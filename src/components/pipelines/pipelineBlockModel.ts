@@ -421,7 +421,8 @@ export function mergeReasonText(t: TFunction, reason: string | null): string {
       || LEGACY_MERGE_REASONS[candidate]?.includes(reason));
   if (key) return t(`pipelineBlock.mergeReason.${key}`);
   const check = MERGE_REASON_PATTERNS.check.exec(reason);
-  if (check) return t("pipelineBlock.mergeReason.check", { name: check[1]! });
+  if (check) return t("pipelineBlock.mergeReason.check", { name: check[1]! })
+    + (reason.endsWith(`; ${MERGE_REASONS.requiredUnknown}`) ? `; ${t("pipelineBlock.mergeReason.requiredUnknown")}` : "");
   const merge = MERGE_REASON_PATTERNS.refusedMerge.exec(reason);
   if (merge) return t("pipelineBlock.mergeReason.refusedMerge", { message: merge[1]! });
   const refresh = MERGE_REASON_PATTERNS.refusedRefresh.exec(reason);

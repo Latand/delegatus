@@ -148,8 +148,9 @@ class MemoryEventStore implements RuntimeEventStore {
 
 test("every native host offers one gate completion callback without opening operator attention", async () => {
   const server = new FakeAppServer("gate-wait-thread");
+  const eventStore = new MemoryEventStore();
   const host = await CodexAppServerHost.start({ cwd: metadataState, env: { ...process.env, TMPDIR: metadataState },
-    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    eventStore, spawnProcess: fakeSpawn(server) });
   try {
     expect((server.requests.find(row => row.method === "thread/start")!.params as { dynamicTools: unknown[] }).dynamicTools).toContainEqual(gateCheckTool);
     await host.send({ id: "gate-opening", text: "run a check" });
@@ -177,6 +178,24 @@ test("every native host offers one gate completion callback without opening oper
     server.request("foreign-wait", "item/tool/call", { ...params, threadId: "foreign-thread" });
     expect((await foreignReply).result).toMatchObject({ success: false });
     expect((await host.health()).pendingAttention).toEqual([]);
+    // Native Codex never sends serverRequest/resolved for a dynamic tool call
+    // and this server sends none: the host's own reply settles each wait.
+    const refusedReply = new Promise<Record<string, unknown>>(resolve => {
+      const listener = (message: Record<string, unknown>) => { if (message.id === "refused-wait") { server.off("client-request", listener); resolve(message); } };
+      server.on("client-request", listener);
+    });
+    server.request("refused-wait", "item/tool/call", { ...params, callId: "refused-call", arguments: { log: "relative.log", reason: "fixture comparator" } });
+    expect((await refusedReply).result).toMatchObject({ success: false });
+    const events = eventStore.load(host.identity.threadId!);
+    const settled = events.filter(event => event.kind === "attention-resolved" && event.codexReceipt?.gateWait);
+    expect(settled.map(event => event.kind === "attention-resolved" && [event.codexReceipt!.identity.requestId, event.resolution, event.codexReceipt!.serverResolution?.outcome]))
+      .toEqual([["gate-wait", "answered", "answered"], ["foreign-wait", "answered", "answered"], ["refused-wait", "answered", "answered"]]);
+    const refused = settled.at(-1);
+    expect(refused?.kind === "attention-resolved" && refused.codexReceipt?.gateWait).toMatchObject({ result: { success: false } });
+    expect(refused?.kind === "attention-resolved" && refused.codexReceipt?.gateWait?.runId).toBeUndefined();
+    // None of it reaches the operator's attention projection.
+    expect(events.filter(event => event.kind === "attention" || event.kind === "attention-resolved")
+      .map(event => projectEngineHostEvent("conversation", "codex:gate-wait-thread", event))).toEqual(events.filter(event => event.kind === "attention" || event.kind === "attention-resolved").map(() => null));
   } finally { await host.release(); }
 });
 

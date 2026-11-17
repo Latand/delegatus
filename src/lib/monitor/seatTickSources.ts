@@ -245,6 +245,7 @@ export function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string
 export interface SeatTickJournalReceipt {
   status: RuntimeReceiptStatus;
   reason: string | null;
+  primaryFailure?: SendReceipt["primaryFailure"];
 }
 
 /**
@@ -288,7 +289,8 @@ export interface SeatTickWakeObservation {
     under the id. Throws when the host cannot be asked. */
 export async function journalReceipt(operationId: string, client: RuntimeHostClient): Promise<SeatTickJournalReceipt | null> {
   const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null } : null;
+  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null,
+    ...(current.receipt.primaryFailure ? { primaryFailure: current.receipt.primaryFailure } : {}) } : null;
 }
 
 /**
@@ -752,9 +754,9 @@ export async function settleRecordFromJournal(
   target: WakeRecordTarget,
   receipt: SeatTickJournalReceipt,
 ): Promise<SendReceipt | null> {
-  const verdict = journalVerdict(receipt.status, receipt.reason);
-  /* Only what {@link journalWakeState} would act on: the settlement's own
-     unverified `failed` classifies as lost here and is not one. */
+  const verdict = journalVerdict(receipt.status, receipt.reason, receipt.primaryFailure);
+  /* Only what {@link journalWakeState} would act on. Unverified outcomes
+     retain their duplicate risk and cannot settle the wake as safely lost. */
   if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
   /* Off the loop (docs/design/delivery-progress-and-drain.md, C2); refused,
      it answers null like an undecidable verdict, and the next tick reads it
@@ -768,7 +770,7 @@ export async function settleRecordFromJournal(
     } else if (target.deliveryId) {
       const deliveryId = target.deliveryId;
       const written = await registry.deliveryWrite(correlation,
-        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost"));
+        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost", null, verdict.primaryFailure));
       if (!written.acquired) return null;
     } else {
       return null;
@@ -1597,6 +1599,15 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
+  for (const lane of projectRows(sources.pipelines(), project)) {
+    const names = lane.merge?.optionalFailedChecks;
+    if (lane.hiddenAt || !names?.length) continue;
+    found.push({
+      id: `optional-check-failures:${lane.id}`,
+      actionable: true,
+      label: redactBounded(`Note: optional checks failed on PR #${lane.merge!.prNumber}: ${names.join(", ")}; merge depends on required checks only`, 800),
+    });
+  }
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }

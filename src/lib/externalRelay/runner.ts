@@ -1,3 +1,4 @@
+import { safeRelayHttpReason } from "./httpDiagnostics";
 import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
 import { actionOutcomeAnswer } from "./actionOutcome";
@@ -192,8 +193,14 @@ export async function runClaimedRequest(
     if (compact.success) return runCompactRequest(relay, compact.data, onFreed, runtime);
     const invalid = raw as Record<string, unknown>;
     if (typeof invalid.request_id !== "string" || typeof invalid.lease_id !== "string") return null;
-    return (await completeRelayRequest(relay, invalid.request_id, declined(invalid.lease_id, "invalid_request"), () => deadline.at,
-      undefined, runtime?.onUnknownFeature)).body;
+    const recorder = answerRecorder({ requestId: invalid.request_id, relayId: relay.id, targetId: invalid.target_id,
+      targetName: null, claimedAt: invalid.claimed_at, input: invalid.input });
+    const body = declined(invalid.lease_id, "invalid_request");
+    recorder?.finish({ outcome: "declined:invalid_request", answer: null, delivery: "unconfirmed" });
+    const sent = await completeRelayRequest(relay, invalid.request_id, body, () => deadline.at,
+      undefined, runtime?.onUnknownFeature, undefined, recorder?.recordCompletionRefusal);
+    recorder?.recordDelivery({ outcome: "declined:invalid_request", delivery: sent.delivery });
+    return sent.body;
   }
   const parsed = requestSchema.safeParse(raw);
   const request = parsed.success ? parsed.data : null;
@@ -436,14 +443,14 @@ export async function runClaimedRequest(
           ? await deliverOwnerLateAnswer(relay, requestId, body, stagedAttachments, allowOwnerReply!)
           : transport
           ? await transport.complete(body, until, caps?.plainMax ?? 4000, ownerStatusReply ? "status" : failureReply ? "failure" : !!allowOwnerReply)
-          : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
+          : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax, recorder?.recordCompletionRefusal);
       } catch {
         if (allowOwnerReply && body.outcome === "answered") {
           console.error("Owner relay completion acknowledgement unavailable; delivery retained");
           sent = { body, delivery: "unconfirmed" };
         } else {
           console.error("External relay helper completion unavailable; using Viewer transport");
-          sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
+          sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax, recorder?.recordCompletionRefusal);
         }
       } finally { completionInFlight = false; }
       if (sent.delivery === "refused" && body.outcome === "declined" && body.reason === "handoff") {
@@ -466,6 +473,7 @@ export async function runClaimedRequest(
           ...(sent.delivery === "accepted" ? { completionAccepted: true as const } : {}),
           ownerTurn: { ...row.ownerTurn!, completionAttempt: undefined } }), ownerRelayStoreDeadline());
       }
+      if (sent.tooLong) failureNotice = true;
       const completion = sent.body;
       if (sent.delivery === "accepted") {
         completionAccepted = true;
@@ -645,11 +653,10 @@ export async function runClaimedRequest(
     let firstAcknowledged!: () => void;
     const firstAck = new Promise<void>(resolve => { firstAcknowledged = resolve; });
     const onHeartbeat = (frame: Parameters<ConstructorParameters<typeof RelayLeaseTransport>[5]>[0]) => {
-      const step = newestProgress?.kind === "step" ? newestProgress.label : null;
       if (frame.phase === "attempt") heartbeatBusy = true;
       else if (frame.phase === "acknowledged" || frame.phase === "failed" || frame.phase === "post_completion") heartbeatBusy = false;
-      console.info("External relay heartbeat", { request: requestId.slice(0, 8), seq: frame.seq,
-        phase: frame.phase, step, status: frame.status, ...(frame.code ? { code: frame.code } : {}) });
+      console.info("External relay heartbeat", { path: "/requests/:request/heartbeat", seq: frame.seq,
+        phase: frame.phase, status: frame.status, ...(frame.code ? { code: safeRelayHttpReason(frame.code) } : {}) });
       if (frame.phase === "acknowledged") { acked = true; heartbeatAt = Date.now(); firstAcknowledged(); }
       else if (frame.phase === "failed") {
         if (!ownerPastWindow() && (frame.status === 404 || frame.status === 409 && frame.code === "lease_lost") && !completionAccepted) {
@@ -662,9 +669,9 @@ export async function runClaimedRequest(
     };
     transport = recovery ? null : runtime?.leaseWorker === false
       ? new InlineRelayLeaseTransport(relay, requestId, target.id, leaseId, intervalMs, onHeartbeat, initialProgress,
-        () => { void runtime?.onUnknownFeature?.(); })
+        () => { void runtime?.onUnknownFeature?.(); }, recorder?.recordCompletionRefusal)
       : new RelayLeaseTransport(relay, requestId, target.id, leaseId, intervalMs, onHeartbeat, initialProgress,
-        () => { void runtime?.onUnknownFeature?.(); });
+        () => { void runtime?.onUnknownFeature?.(); }, undefined, recorder?.recordCompletionRefusal);
     if (transport) {
       await transport.ready;
       const firstBeatDeadline = runtime?.leaseWorker === false ? null

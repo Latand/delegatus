@@ -1,3 +1,4 @@
+import { publicationLanguageHints } from "./publicationLanguage";
 import fs from "node:fs";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -344,7 +345,7 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
         if (mode === "part") {
           const titled = receipt.batch ? await read(`repos/${receipt.repository}/pulls/${receipt.pr}`) : primary;
           const title = typeof titled.title === "string" ? titled.title : "";
-          const safe = title && await ports.inspectTitle(title); current();
+          const safe = title && !publicationLanguageHints("title", title).length && await ports.inspectTitle(title); current();
           note = `Part of this issue landed in ${target}${safe ? `: ${title}` : "."}`;
         }
         // gh 2.45 emits one JSON page per line with --jq @json.
