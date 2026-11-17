@@ -40,27 +40,60 @@ const INVENTORY_WORKER_RESTART_MS = 1_000;
 
 const deliveryPort = createMigrationDeliveryPort();
 
+type QuotaPort = Pick<QuotaController, "tick">;
+type QuotaOutcome = PromiseSettledResult<void>;
+const quotaHost = process as typeof process & {
+  __llvMigrationQuotaOwners?: WeakMap<AgentRegistry, WeakMap<QuotaPort, Promise<QuotaOutcome[]>>>;
+};
+const quotaOwners = quotaHost.__llvMigrationQuotaOwners ??= new WeakMap();
+
+/** The quota owner outlives a cycle acknowledgement. A later cycle joins it
+ * until every peer settles; both early and late failures remain observed. */
+function ownedQuotaTick(registry: AgentRegistry, quota: QuotaPort): Promise<QuotaOutcome[]> {
+  let owners = quotaOwners.get(registry);
+  if (!owners) quotaOwners.set(registry, owners = new WeakMap());
+  const running = owners.get(quota);
+  if (running) return running;
+  const work = withoutOperationLease(() => Promise.allSettled(
+    (["claude", "codex", "copilot"] as const).map(engine =>
+      Promise.resolve().then(() => withViewerOperation("controller.account-quota", () => quota.tick(engine)))
+        .catch(error => { console.error("[account migration controller] quota tick failed", error); throw error; })),
+  )).then(outcomes => {
+    if (owners!.get(quota) === work) owners!.delete(quota);
+    return outcomes;
+  });
+  owners.set(quota, work);
+  return work;
+}
+
 export async function reconcileAccountMigrationCycle(
   registry: AgentRegistry,
   quota: Pick<QuotaController, "tick">,
   provider: SuccessorProviderPort = new RegisteredSuccessorProvider(),
   delivery: HeldDeliveryPort = deliveryPort,
+  passBudgetMs = HELD_DRAIN_PASS_BUDGET_MS,
 ): Promise<void> {
   const startedAt = performance.now();
+  const remaining = () => Math.max(0, passBudgetMs - (performance.now() - startedAt));
+  if (!remaining()) return;
   try {
     // Reservation writes and startup already compact their own evidence.
     // An idle controller must not open a whole-registry mutation for hygiene.
-    /* Quota ticks run alongside migration reconciliation so a slow migration
-       cannot delay fresh readings. Observe every rejection immediately and
-       settle all peers before releasing the controller's running fence. */
-    const outcomes = await Promise.allSettled([
-      quota.tick("claude"), quota.tick("codex"), quota.tick("copilot"),
-      reconcileMigrations(provider, delivery, registry),
-    ]);
+    const work = Promise.all([
+      ownedQuotaTick(registry, quota),
+      Promise.allSettled([reconcileMigrations(provider, delivery, registry, { passBudgetMs: remaining() })]),
+    ]).then(groups => groups.flat());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let outcomes: QuotaOutcome[];
+    try {
+      outcomes = await Promise.race([work, new Promise<QuotaOutcome[]>(resolve => {
+        timer = setTimeout(() => resolve([]), remaining());
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
     const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
     // Delivery owns its wake and deadline. A migration pass cannot join the
     // lifetime of the general queue while more admissions keep it busy.
-    await withoutOperationLease(() => requestStructuredDeliveryQueue(Math.max(0, HELD_DRAIN_PASS_BUDGET_MS - (performance.now() - startedAt))));
+    await withoutOperationLease(() => requestStructuredDeliveryQueue(remaining()));
     // A busy peer must not hide another peer's failure.
     const failure = failures.find(outcome => !reconciliationWriterBusy(outcome.reason)) ?? failures[0];
     if (failure) throw failure.reason;

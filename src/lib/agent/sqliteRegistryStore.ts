@@ -254,11 +254,19 @@ const registryCallerIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_caller_structured_pid ON registry_rows(collection,json_extract(value_json,'$.structuredHost.process.pid'),row_order)",
 ]);
 
+/** State and recipient are equality seeks before the keyset bound and LIMIT. */
+export function openDeliverySelection(conversationId: string, state: string, after: string, limit: number) {
+  return { sql: `SELECT row_key FROM registry_rows INDEXED BY registry_open_delivery_page
+    WHERE collection='heldDeliveries' AND json_extract(value_json,'$.conversationId')=?
+      AND json_extract(value_json,'$.state')=? AND row_key>? ORDER BY row_key LIMIT ?`,
+    values: [conversationId, state, after, limit] as (string | number)[] };
+}
+
 const registryRowIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_rows_collection_order ON registry_rows(collection, row_order)",
   "CREATE INDEX IF NOT EXISTS registry_state_page ON registry_rows(collection,json_extract(value_json,'$.state'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_migration_page ON registry_rows(collection,json_extract(value_json,'$.migration.phase'),row_key)",
-  "CREATE INDEX IF NOT EXISTS registry_open_delivery_conversation ON registry_rows(collection,json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),row_order)",
+  "CREATE INDEX IF NOT EXISTS registry_open_delivery_page ON registry_rows(collection,json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_phase ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),json_extract(value_json,'$.migration.phase'),row_order)",
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_custody ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END,row_order)",
   "CREATE INDEX IF NOT EXISTS registry_seat_children_order ON registry_rows(json_extract(value_json, '$.parentConversationId'), row_order) WHERE collection = 'lineageEdges' AND json_extract(value_json, '$.source') = 'viewer-spawn'",
@@ -364,6 +372,7 @@ type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjec
 interface RegistryFileReaders {
   keyed: WeakMap<object, KeyedReader>;
   bounded: WeakMap<object, BoundedKeyReader>;
+  openDelivery?: WeakMap<object, (conversationId: string, states: readonly string[], after: string, limit: number) => string[]>;
   page?: WeakMap<object, (collection: RowCollection, after: string, limit: number, filter?: RegistryKeyFilter) => string[]>;
   path: WeakMap<object, (path: string) => string[]>;
   entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
@@ -388,6 +397,7 @@ const fileReaders = readerState.__llvRegistryFileReaders ??= {
 };
 const keyedReaders = fileReaders.keyed;
 const boundedReaders = fileReaders.bounded;
+const openDeliveryReaders = fileReaders.openDelivery ??= new WeakMap();
 const pageReaders = fileReaders.page ??= new WeakMap();
 const pathReaders = fileReaders.path;
 const entryKeyReaders = fileReaders.entryKey;
@@ -624,6 +634,15 @@ export function registryHasLookupIndex(file: object): boolean {
 
 export function registryKeysMatching<C extends RowCollection>(file: Pick<RegistryFile, C>, collection: C, field: LookupField, value: LookupValue): string[] {
   return keyedReaders.get(file)?.(collection, field, value) ?? Object.entries(file[collection] ?? {}).filter(([, row]) => (typeof value === "string" ? [value] : value).includes(lookupValue(row, field) as string)).map(([key]) => key);
+}
+
+/** A separate seek for each state keeps settled history outside the scan.
+ * Each state contributes at most one page before the caller merges it. */
+export function registryOpenDeliveryKeys(file: RegistryFile, conversationId: string, states: readonly string[], after: string, limit: number): string[] {
+  const reader = openDeliveryReaders.get(file);
+  if (reader) return reader(conversationId, states, after, limit);
+  return registryKeysMatching(file, "heldDeliveries", "conversationId", conversationId)
+    .filter(key => key > after && states.includes(file.heldDeliveries[key]!.state)).sort().slice(0, limit);
 }
 
 /** Select at most `limit` row keys before creating a result array or reading
@@ -5533,6 +5552,10 @@ export class SqliteAgentRegistryStore {
       }
       return [...keys].sort().slice(0, limit);
     });
+    openDeliveryReaders.set(file, (conversationId, states, after, limit) => [...new Set(states)].flatMap(state => {
+      const { sql, values } = openDeliverySelection(conversationId, state, after, limit);
+      return this.db.query<{ row_key: string }, (string | number)[]>(sql).all(...values).map(row => row.row_key);
+    }).sort().slice(0, limit));
     boundedReaders.set(file, (collection, filters, limit) => this.matchingRowKeysBounded(collection, filters, limit));
     keyedReaders.set(file, (collection, field, value) => {
       const values = typeof value === "string" ? [value] : value;

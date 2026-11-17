@@ -1323,7 +1323,7 @@ export async function drainHeldDeliveries(
   const conversation = registry.conversation(conversationId);
   const current = conversation?.generations.at(-1);
   if (!current) return;
-  await forEachCooperatively(registry.openDeliveries(conversationId, ["assigned", "delivery-uncertain"]), async (item) => {
+  await forEachCooperatively(registry.openDeliveries(conversationId, ["assigned", "delivery-uncertain"], { advance: true }), async (item) => {
     const reconciling = item.state === "delivery-uncertain";
     if (reconciling && !delivery.reconcileUncertain) return;
     if (!reconciling && (item.state !== "assigned" || item.generationId !== current.id)) return;

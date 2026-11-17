@@ -114,3 +114,47 @@ independent queue wake, bounded repeated wakes, admissions during listing, and
 56-host production-controller reconciliation. A separate page test uses 4,096
 hosts. Existing coordinator tests retain board grouping, per-conversation order,
 late provider results, rollback ownership and original-key recovery coverage.
+
+
+## Review repairs
+
+Open-delivery drains now keep a bounded keyset cursor per registry storage
+identity and state set. Each state seeks the recipient/state/key compound
+index before its limit; at most 768 keys are merged into a 256-row page.
+Observation reads leave the drain cursor alone. A short page releases its
+offset, and reopening or replacing the store restarts discovery. The existing
+writer claim still compares every earlier assigned admission, preserving legacy
+creation/id ordering and the original operation, recipient and generation.
+An oldest admission outside the first storage page is reached on a later drain.
+
+The cycle deadline also covers quota acknowledgements. One retained quota owner
+per registry/port runs the three engine ticks outside the cycle lease; repeated
+cycles join that owner until it settles. Its late failures remain observed, and
+monitoring labels its lifetime as `controller.account-quota`.
+
+Regression cases reverse both storage and admission order across 301 deliveries,
+include legacy rows, interleave observations and reopen the registry after
+settlement. Concentrated-history SQL coverage checks the actual plan and VM loop,
+including empty results. An external parent watches positive-budget discovery
+passes over 128 unchanged active admissions, then verifies one dispatch under
+each original identity across executor processes. Separate mutation controls
+remove positive elapsed expiry and discovery cursor advancement.
+
+
+The repair remeasurement used two fresh processes over prebuilt copies of the
+same recorded synthetic rows, with fixture construction excluded from both
+processes. Five full sweeps again made 640 observations on each side and kept
+matching before/after row fingerprints. Baseline remained `a63693d9`, with the
+same installed dependency inputs and Bun 1.4.0. Shared-machine contention was
+uncontrolled. The fresh median full-sweep times were **3443.60 ms before and
+401.95 ms after**; endpoint RSS was **1629.70 MiB and 167.42 MiB**. These numbers
+retain the offline workload limits above.
+
+For the separate concentrated-history workload, the production SQL and actual
+schema were also read by an independent SQLite 3.45.1 progress-handler counter.
+Five observations over 32,768 terminal rows and one open row returned identical
+results without changing any row. Steady VM work was **393,419 versus 64 steps**
+for one match and **393,416 versus 58** after the open key, with no matches.
+First-prepare overhead was separately visible (393,578 versus 74 steps).
+The Bun regression checks its own query plan and loop bytecode; these counters
+measure the independent interpreter, with its version stated explicitly.

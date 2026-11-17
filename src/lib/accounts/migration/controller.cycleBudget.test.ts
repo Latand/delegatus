@@ -30,3 +30,66 @@ test("migration completes while an independently owned delivery wake remains hel
     setStructuredDeliveryKick(null); registry.close(); fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test("an external watcher sees bounded cycles sharing held quota work and observing its late failure", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "migration-quota-deadline-"));
+  const code = `
+    import { AgentRegistry } from ${JSON.stringify(new URL("../../agent/registry.ts", import.meta.url).pathname)};
+    import { reconcileAccountMigrationCycle } from ${JSON.stringify(new URL("./controller.ts", import.meta.url).pathname)};
+    import { OperationLease, currentOperationLease } from ${JSON.stringify(new URL("../../operationLease.ts", import.meta.url).pathname)};
+    const registry = new AgentRegistry(process.argv[1]);
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    const calls = []; const settled = []; const leases = [];
+    const quota = { async tick(engine) {
+      calls.push(engine); leases.push(currentOperationLease() === undefined);
+      await held; settled.push(engine);
+      if (engine === "copilot") throw new Error("late-quota-refusal");
+    } };
+    const provider = { async create() { throw new Error("unexpected successor"); }, async verify() {} };
+    const delivery = { async deliver() { throw new Error("unexpected dispatch"); } };
+    const lease = new OperationLease();
+    console.log("START");
+    await lease.run(() => reconcileAccountMigrationCycle(registry, quota, provider, delivery));
+    lease.expire(); console.log("FIRST");
+    await reconcileAccountMigrationCycle(registry, quota, provider, delivery);
+    console.log("SECOND " + JSON.stringify({ calls, leases }));
+    for await (const chunk of Bun.stdin.stream()) { release(); break; }
+    await new Promise(resolve => setImmediate(resolve));
+    console.log("SETTLED " + JSON.stringify(settled)); registry.close();
+  `;
+  const child = Bun.spawn([process.execPath, "--eval", code, path.join(directory, "registry.json")],
+    { env: process.env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let late = false;
+  let released = false;
+  let output = "";
+  const arm = () => { clearTimeout(timeout); timeout = setTimeout(() => { late = true; child.kill(); }, 6_500); };
+  const errors = new Response(child.stderr).text();
+  try {
+    const reader = (async () => {
+      for await (const chunk of child.stdout) {
+        output += new TextDecoder().decode(chunk);
+        if (output.includes("START") && !timeout) arm();
+        if (output.includes("FIRST") && !output.includes("SECOND")) arm();
+        if (output.includes("SECOND") && !released) {
+          released = true; clearTimeout(timeout); child.stdin.write("release\n"); child.stdin.end();
+        }
+      }
+    })();
+    await reader;
+    expect(await child.exited).toBe(0);
+    expect(late).toBe(false);
+    const second = JSON.parse(output.split("SECOND ")[1]!.split("\n")[0]!);
+    expect(second.calls).toEqual(["claude", "codex", "copilot"]);
+    expect(second.leases).toEqual([true, true, true]);
+    expect(JSON.parse(output.split("SETTLED ")[1]!)).toEqual(["claude", "codex", "copilot"]);
+    expect((await errors).match(/quota tick failed/g)).toHaveLength(1);
+    expect(await errors).toContain("late-quota-refusal");
+  } finally {
+    clearTimeout(timeout); child.stdin.end();
+    if (child.exitCode === null) child.kill();
+    await child.exited; fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 20_000);

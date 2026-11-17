@@ -5,8 +5,9 @@ import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { lookupOriginalSend } from "@/lib/runtime/sendSettlement";
-import { DELIVERY_KEY_ROW_LIMIT, deliveryRegistryEntriesForKey, normalizeRegistry } from "./registry";
-import { registryKeysMatching, registryKeysMatchingBounded, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { AgentRegistry, compareDeliveryAdmission, DELIVERY_KEY_ROW_LIMIT, deliveryRegistryEntriesForKey, normalizeRegistry } from "./registry";
+import { openDeliverySelection, registryKeysMatching, registryKeysMatchingBounded, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
 import { memoryDeliveryEvidence } from "@/lib/memory/deliveryEvidence";
 
 const roots: string[] = [];
@@ -225,4 +226,83 @@ test("authority facts are narrow and follow alias, generation, project and super
   }, false);
   for (const reader of [store, f.open()]) expect(reader.conversationAuthorityFacts("conversation_old"))
     .toEqual({ id: "conversation_target", superseded: true, hasGeneration: false, project: "project-b", directories: [] });
+});
+
+
+function admissionFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-admission-page-")); roots.push(root);
+  const seed = new AgentRegistry(path.join(root, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = seed.ensureConversation("codex", "/sessions/admission-page.jsonl", "account-a");
+  const reserved = seed.holdDelivery(conversation.id, "input", "admission-key");
+  const file = seed.snapshot(); seed.close();
+  const template = file.heldDeliveries[reserved.id]!;
+  const owner = file.deliveryOperationOwners[template.command.operationId]!;
+  file.heldDeliveries = {}; file.deliveryOperationOwners = {};
+  for (let i = 0; i <= 300; i++) {
+    const id = `delivery-${String(i).padStart(5, "0")}`;
+    const operationId = `admission-operation-${i}`;
+    file.heldDeliveries[id] = { ...structuredClone(template), id, state: "assigned", recoveryIntent: "reclaimed-host",
+      createdAt: at, admissionSeq: i >= 281 ? undefined : 281 - i, generationId: conversation.generations[0]!.id,
+      clientMessageId: `admission-key-${i}`, command: { ...template.command, operationId } };
+    file.deliveryOperationOwners[operationId] = { ...structuredClone(owner), deliveryId: id,
+      command: { ...owner.command, operationId }, clientMessageId: `admission-key-${i}` };
+  }
+  return { root, conversation, file };
+}
+
+test("admission pages reach the true head across reversed storage and key order, legacy rows and reopening", async () => {
+  for (const mode of ["off", "sqlite"] as const) {
+    const { root, conversation, file } = admissionFixture();
+    const filename = path.join(root, "registry.json");
+    fs.writeFileSync(filename, JSON.stringify(file));
+    const expected = Object.values(file.heldDeliveries).sort(compareDeliveryAdmission);
+    const sent: string[] = [];
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: mode });
+    try {
+      const observer = registry.ensureConversation("codex", "/sessions/observer.jsonl", "account-a");
+      for (let pass = 0; pass < 8; pass++) {
+        registry.holdDelivery(observer.id, "other admission", `observer-key-${pass}`);
+        // Discovery/observation must not consume the actuator's next page.
+        registry.openDeliveries(conversation.id, ["assigned", "delivery-uncertain"]);
+        await drainHeldDeliveries(conversation.id, { async deliver({ delivery, clientMessageId }) {
+          expect(delivery.command.operationId).toBe(file.heldDeliveries[delivery.id]!.command.operationId);
+          expect(clientMessageId).toBe(file.heldDeliveries[delivery.id]!.clientMessageId!);
+          sent.push(delivery.id); return "delivered";
+        } }, registry);
+      }
+    } finally { registry.close(); }
+    const restarted = new AgentRegistry(filename, undefined, undefined, { sqliteMode: mode });
+    try { expect(restarted.openDeliveries(conversation.id)).toEqual([]); } finally { restarted.close(); }
+    expect(sent).toEqual(expected.map(row => row.id));
+    expect(new Set(sent).size).toBe(301);
+  }
+}, 120_000);
+
+test("open delivery state seeks exclude concentrated retained history before LIMIT", () => {
+  const { root, conversation, file } = admissionFixture();
+  const filename = path.join(root, "registry.sqlite");
+  const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: file, normalize: normalizeRegistry }); stores.push(store);
+  const db = new Database(filename);
+  try {
+    const insert = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('heldDeliveries',?,?,?)");
+    db.transaction(() => {
+      for (let i = 0; i < 32_768; i++) insert.run(`retained-${i}`, JSON.stringify({ conversationId: conversation.id,
+        state: "delivered", id: `retained-${i}`, createdAt: at }), 100_000 + i);
+    })();
+    for (const state of ["held", "assigned", "delivery-uncertain"]) {
+      const { sql, values } = openDeliverySelection(conversation.id, state, "", 1);
+      const plan = db.query<{ detail: string }, (string | number)[]>(`EXPLAIN QUERY PLAN ${sql}`).all(...values);
+      expect(plan.some(row => row.detail.includes("registry_open_delivery_page") && row.detail.includes("<expr>=? AND <expr>=?"))).toBe(true);
+      expect(plan.some(row => /SCAN|TEMP B-TREE/.test(row.detail))).toBe(false);
+      // Inspect the actual VM loop too: state JSON extraction, a sorter or a
+      // table scan inside Next would hide synchronous work from parse counters.
+      const code = db.query<{ addr: number; opcode: string; p2: number }, (string | number)[]>(`EXPLAIN ${sql}`).all(...values);
+      for (const next of code.filter(row => row.opcode === "Next")) {
+        const loop = code.filter(row => row.addr >= next.p2 && row.addr < next.addr);
+        expect(loop.some(row => /Function|Sorter|Rewind/.test(row.opcode))).toBe(false);
+        expect(loop.some(row => row.opcode === "DecrJumpZero")).toBe(true);
+      }
+      expect(db.query(sql).all(...values)).toHaveLength(state === "assigned" ? 1 : 0);
+    }
+  } finally { db.close(); }
 });
