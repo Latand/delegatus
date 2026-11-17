@@ -362,7 +362,7 @@ process.stdout.write(result.subarray(cut));
 });
 test("the native web search is the one tool the relay profile can add", () => {
   const codex = buildEphemeralCommand({ ...fixture("codex"), webSearch: true }).args;
-  expect(codex).toContain("web_search=live");
+  expect(codex).toContain("web_search=cached");
   expect(codex).not.toContain("web_search=disabled");
   for (const feature of ["shell_tool", "unified_exec", "apps", "plugins", "browser_use", "computer_use"])
     expect(codex[codex.indexOf(feature) - 1]).toBe("--disable");
@@ -438,4 +438,23 @@ if (args.includes('--output-last-message')) {
   }
   const failed = await runEphemeralAgent({ ...fixture("claude"), inputFile: path.join(root, "missing-input"), runtime: { command: script } });
   expect((await failed.done).status).not.toBe("done");
+});
+
+for (const action of ["search", "open_page", "incomplete"] as const) test(`native provider evidence and note suppression: ${action}`, async () => {
+  const script = path.join(root, `provider-${action}`);
+  fs.writeFileSync(script, `#!/usr/bin/env bun
+    const a=process.argv;await Bun.stdin.text();
+    console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Before search'}}));
+    console.log(JSON.stringify({type:'item.started',item:{id:'search-item',type:'web_search',action:{type:'other'}}}));
+    if(${JSON.stringify(action)}!=='incomplete')console.log(JSON.stringify({type:'item.completed',item:{id:'search-item',type:'web_search',action:${JSON.stringify(action === "search" ? { type: "search", query: "page" } : { type: "open_page", url: "https://example.org" })}}}));
+    console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'PAGE_NOTE_CANARY'}}));
+    await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));
+  `); fs.chmodSync(script, 0o700);
+  const notes: string[] = [];
+  const request = fixture("codex"); request.key = `provider-${action}`; request.account.accountId = `provider_${action}`;
+  const run = await runEphemeralAgent({ ...request, webSearch: true, runtime: { command: script }, onEvent: event => { if (event.type === "note") notes.push(event.text); } });
+  const result = await run.done;
+  expect(result.status).toBe("done"); expect(notes).toEqual(["Before search"]);
+  if (action === "search") expect(result.providerOpens).toEqual([]);
+  else expect(result.providerOpens).toHaveLength(1);
 });

@@ -1,4 +1,4 @@
-import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
+import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, normalizeInputMediaDescriptor, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
 import { z } from "zod";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
@@ -97,6 +97,7 @@ const inputMediaSchema = z.object({
   mime_type: boundedString(100).optional(), filename: boundedString(128).optional(),
   byte_size: z.number().int().positive().max(20971520).optional(), expires_at: time.optional(),
 }).strict();
+const claimMediaSchema = inputMediaSchema.extend({ byte_size: z.number().int().positive().safe().optional() });
 const mentionSchema = z.object({ author_key: id, offset: z.number().int().min(0).max(31999), length: z.number().int().min(1).max(128) }).strict();
 const messageSchema = z.object({
   id,
@@ -217,16 +218,28 @@ const answerRequestSchema = z.object({
     progress: z.enum(["notes", "none"]),
   }),
 });
-/** Normalize each history photo independently; anchor media stays fail-closed. */
+/** Normalize item policy refusals on anchors; malformed anchors stay fail-closed. */
 export const requestSchema = z.preprocess(raw => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const value = raw as Record<string, unknown>;
+  let value = raw as Record<string, unknown>;
   const inbound = Array.isArray(value.features) && value.features.includes("relay_media_in");
   if (!value.input || typeof value.input !== "object" || Array.isArray(value.input)) return raw;
-  const input = value.input as Record<string, unknown>;
+  let input = value.input as Record<string, unknown>;
   const trigger = Array.isArray(input.conversation) ? input.conversation.find(message =>
     message && typeof message === "object" && message.id === input.respond_to) : undefined;
   const allowed = new Set([trigger?.id, trigger?.reply_to].filter(candidate => typeof candidate === "string"));
+  if (inbound && Array.isArray(input.conversation)) {
+    input = { ...input, conversation: input.conversation.map(message => {
+      if (!message || !allowed.has(message.id) || !Array.isArray(message.media)) return message;
+      return { ...message, media: message.media.map((rawMedia: unknown) => {
+        const parsed = claimMediaSchema.safeParse(rawMedia);
+        if (!parsed.success) return rawMedia;
+        try { return normalizeInputMediaDescriptor(parsed.data, value.features as string[]); }
+        catch { return rawMedia; }
+      }) };
+    }) };
+    value = { ...value, input };
+  }
   const history = inbound && (value.delivery === "guest" || (value.features as string[]).includes(RELAY_HISTORY_MEDIA));
   // Anchor descriptors take precedence over conflicting historical copies.
   const refs = new Map<string, InputMedia>();

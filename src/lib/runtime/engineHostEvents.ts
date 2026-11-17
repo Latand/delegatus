@@ -524,6 +524,11 @@ export function projectEngineHostEvent(
   if (event.kind === "native-queue-changed") {
     return { ...base, kind: "native-queue-changed", payload: { conversationId, threadId: event.threadId } };
   }
+  /* A recorded check wait is the host's own automatic callback: nobody can
+     answer it, and Codex never confirms its reply. Its receipt stays in the
+     host's ledger for handover recovery and never becomes operator attention,
+     which would hold the session's attention set and block idle work. */
+  if ((event.kind === "attention" || event.kind === "attention-resolved") && event.codexReceipt?.gateWait) return null;
   if (event.kind === "attention") {
     const projected = attentionProjection(engine, event);
     const payload = {

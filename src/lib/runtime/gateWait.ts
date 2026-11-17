@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited } from "./signalSandboxContext";
-import { CUSTODY_CLEANUP_MS, identitySchema, readEnvelope, physical, custodyClock } from "../recordedChecks/wire";
+import { CUSTODY_CLEANUP_MS, digest, identitySchema, readEnvelope, physical, custodyClock } from "../recordedChecks/wire";
 
 // Leave one minute of the engines' ten-minute foreground window for startup
 // and printing the final state and tail. Custom waits share this ceiling.
@@ -95,7 +95,7 @@ async function observeGate(log: string, timeoutMs: number, signal?: AbortSignal)
 
 /** One engine callback, through queueing, execution and cleanup. The recorder
  * pins the original deadline; callers cannot extend it by asking again. */
-export async function waitForGateCompletion(log: string, signal?: AbortSignal): Promise<ReturnType<typeof gateSnapshot>> {
+export function gateCompletionIdentity(log: string) {
   log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
   const dir = directory(log);
   const directoryIdentity = physical(dir);
@@ -110,8 +110,17 @@ export async function waitForGateCompletion(log: string, signal?: AbortSignal): 
       || owner.bootEpoch !== cpuOwnerIdentity(process.pid).bootEpoch) throw new Error("gate completion ticket identity changed");
   };
   validate();
-  const remaining = Math.max(0, ticket.deadlineUptimeMs + CUSTODY_CLEANUP_MS - custodyClock());
+  // Foreground recordings have no custody descriptor. Their immutable ticket
+  // and physical directory identify the run across Viewer generations.
+  const runId = digest({ log, ticket });
+  return { runId, deadlineUptimeMs: ticket.deadlineUptimeMs, validate };
+}
+
+export async function waitForGateCompletion(log: string, signal?: AbortSignal, expectedRunId?: string): Promise<ReturnType<typeof gateSnapshot> & { runId: string; reason?: string }> {
+  const { runId, deadlineUptimeMs, validate } = gateCompletionIdentity(log);
+  if (expectedRunId !== undefined && runId !== expectedRunId) throw new Error("gate completion run identity changed");
+  const remaining = Math.max(0, deadlineUptimeMs + CUSTODY_CLEANUP_MS - custodyClock());
   const result = await observeGate(log, remaining, signal);
   validate();
-  return result;
+  return { ...result, runId, ...(!result.state.startsWith("finished") ? { reason: "recorded check deadline and cleanup bound expired without a terminal verdict" } : {}) };
 }

@@ -41,12 +41,13 @@ test("the first diagnostic survives a fresh-process interrupted-answer settlemen
   recorder.begin("claude", "opus", { webSearch: true, owner: true });
   recorder.diagnose({ source: "exception", message: "Error: fixture launch response lost" });
   recorder.diagnose({ source: "observation", message: "secondary cleanup error" });
+  recorder.recordCompletionRefusal({ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" });
   expect(readAnswerRecord("relay", "diagnostic", "reason-restart")).toMatchObject({ state: "running", diagnostic: { message: "Error: fixture launch response lost" } });
   const child = Bun.spawnSync([process.execPath, "-e", `import { settleInterruptedAnswer, readAnswerRecord } from './src/lib/externalRelay/answers.ts';
     settleInterruptedAnswer('relay', 'diagnostic', 'reason-restart', 'accepted');
     console.log(JSON.stringify(readAnswerRecord('relay', 'diagnostic', 'reason-restart')));`], { env: { ...process.env } });
   expect(child.exitCode).toBe(0);
-  expect(JSON.parse(child.stdout.toString())).toMatchObject({ state: "finished", diagnostic: { source: "exception", message: "Error: fixture launch response lost" } });
+  expect(JSON.parse(child.stdout.toString())).toMatchObject({ state: "finished", diagnostic: { source: "exception", message: "Error: fixture launch response lost" }, completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
 });
 
 test("the retention is one 30-day constant for readers and pruning", () => {

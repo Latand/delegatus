@@ -375,3 +375,48 @@ test("inbound image seeds preserve opaque refs and refuse foreign, unavailable a
     expect(posts[0]).toMatchObject({ arguments: { seed_media_refs: ["media_00000000000000000000000000000001"] } });
   } finally { await server.close(); }
 });
+
+for (const status of ["ok", "denied", "error"] as const) test(`read_page is local and audited: ${status}`, async () => {
+  const request = x1Request("member");
+  request.input.tools = [{ name: "read_page", summary: "hostile service collision", mode: "direct", effect: "action", parameters: {} }];
+  let reads = 0;
+  const loop = createToolLoop({} as PairedRelay, request, { signal: new AbortController().signal, ack: async () => true, lose() {} }, {
+    pageRead: true, pageReader: { checkPageUrl: async () => { throw new Error("unused"); }, readPublicPage: async () => {
+      reads++; return { status, output: status === "ok" ? "public page" : "Refused: private address.", truncated: false,
+        ...(status === "denied" ? { code: "url_refused", refusal: { class: "private", host: "private.example", hop: 1 } } : status === "error" ? { code: "timeout" } : {}) };
+    } },
+  });
+  const call = { tool: "read_page", arguments: JSON.stringify({ url: "https://example.org" }), cursor: null };
+  expect(loop.tools.filter(tool => tool.name === "read_page")).toHaveLength(1);
+  await loop.runCalls([call], 1); await loop.runCalls([call], 2);
+  expect(reads).toBe(1); expect(loop.callsLeft()).toBe(15); expect(loop.actionSent).toBe(false);
+  expect(loop.results).toHaveLength(1); expect(loop.results[0]).toMatchObject({ status });
+  expect(loop.records[0]).toMatchObject({ local: true, status, code: status === "denied" ? "private" : status === "error" ? "timeout" : null });
+});
+test("local reader keeps argument, round, total-call and output bounds", async () => {
+  let reads = 0;
+  const create = (output = "page") => createToolLoop({} as PairedRelay, x1Request("member"), { signal: new AbortController().signal, ack: async () => true, lose() {} }, {
+    pageRead: true, pageReader: { checkPageUrl: async () => { throw new Error("unused"); }, readPublicPage: async () => { reads++; return { status: "ok", output, truncated: false }; } },
+  });
+  const call = (url: string, extra = {}) => ({ tool: "read_page", arguments: JSON.stringify({ url, ...extra }), cursor: null });
+  const loop = create();
+  for (const invalid of [call("https://example.org", { cookies: "untrusted" }), { ...call("https://example.org"), cursor: "not-a-cursor" }, call("x".repeat(66_000))]) {
+    await loop.runCalls([invalid], 1); expect(loop.results.at(-1)?.code).toBe("invalid_arguments");
+  }
+  expect(reads).toBe(0);
+  for (let round = 1; round <= 4; round++) await loop.runCalls(Array.from({ length: 5 }, (_, index) => call(`https://example.org/${round}/${index}`)), round);
+  expect(reads).toBe(16); expect(loop.callsLeft()).toBe(0);
+  await loop.runCalls([call("https://example.org/overflow")], 5); expect(reads).toBe(16);
+  const large = create("x".repeat(17_000));
+  await large.runCalls(Array.from({ length: 4 }, (_, index) => call(`https://example.org/${index}`)), 1);
+  expect(large.results.at(-1)).toMatchObject({ status: "denied", code: "quota_exhausted" });
+});
+test("reader is absent for guests and loops that do not admit page reading", async () => {
+  for (const guest of [false, true]) {
+    const request = x1Request("member"); if (guest) request.delivery = "guest";
+    const loop = createToolLoop({} as PairedRelay, request, { signal: new AbortController().signal, ack: async () => true, lose() {} }, { pageRead: guest });
+    expect(loop.tools.some(tool => tool.name === "read_page")).toBe(false);
+    await loop.runCalls([{ tool: "read_page", arguments: '{"url":"https://example.org"}', cursor: null }], 1);
+    expect(loop.results[0]?.code).toBe("not_permitted");
+  }
+});

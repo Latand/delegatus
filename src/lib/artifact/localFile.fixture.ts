@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 
 export const KEEP_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 export const KEEP_TEXT = "# Fixture report\n";
@@ -28,7 +29,7 @@ export function localFileKeepFixture(base: string) {
   write(path.join(state, "project-catalog.json"), JSON.stringify({ files: Object.fromEntries(
     [project, codex, sibling].map((cwd, index) => [`fixture-${index}`, { cwd, projectRoot: cwd }]),
   ) }));
-  const checkouts = [project, ...[".worktrees/wt-a", ".claude/worktrees/wt-b", "worktrees/wt-c"].map(dir => path.join(project, dir)), codex, sibling];
+  const checkouts = [project, ...[".worktrees/wt-a", ".claude/worktrees/wt-b", "worktrees/wt-c"].map(dir => path.join(project, dir)), sibling];
   const images = checkouts.map(dir => write(path.join(dir, "shots/render.png"), KEEP_PNG));
   const texts = checkouts.map(dir => write(path.join(dir, "reports/report.md"), KEEP_TEXT));
   for (const dir of [project, path.join(project, ".worktrees/wt-a")]) {
@@ -49,10 +50,10 @@ export function localFileKeepFixture(base: string) {
 }
 
 /** The legacy writer's persisted format has no resolved-source admission proof. */
-export function legacyReportPictureFixture(project: string, state: string, hidden = ".private-picture.png") {
+export function legacyReportPictureFixture(project: string, hidden = ".private-picture.png") {
   const source = path.join(project, hidden);
   const alias = path.join(project, "public-picture.png");
-  const store = path.join(state, "report-media");
+  const store = reportMediaRoot();
   const file = `${createHash("sha256").update(KEEP_PNG).digest("hex")}.png`;
   fs.mkdirSync(path.dirname(source), { recursive: true });
   fs.writeFileSync(source, KEEP_PNG);

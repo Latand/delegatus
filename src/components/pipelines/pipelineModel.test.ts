@@ -45,6 +45,7 @@ import {
   stageOpenTarget,
   attemptNavTarget,
   stageAgentRowModel,
+  stageCloudTaskUrl,
   resolveStageNavFile,
   partitionPipelineSurfaces,
   pipelineBoardProjection,
@@ -1812,6 +1813,11 @@ describe("stage agent row", () => {
     expect(row.target).toEqual({ conversationId: "conversation_design", agentPath: null });
     expect(row.question).toBe(state === "needs_decision" ? "Which layout should we use?" : null);
   });
+  test("a parked decision keeps its localized question on the board", () => {
+    const question = "Який макет обрати для панелі?";
+    const p = pipeline({ state: "needs_decision", runs: [{ stageId: "design", attempts: [{ n: 4, state: "needs_decision", conversationId: "conversation_design", agentPath: null, report: { summary: question } } as PipelineStageAttempt] }] });
+    expect(stageAgentRowModel(p, "design").question).toBe(question);
+  });
   test("keeps earlier own attempts, path-only launches, and their positions while excluding historical helpers", () => {
     const p = pipeline({ runs: [{ stageId: "design", attempts: [
       { n: 1, state: "failed", conversationId: null, agentPath: "/fixture/old.jsonl" },
@@ -1821,6 +1827,44 @@ describe("stage agent row", () => {
     ] as PipelineStageAttempt[] }] });
     expect(stageAgentRowModel(p, "design")).toEqual({ target: { conversationId: "conversation_design", agentPath: null }, question: "Question\nOptions", earlier: [{ n: 1, position: 1, state: "failed", target: { conversationId: null, agentPath: "/fixture/old.jsonl" } }] });
     expect(stageAgentRowModel(p, "unstarted")).toEqual({ target: null, question: null, earlier: [] });
+  });
+});
+
+describe("stage cloud task link", () => {
+  const taskUrl = "https://example.com/cloud/tasks/task_abc123";
+  const cloudRun = (attempt: Record<string, unknown>) => pipeline({
+    stages: [stage("design")],
+    runs: [{ stageId: "design", attempts: [{ n: 1, state: "passed", conversationId: null, agentPath: null, ...attempt } as PipelineStageAttempt] }],
+  });
+  const cloud = (over: Record<string, unknown> = {}) => ({ phase: "completed", taskId: "task_abc123", taskUrl, ...over });
+
+  test("a cloud attempt with a stored task link opens that link", () => {
+    const p = cloudRun({ definition: { runtime: "codex-cloud" }, cloud: cloud() });
+    expect(stageCloudTaskUrl(p, "design")).toBe(taskUrl);
+    /* It has no conversation, so the conversation target stays empty. */
+    expect(stageAgentRowModel(p, "design").target).toBeNull();
+  });
+  test("a cloud attempt with no stored task link, or an unusable one, offers nothing", () => {
+    expect(stageCloudTaskUrl(cloudRun({ cloud: cloud({ taskId: null, taskUrl: null, phase: "submitting" }) }), "design")).toBeNull();
+    expect(stageCloudTaskUrl(cloudRun({ cloud: cloud({ taskUrl: "javascript:alert(1)" }) }), "design")).toBeNull();
+    expect(stageCloudTaskUrl(cloudRun({ cloud: cloud({ taskUrl: "http://example.com/cloud/tasks/task_abc123" }) }), "design")).toBeNull();
+    expect(stageCloudTaskUrl(cloudRun({ cloud: cloud({ taskUrl: `${taskUrl}?token=secret` }) }), "design")).toBeNull();
+  });
+  test("a local stage, a stage that moved local and an unstarted stage offer none and keep the conversation", () => {
+    const local = cloudRun({ conversationId: "conversation_design", agentPath: "/fixture/design.jsonl" });
+    expect(stageCloudTaskUrl(local, "design")).toBeNull();
+    expect(stageAgentRowModel(local, "design").target).toEqual({ conversationId: "conversation_design", agentPath: "/fixture/design.jsonl" });
+    expect(stageCloudTaskUrl(cloudRun({ cloud: cloud({ fallback: { at: new Date(0).toISOString(), reason: "cloud failed" } }) }), "design")).toBeNull();
+    expect(stageCloudTaskUrl(cloudRun({ executionRuntime: "cloud-then-local", cloud: cloud() }), "design")).toBeNull();
+    expect(stageCloudTaskUrl(cloudRun({ conversationId: "conversation_design", cloud: cloud() }), "design")).toBeNull();
+    expect(stageCloudTaskUrl(local, "unstarted")).toBeNull();
+  });
+  test("only the latest attempt counts", () => {
+    const p = pipeline({ stages: [stage("design")], runs: [{ stageId: "design", attempts: [
+      { n: 1, state: "failed", cloud: cloud() },
+      { n: 2, state: "passed", conversationId: "conversation_design", agentPath: null },
+    ] as unknown as PipelineStageAttempt[] }] });
+    expect(stageCloudTaskUrl(p, "design")).toBeNull();
   });
 });
 

@@ -8,8 +8,9 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 import { determined } from "@/lib/runtime/determinable";
 import { runStructuredHostRetirementSweep } from "@/lib/runtime/structuredHostRetirement";
 import { AgentStateService } from "./service";
+import { AGENT_STATE_POLICY } from "./model";
 import { readAgentStateMetrics, readAgentProjection, subjectId } from "./store";
-import { FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_CONVERSATION, fixtureRegistry, fixtureRecords, type FixtureEngine } from "./testFixture";
+import { FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_CONVERSATION, fixtureRegistry, fixtureRecords, currentClaudeRecords, type FixtureEngine } from "./testFixture";
 import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
 import { claudeHostColumns } from "@/lib/runtime/registry";
@@ -19,7 +20,7 @@ const engine = engineValue as FixtureEngine;
 const output = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const input = readline.createInterface({ input: process.stdin });
 if (role === "native") {
-  const records = fixtureRecords(engine);
+  const records = engine === "claude" ? currentClaudeRecords(40) : fixtureRecords(engine);
   const append = (rows: unknown[]) => fs.appendFileSync(path.join(root!, "native.jsonl"), rows.map(row => JSON.stringify(row)).join("\n") + "\n");
   let starts = 0;
   const server = net.createServer(socket => {
@@ -71,8 +72,17 @@ if (role === "native") {
   let tick: () => void = () => { throw new Error("scheduler has not armed"); };
   let publications = 0;
   let protectedDelivery: string | null = null;
+  if (role === "idle-observer") {
+    fs.utimesSync(path.join(root!, "native.jsonl"), new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+    await registry.deliveryWriteOrBusy({ label: "fixture.idle-owner" }, () => registry.agentStateWrite(file => {
+      const entry = file.entries[`${engine}:${FIXTURE_SESSION}`]!;
+      entry.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+      entry.structuredHost!.activeTurnRef = null;
+    }));
+  }
   const service = new AgentStateService({ registry, now: () => now, owns: () => true, process: processIdentityStatus,
-    memory: () => null, release: "fixture-successor", publish: async () => { publications++; return role !== "successor-unpublished"; } });
+    memory: () => role === "idle-observer" ? { activeTurnRef: null, pendingAttention: [], eventCursor: 1 } : null,
+    release: "fixture-successor", publish: async () => { publications++; return role !== "successor-unpublished"; } });
   service.start(((callback: () => void) => { tick = callback; return setInterval(() => {}, 60_000); }) as typeof setInterval);
   await service.request();
   const state = () => {
@@ -82,6 +92,10 @@ if (role === "native") {
   state();
   for await (const line of input) {
     if (line === "cycle") { tick(); await service.request(); state(); }
+    else if (line === "grace-before" || line === "grace-after") {
+      now = FIXTURE_NOW + AGENT_STATE_POLICY.startupGraceMs - (line === "grace-before" ? 1 : 0);
+      tick(); await service.request(); state();
+    }
     else if (line === "retire" || line === "recent" || line === "protect") {
       now = line !== "recent" ? FIXTURE_NOW + 7 * 3_600_000 : FIXTURE_NOW + 2000;
       if (line !== "recent") fs.utimesSync(path.join(root!, "native.jsonl"), new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));

@@ -17,8 +17,9 @@ const time = (v: unknown): number | null => typeof v === "string" && Number.isFi
 const PAGE = 128 * 1024;
 const PASS_BYTES = 4 * 1024 * 1024;
 const MAX_EVENTS = 2048;
+const BOUNDARY_VERSION = 1;
 export interface BoundaryEvent {
-  kind: "start" | "terminal" | "tool" | "output" | "continue";
+  kind: "start" | "terminal" | "tool" | "output" | "continue" | "ancestry";
   type: string;
   id: string | null;
   at: number | null;
@@ -61,6 +62,13 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
     const parts = Array.isArray(message.content) ? message.content : [];
     const text = typeof message.content === "string" ? message.content : parts.map(part => string(object(part).text) ?? "").join("\n");
     if (record.isCompactSummary === true) return null;
+    // Attachments are nodes in the native parent chain. Context must neither
+    // open work nor settle a tool result; queued input keeps work open.
+    // Request bookkeeping has no place in this chain.
+    if (record.type === "attachment") {
+      const parentId = identity(record.parentUuid);
+      return id && parentId ? { kind: object(record.attachment).type === "queued_command" ? "continue" : "ancestry", type, id, at, parentId } : null;
+    }
     if (record.type === "user") {
       if (record.interruptedByShutdown === true || "interruptedMessageId" in record
         || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(text)) {
@@ -176,7 +184,8 @@ export class AgentTranscriptCache {
   seed(input: { engine: Engine; path: string; revision: string; anchor?: NativePromptAnchor | null; localRef?: string | null }, acquisition: TranscriptAcquisition): void {
     const key = JSON.stringify([input.engine, input.path, input.revision, input.anchor ?? null, input.engine === "claude-ledger" ? input.localRef : null]);
     if (this.rows.has(key) || !acquisition.turn.determined || !acquisition.transcript.determined
-      || acquisition.turn.evidence.source !== "native-transcript") return;
+      || acquisition.turn.evidence.source !== "native-transcript"
+      || input.engine === "claude" && acquisition.transcript.value.boundaryVersion !== BOUNDARY_VERSION) return;
     // acquire validates the persisted signature against the current pathname
     // before using this boundary. No request has to scan retained history.
     const row: Cached = { version: { ...acquisition.transcript.value }, turn: { ...acquisition.turn.value }, events: [],
@@ -215,7 +224,7 @@ export class AgentTranscriptCache {
       }
       // Incomplete scans retain only compact native boundaries and the earlier
       // cursor. Every earlier page is read once for a stable artifact version.
-      cached ??= { version: { artifact, signature, size, mtimeMs: Number(stat.mtimeNs) / 1e6, coveredFrom: size, bytesRead: 0 },
+      cached ??= { version: { artifact, signature, size, mtimeMs: Number(stat.mtimeNs) / 1e6, coveredFrom: size, bytesRead: 0, boundaryVersion: BOUNDARY_VERSION },
         turn: null, events: [], before: size, complete: false };
       this.counters.opens++;
       handle = await fs.open(input.path, "r");

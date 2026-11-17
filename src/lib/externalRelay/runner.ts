@@ -1,3 +1,5 @@
+import { safeRelayHttpReason } from "./httpDiagnostics";
+import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
 import { actionOutcomeAnswer } from "./actionOutcome";
 import { CloudFailure, cloudEnvironment, cloudTransport, runCloudRelay, type CloudTransport } from "./cloud";
@@ -191,8 +193,14 @@ export async function runClaimedRequest(
     if (compact.success) return runCompactRequest(relay, compact.data, onFreed, runtime);
     const invalid = raw as Record<string, unknown>;
     if (typeof invalid.request_id !== "string" || typeof invalid.lease_id !== "string") return null;
-    return (await completeRelayRequest(relay, invalid.request_id, declined(invalid.lease_id, "invalid_request"), () => deadline.at,
-      undefined, runtime?.onUnknownFeature)).body;
+    const recorder = answerRecorder({ requestId: invalid.request_id, relayId: relay.id, targetId: invalid.target_id,
+      targetName: null, claimedAt: invalid.claimed_at, input: invalid.input });
+    const body = declined(invalid.lease_id, "invalid_request");
+    recorder?.finish({ outcome: "declined:invalid_request", answer: null, delivery: "unconfirmed" });
+    const sent = await completeRelayRequest(relay, invalid.request_id, body, () => deadline.at,
+      undefined, runtime?.onUnknownFeature, undefined, recorder?.recordCompletionRefusal);
+    recorder?.recordDelivery({ outcome: "declined:invalid_request", delivery: sent.delivery });
+    return sent.body;
   }
   const parsed = requestSchema.safeParse(raw);
   const request = parsed.success ? parsed.data : null;
@@ -435,14 +443,14 @@ export async function runClaimedRequest(
           ? await deliverOwnerLateAnswer(relay, requestId, body, stagedAttachments, allowOwnerReply!)
           : transport
           ? await transport.complete(body, until, caps?.plainMax ?? 4000, ownerStatusReply ? "status" : failureReply ? "failure" : !!allowOwnerReply)
-          : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
+          : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax, recorder?.recordCompletionRefusal);
       } catch {
         if (allowOwnerReply && body.outcome === "answered") {
           console.error("Owner relay completion acknowledgement unavailable; delivery retained");
           sent = { body, delivery: "unconfirmed" };
         } else {
           console.error("External relay helper completion unavailable; using Viewer transport");
-          sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
+          sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax, recorder?.recordCompletionRefusal);
         }
       } finally { completionInFlight = false; }
       if (sent.delivery === "refused" && body.outcome === "declined" && body.reason === "handoff") {
@@ -465,6 +473,7 @@ export async function runClaimedRequest(
           ...(sent.delivery === "accepted" ? { completionAccepted: true as const } : {}),
           ownerTurn: { ...row.ownerTurn!, completionAttempt: undefined } }), ownerRelayStoreDeadline());
       }
+      if (sent.tooLong) failureNotice = true;
       const completion = sent.body;
       if (sent.delivery === "accepted") {
         completionAccepted = true;
@@ -644,11 +653,10 @@ export async function runClaimedRequest(
     let firstAcknowledged!: () => void;
     const firstAck = new Promise<void>(resolve => { firstAcknowledged = resolve; });
     const onHeartbeat = (frame: Parameters<ConstructorParameters<typeof RelayLeaseTransport>[5]>[0]) => {
-      const step = newestProgress?.kind === "step" ? newestProgress.label : null;
       if (frame.phase === "attempt") heartbeatBusy = true;
       else if (frame.phase === "acknowledged" || frame.phase === "failed" || frame.phase === "post_completion") heartbeatBusy = false;
-      console.info("External relay heartbeat", { request: requestId.slice(0, 8), seq: frame.seq,
-        phase: frame.phase, step, status: frame.status, ...(frame.code ? { code: frame.code } : {}) });
+      console.info("External relay heartbeat", { path: "/requests/:request/heartbeat", seq: frame.seq,
+        phase: frame.phase, status: frame.status, ...(frame.code ? { code: safeRelayHttpReason(frame.code) } : {}) });
       if (frame.phase === "acknowledged") { acked = true; heartbeatAt = Date.now(); firstAcknowledged(); }
       else if (frame.phase === "failed") {
         if (!ownerPastWindow() && (frame.status === 404 || frame.status === 409 && frame.code === "lease_lost") && !completionAccepted) {
@@ -661,9 +669,9 @@ export async function runClaimedRequest(
     };
     transport = recovery ? null : runtime?.leaseWorker === false
       ? new InlineRelayLeaseTransport(relay, requestId, target.id, leaseId, intervalMs, onHeartbeat, initialProgress,
-        () => { void runtime?.onUnknownFeature?.(); })
+        () => { void runtime?.onUnknownFeature?.(); }, recorder?.recordCompletionRefusal)
       : new RelayLeaseTransport(relay, requestId, target.id, leaseId, intervalMs, onHeartbeat, initialProgress,
-        () => { void runtime?.onUnknownFeature?.(); });
+        () => { void runtime?.onUnknownFeature?.(); }, undefined, recorder?.recordCompletionRefusal);
     if (transport) {
       await transport.ready;
       const firstBeatDeadline = runtime?.leaseWorker === false ? null
@@ -721,6 +729,7 @@ export async function runClaimedRequest(
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
     owner = request.delivery === "guest" ? null : prototype ? ownerMessage : ownerTierFor(target, request);
+    if (owner || request.delivery === "guest") delete profile.pageRead;
     boundedOwnerTurn = !!owner && !prototype;
     ownerExecution = boundedOwnerTurn;
     if (owner && recovery?.ownerTurn?.context) owner = recovery.ownerTurn.context;
@@ -888,8 +897,9 @@ export async function runClaimedRequest(
     // history photos belong to the hosted assistant in that case; handing the
     // request back keeps the client from claiming an answer without seeing them.
     if (usingCloud && hasInboundMedia(request)) {
-      if (request.delivery === "guest") return await finish(declined(leaseId, "handoff", null, GUEST_CLOUD_MEDIA_HANDOFF_DETAIL));
-      if (request.features?.includes(RELAY_HISTORY_MEDIA) && validateMediaInput(request).some(media => isInboundImage(media.mime_type)))
+      const ready = validateMediaInput(request).filter(media => media.availability === "ready");
+      if (request.delivery === "guest" && ready.length) return await finish(declined(leaseId, "handoff", null, GUEST_CLOUD_MEDIA_HANDOFF_DETAIL));
+      if (request.features?.includes(RELAY_HISTORY_MEDIA) && ready.some(media => isInboundImage(media.mime_type)))
         return await finish(declined(leaseId, "handoff", null, "This install cannot inspect history photos; the service's own assistant will answer."));
     }
     const hydrated = recovery ? { request, guidance: [] } : await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
@@ -906,6 +916,7 @@ export async function runClaimedRequest(
     for (rounds = 1; rounds <= (loop ? RELAY_TOOL_ROUNDS : 1); rounds++) {
       if (executionExpired && Date.now() >= executionDeadline) return await finishOwnerTimeout(started);
       if (!ownerExecution && Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
+      let providerOpened = false;
       runFinished = false;
       let previousImages = new Set<string>();
       if (caps?.generate && conversation?.sessionId) {
@@ -918,11 +929,31 @@ export async function runClaimedRequest(
       if (rounds === 1 && hasInboundMedia(request)) {
         if (!await lease.ack()) return null;
         await inbound?.dispose();
-        inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at),
+        inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at), skipRejected: true,
           ...(conversation && request.delivery !== "guest" ? { seenMessageIds: new Set(conversation.seen) } : {}),
           authorize: () => { if (leaseUnavailable || releaseRequested || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new ExternalRelayError("lease_lost", 409); } });
         callAbort.signal.throwIfAborted();
         if (toolMedia) toolMedia.replaceInbound(inbound);
+        // Rejected originals must not remain seed candidates or contribute a
+        // stale extraction to the text answer.
+        const refused = new Map(inbound.skipped.map(item => [item.ref, item.reason]));
+        for (const message of request.input.conversation) for (const media of message.media ?? []) {
+          const reason = refused.get(media.ref);
+          if (reason) media.availability = reason === "too_large" ? "too_large" : "unsupported_type";
+        }
+        request.input.documents = request.input.documents.filter(document => !document.media_ref || !refused.has(document.media_ref));
+        const trigger = request.input.conversation.find(message => message.id === request.input.respond_to);
+        const triggerText = (trigger?.text ?? "").trim().replace(/^\[(?:Media attached; description unavailable|Document attached; filename=[^\r\n]+; mime_type=[^\r\n]+; byte_size=\d+)\]\s*$/gm, "").trim();
+        if (inbound.skipped.length && !inbound.files.length && !request.input.request_text?.trim() && !triggerText) {
+          const labels: Record<string, string> = { unsupported_media_type: "unsupported media type", too_large: "media too large",
+            protected: "protected media", missing: "media unavailable", media_unavailable: "media unavailable" };
+          const reasons = [...new Set(inbound.skipped.map(item => labels[item.reason] ?? "media unavailable"))];
+          const text = `Media could not be read: ${reasons.join(", ")}. Send a JPEG/PNG image or a text request.`;
+          const brief = reasons[0]!.replace("unsupported media type", "unsupported media");
+          const notice = text.length <= request.answer.max_chars ? text : `${brief[0]!.toUpperCase()}${brief.slice(1)}.`;
+          return await finish({ lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - started,
+            answer: { action: "reply", text: notice.slice(0, request.answer.max_chars), reply_to: request.input.respond_to, format: "plain" } });
+        }
       }
       // A refused continuation retries round one with the same registrations and budgets.
       if (rounds === 1 && !toolMedia) {
@@ -943,7 +974,7 @@ export async function runClaimedRequest(
             return true;
           }, toolMedia);
         if (ownerTools && usingCloud) loop = ownerTools.loop;
-        else if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, lease, { ...runtime, seedMediaRefs: toolMedia?.seedRefs, seedRefusal: toolMedia?.seedRefusal }, (tool, done, failed) => {
+        else if (!owner && request.delivery !== "guest" && (callableTools(request).length || profile.pageRead)) loop = createToolLoop(relay, request, lease, { ...runtime, pageRead: profile.pageRead, seedMediaRefs: toolMedia?.seedRefs, seedRefusal: toolMedia?.seedRefusal }, (tool, done, failed) => {
           if (!steps && request.answer.progress === "notes") {
             newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
               status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
@@ -959,7 +990,7 @@ export async function runClaimedRequest(
       }
       const final = rounds === RELAY_TOOL_ROUNDS || !!loop && loop.callsLeft() === 0;
       try {
-        const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }, target.engine) : answerPrompt(request, target.engine);
+        const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent, pageRead: !owner && profile.pageRead }, target.engine) : answerPrompt(request, target.engine);
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         const ownerTarget = target;
         if (owner && !cloud) executionDeadline = Date.now() + target.hardCapMinutes * 60_000;
@@ -1007,7 +1038,7 @@ export async function runClaimedRequest(
         }
         steps?.observe({});
         stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
-        const schema = withAnswerParts(request.delivery === "guest" ? guestAnswerSchema : loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent }))
+        const schema = withAnswerParts(request.delivery === "guest" ? guestAnswerSchema : loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent || !offersHandoff(request) ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent && offersHandoff(request) }))
             : ownerTools ? (ownerTools.sawUnknown ? replyAnswerSchema : ownerTools.actionSent ? answerSchema : offersHandoff(request) ? handoffAnswerSchema : answerSchema)
               : offersHandoff(request) ? handoffAnswerSchema : answerSchema, caps!);
         const localEngine = target.engine, localModel = target.model, localRunDir = runDir;
@@ -1069,6 +1100,8 @@ export async function runClaimedRequest(
             ...(caps?.generate ? { imageGeneration: { readableRoot: conversation?.cwd ?? path.join(loop ? path.join(localRunDir, `round-${rounds}`) : localRunDir, "cwd"), ...(inbound?.files.length ? { readableMediaRoot: path.dirname(inbound.files[0]!.path) } : {}) } } : {}),
             runtime,
             onEvent: (event) => {
+              if (event.type === "provider_open" && !event.open.search) providerOpened = true;
+              if (event.type === "note" && providerOpened && !owner) return;
               if (steps) return;
               const progress = progressForEvent(event);
               if (progress && request.answer.progress === "notes") {
@@ -1218,6 +1251,20 @@ export async function runClaimedRequest(
       }
       if (ownerParts) { stagedAttachments = ownerParts.parts().attachments; answerDrops.push(...ownerParts.drops); }
       if (!usingCloud || cloudFailed || result.status !== "done") await ownerTools?.close(result.status);
+      if (!owner && result.status === "done") {
+        const refusal = await checkProviderOpens(result.providerOpens ?? [], rounds, {
+          reader: runtime?.pageReader, signal: AbortSignal.any([callAbort.signal, AbortSignal.timeout(Math.max(1, Math.min(20_000, deadline.at - Date.now())))]) });
+        if (refusal) {
+          result = { ...result, answer: null, status: "violation" };
+          if (loop) {
+            loop.results.push(refusal);
+            loop.records.push({ round: rounds, tool: "web_search", page: false, status: refusal.status,
+              code: refusal.refusal?.class ?? refusal.code ?? null, audience: null, truncated: false, replayed: false, withheld: false, local: true });
+          }
+          if (loop && !conversation && !final) continue;
+          conversationBroken = !!conversation;
+        }
+      }
       if (conversation && !owner) {
         if (result.sessionId) conversation.sessionId = result.sessionId;
         else { conversationBroken = true; if (result.status === "done") result = { ...result, status: "failed" }; }

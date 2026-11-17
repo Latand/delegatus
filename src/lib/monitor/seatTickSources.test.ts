@@ -374,6 +374,49 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
+test("a failed host-death attempt leaves the seat projection with its failure and clears the old stall", async () => {
+  const active = lane();
+  const ports = sources({ pipelines: [active] });
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  gathered.pipelines[0]!.stageActivity = {
+    lifecycle: "gone", reason: "host_gone_turn_unverified", verified: false, turnState: "busy",
+    conversationId: STAGE_CONVERSATION,
+  };
+  const stalled = seatTickDecision(gathered);
+  expect(stalled.state.stalledSeen).toContain("pipeline_a1");
+
+  const failure = "stage host exited after recovery was cancelled; stopped by pipeline-stage-stop";
+  const settled = lane({
+    state: "needs_decision", stateDetail: failure,
+    cursor: { stageId: "build", state: "needs_decision", input: null, activatedBy: null },
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "failed", error: failure, completedAt: new Date(NOW).toISOString(),
+      conversationId: STAGE_CONVERSATION, agentPath: TRANSCRIPT, startedAt: new Date(NOW - 60_000).toISOString() }] }],
+  });
+  ports.pipelines = () => [settled] as never;
+  const refreshed = refreshSeatTickInput({ ...gathered, state: stalled.state }, ports);
+  expect(refreshed.pipelines).toHaveLength(1);
+  expect(refreshed.pipelines[0]).toMatchObject({ state: "inert", stageState: "needs_decision", stageAttemptState: "failed" });
+  expect(settled.stateDetail).toContain("stopped by pipeline-stage-stop");
+  const afterSettlement = seatTickDecision(refreshed);
+  expect(afterSettlement.state.stalledSeen).not.toContain("pipeline_a1");
+
+  const retried = lane({
+    state: "running", stateDetail: null,
+    cursor: { stageId: "build", state: "running", input: null, activatedBy: null },
+    runs: [{ stageId: "build", attempts: [{ n: 2, state: "running", conversationId: STAGE_CONVERSATION,
+      agentPath: TRANSCRIPT, startedAt: new Date(NOW + 1).toISOString() }] }],
+  });
+  ports.pipelines = () => [retried] as never;
+  const retryProjection = refreshSeatTickInput({ ...refreshed, state: afterSettlement.state }, ports);
+  expect(retryProjection.pipelines[0]).toMatchObject({ state: "active", stageAttemptState: "running" });
+  expect(seatTickDecision(retryProjection).state.stalledSeen).not.toContain("pipeline_a1");
+
+  ports.pipelines = () => [finishedLane()] as never;
+  const terminalProjection = refreshSeatTickInput({ ...retryProjection, state: afterSettlement.state }, ports);
+  expect(terminalProjection.pipelines).toHaveLength(0);
+  expect(seatTickDecision(terminalProjection).state.stalledSeen).not.toContain("pipeline_a1");
+});
+
 test("gather yields while frozen lanes move and refresh carries the replacement agenda", async () => {
   const { deepFreeze } = await import("@/lib/deepFreeze");
   const { refreshSeatTickEvidence } = await import("./seatTickSources");
@@ -1339,6 +1382,26 @@ test("a pull request the merge runner holds is left out, and a stopped merge nam
       .toBe(`pull request #1289 left open by a lane that finished; merge stopped: ${reason}`);
     expect(verdict.kind === "wake" && verdict.items.find((item) => item.kind === "pull-request")?.label).toContain(`merge stopped: ${reason}`);
   }
+});
+
+test("optional check failures reach the seat wake after landing and stay project-scoped", async () => {
+  const merge = { state: "merged", by: "auto-merge", prNumber: 1289, optionalFailedChecks: ["optional-audit"] };
+  const input = await gather({ pipelines: [finishedLane({ merge }),
+    finishedLane({ id: "hidden-lane", hiddenAt: "2026-08-27T11:00:00.000Z", merge }),
+    finishedLane({ id: "other-lane", project: "another-project", merge })], openPullRequests: [] }, withCursor(0, OVERDUE));
+  const notes = input.signals.filter(signal => signal.id.startsWith("optional-check-failures:"));
+  expect(notes).toHaveLength(1);
+  expect(notes[0]!.label).toContain("Note: optional checks failed on PR #1289: optional-audit");
+  const verdict = seatTickDecision(input).verdict;
+  expect(verdict.kind).toBe("wake");
+  if (verdict.kind === "wake") expect(verdict.items.find(item => item.id === notes[0]!.id)?.label).toContain("merge depends on required checks only");
+  if (verdict.kind === "wake") {
+    const shown = verdict.items.map(item => item.itemVersion!).filter(Boolean);
+    const again = seatTickDecision({ ...input, state: { ...input.state, itemsShown: shown } }).verdict;
+    expect(again.kind === "wake" && again.items.some(item => item.id === notes[0]!.id)).toBe(false);
+  }
+  const recovered = await gather({ pipelines: [finishedLane({ merge: { ...merge, optionalFailedChecks: [] } })], openPullRequests: [] }, withCursor(0, OVERDUE));
+  expect(recovered.signals.some(signal => signal.id.startsWith("optional-check-failures:"))).toBe(false);
 });
 
 /* #2187 §5.3: a finished lane marked as finishing its task, whose move to

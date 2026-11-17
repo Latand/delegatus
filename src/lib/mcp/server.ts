@@ -4518,7 +4518,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       rejectedHead: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("Commit SHA or unique local commit prefix (7+ hex)."),
       comparison: z.boolean().optional(),
     }).optional().describe("Delivery target, using the PR head repository remote and full branch. The canonical repository plus branch has one Delegatus publisher. A competing creation becomes an internal comparison lane and names its owner; host Git/gh tools remain unchanged."),
-    task: z.string().min(1).describe("Board title for the pipeline."),
+    task: z.string().min(1).describe("Board title for the pipeline, in the operator's language."),
+    prTitle: z.string().trim().min(1).max(120).regex(/^[^\r\n]+$/).optional().describe("English public PR title, separate from the board title. When omitted, derives an English title from the task or stage report."),
     taskIds: z.array(z.string()).optional()
       .describe("Board tasks this pipeline's work belongs to (#1720), recorded durably on the pipeline. EVERY stage launch — run, review-loop, retry, fail branch — reads this list at launch time and joins those tasks, so passing it in the create call is what keeps one product outcome on one card; a pipeline created without it is given a placeholder task of its own. Each id must name an existing task in the pipeline's project. pipeline_action \"link-task\" adds one afterwards, for the stages that have not started yet."),
     finishesTask: z.union([z.boolean(), z.array(z.string())]).optional()
@@ -5128,8 +5129,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   issue_report: z.object({
     clientRequestId: clientRequestIdSchema,
     action: z.enum(["hints", "preview", "show", "publish"]).describe("hints: advisory pointers without storage. preview: store text and agent judgment. show: read a preview back. publish: file an approved preview."),
-    title: z.string().optional().describe("preview only: the issue title, one line."),
-    body: z.string().optional().describe("preview only: the issue body in the repository's issue style: symptom, observed evidence, impact, expected behaviour, suggested investigation."),
+    title: z.string().optional().describe("preview only: the public issue title in English, one line."),
+    body: z.string().optional().describe("preview only: the public issue body in English in the repository's issue style: symptom, observed evidence, impact, expected behaviour, suggested investigation."),
     privacyJudgment: z.object({
       assessment: z.string().trim().min(1).max(3000),
       removed: z.string().trim().min(1).max(3000),

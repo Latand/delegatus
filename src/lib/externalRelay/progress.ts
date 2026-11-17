@@ -1,6 +1,8 @@
+import { providerOpen, type ProviderOpen } from "./providerOpens";
 import { redactTranscriptText } from "@/components/feed/toolRedaction";
 import type { ExternalRelayProgress } from "./protocol";
 export type EphemeralAgentEvent =
+  | { type: "provider_open"; open: ProviderOpen }
   | { type: "note"; text: string }
   | { type: "tool"; phase: "start" | "done"; tool: string; ok: boolean | null }
   | { type: "violation"; detail: string };
@@ -24,10 +26,12 @@ export function mapAgentLine(
       )
         return [{ type: "violation", detail: "unexpected Codex item" }];
       // Native tool progress is admitted only by the negotiated run profile.
-      if (item.type === "web_search" || item.type === "image_generation" || item.type === "image_generation_call")
-        return event.type === "item.started" || event.type === "item.completed"
-          ? [{ type: "tool", phase: event.type === "item.started" ? "start" : "done", tool: item.type === "web_search" ? "web_search" : "image_generation", ok: null }]
-          : [];
+      if (item.type === "web_search" || item.type === "image_generation" || item.type === "image_generation_call") {
+        if (event.type !== "item.started" && event.type !== "item.completed") return [];
+        const open = item.type === "web_search" ? providerOpen(item, event.type === "item.started" ? "start" : "done") : null;
+        return [...(open ? [{ type: "provider_open" as const, open }] : []),
+          { type: "tool", phase: event.type === "item.started" ? "start" : "done", tool: item.type === "web_search" ? "web_search" : "image_generation", ok: null }];
+      }
       if (
         event.type === "item.completed" &&
         item.type === "agent_message" &&
@@ -75,7 +79,7 @@ export function mapAgentLine(
 export function progressForEvent(
   event: EphemeralAgentEvent,
 ): ExternalRelayProgress | null {
-  if (event.type === "violation") return null;
+  if (event.type === "violation" || event.type === "provider_open") return null;
   const raw =
     event.type === "note"
       ? (event.text.split(/\r\n|\r|\n/).find((line) => line.trim()) ?? "")
