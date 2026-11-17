@@ -116,7 +116,8 @@ export async function reviewScopePOST(request: NextRequest,world: PrototypeWorld
     }
     const target = await withPrototypeState(() => body.mode === "publish" ? publicationTarget(request,body.taskId,world) : readTarget(request,body.taskId,world));
     if (!target.caller.conversationId) throw new PrototypeError("caller could not be identified",403);
-    return NextResponse.json({ conversationId: target.caller.conversationId, taskId: target.taskId },{ headers: { "cache-control": "private, no-store" } });
+    return NextResponse.json({ conversationId: target.caller.conversationId, taskId: target.taskId,
+      project: target.caller.project ? canonicalProject(target.caller.project) : null },{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error, "POST /api/prototype-reviews/scope"); }
 }
 /** A seat's answered rounds whose message is not yet known delivered take the

@@ -160,7 +160,7 @@ test("the seat reads its own questions and the receipt scope names them", async 
   const read = await (await reviewReadPOST(request("/api/prototype-reviews/read", {}), seat)).json() as PrototypeReviewRead;
   expect(read).toMatchObject({ taskId: null, waitingReviewId: seatId });
   expect(read.rounds.map(r => r.id)).toEqual([seatId]);
-  expect(await (await reviewScopePOST(request("/api/prototype-reviews/scope", { mode: "publish" }), seat)).json()).toEqual({ conversationId: "conversation_seat", taskId: null });
+  expect(await (await reviewScopePOST(request("/api/prototype-reviews/scope", { mode: "publish" }), seat)).json()).toEqual({ conversationId: "conversation_seat", taskId: null, project: "project-a" });
 });
 
 test("an existing seat round's pictures are served without a task and survive another publication's cleanup", async () => {

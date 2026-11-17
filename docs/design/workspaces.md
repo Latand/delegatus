@@ -1010,11 +1010,14 @@ their launch binding or latest admitted member, including revocation checks.
 `publish_prototype_review` and `read_prototype_review` also pass through their
 HTTP workspace fence. Taskless form routes resolve their project from the
 authenticated current seat. A current seat's exact keyed replay reads its
-settled caller-and-task receipt before workspace admission, including after a
+settled caller-project-and-task receipt before workspace admission, including after a
 restart. An omitted task uses the same pipeline-stage task inference as the
 HTTP scope handler, including when that stage conversation is also a seat.
-Changed arguments conflict; a different caller cannot read that
-receipt. Pending or retryable publications still use normal recovery and
+Changed arguments conflict; a different caller or a seat in another project
+cannot read that receipt. The HTTP scope supplies the verified project when
+the receipt is written; replay rechecks the current seat project after reading
+it. Legacy receipts without a proven project require ordinary HTTP admission.
+Pending or retryable publications still use normal recovery and
 admission. New calls retain all workspace checks. MCP and HTTP workspace
 refusals name the failed check without exposing target identities.
 

@@ -8831,7 +8831,16 @@ async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: M
     { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }), ...(args.reviewId === undefined ? {} : { reviewId: args.reviewId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
   /* A seat asking without a task is scoped to its own questions (docs/design/operator-decision-forms.md §2.1). */
   if (typeof scope.conversationId !== "string" || (typeof scope.taskId !== "string" && scope.taskId !== null)) throw new Error("the Viewer did not name the caller and task of this prototype call");
+  if (mode !== "resend" && typeof scope.project === "string" && scope.project) {
+    return prototypeProjectReceiptScope(scope.conversationId, scope.taskId, scope.project);
+  }
+  // Older Viewers prove access through HTTP, but cannot mint a receipt that
+  // bypasses that check: their legacy scope is never used by fast replay.
   return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
+}
+
+function prototypeProjectReceiptScope(conversationId: string, taskId: string | null, project: string): string {
+  return JSON.stringify(["prototype-project-v1", conversationId, canonicalProject(project), taskId]);
 }
 
 /** A current seat may recover its own settled form without asking a workspace
@@ -8841,13 +8850,17 @@ function prototypeSeatReceiptScope(mode: "publish" | "read", args: McpToolArgs, 
   const caller = dependencies.attentionAuthority();
   if ((caller.kind !== "root" && caller.kind !== "worker") || !caller.conversationId) return null;
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
-  if (!seats.some(seat => seat.conversationId === caller.conversationId)) return null;
+  const projects = new Set(seats.filter(seat => seat.conversationId === caller.conversationId)
+    .map(seat => canonicalProject(seat.project)));
+  if (projects.size !== 1) return null;
+  const project = [...projects][0];
+  if (!project) return null;
   if (args.taskId !== undefined && (typeof args.taskId !== "string" || !args.taskId)) return null;
   const stage = prototypeStageForConversation(caller.conversationId,
     dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines);
   if (stage && stage.taskIds.length !== 1 && (mode === "publish" || args.taskId === undefined)) return null;
   if (mode === "publish" && stage && args.taskId !== undefined && args.taskId !== stage.taskIds[0]) return null;
-  return `${caller.conversationId}\n${args.taskId ?? stage?.taskIds[0] ?? "seat"}`;
+  return prototypeProjectReceiptScope(caller.conversationId, (args.taskId as string | undefined) ?? stage?.taskIds[0] ?? null, project);
 }
 
 /**

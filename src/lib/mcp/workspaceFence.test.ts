@@ -158,7 +158,7 @@ test.each(["seat", "task"])("#3818: a refused transcript read leaves %s forms an
   const control = {
     get: async () => ({}),
     post: async (url: string) => {
-      if (url.endsWith("/scope")) { scopeCalls++; return { conversationId: "conversation_member", taskId: taskId ?? null }; }
+      if (url.endsWith("/scope")) { scopeCalls++; return { conversationId: "conversation_member", project: own, taskId: taskId ?? null }; }
       if (url.endsWith("/read")) return { rounds: [] };
       publications++; return { reviewId: "review-one", project: own };
     },
@@ -206,19 +206,20 @@ test.each(["seat", "task"])("#3818: a refused transcript read leaves %s forms an
   });
 });
 
-test.each(["caller", "designation", "task", "read-error"])("form replay rechecks identity after the receipt await: %s", async change => {
+test.each((["read", "publish"] as const).flatMap(mode => ["caller", "designation", "task", "project", "ambiguous-project", "read-error"].map(change => [mode, change] as const)))("form replay rechecks identity after the receipt await: %s %s", async (mode, change) => {
   designateCaller({ memberId: member.id, workspaceId: W1 });
   const receiptFile = path.join(root, "race-receipts.json");
   const receipts = new FileMcpReceiptStore(receiptFile);
   let publications = 0;
   const bindings = viewerMcpBindings(undefined, { get: async () => ({}), post: async url => {
-    if (url.endsWith("/scope")) return { conversationId: "conversation_member", taskId: null };
+    if (url.endsWith("/scope")) return { conversationId: "conversation_member", project: own, taskId: null };
     publications++; return { reviewId: "original-form" };
   } }, dependencies);
   service = withWorkspaceMcpFence(createMcpToolService(bindings, receipts), dependencies);
   await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
-    const args = { clientRequestId: "owned-form", title: "Choose", questions: formQuestions };
-    expect(await call("publish_prototype_review", args)).toMatchObject({ ok: true });
+    const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+    const args = { clientRequestId: "owned-form", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
+    expect(await call(tool, args)).toMatchObject({ ok: true });
     const durable = fs.readFileSync(receiptFile, "utf8");
     const lookup = receipts.lookup.bind(receipts);
     const read = spyOn(receipts, "lookup").mockImplementation(async key => {
@@ -229,12 +230,14 @@ test.each(["caller", "designation", "task", "read-error"])("form replay rechecks
         const pipeline = dependencies.getPipelines().pipelines[0]!;
         pipeline.taskIds = ["task_0"];
         pipeline.runs.push({ stageId: "review", attempts: [{ n: 1, conversationId: "conversation_member" }] } as never);
-      } else dependencies.authorizedSeats = () => [];
+      } else if (change === "project") dependencies.authorizedSeats = () => [{ conversationId: "conversation_member", project: other, path: null }];
+      else if (change === "ambiguous-project") dependencies.authorizedSeats = () => [own, other].map(project => ({ conversationId: "conversation_member", project, path: null }));
+      else dependencies.authorizedSeats = () => [];
       store.removeWorkspaceMember(W1, member.id);
       return record;
     });
     try {
-      const answer = await call("publish_prototype_review", args);
+      const answer = await call(tool, args);
       expect(answer).toMatchObject(change === "read-error" ? { ok: false, code: "receipt_unavailable", retryable: true, details: { check: "receipt-store" } } : REFUSED);
       expect(answer).not.toHaveProperty("reviewId");
       expect(publications).toBe(1);
@@ -1257,6 +1260,89 @@ test.each(["read", "publish"] as const)("implicit pipeline-task %s receipts repl
       expect(await call(tool, args)).toMatchObject(REFUSED);
       expect(fs.readFileSync(receiptFile, "utf8")).toBe(durable);
       expect(scopeCalls).toBe(1); expect(effects).toBe(1);
+    });
+  } finally { installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null); }
+});
+
+
+test.each((["read", "publish"] as const).flatMap(mode => [false, true].map(legacy => [mode, legacy] as const)))("project-bound %s receipts refuse a seat in another project after reopening (legacy=%s)", async (mode, legacy) => {
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const { reviewScopePOST } = await import("@/lib/prototypeReview/http");
+  const { prototypeWorld } = await import("@/lib/prototypeReview/world");
+  const { authorizedManagerSeats } = await import("@/lib/orchestrator/authority");
+  saveTasks(dependencies.loadTasks().map(task => ({ ...task, assignments: [], sources: [] })));
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  dependencies.authorizedSeats = () => authorizedManagerSeats({
+    activeSeats: () => Object.values(readOrchestratorSeatFile().seats),
+    revocations: () => readOrchestratorSeatFile().revocations,
+    resolveAlias: id => id,
+    conversationFacts: id => {
+      const row = snapshot.conversations[id];
+      return row ? { superseded: false, hasGeneration: row.generations.length > 0, project: row.projectOwnership?.project ?? null } : null;
+    },
+  });
+  let reads = 0, scopes = 0;
+  const world = { ...prototypeWorld, caller: () => ({ conversationId: "conversation_member", project: snapshot.conversations.conversation_member!.projectOwnership!.project }),
+    stage: () => null, orchestrator: () => "conversation_member" };
+  const controls = { get: async () => ({}), post: async (url: string, body: Record<string, unknown>) => {
+    if (!url.endsWith("/scope")) { reads++; return { rounds: [{ title: "Project Alpha private answer" }] }; }
+    scopes++;
+    const response = await reviewScopePOST(new NextRequest("http://localhost/api/prototype-reviews/scope", {
+      method: "POST", headers: { host: "localhost", "content-type": "application/json", "x-llv-spawn-capability": "a".repeat(43) }, body: JSON.stringify(body),
+    }), world);
+    const result = await response.json();
+    if (!response.ok) throw new Error(String(result.error));
+    if (legacy) delete result.project;
+    return result;
+  } };
+  setCallerConversationResolverForTests(() => "conversation_member");
+  installSpawnCapabilityResolver(() => "conversation_member");
+  try {
+    const receipts = new FileMcpReceiptStore(path.join(root, "project-change-receipts.json"));
+    service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, controls, dependencies), receipts), dependencies);
+    await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+      const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+      const args = { taskId: "task_0", clientRequestId: "project-change-replay", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
+      expect(await call(tool, args)).toMatchObject({ ok: true, replayed: false });
+      if (legacy) {
+        const original = fs.readFileSync(path.join(root, "project-change-receipts.json"), "utf8");
+        store.removeWorkspaceMember(W1, member.id);
+        expect(await call(tool, args)).toMatchObject(REFUSED);
+        expect(fs.readFileSync(path.join(root, "project-change-receipts.json"), "utf8")).toBe(original);
+        store.putWorkspaceMember(W1, member.id, "member", owner.id, AT);
+      }
+      store.putWorkspaceMember(W2, member.id, "member", owner.id, AT);
+      snapshot.conversations.conversation_member = conversation("conversation_member", other) as never;
+      snapshot.conversations.conversation_member!.generations[0]!.launchProfile!.workspace = { memberId: member.id, workspaceId: W2 };
+      const seats = readOrchestratorSeatFile();
+      const oldSeat = seats.seats[own]!;
+      delete seats.seats[own];
+      seats.seats[other] = { ...oldSeat, project: other, seatEpoch: oldSeat.seatEpoch + 1, workspace: { memberId: member.id, workspaceId: W2 } };
+      writeStoredSeatRecord(seats);
+      expect(dependencies.authorizedSeats!()).toMatchObject([{ conversationId: "conversation_member", project: other }]);
+      expect(conversationWorkspacePrincipal(snapshot, "conversation_member", store)).toEqual({ memberId: member.id, workspaceId: W2 });
+      service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, controls, dependencies), new FileMcpReceiptStore(path.join(root, "project-change-receipts.json"))), dependencies);
+      const durable = fs.readFileSync(path.join(root, "project-change-receipts.json"), "utf8");
+      const replay = await call(tool, args);
+      expect(replay).toMatchObject({ ...REFUSED, details: { check: "argument:taskId" } });
+      expect(scopes).toBe(1);
+      expect(JSON.stringify(replay)).not.toContain("Project Alpha private answer");
+      expect(reads).toBe(1);
+      expect(fs.readFileSync(path.join(root, "project-change-receipts.json"), "utf8")).toBe(durable);
+      const script = `
+        import { createMcpToolService, FileMcpReceiptStore } from ${JSON.stringify(path.resolve("src/lib/mcp/server.ts"))};
+        import { viewerMcpBindings, productionDomainDependencies } from ${JSON.stringify(path.resolve("src/lib/mcp/bindings.ts"))};
+        const dependencies = { ...productionDomainDependencies,
+          attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_member", role: "orchestrator" }),
+          authorizedSeats: () => [{ conversationId: "conversation_member", project: ${JSON.stringify(other)}, path: null }],
+          listPipelineRecords: () => [] };
+        const control = { get: async () => { throw new Error("replay dispatched"); }, post: async () => { throw new Error("replay dispatched"); } };
+        const service = createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(${JSON.stringify(path.join(root, "project-change-receipts.json"))}));
+        console.log(JSON.stringify(await service.replayTool(${JSON.stringify(tool)}, ${JSON.stringify(args)})));
+      `;
+      const restarted = spawnSync(process.execPath, ["-e", script], { env: process.env, encoding: "utf8" });
+      expect(restarted.status).toBe(0);
+      expect(JSON.parse(restarted.stdout.trim())).toBeNull();
     });
   } finally { installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null); }
 });
