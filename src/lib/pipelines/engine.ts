@@ -1676,6 +1676,7 @@ async function stopStageHostByRecordedIdentity(
   const outcome = await terminateStructuredHostTree(ref, {
     ...termination,
     stopOrigin: { path: "pipeline-stage-stop", operationId: `${target.launchId}:${target.stageId}:${target.attempt}` },
+    orphanAlarmRegistry: registry,
     retainedSurvivors,
     authorize,
     onFirstEffect: () => {
