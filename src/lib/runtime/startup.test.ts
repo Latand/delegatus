@@ -7265,6 +7265,8 @@ test.each([false, true])("fresh work from a proven live engine closes its restar
   try {
     await viewer.boot();
     expect(restartCutEvidenceUnresolved(hostKey)).toBe(true);
+    const working = registry.readOnlySnapshot().entries[hostKey]!;
+    registry.upsert({ ...working, structuredHost: { ...working.structuredHost!, eventCursor: working.structuredHost!.eventCursor + 1 } });
     setSystemTime(cutAt + 1000);
     const afterCut = { type: "assistant", timestamp: new Date(cutAt + 1000).toISOString(),
       message: { role: "assistant", content: [{ type: "text", text: "Still working on the same turn." }] } };

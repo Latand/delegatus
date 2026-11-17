@@ -834,7 +834,8 @@ async function restartCutTargets(
     // A registry checkpoint can precede unfinished work before the restart.
     // Only new work after this startup first observed this owner proves
     // continuity. Keep the first observation across every deferral re-probe.
-    const owner = JSON.stringify([generation.path, entry.claimEpoch, entry.claimOwner, entry.structuredHost]);
+    const owner = JSON.stringify([generation.path, entry.claimEpoch, entry.claimOwner,
+      entry.structuredHost.endpoint, entry.structuredHost.process]);
     let observation = observations.get(hostKey);
     if (!observation || observation.owner !== owner) {
       observation = { owner, at: now, transcript, workAt: at };

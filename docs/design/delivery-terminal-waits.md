@@ -44,8 +44,9 @@ to inspect the original operation and authorize a replacement instruction.
 Startup retains its first observation of each host owner. Growth in that same
 transcript file, containing newer native work dated after the observation,
 together with the exact engine process proven alive, disproves a restart cut.
-Work recorded before startup retains the existing ledger and cut decision. Startup revalidates the generation path, endpoint,
-claim and process after reading the transcript. It withdraws unsupported cut
+Work recorded before startup retains the existing ledger and cut decision.
+Startup revalidates the generation path, endpoint, claim and process after
+reading the transcript. It withdraws unsupported cut
 proposals and releases the hold. The surviving process keeps its writer and
 turn; startup neither replaces nor demotes it and sends no continuation.
 Unreadable evidence and unverified processes retain the existing hold policy.

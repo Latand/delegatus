@@ -598,7 +598,7 @@ export async function dispatchStructuredControl(
             };
     assertSwitchCurrent?.();
     const result = await client.command(command);
-    if (structuredKill && ["pending", "queued", "applying", "delivered"].includes(result.receipt.status)) await fenceSends(result.receipt.pendingSendIds ?? (result.replayed ? [] : pendingSendIds));
+    if (structuredKill && ["pending", "queued", "delivering", "applying", "delivered"].includes(result.receipt.status)) await fenceSends(result.receipt.pendingSendIds ?? (result.replayed ? [] : pendingSendIds));
     /* The host holds a durable receipt for this reconfigure, so the switch is a
        thing that happened and the record describes it. */
     assertSwitchCurrent?.();
@@ -626,7 +626,7 @@ export async function dispatchStructuredControl(
          durable receipt decides whether structured control owns the response. */
       const durable = await client.operationStatus(operationId).catch(() => null);
       if (durable) {
-        if (structuredKill && ["pending", "queued", "applying", "delivered"].includes(durable.receipt.status)) await fenceSends(durable.receipt.pendingSendIds ?? []);
+        if (structuredKill && ["pending", "queued", "delivering", "applying", "delivered"].includes(durable.receipt.status)) await fenceSends(durable.receipt.pendingSendIds ?? []);
         /* The socket failed, the receipt did not: the command was accepted, so
            this is the same acceptance the success path attributes. */
         try { assertSwitchCurrent?.(); } catch { return { status: 409, body: { error: "account switch ownership changed" } }; }

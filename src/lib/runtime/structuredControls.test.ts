@@ -1724,7 +1724,7 @@ test("a refused kill leaves pending sends intact and an accepted kill excludes l
 });
 
 
-test.each(["replay", "restart", "lost-reply", "restart-before-fence", "dead-projection"] as const)(
+test.each(["replay", "restart", "lost-reply", "delivering-lost-reply", "restart-before-fence", "dead-projection"] as const)(
   "original-key kill %s fences only its durable admission cohort", async mode => {
     const fixture = structuredConversation();
     const conversation = fixture.registry.conversationForPath(fixture.path)!;
@@ -1733,7 +1733,7 @@ test.each(["replay", "restart", "lost-reply", "restart-before-fence", "dead-proj
     const before = fixture.registry.holdDelivery(conversation.id, "before the kill", `cohort-before-${mode}`);
     const filename = path.join(sandbox, `kill-cohort-${mode}.sqlite`);
     let journal = new RuntimeJournal(filename, { structuredHosts: true });
-    let loseReply = mode === "lost-reply" || mode === "restart-before-fence";
+    let loseReply = mode === "lost-reply" || mode === "delivering-lost-reply" || mode === "restart-before-fence";
     let later: typeof before | undefined;
     const client = {
       command: async (command: RuntimeOperationCommand) => {
@@ -1742,6 +1742,7 @@ test.each(["replay", "restart", "lost-reply", "restart-before-fence", "dead-proj
         if (loseReply) {
           loseReply = false;
           if (mode === "restart-before-fence") throw new Error("response interrupted before fencing");
+          if (mode === "delivering-lost-reply") journal.transitionOperation(command.operationId!, "delivering");
           throw new RuntimeHostUnavailableError("runtime host request timed out");
         }
         return result;
