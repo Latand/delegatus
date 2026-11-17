@@ -10,6 +10,7 @@ import { demoteSkippedStructuredRegistryHosts, reconcileDeadStructuredRegistryHo
 import { determined } from "./determinable";
 import { handOverHostForDemotion } from "./structuredDeliveryController";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 
 const NOW = Date.parse("2026-10-16T00:00:00Z");
 const CREATED = new Date(NOW).toISOString();
@@ -902,6 +903,15 @@ for (const engine of ["codex", "claude"] as const) for (const prepared of [false
       },
       deliveryWriteOrBusy: async (_options: unknown, work: () => unknown) => work(),
       setStructuredHostClaimed: () => null,
+      // Same lookup as AgentRegistry.spawnReceiptForHost: the host operation
+      // is authoritative, else the latest receipt for this native generation.
+      spawnReceiptForHost: (key: SessionKey) => {
+        const entry = view.entries[sessionKeyId(key)];
+        const receipt = entry?.structuredHostOperationId ? view.receipts[entry.structuredHostOperationId]
+          : Object.values(view.receipts).findLast(row => row.key?.sessionId === key.sessionId
+            && row.key?.engine === key.engine && row.artifactPath === entry?.artifactPath);
+        return receipt ? structuredClone(receipt) : null;
+      },
     } as unknown as AgentRegistry;
     const adopt = engine === "codex" ? adoptCodexRegistryHosts : adoptClaudeRegistryHosts;
     await adopt(registry, async () => { throw new Error("refused admission reached options"); }, { NODE_ENV: "test" }, () => true, undefined, {
