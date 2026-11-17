@@ -20,7 +20,7 @@ import type { ReleaseController } from "@/lib/release/run";
 import { runSeatAutoRotation, type SeatAutoRotationPorts } from "./seatAutoRotation";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import type { SeatCommandResult } from "@/lib/orchestrator/seatCommand";
-import { seatHostRecoveryKey, seatHostRecoveryCard, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
+import { seatHostRecoveryKey, seatHostRecoveryCard, seatHostRevivalBackoffMs, SEAT_HOST_REVIVAL_SETTLE_MS, SEVERING_HOST_STOPS, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
 import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
 import { openSeatAuthIncident } from "./seatAuthIncident";
 import { curationForSweep, productionCurationController, type CurationController } from "@/lib/memory/curation/run";
@@ -1818,6 +1818,9 @@ async function check(
   const hostReachabilityFor = async (seat: { conversationId: string; seatEpoch: number }, observed = recoveryIdentity(seat.conversationId)) => {
     let deadHost = false;
     let detail = "host evidence absent";
+    /* Who stopped the lost host, when anyone did: the current exit receipt, or
+       the one the registry retained after reclaiming it. */
+    let stop: string | null = null;
     try {
       await yieldToRuntime();
       const rows = await sources.liveness({ conversationId: seat.conversationId, stallAfterMs: policy.stallAfterMs, limit: 1 });
@@ -1826,13 +1829,14 @@ async function check(
       deadHost = row?.host?.state === "gone"
         && (row.reason === "host_gone_turn_settled" || row.reason === "host_gone_turn_open");
       if (row) detail = `${row.host?.state ?? "unknown"}/${row.reason}`;
+      if (deadHost) stop = (row?.hostExit ?? row?.previousHostExit)?.stop?.path ?? null;
     } catch { detail = "host evidence unreadable"; }
     const current = () => {
       const active = sources.seatFor(canonical).active;
       return !!active && active.conversationId === seat.conversationId && active.seatEpoch === seat.seatEpoch
         && observed !== null && recoveryIdentity(seat.conversationId)?.identity === observed.identity;
     };
-    return { deadHost, detail, current };
+    return { deadHost, detail, stop, current };
   };
   let openingReachability: { conversationId: string; seatEpoch: number; observation: Awaited<ReturnType<typeof hostReachabilityFor>> } | null = null;
   let admissionDetail: string | null = null;
@@ -1936,6 +1940,79 @@ async function check(
     } catch (error) { record.state = "failed"; record.detail = redactMonitorText(error instanceof Error ? error.message : "rotation failed").slice(0, 500); }
     await persistRecovery(record); await tellRecovery(record);
     recoveryDetail = `seat host recovery: ${record.state}; ${record.detail}`;
+  };
+  /* A designated seat whose host was severed (#4029 covered only a delivered
+     wake): start a fresh host through the shared structured recovery, with no
+     prompt and so no model turn. A deliberate stop is never undone, and every
+     attempt and its next allowed time are durable seat state, so a failing
+     revival is carded and backs off across restarts instead of looping. */
+  const reviveSeveredSeat = async (seat: { conversationId: string; seatEpoch: number; path?: string | null },
+    reachability: Awaited<ReturnType<typeof hostReachabilityFor>>) => {
+    const revive = sources.reviveSeatHost;
+    if (!revive) return;
+    if (reachability.stop && !SEVERING_HOST_STOPS.has(reachability.stop)) {
+      recoveryDetail = `seat host stopped deliberately (${redactMonitorText(reachability.stop).slice(0, 80)}); not revived`;
+      return;
+    }
+    const previous = readState(canonical).hostRecovery;
+    // A rotation that is still settling owns this epoch's recovery.
+    if (previous?.state === "pending" && previous.seatEpoch === seat.seatEpoch) return;
+    const id = seatHostRecoveryKey(canonical, seat.seatEpoch, `host-loss:${seat.conversationId}`);
+    const now = sources.now();
+    const same = previous?.id === id ? previous : null;
+    if (same?.retryAt && Date.parse(same.retryAt) > now) {
+      recoveryDetail = `seat host revival: ${same.state}; next attempt ${same.retryAt}`;
+      return;
+    }
+    const continuing = same && (same.state !== "revived" || now - Date.parse(same.at) < SEAT_HOST_REVIVAL_SETTLE_MS);
+    const attempts = (continuing ? same.attempts ?? 1 : 0) + 1;
+    const guard = () => {
+      assertSeatTickWork();
+      if (activeDrain()) throw new DeliveryAdmissionRefusedError("AUTO_UPDATE_DRAIN");
+      const active = sources.seatFor(canonical).active;
+      if (!active || active.seatEpoch !== seat.seatEpoch || active.conversationId !== seat.conversationId)
+        throw new DeliveryAdmissionRefusedError("seat-rotated");
+      if (seatRequestControlled(canonical, seat, new Date(now).toISOString())) throw new DeliveryAdmissionRefusedError("seat-controlled");
+    };
+    let state: "revived" | "unrevived";
+    let detail: string;
+    try {
+      guard();
+      const result = await revive({ path: seat.path ?? "", conversationId: seat.conversationId,
+        origin: delegatusMessageOrigin("seat-tick", canonical), admissionGuard: () => guard(), authorityGuard: guard });
+      if (result?.conversationId === seat.conversationId) {
+        state = "revived";
+        detail = result.spawned ? "the severed host was replaced by a fresh one without a model turn" : "a live host already serves the seat";
+      } else {
+        state = "unrevived";
+        detail = "structured recovery could not take ownership of the seat";
+      }
+    } catch (error) {
+      // Another owner, an update hold or a seat change: nothing failed, and the
+      // next check observes the host again.
+      const name = error instanceof Error ? error.name : "";
+      if (error instanceof DeliveryAdmissionRefusedError || ["StructuredRecoveryHeldForUpdateError", "StructuredRecoverySynchronizingError",
+        "StructuredRecoveryContendedError", "StructuredRecoverySupersededError"].includes(name)) {
+        recoveryDetail = `seat host revival deferred: ${error instanceof DeliveryAdmissionRefusedError ? error.code : name}`;
+        return;
+      }
+      state = "unrevived";
+      detail = error instanceof Error ? error.message : "host revival failed";
+    }
+    const at = new Date(sources.now()).toISOString();
+    const record: SeatHostRecovery = { id, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch, at, state,
+      detail: redactMonitorText(detail).slice(0, 500), told: false, attempts,
+      retryAt: new Date(Date.parse(at) + seatHostRevivalBackoffMs(attempts, policy.checkIntervalMs)).toISOString() };
+    await persistRecovery(record);
+    if (state === "revived" && same?.state === "unrevived") {
+      // The failure notice of this episode closes with its success.
+      try { ensureCard(canonical, { ...seatHostRecoveryCard(same, operatorLocale() === "en" ? "en" : "uk"), state: "resolved" }, at); }
+      catch { /* A stale open notice is replaced by the next failure or closed by hand. */ }
+    }
+    await tellRecovery(record);
+    // Later admission in this check must observe the host it just started.
+    if (state === "revived") openingReachability = null;
+    recoveryDetail = `seat host revival: ${state} (attempt ${attempts}); ${record.detail}`;
   };
   const deliverWake: typeof deliverConversationMessage = async message => {
     const dispatchState = readState(canonical);
@@ -2225,6 +2302,10 @@ async function check(
       opened = fresh.unreachableSince ? fresh : { ...fresh,
         unreachableSince: observedAt, unreachableBacklogSince: fresh.lastWakeAt ?? observedAt };
       await seatTickMutation("writeState", () => writeState(canonical, opened));
+      opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
+    }
+    if (reachability.deadHost && reachability.current() && !quotaHeld && !activeDrain()) {
+      await reviveSeveredSeat({ ...openingSeat, conversationId: openingSeat.conversationId }, reachability);
       opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
     }
   }
