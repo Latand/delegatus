@@ -1,3 +1,4 @@
+import { prototypeStageForConversation } from "@/lib/prototypeReview/world";
 import { protectNativeMediaContext } from "@/lib/externalRelay/nativeMediaContext";
 import { publicationLanguageHints } from "@/lib/forge/publicationLanguage";
 import { briefWarningAnswer, briefWarnings } from "@/lib/pipelines/briefWarnings";
@@ -8836,13 +8837,17 @@ async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: M
 /** A current seat may recover its own settled form without asking a workspace
  * grant again. Fresh calls still use prototypeReceiptScope and the HTTP fence.
  * Workers keep the Viewer-validated scope, including implicit task selection. */
-function prototypeSeatReceiptScope(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): string | null {
+function prototypeSeatReceiptScope(mode: "publish" | "read", args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): string | null {
   const caller = dependencies.attentionAuthority();
   if (caller.kind !== "root" && caller.kind !== "worker") return null;
   const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
   if (!seats.some(seat => seat.conversationId === caller.conversationId)) return null;
   if (args.taskId !== undefined && (typeof args.taskId !== "string" || !args.taskId)) return null;
-  return `${caller.conversationId}\n${args.taskId ?? "seat"}`;
+  const stage = prototypeStageForConversation(caller.conversationId,
+    dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines);
+  if (stage && stage.taskIds.length !== 1 && (mode === "publish" || args.taskId === undefined)) return null;
+  if (mode === "publish" && stage && args.taskId !== undefined && args.taskId !== stage.taskIds[0]) return null;
+  return `${caller.conversationId}\n${args.taskId ?? stage?.taskIds[0] ?? "seat"}`;
 }
 
 /**
@@ -9158,7 +9163,7 @@ export function viewerMcpBindings(
       if (!capability) throw new Error("prototype publication requires an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context),
-      replayReceiptScope: (args: McpToolArgs) => prototypeSeatReceiptScope(args, domainDependencies) }),
+      replayReceiptScope: (args: McpToolArgs) => prototypeSeatReceiptScope("publish", args, domainDependencies) }),
     resend_prototype_review_telegram: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype resend requires an identified caller");
@@ -9169,7 +9174,7 @@ export function viewerMcpBindings(
       if (!capability) throw new Error("prototype reads require an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context),
-      replayReceiptScope: (args: McpToolArgs) => prototypeSeatReceiptScope(args, domainDependencies) }),
+      replayReceiptScope: (args: McpToolArgs) => prototypeSeatReceiptScope("read", args, domainDependencies) }),
     dismiss_attention: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => dismissAttentionTool(args, domainDependencies, controlDependencies, context), {
       authorizeReceipt: (args: McpToolArgs) => prototypeDismissalAuthority(args, domainDependencies),
     }),

@@ -6,6 +6,7 @@ import { existingTeamStore, type TeamStore } from "./store";
 import { workspaceDirectory } from "./workspaces";
 import { workspaceScope } from "./workspaceAccess";
 import { orchestratorWorkspacePrincipalsOrUnknown } from "@/lib/orchestrator/seats";
+import { authorizedManagerSeats } from "@/lib/orchestrator/authority";
 import { TeamError } from "./members";
 
 export type WorkspacePrincipal = NonNullable<LaunchProfile["workspace"]>;
@@ -35,6 +36,9 @@ export function conversationWorkspacePrincipal(snapshot: RegistryFile | ((id: st
  * authority: whoever designated the successor already decided that.
  */
 export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string) => RegistryConversation | null), id: string | null, store = existingTeamStore()): WorkspaceReach {
+  const callerId = id;
+  const lookup = (key: string) => typeof snapshot === "function" ? snapshot(key)
+    : Object.hasOwn(snapshot.conversations, key) ? snapshot.conversations[key] : null;
   const seen = new Set<string>();
   // One lazy, identity-cached seat map per resolution. Solo installations skip it;
   // persisted launch bindings still fail closed if their team store vanishes.
@@ -63,21 +67,32 @@ export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string
   };
   while (id && !seen.has(id)) {
     seen.add(id);
-    const conversation = typeof snapshot === "function" ? snapshot(id) : Object.hasOwn(snapshot.conversations, id) ? snapshot.conversations[id] : undefined;
+    const conversation = lookup(id);
     const profile = conversation?.generations.at(-1)?.launchProfile;
     const seat = seatBinding(id, Boolean(profile?.workspace));
     // A designation owns the seat's authority. Human messages carry requests;
     // they do not redesignate the seat. Preserve an explicit launch restriction
     // as well, including when an installation seat adopts a member's worker.
-    if (seat) {
+    if (id === callerId && seat && authorizedManagerSeats({
+      ...seat.authority,
+      resolveAlias: key => lookup(key)?.id ?? key,
+      conversationFacts: key => {
+        const row = lookup(key);
+        const project = conversationProjectKey(row?.projectOwnership, row?.generations.at(-1)?.launchProfile);
+        return row ? { superseded: Boolean(row.supersededBy), hasGeneration: row.generations.length > 0,
+          project: project ? canonicalProject(project) : null } : null;
+      },
+    }).some(current => current.conversationId === id)) {
       const launched = profile?.workspace && !profile.workspace.fromMessage ? profile.workspace : undefined;
       const principal = launched ?? seat.workspace;
       return principal ? bound(principal, !launched && seat.fromMessage) : { principal: null, fromMessage: false };
     }
-    // Once a conversation leaves the seat map, its message marker restores
-    // ordinary conversation behaviour. Explicit launch bindings remain fixed.
-    const inherited = profile?.workspace?.fromMessage ? profile.workspace : undefined;
-    const principal = inherited ? undefined : profile?.workspace;
+    // Ancestors and rejected designations retain the ordinary precedence:
+    // fixed bindings, then the latest author, then inherited message authority.
+    const designated = seat?.fromMessage ? undefined : seat?.workspace;
+    const marked = profile?.workspace?.fromMessage ? profile.workspace : undefined;
+    const inherited = designated ? undefined : seat?.fromMessage ? seat.workspace : marked;
+    const principal = inherited ? undefined : designated && marked ? designated : profile?.workspace ?? seat?.workspace;
     if (principal) return bound(principal, false);
     const memberId = store?.latestConversationMember(id);
     if (memberId) {
@@ -87,6 +102,7 @@ export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string
       return { principal: { memberId, workspaceId: project ? workspaceDirectory(store!).workspaceOf(project) : null }, fromMessage: true };
     }
     if (inherited) return bound(inherited, true);
+    if (seat) return { principal: null, fromMessage: false };
     id = profile?.parentConversationId ?? null;
   }
   return { principal: null, fromMessage: false };

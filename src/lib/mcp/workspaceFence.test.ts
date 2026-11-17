@@ -128,6 +128,29 @@ test("#4112: member input never changes an installation seat's tool permissions"
   expect(calls).toHaveLength(12);
 });
 
+test.each([1, 2, 4])("existing non-seat descendants retain project, account and installation fences at depth %s", async depth => {
+  snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
+  designateCaller();
+  store.admitConversationMember("conversation_member", member.id);
+  await setWorkspaceDefaults(store, owner, W1, { accounts: { codex: ["account-a"] } });
+  let parent = "conversation_member";
+  for (let index = 1; index <= depth; index++) {
+    const id = `conversation_descendant_${index}`;
+    const child = conversation(id, own, false);
+    child.generations[0]!.launchProfile.parentConversationId = parent as `conversation_${string}`;
+    snapshot.conversations[id] = child as never;
+    parent = id;
+  }
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: parent, role: "builder" });
+  expect(await call("get_task", { taskId: "task_0" })).toMatchObject({ ok: true });
+  expect(await call("get_task", { taskId: "task_1" })).toMatchObject(REFUSED);
+  expect(await call("account_limits")).toMatchObject({ ...REFUSED, details: { check: "tool" } });
+  expect(await call("spawn_agent", { cwd: root, engine: "codex", accountId: "account-b" })).toMatchObject(REFUSED);
+  expect(await call("conversation_migration", { conversationId: parent, action: "select-account", accountId: "account-a" })).toMatchObject({ ok: true });
+  store.removeWorkspaceMember(W1, member.id);
+  expect(await call("get_task", { taskId: "task_0", clientRequestId: "after-revocation" })).toMatchObject({ ...REFUSED, details: { check: "caller-project" } });
+});
+
 test.each(["seat", "task"])("#3818: a refused transcript read leaves %s forms and their receipts usable", async target => {
   const taskId = target === "task" ? "task_0" : undefined;
   designateCaller({ memberId: member.id, workspaceId: W1 });
@@ -1156,4 +1179,77 @@ test("an agent author's project label never refuses a permitted transcript, and 
     return answer;
   } } as McpToolService, dependencies);
   expect(await leaking.callTool("conversation_messages", { clientRequestId: "leak", transcriptPath: "conversation_member.jsonl" })).toMatchObject(REFUSED);
+});
+
+
+test.each(["read", "publish"] as const)("implicit pipeline-task %s receipts replay before workspace admission", async mode => {
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const { savePipelines, loadPipelinesForList } = await import("@/lib/pipelines/store");
+  saveTasks(dependencies.loadTasks().map(task => ({ ...task, assignments: [], sources: [] })));
+  const effectiveRole = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "implicit-lane", project: own, task: "Review work", repoDir: root, taskIds: ["task_0"],
+    stages: [{ id: "review", kind: "run", prompt: "Review work", next: null, effectiveRole }], srcPath: null, srcConversationId: null, now: AT });
+  pipeline.runs[0]!.attempts.push({ n: 1, state: "running", conversationId: "conversation_member", startedAt: AT,
+    effectiveRole, launchId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    completedAt: null, output: null, verdict: null, error: null });
+  savePipelines([pipeline]);
+  dependencies.listPipelineRecords = loadPipelinesForList;
+  const { reviewScopePOST } = await import("@/lib/prototypeReview/http");
+  const { prototypeWorld } = await import("@/lib/prototypeReview/world");
+  const world = { ...prototypeWorld, caller: () => ({ conversationId: "conversation_member", project: own }),
+    orchestrator: () => "conversation_member" };
+  let scopeCalls = 0, effects = 0;
+  const control = { get: async () => ({}), post: async (url: string, body: Record<string, unknown>) => {
+    if (!url.endsWith("/scope")) { effects++; return { rounds: [], reviewId: "implicit-form" }; }
+    scopeCalls++;
+    const response = await reviewScopePOST(new NextRequest("http://localhost/api/prototype-reviews/scope", {
+      method: "POST", headers: { host: "localhost", "content-type": "application/json", "x-llv-spawn-capability": "a".repeat(43) }, body: JSON.stringify(body),
+    }), world);
+    const scope = await response.json();
+    expect(response.status).toBe(200);
+    expect(scope).toMatchObject({ conversationId: "conversation_member", taskId: "task_0" });
+    return scope;
+  } };
+  setCallerConversationResolverForTests(() => "conversation_member");
+  installSpawnCapabilityResolver(() => "conversation_member");
+  const receiptFile = path.join(root, "implicit-form-receipts.json");
+  const reopen = () => withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(receiptFile)), dependencies);
+  try {
+    service = reopen();
+    await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+      const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+      const args = { clientRequestId: "implicit-task-form", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
+      expect(await call(tool, args)).toMatchObject({ ok: true, replayed: false });
+      store.removeWorkspaceMember(W1, member.id);
+      service = reopen();
+      expect(await call(tool, args)).toMatchObject({ ok: true, replayed: true });
+      expect(await call(tool, { ...args, full: true })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+      expect(await call(tool, { ...args, clientRequestId: "fresh-implicit" })).toMatchObject(REFUSED);
+      expect(scopeCalls).toBe(1); expect(effects).toBe(1);
+      const durable = fs.readFileSync(receiptFile, "utf8");
+      const script = `
+        import { createMcpToolService, FileMcpReceiptStore } from ${JSON.stringify(path.resolve("src/lib/mcp/server.ts"))};
+        import { viewerMcpBindings, productionDomainDependencies } from ${JSON.stringify(path.resolve("src/lib/mcp/bindings.ts"))};
+        import { withWorkspaceMcpFence } from ${JSON.stringify(path.resolve("src/lib/mcp/workspaceFence.ts"))};
+        const dependencies = { ...productionDomainDependencies,
+          attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_member", role: "orchestrator" }),
+          authorizedSeats: () => [{ conversationId: "conversation_member", project: ${JSON.stringify(own)}, path: null }],
+          workspaceConversation: () => { throw new Error("replay reached workspace admission"); } };
+        const control = { get: async () => { throw new Error("replay dispatched"); }, post: async () => { throw new Error("replay dispatched"); } };
+        const service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(${JSON.stringify(receiptFile)})), dependencies);
+        console.log(JSON.stringify(await service.callTool(${JSON.stringify(tool)}, ${JSON.stringify(args)})));
+      `;
+      const restarted = spawnSync(process.execPath, ["-e", script], { env: process.env, encoding: "utf8" });
+      expect(restarted.status).toBe(0);
+      expect(JSON.parse(restarted.stdout.trim())).toMatchObject({ ok: true, replayed: true });
+      // Another current seat has no right to this caller's receipt.
+      snapshot.conversations.conversation_second = conversation("conversation_second", own) as never;
+      dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: "conversation_second", role: "orchestrator" });
+      dependencies.authorizedSeats = () => [{ conversationId: "conversation_second", project: own, path: null }];
+      expect(await call(tool, args)).toMatchObject(REFUSED);
+      expect(fs.readFileSync(receiptFile, "utf8")).toBe(durable);
+      expect(scopeCalls).toBe(1); expect(effects).toBe(1);
+    });
+  } finally { installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null); }
 });

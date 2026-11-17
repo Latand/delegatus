@@ -986,15 +986,18 @@ conversations fall back to their latest recorded message author. Owner
 conversations and installation-owned seats without a member binding retain
 their existing reach.
 
-A project's seat states its own reach, and resolution ends at it. Its persisted
-designation decides its call permissions independently of human message authors
+A project's current seat states its own reach, and resolution ends at it. The
+manager authority resolver validates its project, generation, epoch and absence
+of conflicting designations before its persisted designation decides its call permissions independently of human message authors
 and earlier refusals. A member-bound seat retains its workspace restriction;
 an installation-owned seat retains installation authority. Explicit member
 launch bindings remain restrictive even if the conversation becomes a seat.
 Rotations carry the designation's reach. A legacy binding inherited from a
 message remains restrictive while the conversation is the active seat; an
 authorized redesignation or rotation can change that binding. The handover
-parent carries no additional authority.
+parent carries no additional authority. This stable override applies only to
+calls by the seat itself. Existing workers and deeper descendants keep their
+ordinary ancestry, latest-author, project and account restrictions.
 
 An inherited message binding (`workspaceFromMessage`) retains its existing
 Telegram grant while its member still holds the project. Workers and seats
@@ -1008,7 +1011,9 @@ their launch binding or latest admitted member, including revocation checks.
 HTTP workspace fence. Taskless form routes resolve their project from the
 authenticated current seat. A current seat's exact keyed replay reads its
 settled caller-and-task receipt before workspace admission, including after a
-restart. Changed arguments conflict; a different caller cannot read that
+restart. An omitted task uses the same pipeline-stage task inference as the
+HTTP scope handler, including when that stage conversation is also a seat.
+Changed arguments conflict; a different caller cannot read that
 receipt. Pending or retryable publications still use normal recovery and
 admission. New calls retain all workspace checks. MCP and HTTP workspace
 refusals name the failed check without exposing target identities.

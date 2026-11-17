@@ -303,3 +303,48 @@ test("a message-authority seat keeps answering to the latest person after it lea
   writes(owner, fenced);
   expect(await reach(fenced)).toEqual(OWNER_REACH);
 });
+
+test.each([1, 2, 4])("a non-seat descendant at depth %s keeps the member fence inherited from its parent", async depth => {
+  designate(SEAT);
+  const worker = "conversation_55555555-5555-4555-8555-555555555555";
+  // An existing installation worker was launched before the member's message.
+  let parent = SEAT;
+  for (let index = 1; index < depth; index++) {
+    const intermediate = `conversation_ancestor_${index}`;
+    launched.set(intermediate, { workspace: null, parent }); parent = intermediate;
+  }
+  launched.set(worker, { workspace: null, parent });
+  writes(member, SEAT);
+  expect(await reach(worker)).toEqual(MEMBER_REACH);
+});
+
+test.each(["project", "superseded", "revoked", "conflict", "generation"])("a stale seat record cannot restore installation access: %s", async invalid => {
+  designate(SEAT);
+  writes(member, SEAT);
+  const foreign = "proj-b";
+  const seats = readOrchestratorSeatFile();
+  if (invalid === "revoked") seats.revocations.push({ conversationId: SEAT, project: PROJECT,
+    seatEpoch: seats.seats[PROJECT]!.seatEpoch, revokedAt: AT });
+  if (invalid === "conflict") seats.seats[foreign] = { ...seats.seats[PROJECT]!, project: foreign };
+  writeStoredSeatRecord(seats);
+  const foreignWorkspace = `w_${"e".repeat(32)}`;
+  createWorkspace(store, owner, { id: foreignWorkspace, name: "Beta", projects: [foreign] });
+  const foreignLookup = (id: string) => {
+    const record = lookup(id)!;
+    return { ...record, projectOwnership: { project: invalid === "project" ? foreign : PROJECT },
+      ...(invalid === "superseded" ? { supersededBy: { conversationId: "conversation_successor", at: AT, reason: "replaced" } } : {}),
+      generations: invalid === "generation" ? [] : record.generations } as RegistryConversation;
+  };
+  const { authorizedManagerSeats } = await import("./authority");
+  const authorized = authorizedManagerSeats({
+    activeSeats: () => Object.values(readOrchestratorSeatFile().seats), revocations: () => seats.revocations, resolveAlias: id => id,
+    conversationFacts: () => ({ superseded: invalid === "superseded", hasGeneration: invalid !== "generation", project: invalid === "project" ? foreign : PROJECT }),
+  });
+  expect(authorized).toEqual([]);
+  const fenced = withWorkspaceMcpFence({ callTool: async tool => ({ ok: true, toolName: tool, clientRequestId: null, replayed: false }) } as McpToolService, {
+    attentionAuthority: () => ({ kind: "worker", conversationId: SEAT, role: "builder" }),
+    registrySnapshot: () => ({ conversations: {} }), workspaceConversation: foreignLookup, workspaceProject: () => foreign,
+  } as unknown as ViewerMcpDomainDependencies);
+  const answer = await fenced.callTool("account_limits", { clientRequestId: "foreign-installation-read" });
+  expect(answer).toMatchObject({ ok: false, code: "workspace_forbidden" });
+});
