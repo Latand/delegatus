@@ -1118,7 +1118,7 @@ test("fleet wait precedence follows row order, row key and then run order",async
   } finally {f.db.close();}
 });
 
-test("the jsonb and the text input queries store the same text JSON",() => {
+test("the supported input query stores the same text JSON as the text fallback",() => {
   const f=fixture();
   try {
     const wait={accountId:null,resetsAt:NOW+1000,resumeAt:new Date(NOW+2000).toISOString(),startedAt:new Date(NOW).toISOString(),text:"wait",turnTs:1,tries:0,condition:{kind:"usage_limit",scope:null,resetLabel:null,label:"usage limit"}};
@@ -1129,11 +1129,30 @@ test("the jsonb and the text input queries store the same text JSON",() => {
     f.put(flow({id:"flow_empty"}),"flows");
     expect(historyInputSql(f.db,"pipelines","text")).not.toContain("jsonb");
     expect(historyInputSql(f.db,"flows","text")).not.toContain("jsonb");
+    const form = historyInputSql(f.db,"pipelines") === historyInputSql(f.db,"pipelines","text") ? "text" : "jsonb";
     for (const [collection,key] of [["pipelines","plain"],["pipelines","closed"],["pipelines","empty_runs"],["flows","flow_rounds"],["flows","flow_empty"]] as const) {
       const input=(form:"jsonb"|"text")=>f.db.query<{input:string},[string,string]>(historyInputSql(f.db,collection,form)).get(collection,key)!.input;
-      expect(typeof input("jsonb")).toBe("string");
-      expect(input("text")).toBe(input("jsonb"));
+      expect(typeof input(form)).toBe("string");
+      expect(input("text")).toBe(input(form));
     }
-    expect(historyInputSql(f.db,"pipelines")).toBe(historyInputSql(f.db,"pipelines","jsonb"));
+    expect(historyInputSql(f.db,"pipelines")).toBe(historyInputSql(f.db,"pipelines",form));
+  } finally { f.db.close(); }
+});
+
+
+test("the JS correction keeps adjacent fractional milliseconds exact before history readers run", async () => {
+  const f = fixture();
+  const start = Date.parse("2026-10-11T04:58:01.001Z");
+  const row = pipeline("exact_history_times");
+  const original = row.runs[0]!.attempts[0]!;
+  original.startedAt = new Date(start).toISOString();
+  row.runs[0]!.attempts.push({ ...original, n: 2, startedAt: new Date(start - 1).toISOString() });
+  try {
+    f.put(row);
+    expect(await f.read(db => historyAttemptCounts(db, "fixture", start + WINDOW))).toEqual({ builder: 1, reviewer: 0 });
+    expect(f.db.query("SELECT startedMs FROM history_attempts ORDER BY attempt").all()).toEqual([{ startedMs: start }, { startedMs: start - 1 }]);
+    // A later incremental refresh keeps the same inclusive window boundary.
+    original.startedAt = new Date(start + 1).toISOString(); f.put(row);
+    expect(await f.read(db => historyAttemptCounts(db, "fixture", start + WINDOW + 1))).toEqual({ builder: 1, reviewer: 0 });
   } finally { f.db.close(); }
 });

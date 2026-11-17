@@ -1,3 +1,4 @@
+import { noteRelayHttpRefusal, relayHttpRefusal, type RelayHttpRefusal } from "./httpDiagnostics";
 import dns from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
@@ -82,6 +83,8 @@ export async function relayCall<T = unknown>(
     /** Preserve DNS failures for readers that report transport causes. */
     detailedErrors?: boolean;
     onResponseStatus?: (status: number) => void;
+    /** Lease helper forwards safe refusal records to the Viewer journal. */
+    onHttpRefusal?: (record: RelayHttpRefusal) => void;
     headers?: Record<string, string>;
     /** Trusted caller rechecks its body after DNS, immediately before emission. */
     prepareBody?: () => unknown;
@@ -129,13 +132,24 @@ export async function relayCall<T = unknown>(
         },
       },
       (response) => {
+        let refusalReported = false;
+        const reportRefusal = (payload?: unknown) => {
+          if (refusalReported) return;
+          const record = relayHttpRefusal(route, response.statusCode ?? 0, payload);
+          if (!record) return;
+          refusalReported = true;
+          if (options.onHttpRefusal) options.onHttpRefusal(record);
+          // Claim counters and reasons have their own poll-loop journal.
+          else if (record.path !== "/requests/claim") noteRelayHttpRefusal(record);
+        };
         options.onResponseStatus?.(response.statusCode ?? 0);
-        response.on("error", reject);
+        response.on("error", error => { reportRefusal(); reject(error); });
         const chunks: Buffer[] = [];
         let size = 0;
         response.on("data", (chunk: Buffer) => {
           size += chunk.length;
           if (size > (options.maxBytes ?? 1_048_576)) {
+            reportRefusal();
             response.destroy(new ExternalRelayError("too_large", options.detailedErrors ? response.statusCode : 0));
             return;
           }
@@ -146,23 +160,27 @@ export async function relayCall<T = unknown>(
           // that owned upload before a retry starts another transfer.
           if (options.binary || options.upload) request.destroy();
           if (!response.complete) {
+            reportRefusal();
             reject(new ExternalRelayError("unreachable"));
             return;
           }
           const status = response.statusCode ?? 0;
-          if (status >= 300 && status < 400) {
-            reject(new ExternalRelayError("unreachable", status));
-            return;
-          }
           let parsed: unknown = null;
           try {
             if (size)
               parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
           } catch {
+            reportRefusal();
             reject(new ExternalRelayError("malformed", status));
             return;
           }
+          if (status >= 300 && status < 400) {
+            reportRefusal(parsed);
+            reject(new ExternalRelayError("unreachable", status, null, parsed));
+            return;
+          }
           if (status >= 400) {
+            reportRefusal(parsed);
             const error = parsed as {
               error?: { code?: string; retry_after_s?: number } | { code?: string; retry_after?: number }[];
             } | null;
@@ -193,7 +211,7 @@ export async function relayCall<T = unknown>(
     );
     request.on("error", reject);
     request.setTimeout(options.timeoutMs ?? 5_000, () =>
-      request.destroy(new ExternalRelayError("unreachable")),
+      request.destroy(new ExternalRelayError(options.detailedErrors ? "timeout" : "unreachable")),
     );
     if (options.upload) {
       const source = Readable.from(options.upload.body());

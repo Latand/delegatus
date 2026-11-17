@@ -1,3 +1,4 @@
+import { noteRelayHttpRefusal, type RelayHttpRefusal } from "./httpDiagnostics";
 import type { CompletionRefusal } from "./completionRefusal";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -10,7 +11,7 @@ import { completeRelayRequest } from "./relayCompletion";
 import { ownerRelayAuthorized, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
 
 export type TransportResult = Awaited<ReturnType<typeof completeRelayRequest>>;
-type Frame = { type: "ready" } | { type: "heartbeat"; seq: number; phase: "attempt" | "acknowledged" | "failed" | "completion_pending" | "post_completion"; status: number; code?: string }
+type Frame = { type: "http_refusal"; record: RelayHttpRefusal } | { type: "ready" } | { type: "heartbeat"; seq: number; phase: "attempt" | "acknowledged" | "failed" | "completion_pending" | "post_completion"; status: number; code?: string }
   | { type: "refusal"; refusal: CompletionRefusal } | { type: "completion"; result?: TransportResult; error?: true } | { type: "refresh_features" } | { type: "drained" };
 // A validated 128 KB answer may expand to 768 KB when JSON escapes control
 // characters. Keep an explicit per-frame cap with room for the envelope.
@@ -72,6 +73,7 @@ export class RelayLeaseTransport {
       if (Buffer.byteLength(line) > MAX_FRAME_BYTES) { this.fail(new Error("relay lease helper exceeded its frame bound")); endLeasedHelper(this.child); return; }
       try {
         const frame = JSON.parse(line) as Frame;
+        if (frame.type === "http_refusal") { noteRelayHttpRefusal(frame.record); continue; }
         if (frame.type === "ready") { this.readyResolve(); continue; }
         if (frame.type === "heartbeat") { this.onHeartbeat(frame); continue; }
         if (frame.type === "refresh_features") { this.onRefreshFeatures?.(); continue; }

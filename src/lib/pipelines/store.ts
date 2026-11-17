@@ -624,6 +624,7 @@ function isGraphEdit(value: unknown): boolean {
     && typeof edit.pipelineState === "string"
     && (edit.effect === "applied" || edit.effect === "pending-next-attempt")
     && (edit.appliesFromAttempt === null || (Number.isSafeInteger(edit.appliesFromAttempt) && (edit.appliesFromAttempt as number) >= 1))
+    && (edit.accountOverride === undefined || isNullableString(edit.accountOverride))
     && typeof edit.summary === "string";
 }
 
