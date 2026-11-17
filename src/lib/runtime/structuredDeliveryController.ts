@@ -68,7 +68,7 @@ import { readEvidence } from "./evidence";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation, StructuredDispatchDeferredError, StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
-import { cancelDeliveryWakeForKick, DeliveryWake } from "./deliveryWake";
+import { cancelDeliveryWakeForKick, DeliveryHostPage, DeliveryWake } from "./deliveryWake";
 import { DeliveryEffectPages } from "./deliveryEffectPages";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { withoutOperationLease } from "@/lib/operationLease";
@@ -818,6 +818,8 @@ export async function bindStructuredDeliveryQueue(
   const registry = dependencies.registry ?? agentRegistry();
   const permissionGuard = dependencies.permissionGuard ?? productionPermissionGuard(registry);
   const hosts = new Map<string, EngineHost>();
+  const nativeHostPage = new DeliveryHostPage(hosts);
+  const guardHostPage = new DeliveryHostPage(hosts);
   // Registration events can request a drain while startup is still seating
   // the remaining hosts. Their original queued operations must wait for those
   // seats instead of attempting competing recovery and terminalizing them.
@@ -887,8 +889,7 @@ export async function bindStructuredDeliveryQueue(
     /* Off the loop, a hand-off's own row included (C3, A8). */
     settled: (entry) => settleNativeQueueEntry(registry, entry, progressStore),
     binding: (conversationId) => {
-      const snapshot = registry.readOnlySnapshot();
-      const conversation = snapshot.conversations[conversationId];
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
       const generation = conversation?.generations.at(-1);
       if (!conversation || conversation.engine !== "codex" || !generation) return null;
       return { threadId: generation.id, accountId: generation.accountId };
@@ -1085,7 +1086,7 @@ export async function bindStructuredDeliveryQueue(
       nativeQueueExecute: (command, refusalReason, note, step, settled) => nativeQueueExecutor.execute(command, refusalReason, note, step, settled),
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;
-        const readyHosts = [...hosts].filter(([key, host]) => {
+        const readyHosts = nativeHostPage.next().filter(([key, host]) => {
           if (!host.nativeQueue) {
             if (!queuelessNativeHosts.has(key)) {
               queuelessNativeHosts.add(key);
@@ -1107,9 +1108,10 @@ export async function bindStructuredDeliveryQueue(
         });
         // A cooldown wake must not rebuild the registry snapshot either.
         if (readyHosts.length === 0) return;
-        const entries = registry.readOnlySnapshot().entries;
         for (const [key] of readyHosts) {
-          const entry = entries[key];
+          const registration = registrations.get(key);
+          if (!registration || hosts.get(key) !== registration.host) continue;
+          const entry = registry.hostEntry(registration.key);
           const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
           if (!conversationId) {
             if (!unresolvedNativeHosts.has(key)) {
@@ -1576,16 +1578,47 @@ export async function bindStructuredDeliveryQueue(
   );
   // Accepted delivery belongs to this queue's lifetime. Publication may have
   // scheduled its wake inside a controller pass that has since expired.
-  const drainWake = new DeliveryWake(() => withoutOperationLease(() => {
-    if (!stopped) void withViewerOperation("runtime.delivery-wake", () => drainWithRetry());
-  }));
+  const drainWake = new DeliveryWake(() => { if (!stopped) void generalDrain(); });
+  let runningGeneralDrain: Promise<void> | null = null;
+  let followingGeneralDrain: { preceding: Promise<void>; run: Promise<void> } | null = null;
+  let generalWakeOwed = false;
+  const generalDrain = (afterAdmission = false, freshAdmission = false): Promise<void> => {
+    if (stopped) return Promise.resolve();
+    if (runningGeneralDrain) {
+      if (!afterAdmission) { generalWakeOwed = true; return runningGeneralDrain; }
+      const preceding = runningGeneralDrain;
+      if (followingGeneralDrain?.preceding === preceding) return followingGeneralDrain.run;
+      // A peer that starts after the preceding owner is already a valid next
+      // read. Join it instead of chaining another barrier behind every peer.
+      const run = preceding.catch(() => undefined).then(() => generalDrain(false, freshAdmission))
+        .finally(() => { if (followingGeneralDrain?.run === run) followingGeneralDrain = null; });
+      followingGeneralDrain = { preceding, run };
+      return run;
+    }
+    runningGeneralDrain = withoutOperationLease(() => Promise.resolve().then(() =>
+      withViewerOperation("runtime.delivery-wake", () => drainWithRetry(afterAdmission, freshAdmission)),
+    )).finally(() => {
+      runningGeneralDrain = null;
+      if (generalWakeOwed && !stopped) { generalWakeOwed = false; scheduleDrain(); }
+    });
+    return runningGeneralDrain;
+  };
   let settleTimer: ReturnType<typeof setInterval> | null = null;
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;
   let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
   let guarding: Promise<void> | null = null;
-  const guardHosts = () => [...hosts].map(([id, host]) => ({ key: registrations.get(id)!.key, host }));
+  const guardHosts = () => {
+    if (!registry.quotaObservations("codex").some(row => accountCreditGuardBlock("codex", row.accountId, row.limits))) {
+      guardHostPage.reset();
+      return [];
+    }
+    return guardHostPage.next().flatMap(([id, host]) => {
+      const registration = registrations.get(id);
+      return registration?.host === host ? [{ key: registration.key, host }] : [];
+    });
+  };
   const enforceGuard = (onlyIfChanged = false) => guarding ??= enforceAccountCreditGuard(registry,
     guardHosts,
     async (key, host) => hosts.get(sessionKeyId(key)) === host
@@ -1599,7 +1632,10 @@ export async function bindStructuredDeliveryQueue(
       return enqueueStructuredMessage({ ...request, admissionGuard: authorize, recoveryAuthorityGuard: authorizeRecovery }, { enabled: () => true,
         registry: () => registry, client: () => client, recover: dependencies.recover, kick: requestDrain,
         authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
-    }, { onlyIfChanged }).finally(() => { guarding = null; });
+    }, { onlyIfChanged: onlyIfChanged && !guardHostPage.pending }).finally(() => {
+      guarding = null;
+      if (guardHostPage.pending && !stopped && state.activeQueue === queue) scheduleDrain();
+    });
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
   const drainWithRetry = async (afterAdmission = false, freshAdmission = false, conversationId?: string): Promise<void> => {
     if (stopped) return;
@@ -2248,7 +2284,13 @@ export async function bindStructuredDeliveryQueue(
        replace the earlier accepted deadline. */
     // A scoped pass cannot replace another recipient's pending general retry.
     if (!freshAdmission || !conversationId) cancelDeliveryWakeForKick(drainWake, freshAdmission, queue.canStartPass());
-    return drainWithRetry(true, freshAdmission, conversationId);
+    return freshAdmission && conversationId ? drainWithRetry(true, true, conversationId) : generalDrain(true, freshAdmission);
+  }, async () => {
+    if (stopped) return;
+    if (!startupPending) await enforceGuard();
+    // A shared guard may have begun before this cycle's quota observation.
+    if (!startupPending && !stopped) await enforceGuard(true);
+    if (!stopped && state.activeQueue === queue) scheduleDrain();
   });
   state.stopActive = () => {
     stopped = true;

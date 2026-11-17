@@ -198,6 +198,15 @@ function provider(
   };
 }
 
+/** Bind responses to recipients, independently of discovery/UUID order. */
+function mappedProvider(sources: string[], successors: string[], continuity: string[]): SuccessorProviderPort {
+  return { virtualSource: true, async create(input) {
+    const index = sources.indexOf(input.source.path);
+    expect(index).toBeGreaterThanOrEqual(0);
+    return provider([successors[index]!], { create: 0, verify: 0 }, [[continuity[index]!]]).create(input);
+  }, async verify() {} };
+}
+
 afterEach(() => {
   setBoardFileForTests(null);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -1791,7 +1800,7 @@ describe("durable account migration coordinator", () => {
     expect(arranged.ok).toBeTrue();
 
     await reconcileMigrations(
-      provider([...successors], { create: 0, verify: 0 }, continuityPaths.map((pathname) => [pathname])),
+      mappedProvider(sources, successors, continuityPaths),
       { async deliver() { return "delivered"; } },
       store,
     );
@@ -1893,7 +1902,7 @@ describe("durable account migration coordinator", () => {
     expect(arranged.board.prefs.manual).toHaveLength(104);
 
     await reconcileMigrations(
-      provider([...successors], { create: 0, verify: 0 }, forks.map((pathname) => [pathname])),
+      mappedProvider(sources, successors, forks),
       { async deliver() { return "delivered"; } },
       store,
     );
@@ -1908,7 +1917,7 @@ describe("durable account migration coordinator", () => {
     expect(afterScan.ok).toBeTrue();
     expect(afterScan.board.prefs.manual).toEqual(visible);
     // Archive retains every concrete generation even after its alias advances.
-    expect(afterScan.board.prefs.hidden).toEqual([...sources, ...successors]);
+    expect(new Set(afterScan.board.prefs.hidden)).toEqual(new Set([...sources, ...successors]));
     expect(Object.keys(afterScan.board.pathAliases ?? {})).toHaveLength(102);
     expect(Object.values(store.snapshot().conversations).every((conversation) => conversation.migration?.boardProject === project)).toBeTrue();
   });
@@ -2759,9 +2768,9 @@ describe("durable account migration coordinator", () => {
       "/rolled-back-reauthorized-race.jsonl",
       "rolled-back-reauthorized-race",
     );
-    const pendingDeliveries = store.pendingDeliveries.bind(store);
+    const pendingDeliveries = store.openDeliveries.bind(store);
     const reauthorized = { id: null as string | null };
-    store.pendingDeliveries = (conversationId) => {
+    store.openDeliveries = (conversationId) => {
       const pending = pendingDeliveries(conversationId);
       if (!reauthorized.id && pending.some((item) => item.id === "owned-by-rollback")) {
         reauthorized.id = store.holdDelivery(
@@ -4705,18 +4714,19 @@ describe("per-conversation lanes in the account-migration coordinator", () => {
     ]);
     expect(pass).toBe("returned");
     expect(performance.now() - startedAt).toBeLessThan(1_000);
-    expect(delivered).toEqual(["lane-hung-1", "lane-free-1"]);
+    expect([...delivered].sort()).toEqual(["lane-free-1", "lane-hung-1"]);
     expect(store.pendingDeliveries(second!.id)).toEqual([]);
 
     /* A later pass skips the conversation whose lane still works. */
     store.holdDelivery(first!.id, "after the hung one", "lane-hung-2");
     await reconcileMigrations(provider([]), port, store, { passBudgetMs: 50 });
-    expect(delivered).toEqual(["lane-hung-1", "lane-free-1"]);
+    expect([...delivered].sort()).toEqual(["lane-free-1", "lane-hung-1"]);
 
     release!();
     await until(() => store.pendingDeliveries(first!.id).every((item) => item.clientMessageId !== "lane-hung-1"));
     await reconcileMigrations(provider([]), port, store, { passBudgetMs: 50 });
-    expect(delivered).toEqual(["lane-hung-1", "lane-free-1", "lane-hung-2"]);
+    expect([...delivered].sort()).toEqual(["lane-free-1", "lane-hung-1", "lane-hung-2"]);
+    expect(delivered.filter(key => key.startsWith("lane-hung"))).toEqual(["lane-hung-1", "lane-hung-2"]);
     expect(store.pendingDeliveries(first!.id)).toEqual([]);
   });
 
@@ -4762,6 +4772,9 @@ describe("per-conversation lanes in the account-migration coordinator", () => {
     expect(delivered).toEqual(["permit-free-1"]);
 
     /* The late answer publishes once, commits once and delivers once. */
+    // Discovery is ordered by durable key. Both providers must have entered
+    // before releasing the held one, whichever conversation's key came first.
+    await until(() => releaseCreate !== null);
     releaseCreate!();
     await until(() => delivered.includes("permit-hung-1"));
     await reconcileMigrations(switching, port, store, { passBudgetMs: 50, advancementLeaseMs: 50 });
