@@ -189,13 +189,11 @@ exec /usr/bin/git "$@"
 
   // 2. The session is lost while install holds: the client's removal stops
   // the setup, and only then runs the command here.
-  const installLock = path.join(h.root, "install.lock"), installing = path.join(h.root, "installing");
-  h.settings({ killWhen: installing, remoteEnv: { LLV_GATE_RUNNER_TEST_AFTER_INSTALL: hold(installLock, installing) } });
+  h.settings({ killWhen: "installing", remoteEnv: { LLV_GATE_RUNNER_TEST_AFTER_INSTALL_ACTION: JSON.stringify({ hold: { lock: "install.lock", mark: "installing" } }) } });
   const lost = h.run(["bun", "test", pass]);
-  expect(fs.existsSync(installing)).toBeTrue();
+  expect(h.calls().some(call => (call as { killedAtMarker?: boolean }).killedAtMarker)).toBeTrue();
   expect(lost.stderr).toMatch(/^gate-runner: running here: the runner session failed before the command started/m);
   expect(lost.stderr).not.toContain("cleanup on the runner was not confirmed");
   expect(lost.code).toBe(0);
-  expect(held(installLock)).toBeFalse();
   expect(fs.readdirSync(runs)).toEqual([]);
 }, E2E_TIMEOUT);

@@ -3,6 +3,21 @@ import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
 import { BudgetExhausted, comparatorEnding } from "./local-gate-tests";
 
+test("a destructive-code head failure never launches a base sample, including through an imported implementation", async () => {
+  const f = fixture('import { test } from "bun:test"; test("guarded cleanup", () => {});');
+  const marker = path.join(f.dir, "recorded-runs");
+  // Both versions only record. A regression in the selector cannot delete.
+  writeFileSync(path.join(f.dir, "example.test.ts"), `import { test } from "bun:test"; import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, "base\\n"); test("guarded cleanup", () => {});`);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "recording baseline");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "cleanup.ts"), '// destructive-code: a recording implementation for selector verification\nexport const recorded = true;\n');
+  writeFileSync(path.join(f.dir, "example.test.ts"), `import "./cleanup"; import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, "head\\n"); test("guarded cleanup", () => expect(false).toBeTrue());`);
+  const result = await touchedTests(f.dir, base, ["./example.test.ts"], { env: f.env, log: line => f.logs.push(line) });
+  expect(result.introduced).toHaveLength(1); expect(result.preexisting).toHaveLength(0);
+  expect(readFileSync(marker, "utf8").trim().split("\n").every(line => line === "head")).toBeTrue();
+  expect(f.logs.some(line => line.startsWith("touched-tests: baseline setup"))).toBeFalse();
+});
+
 test("only an exhausted comparator budget returns no verdict", () => {
   const message = "head: test run exceeded its 15 minute budget; 8 of 12 files completed";
   expect(comparatorEnding(new BudgetExhausted(message))).toEqual({

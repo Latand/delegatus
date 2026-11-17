@@ -11,6 +11,30 @@ import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
 export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: number; completed: string[] }
+
+/** Conservative head-only classification follows local imports, including the
+ * implementation a test exercises. Unknown or overlarge graphs get no base run. */
+export function destructiveTestFile(root: string, file: string): boolean {
+  const pending = [path.resolve(root, file)], seen = new Set<string>();
+  while (pending.length) {
+    const target = pending.pop()!;
+    if (seen.has(target)) continue;
+    if (seen.size >= 256 || !target.startsWith(path.resolve(root) + path.sep)) return true;
+    seen.add(target);
+    let source: string;
+    try { source = readFileSync(target, "utf8"); } catch { return true; }
+    if (/destructive-code|\b(?:rmSync|rmdirSync|unlinkSync|truncateSync|renameSync)\s*\(|\.(?:rm|rmdir|unlink|truncate|rename)\s*\(|\brm\s+-[^\n]*[rRf]|find[^\n]*-delete|rsync[^\n]*--delete/.test(source)) return true;
+    for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([.@][^"']+)["']/g)) {
+      const name = match[1];
+      if (!name.startsWith(".") && !name.startsWith("@/")) continue;
+      const base = name.startsWith("@/") ? path.join(root, "src", name.slice(2)) : path.resolve(path.dirname(target), name);
+      const resolved = [base, ...[".ts", ".tsx", ".mjs", ".js", "/index.ts", "/index.tsx"].map(ext => base + ext)].find(value => { try { return statSync(value).isFile(); } catch { return false; } });
+      if (!resolved) return true;
+      pending.push(resolved);
+    }
+  }
+  return false;
+}
 const escapedTemporaryRoot = path.join(gateTemporaryRoot(), "delegatus-test-comparison-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]test-[a-zA-Z0-9]{6}`, "g");
 const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.replace(privateTestRoot, "<sandbox>") : site.name;
@@ -548,7 +572,11 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     }
     const baseFiles = new Set(git("ls-tree", "-r", "--name-only", "-z", base, "--", ...files).split("\0"));
     const failingFiles = files.filter(file => head.failures.some(site => site.file === file));
-    const oldFiles = failingFiles.filter(file => baseFiles.has(file));
+    // Destructive paths never run against an older implementation. A red head
+    // remains blocking and gets no inherited-failure allowance.
+    const headOnly = new Set(failingFiles.filter(file => destructiveTestFile(root, file)));
+    for (const file of headOnly) log(`touched-tests: ${file}: destructive code, judged on head only; no base execution`);
+    const oldFiles = failingFiles.filter(file => baseFiles.has(file) && !headOnly.has(file));
     const graph = dependencyGraph(root);
     const remote = oldFiles.length ? git("config", "--get", "remote.origin.url").trim() : "";
     const baselineStarted = performance.now();
@@ -639,7 +667,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const comparison = await confirmFailures(baseline, head, async (side, sites) => {
       if (sites.some(site => site.kind === "error")) diagnosticReruns++;
       else reruns++;
-      const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file));
+      const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file) && !headOnly.has(file));
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
       return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, ...(sites.some(site => site.kind === "error") ? {} : { sites }), deadline });
     });

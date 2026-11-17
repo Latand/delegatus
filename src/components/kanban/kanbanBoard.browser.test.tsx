@@ -69,6 +69,16 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("destructive operation refusal", () => {
+  browserTest("protected delete attention is readable and dismissible on desktop", async () => {
+    const { captureDestructiveRefusal, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try { expect(await captureDestructiveRefusal(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "destructive-refusal-desktop"), false)).toBe(12); }
+    finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+});
+
 describe("accepted queued creation continuity", () => {
   browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
     const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");

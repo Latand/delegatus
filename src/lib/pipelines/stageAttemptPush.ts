@@ -329,7 +329,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       // independent commit receipts. Shared identity and reflog text add none.
       if (raw !== null) return false;
       if (!nativeCreated) {
-        const publicationIdentity = agentPublicationIdentityEnv(await repositoryPublicationSource(pipeline.worktreeDir, process.env, exec));
+        const publicationIdentity = agentPublicationIdentityEnv(await repositoryPublicationSource(pipeline.worktreeDir, process.env, exec), pipeline.worktreeDir);
         const expectedName = publicationIdentity.GIT_AUTHOR_NAME;
         const expectedEmail = publicationIdentity.GIT_AUTHOR_EMAIL;
         nativeCreated = new Set();

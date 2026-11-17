@@ -71,6 +71,8 @@ export const LIFECYCLE_EVENT_TYPES = [
   "permission_denied",
   /** Native delegation observed on a launch whose permission denied it. */
   "subagent_policy_violation",
+  "destructive_refused",
+  "destructive_guard_off",
 ] as const;
 
 export type LifecycleEventType = typeof LIFECYCLE_EVENT_TYPES[number];
@@ -106,6 +108,8 @@ export const LIFECYCLE_STATE_FOR_EVENT: Record<LifecycleEventType, LifecycleStat
   task_finished: "completed",
   permission_denied: "running",
   subagent_policy_violation: "running",
+  destructive_refused: "running",
+  destructive_guard_off: "running",
 };
 
 /**
@@ -130,6 +134,8 @@ export const TERMINAL_HIGH_SIGNAL_EVENT_TYPES: ReadonlySet<LifecycleEventType> =
   "pipeline_merged",
   "task_finished",
   "subagent_policy_violation",
+  "destructive_refused",
+  "destructive_guard_off",
 ]);
 
 export function isTerminalHighSignalEvent(type: LifecycleEventType): boolean {

@@ -172,7 +172,7 @@ export function remoteEnvironment(env: Env, root: string, cwd: string): { env: R
 // ---------------------------------------------------------------- health
 
 export interface Health { checkedAt: number; healthy: boolean; reason?: string; main?: string; runs?: number; unhealthyUntil?: number }
-const PROBE = [
+export const PROBE = [
   `printf 'bun=%s\\n' "$(~/.bun/bin/bun --version 2>/dev/null)"`,
   `printf 'disk=%s\\n' "$(df -Pk ~ 2>/dev/null | awk 'NR==2{print $4}')"`,
   `systemctl --user show-environment >/dev/null 2>&1 && echo manager=ok`,

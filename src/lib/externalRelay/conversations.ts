@@ -223,17 +223,32 @@ export function conversationAuthority(requester?: ExternalRelayRequester | null,
 const encodedCwd = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
 export { isRelayConversationDir } from "./conversationPrivacy";
 export const conversationCodexHome = (record: RelayConversation) => statePath(`external-relay/conversations/${record.id}/codex`);
+function conversationTemporaryRoot() {
+  const temporary = path.resolve(os.tmpdir()), home = path.resolve(os.homedir());
+  return temporary === home || temporary.startsWith(home + path.sep) ? "/tmp" : temporary;
+}
+function assertConversationDirectory(record: RelayConversation) {
+  const cwd = record.cwd;
+  const refuse = (): never => { console.warn("[external relay] refused deletion of an invalid conversation directory"); throw new Error("invalid conversation directory"); };
+  if (!cwd || !/^[0-9a-f-]{36}$/.test(record.id) || path.basename(cwd) !== `llv-relay-conv-${record.id}`
+    || cwd !== path.join(conversationTemporaryRoot(), `llv-relay-conv-${record.id}`)) refuse();
+  // Missing owned directories are already clean. Never follow a substituted
+  // final link or a parent that has moved outside the minting root.
+  const stat = fs.lstatSync(cwd, { throwIfNoEntry: false });
+  if (stat && (!stat.isDirectory() || stat.isSymbolicLink()
+    || fs.realpathSync(path.dirname(cwd)) !== fs.realpathSync(conversationTemporaryRoot()))) refuse();
+}
 export function deleteConversationFiles(record: RelayConversation) {
   if (record.authority === "owner-tier") return;
   // Only the reserved directories minted by this module may be removed.
-  if (!/^[0-9a-f-]{36}$/.test(record.id) || path.basename(record.cwd!) !== `llv-relay-conv-${record.id}`) throw new Error("invalid conversation directory");
+  assertConversationDirectory(record);
   fs.rmSync(record.cwd!, { recursive: true, force: true });
   fs.rmSync(statePath(`external-relay/conversations/${record.id}`), { recursive: true, force: true });
   for (const root of claudeProjectRoots()) fs.rmSync(path.join(root, encodedCwd(record.cwd!)), { recursive: true, force: true });
 }
-async function deleteConversationFilesAsync(record: RelayConversation): Promise<void> {
+export async function deleteConversationFilesAsync(record: RelayConversation): Promise<void> {
   if (record.authority === "owner-tier") return;
-  if (!/^[0-9a-f-]{36}$/.test(record.id) || path.basename(record.cwd!) !== `llv-relay-conv-${record.id}`) throw new Error("invalid conversation directory");
+  assertConversationDirectory(record);
   await Promise.all([
     fs.promises.rm(record.cwd!, { recursive: true, force: true }),
     fs.promises.rm(statePath(`external-relay/conversations/${record.id}`), { recursive: true, force: true }),

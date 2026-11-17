@@ -16,7 +16,7 @@ import { DismissalError } from "./dismissalTypes";
 import type { DismissalTarget, DismissedBy } from "./dismissalTypes";
 import { laneRouteNow } from "./routeTypes";
 
-export const NEEDS_YOU_ROW_KINDS = ["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"] as const;
+export const NEEDS_YOU_ROW_KINDS = ["decision", "question", "plan", "permission", "refusal", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"] as const;
 export type NeedsYouRowKind = typeof NEEDS_YOU_ROW_KINDS[number];
 export interface NeedsYouBody { prototypeReviewNotices?: readonly import("@/lib/prototypeReview/types").PrototypeReviewNotice[]; files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks: readonly BoardTask[]; workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
   /** The orchestrators' own open questions (docs/design/operator-decision-forms.md §2.2). */

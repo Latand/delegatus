@@ -15,11 +15,20 @@ afterEach(() => { for (const h of harnesses.splice(0)) h.cleanup(); });
 function harness(options?: Parameters<typeof makeHarness>[0]): Harness { const h = makeHarness(options); harnesses.push(h); return h; }
 const RUNNING = /^gate-runner: running on the gate runner \(run [0-9a-f]{12}, tree [0-9a-f]{12}\)$/m;
 
+test.if(linux)("the retired shell seam is ignored by a real runner setup", () => {
+  const h = harness(), marker = path.join(h.root, "must-not-exist");
+  h.settings({ remoteEnv: { LLV_GATE_RUNNER_TEST_AFTER_INSTALL: `touch '${marker}'` } });
+  const file = testFile(h, "record-only.test.ts", 'test("fixed fixture", () => expect(true).toBeTrue());');
+  const result = h.run(["bun", "test", file]);
+  expect(result.code, result.stderr).toBe(0); expect(result.stderr).toMatch(RUNNING);
+  expect(fs.existsSync(marker)).toBeFalse();
+}, E2E_TIMEOUT);
+
 
 // T9
 test.if(linux)("a tree that changes on the runner after install starts nothing there and runs here", () => {
   const h = harness();
-  h.settings({ remoteEnv: { LLV_GATE_RUNNER_TEST_AFTER_INSTALL: "echo changed >> README.md" } });
+  h.settings({ remoteEnv: { LLV_GATE_RUNNER_TEST_AFTER_INSTALL_ACTION: JSON.stringify({ append: { file: "README.md", text: "changed\n" } }) } });
   const file = testFile(h, "where.test.ts", `test("where", () => console.log("cwd=" + process.cwd()));`);
   const result = h.run(["bun", "test", file]);
   expect(result.code).toBe(0);

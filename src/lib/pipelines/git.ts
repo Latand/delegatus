@@ -19,6 +19,7 @@ import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/stat
 import { mailboxPattern } from "@/lib/privacy/mailbox";
 import publicationFingerprints from "../../../scripts/privacy-known-value-fingerprints.json";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
+import { agentDestructiveGuardEnv } from "@/lib/agent/destructiveGuard";
 import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, readPublicationCheckReceipt, supportsPublicationPreparation } from "@/lib/git/publicationCheckReceipt";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
@@ -2482,6 +2483,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
     ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
+  Object.assign(pushEnv, agentDestructiveGuardEnv({ ...process.env, ...pushEnv }, { cwd: pipeline.worktreeDir }));
   // The repository's gate can finish before Git's authenticated discovery.
   // The subsequent native hook verifies this exact operation's consumed
   // inputs, with fresh privacy, under a separate bounded transport deadline.

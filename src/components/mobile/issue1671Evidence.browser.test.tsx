@@ -55,6 +55,16 @@ import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 const browserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" ? test : test.skip;
 
+describe("destructive operation refusal", () => {
+  browserTest("protected delete attention is readable and dismissible on the phone", async () => {
+    const { captureDestructiveRefusal, ownedBrowserSocketEnvironment } = await import("@/components/kanban/issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, env: sockets.env, args: ["--no-sandbox"] });
+    try { expect(await captureDestructiveRefusal(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "destructive-refusal-phone"), true)).toBe(12); }
+    finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+});
+
 describe("Claude native admission receipts on the phone", () => {
   const nativeBrowserTest = process.env.LLV_SWIPE_BROWSER_TEST === "1" && process.env.LLV_NATIVE_RECEIPT_EVIDENCE ? test : test.skip;
   nativeBrowserTest("original native, contained and ambiguous receipts preserve phone delivery states", async () => {

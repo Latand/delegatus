@@ -2,12 +2,13 @@ import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
 import { agentHistoryGuardEnv, type AgentEnvironment } from "./agentHistoryGuard";
 import { agentForgeWriteEnv } from "./agentForgeCredentials";
 import { agentLessonPublicationEnv } from "@/lib/memory/roleStore";
+import { agentDestructiveGuardEnv } from "@/lib/agent/destructiveGuard";
 import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, type RepositoryCommitIdentity } from "./repositoryCommitIdentity";
 
 /** Publication settings belong to the launching process, before child-env
     filtering. Git identity variables from that process never choose an agent's
     identity. Invalid settings refuse the launch without logging their values. */
-export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<string, string | undefined> {
+export function agentPublicationIdentityEnv(source: AgentEnvironment, cwd = source.LLV_AGENT_CWD || process.cwd()): Record<string, string | undefined> {
   let repository: RepositoryCommitIdentity | undefined;
   if (source[REPOSITORY_IDENTITY] !== undefined) {
     try { repository = JSON.parse(source[REPOSITORY_IDENTITY]!); }
@@ -19,10 +20,12 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
       throw new Error("Invalid repository Git identity (values withheld)");
     }
     const forge = agentForgeWriteEnv(source);
+    const history = agentHistoryGuardEnv({ ...source, ...forge }, name, email, repository.coauthor);
     return { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
       [REPOSITORY_IDENTITY]: source[REPOSITORY_IDENTITY],
       ...agentLessonPublicationEnv(), ...forge,
-      ...agentHistoryGuardEnv({ ...source, ...forge }, name, email, repository.coauthor) };
+      ...history,
+      ...agentDestructiveGuardEnv({ ...source, ...forge, ...history }, { cwd }) };
   }
   const defaults = controllerCommitIdentityEnv();
   const configuredName = source.DELEGATUS_PUBLICATION_NAME ?? source.LLV_PUBLICATION_NAME ?? defaults.GIT_AUTHOR_NAME!;
@@ -38,6 +41,7 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
      come first: the history guard appends its own after them and has to stay
      the last one. */
   const forge = agentForgeWriteEnv(source);
+  const history = agentHistoryGuardEnv({ ...source, ...forge }, name, email);
   return {
     GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email,
     GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
@@ -45,12 +49,13 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
        role-memory lesson (src/lib/memory/roleStore.ts). */
     ...agentLessonPublicationEnv(),
     ...forge,
-    ...agentHistoryGuardEnv({ ...source, ...forge }, name, email),
+    ...history,
+    ...agentDestructiveGuardEnv({ ...source, ...forge, ...history }, { cwd }),
   };
 }
 
-export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment): Record<string, unknown> {
-  const identity = agentPublicationIdentityEnv(source);
+export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment, cwd?: string): Record<string, unknown> {
+  const identity = agentPublicationIdentityEnv(source, cwd);
   const shellBindings = source.LLV_GATE_CPU_PRIORITY_SOURCE === undefined
     ? {} : { LLV_GATE_CPU_PRIORITY_SOURCE: source.LLV_GATE_CPU_PRIORITY_SOURCE };
   const storage = Object.fromEntries(["TMPDIR", "LLV_EVIDENCE_DIR"].flatMap(key => source[key] === undefined ? [] : [[key, source[key]]]));
@@ -78,8 +83,8 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
   return override;
 }
 
-export function agentCodexPublicationArgs(policy: unknown, source: AgentEnvironment): string[] {
-  return Object.entries(agentCodexPublicationPolicy(policy, source)).flatMap(([field, value]) =>
+export function agentCodexPublicationArgs(policy: unknown, source: AgentEnvironment, cwd?: string): string[] {
+  return Object.entries(agentCodexPublicationPolicy(policy, source, cwd)).flatMap(([field, value]) =>
     Array.isArray(value) ? ["-c", `shell_environment_policy.${field}=${JSON.stringify(value)}`]
       : Object.entries(value as Record<string, unknown>).flatMap(([key, item]) =>
         ["-c", `shell_environment_policy.${field}.${key}=${JSON.stringify(item)}`]));

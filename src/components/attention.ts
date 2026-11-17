@@ -189,6 +189,8 @@ export function attentionExpiries(files: readonly FileEntry[]): number[] {
     }
     const memoryAt = file.memoryKill ? isoSeconds(file.memoryKill.at) : null;
     if (memoryAt !== null) expiries.push(memoryAt + 24 * 3600);
+    const refusalAt = file.guardRefusal ? isoSeconds(file.guardRefusal.at) : null;
+    if (refusalAt !== null) expiries.push(refusalAt + 24 * 3600);
     const deliverySince = file.stuckDelivery ? isoSeconds(file.stuckDelivery.since) : null;
     if (deliverySince !== null) expiries.push(deliverySince + DELIVERY_UNCERTAIN_MS / 1000, deliverySince + DELIVERY_ATTENTION_TTL);
   }
@@ -206,6 +208,7 @@ export function attentionExpiries(files: readonly FileEntry[]): number[] {
 export interface ConversationReason {
   kind: ConversationReasonKind;
   memory?: FileEntry["memoryKill"];
+  refusal?: FileEntry["guardRefusal"];
   /** The shared attention identity: the push dedupe key and the cycle anchor. */
   id: string;
   since: number;
@@ -291,6 +294,12 @@ function askReason(ask: BridgeAsk): ConversationReason {
 }
 
 function undismissedReason(file: FileEntry, now: number): ConversationReason | null {
+  const refusal = file.guardRefusal;
+  const refusedAt = refusal ? isoSeconds(refusal.at) : null;
+  if (refusal && refusedAt !== null && refusedAt <= now && now - refusedAt < 24 * 3600) {
+    return { kind: "refusal", id: `destructive-guard:${refusal.id}`, since: refusedAt, raisedAt: refusedAt, clocked: true,
+      header: `${refusal.tool} · ${refusal.entry} (${refusal.kind})`, refusal, dismissal: null };
+  }
   /* First, and above the file's own signals (issue #1168). A bridge ask is the
      manager saying, in as many words, that it cannot go on without the
      operator — the one signal on this board that was ESCALATED rather than

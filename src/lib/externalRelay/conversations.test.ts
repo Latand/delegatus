@@ -17,6 +17,28 @@ const relay = { id: "r", targets: [target] } as PairedRelay;
 const request = (id = "root", parent: string | null = null): ExternalRelayRequest => requestSchema.parse({ ...contextRequest, request_id: id, chat: { key: "fixture-chat-chain" }, input: { ...contextRequest.input,
   respond_to: id, conversation: [{ ...contextRequest.input.conversation[0]!, id, reply_to: parent }] } });
 
+test("both cleanup paths refuse another parent, traversal spelling and a final symlink; minted trees can be removed", async () => {
+  const { deleteConversationFiles, deleteConversationFilesAsync } = await import("./conversations");
+  for (const remove of [deleteConversationFiles, deleteConversationFilesAsync]) {
+    const record = reserveChainConversation(relay, target, request(), "member")!;
+    const minted = record.cwd!;
+    const outside = path.join(root, path.basename(minted)); fs.mkdirSync(outside); fs.writeFileSync(outside + "/keep", "owned");
+    const traversal = path.dirname(minted) + "/x/../" + path.basename(minted);
+    for (const cwd of [outside, traversal]) {
+      let refused = false; try { await remove({ ...record, cwd }); } catch { refused = true; }
+      expect(refused).toBeTrue(); expect(fs.readFileSync(outside + "/keep", "utf8")).toBe("owned");
+    }
+    // Only the test-created fake target can be affected if the guard regresses.
+    fs.symlinkSync(outside, minted);
+    let refused = false; try { await remove(record); } catch { refused = true; }
+    expect(refused).toBeTrue(); expect(fs.readFileSync(outside + "/keep", "utf8")).toBe("owned");
+    fs.unlinkSync(minted); fs.mkdirSync(minted); fs.writeFileSync(minted + "/owned", "fixture");
+    expect(fs.realpathSync(minted).startsWith(fs.realpathSync(os.tmpdir()) + path.sep)).toBeTrue();
+    await remove(record); expect(fs.existsSync(minted)).toBeFalse(); releaseConversation(record.id);
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test("a persisted cursor delivers a later history gap once after process restart", () => {
   const firstRequest = request("root");
   firstRequest.input.conversation = [];

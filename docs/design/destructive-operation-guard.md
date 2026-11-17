@@ -761,6 +761,18 @@ also impose:
 8. **Never against a base.** No test of this work is run against an earlier
    version of the code it covers.
 
+The implementation also binds `LLV_GATE_TEMP_ROOT` to each check's private
+`TMPDIR`. This explicit binding survives router children that need a production
+`NODE_ENV`; inheriting `TMPDIR` alone still leaves the normal gate default
+unchanged. The fake runner binds its own command temp root. This keeps both
+comparison sandboxes and their cleanup inside the test's created tree.
+
+For repeated Bash calls, `BASH_ENV` parses the same admit-only `rm` wrapper
+once. Its function keeps all working variables local, restores the caller's
+globbing option, and starts the real binary once per admitted call. Other
+shells and nested executables continue through the PATH wrappers. Every call
+still checks the current policy stamp before using an own-root fast path.
+
 Test files (by path; none named after the issue):
 
 | File | Covers |

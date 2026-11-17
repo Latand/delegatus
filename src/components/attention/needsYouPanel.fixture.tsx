@@ -482,6 +482,11 @@ let board = {
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const serverFetch = window.fetch.bind(window);
+if (params.has("destructive-refusal")) {
+  files.length = 0; pipelines.length = 0; tasks.length = 0; SEAT_ASKS.length = 0;
+  conversation(D, "Guarded worktree cleanup", { ...role("builder"),
+    guardRefusal: { id: "rendered-refusal", at: iso(60), tool: "rm", entry: "~/.ssh", kind: "an account's credentials", command: "rm -rf protected" } });
+}
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();

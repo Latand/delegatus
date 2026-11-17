@@ -220,6 +220,13 @@ test("the gate temp root cannot inherit a pipeline's operator scratch TMPDIR", (
     if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
   }
 });
+
+test("an explicitly bound private gate root survives a router's production environment", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "gate-private-root-")); roots.push(directory);
+  expect(gateTemporaryRoot("linux", { NODE_ENV: "production", LLV_GATE_TEMP_ROOT: directory })).toBe(directory);
+  expect(() => gateTemporaryRoot("linux", { LLV_GATE_TEMP_ROOT: "relative" })).toThrow("absolute");
+  expect(() => gateTemporaryRoot("linux", { LLV_GATE_TEMP_ROOT: directory + "/missing" })).toThrow();
+});
 test("a push that changes nothing checks every pushed commit for privacy and runs no types or tests", () => {
   // Lane branch N commits behind main, stage changed nothing: the diff against
   // the merge base is empty whatever main has become since.

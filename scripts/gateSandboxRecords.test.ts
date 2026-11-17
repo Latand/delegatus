@@ -4,11 +4,28 @@ import os from "node:os";
 import path from "node:path";
 import { createHookFixture } from "./local-gate.fixture";
 import { isolatedEnvironment } from "./local-gate";
+import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
 afterEach(() => {
   for (const directory of roots.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test("cleanup without a journal still requires an allocation identity and refuses replaced symlinks", () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "gate-sandbox-identity-")); roots.push(parent);
+  const saved = process.env.LLV_GATE_SANDBOX_RECORD; delete process.env.LLV_GATE_SANDBOX_RECORD;
+  try {
+    const unknown = path.join(parent, "unknown"); fs.mkdirSync(unknown); fs.writeFileSync(unknown + "/keep", "owned");
+    expect(() => releaseGateSandbox(unknown)).toThrow("no local allocation record");
+    expect(fs.readFileSync(unknown + "/keep", "utf8")).toBe("owned");
+    const owned = path.join(parent, "owned"); fs.mkdirSync(owned); recordGateSandbox(owned);
+    releaseGateSandbox(owned); expect(fs.existsSync(owned)).toBeFalse();
+    const replaced = path.join(parent, "replaced"), retained = path.join(parent, "retained");
+    fs.mkdirSync(replaced); recordGateSandbox(replaced); fs.renameSync(replaced, retained); fs.symlinkSync(unknown, replaced);
+    expect(() => releaseGateSandbox(replaced)).toThrow("changed identity");
+    expect(fs.readFileSync(unknown + "/keep", "utf8")).toBe("owned");
+  } finally { if (saved === undefined) delete process.env.LLV_GATE_SANDBOX_RECORD; else process.env.LLV_GATE_SANDBOX_RECORD = saved; }
 });
 
 for (const hook of ["pre-commit", "pre-push"]) test("a completed " + hook + " retires its allocation before a later path recreation", async () => {

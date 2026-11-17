@@ -490,7 +490,7 @@ export class CopilotAcpHost implements EngineHost {
       // Resolve repository policy before the child environment allowlist drops
       // the identity binding. This path is shared by fresh starts and adopts.
       options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
-      const env = copilotChildEnv(options.env ?? process.env, options.copilotHome, options.providerEnv);
+      const env = copilotChildEnv({ ...(options.env ?? process.env), LLV_AGENT_CWD: options.cwd }, options.copilotHome, options.providerEnv);
       const viewer = options.viewerMcpServer === undefined
         ? (options.mcpServers ?? ["viewer"]).includes("viewer") ? copilotViewerMcpServer(options.env ?? {}) : null
         : options.viewerMcpServer;

@@ -134,6 +134,7 @@ interface ViewerRuntimeActivationSteps {
   runIdentityMigration?: () => Promise<void> | void;
   runWorktreeRecovery?: () => Promise<void>;
   runClaudeLoginRecovery?: () => Promise<void>;
+  startDestructiveGuard?: () => Promise<void>;
   startStructuredHosts: (() => void) | null;
   startControllers: () => Promise<void>;
   publishHotStateActivation: () => void;
@@ -909,6 +910,7 @@ export async function completeViewerRuntimeActivation(
   await steps.runWorktreeRecovery?.();
   const { retireLegacyCodexMemoryHooksAtStartup } = await import("@/lib/memory/hookMigration");
   await retireLegacyCodexMemoryHooksAtStartup();
+  await steps.startDestructiveGuard?.();
   steps.startStructuredHosts?.();
   await steps.prepareBoard?.();
   await steps.startControllers();
@@ -1036,6 +1038,7 @@ export async function registerViewerRuntime(): Promise<void> {
   const startupAbort = new AbortController();
   const startupBarrier = createViewerStartupBarrier(startupAbort);
   const quiesceStartup = async () => {
+    (await import("@/lib/agent/destructiveGuard.refusals")).stopDestructiveRefusalIngest();
     await startupBarrier.quiesce(new Error("structured startup retired by release handover"));
   };
   const assertStartupActive = () => {
@@ -1100,6 +1103,16 @@ export async function registerViewerRuntime(): Promise<void> {
     assertStartupActive();
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
+      startDestructiveGuard: () => startupBarrier.run(async () => {
+        assertStartupActive();
+        const { installDestructiveGuardForAccounts } = await import("@/lib/agent/destructiveGuard");
+        assertStartupActive();
+        installDestructiveGuardForAccounts();
+        const { startDestructiveRefusalIngest } = await import("@/lib/agent/destructiveGuard.refusals");
+        assertStartupActive();
+        await startDestructiveRefusalIngest(() => isCurrent() && !startupAbort.signal.aborted
+          && readHotStateAuthority(hotStateDirectory)?.mode !== "fencing");
+      }),
       runWorktreeRecovery: async () => {
         const { runWorktreeRecoveryAtStartup } = await import("@/lib/projects/worktreeBackfill");
         await runWorktreeRecoveryAtStartup();
