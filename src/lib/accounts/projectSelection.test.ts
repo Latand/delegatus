@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import type { DurableQuotaObservation } from "./migration/contracts";
 import type { AccountProjectBinding } from "./projectBindings";
 import { admitAutomaticAccountTarget, placedAccountHolds, selectProjectAccount } from "./projectSelection";
+import { accountQuotaVerdict, selectHeadlessAccount } from "./headlessSelection";
 
 const NOW = Date.parse("2026-08-30T10:00:00.000Z");
 const ATLAS = "project-atlas";
@@ -13,6 +14,58 @@ const ACCOUNTS = [
   { id: RESERVED, authPresent: true },
   { id: SPARE, authPresent: true },
 ];
+
+test.each(["session", "weekly", "tier"] as const)("Claude selection and stage guard agree at 99 and 100 percent in the %s window", window => {
+  const reset = Math.floor(NOW / 1000) + 3600;
+  for (const age of [1000, 600_000]) {
+    for (const usedPercent of [99, 100]) {
+      const sample = observation(RESERVED, 0, reset);
+      sample.observedAt = sample.authCheckedAt = new Date(NOW - age).toISOString();
+      const governing = { usedPercent, resetsAt: reset };
+      if (window === "tier") sample.limits!.tiers = [{ ...governing, tier: "fable" }];
+      else sample.limits![window] = governing;
+      const observations = [sample, observation(SPARE, 12, reset)];
+      const input = { project: ATLAS, engine: "claude" as const, model: "fable", accounts: ACCOUNTS,
+        observations, bindings: [], preferredId: RESERVED, now: NOW };
+      // The production stage guard classifies a singleton using this same
+      // observation, model and clock; its hold retains the quota verdict.
+      const guarded = selectHeadlessAccount([ACCOUNTS[0]!], observations, RESERVED, [], NOW, input.model);
+      const quota = accountQuotaVerdict(observations, RESERVED, NOW, input.model);
+      expect(guarded.kind === "exhausted").toBe(usedPercent === 100);
+      expect(quota).toEqual({ capacity: usedPercent === 100 ? "exhausted" : age === 1000 ? "available" : "unknown",
+        resetsAt: usedPercent === 100 ? reset : null, observedAt: sample.observedAt });
+      expect(selectProjectAccount({ ...input, accounts: [ACCOUNTS[0]!] })).toEqual(usedPercent === 100
+        ? { kind: "exhausted", resetsAt: reset, allowedAccountIds: [RESERVED] }
+        : { kind: "available", accountId: RESERVED });
+      expect(selectProjectAccount(input)).toEqual({ kind: "available", accountId: SPARE });
+      expect(accountQuotaVerdict(observations, SPARE, NOW, input.model).capacity).toBe("available");
+    }
+  }
+});
+
+test("a Claude stage selected at 99 percent is guarded only after a newer reading crosses 100 percent", () => {
+  const reset = Math.floor(NOW / 1000) + 3600;
+  const launchSample = observation(RESERVED, 0, reset);
+  launchSample.limits!.weekly = { usedPercent: 99, resetsAt: reset };
+  const launch = { project: ATLAS, engine: "claude" as const, model: "fable", accounts: ACCOUNTS,
+    observations: [launchSample], bindings: [], preferredId: RESERVED, now: NOW };
+  expect(selectProjectAccount(launch)).toEqual({ kind: "available", accountId: RESERVED });
+  expect(selectHeadlessAccount([ACCOUNTS[0]!], launch.observations, RESERVED, [], NOW, launch.model).kind).toBe("available");
+
+  const later = NOW + 120_000;
+  const spent = structuredClone(launchSample);
+  spent.observedAt = spent.authCheckedAt = new Date(later).toISOString();
+  spent.limits!.capturedAt = later / 1000;
+  spent.limits!.weekly!.usedPercent = 100;
+  const observations = [spent, observation(SPARE, 12, reset)];
+  expect(selectHeadlessAccount([ACCOUNTS[0]!], observations, RESERVED, [], later, launch.model))
+    .toEqual({ kind: "exhausted", resetsAt: reset });
+  expect(accountQuotaVerdict(observations, RESERVED, later, launch.model))
+    .toEqual({ capacity: "exhausted", resetsAt: reset, observedAt: spent.observedAt });
+  expect(selectProjectAccount({ ...launch, observations, now: later })).toEqual({ kind: "available", accountId: SPARE });
+  // Re-reading the launch snapshot still admits the original selection.
+  expect(selectProjectAccount(launch)).toEqual({ kind: "available", accountId: RESERVED });
+});
 
 test.each(["session", "weekly", "tier"] as const)("Claude %s exhaustion survives stale observation and auth clocks until reset", window => {
   const reset = Math.floor(NOW / 1_000) + 3600;

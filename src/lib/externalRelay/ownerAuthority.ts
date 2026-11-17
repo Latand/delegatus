@@ -129,6 +129,9 @@ export function ownerRelayOperationAuthorized(operationId: string, conversationI
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
     const run = ledger.runs.find(row => row.ownerTurn?.continuation?.operationId === operationId
       && row.conversationId === conversationId);
+    const continuation = run?.ownerTurn?.continuation;
+    if (continuation?.retryOfOperationId && (!Number.isFinite(Date.parse(continuation.deadlineAt ?? ""))
+      || Date.now() >= Date.parse(continuation.deadlineAt!))) return false;
     return !!run?.ownerTurn && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
       && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId);
   } catch { return false; }

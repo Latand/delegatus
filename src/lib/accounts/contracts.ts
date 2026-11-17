@@ -1,4 +1,5 @@
 import type { Engine, EngineLimits, LimitWindow } from "@/lib/types";
+import type { AccountSelectionSnapshot } from "./migration/contracts";
 
 /** Public, secret-free account representation. Keep paths and CLI output server-side. */
 export type AccountSummary = {
@@ -72,7 +73,7 @@ export type HeadlessSpawnAvailability =
 
 /** What a project's account binding (#1279) does to one launch's selection. */
 export type ProjectSpawnResolution =
-  | { kind: "available"; account: AccountContext }
+  | { kind: "available"; account: AccountContext; accountSelection?: AccountSelectionSnapshot }
   /** The launch named an account the project does not permit. Never downgraded
       to a fallback: crossing the boundary silently is the failure the binding
       exists to prevent. */

@@ -6,6 +6,7 @@
  * commit. With nothing linked the store never calls this.
  */
 import { TASK_SYNC_GROUPS, type BoardTask, type TaskSyncGroup } from "@/lib/tasks/types";
+import type { Database } from "bun:sqlite";
 import { prototypeReviewReplica } from "@/lib/prototypeReview/model";
 
 import { derivedStamp, maxStamp, nextStamp } from "./stamp";
@@ -22,7 +23,7 @@ export interface TaskSyncWrite {
   /** Keep an accepted equal-stamp placeholder recovery from becoming a local edit. */
   preserveStamp(id: string, group: TaskSyncGroup): void;
   isStampPreserved(id: string, group: TaskSyncGroup): boolean;
-  projectWatermark(project: string): string | null;
+  projectWatermark(project: string, admittedDb?: Database): string | null;
 }
 
 /** Local digest of a group. `chosen` belongs to the text group: naming a task
@@ -71,9 +72,9 @@ export function newestStamp(task: Pick<BoardTask, "sync" | "updatedAt">, prefix:
 }
 
 /** The largest stamp among a project's rows and its floor (M.3). */
-export function projectWatermark(tasks: readonly BoardTask[], project: string, write: Pick<TaskSyncWrite, "read" | "self">): string | null {
+export function projectWatermark(tasks: readonly BoardTask[], project: string, write: Pick<TaskSyncWrite, "read" | "self"> & Partial<Pick<TaskSyncWrite, "projectWatermark">>, admittedDb?: Database): string | null {
   let mark: string | null = "projectWatermark" in write && typeof write.projectWatermark === "function"
-    ? write.projectWatermark(project) : null;
+    ? write.projectWatermark(project, admittedDb) : null;
   for (const task of tasks) if (task.project === project) mark = maxStamp(mark, newestStamp(task, write.self.prefix));
   const floor = write.read(floorKey(project));
   return maxStamp(mark, isFloor(floor) ? floor.floor : null);
@@ -84,10 +85,10 @@ export function raiseFloor(write: TaskSyncWrite, project: string, stamp: string)
   if (!isFloor(floor) || floor.floor < stamp) write.put({ project, floor: stamp });
 }
 
-export function stampLinkedRows(tasks: BoardTask[], before: ReadonlyMap<string, GroupSnapshot>, write: TaskSyncWrite, fingerprint: (task: BoardTask) => string): void {
+export function stampLinkedRows(tasks: BoardTask[], before: ReadonlyMap<string, GroupSnapshot>, write: TaskSyncWrite, fingerprint: (task: BoardTask) => string, admittedDb?: Database): void {
   const marks = new Map<string, string | null>();
   const fresh = (project: string) => {
-    if (!marks.has(project)) marks.set(project, projectWatermark(tasks, project, write));
+    if (!marks.has(project)) marks.set(project, projectWatermark(tasks, project, write, admittedDb));
     const stamp = nextStamp(marks.get(project)!, write.now(), write.self.prefix);
     marks.set(project, stamp);
     return stamp;
