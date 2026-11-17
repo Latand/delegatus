@@ -152,6 +152,36 @@ export interface StartupRowNoticeContext {
 export async function startupRowNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">, row: StartupRowRetry | null, assertActive = () => {},
   context: StartupRowNoticeContext = {}): Promise<void> {
   const key = `${entry.key.engine}:${entry.key.sessionId}`;
+  if (!row) return structuredHostNotice(entry, null, assertActive);
+  const english = operatorLocale() === "en";
+  const conversations = context.conversationIds?.length ? `\n${context.conversationIds.join("\n")}` : "";
+  const orphan = !context.orphaned ? "" : english
+    ? "\nOrphaned host: its recorded owner process is gone while the engine still runs, and re-adoption failed. A send to the conversation stops it after a bounded grace and resumes it; otherwise stop or rotate it."
+    : "\nОсиротілий хост: процес-власник уже завершився, а двигун ще працює, і повторне прийняття не вдалося. Повідомлення в цю розмову зупинить його після обмеженої паузи й відновить; інакше зупиніть або замініть його.";
+  const text = english
+    ? `Structured host startup quarantine\n\n${key}${conversations}\nReason: ${row.reason}. Only this row retries with bounded backoff.${orphan}`
+    : `Карантин запуску structured-хоста\n\n${key}${conversations}\nПричина: ${row.reason}. Повторюється лише цей рядок із обмеженою затримкою.${orphan}`;
+  return structuredHostNotice(entry, { text, status: context.orphaned ? "assigned" : "inbox" }, assertActive);
+}
+
+/** The alarm for an orphan that no startup pass adopted or quarantined: its
+ * engine still runs while its recorded owner process is gone, typically
+ * after a release handover. It shares the row's one card with the quarantine
+ * notice, so a row never carries two, and it is assigned so the project's
+ * seat is woken. */
+export async function orphanedHostNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">, conversationIds: readonly string[], assertActive = () => {}): Promise<void> {
+  const key = `${entry.key.engine}:${entry.key.sessionId}`;
+  const conversations = conversationIds.length ? `\n${conversationIds.join("\n")}` : "";
+  const text = operatorLocale() === "en"
+    ? `Orphaned structured host\n\n${key}${conversations}\nIts recorded owner process is gone while the engine still runs, and no startup pass re-adopted it. A send to the conversation stops it after a bounded grace and resumes it; otherwise stop or rotate it.`
+    : `Осиротілий structured-хост\n\n${key}${conversations}\nПроцес-власник уже завершився, а двигун ще працює, і жоден прохід запуску не прийняв його повторно. Повідомлення в цю розмову зупинить його після обмеженої паузи й відновить; інакше зупиніть або замініть його.`;
+  return structuredHostNotice(entry, { text, status: "assigned" }, assertActive);
+}
+
+/** Writes, or with `null` closes, the row's one deterministic card. */
+async function structuredHostNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">,
+  notice: { text: string; status: "inbox" | "assigned" } | null, assertActive: () => void): Promise<void> {
+  const key = `${entry.key.engine}:${entry.key.sessionId}`;
   const hash = id(key);
   // A deterministic UUIDv8 keeps retries idempotent and passes older peers'
   // task schemas. Keep finding legacy notices so they can still be resolved.
@@ -162,21 +192,13 @@ export async function startupRowNotice(entry: Pick<AgentRegistryEntry, "key" | "
   await mutateTasksAsync(tasks => {
     assertActive();
     const existing = tasks.find(task => task.id === taskId) ?? tasks.find(task => task.id === legacyId);
-    if (!row) {
+    if (!notice) {
       if (!existing || existing.status === "done") return { tasks: undefined, result: undefined };
       const closed = patchTask(tasks, existing.id, { status: "done" });
       if (!closed.ok) throw new Error(closed.error);
       return { tasks: closed.tasks, result: undefined };
     }
-    const english = operatorLocale() === "en";
-    const conversations = context.conversationIds?.length ? `\n${context.conversationIds.join("\n")}` : "";
-    const orphan = !context.orphaned ? "" : english
-      ? "\nOrphaned host: its recorded owner process is gone while the engine still runs, and re-adoption failed. A send to the conversation stops it after a bounded grace and resumes it; otherwise stop or rotate it."
-      : "\nОсиротілий хост: процес-власник уже завершився, а двигун ще працює, і повторне прийняття не вдалося. Повідомлення в цю розмову зупинить його після обмеженої паузи й відновить; інакше зупиніть або замініть його.";
-    const text = english
-      ? `Structured host startup quarantine\n\n${key}${conversations}\nReason: ${row.reason}. Only this row retries with bounded backoff.${orphan}`
-      : `Карантин запуску structured-хоста\n\n${key}${conversations}\nПричина: ${row.reason}. Повторюється лише цей рядок із обмеженою затримкою.${orphan}`;
-    const status = context.orphaned ? "assigned" : "inbox";
+    const { text, status } = notice;
     if (existing) {
       // A card someone already moved stays where it is; an orphan's alarm
       // only lifts one still sitting in the inbox.

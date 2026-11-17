@@ -2248,14 +2248,56 @@ test.each([
   const admitted = Date.parse(ORPHAN_ADMITTED_AT);
   const request = { path: fixture.artifactPath, conversationId: fixture.conversation.id, admittedAt: ORPHAN_ADMITTED_AT };
   try {
-    const held = recoverDeadStructuredConversation(request, fixture.dependencies(admitted + ORPHANED_HOST_IN_FLIGHT_GRACE_MS - 1));
+    const held = recoverDeadStructuredConversation(request, fixture.dependencies(admitted));
     await expect(held).rejects.toBeInstanceOf(StructuredOrphanGraceError);
     await expect(held).rejects.toThrow("in-flight work");
+    const stillHeld = recoverDeadStructuredConversation(request, fixture.dependencies(admitted + ORPHANED_HOST_IN_FLIGHT_GRACE_MS - 1));
+    await expect(stillHeld).rejects.toBeInstanceOf(StructuredOrphanGraceError);
     expect(processIdentityStatus(hostIdentity)).not.toBe("dead");
     expect(fixture.spawnCalls()).toBe(0);
     expect(fixture.registry.readOnlySnapshot().entries[sessionKeyId(fixture.key)]?.structuredHost?.process).toEqual(hostIdentity);
 
     const result = await recoverDeadStructuredConversation(request, fixture.dependencies(admitted + ORPHANED_HOST_IN_FLIGHT_GRACE_MS));
+    expect(result).toMatchObject({ conversationId: fixture.conversation.id, spawned: true });
+    expect(fixture.spawnCalls()).toBe(1);
+    expect(processIdentityStatus(hostIdentity)).toBe("dead");
+  } finally {
+    fixture.registry.close();
+    await stopFixtureTree(host);
+  }
+});
+
+/* A send queued behind a busy turn before the handover reaches recovery long
+   after its admission. Its grace counts from the first durable observation of
+   the orphan with work in flight, so it never collapses to zero, and the
+   recorded observation is what a later call, in this Viewer or its
+   successor, reads back. */
+test.each(["claude", "codex"] as const)("a %s orphan first seen long after the send's admission still gets its whole grace", async engine => {
+  const host = orphanFixtureChild();
+  const ended = orphanFixtureChild();
+  const owner = captureProcessIdentity(ended.pid!);
+  await stopFixtureTree(ended);
+  const hostIdentity = captureProcessIdentity(host.pid!);
+  const fixture = orphanHostFixture(engine, { host: hostIdentity, owner, activeTurnRef: "turn-cut-by-handover" });
+  const firstSeen = Date.parse(ORPHAN_ADMITTED_AT) + 10 * 60_000;
+  const until = new Date(firstSeen + ORPHANED_HOST_IN_FLIGHT_GRACE_MS).toISOString();
+  const request = { path: fixture.artifactPath, conversationId: fixture.conversation.id, admittedAt: ORPHAN_ADMITTED_AT };
+  try {
+    const held = recoverDeadStructuredConversation(request, fixture.dependencies(firstSeen));
+    await expect(held).rejects.toBeInstanceOf(StructuredOrphanGraceError);
+    await expect(held).rejects.toThrow(until);
+    expect(processIdentityStatus(hostIdentity)).not.toBe("dead");
+
+    // A second registry handle on the same files stands in for a successor Viewer.
+    const successor = new AgentRegistry(fixture.registry.filename, undefined, undefined, { sqliteMode: "off" });
+    try {
+      const later = recoverDeadStructuredConversation(request, { ...fixture.dependencies(firstSeen + 60_000), registry: successor });
+      await expect(later).rejects.toThrow(until);
+    } finally { successor.close(); }
+    expect(processIdentityStatus(hostIdentity)).not.toBe("dead");
+    expect(fixture.spawnCalls()).toBe(0);
+
+    const result = await recoverDeadStructuredConversation(request, fixture.dependencies(firstSeen + ORPHANED_HOST_IN_FLIGHT_GRACE_MS));
     expect(result).toMatchObject({ conversationId: fixture.conversation.id, spawned: true });
     expect(fixture.spawnCalls()).toBe(1);
     expect(processIdentityStatus(hostIdentity)).toBe("dead");

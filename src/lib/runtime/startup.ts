@@ -8,6 +8,7 @@ import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, wit
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { orphanedHostNoticeContext } from "./orphanedHost";
+import { ORPHAN_FOLLOW_UP_DELAYS_MS, surfaceOrphanedHosts } from "./orphanedHostAlarm";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
@@ -3488,6 +3489,23 @@ async function adoptStructuredHostsPass(
         { signal: dependencies.signal, assertActive: dependencies.assertActive }, retryDependencies, schedule);
       rowRetries.schedule(key, schedule, retry.run);
     }
+    /* An orphan this pass neither adopted nor quarantined would otherwise sit
+       unreachable with no card at all: the eligibility filter passes over an
+       idle one, and the Claude adopter leaves lost stdio alone. */
+    const adoptedKeys = new Set(nextAdoptedHosts.map(item => sessionKeyId(item.key)));
+    try {
+      const incumbentOwned = await surfaceOrphanedHosts({
+        registry, rows: retryEntries,
+        adopted: new Set([...adoptedKeys, ...retryEntries.filter(entry => hasStructuredDeliveryHost(entry.key)).map(entry => sessionKeyId(entry.key))]),
+        retry: key => rowRetries.get(key), sweepAbsent: !rowRetry && resumeDeferred === null, assertActive,
+      });
+      /* A row with a startup retry is looked at again by its own scoped pass,
+         whose scan raises the alarm; only the others need a follow-up. */
+      scheduleOrphanFollowUp(dependencies, registry, incumbentOwned.filter(key => !rowRetries.get(sessionKeyId(key))), 0);
+    } catch (error) {
+      assertActive();
+      console.error("[structured hosts] orphaned host scan deferred", error);
+    }
     // Publication, health and recovery all await. Re-read designation after
     // the final await so a seat changed during those phases leaves no adapter.
     nextAdoptedHosts = await revalidateRetainedStartupHosts(
@@ -3607,6 +3625,52 @@ function rememberDeferredStructuredStartup(
   if (!mergePrevious) setRestartCutHeldRows(mergedHeld.keys(), { admitPendingWork: state.capAdmitted });
   if (!sameEvidence) console.error(`[structured hosts] ${message}; re-probing the evidence`, { hosts: hostKeys, nextProbeMs: state.delayMs });
   if (!mergePrevious || !state.probeScheduled) scheduleDeferredStartupReprobe(dependencies, registry, state);
+}
+
+const orphanFollowUps = new WeakMap<AgentRegistry, Set<string>>();
+
+/** Looks again at rows a pass found engine-alive under another live owner.
+    During a release handover that owner is the predecessor, which can exit
+    after the successor's pass; once it has, the scan raises the alarm. Each
+    row is followed by one timer chain, bounded by the delay ladder. */
+function scheduleOrphanFollowUp(
+  dependencies: StructuredStartupDependencies,
+  registry: AgentRegistry,
+  keys: readonly SessionKey[],
+  attempt: number,
+): void {
+  const pending = orphanFollowUps.get(registry) ?? new Set<string>();
+  orphanFollowUps.set(registry, pending);
+  const fresh = keys.filter(key => attempt > 0 || !pending.has(sessionKeyId(key)));
+  if (fresh.length === 0) return;
+  if (attempt >= ORPHAN_FOLLOW_UP_DELAYS_MS.length) {
+    for (const key of fresh) pending.delete(sessionKeyId(key));
+    return;
+  }
+  for (const key of fresh) pending.add(sessionKeyId(key));
+  const assertActive = () => {
+    dependencies.signal?.throwIfAborted();
+    dependencies.assertActive?.();
+  };
+  scheduleOutsidePass(dependencies)(async () => {
+    try { assertActive(); } catch { for (const key of fresh) pending.delete(sessionKeyId(key)); return; }
+    let remaining: SessionKey[] = [];
+    try {
+      remaining = await withViewerOperation("runtime.startup-row", () => surfaceOrphanedHosts({
+        registry, rows: fresh.map(key => ({ key })),
+        adopted: new Set(fresh.filter(key => hasStructuredDeliveryHost(key)).map(sessionKeyId)),
+        retry: key => startupRowRetries(registry).get(key), sweepAbsent: false, assertActive,
+      }));
+    } catch (error) {
+      console.error("[structured hosts] orphaned host follow-up scan failed", error);
+      remaining = [...fresh];
+    }
+    remaining = remaining.filter(key => !startupRowRetries(registry).get(sessionKeyId(key)));
+    const still = new Set(remaining.map(sessionKeyId));
+    for (const key of fresh) if (!still.has(sessionKeyId(key))) pending.delete(sessionKeyId(key));
+    try { assertActive(); } catch { for (const key of remaining) pending.delete(sessionKeyId(key)); return; }
+    scheduleOrphanFollowUp(dependencies, registry, remaining, attempt + 1);
+  }, ORPHAN_FOLLOW_UP_DELAYS_MS[attempt]!).unref?.();
 }
 
 /** Timers armed inside a pass outlive it. A real timer inherits the pass's

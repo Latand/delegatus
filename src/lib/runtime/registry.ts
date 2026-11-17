@@ -9,7 +9,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { withoutOperationLease } from "@/lib/operationLease";
 import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./hostEndCause";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
-import { structuredHostOrphaned } from "./orphanedHost";
+import { forgetOrphanedHostGrace, orphanedHostFirstObservedAt, structuredHostOrphaned } from "./orphanedHost";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
 import type {
   AgentHostStatus,
@@ -1075,7 +1075,7 @@ export async function stopTerminalStructuredOrphan(
 
 export type OrphanedStructuredHostStop =
   | { state: "stopped" }
-  | { state: "grace"; detail: string; until: number | null }
+  | { state: "grace"; detail: string; until: number }
   | { state: "refused"; detail: string };
 
 /** Work an orphan may still finish on its own: an open turn, pending
@@ -1100,10 +1100,12 @@ async function orphanedHostInFlightWork(entry: AgentRegistryEntry, now: number):
  * other orphan stop.
  *
  * An orphan with work in flight gets a bounded grace first: it is left alone
- * until `graceMs` after `admittedAt`, the durable admission of the send that
- * needs it, so a restart neither resets nor extends the bound. Without an
- * admission time such an orphan is not stopped. A host whose owner may still
- * run is never touched, and the fence is asked again before every signal.
+ * until `graceMs` after the later of `admittedAt`, the durable admission of
+ * the send that needs it, and the first durable observation of this orphan
+ * with work in flight. A send that waited behind a handover longer than the
+ * grace still leaves the orphan its whole grace, and a restart neither resets
+ * nor extends the bound. A host whose owner may still run is never touched,
+ * and the fence is asked again before every signal.
  */
 export async function stopOrphanedStructuredHost(
   registry: AgentRegistry,
@@ -1120,13 +1122,18 @@ export async function stopOrphanedStructuredHost(
   const custody = structuredCustodyIdentity(entry);
   const now = options.now();
   const inFlight = await orphanedHostInFlightWork(entry, now);
+  const rowKey = sessionKeyId(key);
   if (inFlight) {
     const admitted = Date.parse(options.admittedAt ?? "");
-    const until = Number.isFinite(admitted) ? admitted + options.graceMs : null;
-    if (until === null || now < until) {
+    const observed = await orphanedHostFirstObservedAt(registry.filename, rowKey, engine, now);
+    const until = Math.max(observed, Number.isFinite(admitted) ? admitted : observed) + options.graceMs;
+    if (now < until) {
       const detail = `the orphaned host still has in-flight work (${inFlight}); `
-        + (until === null ? "it is stopped once a send that needs it is admitted and its grace ends"
-          : `it is stopped at ${new Date(until).toISOString()} unless it settles first`);
+        + `it is stopped at ${new Date(until).toISOString()} unless it settles first`;
+      // Recorded once, when its grace starts; the held send names it on every retry.
+      if (observed === now) console.error("[structured hosts] orphaned host whose owner process is gone held for its grace", {
+        key: rowKey, pid: engine.pid, inFlight, firstObservedAt: new Date(observed).toISOString(), until: new Date(until).toISOString(),
+      });
       return { state: "grace", detail, until };
     }
   }
@@ -1137,8 +1144,9 @@ export async function stopOrphanedStructuredHost(
     current => structuredCustodyIdentity(current) === custody && current?.pendingAction === null
       && !claimOwnerBlocksOrphanReap(current.claimOwner ?? null), dependencies);
   console.error(`[structured hosts] orphaned host whose owner process is gone ${stopped ? "stopped" : "survived its stop"}`, {
-    key: sessionKeyId(key), pid: engine.pid, inFlight, graceEnded: inFlight !== null,
+    key: rowKey, pid: engine.pid, inFlight, graceEnded: inFlight !== null,
   });
+  if (stopped) await forgetOrphanedHostGrace(registry.filename, rowKey);
   return stopped ? { state: "stopped" } : { state: "refused", detail: "the orphaned host's stop did not prove every process gone" };
 }
 
