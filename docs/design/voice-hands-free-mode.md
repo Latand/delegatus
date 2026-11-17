@@ -96,8 +96,8 @@ Places that need the operator's choice are marked **Choice H1…H10** where they
   - the pipeline diffs that drive the event sounds (`workCues.ts:29-38`,
     `:285-299`).
 
-  Hands-free mode reads the same facts **on the server**, once per voice poll and
-  only when they changed. It classifies each fact into seven event classes and
+  Hands-free mode reads the same facts **on the server**, from each store's change
+  log, once per voice poll and only the rows that changed (§4.4). It classifies each fact into seven event classes and
   feeds the result into the speech queue that already speaks reports. That queue
   already waits while the operator talks (`liveSession.ts:1189-1229`). Each spoken
   notice is preceded by one earcon on the **existing** event lane.
@@ -255,17 +255,28 @@ a lot to say … prefer a short spoken summary with an offer to go deeper"
 ### 1.4 Forms, Telegram polls and attention requests
 
 - **Decision forms.** `publish_prototype_review` publishes questions. Each has
-  options, exactly one recommended, and optional `multiple` and `other`
-  (`src/lib/prototypeReview/types.ts:20-37`).
+  options, each option optionally marked `recommended`, and optional `multiple` and
+  `other` (`src/lib/prototypeReview/types.ts:20-31`).
   - **Where they live.** A task form lives on the task. A seat form (no task) lives
     in the `seat-decisions` collection (`src/lib/prototypeReview/seatRounds.ts:10-19`).
   - **How they are decided.** `decidePrototype` records a decision for one of three
     callers (`src/lib/prototypeReview/decision.ts:55`, `:236`): the operator's own
     HTTP request, an `operator-in-process` caller, or an autonomous seat.
+  - **What guards an in-process caller today** (`decision.ts:240-246`, `:303-308`):
+    - Only the autonomous seat's project is checked (`:243`). An
+      `operator-in-process` caller has no project check.
+    - The "no longer waiting" refusal (`:244-246`) applies only to a task round
+      with no decision yet. A seat round (`taskId` null) skips it.
+    - A round that already has a decision: the same answers from the same kind of
+      actor change nothing and report no new decision (`:303-307`). Different
+      answers are refused as "already decided" (`:308`), **except** on a
+      native-association round, where an in-process caller amends the saved
+      decision.
   - **Answer rules.** `normalizePrototypeAnswers` validates the answers
-    (`src/lib/prototypeReview/questions.ts:8`). An owner reply may carry per-question
-    `customText`; the web form requires the shared comment for "other"
-    (`questions.ts:30`).
+    (`src/lib/prototypeReview/questions.ts:8`). Per-question `customText` is
+    accepted only from an owner reply (one that carries `originalReply`) or an
+    autonomous seat (`decision.ts:276`, `:290`; `questions.ts:14`). For any other
+    caller an "other" answer requires a non-empty shared comment (`questions.ts:30`).
 - **Telegram polls.**
   - **Shape.** Each question goes out as an anonymous native poll. Options are
     lettered (`1a)`), the recommended one is marked, and an "other" question gets a
@@ -356,7 +367,7 @@ that answer something they asked in this call. Classes and their tiers are in §
 | --- | --- |
 | Something needs you: a form waiting, a lane parked on a decision, a seat's question or blocker, an attention request | The whole board, lists of tasks or pipelines |
 | Something failed: a merge blocked, a deploy failed or rolled back, a launch failed | Stage-by-stage progress, steps passed |
-| The outcome of a request sent in this call (its report) | Agents' messages and conversation text |
+| Work started on a request sent in this call, and its outcome (its reports) | Agents' messages and conversation text |
 | A lane merged; a lane you started in this call finished | Stalled agents (also in the brief, §2.8) |
 | A deploy succeeded | Limit waits on accounts not blocking your requests |
 | A rate-limit wait that holds a lane you asked about | Frames, variants, full report text for unrelated projects |
@@ -407,10 +418,11 @@ same letters (`reviewPolls.ts:36`). The operator may answer:
 - **A letter or the option's words.** "B", "the recommended one", «другий».
 - **Several options**, only when the question is `multiple`.
 - **"Other"** followed by free text. The server takes the text **from the operator's
-  own transcript turn**, not from the model's paraphrase. The send path already
-  quotes the operator's key phrase verbatim this way (`sessionConfig.ts:72`). The
-  text is stored as that question's `customText`, as an owner reply's would be
-  (`questions.ts:8`, `:30`).
+  own transcript turn**, not from the model's paraphrase. The server-side precedent
+  is `operatorWords` (`liveSession.ts:945-948`), which joins the stored input rows
+  of one operator turn and is what the send gate reads. The model only names which
+  turn holds the answer; the words come from the session's stored inputs. How the
+  words are recorded is under "Recording" below.
 - **"Skip" or "already decided"**, when the question is skippable
   (`types.ts:26-27`).
 - **"Take the recommendations"** for every question, the form's existing whole-form
@@ -431,15 +443,54 @@ same letters (`reviewPolls.ts:36`). The operator may answer:
 
 - A new registry tool `answer_decision_form` (class `delegation`, no egress) calls
   `decidePrototype` with a new in-process caller kind, `operator-voice`
-  (`decision.ts:55`). It is checked like `operator-in-process`: authorised, the
-  round still waiting, the project the call's own (`decision.ts:240-246`).
-- The answers go through `normalizePrototypeAnswers` unchanged.
+  (`decision.ts:55`), which carries the call's project set: the project in view and
+  every project this call sent to, the same set `pollReports` reads
+  (`admission.ts:618-621`).
+- **What the answer records.** The voice answer is an **owner reply**, the shape the
+  Telegram reply already uses
+  (`src/lib/prototypeReview/telegramAnswer.ts:116-117`):
+  - `originalReply` is the operator's own words for this form: the stored input
+    rows of every operator turn from "read it" to the "yes", joined in order, the
+    way `operatorWords` joins one turn (`liveSession.ts:945-948`). It is capped at
+    20,000 characters like any owner reply (`decision.ts:277`).
+  - A question answered "other" carries `customText`: the words of the operator
+    turn that gave it, minus the leading "other" or «своє».
+  - `comment` is empty.
+
+  Because the input carries `originalReply`, `normalizePrototypeAnswers` accepts
+  `customText` and does not require a shared comment (`decision.ts:276`, `:290`;
+  `questions.ts:14`, `:30`). An owner reply skips two checks a web answer gets:
+  "other must be offered" and "exactly one answer for a single-choice question"
+  (`questions.ts:30`, `:32`). `answer_decision_form` makes both checks itself, from
+  the round it read, before it calls `decidePrototype`. No change to
+  `normalizePrototypeAnswers` is needed.
+- **A new guard for `operator-voice`**, applied inside `mutatePrototypeRound`, so
+  the check and the write are one step under the decision lock. Today's
+  in-process guards do not cover the voice (§1.4): a seat round skips the waiting
+  check, `operator-in-process` has no project check, the same answers given on
+  screen would report success to the voice (`decision.ts:303-307`), and a
+  native-association round would be amended (`:308`). The voice caller is refused,
+  before any other branch of `decidePrototype`, when:
+  1. the round is a native-association round. The voice never approves a native
+     session association; the screen or the Telegram reply does;
+  2. the form's project (`canonicalOrchestratorProject(task?.project ??
+     round.project)`, as the seat's check at `:243` computes it) is not in the
+     call's project set;
+  3. the round has **any** decision, including one with the same answers. The
+     voice read the form undecided; a decision now means someone else decided it;
+  4. a task round is not the task's waiting round, or its task runs elsewhere
+     (the `:244` test without its "no decision yet" exemption);
+  5. a seat round was dismissed (the `prototype:<id>` dismissal that hides it from
+     the needs-you list, `src/lib/prototypeReview/read.ts:150`).
+
+  Each refusal is a `PrototypeError` with status 409 (3–5) or 403 (1–2), and the
+  saved round is unchanged.
 - Delivery to the seat follows the existing background path
   (`deliverPrototypeDecision`, `prototypeAnswer.ts:26`).
 - The voice then says what was recorded and the delivery state (§2.3).
-- A form decided elsewhere meanwhile is refused as "no longer waiting"
-  (`decision.ts:244`). The voice says "That form was already decided on another
-  screen" and reads the saved decision.
+- **Decided elsewhere while the voice was reading.** Refusal 3 answers. The voice
+  says "That form was already decided on another screen" and reads the saved
+  decision back from the round. Nothing it heard is recorded.
 
 **A lane parked on a decision** has no form. Its question is the stage's
 `needs_decision` summary (`src/components/attention/operatorAsk.ts:87-88`). By voice
@@ -467,8 +518,8 @@ from options.
 - **Lists.** A list is spoken as a count, the first three by priority, and the rest
   as a number: "Five lanes running. The voice settings one is waiting for you, the
   reconnect one is in review, the timers one is building; two more. Want them?"
-  - The reads already return `shown`, `total` and `nextCursor`
-    (`boardReads.ts:181-182`).
+  - The reads already return `shown`, `total` and `nextCursor` through their shared
+    page shape (`boardReads.ts:56-59`).
   - "More" continues from the cursor. The server keeps the last list cursor per call
     for 10 minutes, so "more" needs no new search.
 - **Reports.** Reports answering a request from this call keep today's rule and are
@@ -554,7 +605,7 @@ Seven classes. Each maps to one sound, and six of the seven sounds exist:
 | merged | `landed` (S4): rising D-major arpeggio | yes | A lane's merge reached `merged` |
 | deployed | `released` (S5): landed plus a low swell | yes | A deploy reached `succeeded` |
 | finished | `reply` (S8): E6→B5 | yes | The orchestrator answered a request of this call; a lane completed with no merge to make |
-| started | `launched` (S9): glide A4→A5, then E6 | yes | A request of this call was accepted and work started on it (a lane or agent launched for it) |
+| started | `launched` (S9): glide A4→A5, then E6 | yes | The orchestrator's first progress report on a request this call sent: work on it started (§4.1, P1) |
 | rate-limited | new `waiting`: two soft low notes, B3→F#3, about 0.6 s, at the level of `step` (−23 LUFS) | **no** | A limit wait holding a lane or request the operator cares about (§4.1) |
 
 - **Why `waiting` is new.** Today a limit episode plays `fault` (`workCues.ts:295-299`).
@@ -572,8 +623,22 @@ Seven classes. Each maps to one sound, and six of the seven sounds exist:
 - **Two classes change meaning in hands-free mode.** On the desk `landed` covers
   "merged or completed with no merge" (`sound-redesign.md` §3.1, S4). In hands-free
   mode, completed with no merge plays `reply` (finished) and `landed` means merged
-  only. `launched` sounds for other launches too, not only for this device's own
-  launch. The desk's map is unchanged.
+  only. On the desk `launched` marks "the launch this device asked for was
+  accepted" (`sound-redesign.md` §3.1, S9). In hands-free mode it marks the same
+  thing for the voice: work started on a request this call sent. Other launches
+  stay silent (§4.1, Dropped). The desk's map is unchanged.
+- **Why "started" needs an exemption.** During any call the cue player silences
+  `launched` (`QUIET_DURING_CALL`, `cuePlayer.ts:124`), both when the request
+  arrives (`:261`) and again when the lane starts the sound (`:200`). The lane also
+  drops `launched` when another sound is playing (`eventLane.ts:63`). Without a
+  change, the started earcon could never play in a call. A hands-free earcon request
+  therefore carries a `handsFree` flag, set only by the page when it plays a notice
+  the voice poll delivered (§3.2 step 3). The lane passes the flag to its `start`
+  callback, and a flagged `launched` is exempt from both the call silence and the
+  busy drop. It still waits in the lane queue within the 15 s bound
+  (`eventLane.ts:65`) and plays at the call's −6 dB. An unflagged `launched`, such
+  as the new-agent card's own (`src/components/DraftAgentPane.tsx:676-678`), stays
+  silent during a call, as today.
 
 ### 3.2 Cues and speech share one channel
 
@@ -584,7 +649,8 @@ The browser plays both: the provider's voice through the call's `<audio>` elemen
    companion calls `setVoiceConnected(owner, true)` (`audio/app.ts:196`), and
    `false` when it ends. The lane's existing call rules then apply: the queue clears
    at connect, the background sounds go silent and the rest play 6 dB down
-   (`cuePlayer.ts:122-124`). This closes the gap of §1.3.
+   (`cuePlayer.ts:122-124`). This closes the gap of §1.3. A hands-free "started"
+   earcon is the one exception to the silence (§3.1).
 2. **The lane waits for silence.** A new "speaking" input on the lane holds the next
    earcon while either voice is audible, and for 300 ms after.
    - **Companion speech** comes from the output analyser `media.ts` already runs
@@ -640,12 +706,22 @@ as the specification asks.
 | Tier | What | Earcon | Speech |
 | --- | --- | --- | --- |
 | **P0: now** | An answer, question or blocker on a request this call sent; a deploy failed or rolled back; a form or parked lane the operator asked about in this call; the call itself ending (cap, plan limit) | yes, may cut a lower earcon | At the next gap in speech, ahead of every P1. Speaks during quiet hours |
-| **P1: next gap** | Any other needs-you entry (form, parked lane, seat blocker or question, attention request); merge blocked; launch failed; merged; deploy succeeded; a limit wait that holds a lane this call asked about | yes | At the next gap, after P0. Held during quiet hours and after "stop" (§2.6) |
+| **P1: next gap** | Any other needs-you entry (form, parked lane, seat blocker or question, attention request); merge blocked; launch failed; merged; deploy succeeded; a limit wait that holds a lane this call asked about; **started**: the first progress report on a request this call sent | yes | At the next gap, after P0. Held during quiet hours and after "stop" (§2.6) |
 | **P2: digest** | Lanes of other people's requests merged or completed in a burst; limit waits on other lanes; a stall that persisted 10 minutes; `status` and `completed` reports answering no request of this call | none | In the next brief, or in a digest at most every 15 minutes, only when nothing was spoken for 2 minutes |
-| **Dropped** | Typing, tool calls, stage steps, stage starts, seat ticks, delivery phases, quota probes, the inferred «asks you» | none | Never. The same events the desk keeps silent (`sound-redesign.md` §3.2) |
+| **Dropped** | Typing, tool calls, stage steps, stage starts, launches that serve no request of this call, seat ticks, delivery phases, quota probes, the inferred «asks you» | none | Never. The same events the desk keeps silent (`sound-redesign.md` §3.2) |
 
 The P0 rule for reports keeps today's order: a report answering a request is spoken
-whole (`sessionConfig.ts:64`). P0 never interrupts the model in mid-sentence. The
+whole (`sessionConfig.ts:64`).
+
+**How "started" is recognised.** Every request the voice sends asks the seat to
+report progress with `correlatesDirective` set to the request's key and
+`answersDirective` false (`admission.ts:63`). A correlated report that does not
+answer its request (`answersRequest`, `admission.ts:83`) is progress. The first such
+report on a request is "started": earcon `launched`, then the report's own words,
+which are already spoken whole as a report on this call's request. Later progress
+reports on the same request are spoken without an earcon. The obligation key is the
+request's key, so a reconnect does not repeat the earcon. A request answered in full
+with no progress report first gets "finished" and no "started". P0 never interrupts the model in mid-sentence. The
 server cannot see sentence ends, and appending instructions "can interrupt speech in
 progress" (`voice-mode-explained.md` §8), which would cut a word. P0 goes first at
 the next gap.
@@ -721,29 +797,74 @@ Hands-free speech is heard by anyone in the room, unlike the screen.
 
 The narrator runs inside the existing events poll, beside `speakReports` and
 `speakTimers` (`liveSession.ts:1434-1435`). It runs only for calls in hands-free mode.
-Per poll it checks change counters first and reads a source only when its counter
-moved:
 
-| Source | Change test | Facts |
-| --- | --- | --- |
-| Bridge reports | Already polled (`admission.ts:612`) | Answers, questions, blockers. Class decides the tier (`src/lib/bridge/types.ts:80-89`, `:109-117`) |
-| «Готово» items | `doneRevision()` (`src/lib/done/store.ts:140`) | Deploy phases, limit episodes, lanes completed |
-| Pipelines | The cached list's identity (`loadPipelinesForList`, `src/lib/pipelines/store.ts:2062-2072`), then `pipelineRevision` per pipeline (`store.ts:53`) | Parks (`needs_decision`), merges, merge blocks, completions, launches for this call's requests |
-| Forms | The task and seat-decision records behind `prototypeReviewNotices` (`attentionQueue.ts:73`) | Forms waiting |
-| Needs-you conversations | `buildNeedsYouQueue`, the same pure function the screen uses (`attentionQueue.ts:24`, `:61`), over the scanner's entries | Seat questions, permissions, failed launches, stuck deliveries |
-| Attention requests | The `attention` store (`src/lib/attention/store.ts`) | Requests a seat raised for the operator |
+**The rule: per-poll work grows with what changed, never with the registry.** Every
+source below is a SQLite state collection with a collection revision and a change
+log. `changesAfter(revision, key, limit)` returns only the rows written or deleted
+after a `(revision, key)` cursor, each with its current value and row revision, and
+reads nothing when the revision has not moved
+(`src/lib/state/sqliteStateStore.ts:2642-2670`). Three readers already follow a
+collection this way: the task-binding feed over pipelines
+(`pipelineTaskBindingSource`, `src/lib/pipelines/store.ts:2625-2636`), the limit-spend
+index (`src/lib/activity/taskLimitSpend.ts:228-233`) and the catalog's folder index
+(`src/lib/scanner/projectCatalogStore.ts:544-560`).
 
-- **Watermarks.** Each source keeps a per-call watermark in the call's stored
-  session, the way report watermarks already are (`admission.ts:626-650`). A
-  reconnected part then speaks what happened while it was away, once.
-- **Baseline.** The first poll after entering the mode sets a baseline and speaks a
-  one-line summary instead of every old fact: "Right now one form waits for you; I'll
-  tell you about anything new."
-- **Cost.** *Unknown:* whether the scanner's entries can be read per poll without a
-  whole-store read, and whether a 500 ms cadence is affordable for the needs-you
-  computation. Slice 2 measures the narrator's cost per poll on recorded data, before
-  and after. If it is too high, the narrator runs every 2 s instead. A notice two
-  seconds late is still timely.
+The narrator does **not** use the obvious tests:
+
+- The cached pipeline list's identity changes on any write to the collection
+  (`loadPipelinesForList`, `store.ts:2062-2072`, over the revision-validated cache,
+  `:2024-2027`).
+- `pipelineRevision` hashes a pipeline's whole JSON (`store.ts:53-54`).
+
+Together they would re-hash every pipeline, for every hands-free call, on every
+500 ms poll after any write anywhere. Likewise `buildNeedsYouQueue`
+(`attentionQueue.ts:61-76`) takes every conversation, pipeline and task, which the
+screen can afford once per board read and the narrator cannot afford per poll.
+
+| Source | Change test | Read when it moved | Facts |
+| --- | --- | --- | --- |
+| Bridge reports | Already polled per project watermark (`admission.ts:612`, `:626-650`) | New reports for the call's projects | Answers, progress ("started", §4.1), questions, blockers. Class decides the tier (`src/lib/bridge/types.ts:80-89`, `:109-117`) |
+| Pipelines | The active collection's change log (`pipelineTaskBindingSource`, `store.ts:2625-2636`) | Changed rows only; each decoded and kept only when its canonical project is in the call's project set | Parks (`needs_decision`), merges, merge blocks, completions |
+| «Готово» items | `doneRevision()` (`src/lib/done/store.ts:140`), then the same collection's change log (`:117-123`) | Changed items only | Deploy phases, limit episodes |
+| Forms | The tasks change log (`src/lib/tasks/store.ts:1651`) and the `seat-decisions` collection's (`seatRounds.ts:19`) | Changed task rows and seat rounds; a task row counts only when its waiting round changed | Forms waiting |
+| Attention requests | The `attention` collection's revision (`src/lib/attention/store.ts:124-135`) | Changed `r:<id>` rows | Requests a seat raised for the operator |
+| Needs-you conversations | The `project_catalog` change log (`projectCatalogStore.ts:60`, `:544-560`) | Changed conversation rows, each classified alone by the per-conversation attention rule the queue uses | Permissions, failed launches, stuck deliveries |
+
+- **Shared across calls.** The change-log cursor and the decoded changes of one
+  poll window are kept once per Viewer process, keyed by collection revision, and
+  every hands-free call filters that one page by its own project set. A second
+  call adds a filter, not a second read.
+- **Bounded per poll.** Each source reads at most one page of 256 changes per poll,
+  the page size the limit-spend index uses. A larger backlog (a burst of writes,
+  a Viewer restart) drains over the following polls, oldest first, so a notice can
+  be late but is never lost.
+- **A cursor behind the log's floor.** When `changeFloor` passes a call's cursor (a
+  re-import, or a cursor idle past retention), the source re-baselines from the
+  current rows of the call's projects through an indexed read, and speaks the
+  one-line baseline summary below instead of the gap. The limit-spend index handles
+  the same case by re-seeding (`taskLimitSpend.ts:230-233`).
+- **Classification is per changed row.** A pipeline row is compared with the
+  narrator's last seen state of that pipeline (state, merge phase, parked reason)
+  kept in a bounded per-call map of the call's projects' lanes, evicted when a lane
+  is terminal and spoken. No row is hashed whole.
+- **Watermarks.** Each source's `(revision, key)` cursor is stored per call in the
+  call's session, the way report watermarks already are (`admission.ts:626-650`).
+  A reconnected part then speaks what happened while it was away, once.
+- **Baseline.** The first poll after entering the mode sets a baseline from indexed
+  reads of the call's projects and speaks a one-line summary instead of every old
+  fact: "Right now one form waits for you; I'll tell you about anything new."
+- **Cost.** *Inferred:* with no writes a poll costs one revision read per source;
+  with writes, a page of changed rows. *Unknown:* whether every per-conversation
+  needs-you reason can be computed from a catalog row alone, without the
+  scanner's in-memory entries. Slice 3 confirms it before that source ships, and
+  until then the conversation source is left out. Seat questions still arrive as
+  bridge reports. Slice 3 measures the per-poll cost at the candidate performance
+  gate's size: 53,299 rows of retained history
+  (`docs/design/candidate-performance-gate.md` line 266, built by
+  `src/lib/agent/registryPerformanceDataset.ts`), with the pipeline, task and
+  «Готово» collections seeded to the same row count, under the gate's two
+  concurrent writers. If the 500 ms cadence is too costly even so, the narrator
+  runs every 2 s. A notice two seconds late is still timely.
 - **No new paid call.** A notice is a commentary append (API) or `appendSpeech`
   (Codex), not a backend response, so it adds no per-answer spend. Voice seconds
   are still billed on the API backend while the call is open
@@ -762,13 +883,15 @@ moved:
 ### 5.1 Lost connection
 
 The reconnect design's §4 table is the one source of cues and words. This design
-adopts it unchanged and adds two rows.
+adopts all five of its rows unchanged and adds two.
 
 | Moment | Sound | Spoken |
 | --- | --- | --- |
+| Tier 1 blip, over 1 s | none | none during; the resume line after, if words were lost (`voice-call-reconnect.md` §4) |
 | Tier 2 begins | disconnect cue (`companionCues.ts:71`) | none; no voice is connected (`voice-call-reconnect.md` §4) |
 | Back | connect cue (`:70`) | the resume line, if anything was cut (`voice-call-reconnect.md` §3.6) |
 | Gave up | give-up cue (`:74`) | none; the screen line `RECONNECT_GAVE_UP` (`errors.ts:15`) |
+| Offered on reload or another device | none | none; the existing screen line `CONNECTION_LOST` with Reconnect (`errors.ts:11`) |
 | **New: back, and notices were owed during the drop** | the connect cue, then the owed notices' earcons in turn | After the resume line: "While we were disconnected: …". Notices are collapsed by class (§4.2) and P0 comes first. They are durable in the call's session, like owed report parts (`admission.ts:674`), so none is lost or doubled |
 | **New: gave up while a P0 is owed** | give-up cue | none; the P0 goes to the Telegram fallback when that is chosen (§5.2) |
 
@@ -880,8 +1003,9 @@ recorded call journals and recorded board data, before and after.
   `src/hooks/useVoiceCompanion.ts`), `liveAdapter.ts`, `companionCues.ts`,
   `src/lib/audio/app.ts`, `cuePlayer.ts`, `eventLane.ts`.
 - **Acceptance:**
-  - During a companion call, `step` and `launched` are silent and the rest play
-    −6 dB (fake clock, lane test).
+  - During a companion call, unflagged `step` and `launched` requests (the desk's,
+    such as the new-agent card's) are silent and the rest play −6 dB (fake clock,
+    lane test). The hands-free exemption for "started" arrives with slice 3.
   - An event sound requested while the voice output is audible waits, and plays
     300 ms after it falls silent.
   - The connect, disconnect, timer, tick and give-up tones keep their frequencies and
@@ -912,16 +1036,35 @@ recorded call journals and recorded board data, before and after.
   - P0 and P1 tiers with obligation keys.
   - Earcon-then-speech through the report speech queue, with the page reporting
     earcon playback.
+  - The `handsFree` flag on earcon requests, carried through the lane to `start`,
+    which exempts a flagged `launched` from the call silence and the busy drop
+    (§3.1).
+  - "Started" from the first progress report on a request of this call (§4.1).
+  - Change-log readers per source, shared per process and bounded per poll (§4.4).
   - The `waiting` sound if Choice H3 is (a).
-- **Files:** a new `src/lib/voiceCompanion/handsFree/narrator.ts` and `classify.ts`,
-  `admission.ts` (a `notice` kind beside reports), `liveSession.ts`
-  (`speakReports`), `liveAdapter.ts` (`playCue` on the notice event), `synth.ts`,
-  `src/lib/audio/cues.ts`.
+- **Files:** a new `src/lib/voiceCompanion/handsFree/narrator.ts`, `classify.ts`
+  and `changeFeed.ts`, `admission.ts` (a `notice` kind beside reports),
+  `liveSession.ts` (`speakReports`), `liveAdapter.ts` (`playCue` on the notice
+  event), `cuePlayer.ts`, `eventLane.ts`, `synth.ts`, `src/lib/audio/cues.ts`, and
+  read-only change-log sources beside `pipelineTaskBindingSource` in
+  `src/lib/pipelines/store.ts`, `src/lib/done/store.ts`,
+  `src/lib/prototypeReview/seatRounds.ts` and `src/lib/attention/store.ts`.
 - **Acceptance**, each with a fake clock and fixed ids:
   - A lane parking on a decision is heard once, as `your-move` then one line. The
     seat's form for the same task a minute later is not heard again.
   - A deploy that failed is P0 and goes before a waiting P1.
   - A notice never starts while the operator's input hold is active.
+  - **Started plays during a hands-free call.** With the voice lease held, the
+    first progress report on a request this call sent plays `launched` at −6 dB,
+    then its words; a second progress report on that request plays no earcon. In
+    the same test, an unflagged `launched` request (the new-agent card's) stays
+    silent, and a flagged `launched` that arrives while another sound plays
+    waits and then plays instead of being dropped.
+  - **Per-poll work follows changes.** With no writes, a poll reads only
+    collection revisions and decodes no row. A write to a pipeline of another
+    project is read once per process and speaks nothing. Two hands-free calls
+    read each change page once. A cursor behind `changeFloor` re-baselines and
+    speaks the baseline line once.
   - A reconnect speaks notices owed during the drop exactly once.
   - Private mode never puts report text into a notice.
   - Every source's failure path keeps the others speaking.
@@ -930,23 +1073,42 @@ recorded call journals and recorded board data, before and after.
   - Time from the event's own time to its earcon. Target median under 5 s with the
     page visible.
   - Notices per call hour against the §4.1 estimate.
-  - The narrator's CPU time per poll on recorded data. The cadence choice of §4.4
-    follows from it.
+  - The narrator's time per poll, median and p95, on a registry of the candidate
+    performance gate's size (53,299 rows, §4.4) under its two concurrent writers:
+    once with no writes, once with the writers running, before and after, each
+    run repeated three times on the same seeded data. Also the rows decoded per
+    poll, which must track rows changed, not rows stored. The cadence choice of
+    §4.4 follows from it.
 
 ### Slice 4. A decision form answered by voice (if Choice H4 is (a))
 
 - **Changes:** reading a form one question at a time, `answer_decision_form`, the
-  `operator-voice` caller in `decidePrototype`, verbatim "other" from the transcript,
-  read-back and consent.
+  `operator-voice` caller in `decidePrototype` with its own guard (§2.4), the
+  answer recorded as an owner reply with the operator's words as `originalReply`
+  and "other" as `customText`, read-back and consent.
 - **Files:** `tools.ts`, `sessionConfig.ts` (replacing the "records only in the
-  review form" line, `:17`), `src/lib/prototypeReview/decision.ts`, `questions.ts`,
-  `src/lib/voiceCompanion/gate.ts`, `prototypeRead.ts`.
+  review form" line, `:17`), `src/lib/prototypeReview/decision.ts` (the
+  `operator-voice` kind and its guard), `liveSession.ts` (the operator's words
+  for `originalReply` and `customText`), `src/lib/voiceCompanion/gate.ts`,
+  `prototypeRead.ts`. `questions.ts` is unchanged.
 - **Acceptance:**
   - A three-question form with one "other" is recorded with the operator's exact
     words as `customText`. Nothing is recorded without the spoken yes.
-  - A form decided on screen during the reading is refused with the spoken "already
-    decided" and the saved decision read back.
-  - A form of another project is refused.
+  - A form whose only question is answered "other", with no comment, is recorded:
+    `customText` holds the exact words of the operator's turn, byte for byte from
+    the stored input rows, `comment` is empty, and `originalReply` holds the
+    form's operator turns.
+  - "Other" on a question that does not offer it, and two options on a
+    single-choice question, are refused by the tool before `decidePrototype`.
+  - **Decided on screen mid-read.** A task form and a seat form are each decided
+    on screen after the voice read them and before the spoken yes. For each, the
+    voice answer is refused with 409, the saved round, its decision, revision and
+    delivery are deep-equal before and after, and the voice says "already
+    decided" and reads the saved decision. The same holds when the screen's
+    answers equal the voice's.
+  - A native-association round is refused with 403 and left unchanged.
+  - A task form and a seat form of a project outside the call's project set are
+    each refused with 403. A dismissed seat form is refused with 409.
   - The Telegram reply path's tests still pass unchanged.
 - **Measure:** the specification's own test. A hands-free user completes a decision
   form and learns the outcome of the lane it unblocks without looking, on a recorded
@@ -991,6 +1153,8 @@ recorded call journals and recorded board data, before and after.
 | A decision form completed by voice, with the lane's outcome learned, without looking | Done in one call; no screen interaction in the journal | Slice 4 scenario, then one live call |
 | Event-to-earcon latency (page visible) | Median < 5 s, p95 < 15 s | Slice 3 journal rows |
 | Earcons over speech | 0 per hour | Slice 1 cue log |
+| Every one of the seven earcons can play in a hands-free call, "started" included | Each plays in its test | Slice 3 tests |
+| Narrator work per poll | Rows decoded track rows changed; no whole-collection read | Slice 3, at the candidate gate's size |
 | Repeated notices for one obligation | 0 | Slice 3 and 5 journals |
 | Spoken notices per hour | Within twice the §4.1 estimate; otherwise the tiers are revisited | Slice 3 |
 | "What's going on" | 1 tool round, ≤ 500 bytes | Slice 2 |
@@ -1028,7 +1192,8 @@ which backend a long call uses.
 | What a locked phone does to the page and playback | Reconnect slice 5 on a device; task `7194c5e5` |
 | Whether Codex voices a progress line during a backing turn | Slice 2 probe on the fake provider, then one live call |
 | Whether the API engine replacement can be observed | The vendor's event list; not needed by the design (§5.3) |
-| The narrator's per-poll cost on real data | Slice 3 measurement |
+| The narrator's per-poll cost at the candidate gate's size | Slice 3 measurement (§4.4) |
+| Whether every per-conversation needs-you reason can be computed from a catalog row alone | Slice 3, before the conversation source ships (§4.4) |
 | Which read was refused on 2026-11-01 | The call journal of that day on the operator's machine. This cloud stage could not read it |
 
 **Deferred — not currently justified:**
