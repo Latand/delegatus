@@ -2689,7 +2689,7 @@ test("#3976: an unconfirmed expired tier cut becomes a visible decision", async 
   expect(h.continuations).toHaveLength(0);
 });
 
-test("late tier cancellation cannot reopen a park after the native session changes", async () => {
+test.each([["session", 1], ["session", 2], ["account", 1], ["account", 2]] as const)("late tier cancellation keeps a changed %s fenced at read %d", async (change, changeOnRead) => {
   const h = await inPlaceHarness();
   h.answer("armed");
   await h.request({ applyNowCut: "boundary" });
@@ -2698,8 +2698,12 @@ test("late tier cancellation cannot reopen a park after the native session chang
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
   const generation = h.ports.conversationGeneration!(STAGE_CONVERSATION)!;
+  let reads = 0;
   h.ports.runtimeSwitchTierCut = async () => {
-    h.ports.conversationGeneration = () => ({ ...generation, sessionId: "session-replacement" });
+    if (++reads === changeOnRead) {
+      if (change === "session") h.ports.conversationGeneration = () => ({ ...generation, sessionId: "session-replacement" });
+      else h.ports.allowedAccountIds = () => [];
+    }
     return "cancelled";
   };
   await tickPipelines([], h.ports);

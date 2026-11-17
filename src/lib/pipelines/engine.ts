@@ -9006,6 +9006,14 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           const live = pipelines.find(item => item.id === pipeline.id);
           const current = live && runFor(live, stage.id)?.attempts.find(item => item.n === attempt.n);
           if (!live || !current || activationFence(live) !== fence || JSON.stringify(current) !== expectedAttempt) throw new RuntimeSwitchSuperseded();
+          if (parked && record.inPlace && record.phase === "committed" && !record.cutAt && !record.continuationDispatch) {
+            const generation = ports.conversationGeneration?.(record.from.conversationId);
+            const allowed = ports.allowedAccountIds?.(pipeline.project, record.to.engine);
+            if (!generation || generation.sessionId !== record.from.sessionId || generation.agentPath !== record.from.agentPath
+              || !runtimeTargetsEqual(generation, { ...record.to,
+                serviceTier: record.appliedServiceTier === undefined ? record.to.serviceTier : record.appliedServiceTier })
+              || allowed && (!generation.accountId || !allowed.includes(generation.accountId))) throw new RuntimeSwitchSuperseded();
+          }
           if (record.retry && JSON.stringify(attempt) === expectedAttempt && live.state === pipeline.state && live.stateDetail === pipeline.stateDetail) return;
           for (const key of Object.keys(current)) if (!(key in attempt)) Reflect.deleteProperty(current, key);
           Object.assign(current, structuredClone(attempt));
