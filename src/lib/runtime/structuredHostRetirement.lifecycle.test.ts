@@ -33,7 +33,7 @@ afterEach(async () => {
 });
 
 for (const engine of ["codex", "claude"] as const) {
-  for (const change of ["released-owner", "missing-identity", "already-reconciled", "live-owner", "new-generation", "reopened-turn",
+  for (const change of ["released-owner", "capture-release", "capture-replacement", "capture-release-epoch", "capture-release-writer", "missing-identity", "already-reconciled", "live-owner", "new-generation", "reopened-turn",
     "live-child", "empty-diagnostics-live-child", "loaded-scope", "unknown-scope", "unknown-identity", "scope-owner", "scope-turn",
     "admission-owner", "admission-turn", "admission-boot", "reused-pids", "settled-scope", "live-status", "released-columns", "released-columns-live-work"] as const) {
     test(`${engine}: concurrent close after capture, ${change}`, async () => {
@@ -42,6 +42,7 @@ for (const engine of ["codex", "claude"] as const) {
       const script = path.join(root, "host.mjs");
       fs.writeFileSync(script, 'import { spawn } from "node:child_process"; spawn("sleep", ["60"], { detached: true, stdio: "ignore" }).unref(); setInterval(() => {}, 1000);');
       const child = spawn(process.execPath, [script], { stdio: "ignore" });
+      children.push(child);
       const identity = captureProcessIdentity(child.pid!);
       identities.push(identity);
       let tree: ProcessIdentity[] = [];
@@ -77,6 +78,19 @@ for (const engine of ["codex", "claude"] as const) {
       let admitted = false;
       const admit = registry.deliveryWriteOrBusy.bind(registry);
       const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, write) => {
+        if (correlation.label === "registry.idle-stop-capture" && change.startsWith("capture-")) {
+          // Exit and release while the capture waits for writer admission.
+          await Promise.resolve();
+          for (const member of [...tree].reverse()) await stopFixtureIdentity(member);
+          expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
+          if (change !== "capture-release") registry.agentStateWrite(state => {
+            const current = state.entries[`${engine}:${FIXTURE_SESSION}`]!;
+            if (change === "capture-replacement") current.claimOwner = "replacement-owner";
+            if (change === "capture-release-epoch") current.claimEpoch++;
+            if (change === "capture-release-writer") current.structuredHost!.writerClaimEpoch++;
+          });
+          closed = true;
+        }
         if (correlation.label === "registry.idle-reconcile-gone") {
           await Promise.resolve();
           admitted = true;
@@ -89,7 +103,9 @@ for (const engine of ["codex", "claude"] as const) {
       const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation(async (ref, dependencies) => {
         const outcome = await originalTerminate(ref, { ...dependencies,
           persistCapturedTree: async captured => {
-            expect(await dependencies!.persistCapturedTree!(captured)).toBe(true);
+            const accepted = await dependencies!.persistCapturedTree!(captured);
+            if (change.startsWith("capture-")) { expect(accepted).toBe(false); return false; }
+            expect(accepted).toBe(true);
             expect(captured).toHaveLength(tree.length);
             for (const member of tree.filter(value => !["live-child", "empty-diagnostics-live-child"].includes(change) || value.pid === identity.pid).reverse()) {
               await stopFixtureIdentity(member);
@@ -155,7 +171,12 @@ for (const engine of ["codex", "claude"] as const) {
           error: `scope retirement target changed: verdict process-identity: no kernel identity can be observed for pid ${identity.pid}` });
         expect(runtimeCalls).toBe(0);
         expect(signals).toBe(0);
-        if (!["released-owner", "missing-identity", "already-reconciled", "reused-pids", "settled-scope", "live-status", "released-columns"].includes(change)) {
+        if (change === "capture-replacement") {
+          expect(report.failed).toEqual([]);
+          expect(report.refused).toMatchObject([{ changed: true, clause: "process-identity",
+            reason: "scope retirement target changed: claimOwner" }]);
+        }
+        if (!["released-owner", "capture-release", "missing-identity", "already-reconciled", "reused-pids", "settled-scope", "live-status", "released-columns"].includes(change)) {
           expect(report.gone).toEqual([]);
           expect(report.retired).toEqual([]);
           expect(retire).not.toHaveBeenCalled();
@@ -352,6 +373,16 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
           }
           if (change !== "none" && change !== "held" && change !== "dead-owner" && change !== "refresh-unchanged") {
             expect(report.retired).toEqual([]);
+            if (boundary === "scope" && change === "claimOwner") {
+              expect(report.failed).toEqual([]);
+              expect(report.refused).toMatchObject([{ clause: "process-identity", changed: true,
+                reason: "scope retirement target changed: claimOwner" }]);
+              expect(outcomes[0]).toMatchObject({ ok: false, status: 409,
+                error: "scope retirement target changed: claimOwner" });
+              expect(registry.hostEntry(entry.key)!.claimOwner).toBe("replacement-owner");
+              expect(signals).toHaveLength(signalsAtChange);
+              return;
+            }
             if (boundary === "scope" && ["process identity", "pid"].includes(change)) {
               expect(report.refused).toMatchObject([{ clause: "process-identity", changed: true }]);
               expect(outcomes[0]).toMatchObject({ ok: false, status: 409, error: "scope retirement target changed: process identity" });
