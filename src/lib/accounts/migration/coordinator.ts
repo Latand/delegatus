@@ -1323,7 +1323,17 @@ export async function drainHeldDeliveries(
   const conversation = registry.conversation(conversationId);
   const current = conversation?.generations.at(-1);
   if (!current) return;
-  await forEachCooperatively(registry.openDeliveries(conversationId, ["assigned", "delivery-uncertain"], { advance: true }), async (item) => {
+  const candidates = registry.openDeliveries(conversationId, ["assigned", "delivery-uncertain"], { advance: true });
+  if (options.orphanedDeliveryReason) {
+    // Preflight exactly the page that can act, before even reconciling an
+    // uncertain peer. A refused cancellation leaves this page without effects.
+    for (const item of candidates) {
+      if (item.state !== "assigned" || item.recoveryIntent === "reclaimed-host" || registry.hasDurableDeliveryOwner(item)) continue;
+      if (!await offLoop(registry, "delivery.cancel", item.command.operationId,
+        () => registry.terminalizeOrphanedHeldDelivery(item, options.orphanedDeliveryReason!(item)))) return;
+    }
+  }
+  await forEachCooperatively(candidates, async (item) => {
     const reconciling = item.state === "delivery-uncertain";
     if (reconciling && !delivery.reconcileUncertain) return;
     if (!reconciling && (item.state !== "assigned" || item.generationId !== current.id)) return;

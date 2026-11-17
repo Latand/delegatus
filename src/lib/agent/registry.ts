@@ -2269,7 +2269,8 @@ export function deliveryHasDurableClaimOwner(
   if (!current || delivery.generationId !== current.id) return false;
   if (current.host !== null && current.host !== undefined) return true;
   const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: current.id })];
-  if (entry && entry.artifactPath === current.path
+  if (entry && entry.key.engine === conversation.engine && entry.key.sessionId === current.id
+    && entry.artifactPath === current.path
     && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null))) return true;
   // Each state is a scalar equality seek. Terminal history is excluded before
   // LIMIT, and no receipt payload is materialized to establish existence.
@@ -12340,6 +12341,15 @@ export class AgentRegistry {
       // Rotating pages reach it even for legacy/storage-order disagreement;
       // later rows cannot dispatch while an earlier assigned admission exists.
       return keys.map(key => clone(file.heldDeliveries[key]!)).sort(compareDeliveryAdmission);
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Bounded observation for a recovery page's cancellation preflight.
+      The writer repeats this decision before cancellation and claim. */
+  hasDurableDeliveryOwner(delivery: HeldDelivery): boolean {
+    return this.readKeyed(file => {
+      const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+      return Boolean(conversation && (conversation.migration || deliveryHasDurableClaimOwner(file, conversation, delivery)));
     }, { skipColdKeyInitialization: true });
   }
 
