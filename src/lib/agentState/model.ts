@@ -48,6 +48,8 @@ export interface TranscriptVersion {
   mtimeMs: number;
   coveredFrom: number;
   bytesRead: number;
+  /** Missing on persisted summaries produced before versioned boundaries. */
+  boundaryVersion?: number;
 }
 export interface AgentFacts {
   subject: string;
@@ -93,6 +95,7 @@ export function evaluateAgentState(facts: AgentFacts, now: number, policy = AGEN
           else if (available("transcript")) {
             state = stuck ? "stuck" : "working";
             reason = stuck ? "open turn with silent transcript" : facts.turn.value.opening === "accepted" ? "accepted work awaiting a native prompt" : "verified open turn";
+            if (facts.turn.evidence.ref === "native-open-after-idle-conflict-grace") reason += "; idle-memory conflict exceeded native write grace";
             if (stuck && facts.activity?.determined && facts.activity.value.flags.length) reason += `; ${facts.activity.value.flags.join(", ")}`;
           }
         }
@@ -237,6 +240,7 @@ export function validAgentFacts(value: unknown): value is AgentFacts {
         || !["nativeId", "localRef", "opening", "closing"].every(k => v[k] === null || typeof v[k] === "string" && v[k].length <= 256)
         || !(v.at === null || number("at")))) return false;
       if (key === "transcript" && (!number("size") || !number("mtimeMs") || !number("coveredFrom") || !number("bytesRead")
+        || v.boundaryVersion !== undefined && (!Number.isSafeInteger(v.boundaryVersion) || (v.boundaryVersion as number) < 1)
         || typeof v.signature !== "string" || v.signature.length > 256 || typeof v.artifact !== "string" || !/^[a-f0-9]{24}$/.test(v.artifact))) return false;
       if (key === "activity" && (!number("tools") || !strings(v.flags, 16, 64) || typeof v.providerRetry !== "boolean")) return false;
     }

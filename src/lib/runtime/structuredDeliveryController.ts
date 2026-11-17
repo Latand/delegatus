@@ -7,7 +7,7 @@ import { withHostStopOrigin } from "./hostExit";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
-import { verifiedBackgroundWork, BACKGROUND_TASK_WAIT_CEILING_MS } from "@/lib/pipelines/backgroundTasks";
+import { verifiedBackgroundWork, type VerifiedBackgroundWorkCache, BACKGROUND_TASK_WAIT_CEILING_MS } from "@/lib/pipelines/backgroundTasks";
 import { AgentTranscriptCache } from "@/lib/agentState/transcript";
 import { registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
@@ -1453,6 +1453,7 @@ export async function bindStructuredDeliveryQueue(
         } : null;
         const outcome = await terminateStructuredHostTree(ref, {
           stopOrigin: { path: onlyIfIdle ? "idle-delivery-retirement" : "delivery-kill-action", operationId: authority?.operationId ?? conversationId },
+          orphanAlarmRegistry: registry,
           retainedSurvivors,
           scope: targetScope,
           registryCustody: retirementCustody,
@@ -2721,6 +2722,8 @@ export interface DemotionInterruptionOptions {
   seats?: () => readonly Pick<OrchestratorSeat, "project" | "seatEpoch" | "conversationId">[];
   /** Keep the evidence check and continuation record in one admitted step. */
   admitRecord?: (record: () => boolean) => Promise<boolean>;
+  /** Optional cache reader for bounded custody recovery; production uses the shared cache. */
+  backgroundWorkCache?: VerifiedBackgroundWorkCache;
 }
 
 /** The seat holding `conversationId`. A seat may still name an alias of the
@@ -3003,7 +3006,8 @@ export async function handOverHostForDemotion(
 }
 
 const backgroundCustodyRetryReasons = new Set([
-  "background transcript recovery is pending", "background read concurrency exceeds its bound",
+  "background transcript recovery is pending", "background transcript recovery is pending cache capacity",
+  "background read concurrency exceeds its bound",
   "the transcript changed under the read", "the transcript shrank under the read",
   "the transcript ends on an unterminated record",
 ]);
@@ -3083,7 +3087,9 @@ async function settleClaudeWorkBeforeDemotion(
         // missing artifact cannot erase a background obligation. A fresh
         // broker that has never ended a turn still has no native work to read.
         const work = pathname && (delivered !== undefined || fs.existsSync(pathname))
-          ? await verifiedBackgroundWork(pathname, Date.now())
+          ? await (options.backgroundWorkCache
+            ? options.backgroundWorkCache.acquire(pathname, Date.now())
+            : verifiedBackgroundWork(pathname, Date.now()))
           : delivered !== undefined ? { state: "unreadable" as const, reason: "native background artifact is missing" }
             : { state: "read" as const, names: [] };
         assertClaim();
