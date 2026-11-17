@@ -17,6 +17,7 @@ test("merger resolves a required reviewed-PR list with a read-write, non-nesting
   expect(role.value.config).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "high" });
   expect(role.value.definition.capabilities).toEqual([]);
   expect(role.value.prompt).toContain("12@abcdef1,13@1234567");
+  expect(role.value.prompt).toContain("call the native wait_for_check once with that runId");
 });
 
 test("role registry exposes the thirteen role ids and campaign-ready orchestrator config", () => {

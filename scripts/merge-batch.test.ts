@@ -11,6 +11,7 @@ import type { TestRun, TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
 import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
 import * as merger from "./merge-batch";
+import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
 import { bindMergerContract } from "../src/lib/pipelines/mergerContract.fixture";
 
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
@@ -293,6 +294,26 @@ test("review inputs require unique PRs and unambiguous hexadecimal heads", () =>
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+
+test.each(["gate", "land"])("a native %s failure remains available by run ID after the batch exits", async phase => {
+  const root = mkdtempSync(join(tmpdir(), "batch-wait-"));
+  roots.push(root);
+  const binding = bindGateCheckRoot(root)!;
+  const state = mkdtempSync(join(tmpdir(), "batch-state-"));
+  roots.push(state);
+  const result = await commandRunner(root, [process.execPath, join(import.meta.dir, "merge-batch.ts"), phase], {
+    ...isolatedEnvironment(join(root, "isolated"), process.env), TMPDIR: state,
+    LLV_GATE_CHECK_LAUNCH_ROOT: binding.root, LLV_GATE_CHECK_ROOT: binding.physicalRoot,
+    LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY: binding.rootDirectoryIdentity,
+  });
+  expect(result.code).toBe(1);
+  const runId = /runId=([a-f0-9]{64})/.exec(result.output)?.[1];
+  expect(runId).toBeDefined();
+  const response = await runGateCheckTool({ runId, reason: phase }, binding, new AbortController().signal);
+  expect(response.success).toBe(true);
+  expect(JSON.parse(response.contentItems[0]!.text)).toMatchObject({ terminal: true, code: 1, runId });
+  expect(existsSync(join(state, "merge-batch.json.lock"))).toBe(false);
+});
 
 function githubFailedLog(output: string): string {
   return output.split("\n").map((line) => `privacy\tScan\t2026-10-02T08:45:12Z ${line}`).join("\n");
