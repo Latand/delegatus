@@ -49,7 +49,7 @@ import {
   runtimeIdleKillMatches,
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
-import { deadStageHostReason, recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
+import { deadStageHostReason, recoverDeadStructuredConversation, StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
 import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import {
@@ -951,9 +951,12 @@ async function recoverReclaimedMessage(
         operationId: admitted.operationId,
       };
     }
+    /* An orphan held for its grace, or behind a refused stop, is still being
+       recovered; its own message says what it waits for. */
+    const orphanWait = error instanceof StructuredOrphanGraceError || error instanceof StructuredOrphanStopRefusedError;
     recordAdmissionWait(progress, registry, reservation, {
-      reason: "awaiting-host",
-      detail: `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
+      reason: orphanWait ? "recovering-host" : "awaiting-host",
+      detail: orphanWait ? error.message : `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
     });
     requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
     return {

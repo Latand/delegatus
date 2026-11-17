@@ -1019,6 +1019,7 @@ async function endRecordedStructuredTree(
     seat: null, turnBusy: null, owned: false, lastActiveAt: null,
   }, {
     stopOrigin: { path: source, operationId: sessionKeyId(key) },
+    orphanAlarmRegistry: registry,
     scope: targetScope,
     retainedSurvivors: [...startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [], ...domainProcesses],
     authorize,
@@ -1075,8 +1076,14 @@ export async function stopTerminalStructuredOrphan(
 
 export type OrphanedStructuredHostStop =
   | { state: "stopped" }
+  /** The row is no orphan any more (claimed again, ended, or retired) by the
+      time the stop looked; the caller reads it again. */
+  | { state: "not-orphaned" }
   | { state: "grace"; detail: string; until: number }
-  | { state: "refused"; detail: string };
+  /** The stop cannot proceed now. `until` bounds how long a send stays held
+      behind it; `firstObserved` is true for the call that recorded the first
+      refusal of this orphan, which raises the alarm. */
+  | { state: "refused"; detail: string; until: number; firstObserved: boolean };
 
 /** Work an orphan may still finish on its own: an open turn, pending
     attention, or Claude background shells. Unreadable background evidence
@@ -1106,25 +1113,43 @@ async function orphanedHostInFlightWork(entry: AgentRegistryEntry, now: number):
  * grace still leaves the orphan its whole grace, and a restart neither resets
  * nor extends the bound. A host whose owner may still run is never touched,
  * and the fence is asked again before every signal.
+ *
+ * A stop that cannot proceed (a pending action owns the row, the engine's
+ * identity cannot be verified, or processes survived the ladder) is refused
+ * with its reason and a deadline `refusedHoldMs` after the later of
+ * `admittedAt` and the first durable observation of the refusal, anchored the
+ * same way as the grace.
  */
 export async function stopOrphanedStructuredHost(
   registry: AgentRegistry,
   key: SessionKey,
-  options: { admittedAt: string | null; now: () => number; graceMs: number; recheck?: () => void },
+  options: { admittedAt: string | null; now: () => number; graceMs: number; refusedHoldMs: number; recheck?: () => void },
   dependencies: StructuredOrphanStopDependencies = {},
 ): Promise<OrphanedStructuredHostStop> {
   const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   const engine = entry?.structuredHost?.process ?? null;
   if (!entry || !engine || !structuredHostOrphaned(entry) || claimOwnerBlocksOrphanReap(entry.claimOwner)) {
-    return { state: "refused", detail: "the host is not an orphan of a gone owner" };
+    return { state: "not-orphaned" };
   }
-  if (entry.pendingAction !== null) return { state: "refused", detail: `a pending ${entry.pendingAction} owns the row` };
+  const rowKey = sessionKeyId(key);
+  const admitted = Date.parse(options.admittedAt ?? "");
+  const refused = async (detail: string): Promise<OrphanedStructuredHostStop> => {
+    const now = options.now();
+    const observed = await orphanedHostFirstObservedAt(registry.filename, rowKey, engine, now, "stop-refused");
+    const until = Math.max(observed, Number.isFinite(admitted) ? admitted : observed) + options.refusedHoldMs;
+    console.error("[structured hosts] orphaned host whose owner process is gone could not be stopped", {
+      key: rowKey, pid: engine.pid, detail, firstRefusedAt: new Date(observed).toISOString(), holdUntil: new Date(until).toISOString(),
+    });
+    return { state: "refused", detail, until, firstObserved: observed === now };
+  };
+  if (entry.pendingAction !== null) return refused(`a pending ${entry.pendingAction} owns the row`);
+  if (!engine.startIdentity || !engine.bootEpoch) {
+    return refused("the engine process's start identity cannot be verified, so no signal can be fenced to it");
+  }
   const custody = structuredCustodyIdentity(entry);
   const now = options.now();
   const inFlight = await orphanedHostInFlightWork(entry, now);
-  const rowKey = sessionKeyId(key);
   if (inFlight) {
-    const admitted = Date.parse(options.admittedAt ?? "");
     const observed = await orphanedHostFirstObservedAt(registry.filename, rowKey, engine, now);
     const until = Math.max(observed, Number.isFinite(admitted) ? admitted : observed) + options.graceMs;
     if (now < until) {
@@ -1146,8 +1171,16 @@ export async function stopOrphanedStructuredHost(
   console.error(`[structured hosts] orphaned host whose owner process is gone ${stopped ? "stopped" : "survived its stop"}`, {
     key: rowKey, pid: engine.pid, inFlight, graceEnded: inFlight !== null,
   });
-  if (stopped) await forgetOrphanedHostGrace(registry.filename, rowKey);
-  return stopped ? { state: "stopped" } : { state: "refused", detail: "the orphaned host's stop did not prove every process gone" };
+  if (stopped) {
+    await forgetOrphanedHostGrace(registry.filename, rowKey);
+    return { state: "stopped" };
+  }
+  const after = startupHostSnapshot(registry, key).entries[rowKey];
+  if (!after || !structuredHostOrphaned(after)) return { state: "not-orphaned" };
+  const survivors = after.structuredTerminationSurvivors?.length ?? 0;
+  return refused(survivors > 0
+    ? `${survivors} process${survivors === 1 ? "" : "es"} of the orphaned host survived its stop`
+    : "the orphaned host's stop did not prove every process gone");
 }
 
 /**

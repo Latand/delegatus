@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import net from "node:net";
 
 import { afterAll, expect, test } from "bun:test";
 
@@ -53,20 +54,24 @@ function runtimeJournalClient(journal: RuntimeJournal): RuntimeHostClient {
   } as RuntimeHostClient;
 }
 
-function fixture(name: string, sessionId: string, options: { engine: ProcessIdentity; owner: ProcessIdentity; activeTurnRef?: string | null }) {
+function fixture(name: string, sessionId: string, options: {
+  engine: ProcessIdentity; owner: ProcessIdentity; activeTurnRef?: string | null;
+  kind?: "claude" | "codex"; endpoint?: string;
+}) {
+  const kind = options.kind ?? "claude";
   const directory = fs.mkdtempSync(path.join(sandbox, `${name}-`));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   const artifactPath = path.join(directory, `${sessionId}.jsonl`);
   fs.writeFileSync(artifactPath, "");
-  const conversation = registry.ensureConversation("claude", artifactPath, "default");
-  const key = { engine: "claude" as const, sessionId };
+  const conversation = registry.ensureConversation(kind, artifactPath, "default");
+  const key = { engine: kind, sessionId };
   registry.upsert({
     key, artifactPath, cwd: directory, accountId: "default", launchProfile: emptyLaunchProfile({ cwd: directory }),
     status: options.activeTurnRef ? "live" : "idle", host: null, claimEpoch: 1,
     claimOwner: `structured-host:${JSON.stringify(options.owner)}`, pendingAction: null,
     structuredHost: {
-      kind: "claude-broker", endpoint: "stdio:orphaned", process: options.engine, eventCursor: 5, protocolVersion: "fixture",
+      kind: kind === "claude" ? "claude-broker" : "codex-app-server", endpoint: options.endpoint ?? "stdio:orphaned", process: options.engine, eventCursor: 5, protocolVersion: "fixture",
       writerClaimEpoch: 1, activeTurnRef: options.activeTurnRef ?? null, pendingAttention: [], activeFlags: [],
     },
   });
@@ -80,7 +85,7 @@ function fixture(name: string, sessionId: string, options: { engine: ProcessIden
     schedule: (callback, delay) => { scheduled.push({ callback, delay }); return { unref() {} }; },
     pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
   };
-  const cards = () => loadTasks(statePath("tasks.json")).filter(task => task.text.includes(`claude:${sessionId}`));
+  const cards = () => loadTasks(statePath("tasks.json")).filter(task => task.text.includes(`${kind}:${sessionId}`));
   const close = async () => {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close(); registry.close();
@@ -213,6 +218,72 @@ test("a recorded alarm whose row left the registry is closed by a full scan", as
     expect(rows.cards().map(card => card.status)).toEqual(["done"]);
   } finally {
     await rows.close();
+    await stopFixtureTree(engine);
+  }
+});
+
+/* A Codex app server listens on its own socket, which outlives the Viewer
+   that started it. A send reconnects to a socket that still verifies, so such
+   an orphan is reachable and needs no alarm; after one release nine idle ones
+   would each have woken the seat with a card saying re-adoption failed. Only a
+   Codex orphan whose socket cannot be verified is unreachable. */
+test.each([
+  ["verifies", 0],
+  ["cannot be verified", 1],
+] as const)("an idle Codex orphan whose socket %s raises %d assigned cards", async (socketState, expected) => {
+  const engine = child();
+  const engineIdentity = captureProcessIdentity(engine.pid!);
+  // A short directory: a Unix socket path is limited to about a hundred bytes.
+  const socketDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "oa-"));
+  const socketFile = path.join(socketDirectory, "rpc.sock");
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketFile, resolve); });
+  fs.chmodSync(socketFile, 0o600);
+  const rows = fixture(`codex-socket-${expected}`, `25300000-0000-0000-0000-00000000009${6 + expected}`, {
+    engine: engineIdentity, owner: await ended(), kind: "codex",
+    endpoint: socketState === "verifies" ? `codex-unix:${socketFile}` : "stdio:orphaned",
+  });
+  try {
+    await adoptStructuredHostsAtStartup(rows.dependencies);
+    expect(rows.cards().filter(card => card.status === "assigned")).toHaveLength(expected);
+    if (expected) expect(rows.cards()[0]!.text).toContain(rows.conversation.id);
+    // Neither case stops the engine.
+    expect(processIdentityStatus(engineIdentity)).toBe("alive");
+    expect(rows.registry.readOnlySnapshot().entries[`codex:${rows.key.sessionId}`]?.structuredHost?.process).toEqual(engineIdentity);
+  } finally {
+    await rows.close();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(socketDirectory, { recursive: true, force: true });
+    await stopFixtureTree(engine);
+  }
+});
+
+test("a recorded alarm closes once the Codex orphan's socket verifies again", async () => {
+  const engine = child();
+  const engineIdentity = captureProcessIdentity(engine.pid!);
+  const socketDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "oa-"));
+  const socketFile = path.join(socketDirectory, "rpc.sock");
+  const rows = fixture("codex-socket-returns", "25300000-0000-0000-0000-000000000098", {
+    engine: engineIdentity, owner: await ended(), kind: "codex", endpoint: `codex-unix:${socketFile}`,
+  });
+  const scan = () => surfaceOrphanedHosts({
+    registry: rows.registry, rows: [{ key: rows.key }], adopted: new Set(),
+    retry: key => startupRowRetries(rows.registry).get(key), sweepAbsent: true, assertActive: () => {},
+  });
+  const server = net.createServer();
+  try {
+    // No socket on disk yet: nothing can reach the engine.
+    await scan();
+    expect(rows.cards().map(card => card.status)).toEqual(["assigned"]);
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketFile, resolve); });
+    fs.chmodSync(socketFile, 0o600);
+    await scan();
+    expect(rows.cards().map(card => card.status)).toEqual(["done"]);
+    expect(processIdentityStatus(engineIdentity)).toBe("alive");
+  } finally {
+    await rows.close();
+    if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(socketDirectory, { recursive: true, force: true });
     await stopFixtureTree(engine);
   }
 });

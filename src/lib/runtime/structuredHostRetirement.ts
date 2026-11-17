@@ -1613,6 +1613,7 @@ export async function runStructuredHostRetirementSweep(
     return terminateStructuredHostTree(ref, {
       authorize: () => captureRefusal ?? authorize(),
       stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
+      orphanAlarmRegistry: agentRegistry(),
       graceMs,
       deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
       persistCapturedTree: identities => {

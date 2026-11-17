@@ -168,13 +168,23 @@ export async function startupRowNotice(entry: Pick<AgentRegistryEntry, "key" | "
  * engine still runs while its recorded owner process is gone, typically
  * after a release handover. It shares the row's one card with the quarantine
  * notice, so a row never carries two, and it is assigned so the project's
- * seat is woken. */
-export async function orphanedHostNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">, conversationIds: readonly string[], assertActive = () => {}): Promise<void> {
+ * seat is woken. `refusal` is set when a send's recovery could not stop it,
+ * and says why. */
+export async function orphanedHostNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">, conversationIds: readonly string[], assertActive = () => {},
+  refusal: string | null = null): Promise<void> {
   const key = `${entry.key.engine}:${entry.key.sessionId}`;
   const conversations = conversationIds.length ? `\n${conversationIds.join("\n")}` : "";
-  const text = operatorLocale() === "en"
-    ? `Orphaned structured host\n\n${key}${conversations}\nIts recorded owner process is gone while the engine still runs, and no startup pass re-adopted it. A send to the conversation stops it after a bounded grace and resumes it; otherwise stop or rotate it.`
-    : `Осиротілий structured-хост\n\n${key}${conversations}\nПроцес-власник уже завершився, а двигун ще працює, і жоден прохід запуску не прийняв його повторно. Повідомлення в цю розмову зупинить його після обмеженої паузи й відновить; інакше зупиніть або замініть його.`;
+  const english = operatorLocale() === "en";
+  const next = refusal === null
+    ? english
+      ? "A send to the conversation stops it after a bounded grace and resumes it; otherwise stop or rotate it."
+      : "Повідомлення в цю розмову зупинить його після обмеженої паузи й відновить; інакше зупиніть або замініть його."
+    : english
+      ? `A send could not stop it: ${refusal}. Stop or rotate it.`
+      : `Повідомлення не змогло його зупинити: ${refusal}. Зупиніть або замініть його.`;
+  const text = english
+    ? `Orphaned structured host\n\n${key}${conversations}\nIts recorded owner process is gone while the engine still runs, and nothing here can re-adopt it. ${next}`
+    : `Осиротілий structured-хост\n\n${key}${conversations}\nПроцес-власник уже завершився, а двигун ще працює, і повторно прийняти його тут неможливо. ${next}`;
   return structuredHostNotice(entry, { text, status: "assigned" }, assertActive);
 }
 

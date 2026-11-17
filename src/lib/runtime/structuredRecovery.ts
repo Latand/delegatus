@@ -23,7 +23,7 @@ import type { MessageOrigin } from "./messageOrigin";
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop, stopOrphanedStructuredHost, type StructuredOrphanStopDependencies } from "./registry";
-import { ORPHANED_HOST_IN_FLIGHT_GRACE_MS, structuredHostOrphaned } from "./orphanedHost";
+import { forgetOrphanedHostGrace, ORPHANED_HOST_IN_FLIGHT_GRACE_MS, ORPHANED_HOST_STOP_REFUSED_HOLD_MS, structuredHostOrphaned } from "./orphanedHost";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
 import { stageGitEnvironment } from "./stageGitEnvironment";
@@ -312,6 +312,24 @@ export class StructuredOrphanGraceError extends Error {
   }
 }
 
+/** The host's recorded owner process is gone, and its stop was refused: a
+    pending action owns the row, the engine's identity cannot be verified, or
+    processes survived the ladder. While `holding`, the caller keeps its
+    message held and asks again; past `until` it fails the message with this
+    reason. The row's seat holds an alarm naming the conversation. */
+export class StructuredOrphanStopRefusedError extends Error {
+  readonly until: number;
+  readonly holding: boolean;
+  constructor(detail: string, until: number, holding: boolean) {
+    super(holding
+      ? `the orphaned host could not be stopped (${detail}); the send is held until ${new Date(until).toISOString()} and the seat is alerted`
+      : `the orphaned host could not be stopped (${detail}); its seat is alerted to stop or rotate it`);
+    this.name = "StructuredOrphanStopRefusedError";
+    this.until = until;
+    this.holding = holding;
+  }
+}
+
 class StructuredRecoverySupersededError extends Error {
   constructor() {
     super("structured recovery operation is superseded");
@@ -583,6 +601,16 @@ async function recoverCandidate(
               await publishStructuredDeliveryHost({ key: current.key, host, writerEpoch: claim.claimEpoch }, owns);
               const reconnected = structuredDeliveryHostForConversation(current.conversationId) === host;
               if (!reconnected) await releaseConnection();
+              else {
+                /* The host is claimed again: an orphan alarm raised before the
+                   reconnect no longer holds. */
+                try {
+                  const { closeOrphanedHostAlarm } = await import("./orphanedHostAlarm");
+                  await closeOrphanedHostAlarm(registry, current.key);
+                } catch (error) {
+                  console.error("[structured recovery] orphaned host alarm closure deferred", { key: sessionKeyId(current.key), error: String(error) });
+                }
+              }
               dependencies.requestDeliveryDrain?.();
               return { ...liveHostResult(current), reconnected, ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}) };
             } catch (error) {
@@ -603,10 +631,12 @@ async function recoverCandidate(
       request.admissionGuard?.();
       const operationAdmittedAt = request.operationId ? registry.deliveryAdmissionAtForOperation(request.operationId) : null;
       const orphanKey = current.key;
+      const now = dependencies.now ?? Date.now;
       const stop = await stopOrphanedStructuredHost(registry, orphanKey, {
         admittedAt: operationAdmittedAt ?? request.admittedAt ?? null,
-        now: dependencies.now ?? Date.now,
+        now,
         graceMs: ORPHANED_HOST_IN_FLIGHT_GRACE_MS,
+        refusedHoldMs: ORPHANED_HOST_STOP_REFUSED_HOLD_MS,
         recheck: () => {
           request.admissionGuard?.();
           request.authorityGuard?.();
@@ -614,10 +644,28 @@ async function recoverCandidate(
         },
       }, dependencies.orphanStop);
       if (stop.state === "grace") throw new StructuredOrphanGraceError(stop.detail);
-      if (stop.state === "refused") throw new StructuredRecoverySynchronizingError();
+      if (stop.state === "refused") {
+        const holding = now() < stop.until;
+        /* The seat hears of it once, when the refusal is first seen, and again
+           when the held send gives up, so a lost first card is replaced. */
+        if (stop.firstObserved || !holding) {
+          try {
+            const { raiseOrphanedHostAlarm } = await import("./orphanedHostAlarm");
+            await raiseOrphanedHostAlarm(registry, orphanKey, stop.detail);
+          } catch (error) {
+            console.error("[structured recovery] orphaned host alarm publication deferred", { key: sessionKeyId(orphanKey), error: String(error) });
+          }
+        }
+        throw new StructuredOrphanStopRefusedError(stop.detail, stop.until, holding);
+      }
       await assertOwnership();
       current = candidateFor(registry, request, Boolean(ownership), park);
       if (!current) return null;
+    } else if (!current.ownerOrphaned) {
+      /* An orphan that exited on its own, or was claimed again, leaves its
+         grace and refusal records behind; a later orphan of the same row
+         would replace them, but nothing else reads them. */
+      await forgetOrphanedHostGrace(registry.filename, sessionKeyId(current.key));
     }
     if (current.hostProcessLive && !current.hostLive
       && await settleParkedResumeFence(registry, current.key, client, dependencies)) {

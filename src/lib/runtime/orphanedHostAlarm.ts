@@ -6,9 +6,9 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { processIdentityStatus } from "@/lib/processIdentity";
 
-import { structuredHostOrphaned } from "./orphanedHost";
+import { forgetOrphanedHostGrace, reconnectableCodexOrphan, structuredHostOrphaned } from "./orphanedHost";
 import { startupHostSnapshot } from "./startupSnapshot";
-import { orphanedHostNotice, startupRowNotice, type StartupRowRetry } from "./startupRowRetries";
+import { orphanedHostNotice, startupRowNotice, startupRowRetries, type StartupRowRetry } from "./startupRowRetries";
 
 /** The rows whose orphan alarm is raised, so a later scan can close it once
     the row is adopted, stopped or gone. Keyed by the row's key id. */
@@ -31,6 +31,26 @@ async function readAlarms(registry: AgentRegistry): Promise<OrphanAlarmRecords> 
     if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return {};
     throw error;
   }
+}
+
+/* Every read-modify-write of one alarm file runs in turn, so a recovery that
+   closes a row's alarm and a startup scan that raises another never lose
+   each other's record. Each turn also reads the row again, after the write
+   that made it an orphan or ended it. */
+const alarmTurns = new Map<string, Promise<unknown>>();
+
+async function withAlarms<T>(registry: AgentRegistry, turn: (alarms: OrphanAlarmRecords) => Promise<{ changed: boolean; result: T }>,
+  assertActive: () => void): Promise<T> {
+  const file = alarmFile(registry);
+  const previous = alarmTurns.get(file) ?? Promise.resolve();
+  const run = previous.catch(() => {}).then(async () => {
+    const alarms = await readAlarms(registry);
+    const { changed, result } = await turn(alarms);
+    if (changed) await writeAlarms(registry, alarms, assertActive);
+    return result;
+  });
+  alarmTurns.set(file, run);
+  try { return await run; } finally { if (alarmTurns.get(file) === run) alarmTurns.delete(file); }
 }
 
 async function writeAlarms(registry: AgentRegistry, records: OrphanAlarmRecords, assertActive: () => void): Promise<void> {
@@ -64,7 +84,9 @@ export interface OrphanedHostScan {
  * Surfaces every row in scope whose engine still runs while its recorded
  * owner process is gone, and which this pass neither adopted nor
  * quarantined, as an assigned card naming its conversations; a quarantined
- * orphan's quarantine card carries the same alarm. A row that stops being an
+ * orphan's quarantine card carries the same alarm. A Codex orphan whose
+ * socket still verifies is reachable, since a send reconnects to it, so it
+ * raises none. A row that stops being an
  * orphan has its alarm closed. Idempotent across passes: the card is
  * deterministic per row and rewritten only when its text or state changes.
  *
@@ -75,8 +97,7 @@ export interface OrphanedHostScan {
  */
 export async function surfaceOrphanedHosts(scan: OrphanedHostScan): Promise<SessionKey[]> {
   const { registry, assertActive } = scan;
-  const alarms = await readAlarms(registry);
-  let changed = false;
+  const recorded = await readAlarms(registry);
   const seen = new Set<string>();
   const incumbentOwned: SessionKey[] = [];
   for (const row of scan.rows) {
@@ -85,48 +106,110 @@ export async function surfaceOrphanedHosts(scan: OrphanedHostScan): Promise<Sess
     const id = sessionKeyId(key);
     if (seen.has(id)) continue;
     seen.add(id);
-    if (!alarms[id] && "structuredHost" in row && !mayBeOwnedElsewhere(row)) continue;
-    const snapshot = startupHostSnapshot(registry, key);
-    const entry: AgentRegistryEntry | undefined = snapshot.entries[id];
-    const retry = scan.retry(id);
-    const quarantined = retry?.quarantined && !retry.resolved ? retry : null;
-    if (entry && !scan.adopted.has(id) && mayBeOwnedElsewhere(entry) && structuredHostOrphaned(entry)) {
-      const conversationIds = registryConversationsForEntryKey(snapshot, id).map(row => row.id);
-      try {
-        if (quarantined) await startupRowNotice(entry, quarantined, assertActive, { orphaned: true, conversationIds });
-        else await orphanedHostNotice(entry, conversationIds, assertActive);
-      } catch (error) {
-        assertActive();
-        console.error("[structured hosts] orphaned host alarm publication deferred", { key: id, error: String(error) });
-        continue;
+    if (!recorded[id] && "structuredHost" in row && !mayBeOwnedElsewhere(row)) continue;
+    const owned = await withAlarms(registry, async alarms => {
+      const snapshot = startupHostSnapshot(registry, key);
+      const entry: AgentRegistryEntry | undefined = snapshot.entries[id];
+      const retry = scan.retry(id);
+      const quarantined = retry?.quarantined && !retry.resolved ? retry : null;
+      const candidate = Boolean(entry && !scan.adopted.has(id) && mayBeOwnedElsewhere(entry));
+      if (candidate && structuredHostOrphaned(entry)) {
+        /* A send reconnects a Codex orphan whose socket still verifies,
+           without a stop; that host is reachable, so it raises no alarm. */
+        if (reconnectableCodexOrphan(entry)) {
+          console.error("[structured hosts] orphaned Codex host left for a send's socket reconnect", {
+            key: id, pid: entry!.structuredHost?.process?.pid,
+          });
+        } else {
+          const conversationIds = registryConversationsForEntryKey(snapshot, id).map(row => row.id);
+          try {
+            if (quarantined) await startupRowNotice(entry!, quarantined, assertActive, { orphaned: true, conversationIds });
+            else await orphanedHostNotice(entry!, conversationIds, assertActive);
+          } catch (error) {
+            assertActive();
+            console.error("[structured hosts] orphaned host alarm publication deferred", { key: id, error: String(error) });
+            return { changed: false, result: false };
+          }
+          console.error("[structured hosts] orphaned host surfaced to its seat", {
+            key: id, pid: entry!.structuredHost?.process?.pid, conversations: conversationIds, quarantined: Boolean(quarantined),
+          });
+          if (alarms[id]) return { changed: false, result: false };
+          alarms[id] = { engine: key.engine, sessionId: key.sessionId, cwd: entry!.cwd };
+          return { changed: true, result: false };
+        }
       }
-      console.error("[structured hosts] orphaned host surfaced to its seat", {
-        key: id, pid: entry.structuredHost?.process?.pid, conversations: conversationIds, quarantined: Boolean(quarantined),
-      });
-      if (!alarms[id]) { alarms[id] = { engine: key.engine, sessionId: key.sessionId, cwd: entry.cwd }; changed = true; }
-      continue;
-    }
-    if (entry && !scan.adopted.has(id) && mayBeOwnedElsewhere(entry) && ownedByAnotherLiveProcess(entry)) incumbentOwned.push(key);
-    const recorded = alarms[id];
-    if (!recorded) continue;
-    if (await closeAlarm(entry ?? { key, cwd: recorded.cwd }, quarantined, id, assertActive)) {
+      const incumbent = candidate && ownedByAnotherLiveProcess(entry!);
+      const record = alarms[id];
+      if (!record) return { changed: false, result: incumbent };
+      if (!await closeAlarm(entry ?? { key, cwd: record.cwd }, quarantined, id, assertActive)) return { changed: false, result: incumbent };
       delete alarms[id];
-      changed = true;
-    }
+      return { changed: true, result: incumbent };
+    }, assertActive);
+    if (owned) incumbentOwned.push(key);
   }
   if (scan.sweepAbsent) {
-    for (const [id, recorded] of Object.entries(alarms)) {
+    for (const [id, absent] of Object.entries(recorded)) {
       if (seen.has(id)) continue;
-      const key = { engine: recorded.engine, sessionId: recorded.sessionId } as SessionKey;
-      if (startupHostSnapshot(registry, key).entries[id]?.structuredHost) continue;
-      if (await closeAlarm({ key, cwd: recorded.cwd }, null, id, assertActive)) {
+      const key = { engine: absent.engine, sessionId: absent.sessionId } as SessionKey;
+      await withAlarms(registry, async alarms => {
+        const record = alarms[id];
+        if (!record || startupHostSnapshot(registry, key).entries[id]?.structuredHost) return { changed: false, result: undefined };
+        if (!await closeAlarm({ key, cwd: record.cwd }, null, id, assertActive)) return { changed: false, result: undefined };
         delete alarms[id];
-        changed = true;
-      }
+        return { changed: true, result: undefined };
+      }, assertActive);
     }
   }
-  if (changed) await writeAlarms(registry, alarms, assertActive);
   return incumbentOwned;
+}
+
+/**
+ * Raises the row's orphan alarm from outside a startup pass: a send's
+ * recovery found the orphan and could not stop it. `refusal` says why, and
+ * the card names every conversation of the row. Recorded like a scan's alarm,
+ * so whatever later ends the orphan closes it.
+ */
+export async function raiseOrphanedHostAlarm(registry: AgentRegistry, key: SessionKey, refusal: string,
+  assertActive: () => void = () => {}): Promise<void> {
+  const id = sessionKeyId(key);
+  await withAlarms(registry, async alarms => {
+    const snapshot = startupHostSnapshot(registry, key);
+    const entry = snapshot.entries[id];
+    if (!entry || !structuredHostOrphaned(entry)) return { changed: false, result: undefined };
+    const conversationIds = registryConversationsForEntryKey(snapshot, id).map(row => row.id);
+    const retry = startupRowRetries(registry).get(id);
+    const quarantined = retry?.quarantined && !retry.resolved ? retry : null;
+    if (quarantined) await startupRowNotice(entry, quarantined, assertActive, { orphaned: true, conversationIds });
+    else await orphanedHostNotice(entry, conversationIds, assertActive, refusal);
+    console.error("[structured hosts] orphaned host whose stop was refused surfaced to its seat", { key: id, conversations: conversationIds, refusal });
+    if (alarms[id]) return { changed: false, result: undefined };
+    alarms[id] = { engine: key.engine, sessionId: key.sessionId, cwd: entry.cwd };
+    return { changed: true, result: undefined };
+  }, assertActive);
+}
+
+/**
+ * Closes the row's orphan alarm once the row is no orphan any more: its host
+ * was stopped or retired, or a send claimed it again. A quarantined row keeps
+ * its quarantine card without the orphan alarm. Nothing is written when no
+ * alarm of the row is recorded, so every stop may call it. The row's grace
+ * and refusal records go with it.
+ */
+export async function closeOrphanedHostAlarm(registry: AgentRegistry, key: SessionKey,
+  assertActive: () => void = () => {}): Promise<void> {
+  const id = sessionKeyId(key);
+  await forgetOrphanedHostGrace(registry.filename, id);
+  await withAlarms(registry, async alarms => {
+    const record = alarms[id];
+    if (!record) return { changed: false, result: undefined };
+    const entry = startupHostSnapshot(registry, key).entries[id];
+    if (entry && structuredHostOrphaned(entry) && !reconnectableCodexOrphan(entry)) return { changed: false, result: undefined };
+    const retry = startupRowRetries(registry).get(id);
+    const quarantined = retry?.quarantined && !retry.resolved ? retry : null;
+    if (!await closeAlarm(entry ?? { key, cwd: record.cwd }, quarantined, id, assertActive)) return { changed: false, result: undefined };
+    delete alarms[id];
+    return { changed: true, result: undefined };
+  }, assertActive);
 }
 
 /** The row is no orphan any more: a quarantine card drops the alarm, any
