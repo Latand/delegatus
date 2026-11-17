@@ -8,7 +8,6 @@ import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import {
   agentRegistry,
-  deliveryHasDurableClaimOwner,
   registryReceiptsForConversation,
   RegistryWriterBusyError,
   type AgentRegistry,
@@ -102,6 +101,7 @@ export interface HeldDeliveryPort {
 
 export interface DrainHeldDeliveriesOptions {
   now?: () => number;
+  orphanedDeliveryReason?: (item: HeldDelivery) => string;
 }
 
 /** One registry write the coordinator makes, waited for off the event loop
@@ -1347,7 +1347,8 @@ export async function drainHeldDeliveries(
       if (!reconciling) {
         /* Waited for off the loop (rule c). A claim the lock refused claimed
            nothing: the reservation stays assigned for the next pass. */
-        const claim = await offLoop(registry, "delivery.claim", operationId, () => registry.beginDeliveryAttempt(item.id, current.id));
+        const claim = await offLoop(registry, "delivery.claim", operationId, () => registry.beginDeliveryAttempt(item.id, current.id,
+          options.orphanedDeliveryReason ? { expected: item, reason: options.orphanedDeliveryReason(item) } : undefined));
         if (!claim) {
           delivery.wait?.({ delivery: item, registry, reason: "checking", detail: "the writer claim waited past its lock deadline" });
           return;
@@ -1513,25 +1514,13 @@ export async function reconcileMigrations(
       conversation = registry.conversation(conversation.id) ?? conversation;
     }
     if (!conversation.migration) {
-      const pending = registry.openDeliveries(conversation.id);
-      for (const item of pending) {
-        if ((item.state === "held" || item.state === "assigned")
-          && item.recoveryIntent !== "reclaimed-host"
-          && !deliveryHasDurableClaimOwner(registry.conversationRetentionSnapshot(conversation.id), conversation, item)) {
-          /* A cancellation the lock refused leaves the reservation as it was,
-             and this conversation is not drained this pass: nothing it would
-             have cancelled may be delivered first. */
-          if (!await offLoop(registry, "delivery.cancel", item.command.operationId,
-            () => registry.terminalizeOrphanedHeldDelivery(item, orphanedDeliveryReason(item)))) return;
-        }
+      // Held reservations cannot actuate. Assigned candidates are checked
+      // on the advancing actuator page inside the writer that claims them.
+      for (const item of registry.openDeliveries(conversation.id, ["held"], { advance: true })) {
+        if (!await offLoop(registry, "delivery.cancel", item.command.operationId,
+          () => registry.terminalizeOrphanedHeldDelivery(item, orphanedDeliveryReason(item)))) return;
       }
-      const latest = registry.conversationRetentionSnapshot(conversation.id);
-      const current = latest.conversations[conversation.id] ?? conversation;
-      if (registry.openDeliveries(conversation.id, ["assigned", "delivery-uncertain"]).some((item) =>
-        (item.state === "assigned" && (item.recoveryIntent === "reclaimed-host" || deliveryHasDurableClaimOwner(latest, current, item)))
-        || (item.state === "delivery-uncertain" && delivery.reconcileUncertain))) {
-        await drainHeldDeliveries(conversation.id, delivery, registry);
-      }
+      await drainHeldDeliveries(conversation.id, delivery, registry, { orphanedDeliveryReason });
       return;
     }
     if (conversation.migration.phase === "rolled-back") {
