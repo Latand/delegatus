@@ -7,7 +7,7 @@ import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
-import { orphanedHostNoticeContext } from "./orphanedHost";
+import { orphanedHostNoticeContext, unreachableOrphanedHost } from "./orphanedHost";
 import { ORPHAN_FOLLOW_UP_DELAYS_MS, surfaceOrphanedHosts } from "./orphanedHostAlarm";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -1288,15 +1288,28 @@ async function unresolvedEligibleHosts(
     if (current?.structuredHost && shouldAdopt(current)) unresolved.push(current);
   }, { batchSize: 16, timeBudgetMs: 8 });
   if (unresolved.length === 0) return [];
+  /* An engine whose recorded owner is proven dead has no predecessor to hand
+     it over. Counting it contested deferred its sends for as long as it ran
+     and quarantined it as incumbent-owned, so a send to a busy orphan was
+     never recovered. Its sends go to recovery, which stops it after its grace
+     and resumes it, and the pass's orphan scan raises the seat's alarm. A Codex
+     orphan whose socket verifies stays contested: an adopter reconnects it. */
+  const orphaned = unresolved.filter((entry) => entry.pendingAction !== "handoff" && unreachableOrphanedHost(entry));
+  if (orphaned.length > 0) {
+    console.error("[structured hosts] eligible hosts outlived their owner; leaving them to send recovery", {
+      keys: orphaned.map((entry) => sessionKeyId(entry.key)),
+    });
+  }
   /* A row the incumbent handed over while this pass ran is contested too: its
      claim came free only after the adopter had passed it, and the next pass
      adopts it. One whose adoption fails ends dead, so this cannot replay
      startup without end the way a permanently pending row would (#1364). */
   const contested = unresolved.filter((entry) => {
+    if (orphaned.includes(entry)) return false;
     const process = entry.structuredHost?.process;
     return Boolean(process && processAlive(process)) || (entry.pendingAction === "handoff" && entry.status !== "dead");
   });
-  const abandoned = unresolved.filter((entry) => !contested.includes(entry));
+  const abandoned = unresolved.filter((entry) => !contested.includes(entry) && !orphaned.includes(entry));
   if (abandoned.length > 0) {
     console.error("[structured hosts] eligible hosts have no live engine process to hand over; leaving them to on-demand hosting", {
       keys: abandoned.map((entry) => sessionKeyId(entry.key)),
@@ -3333,6 +3346,10 @@ async function adoptStructuredHostsPass(
         ? await preparedStartupSnapshot(registry) : undefined;
       const contestedConversations = new Set([...contestedHostKeys, ...delayedRows].flatMap(key => {
         const entry = contestedSnapshot!.entries[key];
+        /* A row whose retry is not yet due, quarantined as incumbent-owned
+           before its owner was known dead, is no less an orphan: its sends
+           go to recovery now rather than when the retry comes due. */
+        if (entry && delayedRows.has(key) && entry.pendingAction !== "handoff" && unreachableOrphanedHost(entry)) return [];
         const conversation = entry && registry.conversationForPath(entry.artifactPath);
         return conversation ? [registry.canonicalConversationId(conversation.id)] : [];
       }));

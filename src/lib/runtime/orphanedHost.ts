@@ -155,6 +155,17 @@ export function reconnectableCodexOrphan(
     signalDomain: native.signalDomain, signalBoundary: native.signalBoundary });
 }
 
+/** An orphan nothing can reach without a stop: its owner is proven dead and
+    no verified Codex socket offers a reconnect. Startup has no predecessor to
+    wait for on such a row, so it neither defers its sends nor quarantines it
+    as incumbent-owned; a send's recovery stops and resumes it. */
+export function unreachableOrphanedHost(
+  entry: Pick<AgentRegistryEntry, "key" | "claimOwner" | "pendingAction" | "structuredHost"> | null | undefined,
+  probe?: ProcessIdentityProbe,
+): boolean {
+  return structuredHostOrphaned(entry, probe) && !reconnectableCodexOrphan(entry);
+}
+
 /** What the startup quarantine notice says about one row: whether it is an
     orphan, and the conversations the seat will recognise it by. `snapshot` is
     the row-scoped startup snapshot of that one row. */
@@ -163,7 +174,7 @@ export function orphanedHostNoticeContext(
   entryKey: string,
 ): { orphaned: boolean; conversationIds: string[] } {
   return {
-    orphaned: structuredHostOrphaned(snapshot.entries[entryKey]) && !reconnectableCodexOrphan(snapshot.entries[entryKey]),
+    orphaned: unreachableOrphanedHost(snapshot.entries[entryKey]),
     conversationIds: registryConversationsForEntryKey(snapshot, entryKey).map(row => row.id),
   };
 }

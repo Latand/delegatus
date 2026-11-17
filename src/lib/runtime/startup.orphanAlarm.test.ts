@@ -4,7 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import net from "node:net";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setSystemTime, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -16,8 +16,12 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 
 import type { RuntimeHostClient } from "./client";
 import { adoptStructuredHostsAtStartup, type StructuredStartupDependencies } from "./startup";
-import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
+import { bindStructuredDeliveryQueue, publishStructuredDeliveryHost } from "./structuredDeliveryController";
+import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
+import { ORPHANED_HOST_IN_FLIGHT_GRACE_MS } from "./orphanedHost";
 import { ORPHAN_FOLLOW_UP_DELAYS_MS, surfaceOrphanedHosts } from "./orphanedHostAlarm";
+import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
+import { recoverDeadStructuredConversation } from "./structuredRecovery";
 import { startupRowRetries, type StartupRowRetry } from "./startupRowRetries";
 
 /* A release replaced the Viewer that owned these hosts' stdio. An engine that
@@ -285,5 +289,118 @@ test("a recorded alarm closes once the Codex orphan's socket verifies again", as
     if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
     fs.rmSync(socketDirectory, { recursive: true, force: true });
     await stopFixtureTree(engine);
+  }
+});
+
+/* Tonight's shape end to end: a busy Claude engine outlived its Viewer, and
+   the successor's startup pass ran the production Claude adopter over it.
+   Startup counted the row contested whatever its owner, so the controller kept
+   the conversation deferred and an accepted send waited behind the startup
+   fence for as long as the engine lived; recovery was never asked. A proven
+   orphan has no predecessor to wait for: the send is held for the grace, then
+   the orphan is stopped and resumed, also when an earlier boot quarantined
+   it as incumbent-owned and that retry is not yet due. A row whose owner
+   still runs stays deferred and its engine is left alone. */
+test.each([
+  ["dead", "01"],
+  ["dead, quarantined by an earlier boot", "02"],
+  ["live", "03"],
+] as const)("a busy orphan's send after startup with its owner %s", async (ownerState, suffix) => {
+  const engine = child();
+  const engineIdentity = captureProcessIdentity(engine.pid!);
+  const owner = ownerState === "live" ? child() : null;
+  const rows = fixture(`startup-deferral-${suffix}`, `25300000-0000-0000-0000-0000000001${suffix}`, {
+    engine: engineIdentity, owner: owner ? captureProcessIdentity(owner.pid!) : await ended(), activeTurnRef: "turn-cut-by-handover",
+  });
+  if (ownerState !== "dead" && ownerState !== "live") {
+    const id = `claude:${rows.key.sessionId}`;
+    const directory = `${rows.registry.filename}.startup-retries`;
+    fs.mkdirSync(directory, { recursive: true });
+    const retry: StartupRowRetry = { key: id, attempts: 3, reason: "incumbent-owned",
+      nextAt: Date.parse("2026-11-17T05:20:00.000Z"), quarantined: true, noticePending: false };
+    const { createHash } = await import("node:crypto");
+    fs.writeFileSync(path.join(directory, `${createHash("sha256").update(id).digest("hex")}.json`), JSON.stringify(retry));
+  }
+  const journal = new RuntimeJournal(path.join(path.dirname(rows.registry.filename), "delivery.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  let spawns = 0;
+  const recoveries: string[] = [];
+  const ledger = createFakeDeliveryLedger();
+  const resumed = Object.assign(new FakeEngineHost(ledger), { onStateChange: () => () => {}, setWriterFence: () => {} });
+  const admittedAt = Date.parse("2026-11-17T05:05:00.000Z");
+  setSystemTime(new Date(admittedAt));
+  try {
+    await bindStructuredDeliveryQueue([], {
+      registry: rows.registry, client, deferStartupWork: true, watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0,
+      recover: async (request, dependencies) => {
+        recoveries.push(request.conversationId ?? request.path);
+        const recovered = await recoverDeadStructuredConversation(request, {
+          ...dependencies, transportAvailable: () => true, park: () => null,
+          orphanStop: { graceMs: 200, deadlineMs: 3_000 },
+          resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "legacy", home: sandbox, transcriptRoot: sandbox, env: { NODE_ENV: "test" } }),
+          spawn: async input => {
+            spawns += 1;
+            return { ok: true, target: null, path: request.path, launchId: input.receipt.launchId, conversationId: rows.conversation.id,
+              launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+          },
+        });
+        /* The resumed host, as a real spawn would publish it. */
+        if (recovered?.spawned) {
+          rows.registry.setStructuredHost(rows.key, { kind: "claude-broker", endpoint: "fixture:resumed", process: null, eventCursor: 0,
+            protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] }, "idle");
+          await publishStructuredDeliveryHost({ key: rows.key, host: resumed });
+        }
+        return recovered;
+      },
+    });
+    /* Before the release the predecessor hosted the session in the runtime
+       host's journal, which outlives Viewers, and a send queued behind the
+       busy turn. */
+    journal.append({ scope: `session:${rows.conversation.id}`, kind: "session-status", payload: {
+      conversationId: rows.conversation.id, sessionKey: { engine: "claude", sessionId: rows.key.sessionId },
+      hostKind: "claude-broker", host: "hosted", turn: "running" } });
+    const operationId = `orphan-send-${suffix}`;
+    const admitted = journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+      conversationId: rows.conversation.id, text: "the merge gate finished", policy: "queue" });
+    expect(admitted.receipt.status).toBe("queued");
+
+    /* The production Claude adopter runs, and leaves the lost stdio alone. */
+    await adoptStructuredHostsAtStartup({ ...rows.dependencies, client, adoptClaude: undefined });
+    expect(processIdentityStatus(engineIdentity)).toBe("alive");
+    const quarantine = startupRowRetries(rows.registry).get(`claude:${rows.key.sessionId}`);
+    // Only the earlier boot's record names it incumbent-owned; this pass adds none.
+    expect(quarantine?.reason === "incumbent-owned").toBe(ownerState !== "dead");
+    const recoveriesDuringStartup = recoveries.length;
+
+    const status = () => journal.operationResult(operationId)?.receipt.status;
+    await kickStructuredDeliveryQueue();
+    // Inside the grace nothing is stopped and the send stays accepted.
+    expect(spawns).toBe(0);
+    expect(processIdentityStatus(engineIdentity)).toBe("alive");
+    expect(status()).toBe("queued");
+
+    setSystemTime(new Date(admittedAt + ORPHANED_HOST_IN_FLIGHT_GRACE_MS + 60_000));
+    await kickStructuredDeliveryQueue();
+    if (ownerState !== "live") {
+      expect(recoveries.length).toBeGreaterThan(recoveriesDuringStartup + 1);
+      expect(spawns).toBe(1);
+      expect(processIdentityStatus(engineIdentity)).toBe("dead");
+      // The send reached the resumed host.
+      expect(ledger.writes).toHaveLength(1);
+      expect(status()).not.toBe("failed");
+    } else {
+      // Deferred behind its live owner: not recovered again, never signalled.
+      expect(recoveries).toHaveLength(recoveriesDuringStartup);
+      expect(spawns).toBe(0);
+      expect(processIdentityStatus(engineIdentity)).toBe("alive");
+      expect(status()).toBe("queued");
+      expect(ledger.writes).toEqual([]);
+      expect(rows.registry.readOnlySnapshot().entries[`claude:${rows.key.sessionId}`]?.structuredHost?.process).toEqual(engineIdentity);
+    }
+  } finally {
+    setSystemTime();
+    await rows.close();
+    journal.close();
+    await Promise.all([stopFixtureTree(engine), ...(owner ? [stopFixtureTree(owner)] : [])]);
   }
 });
