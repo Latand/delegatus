@@ -315,11 +315,22 @@ function scheduleRestart() {
   const delay = retryDelayMs;
   nextStartAt = Date.now() + delay;
   retryDelayMs = Math.min(delay * 2, 5_000);
-  restartTimer = setTimeout(() => {
-    restartTimer = null;
-    const error = ensureChild();
-    if (error) scheduleRestart();
-  }, delay);
+  const arm = (waitMs) => {
+    const timer = setTimeout(() => {
+      if (restartTimer !== timer) return;
+      restartTimer = null;
+      if (closing) return;
+      const error = ensureChild();
+      if (error) scheduleRestart();
+      else if (!child && !restartTimer && !closing) {
+        // A timer can wake before the wall-clock admission deadline. Retain
+        // that deadline without spending another backoff or losing the wake.
+        arm(Math.max(1, nextStartAt - Date.now()));
+      }
+    }, waitMs);
+    restartTimer = timer;
+  };
+  arm(delay);
 }
 function finishShutdown() {
   if (!closing || ownedChildren.size) return;
