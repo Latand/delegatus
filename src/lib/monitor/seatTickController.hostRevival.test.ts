@@ -2,7 +2,7 @@ import { expect, test, fs, path, createHash, SANDBOX, harness, PROJECT, CONVERSA
   runSeatTickCheck, reconcileSeatTick, startSeatTick, stopSeatTick, readSeatTickState, writeSeatTickState, emptySeatTickState,
   AgentRegistry, setAgentRegistryForTests, emptyLaunchProfile, sessionKeyFromTranscript, defaultSeatTickSettings,
   childFixture, childRig, refuseBeforeReservation } from "./seatTickController.fixture";
-import { seatHostRecoveryKey } from "./seatHostRecovery";
+import { seatHostRecoveryKey, seatHostRevivalBackoffMs, SEAT_HOST_REVIVAL_LOST_BOUND, SEAT_HOST_REVIVAL_SETTLE_MS } from "./seatHostRecovery";
 import type { AgentLivenessRecord, RuntimeHostClient } from "./seatTickController.fixture";
 import type { SeatHostRevival } from "./seatHostRecovery";
 import type { HostExitRecord } from "@/lib/runtime/hostExit";
@@ -283,6 +283,100 @@ test("a failed revival is carded, backs off across a restart, and closes its car
   expect(third.row().hostRecovery).toMatchObject({ state: "revived", attempts: 3 });
   expect(third.rig.cards).toContainEqual({ project: PROJECT, card: expect.objectContaining({
     ref: "seat-host-recovery", instance: recovery.id, state: "resolved" }) });
+});
+
+/* A host that faults soon after every start: each check finds the host it
+   revived gone again. Every rig is a fresh process over the same state file. */
+async function flapping(checks: number, exit: HostExitRecord) {
+  const first = revivalRig({ exit });
+  await runSeatTickCheck(PROJECT, first.rig.deps);
+  const rows = [first.row().hostRecovery!];
+  const cards = [...first.rig.cards];
+  for (let check = 1; check < checks; check++) {
+    const next = revivalRig({ stateFile: first.stateFile, now: Date.parse(rows.at(-1)!.retryAt!), exit });
+    await runSeatTickCheck(PROJECT, next.rig.deps);
+    expect(next.revivals).toHaveLength(1);
+    rows.push(next.row().hostRecovery!);
+    cards.push(...next.rig.cards);
+  }
+  return { stateFile: first.stateFile, rows, cards };
+}
+
+test("a host lost before each next check keeps one episode: the backoff reaches the hour cap and the card opens at the bound", async () => {
+  const exit: HostExitRecord = { ...EXITED_CLEANLY, stop: { path: "claude-host-fault", operationId: "lost", signal: "SIGTERM", at: new Date(NOW - 21 * MINUTE).toISOString() } };
+  const checks = 9;
+  const { rows, cards } = await flapping(checks, exit);
+  const interval = DEFAULT_SEAT_TICK_POLICY.checkIntervalMs;
+  // Never reset: attempts climb by one per check, and so does the lost count.
+  expect(rows.map(row => row.attempts)).toEqual(Array.from({ length: checks }, (_, index) => index + 1));
+  expect(rows.map(row => row.lost ?? 0)).toEqual(Array.from({ length: checks }, (_, index) => index));
+  expect(rows.map(row => Date.parse(row.retryAt!) - Date.parse(row.at)))
+    .toEqual(rows.map(row => seatHostRevivalBackoffMs(row.attempts!, interval)));
+  expect(Date.parse(rows.at(-1)!.retryAt!) - Date.parse(rows.at(-1)!.at)).toBe(60 * MINUTE);
+  expect(rows.every(row => !row.confirmedAt)).toBe(true);
+  // The bound: the revival after the third lost one is unstable and carded.
+  expect(rows.map(row => row.state)).toEqual(Array.from({ length: checks },
+    (_, index) => index < SEAT_HOST_REVIVAL_LOST_BOUND ? "revived" : "unstable"));
+  const instance = rows[0].id;
+  const recoveryCards = cards.filter(({ card }) => card.kind === "host-recovery");
+  const firstOpen = recoveryCards.findIndex(({ card }) => card.state === "open");
+  expect(recoveryCards[firstOpen]).toEqual({ project: PROJECT, card: expect.objectContaining({ ref: "seat-host-recovery", instance }) });
+  expect(recoveryCards[firstOpen].card.record).toContain(": unstable; ");
+  // Once open it stays open while the host keeps getting lost.
+  expect(recoveryCards.slice(firstOpen).filter(({ card }) => card.ref === "seat-host-recovery" && card.state === "resolved")).toEqual([]);
+  expect(rows.at(-1)!.detail).toContain(`lost again after each of ${checks - 1} revivals`);
+});
+
+test("an unstable revival's card closes only once a check confirms its host alive a settle window later, which ends the episode", async () => {
+  const { stateFile, rows } = await flapping(SEAT_HOST_REVIVAL_LOST_BOUND + 1, EXITED_CLEANLY);
+  const unstable = rows.at(-1)!;
+  expect(unstable.state).toBe("unstable");
+  // Alive, but not yet for the settle window: the card stays open.
+  const early = revivalRig({ stateFile, now: Date.parse(unstable.at) + SEAT_HOST_REVIVAL_SETTLE_MS - 1 });
+  early.hostBack();
+  await runSeatTickCheck(PROJECT, early.rig.deps);
+  expect(early.revivals).toEqual([]);
+  expect(early.rig.cards.filter(({ card }) => card.kind === "host-recovery" && card.state === "resolved")).toEqual([]);
+  expect(early.row().hostRecovery).toMatchObject({ state: "unstable" });
+
+  const confirmedAt = Date.parse(unstable.at) + SEAT_HOST_REVIVAL_SETTLE_MS;
+  const held = revivalRig({ stateFile, now: confirmedAt });
+  held.hostBack();
+  const record = await runSeatTickCheck(PROJECT, held.rig.deps);
+  expect(held.rig.cards).toContainEqual({ project: PROJECT, card: expect.objectContaining({
+    ref: "seat-host-recovery", instance: unstable.id, state: "resolved" }) });
+  expect(held.row().hostRecovery).toMatchObject({ state: "revived", confirmedAt: new Date(confirmedAt).toISOString() });
+  expect(held.row().hostRecovery?.retryAt).toBeUndefined();
+  expect(record?.detail).toContain("seat host revival settled: the revived host stayed alive");
+
+  // A later loss starts a new episode at once.
+  const lostLater = revivalRig({ stateFile, now: confirmedAt + MINUTE });
+  await runSeatTickCheck(PROJECT, lostLater.rig.deps);
+  expect(lostLater.revivals).toHaveLength(1);
+  expect(lostLater.row().hostRecovery).toMatchObject({ state: "revived", attempts: 1 });
+  expect(lostLater.row().hostRecovery?.lost).toBeUndefined();
+});
+
+test("a revived host confirmed alive after the settle window ends its episode, and one seen alive earlier does not", async () => {
+  const { rig, row, stateFile } = revivalRig();
+  await runSeatTickCheck(PROJECT, rig.deps);
+  const revived = row().hostRecovery!;
+  expect(revived).toMatchObject({ state: "revived", attempts: 1 });
+  // Seen alive within the window: not confirmed, so a loss continues the episode.
+  const seen = revivalRig({ stateFile, now: Date.parse(revived.at) + SEAT_HOST_REVIVAL_SETTLE_MS - 1 });
+  seen.hostBack();
+  await runSeatTickCheck(PROJECT, seen.rig.deps);
+  expect(seen.row().hostRecovery?.confirmedAt).toBeUndefined();
+  const confirmedAt = Date.parse(revived.at) + SEAT_HOST_REVIVAL_SETTLE_MS;
+  const confirm = revivalRig({ stateFile, now: confirmedAt });
+  confirm.hostBack();
+  await runSeatTickCheck(PROJECT, confirm.rig.deps);
+  expect(confirm.revivals).toEqual([]);
+  expect(confirm.row().hostRecovery).toMatchObject({ state: "revived", attempts: 1, confirmedAt: new Date(confirmedAt).toISOString() });
+  expect(confirm.rig.cards.filter(({ card }) => card.kind === "host-recovery")).toEqual([]);
+  const lost = revivalRig({ stateFile, now: confirmedAt + MINUTE });
+  await runSeatTickCheck(PROJECT, lost.rig.deps);
+  expect(lost.row().hostRecovery).toMatchObject({ state: "revived", attempts: 1 });
 });
 
 test("an ownership race during revival defers to the next check without a failure card", async () => {

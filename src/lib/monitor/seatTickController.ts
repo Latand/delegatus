@@ -20,7 +20,7 @@ import type { ReleaseController } from "@/lib/release/run";
 import { runSeatAutoRotation, type SeatAutoRotationPorts } from "./seatAutoRotation";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import type { SeatCommandResult } from "@/lib/orchestrator/seatCommand";
-import { seatHostRecoveryKey, seatHostRecoveryCard, seatHostRevivalBackoffMs, SEAT_HOST_REVIVAL_SETTLE_MS, SEVERING_HOST_STOPS, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
+import { seatHostRecoveryKey, seatHostRecoveryCard, seatHostRevivalBackoffMs, hostLossNoticeOpen, SEAT_HOST_REVIVAL_LOST_BOUND, SEAT_HOST_REVIVAL_SETTLE_MS, SEVERING_HOST_STOPS, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
 import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
 import { openSeatAuthIncident } from "./seatAuthIncident";
 import { curationForSweep, productionCurationController, type CurationController } from "@/lib/memory/curation/run";
@@ -1889,21 +1889,22 @@ async function check(
   };
   let retryAdmission: Awaited<ReturnType<typeof admissionFor>> = null;
   let recoveryDetail: string | null = null;
-  /** Closes the open card of a host-loss revival that failed. True when the
-      board took the resolution. */
-  const closeUnrevivedNotice = (record: SeatHostRecovery, at: string): boolean => {
+  /** Closes the open card of a host-loss revival that failed or whose hosts
+      keep getting lost. True when the board took the resolution. */
+  const closeHostLossNotice = (record: SeatHostRecovery, at: string): boolean => {
     try { return ensureCard(canonical, { ...seatHostRecoveryCard(record, operatorLocale() === "en" ? "en" : "uk"), state: "resolved" }, at); }
     catch { return false; /* A stale open notice is closed by hand or by the next settlement. */ }
   };
   const persistRecovery = async (record: SeatHostRecovery) => {
     const fresh = readState(canonical);
-    /* A failed host-loss revival's card says the host is gone and the next
-       attempt is automatic. Any record that replaces it ends that episode: its
-       own success, a wake that re-hosted the seat, or a rotation that carries
-       its own card. Only another failure of the same episode keeps it open. */
+    /* A host-loss card (a failed or an unstable revival) says the next attempt
+       is automatic. Any record that replaces it ends that episode: its own
+       confirmed success, a wake that re-hosted the seat, or a rotation that
+       carries its own card. Only another open state of the same episode keeps
+       it open. */
     const replaced = fresh.hostRecovery;
-    if (replaced?.state === "unrevived" && !(record.id === replaced.id && record.state === "unrevived"))
-      closeUnrevivedNotice(replaced, record.at);
+    if (replaced && hostLossNoticeOpen(replaced.state) && !(record.id === replaced.id && hostLossNoticeOpen(record.state)))
+      closeHostLossNotice(replaced, record.at);
     await seatTickMutation("writeState", () => writeState(canonical, { ...fresh, hostRecovery: record }));
   };
   const tellRecovery = async (record: SeatHostRecovery) => {
@@ -1956,28 +1957,40 @@ async function check(
     await persistRecovery(record); await tellRecovery(record);
     recoveryDetail = `seat host recovery: ${record.state}; ${record.detail}`;
   };
-  /* A failed revival's card says the host is gone. When the seat came back by
-     another path (a message to it, a manual resume) or the operator rotated or
-     dedesignated it, no revival of this tick ever succeeds to close it, so the
-     opening observation settles it: a live host on the same seat, or a seat
-     that is no longer the one the record names. */
-  const settleUnrevived = async (active: { conversationId?: string | null; seatEpoch: number } | null,
+  /* The opening observation settles a host-loss record no revival of this
+     tick will settle. A revived host still alive a settle window after its
+     revival confirms it, which ends the episode. A failed revival's card says
+     the host is gone: when the seat came back by another path (a message to
+     it, a manual resume), that card closes at once, though the episode stays
+     unconfirmed. An unstable revival's card closes only once its host is
+     confirmed. A seat the operator rotated or dedesignated closes either card. */
+  const settleHostLoss = async (active: { conversationId?: string | null; seatEpoch: number } | null,
     reachability: Awaited<ReturnType<typeof hostReachabilityFor>> | null): Promise<boolean> => {
     const stored = readState(canonical).hostRecovery;
-    if (stored?.state !== "unrevived") return false;
+    if (!stored || !(hostLossNoticeOpen(stored.state) || (stored.state === "revived" && stored.attempts && !stored.confirmedAt))) return false;
     const sameSeat = !!active && active.conversationId === stored.conversationId && active.seatEpoch === stored.seatEpoch;
     const hostBack = sameSeat && reachability?.live === true && reachability.current();
-    if (sameSeat && !hostBack) return false;
-    const at = new Date(sources.now()).toISOString();
-    if (!closeUnrevivedNotice(stored, at)) return false;
-    const latest = readState(canonical).hostRecovery;
-    if (latest?.id !== stored.id || latest.state !== "unrevived" || latest.at !== stored.at) return false;
-    // No retryAt: a host lost again later is revived at the next check, not
-    // after the backoff the failed attempt had set.
+    const now = sources.now();
+    const held = now - Date.parse(stored.at) >= SEAT_HOST_REVIVAL_SETTLE_MS;
+    // No retryAt on a settled record: a host lost again later is revived at
+    // the next check, not after the backoff an earlier attempt had set.
     const { retryAt: _retryAt, ...settled } = stored;
+    const at = new Date(now).toISOString();
+    if (stored.state === "revived") {
+      if (!hostBack || !held) return false;
+      await persistRecovery({ ...settled, confirmedAt: at });
+      return true;
+    }
+    if (sameSeat && (!hostBack || (stored.state === "unstable" && !held))) return false;
+    if (!closeHostLossNotice(stored, at)) return false;
+    const latest = readState(canonical).hostRecovery;
+    if (latest?.id !== stored.id || latest.state !== stored.state || latest.at !== stored.at) return false;
+    const confirmed = hostBack && stored.state === "unstable";
     await persistRecovery({ ...settled, state: hostBack ? "revived" : "superseded", at, told: true,
-      detail: hostBack ? "a live host serves the seat again; it came back by another path" : "the seat changed before its host could be revived" });
-    recoveryDetail = `seat host revival settled: ${hostBack ? "the host came back by another path" : "the seat changed"}; failure card closed`;
+      ...(confirmed ? { confirmedAt: at } : {}),
+      detail: !hostBack ? "the seat changed before its host could be revived"
+        : confirmed ? "the revived host stayed alive through the settle window" : "a live host serves the seat again; it came back by another path" });
+    recoveryDetail = `seat host revival settled: ${!hostBack ? "the seat changed" : confirmed ? "the revived host stayed alive" : "the host came back by another path"}; failure card closed`;
     return true;
   };
   /* A designated seat whose host was severed (#4029 covered only a delivered
@@ -2020,8 +2033,13 @@ async function check(
       recoveryDetail = `seat host revival: ${same.state}; next attempt ${same.retryAt}`;
       return;
     }
-    const continuing = same && (same.state !== "revived" || now - Date.parse(same.at) < SEAT_HOST_REVIVAL_SETTLE_MS);
+    /* Only a confirmed revival ends the episode (settleHostLoss). A revived
+       host lost before a check confirmed it counts as a lost revival, so a host
+       that dies soon after every start keeps doubling its backoff to the cap
+       and is carded `unstable` instead of starting over. */
+    const continuing = !!same && !(same.state === "revived" && same.confirmedAt);
     const attempts = (continuing ? same.attempts ?? 1 : 0) + 1;
+    const lost = continuing ? (same.lost ?? 0) + (same.state === "revived" || same.state === "unstable" ? 1 : 0) : 0;
     const guard = () => {
       assertSeatTickWork();
       assertTraffic();
@@ -2031,15 +2049,16 @@ async function check(
         throw new DeliveryAdmissionRefusedError("seat-rotated");
       if (seatRequestControlled(canonical, seat, new Date(now).toISOString())) throw new DeliveryAdmissionRefusedError("seat-controlled");
     };
-    let state: "revived" | "unrevived";
+    let state: "revived" | "unrevived" | "unstable";
     let detail: string;
     try {
       guard();
       const result = await revive({ path: seat.path ?? "", conversationId: seat.conversationId,
         origin: delegatusMessageOrigin("seat-tick", canonical), admissionGuard: () => guard(), authorityGuard: guard });
       if (result?.conversationId === seat.conversationId) {
-        state = "revived";
+        state = lost >= SEAT_HOST_REVIVAL_LOST_BOUND ? "unstable" : "revived";
         detail = result.spawned ? "the severed host was replaced by a fresh one without a model turn" : "a live host already serves the seat";
+        if (state === "unstable") detail = `the host was lost again after each of ${lost} revivals in this episode; ${detail}`;
       } else {
         state = "unrevived";
         detail = "structured recovery could not take ownership of the seat";
@@ -2058,12 +2077,12 @@ async function check(
     }
     const at = new Date(sources.now()).toISOString();
     const record: SeatHostRecovery = { id, conversationId: seat.conversationId, seatEpoch: seat.seatEpoch, at, state,
-      detail: redactMonitorText(detail).slice(0, 500), told: false, attempts,
+      detail: redactMonitorText(detail).slice(0, 500), told: false, attempts, ...(lost ? { lost } : {}),
       retryAt: new Date(Date.parse(at) + seatHostRevivalBackoffMs(attempts, policy.checkIntervalMs)).toISOString() };
     await persistRecovery(record);
     await tellRecovery(record);
     // Later admission in this check must observe the host it just started.
-    if (state === "revived") openingReachability = null;
+    if (state !== "unrevived") openingReachability = null;
     recoveryDetail = `seat host revival: ${state} (attempt ${attempts}); ${record.detail}`;
   };
   const deliverWake: typeof deliverConversationMessage = async message => {
@@ -2361,8 +2380,8 @@ async function check(
       opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
     }
     // Later writes start from this row, so it carries what settlement stored.
-    if (await settleUnrevived(openingSeat, reachability)) opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
-  } else if (await settleUnrevived(null, null)) opened = seatTickStateForEpoch(readState(canonical), null);
+    if (await settleHostLoss(openingSeat, reachability)) opened = seatTickStateForEpoch(readState(canonical), openingSeat.seatEpoch);
+  } else if (await settleHostLoss(null, null)) opened = seatTickStateForEpoch(readState(canonical), null);
   /* Whether the project came into this check with anything its card could be
      describing — so a check that finds it all gone closes the card, and a
      project that never had one asks nothing of the board. The refusal run is
