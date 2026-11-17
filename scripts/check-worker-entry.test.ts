@@ -3,6 +3,41 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const entry = path.join(import.meta.dir, "check-worker-entry.py");
+for (const call of ["open", "openat"]) for (const [flags, admitted] of [
+  ["os.O_WRONLY", false],
+  ["os.O_RDWR | os.O_TRUNC", false],
+  ["os.O_RDONLY", true],
+  ["os.O_RDWR", true],
+  ["os.O_PATH", true],
+  ["os.O_PATH | os.O_WRONLY", true],
+  ["os.O_PATH | os.O_TRUNC", true],
+] as const) test.skipIf(process.platform !== "linux" || call === "open" && process.arch !== "x64")(`${call} preserves compiler admission for ${flags}`, () => {
+  const source = String.raw`import ctypes,os,platform,subprocess,sys,tempfile
+with tempfile.TemporaryDirectory() as root:
+ filename=os.path.join(root,"compiler")
+ with open(filename,"w") as file: file.write("Micro"+"soft Corporation\nfunction cre"+"ateProgram(")
+ command='''import ctypes,os,sys
+libc=ctypes.CDLL(None,use_errno=True)
+name=ctypes.c_char_p(os.fsencode(sys.argv[1]))
+flags=eval(sys.argv[2])
+number=2 if sys.argv[3] == "open" else (257 if sys.argv[4] == "x86_64" else 56)
+print("opening",flush=True)
+fd=libc.syscall(number,name,flags,0) if number == 2 else libc.syscall(number,-100,name,flags,0)
+assert fd >= 0,ctypes.get_errno()
+os.close(fd)
+'''
+ env={**os.environ,"LLV_CHECK_BROKER":'{"port":1,"nonce":"fixture"}'}
+ result=subprocess.run(["python3","-I",sys.argv[1],"python3","-I","-c",command,filename,sys.argv[2],sys.argv[3],platform.machine()],env=env,capture_output=True,text=True,timeout=5)
+ assert result.stdout == "opening\n",result
+ if sys.argv[4] == "true":
+  assert result.returncode == 137,result
+ else:
+  assert result.returncode == 0,result.stderr
+`;
+  const result = spawnSync("python3", ["-I", "-c", source, entry, flags, call, String(admitted)], { encoding: "utf8", timeout: 8_000 });
+  expect(result.status, result.stderr).toBe(0);
+});
+
 for (const fallback of [false, true]) test.skipIf(process.platform !== "linux")(`stopped-task memory reads preserve bytes through proc fallback=${fallback}`, () => {
   const script = `import runpy,sys,ctypes,os
 entry=runpy.run_path(sys.argv[1])

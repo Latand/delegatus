@@ -70,7 +70,21 @@ def install_filter():
     instructions = [(0x20, 0, 0, 4), (0x15, 1, 0, arch), (0x06, 0, 0, 0x80000000),
                     (0x20, 0, 0, 0)]
     for number in (*opens, *execs):
-        instructions += [(0x15, 0, 1, number), (0x06, 0, 0, 0x7FC00000)]
+        body = []
+        if number in opens and number != 437:
+            # These opens cannot return existing compiler bytes. Keep O_PATH
+            # observed: a caller can hand that descriptor to an interpreter.
+            offset = 24 if number == 2 else 32
+            body = [(0x20, 0, 0, offset),
+                    (0x45, 0, 1, os.O_PATH),
+                    (0x06, 0, 0, 0x7FC00000),
+                    (0x45, 0, 1, os.O_DIRECTORY | os.O_TRUNC),
+                    (0x06, 0, 0, 0x7FFF0000),
+                    (0x54, 0, 0, os.O_ACCMODE),
+                    (0x15, 0, 1, os.O_WRONLY),
+                    (0x06, 0, 0, 0x7FFF0000)]
+        body += [(0x06, 0, 0, 0x7FC00000)]
+        instructions += [(0x15, 0, len(body), number), *body]
     instructions += [(0x06, 0, 0, 0x7FFF0000)]
     filters = (Filter * len(instructions))(*(Filter(*row) for row in instructions))
     program = Program(len(filters), filters)
