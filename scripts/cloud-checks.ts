@@ -376,6 +376,18 @@ export class AppServerCloudTransport implements CloudTransport {
     try { return await Promise.race([cleanup(), stopped]); }
     finally { clearTimeout(timer); abort.abort(); recovery?.close(); }
   }
+  /** After the polling deadline every failed interrupt or confirmation read
+   * keeps the timeout policy: bounded cleanup on a fresh connection, no
+   * account-limit or availability verdict, so neither a second Cloud attempt
+   * nor the local fallback can start beside the still-bound remote command. */
+  private async expiredAfterFailure(error: unknown, context: { phase: CloudDiagnostic["category"]; reason?: string },
+    threadId: string, turnId: string, command: string, interruptRequested: boolean): Promise<CloudResult> {
+    const failure = cloudErrorReason(error, this.config);
+    const cleanup = await this.stopExpiredTurn(threadId, turnId, command, interruptRequested);
+    context.phase = "timeout";
+    context.reason = `Cloud check deadline expired; remote cleanup ${cleanup}; interrupt or confirmation failed: ${failure}; no bound command receipt`;
+    return { kind: "invalid" };
+  }
   private async runRemote(job: CloudJob, context: { phase: CloudDiagnostic["category"]; threadId?: string; reason?: string }, signal?: AbortSignal): Promise<CloudResult> {
     if (signal?.aborted) { context.phase = "cancelled"; context.reason = "publication cancelled"; return { kind: "invalid" }; }
     if (!this.config) { context.phase = "environment"; context.reason = "Cloud configuration is missing"; return { kind: "invalid" }; }
@@ -428,12 +440,17 @@ export class AppServerCloudTransport implements CloudTransport {
       if (!terminal) {
         timedOut = !signal?.aborted;
         context.phase = timedOut ? "timeout" : "cancelled"; context.reason = timedOut ? "Cloud check deadline expired" : "publication cancelled";
-        await rpc.call("turn/interrupt", { threadId, turnId }, () => { interruptRequested = true; });
-        // Give Cloud time to record termination before another attempt.
-        for (let attempt = 0; attempt < 20; attempt++) {
-          const turn = await readTurn(rpc, threadId, turnId);
-          if (turn && ["completed", "failed", "interrupted"].includes(turn.status)) { terminal = true; break; }
-          await this.clock.sleep(500);
+        try {
+          await rpc.call("turn/interrupt", { threadId, turnId }, () => { interruptRequested = true; });
+          // Give Cloud time to record termination before another attempt.
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const turn = await readTurn(rpc, threadId, turnId);
+            if (turn && ["completed", "failed", "interrupted"].includes(turn.status)) { terminal = true; break; }
+            await this.clock.sleep(500);
+          }
+        } catch (error) {
+          if (!timedOut) throw error;
+          return await this.expiredAfterFailure(error, context, threadId, turnId, command, interruptRequested);
         }
         if (!terminal) {
           context.phase = "timeout";
@@ -441,7 +458,12 @@ export class AppServerCloudTransport implements CloudTransport {
           return { kind: "invalid" };
         }
       }
-      const verdict = await this.commandVerdict(rpc, threadId, turnId, command);
+      let verdict: CloudResult | undefined;
+      try { verdict = await this.commandVerdict(rpc, threadId, turnId, command); }
+      catch (error) {
+        if (!timedOut) throw error;
+        return await this.expiredAfterFailure(error, context, threadId, turnId, command, interruptRequested);
+      }
       if (timedOut) {
         // A terminal model turn alone does not prove its exact command stopped.
         // Capacity fallback would race that command and could publish without

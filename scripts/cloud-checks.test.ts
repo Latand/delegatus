@@ -305,9 +305,10 @@ test("a time-limited job without terminal command evidence refuses fallback", as
   });
   expect(interrupted).toBe(true);
 });
-test("transport loss during interruption follows the confirmed outage path", async () => {
+test("transport loss during the deadline interruption stays a timeout without a second attempt", async () => {
   const fake = fakeRpc("");
   const original = fake.rpc.call;
+  let connects = 0, runs = 0, local = 0;
   fake.rpc.call = async (method, params) => {
     if (method === "turn/interrupt") throw new CloudRpcError("lost acknowledgement", "unavailable");
     if (method === "thread/turns/list") return { data: [{ id: "turn-fixture", status: "inProgress" }] };
@@ -315,7 +316,14 @@ test("transport loss during interruption follows the confirmed outage path", asy
     if (method === "thread/items/list" && params.turnId) (result.data as { item: { status: string } }[])[0]!.item.status = "inProgress";
     return result;
   };
-  expect(await new AppServerCloudTransport(config, async () => fake.rpc, () => {}, clock()).run(job)).toMatchObject({ kind: "unavailable" });
+  const transport = new AppServerCloudTransport(config, async () => { connects++; return fake.rpc; }, () => {}, clock());
+  let result: Awaited<ReturnType<typeof transport.run>> | undefined;
+  expect(await runCloudChecks(job, { run: async (job, signal) => { runs++; return result = await transport.run(job, signal); } }, async () => { local++; return 0; }, undefined, () => {})).toBe(1);
+  expect(result).toMatchObject({ kind: "invalid", diagnostic: { category: "timeout" } });
+  expect(result!.diagnostic!.reason).toContain("cleanup unresolved");
+  // The lost acknowledgement never dispatched, so cleanup asks once on its own connection.
+  expect([runs, connects, local]).toEqual([1, 2, 0]);
+  expect(fake.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
 });
 test("command evidence is read through every page and bound to its turn", async () => {
   const fake = fakeRpc(`DELEGATUS_GATE ${job.head} ${job.tree} ${job.base} ${cloudInputDigest(job.inputs)} 0\n`);
