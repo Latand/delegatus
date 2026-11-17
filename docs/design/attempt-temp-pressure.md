@@ -37,7 +37,9 @@ deletion fences. An ended stage alone cannot prove an idle producer checkout
 has stopped using its scratch: its link inventory is still necessary. All
 asynchronous observations are revalidated at quarantine and deletion dispatch.
 
-The pressure cursor is durable, ordered by creation time and path, and advances
+A bounded largest-due prefix now leads pressure selection; ordinary pages also
+prefer recorded allocation. The remaining pressure cursor is durable, ordered
+by creation time and path, and advances
 before a candidate's full-window asynchronous observation. Fractional probes
 and the reserved tail do not advance it: after restart, the roots they passed
 receive full windows in turn. The default search finishes the suffix after the
@@ -51,7 +53,8 @@ Explicit diagnostic pages keep their existing
 wrapping behaviour. Failed or deferred full-window roots move behind
 the rest of the inventory. A finite unchanged inventory of N roots is visited in
 at most N pressure passes when each pass can admit one root; when a page fits,
-the bound is ceil(N/32). Newer arrivals join behind older inventory. Each root
+the cursor share has a bound of ceil(N/16), alongside the largest-due share.
+Newer arrivals join behind older cursor inventory. Each root
 visit gets at most five seconds of the existing 40-second work budget. The first
 candidate gets the full five-second window, clipped to the remaining tick.
 Completed holds leave that window available to the next candidate. After a
@@ -168,3 +171,7 @@ cleanup continues below the cap. This fixed default reserves working space for
 checks, SQLite and recovery writes without a new setting. It also activates
 before available space falls into the low tens of GiB. A failed filesystem
 space observation is reported explicitly and leaves low-space mode disabled.
+
+The effective cap also accounts for available scratch-filesystem space. See
+[Closed lane scratch deadlines](closed-lane-scratch-retention.md) for the
+current reserve, metadata backfill and source-export lifecycle.
