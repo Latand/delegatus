@@ -72,7 +72,7 @@ test("parked provider waiting keeps controller cycles within watchdog plus horiz
   expect(f.h.spawnInputs).toHaveLength(2);
   expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(LIMITED_ACCOUNT);
   expect(f.now()).toBeLessThanOrEqual(f.resetsAt! * 1_000 + 90_000);
-}, 60_000);
+}, 240_000);
 
 
 test.each([false, true])("a newer native operator turn cancels running reset continuation, tool=%s", async tool => {

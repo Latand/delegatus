@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { statePath } from "@/lib/configDir";
+import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { RecordedCheckStore, rowSchema } from "@/lib/recordedChecks/store";
 import { digest, descriptorDigest } from "@/lib/recordedChecks/wire";
 import { buildPipeline } from "@/lib/pipelines/store";
@@ -42,7 +42,8 @@ export async function holdFinishedRoot(directory: string, pipeline = "retention-
 /** Names pictures in the report picture index the way a stage report does,
  * with no kept copy: they are then the evidence ledger's links into scratch. */
 export function nameInReport(...files: string[]) {
-  const root = statePath("report-media"), index = path.join(root, "index.json");
+  const root = reportMediaRoot(), index = path.join(root, "index.json");
+  fs.rmSync(root, { recursive: true, force: true });
   fs.mkdirSync(root, { recursive: true });
   let rows: unknown[] = [];
   try { rows = JSON.parse(fs.readFileSync(index, "utf8")); } catch { /* A first name starts the index. */ }

@@ -32,7 +32,7 @@ import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { StructuredHostAdoptionCleanupError } from "@/lib/runtime/engineHost";
 import { hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, requireStructuredDeliveryControllerPublication } from "@/lib/runtime/structuredDeliveryController";
 import { bindClaudeHostPersistence, bindCodexHostPersistence, structuredHostsEnabled } from "@/lib/runtime/registry";
-import { claudeHostLaunchPaths, materializeStructuredHostAccess, materializeOwnedStructuredHostAccess, tempOwnerForConversation, structuredHostAccessPolicy, structuredHostCell } from "@/lib/runtime/structuredSpawn";
+import { claudeHostLaunchPaths, materializeStructuredHostAccess, materializeOwnedStructuredHostAccess, tempOwnerForConversation, structuredHostAccessPolicy, structuredHostCell, prepareDiskCleanerHost } from "@/lib/runtime/structuredSpawn";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "@/lib/runtime/telegramConnectorEnv";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 
@@ -532,7 +532,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     if (input.ownsOperation && !await input.ownsOperation()
       || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
     assertAdoptionCurrent();
-    host = await CodexAppServerHost.adopt(input.receipt.nativeId, {
+    const options = {
       assertCurrent: assertAdoptionCurrent,
       cwd: input.profile.cwd,
       codexHome: input.target.home,
@@ -552,7 +552,16 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       initialEventCursor: claimed.structuredHost?.eventCursor,
       env: access.env,
       ...(memoryCell ? { memoryCell } : {}),
-    });
+    };
+    if (input.profile.agentMemoryRoleParams?.mode === "disk") {
+      const cleanerReceipt = input.conversationId
+        ? input.registry.diskCleanerReceiptForConversation(input.conversationId)
+        : input.registry.spawnReceiptForHost(key);
+      if (!cleanerReceipt) throw new Error("disk cleaner launch receipt is unavailable during account migration");
+      await prepareDiskCleanerHost({ engine: "codex", receipt: cleanerReceipt, spec: { cwd: input.profile.cwd, launchProfile: input.profile }, registry: input.registry }, access, options, cleanerReceipt);
+      assertAdoptionCurrent();
+    }
+    host = await CodexAppServerHost.adopt(input.receipt.nativeId, options);
     assertAdoptionCurrent();
     stopPersistence = await bindCodexHostPersistence(
       input.registry,

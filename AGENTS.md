@@ -97,6 +97,13 @@ commit publication, types, changed-file lint, touched tests, and scoped Linux,
 pinned Bun runtime, native Codex and supply-chain gates. Tests and builds use
 isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
 
+For an intermediate source export, run
+`bash scripts/gate-slot.sh bun scripts/check-source.ts -- <command> [args...]`.
+It copies current inputs, shares installed dependencies, isolates state and
+removes the export after that command and its owned descendants finish. Reuse
+this procedure for repeated builds and focused checks; leave retained evidence
+in `LLV_EVIDENCE_DIR` and avoid accumulating a new full checkout per retry.
+
 For a manual privacy check, run
 `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main`.
 The command defaults to the committed `scripts/privacy-known-value-fingerprints.json`
