@@ -281,7 +281,7 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
     kind,
     request,
     turnId: text(source.turnId, record(source.turn).id),
-    isBlocking: !(engine === "codex" && isNonblockingCodexQuestion(method, source)),
+    isBlocking: !event.codexReceipt?.gateWait && !(engine === "codex" && isNonblockingCodexQuestion(method, source)),
     ...(typeof source.autoResolutionMs === "number" ? { autoResolutionMs: source.autoResolutionMs } : {}),
   };
 }
