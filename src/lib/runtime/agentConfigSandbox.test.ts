@@ -6,7 +6,15 @@ import path from "node:path";
 import { QUIET_DIAGNOSTICS_ENV } from "@/lib/startupDiagnostics";
 import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
-import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSandbox";
+import { agentArtifactCacheEnv, agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSandbox";
+
+test("Windows preserves uv's existing local-app-data cache and explicit overrides", () => {
+  const source: NodeJS.ProcessEnv = { NODE_ENV: "test", USERPROFILE: "C:\\fixture", LOCALAPPDATA: "C:\\fixture\\local", XDG_CACHE_HOME: "C:\\unused" };
+  expect(agentArtifactCacheEnv(source, "win32").UV_CACHE_DIR).toBe("C:\\fixture\\local\\uv\\cache");
+  expect(agentArtifactCacheEnv({ ...source, LOCALAPPDATA: undefined }, "win32").UV_CACHE_DIR).toBe("C:\\fixture\\AppData\\Local\\uv\\cache");
+  expect(agentArtifactCacheEnv({ ...source, UV_CACHE_DIR: "C:\\shared", BUN_INSTALL_CACHE_DIR: "C:\\bun" }, "win32"))
+    .toEqual({ UV_CACHE_DIR: "C:\\shared", BUN_INSTALL_CACHE_DIR: "C:\\bun" });
+});
 
 test("fresh attempts reuse package artifact caches while their config and state stay private", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-artifacts-"));
