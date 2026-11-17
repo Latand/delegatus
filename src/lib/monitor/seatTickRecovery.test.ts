@@ -3,6 +3,7 @@ import { expect, test, fs, path, spawn, SANDBOX, runSeatTickCheck, SeatTickAccou
   wakeStateFromRecord, resolveOriginalSend, defaultSeatTickSettings, childFixture, childRig, settleRecordFromJournal, SEND_UNVERIFIED_REASON } from "./seatTickController.fixture";
 import { seatTickDeliveryAlarm } from "./seatTickWatchdog";
 import { seatTickSettingsAnswer } from "./seatTickSettingsAnswer";
+import { RegistryTransactionError } from "@/lib/agent/registryTransaction";
 
 function destination(registry: InstanceType<typeof AgentRegistry>) {
   return (wake: Parameters<typeof wakeStateFromRecord>[0]) => wakeStateFromRecord(wake, {
@@ -10,6 +11,45 @@ function destination(registry: InstanceType<typeof AgentRegistry>) {
     journal: async () => { throw new Error("isolated host unavailable"); },
   });
 }
+
+test("a transient registry refusal followed by absent enqueues the owed wake once under its original key", async () => {
+  const { hostedSeat, realTransport, deliverConversationMessage, setAgentRegistryForTests } = await import("./seatTickController.fixture");
+  const Clock = Date;
+  globalThis.Date = new Proxy(Clock, { construct(target, args) { return Reflect.construct(target, args.length ? args : [NOW]); },
+    get(target, key, receiver) { return key === "now" ? () => NOW : Reflect.get(target, key, receiver); } });
+  try {
+    const f = childFixture("registry-refusal-recovery");
+    f.seed(OVERDUE);
+    const hosted = hostedSeat(f), transport = realTransport(f, hosted.client);
+    setAgentRegistryForTests(f.registry);
+    await f.registry.prepareRecoveryIndexes();
+    const first = childRig(f, { pipelines: OPEN_LANE.map(lane => ({ ...lane, project: f.project })), realWakeState: true,
+      journal: { client: hosted.client }, deliverWith: message => deliverConversationMessage(message, {
+        recover: async () => { throw new RegistryTransactionError(); },
+      }) });
+    await runSeatTickCheck(f.project, first.deps);
+    const owed = f.row().outstandingWake!;
+    expect(owed.dispatch?.state).toBe("refused");
+    expect(Object.values(f.registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
+    expect(await resolveOriginalSend(owed, { registry: f.registry, client: hosted.client })).toEqual({ kind: "absent" });
+    const next = childRig(f, { pipelines: OPEN_LANE.map(lane => ({ ...lane, project: f.project })), realWakeState: true,
+      journal: { client: hosted.client }, deliverWith: transport });
+    await runSeatTickCheck(f.project, next.deps);
+    expect(next.sent).toHaveLength(1);
+    expect(next.sent[0]!.clientMessageId).toBe(owed.clientMessageId);
+    const held = Object.values(f.registry.readOnlySnapshot().heldDeliveries);
+    expect(held).toHaveLength(1);
+    expect(held[0]!.clientMessageId).toBe(owed.clientMessageId);
+    await runSeatTickCheck(f.project, next.deps);
+    expect(next.sent).toHaveLength(1);
+  } finally { globalThis.Date = Clock; }
+});
+
+const alarmFile = process.env.LLV_TICK_ALARM_FILE;
+test.skipIf(!alarmFile)("persisted delivery alarm subprocess", () => {
+  const row = new SeatTickAccounting(alarmFile!, PROJECT).readState();
+  expect(seatTickDeliveryAlarm(row, NOW + MINUTE)).toMatchObject({ ageMs: 17 * MINUTE });
+});
 
 const crashFile = process.env.LLV_TICK_CRASH_FILE;
 const legacyRoot = process.env.LLV_TICK_LEGACY_ROOT;
@@ -156,6 +196,17 @@ test("the fifteen-minute watchdog persists across checks and names the stuck del
   expect(answer.lastRun?.detail).toContain("ageMs=960000");
   const reopened = new SeatTickAccounting(row.accounting!.filename, PROJECT).readState();
   expect(seatTickDeliveryAlarm(reopened, NOW + MINUTE)?.ageMs).toBe(17 * MINUTE);
+  const child = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "^persisted delivery alarm subprocess$"], {
+    env: { ...process.env, LLV_TICK_ALARM_FILE: row.accounting!.filename }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+  child.stderr.on("data", chunk => { output = (output + chunk).slice(-16_000); });
+  const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
+  try {
+    const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+    expect({ code, output }).toMatchObject({ code: 0 });
+  } finally { clearTimeout(timer); }
   expect(seatTickDeliveryAlarm({ ...reopened, lastWakeAt: new Date(NOW).toISOString() }, NOW)).toBeNull();
 });
 

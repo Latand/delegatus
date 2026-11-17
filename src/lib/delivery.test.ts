@@ -7,6 +7,7 @@ import path from "node:path";
 
 import type { AccountContext } from "./accounts/contracts";
 import { AgentRegistry, setAgentRegistryForTests, type ConversationObservation } from "./agent/registry";
+import { RegistryTransactionError } from "./agent/registryTransaction";
 import { emptyLaunchProfile } from "./accounts/migration/contracts";
 import { drainHeldDeliveries } from "./accounts/migration/coordinator";
 import { deliverConversationMessage, migrationDeliveryOutcome, resumeConversation, type DeliveryFailure } from "./delivery";
@@ -42,6 +43,18 @@ test("migration delivery keeps an internally held result recoverable", () => {
   expect(migrationDeliveryOutcome({ ok: true, target: "pane" })).toBe("delivered");
   expect(migrationDeliveryOutcome(failure)).toBe("failed");
   expect(migrationDeliveryOutcome({ ...failure, actuation: "started" as const })).toBe("delivery-uncertain");
+});
+
+test("store transaction conflicts answer as a transient internal failure without reserving a send", async () => {
+  const registry = new AgentRegistry(path.join(SANDBOX, "transaction-conflict-registry.json"));
+  setAgentRegistryForTests(registry);
+  const conversation = registry.ensureConversation("codex", "", "default");
+  const outcome = await deliverConversationMessage({ pid: null, path: "", conversationId: conversation.id,
+    clientMessageId: "transaction-conflict-wake", text: "wake", images: [],
+  }, { recover: async () => { throw new RegistryTransactionError(); } });
+  expect(outcome).toMatchObject({ ok: false, status: 503, code: "registry_transaction_busy" });
+  expect(outcome.ok ? "" : outcome.error).toContain("SqliteAgentRegistryStore: transient internal");
+  expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
 });
 
 test("a definitively unpublished resume returns a typed unsent failure to seat recovery", async () => {

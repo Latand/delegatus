@@ -1,3 +1,4 @@
+import { RegistryTransactionError } from "@/lib/agent/registryTransaction";
 import { orchestratorRecipientRefusal, orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import type { AgentEngine } from "@/lib/agent/cli";
@@ -109,6 +110,7 @@ export function migrationDeliveryOutcome(outcome: DeliveryOutcome): "delivered" 
 }
 
 function failure(error: unknown, status = 500, actuation?: "started"): DeliveryFailure {
+  if (error instanceof RegistryTransactionError) return { ok: false, outcome: "failed", error: error.message, code: error.code, status: 503 };
   if (error instanceof DeliveryAdmissionRefusedError) return { ok: false, outcome: "failed", error: error.message, code: error.code, status: 409, admission: "refused" };
   if (error instanceof StructuredResumeUnpublishedError) return { ok: false, outcome: "failed", error: error.message, code: "structured_revival_impossible", status: 503 };
   if (error instanceof StageAttemptSettledError) return { ok: false, outcome: "failed", error: error.refusal, code: error.code, status: 409 };
