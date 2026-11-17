@@ -9,7 +9,7 @@ import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { cpus, loadavg, setPriority } from "node:os";
 
 import { recordHelperGroup } from "@/lib/helperLease";
@@ -51,9 +51,9 @@ export interface StepPorts {
   builtRevision?(dir: string): string | null;
   markBuilt?(dir: string, sha: string | null): void;
   /** Refuses dirty existing checkouts; the real port restores proven missing paths. */
-  prepareExistingRelease?(dir: string): Promise<string | null>;
+  prepareExistingRelease?(dir: string, checkout: string): Promise<string | null>;
   /** Records only outputs observed around this deployer's own commands. */
-  withGeneratedOutputs?(dir: string, sha: string, work: () => Promise<number | null>): Promise<number | null>;
+  withGeneratedOutputs?(dir: string, sha: string, work: () => Promise<number | null>, checkout: string): Promise<number | null>;
 }
 
 /** Written by the ready step: the build in this release directory passed its
@@ -61,19 +61,43 @@ export interface StepPorts {
 const BUILT_MARKER = join(".next", "DELEGATUS_RELEASE_READY");
 
 // Keep provenance outside the build inputs, in this worktree's private Git
-// directory. A source checkout cannot supply this record. Unknown ignored
+// directory, verified against the owning checkout. Unknown ignored
 // paths retain the sweep guard; only these deploy outputs can gain provenance.
 const GENERATED_OUTPUTS = new Set([".next/", "node_modules/", "dist/", "next-env.d.ts", "tsconfig.tsbuildinfo"]);
 const GENERATED_MARKER = "delegatus-release-outputs.json";
 
-async function releaseIdentity(dir: string, git: typeof runGit) {
-  const head = await git(["rev-parse", "HEAD"], dir);
-  const admin = await git(["rev-parse", "--absolute-git-dir"], dir);
-  if (head.code || admin.code || !/^[a-f0-9]{40}$/.test(head.stdout.trim())) throw new Error("Cannot identify release outputs");
+async function releaseIdentity(dir: string, checkout: string, git: typeof runGit) {
+  // The release's .git is untrusted input. Only a direct registration below
+  // the configured checkout's common directory can own a generated receipt.
+  const owner = await git(["rev-parse", "--path-format=absolute", "--git-common-dir"], checkout);
+  if (owner.code || !owner.stdout.trim()) throw new Error("Cannot identify release owner");
+  const common = await fs.realpath(owner.stdout.trim());
+  const registrations = join(common, "worktrees");
+  if (await fs.realpath(registrations) !== registrations) throw new Error("Release registrations were redirected");
+  const pointer = join(await fs.realpath(dir), ".git");
+  const plainFile = async (file: string) => {
+    const stat = await fs.lstat(file);
+    if (!stat.isFile() || stat.nlink !== 1) throw new Error("Release metadata is not a private file");
+    return fs.readFile(file, "utf8");
+  };
+  const match = /^gitdir: (.+)\n?$/.exec(await plainFile(pointer));
+  if (!match) throw new Error("Release is not a linked worktree");
+  const selected = resolve(dirname(pointer), match[1]);
+  const admin = join(registrations, basename(selected));
+  if (selected !== admin || await fs.realpath(admin) !== admin || !(await fs.lstat(admin)).isDirectory())
+    throw new Error("Release metadata is not owned by the checkout");
+  if (resolve(admin, (await plainFile(join(admin, "gitdir"))).trim()) !== pointer
+    || await fs.realpath(resolve(admin, (await plainFile(join(admin, "commondir"))).trim())) !== common)
+    throw new Error("Release worktree registration does not match the checkout");
+  const marker = join(admin, GENERATED_MARKER);
+  try { await plainFile(marker); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const head = await git(["--git-dir", admin, "rev-parse", "HEAD"], checkout);
+  if (head.code || !/^[a-f0-9]{40}$/.test(head.stdout.trim())) throw new Error("Cannot identify release outputs");
   const stat = await fs.lstat(dir, { bigint: true });
   if (!stat.isDirectory()) throw new Error("Release directory is not a directory");
   return { sha: head.stdout.trim(), directory: await fs.realpath(dir), device: String(stat.dev), inode: String(stat.ino),
-    marker: join(admin.stdout.trim(), GENERATED_MARKER) };
+    marker };
 }
 
 /** A bounded metadata fingerprint detects additions, replacements and writes
@@ -100,11 +124,11 @@ async function outputFingerprint(dir: string, output: string): Promise<string> {
   return hash.digest("hex");
 }
 
-async function provenGeneratedOutputs(dir: string, ignored: string[], git: typeof runGit): Promise<Set<string>> {
+async function provenGeneratedOutputs(dir: string, ignored: string[], git: typeof runGit, checkout?: string): Promise<Set<string>> {
   const proven = new Set<string>();
-  if (!ignored.some(entry => GENERATED_OUTPUTS.has(entry))) return proven;
+  if (!checkout || !ignored.some(entry => GENERATED_OUTPUTS.has(entry))) return proven;
   try {
-    const identity = await releaseIdentity(dir, git);
+    const identity = await releaseIdentity(dir, checkout, git);
     const record = JSON.parse(await fs.readFile(identity.marker, "utf8"));
     if (record.version !== 1 || record.sha !== identity.sha || record.directory !== identity.directory
       || record.device !== identity.device || record.inode !== identity.inode) return proven;
@@ -114,15 +138,17 @@ async function provenGeneratedOutputs(dir: string, ignored: string[], git: typeo
   return proven;
 }
 
-async function withGeneratedOutputs(dir: string, sha: string, work: () => Promise<number | null>, signal: AbortSignal): Promise<number | null> {
-  const refusal = await prepareExistingRelease(dir);
+async function withGeneratedOutputs(dir: string, sha: string, work: () => Promise<number | null>, signal: AbortSignal, checkout: string): Promise<number | null> {
+  const refusal = await prepareExistingRelease(dir, checkout);
   signal.throwIfAborted();
   if (refusal) throw new Error(refusal);
-  const identity = await releaseIdentity(dir, runGit);
+  const identity = await releaseIdentity(dir, checkout, runGit);
   signal.throwIfAborted();
   if (identity.sha !== sha) throw new Error("Release output revision does not match the target");
   try { return await work(); }
   finally {
+    if (JSON.stringify(await releaseIdentity(dir, checkout, runGit)) !== JSON.stringify(identity))
+      throw new Error("Release identity changed while generating outputs");
     // Failed commands can leave useful partial outputs too. A later process
     // accepts exactly this observed inventory, never everything under a name.
     const status = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
@@ -130,7 +156,7 @@ async function withGeneratedOutputs(dir: string, sha: string, work: () => Promis
     const outputs: Record<string, string> = {};
     for (const entry of classifyStatus(status.stdout, true).ignored) if (GENERATED_OUTPUTS.has(entry)) outputs[entry] = await outputFingerprint(dir, entry);
     const temporary = `${identity.marker}.${process.pid}.tmp`;
-    await fs.writeFile(temporary, JSON.stringify({ version: 1, ...identity, marker: undefined, outputs }), { mode: 0o600 });
+    await fs.writeFile(temporary, JSON.stringify({ version: 1, ...identity, marker: undefined, outputs }), { mode: 0o600, flag: "wx" });
     await fs.rename(temporary, identity.marker);
   }
 }
@@ -145,11 +171,15 @@ export function releaseBuilt(dir: string, sha: string): boolean {
 }
 
 /** Restore only missing tracked paths left by an interrupted removal. */
-export async function prepareExistingRelease(dir: string, git: typeof runGit = runGit): Promise<string | null> {
+export async function prepareExistingRelease(dir: string, checkout?: string, git: typeof runGit = runGit): Promise<string | null> {
+  if (checkout) {
+    try { await releaseIdentity(dir, checkout, git); }
+    catch { return "Existing release metadata cannot be proven owned by the checkout; checkout was refused"; }
+  }
   const status = await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
   if (status.code !== 0) return `cannot inspect existing release contents: ${status.stderr || status.stdout}`;
   const classified = classifyStatus(status.stdout, true);
-  const generated = await provenGeneratedOutputs(dir, classified.ignored, git);
+  const generated = await provenGeneratedOutputs(dir, classified.ignored, git, checkout);
   const disposable = (entry: string) => generated.has(entry) || disposableIgnoredPath(dir, entry);
   const onlyMissingTracked = classified.changed.length > 0 && status.stdout.split("\0").filter(Boolean).every(row => /^( D|D ) /.test(row) || row.startsWith("!! "));
   if (classified.changed.length && (!onlyMissingTracked || existsSync(join(dir, BUILT_MARKER)))) return "Existing release has local changes; checkout was refused to preserve them";
@@ -165,7 +195,7 @@ export async function prepareExistingRelease(dir: string, git: typeof runGit = r
   const checked = await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
   if (checked.code !== 0) return "Existing release status could not be checked after deletion recovery";
   const after = classifyStatus(checked.stdout, true);
-  const generatedAfter = await provenGeneratedOutputs(dir, after.ignored, git);
+  const generatedAfter = await provenGeneratedOutputs(dir, after.ignored, git, checkout);
   if (after.changed.length || after.ignored.some(entry => !generatedAfter.has(entry) && !disposableIgnoredPath(dir, entry))) return "Existing release still has local changes after deletion recovery; checkout was refused";
   return null;
 }
@@ -410,7 +440,7 @@ export class UpdateRunner {
     const target = this.state.target!;
     const release = this.state.releaseDir!;
     const generatedWork = (work: () => Promise<number | null>) => this.ports.withGeneratedOutputs
-      ? this.ports.withGeneratedOutputs(release, target, work) : work();
+      ? this.ports.withGeneratedOutputs(release, target, work, checkout) : work();
     const command = async (argv: string[], cwd: string, work?: string): Promise<number> => {
       push(`$ ${argv.join(" ")}   (in ${cwd})`, false);
       const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line), lowPriority: this.state.trigger === "auto" && name !== "build" && name !== "install", ...(work ? { work } : {}) });
@@ -451,7 +481,7 @@ export class UpdateRunner {
       case "checkout":
         /* A directory an earlier attempt at this target left is reused. */
         if (this.ports.exists(release)) {
-          const refusal = await (this.ports.prepareExistingRelease ?? prepareExistingRelease)(release);
+          const refusal = await (this.ports.prepareExistingRelease ?? prepareExistingRelease)(release, checkout);
           if (refusal) { push(refusal, false); throw new CommandFailure(1); }
           return command(["git", "checkout", "--detach", target], release);
         }
@@ -593,9 +623,9 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
     exists: (path) => existsSync(path),
     buildIdReadable: (dir) => existsSync(join(dir, ".next", "BUILD_ID")),
     builtRevision,
-    withGeneratedOutputs(dir, sha, work) {
+    withGeneratedOutputs(dir, sha, work, checkout) {
       const controller = new AbortController();
-      const done = withGeneratedOutputs(dir, sha, work, controller.signal);
+      const done = withGeneratedOutputs(dir, sha, work, controller.signal, checkout);
       const inventory = { controller, done };
       generated = inventory;
       return done.finally(() => { if (generated === inventory) generated = null; });

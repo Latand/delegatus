@@ -2,8 +2,9 @@ import { tmpdir } from "node:os";
 import { afterAll, describe, expect, jest, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { builtRevision, prepareExistingRelease, realPorts, releaseBuilt, UpdateRunner, updateFailureDetail, type StepPorts } from "./steps";
 import { ReleasePointer, releaseDirFor } from "./release";
@@ -127,6 +128,113 @@ test.each(["foreign-root", "foreign-nested", "changed-output", "missing-record",
   if (change === "changed-output") expect(readFileSync(join(h.release, ".next", "static", "asset.png"), "utf8")).toBe("foreign replacement");
 });
 
+// An attacker can compute the receipt's entire payload. Its authority must
+// come from the owning checkout's registration, never from those values.
+function forgedOutputs(release: string, sha: string) {
+  const hash = createHash("sha256"), pending = [".next"];
+  while (pending.length) {
+    const entry = pending.pop()!, file = join(release, entry), stat = lstatSync(file, { bigint: true });
+    hash.update(JSON.stringify([entry, String(stat.dev), String(stat.ino), String(stat.mode)]));
+    if (stat.isDirectory()) for (const name of readdirSync(file).sort().reverse()) pending.push(`${entry}/${name}`);
+    else hash.update(JSON.stringify([String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs), stat.isSymbolicLink() ? readlinkSync(file) : null]));
+  }
+  const stat = lstatSync(release, { bigint: true });
+  return JSON.stringify({ version: 1, sha, directory: release, device: String(stat.dev), inode: String(stat.ino), outputs: { ".next/": hash.digest("hex") } });
+}
+
+test.each(["local-git", "foreign-pointer", "peer-pointer", "pointer-symlink", "admin-symlink", "unregistered-admin", "bad-backlink", "foreign-common", "receipt-symlink", "receipt-hardlink"])(
+  "checkout refuses forged provenance before install/build: %s", async attack => {
+    const h = await retryReleaseFixture();
+    h.git(["worktree", "add", "--detach", h.release, h.target]);
+    mkdirSync(join(h.release, ".next"));
+    const foreign = join(h.release, ".next", "foreign.png"); writeFileSync(foreign, "foreign media");
+    const pointer = join(h.release, ".git");
+    let admin = h.git(["rev-parse", "--absolute-git-dir"], h.release);
+    if (attack === "local-git") {
+      rmSync(pointer);
+      h.git(["init", "-q"], h.release);
+      h.git(["fetch", "-q", h.root, h.target], h.release);
+      h.git(["reset", "--mixed", h.target], h.release);
+      admin = join(h.release, ".git");
+    }
+    if (attack === "foreign-pointer" || attack === "foreign-common") {
+      const fake = join(h.root, "foreign-admin");
+      h.git(["clone", "-q", "--bare", h.root, fake]);
+      h.git(["--git-dir", fake, "config", "core.bare", "false"]);
+      if (attack === "foreign-pointer") {
+        writeFileSync(pointer, `gitdir: ${fake}\n`); admin = fake;
+        h.git(["reset", "--mixed", h.target], h.release);
+      } else writeFileSync(join(admin, "commondir"), `${fake}\n`);
+    }
+    if (attack === "peer-pointer") {
+      const peer = join(h.root, "peer"); h.git(["worktree", "add", "--detach", peer, h.target]);
+      admin = h.git(["rev-parse", "--absolute-git-dir"], peer);
+      writeFileSync(pointer, readFileSync(join(peer, ".git")));
+    }
+    if (attack === "pointer-symlink") {
+      const redirected = join(h.root, "redirected-pointer"); renameSync(pointer, redirected); symlinkSync(redirected, pointer);
+    }
+    if (attack === "admin-symlink" || attack === "unregistered-admin") {
+      const moved = join(h.root, ".git", "moved-admin"); renameSync(admin, moved);
+      writeFileSync(join(moved, "commondir"), `${join(h.root, ".git")}\n`);
+      if (attack === "admin-symlink") symlinkSync(moved, admin, "dir");
+      else { admin = moved; writeFileSync(pointer, `gitdir: ${admin}\n`); }
+    }
+    if (attack === "bad-backlink") writeFileSync(join(admin, "gitdir"), `${join(h.root, "unrelated", ".git")}\n`);
+    const marker = join(admin, "delegatus-release-outputs.json");
+    if (attack === "receipt-symlink" || attack === "receipt-hardlink") {
+      const forged = join(h.root, "forged-receipt.json"); writeFileSync(forged, forgedOutputs(h.release, h.target));
+      if (attack === "receipt-symlink") symlinkSync(forged, marker);
+      else linkSync(forged, marker);
+    } else writeFileSync(marker, forgedOutputs(h.release, h.target));
+    const refused = h.start();
+    expect(refused.state).toBe("failed");
+    expect(refused.steps.find(step => step.name === "checkout")?.state).toBe("failed");
+    expect(refused.calls).toEqual([]);
+    expect(readFileSync(join(h.root, "logs", "checkout.log"), "utf8")).toContain("checkout was refused");
+    expect(readFileSync(foreign, "utf8")).toBe("foreign media");
+    expect(readFileSync(h.pointerFile, "utf8")).toBe(h.rollback);
+  },
+);
+
+test("release provenance needs the configured owner and supports an owner that is itself a worktree", async () => {
+  const h = await retryReleaseFixture(); expect(h.start().state).toBe("done");
+  const peer = join(h.root, "owner-worktree"); h.git(["worktree", "add", "--detach", peer, h.target]);
+  expect(await prepareExistingRelease(h.release)).not.toBeNull();
+  expect(await prepareExistingRelease(h.release, peer)).toBeNull();
+});
+
+test("checkout refuses foreign metadata even when its index conceals ignored data", async () => {
+  const h = await retryReleaseFixture(); h.git(["worktree", "add", "--detach", h.release, h.target]);
+  rmSync(join(h.release, ".git")); h.git(["init", "-q"], h.release);
+  h.git(["fetch", "-q", h.root, h.target], h.release); h.git(["reset", "--mixed", h.target], h.release);
+  // There is no ignored output to trigger the receipt reader here.
+  const refused = h.start(); expect(refused.state).toBe("failed"); expect(refused.calls).toEqual([]);
+  expect(refused.steps.find(step => step.name === "checkout")?.state).toBe("failed");
+});
+
+test.each(["backlink", "receipt", "temporary", "directory"])("a metadata substitution during generation cannot record a receipt: %s", async attack => {
+  const h = await retryReleaseFixture(); h.git(["worktree", "add", "--detach", h.release, h.target]);
+  const admin = h.git(["rev-parse", "--absolute-git-dir"], h.release), marker = join(admin, "delegatus-release-outputs.json");
+  const foreign = join(h.root, "foreign-receipt.json"); writeFileSync(foreign, "preserve");
+  const ports = realPorts(() => {});
+  await expect(ports.withGeneratedOutputs!(h.release, h.target, async () => {
+    mkdirSync(join(h.release, ".next")); writeFileSync(join(h.release, ".next", "generated.png"), "generated");
+    await Promise.resolve();
+    if (attack === "backlink") writeFileSync(join(admin, "gitdir"), `${join(h.root, "foreign", ".git")}\n`);
+    if (attack === "receipt") symlinkSync(foreign, marker);
+    if (attack === "temporary") symlinkSync(foreign, `${marker}.${process.pid}.tmp`);
+    if (attack === "directory") {
+      const moved = join(h.root, "moved-release"); renameSync(h.release, moved); mkdirSync(h.release);
+      writeFileSync(join(h.release, ".git"), readFileSync(join(moved, ".git")));
+    }
+    return 0;
+  }, h.root)).rejects.toThrow();
+  expect(readFileSync(foreign, "utf8")).toBe("preserve");
+  if (attack === "receipt") expect(lstatSync(marker).isSymbolicLink()).toBeTrue();
+  else expect(existsSync(marker)).toBeFalse();
+});
+
 test("retry recovery preserves a file created after the deleted-path listing", async () => {
   const root = mkdtempSync(join(tmpdir(), "llv-release-recovery-race-")); roots.push(root);
   const git = (args: string[]) => {
@@ -137,7 +245,7 @@ test("retry recovery preserves a file created after the deleted-path listing", a
   writeFileSync(join(root, "source.txt"), "committed\n"); git(["add", "source.txt"]); git(["commit", "-qm", "initial"]);
   rmSync(join(root, "source.txt"));
   let injected = false;
-  const refusal = await prepareExistingRelease(root, async (args, cwd) => {
+  const refusal = await prepareExistingRelease(root, undefined, async (args, cwd) => {
     if (args[0] === "checkout-index") { injected = true; writeFileSync(join(root, "source.txt"), "late unique data\n"); }
     return runGit(args, cwd);
   });
@@ -396,7 +504,7 @@ test.skipIf(process.platform !== "linux").each(([["install", "silence"], ["insta
       }, () => {});
       await runner.start(target);
       process.stdout.write(JSON.stringify({ state: runner.state.state, failure: runner.state.steps.find(step => step.name === name).failure,
-        detail: updateFailureDetail(runner.state), published, refusal: await prepareExistingRelease(runner.state.releaseDir) }));
+        detail: updateFailureDetail(runner.state), published, refusal: await prepareExistingRelease(runner.state.releaseDir, checkout) }));
     `;
     const env = { ...process.env, DELEGATUS_AGENT_CPU: "off", TMPDIR: base, HOME: join(base, "home"),
       XDG_CONFIG_HOME: join(base, "config"), LLV_STATE_DIR: join(base, "state") };
