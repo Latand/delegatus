@@ -17,7 +17,7 @@ export function admissionLockWait(timeoutMs = 30_000, say: (line: string) => voi
         return result;
       } catch (error) {
         const code = (error as { code?: string } | null)?.code;
-        if (code !== "SQLITE_BUSY" && code !== "SQLITE_LOCKED") throw error;
+        if (typeof code !== "string" || !/^SQLITE_(?:BUSY|LOCKED)(?:_[A-Z]+)*$/.test(code)) throw error;
         const now = clock.now();
         deadline ??= now + timeoutMs;
         if (started === undefined) {
