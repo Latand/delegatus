@@ -73,18 +73,22 @@ for (const mode of ["off", "sqlite"] as const) test(`unchanged dead reseat stays
     const before = Object.keys(f.registry.readOnlySnapshot().migrationIntents);
     f.registry.close();
     const source = `
+      import { setSystemTime } from "bun:test";
       import { AgentRegistry } from ${JSON.stringify(path.resolve(import.meta.dir, "../agent/registry.ts"))};
       import { enforceAccountCreditGuard } from ${JSON.stringify(path.join(import.meta.dir, "accountCreditGuard.ts"))};
       import { accountManager } from ${JSON.stringify(path.resolve(import.meta.dir, "../accounts/manager.ts"))};
+      setSystemTime(new Date(Number(process.argv[3])));
       accountManager.resolveProjectSpawn = (engine, request) => ({kind:"available",account:{engine,accountId:request?.requestedId??"account-b",kind:"managed",home:process.env.HOME,transcriptRoot:process.env.HOME,env:{NODE_ENV:"test"}}});
       const registry = new AgentRegistry(process.argv[1],()=>false,undefined,{sqliteMode:process.argv[2]});
       try { await enforceAccountCreditGuard(registry,[],async()=>{throw Error("unexpected stop")},async()=>false,async()=>null); }
-      finally { registry.close(); }`;
+      finally { registry.close(); }
+      console.log("guard-clock=" + Date.now());`;
     for (let interval = 2; interval <= 3; interval++) {
       clock(interval * MIGRATION_INTENT_PROGRESS_TIMEOUT_MS);
-      const child = Bun.spawn([process.execPath, "-e", source, f.registry.filename, mode], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+      const child = Bun.spawn([process.execPath, "-e", source, f.registry.filename, mode, String(Date.now())], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
       const output = new Response(child.stdout).text(); const errors = new Response(child.stderr).text();
-      expect(await child.exited, await errors).toBe(0); await output;
+      expect(await child.exited, await errors).toBe(0);
+      expect(await output).toContain(`guard-clock=${epoch + interval * MIGRATION_INTENT_PROGRESS_TIMEOUT_MS}`);
       const read = new AgentRegistry(f.registry.filename, () => false, undefined, { sqliteMode: mode });
       try {
         expect(Object.keys(read.readOnlySnapshot().migrationIntents)).toEqual(before);
@@ -107,7 +111,8 @@ for (const evidence of ["quota refresh", "credit change", "new delivery", "live 
       if (evidence === "new delivery") f.registry.holdDelivery(f.conversation.id, "new work", "new-delivery");
       if (evidence === "live host") f.registry.upsert({ ...f.registry.hostEntry(f.key)!, status: "idle" });
       if (evidence === "target change") select.mockReturnValue({ kind: "available", account: { engine: "codex", accountId: "account-c", kind: "managed", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
-      if (evidence === "manual request" || evidence === "live host") f.registry.requestConversationReseat(f.conversation.id, "account-b", undefined, undefined, evidence === "live host" ? true : undefined);
+      if (evidence === "manual request" || evidence === "live host") f.registry.requestConversationReseat(f.conversation.id, "account-b", undefined, undefined,
+        evidence === "live host" ? true : undefined, evidence === "live host" ? f.cut.id : undefined);
       else await f.poll();
       expect(Object.keys(f.registry.readOnlySnapshot().migrationIntents)).toHaveLength(before + (evidence === "quota refresh" ? 0 : 1));
       expect(f.store.list()).toMatchObject([{ id: f.cut.id, state: "owed", attempts: 0 }]);

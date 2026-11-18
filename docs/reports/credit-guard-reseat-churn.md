@@ -53,7 +53,7 @@ repeated producer and the stop's write scope.
 ## Disposable-fixture measurements
 
 Baseline: main revision `13353544440d1ec601ea8ceac1b229bd21aff3f5`.
-Runs used Bun 1.4.0 on Linux on 2026-11-17 UTC. Every test command had private
+Runs used Bun 1.4.0 on Linux on 2026-11-17–18 UTC. Every test command had private
 HOME, XDG_CONFIG_HOME, LLV_STATE_DIR and TMPDIR beneath the stage scratch root,
 and the Viewer control URL used a verified closed loopback port. Tests ran in
 source exports with shared installed dependencies. Production state was unused.
@@ -97,7 +97,9 @@ cases cover recovery with new evidence, a revived host cut, changes during
 asynchronous writer admission, and writer refusal without consuming evidence or
 changing delivery receipts. Two complete former retry intervals pass after the
 first stopped attempt in separate fresh processes, with the obligation still
-owed and no additional intent.
+owed and no additional intent. Each restarted process receives the frozen clock
+and reports it back. The live-host probe retains the same interruption-cut
+identity so the host's status is the evidence that reopens the attempt.
 
 Scope cases count persistence writes and archive rows for three stop paths,
 exercise both engine/conversation decision orders, and keep a foreign send
@@ -110,7 +112,13 @@ Retained logs: `red-reseat.log`, `red-metrics.log`, `green-reseat.log`, and
 `green-scope.log` in the stage evidence directory. The early scope run's short
 hour timeout was superseded by the completed baseline measurement above.
 
-The final committed tree also requires the pre-push planner's own touched-tests
-selection and the repository privacy gate. Their final verdicts and command
-exits are recorded in the stage handoff. Publication and operational observation
-belong to the pipeline's later owners.
+The pre-push planner's complete touched-tests selection is compared one explicit
+file at a time through the unchanged project comparator. Its ordinary
+five-minute file and fifteen-minute run limits apply to every invocation. The
+initial eight-worker aggregate exited 1 with eight file timeouts. A subsequent
+serial aggregate completed eleven files with zero new failures before an added
+campaign-wide execution limit stopped it; that incomplete aggregate is retained
+as inconclusive. The final committed tree requires all selected per-file verdicts
+and the repository privacy gate. Final verdicts and command exits are recorded
+in the stage handoff. Publication and operational observation belong to the
+pipeline's later owners.
