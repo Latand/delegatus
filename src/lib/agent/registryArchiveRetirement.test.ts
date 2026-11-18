@@ -132,9 +132,9 @@ test("duplicate cold mappings share one archive fetch and stay readable after re
     "SELECT archive_id FROM registry_cold WHERE collection='receipts' AND row_key='retention-launch-5'").get()!.archive_id;
   db.run("UPDATE registry_cold SET archive_id=? WHERE collection='receipts' AND row_key='retention-launch-4'",[duplicate]);
   const projector = { id: "retirement-duplicate-receipt-launch",collection: "receipts" as const,project: (row: { launchId: string }) => row.launchId };
-  const readLaunchIds = () => registryRowProjection(store.readOnlySnapshot().file,projector);
-  expect(readLaunchIds()).toHaveLength(8);
-  expect(readLaunchIds().map(([key]) => key)).toContain("retention-launch-4");
+  const expected = registryRowProjection(store.readOnlySnapshot().file,projector);
+  expect(expected).toHaveLength(8);
+  expect(expected.map(([key]) => key)).toContain("retention-launch-4");
 
   store.close();
   handles.splice(handles.indexOf(store),1);
@@ -142,13 +142,13 @@ test("duplicate cold mappings share one archive fetch and stay readable after re
     initialSnapshot: () => { throw new Error("retirement fixture must already be imported"); },
     normalize: normalizeRegistry,
   }); handles.push(reopened);
-  expect(registryRowProjection(reopened.readOnlySnapshot().file,projector)).toHaveLength(8);
+  expect(registryRowProjection(reopened.readOnlySnapshot().file,projector)).toEqual(expected);
 
   approveFixture(filename);
   const observation = reopened.prepareArchiveRetirement()!;
   reopened.retireSupersededArchive(observation,RETIREMENT_NOW);
   reopened.retireSupersededArchive(undefined,RETIREMENT_NOW+RETIREMENT_GRACE_MS+1);
-  expect(registryRowProjection(reopened.readOnlySnapshot().file,projector)).toHaveLength(8);
+  expect(registryRowProjection(reopened.readOnlySnapshot().file,projector)).toEqual(expected);
   expect(db.query("SELECT 1 FROM registry_archive WHERE id=?").get(duplicate)).not.toBeNull();
 });
 
