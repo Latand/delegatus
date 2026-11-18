@@ -161,6 +161,43 @@ test("an oversized live append included in the snapshot cannot resurrect older p
   expect(() => runtimeEventsAfter(window.events, 0, () => [])).toThrow(RuntimeReplayGapError);
 });
 
+test.each([240, 6 * 1024 * 1024])("a retained live original survives candidate eviction at the %s byte limit", async byteLimit => {
+  const first = event(1);
+  const liveTwo = event(2, "x");
+  const baseThree = event(3, "");
+  const baseFour = event(4, "");
+  const remaining = byteLimit - [liveTwo, baseThree, baseFour].reduce((sum, value) => sum + Buffer.byteLength(JSON.stringify(value)), 0);
+  expect(remaining).toBeGreaterThan(8);
+  const liveThree = event(3, "a".repeat(Math.floor(remaining / 2)));
+  const liveFour = event(4, "b".repeat(remaining - Math.floor(remaining / 2)));
+  const live = [liveTwo, liveThree, liveFour];
+  const durable = [{ ...liveTwo, text: `${liveTwo.text}12345678` }, liveThree, liveFour];
+  let resume!: () => void;
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  const history = [first];
+  const store: RuntimeEventStore = {
+    load: () => history.slice(),
+    append: (_id, value) => { history.push(value); },
+    scan: async (_id, visit) => {
+      await gate;
+      const snapshot = history.slice();
+      for (const value of snapshot) visit(value);
+      return snapshot.at(-1)?.seq ?? 0;
+    },
+  };
+  const window = new HostEventWindow(byteLimit);
+  window.append(first);
+  window.release();
+  const pending = window.refill(store, "thread");
+  for (const [index, value] of live.entries()) {
+    store.append("thread", durable[index]!);
+    window.append(value);
+  }
+  resume();
+  await pending;
+  expect(window.events).toEqual(live);
+  expect(window.heapAttribution().windowBytes).toBe(byteLimit);
+});
 
 test("invalid attach cursors cannot start an unobserved refill", () => {
   let reads = 0;

@@ -145,16 +145,20 @@ export class HostEventWindow {
     if (evictedLivePrefix) candidate.release();
     // Appends can land before the descriptor snapshot is taken. Keep their
     // original live payloads in preference to the ledger projection.
-    const liveBySeq = new Map(this.events.map((event, index) => [event.seq, { event, size: this.sizes[index]! }]));
-    const merged = new HostEventWindow(this.byteLimit);
+    const retainedBySeq = new Map<number, { event: RuntimeEvent; size: { bytes: number; trimmed: boolean } }>();
     for (let index = 0; index < candidate.events.length; index++) {
-      const event = candidate.events[index]!;
-      const live = liveBySeq.get(event.seq);
-      merged.appendRetained(live?.event ?? event, live?.size ?? candidate.sizes[index]!);
+      retainedBySeq.set(candidate.events[index]!.seq, { event: candidate.events[index]!, size: candidate.sizes[index]! });
     }
     for (let index = 0; index < this.events.length; index++) {
       const event = this.events[index]!;
-      if (event.seq > lastSeq || evictedLivePrefix) merged.appendRetained(event, this.sizes[index]!);
+      // A durable projection can be larger than its live original and may
+      // therefore be evicted from the candidate while the live copy still
+      // fits. Every retained live sequence participates in the ordered merge.
+      retainedBySeq.set(event.seq, { event, size: this.sizes[index]! });
+    }
+    const merged = new HostEventWindow(this.byteLimit);
+    for (const { event, size } of [...retainedBySeq.values()].sort((left, right) => left.event.seq - right.event.seq)) {
+      merged.appendRetained(event, size);
     }
     this.events.splice(0, this.events.length, ...merged.events);
     this.sizes.splice(0, this.sizes.length, ...merged.sizes);
@@ -261,11 +265,14 @@ export function attachRuntimeEvents(afterSeq: number, source: RuntimeEventSource
   };
   source.subscribers.add(subscriber);
   const seat: Seat = { subscriber, subscribers: source.subscribers };
+  let cancelled = false;
+  let cancelRead!: () => void;
+  const cancellation = new Promise<void>(resolve => { cancelRead = resolve; });
   let ready: Promise<void> | undefined;
   try {
     const refillResult = refill?.();
     if (refillResult) {
-      ready = refillResult.then(() => initializeQueue()).catch(error => {
+      ready = refillResult.catch(error => {
         leaveSeat(seat);
         throw error;
       });
@@ -289,7 +296,11 @@ export function attachRuntimeEvents(afterSeq: number, source: RuntimeEventSource
 
   async function* read(): AsyncGenerator<RuntimeEvent> {
     try {
-      await ready;
+      if (ready) {
+        const outcome = await Promise.race([ready.then(() => "ready" as const), cancellation.then(() => "cancelled" as const)]);
+        if (outcome === "cancelled" || cancelled) return;
+        initializeQueue();
+      }
       while (true) {
         const event = subscriber.queue.shift();
         if (event) {
@@ -315,6 +326,8 @@ export function attachRuntimeEvents(afterSeq: number, source: RuntimeEventSource
         stream,
         next: () => generator.next(),
         return: (value?: unknown) => {
+          cancelled = true;
+          cancelRead();
           leaveSeat(seat);
           return generator.return(value as never);
         },

@@ -230,6 +230,34 @@ test("cancelling a reader during refill releases its registered seat immediately
   expect(subscribers.size).toBe(0);
 });
 
+test("return settles a pending next without waiting for refill or initializing replay", async () => {
+  const subscribers = new Set<RuntimeEventSubscriber>();
+  let finishRefill!: () => void;
+  const refill = new Promise<void>(resolve => { finishRefill = resolve; });
+  let windowReads = 0;
+  let ledgerReads = 0;
+  const stream = attachRuntimeEvents(0, {
+    window: () => { windowReads++; return []; },
+    ledger: () => { ledgerReads++; return []; },
+    subscribers,
+  }, () => refill)[Symbol.asyncIterator]();
+
+  let nextSettled = false;
+  let returnSettled = false;
+  const next = stream.next().then(value => { nextSettled = true; return value; });
+  const returned = stream.return!().then(value => { returnSettled = true; return value; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+
+  expect(nextSettled).toBe(true);
+  expect(returnSettled).toBe(true);
+  expect(await next).toEqual({ done: true, value: undefined });
+  expect(await returned).toEqual({ done: true, value: undefined });
+  expect(subscribers.size).toBe(0);
+  expect(windowReads).toBe(0);
+  expect(ledgerReads).toBe(0);
+  finishRefill();
+});
+
 test("a failed refill removes its seat and surfaces the original error to the reader", async () => {
   const subscribers = new Set<RuntimeEventSubscriber>();
   const stream = attachRuntimeEvents(0, {
