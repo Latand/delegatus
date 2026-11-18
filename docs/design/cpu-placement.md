@@ -158,17 +158,15 @@ After gate admission, the test preload drops that binding before fixtures run,
 so their priority reads stay inside their own state roots.
 Per-stage urgency remains a follow-up.
 
-Stage and workflow admission retains its ten-minute fairness bound. A local
-heavy check requires a permissive measured sample at readiness and again when
-it claims a free slot, even after ten minutes and after its helper restarts.
-Its ticket records that rule (`low_pressure`). A ticket past its own bound that
-does not need low pressure passes such tickets in its lane, so a check held by
-pressure never holds a publication install beyond the install's bound. A stage
-never waits on a check at all, because the two sit in different lanes. Checks
-keep FIFO within their effective class.
+Stages, workflows and local heavy checks have a ten-minute pressure bound. A
+heavy check uses that same bound at readiness and when claiming a free slot,
+including after a helper restart. Its ticket is marked `low_pressure` so a
+publication install past its own bound can pass checks waiting for a slot.
+Stages and checks have independent lanes. Checks keep FIFO within their
+effective class.
 The gate samples PSI asynchronously; if PSI is unreadable or malformed, it
 requires the one-minute load divided by online CPUs to be below 0.75. If both
-metrics are unavailable, it waits. `DELEGATUS_CPU_PRESSURE=off` explicitly
+metrics are unavailable, it waits until the pressure bound. `DELEGATUS_CPU_PRESSURE=off` explicitly
 disables sampling. A stable reason is logged once per hold; polling yields
 the event loop. Nested commands retain their validated parent's slot.
 Admissions remain separated by two seconds.
@@ -365,20 +363,19 @@ younger tickets. X's position therefore never grows from arrivals after
 `t0 + r·T`. X is admitted no later than the (k+1)-th admission in L after that
 instant among callers using the same pressure policy, where k is the number
 of earlier tickets of L still waiting then. The existing escape for a bounded
-publication command can pass low-pressure-only checks; those bypass admissions
+publication command can pass checks marked `low_pressure`. Those admissions
 do not count toward a heavy check's admission bound. This holds as long as X
 keeps checking (stages every 5 s, gate helpers every 2 s)
 and L's own admission conditions hold that many times:
 
 - Start lane: the CPU-pressure gate allows a start, or the head is past its own
   10-minute bound (the existing stage rule, unchanged), plus spacing.
-- Command lane: a slot is free, and measured pressure is low at readiness and
-  at claim, plus spacing.
+- Heavy checks in the command lane: a slot is free, spacing has elapsed, and
+  measured pressure allows admission or the ticket has reached its own
+  ten-minute bound. Readiness and claim apply the same pressure rule.
 
-There is no wall-clock promise for heavy checks. Occupied slots or a
-nonpermissive measured pressure sample can hold them indefinitely, and the
-waiting text names that cause (§3). The start lane retains its existing escape
-at the head's ten-minute bound, with spacing and worker limits still applying.
+The ten-minute bound caps the pressure hold. Occupied slots, FIFO position and
+spacing can extend the total wait. The waiting text names the cause (§3).
 
 **Before aging, urgent work keeps its preference.** A high ticket that arrives
 while X is still younger than `r·T` is ordered ahead of X. So for one full
@@ -425,9 +422,9 @@ for polls, pass-overs and `stage_admissions`.
   lane or any release are closer than 2 s, so a stage start and a check claim
   still never land together. Stall detection keeps reading that same row; the
   stalled text reads "nothing started" for the machine.
-- Pressure is checked per caller, as today. A stage start uses the stage
-  sensor and its 10-minute rule. A gate check uses the strict measured policy at
-  readiness and claim. Separating the lanes skips neither.
+- Pressure is checked per caller. A stage start uses the stage sensor and a
+  gate check uses the measured policy at readiness and claim. Both lift the
+  pressure hold at the ticket's ten-minute bound.
 - Slots stay kernel locks. A gate command runs only after `flock -n` on a slot
   descriptor and a committed `--claim`. The queue never grants a slot, so the
   6-slot limit holds whatever order any version computes.
@@ -438,10 +435,9 @@ behave as before: they wait for a slot, and FIFO holds within their effective
 class.
 
 Publication installs and release steps (`waitForCpuPressure`) keep owned
-`command:` keys, so they stay in the command lane. They can wait behind a check
-that is waiting for a slot, but never longer than their own 10-minute bound,
-because the existing passing rule lets them pass `low_pressure` tickets. That
-is the behaviour they have today; moving them is deferred.
+`command:` keys, so they stay in the command lane. Once they reach their own
+ten-minute bound, the existing passing rule ignores `low_pressure` tickets
+that may be waiting for a slot.
 
 An operator-visible consequence of the existing rule follows. The start lane's
 head, once past its own 10-minute bound, starts even under pressure. Before
@@ -568,9 +564,9 @@ on main.
 
 ### 5. Invariants the builder keeps
 
-1. The command lane admits only position 1 of that lane, only while a slot
-   descriptor is locked, and only after a permissive measured sample at
-   readiness and at claim (`requireLowPressure`).
+1. A heavy check must be at position 1 of the command lane and hold a slot
+   descriptor at claim. Readiness and claim require a permissive pressure
+   sample or a ticket at its own wait bound.
 2. The start lane admits only position 1 of that lane, when the stage pressure
    check allows it or the ticket is past its own bound. A stage admission
    remains recoverable through `stage_admissions` until its checkpoint.
@@ -625,10 +621,10 @@ and `heldBy`.
   in FIFO place. A 15-minute-old low competes with normals in FIFO. A
   12-minute-old normal lowered to low falls to class 1. `since` and
   `fifo_seq` never change.
-- **No wall-clock promise.** Under continuous pressure, an aged command ticket
-  with `requireLowPressure` is never admitted (`heldBy: "pressure"`). A stage
-  under its bound is held. A stage past its bound at the head of the start lane
-  is admitted. That pins the existing rule.
+- **Bounded pressure wait.** At the head of either lane, pressure can hold a
+  ticket until its bound. Once the bound is reached, a heavy check still needs
+  its turn, spacing and a slot. A stage still uses its own lane and the shared
+  spacing.
 - **Lane independence.** The audit's case (b): an owned high command checks
   with `consume=false`, answers ready and holds no slot. A normal stage then
   checks and is admitted after spacing. An owned command never counts a stage,

@@ -94,12 +94,14 @@ try {
     const reason = await pressure.check();
     // Sampling yields: the command must still own its ticket before a write.
     checkOwner();
+    // Mark this as a gate ticket in both modes. The queue applies its durable
+    // pressure bound, and the shell takes a slot before calling --claim.
     const wait = queue!.check(key, !reason, owner, mode === "--claim", priority, true);
     return { reason, wait };
   };
   if (mode === "--claim") {
     const { reason, wait } = await lockWait(check);
-    if (wait && reason) console.error(`gate-slot: ${reason}`);
+    if (wait?.heldBy === "pressure" && reason) console.error(`gate-slot: ${reason}`);
     process.exitCode = !wait ? 0 : 75;
   } else {
     let shown = "";

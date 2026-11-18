@@ -117,7 +117,7 @@ test.each([1, 6])("%i real slot locks stay exclusive while an independent stage 
   }
 }, 90_000);
 
-test("gate-slot keeps pressure mandatory beyond ten minutes and preserves FIFO through slot acquisition", async () => {
+test("gate-slot lifts the pressure hold at ten minutes and preserves FIFO through slot acquisition", async () => {
   const f = fixture();
   const pending: Promise<unknown>[] = [];
   try {
@@ -128,9 +128,6 @@ test("gate-slot keeps pressure mandatory beyond ten minutes and preserves FIFO t
     await Bun.sleep(1200); // longer than either caller's execution budget
     expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
     f.age();
-    await Bun.sleep(100);
-    expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
-    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
     const results = await Promise.all([one, two]);
     expect(results.map(r => r.code), JSON.stringify(results)).toEqual([0, 0]);
     expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("one\ntwo\n");
@@ -138,7 +135,7 @@ test("gate-slot keeps pressure mandatory beyond ten minutes and preserves FIFO t
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n"); f.age(); await Promise.allSettled(pending); f.close(); }
 }, 20_000);
 
-test("a restarted claim helper refuses high pressure after the queue bound, then accepts a low sample", async () => {
+test("a restarted claim helper refuses high pressure before the queue bound and accepts it after", async () => {
   const f = fixture();
   const claim = async () => {
     const child = Bun.spawn([process.execPath, "scripts/cpu-admission.ts", "--claim", "command:claim-restart", String(process.pid)], { env: f.env, stdout: "pipe", stderr: "pipe" });
@@ -146,14 +143,12 @@ test("a restarted claim helper refuses high pressure after the queue bound, then
     return { code: await child.exited, output };
   };
   try {
-    expect((await claim()).code).toBe(75);
-    f.age();
     const refused = await claim();
     expect(refused.code).toBe(75);
     expect(refused.output).toContain("Waiting for measured CPU pressure");
     expect(f.count()).toBe(1);
-    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
-    expect((await claim()).code).toBe(0);
+    f.age();
+    expect(await claim()).toEqual({ code: 0, output: "" });
     expect(f.count()).toBe(0);
   } finally { f.close(); }
 });
@@ -229,6 +224,46 @@ test("dead and unverifiable owners at the head stop blocking real gates, each wi
     expect(stderr.match(/passed over command:foreign-head: its owner process 4242 cannot be verified from here and has not checked in for \d+ s/g)).toHaveLength(1);
     expect(f.db.query("SELECT key FROM tickets").all()).toEqual([{ key: "command:foreign-head" }]);
   } finally { await Promise.allSettled(pending); f.close(); }
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("an aged gate under sustained pressure still waits for a locked slot", async () => {
+  const f = fixture(), control = new AbortController();
+  const stderr = path.join(f.dir, "stderr");
+  const env = { ...f.env, LLV_GATE_SLOTS: "1", CPU_SLOT_STDERR: stderr };
+  const lock = path.join(f.dir, "llv-heavy-gate.slot1.lock");
+  const holder = Bun.spawn(["flock", lock, "bash", "-c", 'printf "ready\n"; read -r line'], {
+    stdin: "pipe", stdout: "pipe", stderr: "inherit", env,
+  });
+  const reader = holder.stdout.getReader();
+  let pending: ReturnType<typeof realExec> | undefined;
+  const log = () => fs.existsSync(stderr) ? fs.readFileSync(stderr, "utf8") : "";
+  try {
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready\n");
+    pending = realExec("bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "slot-fixture", ...f.command("aged")],
+      process.cwd(), env, { timeoutMs: 20_000, signal: control.signal });
+    await until(() => log().includes("Waiting for measured CPU pressure"));
+    expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
+    f.age();
+    try {
+      await until(() => log().includes("Waiting for a heavy command slot · all 1 busy"));
+    } catch {
+      throw new Error(`The aged gate never became ready to take a slot. ${log()}`);
+    }
+    expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
+    expect(f.count()).toBe(1);
+    holder.stdin.write("release\n");
+    expect(await holder.exited).toBe(0);
+    const result = await pending;
+    expect(result.code, log()).toBe(0);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("aged\n");
+    expect(f.count()).toBe(0);
+  } finally {
+    control.abort();
+    holder.stdin.end();
+    await Promise.allSettled([pending, holder.exited]);
+    reader.releaseLock();
+    f.close();
+  }
 }, 30_000);
 
 test("a live owner the helpers can verify keeps the head of a real gate's queue", async () => {

@@ -402,7 +402,8 @@ export class CpuAdmissionQueue {
       const age = Math.floor(waitedMs / this.maxWaitMs);
       const effectiveClass = Math.max(0, ticket.priority - age);
       const agedClass = "MAX(0, priority - aging * CAST(MAX(0, ? - since) / ? AS INTEGER))";
-      // A bounded caller still passes low-pressure-only tickets at its bound.
+      // At its bound, an install can pass checks that may be waiting for a slot.
+      // Gate tickets count each other even after they become eligible under pressure.
       const passesLowPressure = !requireLowPressure && budget === 0 ? 1 : 0;
       const counted = `${lane} AND (${agedClass} < ? OR (${agedClass} = ? AND fifo_seq <= ?)) AND (? = 0 OR low_pressure = 0 OR key = ?) AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)`;
       const args: [number, number, number, number, number, number, number, number, string] = [now, this.maxWaitMs, effectiveClass, now, this.maxWaitMs, effectiveClass, ticket.fifo_seq, passesLowPressure, key];
@@ -411,9 +412,9 @@ export class CpuAdmissionQueue {
       const position = ahead.n;
       const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
-      // Heavy gates must keep waiting under load even after the queue's stage
-      // fairness bound. Readiness and the final slot claim use the same guard.
-      if (!observationChanged && position === 1 && spacing === 0 && (pressureAllows || !requireLowPressure && budget === 0)) {
+      // The durable wait bound lifts the pressure hold in both lanes.
+      // Readiness and claim still require the same queue position and spacing.
+      if (!observationChanged && position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
         if (consume) {
           // Commands settle at their kernel slot claim. Stages retain a
           // recoverable admission until their own start checkpoint is read.
