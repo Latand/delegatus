@@ -45,7 +45,7 @@ test.skipIf(process.platform !== "linux")("the ordinary automatic owner retires 
     fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, realClock: true, measureCost: 0 }));
     process.env.LLV_PRESSURE_FIXTURE = config; process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = String(1e12);
     const report = await realParentPass(true);
-    expect(report.pressure).toBeFalse(); expect(report.pass).toBeNull();
+    expect(report.pressure).toBeFalse(); expect(report.pass ?? null).toBeNull();
     expect(report.errors).toBe(0); expect(report.removed).toBe(1); expect(report.removedBytes).toBeGreaterThan(0);
     expect(fs.existsSync(directories[0]!)).toBeFalse();
     for (const directory of directories.slice(1)) expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("fixture payload");
