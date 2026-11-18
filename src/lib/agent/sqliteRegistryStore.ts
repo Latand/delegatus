@@ -249,8 +249,24 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
   db.exec("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('termination_projection_version','4')");
 }
 
-// Keep this predicate aligned with the kinds accepted by normalizeStructuredHost.
-const nativeCallerHost = "collection='entries' AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp')";
+// Both termination writers retain the signal domain after proving every
+// member dead. Exclude only that released row shape. A dead status alone
+// still allows an unresolved process, reservation or replacement claim.
+const nativeCallerHost = `collection='entries'
+  AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp')
+  AND NOT COALESCE((
+    json_extract(value_json,'$.status')='dead'
+    AND json_extract(value_json,'$.structuredHost.endpoint')='stdio:released'
+    AND json_extract(value_json,'$.structuredHost.signalDomain.policyVersion')=1
+    AND json_type(value_json,'$.structuredHost.signalDomain.retired')='true'
+    AND json_extract(value_json,'$.host') IS NULL
+    AND json_extract(value_json,'$.structuredHost.process') IS NULL
+    AND json_extract(value_json,'$.structuredHost.scope') IS NULL
+    AND json_extract(value_json,'$.structuredHost.memory.unit') IS NULL
+    AND json_extract(value_json,'$.claimOwner') IS NULL
+    AND json_extract(value_json,'$.pendingAction') IS NULL
+    AND COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)=0
+  ),0)`;
 const registryCallerIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_caller_roots_latest ON registry_caller_roots(updated_at DESC,row_order DESC)",
   "CREATE INDEX IF NOT EXISTS registry_caller_structured_pid ON registry_rows(collection,json_extract(value_json,'$.structuredHost.process.pid'),row_order)",
@@ -258,7 +274,7 @@ const registryCallerIndexes = declaredIndexes([
     WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid') IS NOT NULL
       AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
         OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)`,
-  `CREATE INDEX IF NOT EXISTS registry_caller_native_hosts ON registry_rows(row_key) WHERE ${nativeCallerHost}`,
+  `CREATE INDEX IF NOT EXISTS registry_caller_native_host_evidence ON registry_rows(row_key) WHERE ${nativeCallerHost}`,
 ]);
 
 // An oversized identity cohort cannot establish the caller. Read one extra
@@ -1916,7 +1932,7 @@ export class SqliteAgentRegistryStore {
       // reservation is relevant even without a PID. Canonical path comparison
       // must also see entries whose recorded path differs from the transcript.
       const hosts = this.db.query<{ row_key: string; value_json: string }, [number]>(`
-        SELECT row_key,value_json FROM registry_rows INDEXED BY registry_caller_native_hosts
+        SELECT row_key,value_json FROM registry_rows INDEXED BY registry_caller_native_host_evidence
         WHERE ${nativeCallerHost} LIMIT ?`).all(MCP_CALLER_CANDIDATE_LIMIT + 1);
       this.onRowPayloadRead?.("entries", hosts.length);
       if (hosts.length > MCP_CALLER_CANDIDATE_LIMIT) {

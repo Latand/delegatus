@@ -304,6 +304,34 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
         generations: [{ id: session, path: nativePath, archivedAt: null, launchProfile: { role: "worker" } }] };
       const put = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('conversations',?,?,?)");
       put.run(nativeId, JSON.stringify(row), history + 1);
+      let retiredKey: string | undefined;
+      if (history > 256) {
+        const key = { engine: "codex" as const, sessionId: "retained-domain-0" };
+        const identity = (pid: number) => ({ pid, startIdentity: `${pid}:fixture`, bootEpoch: "fixture-boot" });
+        const domain = {
+          policyVersion: 1 as const, monitor: identity(2_147_483_600), bubblewrap: identity(2_147_483_601),
+          init: identity(2_147_483_602), native: identity(2_147_483_603),
+          pidNamespace: "pid:[101]", userNamespace: "user:[102]", scope: "/fixture/retained.scope", directory: home,
+        };
+        f.registry.upsert({
+          key, artifactPath: unrelated, cwd: home, accountId: null,
+          status: "idle", host: null, claimEpoch: 1, claimOwner: null, pendingAction: null,
+          structuredHost: { ...structuredHostFixture(domain.native, "codex-app-server"), exitProcess: domain.native, signalDomain: domain },
+        });
+        expect(f.registry.terminateStructuredHost(key, domain.native)).toBe(true);
+        retiredKey = `codex:${key.sessionId}`;
+        const stored = db.query<{ value_json: string }, [string]>(
+          "SELECT value_json FROM registry_rows WHERE collection='entries' AND row_key=?").get(retiredKey)!;
+        const retired = JSON.parse(stored.value_json);
+        expect(retired).toMatchObject({ status: "dead", structuredHost: { endpoint: "stdio:released", process: null, signalDomain: { retired: true } } });
+        const insert = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('entries',?,?,?)");
+        db.transaction(() => {
+          for (let n = 1; n <= 256; n++) {
+            const sessionId = `retained-domain-${n}`;
+            insert.run(`codex:${sessionId}`, JSON.stringify({ ...retired, key: { ...key, sessionId }, artifactPath: `/fixture/retired/${n}.jsonl` }), history + 1 + n);
+          }
+        })();
+      }
       f.registry.readOnlySnapshot = () => { throw new Error("native authority opened the whole registry"); };
       let realpaths = 0;
       let checkedGenerations = 0;
@@ -325,6 +353,24 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
         expect(f.count()).toBeLessThanOrEqual(2);
         expect(realpaths).toBe(5);
         expect(checkedGenerations).toBe(3);
+      }
+      if (retiredKey) {
+        expect(f.registry.archiveInactiveRows(2000)).toBeGreaterThanOrEqual(257);
+        const archived = db.query<{ count: number }, []>(
+          "SELECT COUNT(*) AS count FROM registry_cold WHERE collection='entries' AND row_key LIKE 'codex:retained-domain-%'").get();
+        expect(archived?.count).toBe(257);
+        realpaths = 0;
+        expect(resolveNativeCaller(sources)).toEqual(admitted);
+        expect(realpaths).toBe(5);
+        // A reopened claim puts even a historically retired row back in the
+        // cohort. This alias matches without sharing the recorded pathname.
+        fs.symlinkSync(nativePath, alias);
+        const claim = db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.artifactPath',?,'$.claimOwner',?) WHERE collection='entries' AND row_key=?");
+        claim.run(alias, "fixture-replacement-claim", retiredKey);
+        expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-hosted" });
+        claim.run(unrelated, null, retiredKey);
+        expect(resolveNativeCaller(sources)).toEqual(admitted);
+        fs.unlinkSync(alias);
       }
 
       fs.symlinkSync(nativePath, alias);
@@ -354,7 +400,7 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
       db.close();
     }
   }
-});
+}, 20_000);
 
 test("ancestry attributes a retained scope's exit identity without crossing engine namespaces", () => {
   const f = fixture(10);
