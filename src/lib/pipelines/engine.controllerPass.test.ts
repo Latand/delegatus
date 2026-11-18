@@ -1590,6 +1590,12 @@ test.each(["stop", "withdrawal", "close-withdrawal"] as const)(
   "an accepted peer %s remains pending while the controller starts an unrelated child",
   mutation => auditIsolatedColdProvisioning("direct", "pinned", 1, { mutation }), 30_000);
 
+const restartPreparationMs = 30_000;
+const restartOperationMs = 15_000;
+// Dead and unhosted recovery can start five children in sequence. Allow a
+// separate sender-exit or admission wait, plus time for fixture setup and cleanup.
+const restartFixtureMs = 5 * (restartPreparationMs + restartOperationMs) + restartOperationMs + 30_000;
+
 test.each([
   ["stop", false, "none"], ["withdrawal", false, "none"], ["stop", true, "none"],
   ["withdrawal", true, "none"], ["withdrawal", true, "stale"], ["withdrawal", false, "legacy"],
@@ -1626,8 +1632,6 @@ test.each([
         process.disconnect();
       }
     `;
-    const preparationMs = 30_000;
-    const operationMs = 15_000;
     const start = (role: string) => {
       const ready = Promise.withResolvers<void>();
       const child = Bun.spawn([process.execPath, "-e", source, JSON.stringify({ mutation, target })], {
@@ -1639,14 +1643,14 @@ test.each([
       void child.exited.then(async code => ready.reject(new Error(
         `owned ${mutation} ${role} exited before readiness (${code}): ${await errors} ${await output}`)));
       const execute = async () => {
-        await until(ready.promise, preparationMs, `owned ${mutation} ${role} preparation exceeded ${preparationMs} ms`);
+        await until(ready.promise, restartPreparationMs, `owned ${mutation} ${role} preparation exceeded ${restartPreparationMs} ms`);
         child.send("execute");
       };
       return { child, errors, output, execute };
     };
     const { child: incumbent, errors: initialError, output: initialOutput, execute } = start("sender");
     const finishSender = async () => {
-      await until(incumbent.exited, operationMs, `owned ${mutation} sender operation did not exit within ${operationMs} ms`);
+      await until(incumbent.exited, restartOperationMs, `owned ${mutation} sender operation did not exit within ${restartOperationMs} ms`);
       expect(await incumbent.exited).toBe(0);
     };
     const observe = async () => {
@@ -1654,7 +1658,7 @@ test.each([
       try {
         await observer.execute();
         const result = Promise.all([observer.child.exited, observer.errors, observer.output]);
-        await until(result, operationMs, `owned ${mutation} observer operation exceeded ${operationMs} ms`);
+        await until(result, restartOperationMs, `owned ${mutation} observer operation exceeded ${restartOperationMs} ms`);
         const [code, errors, output] = await result;
         expect(code, errors).toBe(0);
         const observed = output.split("\n").find(line => line.startsWith("owned-control-result "));
@@ -1670,7 +1674,7 @@ test.each([
       await execute();
       await until(Promise.race([held, incumbent.exited.then(async code => {
         throw new Error(`owned mutation sender exited before it reached the held phase (${code}): ${await initialError} ${await initialOutput}`);
-      })]), operationMs, `owned ${mutation} sender operation did not reach the held phase within ${operationMs} ms`);
+      })]), restartOperationMs, `owned ${mutation} sender operation did not reach the held phase within ${restartOperationMs} ms`);
       if (withdrawalRefusal) {
         await finishSender();
         expect(await initialOutput).toContain("requires a session-status event and its observed revision");
@@ -1742,7 +1746,8 @@ test.each([
         expect(pending.outcome).toBe(mutation === "stop" ? "unconfirmed" : "unknown");
         if (mutation === "withdrawal") expect(pending.reason).toContain("awaits a confirmed receipt");
         fixture.release();
-        await until(fixture.mutationAccepted, operationMs, `owned ${mutation} did not reach admission after release within ${operationMs} ms`);
+        await until(fixture.mutationAccepted, restartOperationMs,
+          `owned ${mutation} did not reach admission after release within ${restartOperationMs} ms`);
       }
       const reconciled = holdBeforeAdmission ? await observe() : pending;
       expect(fixture.dispatches).toHaveLength(1);
@@ -1772,7 +1777,7 @@ test.each([
       await incumbent.exited;
       await fixture.dispose();
     }
-  }), 60_000);
+  }), restartFixtureMs);
 
 test.each(["stop", "withdrawal"] as const)(
   "a delayed %s cannot act on a replacement turn",
