@@ -121,12 +121,15 @@ export async function ownedStageControl(hold: "stop" | "withdrawal", now: string
       || !entry?.structuredHost?.process || !processIdentityMayRun(entry.structuredHost.process)) {
       throw new Error("fixture registry did not record a resident stage process");
     }
-    const publish = (turn: "idle" | "running" | "dead", writerClaim: string | null) => journal.append({
-      scope: { type: "session", id: conversationId }, kind: "session-status",
-      payload: { sessionKey: key, artifactPath: transcriptPath, writerClaim, hostKind: "codex-app-server",
-        host: turn === "dead" ? "dead" : "hosted", turn: turn === "dead" ? "unknown" : turn,
-        activeTurnId: turn === "running" ? "fixture-new-turn" : null, nativeTurnClaims: [] },
-    });
+    const publish = (state: "idle" | "running" | "dead" | "unhosted", writerClaim: string | null) => {
+      const hosted = state === "idle" || state === "running";
+      return journal.append({
+        scope: { type: "session", id: conversationId }, kind: "session-status",
+        payload: { sessionKey: key, artifactPath: transcriptPath, writerClaim, hostKind: "codex-app-server",
+          host: hosted ? "hosted" : state, turn: hosted ? state : "unknown",
+          activeTurnId: state === "running" ? "fixture-new-turn" : null, nativeTurnClaims: [] },
+      });
+    };
     publish("idle", "fixture-writer-one");
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);

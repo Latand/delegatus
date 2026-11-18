@@ -4215,7 +4215,8 @@ export async function invalidateProviderContinuation(conversationId: string, cli
     if (session.revision < previous.revision || session.sessionKey.engine !== previous.sessionKey.engine
       || session.sessionKey.sessionId !== previous.sessionKey.sessionId || session.activeTurnId !== null
       || session.attentionIds.length !== 0) throw pending();
-    const deadSession = session.host === "dead" && !session.writerClaim;
+    // Runtime admission reports both released host states as dead-host.
+    const deadSession = (session.host === "dead" || session.host === "unhosted") && !session.writerClaim;
     if (session.revision > previous.revision && deadSession) dead = previous;
     if (!deadSession && (session.host !== "hosted" || session.turn !== "idle" || !session.writerClaim)) throw pending();
     if (session.revision === previous.revision) {

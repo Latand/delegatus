@@ -1594,10 +1594,11 @@ test.each([
   ["stop", false, "none"], ["withdrawal", false, "none"], ["stop", true, "none"],
   ["withdrawal", true, "none"], ["withdrawal", true, "stale"], ["withdrawal", false, "legacy"],
   ["withdrawal", false, "unclassified"], ["withdrawal", false, "dead"], ["withdrawal", false, "legacy-dead"],
+  ["withdrawal", false, "unhosted"],
 ] as const)(
   "a fresh process reconciles an owned %s after its sender exits, admission still pending %s, refusal %s",
   (mutation, holdBeforeAdmission, refusal) => withControllerAuditState(async () => {
-    const withdrawalRefusal = refusal === "dead" || refusal === "unclassified" ? "unclassified"
+    const withdrawalRefusal = refusal === "dead" || refusal === "unhosted" || refusal === "unclassified" ? "unclassified"
       : refusal === "legacy" || refusal === "legacy-dead" ? "legacy" : undefined;
     const fixture = await ownedStageControl(mutation, "2026-11-18T12:00:00.000Z", holdBeforeAdmission, { withdrawalRefusal });
     if (refusal === "legacy-dead") fixture.publish("dead", null);
@@ -1659,12 +1660,12 @@ test.each([
           expect(await observe()).toMatchObject(unknown);
           expect(fixture.dispatches).toEqual(["append-session-fenced"]);
           expect(fixture.withdrawals).toHaveLength(0);
-          if (refusal === "dead") {
+          if (refusal === "dead" || refusal === "unhosted") {
             const { claimWithdrawal, readWithdrawal } = await import("./stageControlCustody");
             const ownerKey = "fixture-restart-withdrawal";
             const old = await readWithdrawal(ownerKey);
             if (!old) throw new Error("the pending withdrawal has no durable owner");
-            fixture.publish("dead", null);
+            fixture.publish(refusal, null);
             expect(await observe()).toEqual({ outcome: "confirmed" });
             fixture.publish("idle", "fixture-writer-two");
             const revived = fixture.journal.readSession({ conversationId: fixture.conversationId })!;
