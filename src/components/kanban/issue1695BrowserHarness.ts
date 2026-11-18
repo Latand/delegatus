@@ -688,7 +688,7 @@ export async function captureDestructiveRefusal(browser: Browser, out: string, p
             const range = document.createRange(); range.selectNodeContents(node);
             for (const rect of range.getClientRects()) {
               let left = 0, right = innerWidth, top = 0, bottom = innerHeight;
-              for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+              for (let parent: HTMLElement | null = node.parentElement; parent; parent = parent.parentElement) {
                 const style = getComputedStyle(parent), bounds = parent.getBoundingClientRect();
                 if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, bounds.left); right = Math.min(right, bounds.right); }
                 if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom); }

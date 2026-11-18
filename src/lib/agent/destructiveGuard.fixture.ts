@@ -32,7 +32,7 @@ export function guardFixture() {
     if (!resolved.startsWith(root + path.sep)) throw Error("test target is outside its own temporary tree");
   };
   const cleanup = () => { assertOwned(root + "/home"); fs.rmSync(root, { recursive: true, force: true }); };
-  const run = (tool: string, args: string[], overrides: NodeJS.ProcessEnv = {}) => {
+  const run = (tool: string, args: string[], overrides: Record<string, string | undefined> = {}) => {
     assertOwned(cwd); assertOwned(home); assertOwned(tmp);
     return Bun.spawnSync([path.join(installed.directory, tool), ...args], { cwd, env: { ...env, ...overrides }, stdout: "pipe", stderr: "pipe" });
   };

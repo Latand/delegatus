@@ -34,6 +34,7 @@ const SOUND_OF_REASON: Record<ConversationReason["kind"], "your-move" | "fault" 
   delivery: "fault",
   launch: "fault",
   memory: "fault",
+  refusal: null,
   ask: null,
 };
 

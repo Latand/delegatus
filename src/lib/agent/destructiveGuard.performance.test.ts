@@ -34,7 +34,7 @@ test("five fresh runs measure wrapper cost for 3000 owned targets", () => {
         if (round % 2) pair.reverse();
         for (const { kind, directory, files } of pair) {
         const wrapped = kind.startsWith("wrapped");
-        const env = { ...f.env, PATH: wrapped ? f.env.PATH : "/usr/bin:/bin", ...(kind === "wrapped-absolute" ? { LLV_DESTRUCTIVE_GUARD_FAST: "" } : {}) };
+        const env: NodeJS.ProcessEnv = { ...f.env, PATH: wrapped ? f.env.PATH : "/usr/bin:/bin", ...(kind === "wrapped-absolute" ? { LLV_DESTRUCTIVE_GUARD_FAST: "" } : {}) };
         measure(kind, () => {
           if (kind.endsWith("find")) execute([wrapped ? f.installed.directory + "/find" : "/usr/bin/find", directory, "-type", "f", "-delete"], f.cwd, env);
           else if (kind.endsWith("separate")) execute(["/bin/bash", "-c", 'for file in "$1"/*; do rm -f "$file" || exit; done', "fixture", directory], f.cwd, { ...env, BASH_ENV: wrapped ? env.BASH_ENV : undefined });

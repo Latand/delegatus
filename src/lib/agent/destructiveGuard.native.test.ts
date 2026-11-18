@@ -88,7 +88,7 @@ for (const [engine, transport] of [["claude", "cli"], ["codex", "cli"], ["codex"
         });
         const stream = (async () => {
           const decoder = new TextDecoder(); let buffered = "";
-          for await (const chunk of child.stdout) {
+          for await (const chunk of child.stdout as typeof child.stdout & AsyncIterable<Uint8Array>) {
             buffered += decoder.decode(chunk, { stream: true });
             for (let newline; (newline = buffered.indexOf("\n")) >= 0;) {
               const line = buffered.slice(0, newline); buffered = buffered.slice(newline + 1);

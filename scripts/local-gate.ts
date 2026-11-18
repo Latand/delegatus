@@ -213,7 +213,7 @@ export function discover(root: string, base: string, files: readonly string[]): 
  * probes replace TMPDIR again, losing that exemption. Use an OS temp root
  * outside the operator installation for the gate's whole sandbox tree.
  */
-export function gateTemporaryRoot(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
+export function gateTemporaryRoot(platform: NodeJS.Platform = process.platform, env: Readonly<Record<string, string | undefined>> = process.env): string {
   // Explicit fixture/check roots retain their binding across production-mode
   // router children. Merely inheriting a pipeline TMPDIR still changes nothing.
   if (env.LLV_GATE_TEMP_ROOT) {

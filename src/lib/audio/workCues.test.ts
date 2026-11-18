@@ -90,6 +90,12 @@ describe("S6 and S7 read the needs-you queue (§4.1)", () => {
     expect(plan.seen.has("c-ask")).toBe(true);
   });
 
+  test("a destructive refusal remains in the attention queue without an unassigned sound cue", () => {
+    const plan = planNeedsYouCues([conversation("c-refusal", "refusal")], baseline(), "p", NOW)!;
+    expect(plan.requests).toEqual([]);
+    expect(plan.seen.has("c-refusal")).toBe(true);
+  });
+
   test("a stuck delivery admitted 30 minutes ago sounds from the moment it raised, never from its admission", () => {
     const plan = planNeedsYouCues([conversation("c-delivery", "delivery", 3, 30 * 60)], baseline(), "p", NOW)!;
     expect(plan.requests[0]!.occurredAt).toBe(NOW - 3000);

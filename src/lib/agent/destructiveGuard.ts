@@ -16,7 +16,7 @@ import { jsonSpans, edit, removeArrayItems, tomlStatements } from "@/lib/memory/
 import { toolsInLoginShell } from "@/lib/git/agentForgeCredentials";
 
 export const DESTRUCTIVE_GUARD_PREFIX = "LLV_MANAGED_DESTRUCTIVE_GUARD=1 ";
-type Env = NodeJS.ProcessEnv;
+type Env = Record<string, string | undefined>;
 export type GuardPolicy = { v: number; digest: string; computedAt: string; home: string[]; sealed: { path: string; kind: string }[]; configured?: string[] };
 const sha = (value: string | Buffer) => crypto.createHash("sha256").update(value).digest("hex");
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";

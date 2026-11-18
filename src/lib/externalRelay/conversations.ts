@@ -231,7 +231,7 @@ function assertConversationDirectory(record: RelayConversation) {
   const cwd = record.cwd;
   const refuse = (): never => { console.warn("[external relay] refused deletion of an invalid conversation directory"); throw new Error("invalid conversation directory"); };
   if (!cwd || !/^[0-9a-f-]{36}$/.test(record.id) || path.basename(cwd) !== `llv-relay-conv-${record.id}`
-    || cwd !== path.join(conversationTemporaryRoot(), `llv-relay-conv-${record.id}`)) refuse();
+    || cwd !== path.join(conversationTemporaryRoot(), `llv-relay-conv-${record.id}`)) return refuse();
   // Missing owned directories are already clean. Never follow a substituted
   // final link or a parent that has moved outside the minting root.
   const stat = fs.lstatSync(cwd, { throwIfNoEntry: false });

@@ -54,6 +54,7 @@ export function fallbackPolicy() {
     .map(name => ({ path: path.join(home, name), kind: 'protected account or configuration' }));
   return { v: VERSION, home: [...new Set([home, canonical(home)])], sealed, digest: 'fallback' };
 }
+/** @param {Readonly<Record<string, string | undefined>>} env */
 export function readPolicy(env = process.env) {
   try {
     const policy = JSON.parse(fs.readFileSync(env.LLV_DESTRUCTIVE_GUARD_POLICY, 'utf8'));
@@ -70,6 +71,10 @@ export function resolveTarget(given, cwd, follow = false, parents = new Map()) {
   if (!parents.has(parent)) parents.set(parent, canonical(parent));
   return path.join(parents.get(parent), path.basename(absolute));
 }
+/**
+ * @param {string} given
+ * @param {{ policy?: { home: string[], sealed: { path: string, kind: string }[] }, own?: string[], cwd?: string, follow?: boolean, noPreserveRoot?: boolean, parents?: Map<string, string>, clearOwnRoots?: string[] }} [options]
+ */
 export function evaluate(given, { policy, own = [], cwd = process.cwd(), follow = false, noPreserveRoot = false, parents, clearOwnRoots } = {}) {
   policy ??= readPolicy();
   if (given === '' && !noPreserveRoot) return null;
