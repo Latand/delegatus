@@ -39,7 +39,7 @@ async function legacyFingerprint(dir: string, output: string) {
 function worker(transform: (source: string) => string, observe?: (child: ChildProcess) => void) {
   return ((command: string, args: string[], options: SpawnOptions) => {
     expect(command).toBe(process.execPath);
-    expect(options.env).toEqual({});
+    expect(Object.keys(options.env!)).toEqual([]);
     expect(args.slice(0, 3)).toEqual(["--no-env-file", "--no-install", "--eval"]);
     const argv = [...args]; argv[3] = transform(argv[3]!);
     const child = spawn(command, argv, options); observe?.(child); return child;

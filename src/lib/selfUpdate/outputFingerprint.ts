@@ -45,7 +45,9 @@ export function outputFingerprint(dir: string, output: string, signal?: AbortSig
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = start(process.execPath, ["--no-env-file", "--no-install", "--eval", OUTPUT_INVENTORY_SOURCE, absolutePath(dir), output], {
-      cwd: dirname(process.execPath), env: {}, detached: true, stdio: ["ignore", "pipe", "pipe"],
+      // Next's ProcessEnv augmentation requires NODE_ENV for its own process;
+      // this isolated Bun worker intentionally inherits no environment entries.
+      cwd: dirname(process.execPath), env: {} as NodeJS.ProcessEnv, detached: true, stdio: ["ignore", "pipe", "pipe"],
     });
     let failure: Error | undefined;
     let stdout = "";
