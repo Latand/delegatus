@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import type { BigIntStats, StatOptions, Stats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
@@ -585,6 +586,52 @@ test("two fresh processes share one completed installation", async () => {
   } finally { f.close(); }
 }, 30_000);
 
+test("warm validation rechecks a CLI link removed immediately after its verification read", async () => {
+  const f = await lockedFixture({ registry: true });
+  let restore: (() => void) | undefined;
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const local = path.join(f.worktreeDir, "node_modules"), modules = fs.realpathSync(local);
+    const cli = path.join(modules, ".bin/fixture-tool"), lstat = fs.promises.lstat;
+    let reads = 0;
+    function intercept(filename: fs.PathLike, options: StatOptions & { bigint: true }): Promise<BigIntStats>;
+    function intercept(filename: fs.PathLike, options?: StatOptions): Promise<Stats>;
+    function intercept(filename: fs.PathLike, options?: StatOptions): Promise<Stats | BigIntStats> {
+      const value = options?.bigint ? lstat(filename, { bigint: true }) : lstat(filename);
+      return value.then(result => {
+        if (filename === cli && ++reads === 2) fs.unlinkSync(cli);
+        return result;
+      });
+    }
+    const hook = spyOn(fs.promises, "lstat").mockImplementation(intercept);
+    restore = () => hook.mockRestore();
+    await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow(/changed during (validation|preparation)/);
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(fs.realpathSync(local)).toBe(modules);
+    expect(fs.existsSync(cli)).toBe(false);
+  } finally { restore?.(); f.close(); }
+}, 30_000);
+
+test("receipt inventory omissions refuse, and permission drift is repaired under the writer fence", async () => {
+  const f = await lockedFixture({ registry: true });
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const local = path.join(f.worktreeDir, "node_modules"), modules = fs.realpathSync(local);
+    const receipt = path.join(path.dirname(modules), "installed.json");
+    const original = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    fs.writeFileSync(receipt, JSON.stringify({ ...original, cliLinks: [] }));
+    await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow("dependency receipt inventory does not match the installed graph");
+    fs.writeFileSync(receipt, JSON.stringify(original));
+    const payload = path.join(modules, "fixture-tool/index.js"), bin = path.join(modules, ".bin");
+    fs.chmodSync(payload, 0o644);
+    fs.chmodSync(bin, 0o777);
+    expect(await prepareLockedDependencies(f.worktreeDir)).toBe(true);
+    expect(fs.statSync(payload).mode & 0o222).toBe(0);
+    expect(fs.statSync(bin).mode & 0o222).toBe(0o200);
+    await f.run(["node_modules/.bin/fixture-tool"], f.worktreeDir);
+  } finally { f.close(); }
+}, 30_000);
+
 test("two linked hooks pass a held writer while a first link waits and performs no warm prune", async () => {
   const f = await lockedFixture();
   const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
@@ -599,18 +646,19 @@ test("two linked hooks pass a held writer while a first link waits and performs 
     release = f.holdWriter();
     await Promise.all([f.worktreeDir, other].map(cwd => f.run(["bun", hook], cwd)));
 
-    let now = Date.now();
-    const clock = spyOn(Date, "now").mockImplementation(() => now);
-    const open = fs.promises.open;
-    const openSpy = spyOn(fs.promises, "open").mockImplementation(async (...args) => {
-      const fd = await open(...args);
-      if (args[0] === path.join(f.cache, "owner.lock")) now += 180_001;
-      return fd;
-    });
+    const source = `import {prepareLockedDependencies} from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+      let contended=false;
+      try { await prepareLockedDependencies(${JSON.stringify(newcomer)}, {budgetMs:250,onWriterWait(){contended=true;}}); process.stdout.write(JSON.stringify({contended,result:"admitted"})); }
+      catch (error) { process.stdout.write(JSON.stringify({contended,error:String(error)})); }`;
+    const contender = Bun.spawn([process.execPath, "-e", source], { cwd: path.resolve("."), stdout: "pipe", stderr: "pipe" });
     try {
-      await expect(prepareLockedDependencies(newcomer)).rejects.toThrow(/deadline exceeded \[wait: repository writer fence, wait \d+ ms, validation \d+ ms, commit 0 ms\]/);
+      const [code, output] = await Promise.all([contender.exited, new Response(contender.stdout).text()]);
+      expect(code).toBe(0);
+      const result = JSON.parse(output);
+      expect(result.contended).toBe(true);
+      expect(result.error).toMatch(/deadline exceeded \[wait: repository writer fence, wait \d+ ms, validation \d+ ms, commit 0 ms\]/);
       expect(fs.existsSync(path.join(newcomer, "node_modules"))).toBe(false);
-    } finally { openSpy.mockRestore(); clock.mockRestore(); }
+    } finally { if (contender.exitCode === null) contender.kill("SIGKILL"); }
 
     release();
     const commands: string[] = [];
@@ -682,6 +730,20 @@ test("an equal key in a peer namespace cannot admit a foreign link or a copied w
     await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow("dependency worktree is no longer registered");
     expect(fs.realpathSync(local)).toBe(expected);
   } finally { release?.(); f.close(); }
+}, 30_000);
+
+test("a Git worktree registration inside a newline path prepares successfully", async () => {
+  const f = await lockedFixture();
+  try {
+    const parent = path.join(f.root, "parent\nwith newline");
+    fs.mkdirSync(parent);
+    const moved = path.join(parent, "checkout");
+    await f.run(["git", "worktree", "move", f.worktreeDir, moved]);
+    f.worktreeDir = moved;
+    f.pipeline.worktreeDir = moved;
+    expect(await prepareLockedDependencies(moved)).toBe(true);
+    expect(fs.lstatSync(path.join(moved, "node_modules")).isSymbolicLink()).toBe(true);
+  } finally { f.close(); }
 }, 30_000);
 
 test.each(["receipt", "installed manifest", "CLI link"] as const)("validation detects a replaced %s behind an asynchronous read", async shape => {

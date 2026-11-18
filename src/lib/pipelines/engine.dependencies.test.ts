@@ -68,6 +68,32 @@ test.each(["missing", "lagging-link", "matching", "unrepairable"])("resumed stag
   } finally { savePipelines([]); f.close(); }
 }, 30_000);
 
+test("a registered worktree from a second clone cannot dispatch for the lane's repository", async () => {
+  const f = await lockedFixture();
+  const h = harness();
+  try {
+    const pipeline = await resumedLane(f, h);
+    const original = pipeline.worktreeDir, saved = path.join(f.root, "original-checkout");
+    const foreignRepo = path.join(f.root, "foreign-repo"), foreign = path.join(f.root, "foreign-checkout");
+    await f.run(["git", "clone", f.repoDir, foreignRepo]);
+    await f.run(["git", "worktree", "move", original, saved], f.repoDir);
+    await f.run(["git", "worktree", "add", "--detach", foreign], foreignRepo);
+    await f.run(["git", "worktree", "move", foreign, original], foreignRepo);
+    f.worktreeDir = original;
+    f.pipeline.worktreeDir = original;
+    await prepareLockedDependencies(original);
+    const link = path.join(original, "node_modules"), target = fs.readlinkSync(link);
+    savePipelines([pipeline]);
+    h.ports.exec = realExec;
+    await tickPipelines([], h.ports);
+    const current = loadPipelines().find(row => row.id === pipeline.id)!;
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(current.stateDetail).toContain("dependency worktree belongs to a different repository");
+    expect(fs.readlinkSync(link)).toBe(target);
+    expect(current.runs[0]!.attempts.at(-1)?.state).not.toBe("running");
+  } finally { savePipelines([]); f.close(); }
+}, 30_000);
+
 test("a controller launch survives a lost link result and dispatches its original attempt once", async () => {
   const f = await lockedFixture();
   const h = harness();

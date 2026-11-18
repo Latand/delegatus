@@ -8411,7 +8411,7 @@ async function spawnCorrelatedRunStage(
       // repositories release old source links before package code can run.
       lockedDependencies = await performanceSpans.wait("pipeline.shared",
         () => prepareLockedDependencies(pipeline.worktreeDir, {
-          exec: ports.exec, signal: setupAbort.signal, assertCurrent: assertSetupCurrent,
+          exec: ports.exec, signal: setupAbort.signal, assertCurrent: assertSetupCurrent, repository: pipeline.repoDir,
         }));
       assertSetupCurrent();
       if (!lockedDependencies) isolateWorktreeDependencies(pipeline);

@@ -256,7 +256,7 @@ export async function lockedDependencyInputs(cwd: string) {
   return { key: hash.digest("hex"), files, required, reads, manifestName: manifest.name };
 }
 
-type PreparationOptions = { exec?: ExecPort; signal?: AbortSignal; assertCurrent?: () => void };
+type PreparationOptions = { exec?: ExecPort; signal?: AbortSignal; assertCurrent?: () => void; repository?: string; budgetMs?: number; onWriterWait?: () => void };
 type DependencyPlan = Awaited<ReturnType<typeof lockedDependencyInputs>>;
 
 function graphPaths(cache: string, key: string) {
@@ -285,6 +285,30 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
     || !link.target || path.isAbsolute(link.target))) throw new Error("invalid dependency CLI link receipt");
 
   let reseal = (Number(root.mode) & 0o222) !== 0;
+  const actualExecutables = new Set<string>();
+  const actualCliLinks = new Map<string, string>();
+  const inventory = async (directory: string): Promise<void> => {
+    check();
+    for (const name of await fs.readdir(directory)) {
+      check();
+      const filename = path.join(directory, name), entry = await reads.read(filename);
+      if (!entry) throw new Error("dependency graph changed during validation");
+      const mode = Number(entry.mode) & 0o777;
+      if (entry.isSymbolicLink()) {
+        if (path.basename(path.dirname(filename)) === ".bin") actualCliLinks.set(path.relative(modules, filename), await fs.readlink(filename));
+        continue;
+      }
+      if (!entry.isFile() && !entry.isDirectory()) throw new Error("unsupported dependency graph entry");
+      const allowedBinWrite = entry.isDirectory() && path.basename(filename) === ".bin"
+        && path.basename(path.dirname(filename)) === "node_modules" && (mode & 0o022) === 0 && (mode & 0o200) !== 0;
+      if ((mode & 0o222) !== 0 && !allowedBinWrite) reseal = true;
+      if (entry.isFile() && (mode & 0o111) !== 0) actualExecutables.add(path.relative(modules, filename));
+      if (entry.isDirectory()) await inventory(filename);
+    }
+  };
+  await inventory(modules);
+  const recordedExecutables = new Set(executables as string[]);
+  const recordedLinks = new Map((cliLinks as CliLink[]).map(link => [link.file, link.target]));
   const writable: { filename: string; entry: BigIntStats }[] = [];
   const parents = async (filename: string) => {
     for (let parent = path.dirname(filename); parent !== modules; parent = path.dirname(parent)) {
@@ -319,8 +343,14 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
     const resolved = await fs.realpath(filename);
     if (!resolved.startsWith(modules + path.sep)) throw new Error("dependency CLI link leaves the installation");
     await parents(resolved);
-    await reads.read(resolved);
+    const target = await reads.read(resolved);
+    if (!target?.isFile() || (Number(target.mode) & 0o111) === 0) throw new Error("dependency CLI target is not executable");
   });
+  if (recordedExecutables.size !== executables.length || recordedLinks.size !== cliLinks.length
+    || recordedExecutables.size !== actualExecutables.size || [...actualExecutables].some(file => !recordedExecutables.has(file))
+    || recordedLinks.size !== actualCliLinks.size || [...actualCliLinks].some(([file, target]) => recordedLinks.get(file) !== target)) {
+    throw new Error("dependency receipt inventory does not match the installed graph");
+  }
 
   const verify = async () => {
     await reads.verify("dependency installation changed during validation; retry setup", check);
@@ -330,7 +360,7 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
       || !sameVersion(seal, entryNow(receipt))) throw new Error("dependency installation changed during preparation; retry setup");
     installed.reads.assertCurrent("shared dependency manifest changed during preparation; retry setup");
   };
-  return { reseal, writable, verify, assertAnchors };
+  return { reseal, writable, verify, assertAnchors, assertCurrent: (message: string) => reads.assertCurrent(message) };
 }
 
 /** Match Git's registration backlink, so a copied .git pointer cannot give a
@@ -339,7 +369,8 @@ async function dependencyNamespace(cwd: string, common: string) {
   const dotGit = path.join(cwd, ".git");
   const checkout = entryNow(cwd), pointer = entryNow(dotGit), repository = entryNow(common);
   if (!checkout?.isDirectory() || !pointer?.isFile() || !repository?.isDirectory()) throw new Error("dependency worktree identity changed");
-  const destination = /^gitdir: (.+)\r?\n?$/.exec(await fs.readFile(dotGit, "utf8"))?.[1];
+  const pointerText = await fs.readFile(dotGit, "utf8");
+  const destination = pointerText.startsWith("gitdir: ") ? pointerText.slice(8).replace(/[\r\n]+$/, "") : undefined;
   if (!destination) throw new Error("invalid dependency worktree registration");
   const gitDir = await fs.realpath(path.resolve(cwd, destination.trimEnd()));
   const registration = entryNow(gitDir);
@@ -368,7 +399,7 @@ async function dependencyNamespace(cwd: string, common: string) {
  * pointing at its graph can verify it independently of the writer. */
 export async function prepareLockedDependencies(cwd: string, options: PreparationOptions = {}): Promise<boolean> {
   const exec = options.exec ?? worktreeDependencyExec;
-  const deadline = Date.now() + BUDGET_MS;
+  const deadline = Date.now() + (options.budgetMs ?? BUDGET_MS);
   type Phase = "validation" | "wait" | "commit";
   const elapsed: Record<Phase, number> = { validation: 0, wait: 0, commit: 0 };
   let phase: Phase = "validation", operation = "worktree identity";
@@ -399,6 +430,10 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
     if (!(await stat(path.join(cwd, ".git")))?.isFile()) return false;
     cwd = await fs.realpath(cwd);
     const common = await fs.realpath(await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+    if (options.repository) {
+      const ownerCommon = await fs.realpath(await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], options.repository));
+      if (ownerCommon !== common) throw new Error("dependency worktree belongs to a different repository");
+    }
     await run("git", ["check-ignore", "--quiet", "node_modules"]);
     const assertNamespace = await dependencyNamespace(cwd, common);
     const cacheParent = path.join(common, "delegatus-dependencies");
@@ -440,6 +475,7 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
           assertCurrent();
           assertCache();
           checked.assertAnchors();
+          checked.assertCurrent("dependency graph changed during validation; retry setup");
           assertInputs(plan);
           if (!sameVersion(before, entryNow(local)) || !linksDirectlyTo(local, graph.modules)) {
             throw new Error("dependency link changed during validation; retry setup");
@@ -479,6 +515,7 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
         assertWriter();
         held = tryLockFenceExclusive({ fd: fd.fd, filename });
         if (held) break;
+        options.onWriterWait?.();
         await delay(Math.min(50, remaining()), undefined, { signal: options.signal });
       }
 
@@ -608,6 +645,7 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
         await checked.verify();
         assertWriter();
         checked.assertAnchors();
+        checked.assertCurrent("dependency graph changed during validation; retry setup");
         assertInputs(plan);
         if (!sameVersion(previous, entryNow(local)) || !linksDirectlyTo(local, modules)) {
           throw new Error("dependency link changed during validation; retry setup");
@@ -634,6 +672,7 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
         await checked.verify();
         assertWriter();
         checked.assertAnchors();
+        checked.assertCurrent("dependency graph changed during validation; retry setup");
         assertInputs(plan);
         if (!sameVersion(previous, entryNow(local)) || !sameVersion(staged, entryNow(link))) {
           throw new Error("dependency link changed before commit");
