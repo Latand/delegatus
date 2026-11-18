@@ -429,13 +429,14 @@ test.each([
   const barrier = join(bin, "barrier.ts");
   writeFileSync(barrier, 'const response = await fetch(process.env.BATCH_FIXTURE_BARRIER!); if (!response.ok) process.exit(1);\nexport {};\n');
   const realGit = Bun.which("git")!;
+  // A launched Git shim must resolve its delegate outside this fixture bin.
   writeFileSync(join(bin, "git"), `#!/bin/sh
 if [ "$BATCH_FIXTURE_PHASE" = gate ] && [ "$PWD" = "$BATCH_FIXTURE_REPO" ] && [ "$*" = "rev-parse --path-format=absolute --git-common-dir" ]; then
   "$BATCH_FIXTURE_BUN" "$BATCH_FIXTURE_SCRIPT" || exit 1
   printf '%s\\n' "different common directory"
   exit 0
 fi
-exec "$BATCH_FIXTURE_GIT" "$@"
+PATH="$BATCH_FIXTURE_PATH" exec "$BATCH_FIXTURE_GIT" "$@"
 `, { mode: 0o700 });
   writeFileSync(join(bin, "gh"), `#!/bin/sh
 case "$1 $2" in
@@ -452,7 +453,7 @@ esac
     LLV_GATE_CHECK_LAUNCH_ROOT: binding.root, LLV_GATE_CHECK_ROOT: binding.physicalRoot,
     LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY: binding.rootDirectoryIdentity,
     BATCH_FIXTURE_BARRIER: server.url.href, BATCH_FIXTURE_REPO: f.repo, BATCH_FIXTURE_PHASE: phase,
-    BATCH_FIXTURE_GIT: realGit, BATCH_FIXTURE_BUN: process.execPath, BATCH_FIXTURE_SCRIPT: barrier,
+    BATCH_FIXTURE_GIT: realGit, BATCH_FIXTURE_PATH: process.env.PATH, BATCH_FIXTURE_BUN: process.execPath, BATCH_FIXTURE_SCRIPT: barrier,
   };
   const command = [process.execPath, join(import.meta.dir, "merge-batch.ts"), phase];
   const child = Bun.spawn(command, { cwd: f.repo, env, stdout: "pipe", stderr: "pipe" });
