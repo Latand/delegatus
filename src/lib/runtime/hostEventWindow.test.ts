@@ -200,29 +200,18 @@ test("a deferred refill keeps the live event payload and replays it only once", 
 });
 
 test("a source closed during deferred refill stays closed after replay initializes", async () => {
-  const ledger = [delta(1)];
-  const window = new HostEventWindow();
-  window.restore(ledger);
-  window.release();
-  const subscribers = new Set<RuntimeEventSubscriber>();
+  const host = source(1);
+  releaseHostEventWindow(host.window);
   let finishRefill!: () => void;
   const refill = new Promise<void>(resolve => { finishRefill = resolve; });
-  const stream = attachRuntimeEvents(0, {
-    window: () => window.events,
-    ledger: () => ledger,
-    subscribers,
-  }, () => refill)[Symbol.asyncIterator]();
+  const stream = attachRuntimeEvents(0, host.events, () => refill)[Symbol.asyncIterator]();
 
-  for (const subscriber of subscribers) {
-    subscriber.closed = true;
-    subscriber.wake?.();
-  }
-  subscribers.clear();
+  host.close();
   finishRefill();
 
-  expect((await stream.next()).value).toEqual(ledger[0]);
+  expect((await stream.next()).value).toEqual(host.ledger[0]);
   expect(await stream.next()).toMatchObject({ done: true });
-  expect(subscribers.size).toBe(0);
+  expect(host.subscribers.size).toBe(0);
 });
 
 test("cancelling a reader during refill releases its registered seat immediately", async () => {
