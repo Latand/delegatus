@@ -144,3 +144,23 @@ export async function ownedStageControl(hold: "stop" | "withdrawal", now: string
     throw error;
   }
 }
+
+export async function withControllerAuditState(audit: () => Promise<void>) {
+  const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const previousRegistry = agentRegistry();
+  const previousState = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(process.env.TMPDIR!, "controller-audit-state-"));
+  process.env.LLV_STATE_DIR = state;
+  let registry: InstanceType<typeof AgentRegistry> | undefined;
+  try {
+    registry = new AgentRegistry();
+    setAgentRegistryForTests(registry);
+    await audit();
+  } finally {
+    setAgentRegistryForTests(previousRegistry);
+    registry?.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+}
