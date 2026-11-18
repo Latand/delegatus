@@ -164,3 +164,15 @@ export async function withControllerAuditState(audit: () => Promise<void>) {
     fs.rmSync(state, { recursive: true, force: true });
   }
 }
+
+export function latch() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+export async function until(promise: Promise<unknown>, timeout = 3_000) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try { await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("boundary did not settle")), timeout); })]); }
+  finally { clearTimeout(timer); }
+}
