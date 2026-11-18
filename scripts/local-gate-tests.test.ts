@@ -1,7 +1,7 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding, destructiveTestFile } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, destructiveTestFile, touchedTests } from "./local-gate-tests";
 
 test("destructive file-system calls stay head-only through direct and renamed imports", () => {
   const f = fixture(source(true));
@@ -28,6 +28,7 @@ test("a destructive-code head failure never launches a base sample, including th
   writeFileSync(path.join(f.dir, "example.test.ts"), `import "./cleanup"; import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, "head\\n"); test("guarded cleanup", () => expect(false).toBeTrue());`);
   const result = await touchedTests(f.dir, base, ["./example.test.ts"], { env: f.env, log: line => f.logs.push(line) });
   expect(result.introduced).toHaveLength(1); expect(result.preexisting).toHaveLength(0);
+  expect(result.introduced[0], JSON.stringify(result) + f.logs.join("\n")).toMatchObject({ name: "guarded cleanup", kind: "test" });
   expect(readFileSync(marker, "utf8").trim().split("\n").every(line => line === "head")).toBeTrue();
   expect(f.logs.some(line => line.startsWith("touched-tests: baseline setup"))).toBeFalse();
 });
