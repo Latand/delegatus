@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import net from "node:net";
@@ -119,6 +120,25 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
   beforeEach(() => {
     fs.rmSync(OPERATOR_HOME, { recursive: true, force: true });
     fs.mkdirSync(STATE_DIRECTORY, { recursive: true });
+  });
+
+  test("archive retirement dry run claims tool ownership before resolving state and installs no schema", () => {
+    const db = new Database(path.join(STATE_DIRECTORY,"agent-registry.sqlite"));
+    db.exec(`CREATE TABLE registry_rows(collection TEXT,row_key TEXT,value_json TEXT,row_order INTEGER);
+      CREATE TABLE registry_archive(id INTEGER PRIMARY KEY,collection TEXT,row_key TEXT,value_json TEXT,row_order INTEGER);
+      CREATE TABLE registry_cold(collection TEXT,row_key TEXT,archive_id INTEGER);
+      CREATE VIEW registry_hot_rows AS SELECT * FROM registry_rows;
+      CREATE VIEW registry_records AS SELECT * FROM registry_rows;`);
+    db.close();
+    const env = operatorEnvironment(); env.LLV_AGENT_REGISTRY_SQLITE = "sqlite";
+    const result = runEntryPoint(["scripts/registry-archive-retirement.ts","--dry-run"],env);
+    expectNoRefusal(result);
+    expect(result.status,result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ category: "A",approved: false,collections: [] });
+    const verify = new Database(path.join(STATE_DIRECTORY,"agent-registry.sqlite"),{ readonly: true });
+    try { expect(verify.query("SELECT name FROM sqlite_master WHERE name='registry_archive_retirements'").get()).toBeNull(); }
+    finally { verify.close(); }
+    expect(fs.existsSync(OTHER_APP_DIR)).toBe(false);
   });
 
   test("the standalone App token command records its mint in the installation's state", () => {
