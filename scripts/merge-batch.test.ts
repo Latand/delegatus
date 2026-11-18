@@ -12,6 +12,8 @@ import { isolatedEnvironment } from "./local-gate";
 import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
 import * as merger from "./merge-batch";
 import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
+import { resolveGateRun } from "../src/lib/runtime/gateCheckRecord";
+import { waitForGate } from "../src/lib/runtime/gateWait";
 import { bindMergerContract } from "../src/lib/pipelines/mergerContract.fixture";
 
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
@@ -391,6 +393,134 @@ function fixture() {
   const good: CommandRunner = async (_cwd, args) => successfulCommand(args);
   return { root, repo, get base() { return base; }, views, addPr, seed, gh, good };
 }
+
+test.each([
+  { phase: "gate", result: "refused" },
+  { phase: "land", result: "completed" },
+  { phase: "land", result: "recorder lost" },
+])("one native $phase wait observes $result across separate roots", async ({ phase, result }) => {
+  const f = fixture();
+  const launch = join(f.root, "launch");
+  const state = join(f.root, "batch");
+  const bin = join(f.root, "bin");
+  for (const directory of [launch, state, bin]) mkdirSync(directory);
+  const binding = bindGateCheckRoot(launch)!;
+  const stateFile = join(state, "merge-batch.json");
+  const lock = stateFile + ".lock";
+  const batch = new MergeBatch(f.repo, stateFile, f.good, f.gh);
+  const head = f.addPr(12, "unused.txt", "draft fixture");
+  f.views.get(12)!.isDraft = true;
+  await batch.build(`12@${head}`);
+  if (phase === "land") await batch.gate();
+
+  // The production CLI blocks inside an external command with the lock held.
+  // A local barrier lets the test attach before supplying the command result.
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch() {
+      entered.resolve();
+      await release.promise;
+      return new Response(null, { status: 204 });
+    },
+  });
+  const abort = new AbortController();
+  const barrier = join(bin, "barrier.ts");
+  writeFileSync(barrier, 'const response = await fetch(process.env.BATCH_FIXTURE_BARRIER!); if (!response.ok) process.exit(1);\nexport {};\n');
+  const realGit = Bun.which("git")!;
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+if [ "$BATCH_FIXTURE_PHASE" = gate ] && [ "$PWD" = "$BATCH_FIXTURE_REPO" ] && [ "$*" = "rev-parse --path-format=absolute --git-common-dir" ]; then
+  "$BATCH_FIXTURE_BUN" "$BATCH_FIXTURE_SCRIPT" || exit 1
+  printf '%s\\n' "different common directory"
+  exit 0
+fi
+exec "$BATCH_FIXTURE_GIT" "$@"
+`, { mode: 0o700 });
+  writeFileSync(join(bin, "gh"), `#!/bin/sh
+case "$1 $2" in
+  "repo view")
+    "$BATCH_FIXTURE_BUN" "$BATCH_FIXTURE_SCRIPT" || exit 1
+    printf '%s\\n' "example/fixture" ;;
+  "api repos/example/fixture/branches/main/protection")
+    printf '%s\\n' '{"required_status_checks":{"strict":true,"contexts":["privacy"]}}' ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o700 });
+  const env = {
+    ...isolatedEnvironment(join(f.root, "isolated"), process.env), TMPDIR: state, PATH: `${bin}:${process.env.PATH}`,
+    LLV_GATE_CHECK_LAUNCH_ROOT: binding.root, LLV_GATE_CHECK_ROOT: binding.physicalRoot,
+    LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY: binding.rootDirectoryIdentity,
+    BATCH_FIXTURE_BARRIER: server.url.href, BATCH_FIXTURE_REPO: f.repo, BATCH_FIXTURE_PHASE: phase,
+    BATCH_FIXTURE_GIT: realGit, BATCH_FIXTURE_BUN: process.execPath, BATCH_FIXTURE_SCRIPT: barrier,
+  };
+  const command = [process.execPath, join(import.meta.dir, "merge-batch.ts"), phase];
+  const child = Bun.spawn(command, { cwd: f.repo, env, stdout: "pipe", stderr: "pipe" });
+  const stdout = new Response(child.stdout).text();
+  const stderr = new Response(child.stderr).text();
+  try {
+    const ready = setTimeout(() => entered.reject(new Error("Batch did not reach its barrier")), 10_000);
+    try {
+      await Promise.race([entered.promise, child.exited.then(async code => {
+        throw new Error(`Batch exited before reaching its barrier (${code}): ${await stderr}`);
+      })]);
+    } finally { clearTimeout(ready); }
+    expect(existsSync(lock)).toBe(true);
+    const [entry] = readdirSync(join(launch, ".gate-runs"));
+    const runId = entry!.replace(/\.json$/, "");
+    const record = resolveGateRun(launch, runId);
+    const args = { runId, reason: phase };
+    let settled = false;
+    const waiting = runGateCheckTool(args, binding, abort.signal).then(answer => { settled = true; return answer; });
+    expect(await waitForGate(record.log, 0)).toMatchObject({ state: "running", code: 124 });
+    expect(settled).toBe(false);
+    expect(existsSync(lock)).toBe(true);
+
+    if (result === "recorder lost") {
+      child.kill("SIGKILL");
+      await child.exited;
+      release.resolve();
+      // Abort only as a bounded red control if owner loss fails to wake the wait.
+      const deadline = setTimeout(() => abort.abort(), 5_000);
+      try {
+        const answer = await waiting;
+        expect(answer.success).toBe(false);
+        expect(answer.contentItems[0]!.text).toContain("ownership unavailable; no exit result recorded");
+        expect(existsSync(`${record.log}.gate/exit`)).toBe(false);
+        expect(existsSync(lock)).toBe(true);
+      } finally { clearTimeout(deadline); }
+      return;
+    }
+
+    const contention = await commandRunner(f.repo, command, env);
+    expect(contention.code).toBe(1);
+    expect(contention.output).toContain("EEXIST");
+    expect(settled).toBe(false);
+    expect(existsSync(lock)).toBe(true);
+    release.resolve();
+    const answer = await waiting;
+    const code = result === "completed" ? 0 : 1;
+    expect(answer.success).toBe(true);
+    expect(JSON.parse(answer.contentItems[0]!.text)).toMatchObject({ terminal: true, code, runId });
+    expect(existsSync(lock)).toBe(false);
+    expect(await child.exited).toBe(code);
+    expect((await stdout).match(/runId=[a-f0-9]{64}/g)).toEqual([`runId=${runId}`]);
+    const reader = await commandRunner(import.meta.dir, [process.execPath, "-e", `
+      import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
+      const [root, args] = process.argv.slice(-2);
+      const result = await runGateCheckTool(JSON.parse(args!), bindGateCheckRoot(root!), new AbortController().signal);
+      console.log(JSON.stringify(result));
+    `, launch, JSON.stringify(args)], env);
+    expect(reader.code).toBe(0);
+    expect(JSON.parse(reader.output)).toEqual(answer);
+  } finally {
+    abort.abort();
+    release.resolve();
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await child.exited;
+    await server.stop();
+  }
+}, 20_000);
 
 test("gh 2.45 builds a batch with the same closing lines despite its unsupported JSON field", async () => {
   const f = fixture();

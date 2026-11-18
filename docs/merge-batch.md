@@ -25,8 +25,9 @@ returns the exit code and report tail after the phase ends and releases any
 batch lock it owns. This includes a refusal because another run owns the
 lock, and runs that finish before the wait attaches. The driver owns the
 hosted check loop and schedules each heavy child. Run it directly to leave
-the shared slot available between checks. A nonterminal or interrupted wait
-leaves the original batch state available for reconciliation.
+the shared slot available between checks. If the recorder exits without a
+terminal record, the wait reports an unknown result. Preserve the batch
+state and reconcile the worktree and forge before clearing a stale lock.
 
 `build` fetches fresh main and each listed PR, checks its open/non-draft/main
 base and reviewed head, and allocates a temporary worktree on a unique
