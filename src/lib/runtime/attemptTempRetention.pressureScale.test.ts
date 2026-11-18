@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { AttemptTempStore } from "./attemptTempRetention";
+import { attemptTempAuthority } from "./attemptTempProduction";
 import { pipelineIdentity, savePipelines } from "../pipelines/store";
 import { finishedLane } from "./attemptTempRetention.testSupport";
 import { plantKeepMarker } from "./keepMarker.testSupport";
@@ -22,7 +23,11 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
     const live = finishedLane(root, new Date(NOW - 3600_000).toISOString());
     live.id = "live-lane"; Object.assign(live, pipelineIdentity(live.id, live.task, live.repoDir));
     live.state = "running"; live.closedAt = null;
-    live.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
+    live.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+    live.runs[0]!.attempts.push({ n: 1, state: "running", launchId: "retention-launch",
+      effectiveRole: live.stages[0]!.effectiveRole, conversationId: "fixture", sessionId: null,
+      agentPath: null, paneId: null, flowId: null, startedAt: new Date(NOW - 1000).toISOString(),
+      completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null });
     savePipelines([ended, live]);
     for (let n = 0; n < count; n++) {
       const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`); directories.push(directory);
@@ -31,6 +36,7 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
       store.measure(directory, 12288 + n);
     }
     const pinned = directories[1]!; plantKeepMarker(path.join(pinned, ".delegatus-keep"));
+    expect((await attemptTempAuthority(store.owner(directories[0]!)!, undefined, () => NOW)).state).toBe("live");
     store.close();
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
     // The parent sends a real monotonic five-second deadline. The deadline
@@ -46,18 +52,21 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
       // the inventory; the remaining ticks use production warm continuations.
       if (ticks === 1 || ticks === 16) { await worker.close(); worker = realParentWorker(true, deadlineMs); }
       expect(await worker.attemptTemp()).not.toBeNull();
-      const report = JSON.parse(fs.readFileSync(path.join(state, "attempt-temp-report.json"), "utf8"));
+      const report = JSON.parse(fs.readFileSync(path.join(state, "attempt-temp-report.json"), "utf8")) as
+        NonNullable<Awaited<ReturnType<typeof import("./attemptTempProduction").runAttemptTempSweep>>>;
       expect(report.errors).toBe(0);
       if (ticks === 0) {
         expect(report.removed).toBeGreaterThan(0);
         expect(fs.existsSync(directories[count - 1]!)).toBeFalse();
         expect(report.outcomes.some((row: { reason: string }) => row.reason.includes("real helper measurement deadline"))).toBeTrue();
-        expect(report.pass.position).toBeLessThan(count);
+        expect(report.pass).not.toBeNull();
+        expect(report.pass!.position).toBeLessThan(count);
       }
       removed += report.removed;
-      if (report.pass.ended) {
+      if (report.pass?.ended) {
         expect(report.pass).toMatchObject({ ended: "complete", total: count, removed: count - 2 });
-        expect(report.lastFullPass.removedBytes).toBeGreaterThan(0);
+        expect(report.liveHeld).toBe(1);
+        expect(report.lastFullPass!.removedBytes).toBeGreaterThan(0);
         break;
       }
     }
