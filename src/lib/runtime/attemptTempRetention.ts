@@ -723,7 +723,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const settled = state === "closed" || state === "expired" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled) return false;
-        if (state === "expired" || disposableClosed(state)) await claim();
+        if (state === "expired") await claim();
         if (pressure && ledgerLinkedEvidence(owner.directory).length) {
           disposition = "evidence"; reason = "linked report evidence hold"; return false;
         }
@@ -807,6 +807,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); return; }
+      // The first observation lets an in-flight activation settle. The claim
+      // then fences quarantine and deletion, where eligibility is rechecked.
+      if (stat && dispatchState !== undefined && disposableClosed(dispatchState)) await claim();
       if (options.mode !== "dry-run") await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory),
         stat ? "admitted" : "missing-unexplained", stat ? "acknowledged owned-root retirement admitted" : "missing-unexplained; no removal outcome observed", remaining);
       const result = await sweepStaleTempDirs({
