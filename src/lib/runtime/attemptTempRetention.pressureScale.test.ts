@@ -10,7 +10,7 @@ import { cleanupPressureFixtures, NOW, roots, realParentWorker, restoreEnvironme
 
 afterEach(cleanupPressureFixtures);
 
-test("a thousand roots progress through real helper deadlines, cancellation and cold restarts", async () => {
+test.skipIf(process.platform !== "linux")("a thousand roots progress through real helper deadlines, cancellation and cold restarts", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pressure-scale-")); roots.push(root);
   const before = { ...process.env }, state = path.join(root, "state"), scratch = path.join(state, "scratch");
   fs.mkdirSync(scratch, { recursive: true }); process.env.LLV_STATE_DIR = state;

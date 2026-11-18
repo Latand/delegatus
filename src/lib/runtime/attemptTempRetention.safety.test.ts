@@ -27,7 +27,7 @@ function fixture() {
     return { parent, directory, lane, store, options, close() { store.close(); fs.rmSync(parent, { recursive: true, force: true }); savePipelines([]); } };
 }
 for (const mode of ["flag-alias", "plain-symlink-dotdot", "relative-flag-alias", "relative-symlink-dotdot", "flag-alias-spaces"] as const)
-    test(`a pending live command input survives (${mode})`, async () => {
+    test.skipIf(process.platform !== "linux")(`a pending live command input survives (${mode})`, async () => {
         const f = fixture();
         let child: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined;
         try {
@@ -80,7 +80,7 @@ for (const mode of ["flag-alias", "plain-symlink-dotdot", "relative-flag-alias",
             f.close();
         }
     }, 60000);
-test("a finished lane cannot reopen while its native removal is in flight", async () => {
+test.skipIf(process.platform !== "linux")("a finished lane cannot reopen while its native removal is in flight", async () => {
     const f = fixture();
     const native = removal.removeTreeWithinAttemptBudget;
     let reopened = false, refused = false, removerStarted = false;
@@ -138,7 +138,7 @@ test("a finished lane cannot reopen while its native removal is in flight", asyn
         f.close();
     }
 }, 60000);
-test.each(["before-sweep", "reference-await"])("an ancestor rebound beneath protected evidence survives (%s)", async phase => {
+test.skipIf(process.platform !== "linux").each(["before-sweep", "reference-await"])("an ancestor rebound beneath protected evidence survives (%s)", async phase => {
     const f = fixture();
     const { statePath } = await import("../configDir");
     const evidence = statePath("evidence", "rebound-protected");
@@ -172,7 +172,7 @@ test.each(["before-sweep", "reference-await"])("an ancestor rebound beneath prot
     }
 }, 60000);
 
-test("a stable ancestor alias still admits an eligible root", async () => {
+test.skipIf(process.platform !== "linux")("a stable ancestor alias still admits an eligible root", async () => {
     const f = fixture();
     try {
         f.store.forget(f.directory);

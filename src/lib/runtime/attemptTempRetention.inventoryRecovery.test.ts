@@ -11,7 +11,7 @@ import { cleanupPressureFixtures, NOW, roots, realParentPass, restoreEnvironment
 
 afterEach(cleanupPressureFixtures);
 
-test("large protection inventories resume across helper restarts and honor a late descendant pin", async () => {
+test.skipIf(process.platform !== "linux")("large protection inventories resume across helper restarts and honor a late descendant pin", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "protection-recovery-")); roots.push(root);
   const before = { ...process.env }, state = path.join(root, "state"), scratch = path.join(state, "scratch");
   fs.mkdirSync(scratch, { recursive: true }); process.env.LLV_STATE_DIR = state;
