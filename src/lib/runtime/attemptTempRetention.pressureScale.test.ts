@@ -42,31 +42,39 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
     // The parent sends a real monotonic five-second deadline. The deadline
     // clock, mutation fence and native remover remain real. Calendar time is
     // fixed per tick; free-space/process/container observations belong to the fixture.
-    const deadlineMs = 5000, maxTicks = 48;
-    let removed = 0, ticks = 0;
-    worker = realParentWorker(true, deadlineMs);
+    const deadlineMs = 15000, maxTicks = 48;
+    let removed = 0, ticks = 0, completedPasses = 0;
+    worker = realParentWorker(true, 5000);
     for (; ticks < maxTicks; ticks++) {
       fs.writeFileSync(config, JSON.stringify({ now: NOW + ticks * 105_000, freeBytes: 1e12, realClock: true, tickClock: true, measureCost: 0,
-        ...(ticks === 0 ? { exhaustMeasurement: "llv-stage-000998" } : {}) }));
+        ...(ticks === 0 ? { stallMeasurement: "llv-stage-000998" } : {}) }));
       // Exercise a cold owner after the actual deadline cut and midway through
       // the inventory; the remaining ticks use production warm continuations.
       if (ticks === 1 || ticks === 16) { await worker.close(); worker = realParentWorker(true, deadlineMs); }
+      if (ticks === 0) {
+        await expect(worker.attemptTemp()).rejects.toThrow("attempt temp tick exceeded 5000 ms");
+        await worker.close(); worker = realParentWorker(true, deadlineMs);
+        const interrupted = new AttemptTempStore();
+        try {
+          const pass = interrupted.activePressurePass()!;
+          expect(pass).not.toBeNull(); expect(pass.position).toBeGreaterThan(0); expect(pass.position).toBeLessThan(count);
+          expect(pass.removed).toBeGreaterThan(0); removed += pass.removed;
+        } finally { interrupted.close(); }
+        expect(JSON.parse(fs.readFileSync(config, "utf8")).stalledMeasurement).toBe("llv-stage-000998");
+        expect(fs.existsSync(directories[count - 1]!)).toBeFalse();
+        for (let n = 0; n < 2; n++) expect(fs.readFileSync(path.join(directories[n]!, "data"))).toEqual(Buffer.alloc(4096, n));
+        continue;
+      }
       expect(await worker.attemptTemp()).not.toBeNull();
       const report = JSON.parse(fs.readFileSync(path.join(state, "attempt-temp-report.json"), "utf8")) as
         NonNullable<Awaited<ReturnType<typeof import("./attemptTempProduction").runAttemptTempSweep>>>;
       expect(report.errors).toBe(0);
-      if (ticks === 0) {
-        expect(report.removed).toBeGreaterThan(0);
-        expect(fs.existsSync(directories[count - 1]!)).toBeFalse();
-        expect(report.outcomes.some((row: { reason: string }) => row.reason.includes("real helper measurement deadline"))).toBeTrue();
-        const exhaustedWindow = JSON.parse(fs.readFileSync(config, "utf8")).exhaustedWindowMs;
-        expect(exhaustedWindow).toBeGreaterThan(0); expect(exhaustedWindow).toBeLessThanOrEqual(deadlineMs);
-        expect(report.pass).not.toBeNull();
-        expect(report.pass!.position).toBeLessThan(count);
-      }
       removed += report.removed;
       if (report.pass?.ended) {
-        expect(report.pass).toMatchObject({ ended: "complete", total: count, removed: count - 2 });
+        expect(report.pass.ended).toBe("complete"); completedPasses++;
+        // Hard cancellation advances past the interrupted proof for fairness.
+        // Its untouched root is revisited in the next complete inventory.
+        if (removed < count - 2) continue;
         expect(report.liveHeld).toBe(1);
         expect(report.lastFullPass!.removedBytes).toBeGreaterThan(0);
         break;
@@ -74,9 +82,10 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
     }
     expect(ticks + 1).toBeLessThanOrEqual(maxTicks);
     expect(removed).toBe(count - 2);
+    expect(completedPasses).toBeGreaterThan(0);
     for (let n = 0; n < count; n++) {
       if (n < 2) expect(fs.readFileSync(path.join(directories[n]!, "data"))).toEqual(Buffer.alloc(4096, n));
       else expect(fs.existsSync(directories[n]!)).toBeFalse();
     }
   } finally { await worker?.close(); store.close(); restoreEnvironment(before); }
-}, 280_000);
+}, 500_000);

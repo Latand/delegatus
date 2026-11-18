@@ -22,8 +22,8 @@ const config = JSON.parse(fs.readFileSync(fixture, "utf8")) as { now: number; fr
   fixtureRemoval?: boolean;
   forbidFullMeasurement?: boolean;
   realClock?: boolean;
-  exhaustMeasurement?: string;
-  exhaustedWindowMs?: number;
+  stallMeasurement?: string;
+  stalledMeasurement?: string;
   tickClock?: boolean;
   slowProof?: { phase: "allocation" | "protection"; prefix: number; requiredCost?: number; timeoutPrefix?: number }; windows?: number[]; elapsed?: number };
 let elapsed = 0;
@@ -78,14 +78,13 @@ spyOn(filesystem, "attemptReferencesClear").mockImplementation(async () => {
 });
 const measure = filesystem.measureAttemptAllocation;
 spyOn(filesystem, "measureAttemptAllocation").mockImplementation(async (...args) => {
-  if (config.exhaustMeasurement === path.basename(args[0])) {
-    delete config.exhaustMeasurement;
-    const window = attemptTempRemaining(args[1]?.budgetMs ?? 0);
-    if (!Number.isFinite(window) || window <= 0) throw new Error("fixture measurement requires a finite admitted window");
-    config.exhaustedWindowMs = window;
+  if (config.stallMeasurement === path.basename(args[0])) {
+    delete config.stallMeasurement;
+    config.stalledMeasurement = path.basename(args[0]);
     fs.writeFileSync(fixture, JSON.stringify(config));
-    await new Promise(resolve => setTimeout(resolve, window + 5));
-    throw new AttemptTempBudgetDeferred("fixture exhausted the real helper measurement deadline");
+    // An unresponsive observer is deliberately cancelled by the real parent.
+    // No deletion, mutation fence or clock is replaced by this seam.
+    await new Promise<never>(() => {});
   }
   if (config.forbidFullMeasurement && !args[1]?.recordedOnly) throw new AttemptTempBudgetDeferred("fixture forbids a full allocation walk");
   if (config.partialMeasurement) {
