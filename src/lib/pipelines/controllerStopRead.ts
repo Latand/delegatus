@@ -6,7 +6,6 @@ import { requestPipelineTick } from "./controllerSignal";
 import type { PipelinePorts } from "./engine";
 
 const INLINE_READ_MS = 25;
-const STOP_READ_DEADLINE_MS = 5_000;
 const DETACHED_LANE_DEADLINE_MS = 15_000;
 const host = globalThis as typeof globalThis & { __llvStopReadLanes?: Map<string, Map<string, Promise<unknown>>> };
 const active = host.__llvStopReadLanes ??= new Map<string, Map<string, Promise<unknown>>>();
@@ -42,9 +41,6 @@ export function runControllerStopReadLane<T>(id: string, ports: PipelinePorts, r
     const stopObserving = lane.observe(readLease);
     const cancelRead = () => readLease.abort.abort(lane.abort.signal.reason);
     lane.abort.signal.addEventListener("abort", cancelRead, { once: true });
-    const deadline = setTimeout(() => readLease.abort.abort(
-      new Error(`operator stop evidence read timed out after ${STOP_READ_DEADLINE_MS} ms`),
-    ), STOP_READ_DEADLINE_MS);
     const transfer = detachedRoot ? undefined : setTimeout(() => {
       if (detachedRoot || lane.abort.signal.aborted) return;
       const occupied = [...active.values()].reduce((count, lanes) => count + lanes.size, 0);
@@ -61,12 +57,13 @@ export function runControllerStopReadLane<T>(id: string, ports: PipelinePorts, r
       release();
     }, INLINE_READ_MS);
     try {
+      // The transport owns its per-RPC deadline, including legacy receipt
+      // lookups. The lane lease bounds the whole read and its reconciliation.
       return await readLease.run(() => awaitLeasedOperation("pipelines.operator-stop-evidence", () =>
         withViewerOperation("pipelines.operator-stop-evidence", () => read.apply(ports, args))));
     } finally {
       stopObserving();
       clearTimeout(transfer);
-      clearTimeout(deadline);
       lane.abort.signal.removeEventListener("abort", cancelRead);
     }
   } };

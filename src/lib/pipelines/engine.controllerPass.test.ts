@@ -5,7 +5,7 @@ import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineStopReadLanes } from "./controllerStopRead";
 import { createServer } from "node:net";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
-import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
+import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withDeliveryMutationAsync, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
 import { SqliteStateCollection, StateSnapshotChangedError, resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "@/lib/state/sqliteStateStore";
 import { setSystemTime, spyOn } from "bun:test";
 import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
@@ -1578,13 +1578,17 @@ test.each([
 test("the independent deadline holds for a cold lane beside three stalled stop reads",
   () => auditIsolatedColdProvisioning("direct", "pinned", 3), 30_000);
 
-test.each(["clear", "operator-stop", "clear-after-pause"] as const)(
-  "a slow scoped RPC returns %s while an unrelated cold lane starts before the deadline",
-  reply => auditIsolatedColdProvisioning("direct", "pinned", 1, reply), 30_000);
+test.each([
+  ["clear", 620], ["operator-stop", 620], ["clear-after-pause", 620],
+  ["clear", 5_500], ["operator-stop", 5_500], ["clear-after-pause", 5_500],
+] as const)(
+  "a slow scoped RPC returns %s after %i ms while an unrelated cold lane starts before the deadline",
+  (reply, responseMs) => auditIsolatedColdProvisioning("direct", "pinned", 1, { reply, responseMs }), 30_000);
 
-type StopReadReply = "clear" | "operator-stop" | "clear-after-pause";
+type StopReadCase = { reply: "clear" | "operator-stop" | "clear-after-pause"; responseMs: number };
 
-async function delayedScopedStopServer(conversationId: string, admittedAt: string, reply: StopReadReply, pause: () => Promise<void>) {
+async function delayedScopedStopServer(conversationId: string, admittedAt: string, scenario: StopReadCase, pause: () => Promise<void>) {
+  const { reply, responseMs } = scenario;
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR!, "stop-rpc-"));
   const socketPath = path.join(dir, "host.sock");
   const pending = new Set<Promise<void>>();
@@ -1605,7 +1609,7 @@ async function delayedScopedStopServer(conversationId: string, admittedAt: strin
       evidence.requests++;
       const operation = (async () => {
         if (reply === "clear-after-pause") await pause();
-        await Bun.sleep(620);
+        await Bun.sleep(responseMs);
         if (socket.destroyed || socket.readableEnded) { evidence.closedBeforeResponse++; return; }
         const result = reply === "operator-stop" ? [{
           id: "effect:fixture-stop", eventSeq: 1, kind: "runtime.stop-boundary",
@@ -1638,8 +1642,8 @@ async function delayedScopedStopServer(conversationId: string, admittedAt: strin
   } };
 }
 
-function auditIsolatedColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, reply?: StopReadReply) {
-  return withControllerAuditState(() => auditColdProvisioning(admission, base, blockerCount, reply));
+function auditIsolatedColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, scenario?: StopReadCase) {
+  return withControllerAuditState(() => auditColdProvisioning(admission, base, blockerCount, scenario));
 }
 
 async function withControllerAuditState(audit: () => Promise<void>) {
@@ -1662,7 +1666,8 @@ async function withControllerAuditState(audit: () => Promise<void>) {
   }
 }
 
-async function auditColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, reply?: StopReadReply) {
+async function auditColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, scenario?: StopReadCase) {
+  const reply = scenario?.reply;
   const f = await realWorktreeLane("cold-provision-audit", BUILD_ONLY as never);
   const h = f.h;
   const old = loadPipelines()[0]!;
@@ -1711,7 +1716,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
   h.ports.conversationOperatorStopped = async (id, since, ignored) => {
     if (!blockedConversations.has(id)) return false;
     stopReads++;
-    if (!stalled) return false;
+    if (!stalled && !stopServer) return false;
     observedBlockers.add(id);
     blocked.resolve();
     if (stopServer) return defaultPipelinePorts().conversationOperatorStopped!(id, since, ignored);
@@ -1770,7 +1775,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
   let tick: Promise<void> | undefined;
   try {
     await until(observerReady.promise);
-    if (reply) stopServer = await delayedScopedStopServer(attempt.conversationId!, requestedAt, reply, async () => {
+    if (scenario) stopServer = await delayedScopedStopServer(attempt.conversationId!, requestedAt, scenario, async () => {
       await withPipelineMutation(async (rows, persist) => {
         const paused = rows.find(row => row.id === old.id)!;
         paused.pausedState = "running";
@@ -1871,7 +1876,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     observer.send("finished");
     await until(observationComplete.promise);
     if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
-      console.log("cold-controller-audit", JSON.stringify({ admission, base, blockerCount, ...observation, stopReads, cancelledReads, reply, rpc: stopServer?.evidence }));
+      console.log("cold-controller-audit", JSON.stringify({ admission, base, blockerCount, ...observation, stopReads, cancelledReads, scenario, rpc: stopServer?.evidence }));
     }
     expect(observation).toMatchObject({ callbacks: 1, children: 1 });
     expect(observation?.deadlineReached, "independent acceptance-to-child deadline of 15000 ms").toBe(false);
@@ -2181,7 +2186,7 @@ test.each(["resolve", "reject"] as const)("repository waiters reacquire bounded 
   expect(pipelineControllerJobLanes()).toEqual([]);
 });
 
-test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)("repository-waiting provisioning rechecks authority after its predecessor: %s", async change => {
+test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)("repository-waiting provisioning rechecks authority after its predecessor: %s", change => withControllerAuditState(async () => {
   const h = harness();
   const lane = await create(h.ports, BUILD_ONLY as never, { repoDir: "/linked-a" });
   const peer = structuredClone(lane), unrelated = structuredClone(lane);
@@ -2189,8 +2194,8 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
     row.id = id; row.repoDir = repo; row.delivery = undefined;
     Object.assign(row, pipelineIdentity(row.id, row.task, row.repoDir));
   }
-  savePipelines([lane, peer, unrelated]);
-  const entered = latch(), release = latch(), otherReady = latch();
+  savePipelines([lane]);
+  const entered = latch(), release = latch(), peerLookup = latch(), otherReady = latch();
   const unregister = registerPipelineTick(async () => {
     if ((await findControllerPipeline(unrelated.id))?.state === "running") otherReady.resolve();
   });
@@ -2198,7 +2203,7 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
   let peerLookups = 0, peerCommands = 0, holding = false;
   h.ports.provisionExec = async (command, args, cwd) => {
     if (args.includes("--git-common-dir")) {
-      if (cwd === peer.repoDir) peerLookups++;
+      if (cwd === peer.repoDir) { peerLookups++; peerLookup.resolve(); }
       return { code: 0, stdout: cwd === unrelated.repoDir ? "/other-common.git" : "/linked-common.git", stderr: "" };
     }
     if (cwd === peer.repoDir || cwd === peer.worktreeDir) peerCommands++;
@@ -2210,8 +2215,15 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
   };
   try {
     await until(tickPipelinesController([], h.ports));
+    // The worktree command runs under the common-directory owner. Admit the
+    // contenders while that command is held and retain the selected cursor.
     await until(entered.promise);
+    expect(pipelineControllerJobLanes()).toEqual([lane.id]);
+    await withDeliveryMutationAsync(tx => { tx.put(peer); tx.put(unrelated); }, 2);
+    await until(tickPipelinesController([], h.ports));
+    await until(peerLookup.promise);
     await until(otherReady.promise);
+    expect(pipelineControllerJobLanes()).toContain(peer.id);
     expect(peerLookups).toBe(1);
     expect(peerCommands).toBe(0);
     expect((await findControllerPipeline(peer.id))?.state).toBe("provisioning");
@@ -2241,7 +2253,7 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
     if (change === "remove") expect(current).toBeNull();
     else expect(current?.state).toBe(change === "pause" ? "paused" : "provisioning");
   }
-});
+}), 10_000);
 
 test("four linked provisioning lanes leave capacity for a later independent launch", async () => {
   const h = harness();
