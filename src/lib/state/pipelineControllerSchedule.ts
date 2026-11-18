@@ -6,6 +6,7 @@ import { mayRunStateStartupMutation } from "@/lib/stateOwnership";
 export const pipelineControllerScheduleIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS pipeline_tick_dirty ON pipeline_tick_work(dirty, row_order, row_key)",
   "CREATE INDEX IF NOT EXISTS pipeline_tick_due ON pipeline_tick_work(due_at, row_order, row_key)",
+  "CREATE INDEX IF NOT EXISTS pipeline_tick_clean_due ON pipeline_tick_work(due_at, row_order, row_key) WHERE dirty=0",
   "CREATE INDEX IF NOT EXISTS pipeline_tick_order ON pipeline_tick_work(row_order, row_key)",
   "CREATE INDEX IF NOT EXISTS pipeline_controller_work_key ON pipeline_controller_work(row_key)",
 ]);
@@ -59,32 +60,36 @@ export type PipelineTickWork = { row_key: string; row_order: number; generation:
  * It also covers runtime/account events that do not write a pipeline row. */
 export function selectPipelineTickWork(db: Database, now: number, excluded: readonly string[], limit: number): PipelineTickWork[] {
   if (!Number.isInteger(limit) || limit < 1 || limit > 4) throw new Error("invalid controller lane budget");
-  const cursor = db.query<{ row_order: number; row_key: string; due_at: number | null }, [number]>(`
-    SELECT cursor.row_order,cursor.row_key,work.due_at FROM pipeline_tick_cursor cursor
-    LEFT JOIN pipeline_tick_work work ON work.row_key=cursor.row_key AND (work.dirty=1 OR work.due_at<=?)
-    WHERE cursor.id=1`).get(now)!;
-  const priorityOrder = cursor.due_at === null ? -1 : cursor.row_order;
-  const priorityKey = cursor.due_at === null ? "" : cursor.row_key;
-  const dirtySkip = JSON.stringify(excluded);
+  const cursor = db.query<{ row_order: number; row_key: string; dirty: number | null; due_at: number | null }, []>(`
+    SELECT cursor.row_order,cursor.row_key,work.dirty,work.due_at FROM pipeline_tick_cursor cursor
+    LEFT JOIN pipeline_tick_work work ON work.row_key=cursor.row_key
+    WHERE cursor.id=1`).get()!;
+  const cursorReady = cursor.due_at !== null && (cursor.dirty === 1 || cursor.due_at <= now);
+  const priorityOrder = cursorReady ? cursor.row_order : -1;
+  const priorityKey = cursorReady ? cursor.row_key : "";
+  // A deadline still records the selected row. After dirty work, give a
+  // due lane the first await; after due work, give dirty retries their turn.
+  const dueFirst = cursor.dirty !== 0;
+  const skip = JSON.stringify(excluded);
   const dirtyPage = (after: boolean, count: number) => db.query<PipelineTickWork, [number, string, string, number]>(`SELECT * FROM pipeline_tick_work
     WHERE dirty=1 AND (row_order,row_key) ${after ? ">" : "<="} (?,?)
       AND row_key NOT IN (SELECT value FROM json_each(?))
-    ORDER BY row_order,row_key LIMIT ?`).all(priorityOrder, priorityKey, dirtySkip, count);
+    ORDER BY row_order,row_key LIMIT ?`).all(priorityOrder, priorityKey, skip, count);
   // A deadline can leave the selected lane dirty. Resume past the last pick
   // before wrapping back to it, including on the priority path.
   const dirtyLimit = Math.max(1, limit - 2);
   const dirty = dirtyPage(true, dirtyLimit);
   if (dirty.length < dirtyLimit) dirty.push(...dirtyPage(false, dirtyLimit - dirty.length));
-  const dueSkip = JSON.stringify([...excluded, ...dirty.map(row => row.row_key)]);
-  // Match the due index's full key so a cursor near the end seeks directly
-  // to the next candidate, even when every row has the same due time.
+  // The partial index keeps due selection separate from dirty rows whose
+  // due time is zero. The full range key permits a seek past the cursor.
   const duePage = (after: boolean, count: number) => db.query<PipelineTickWork, [number, number, number, string, string, number]>(`SELECT * FROM pipeline_tick_work
-    WHERE due_at<=? AND (due_at,row_order,row_key) ${after ? ">" : "<="} (?,?,?)
+    WHERE dirty=0 AND due_at<=? AND (due_at,row_order,row_key) ${after ? ">" : "<="} (?,?,?)
       AND row_key NOT IN (SELECT value FROM json_each(?))
-    ORDER BY due_at,row_order,row_key LIMIT ?`).all(now, cursor.due_at ?? -1, priorityOrder, priorityKey, dueSkip, count);
-  const dueLimit = Math.max(0, limit - dirty.length - 1);
+    ORDER BY due_at,row_order,row_key LIMIT ?`).all(now, cursorReady ? cursor.due_at! : -1, priorityOrder, priorityKey, skip, count);
+  const dueLimit = Math.max(dueFirst || !dirty.length ? 1 : 0, limit - dirty.length - 1);
   const due = dueLimit ? duePage(true, dueLimit) : [];
   if (due.length < dueLimit) due.push(...duePage(false, dueLimit - due.length));
+  dirty.splice(limit - due.length);
   const fairSkip = JSON.stringify([...excluded,...dirty.map(row=>row.row_key),...due.map(row=>row.row_key)]);
   const fairPage = (after: boolean, count: number) => db.query<PipelineTickWork, [number, string, string, number]>(`SELECT * FROM pipeline_tick_work
     WHERE (row_order,row_key) ${after ? ">" : "<="} (?,?) AND row_key NOT IN (SELECT value FROM json_each(?))
@@ -92,7 +97,7 @@ export function selectPipelineTickWork(db: Database, now: number, excluded: read
   const fairLimit = limit - dirty.length - due.length;
   const fair = fairLimit ? fairPage(true, fairLimit) : [];
   if (fair.length < fairLimit) fair.push(...fairPage(false, fairLimit - fair.length));
-  const work = [...dirty, ...due, ...fair];
+  const work = dueFirst ? [...due, ...dirty, ...fair] : [...dirty, ...due, ...fair];
   // The cursor may still name the only dirty row after a deadline. A wrapped
   // selection must give the other candidates a turn before retrying that row.
   const previous = work.findIndex(row => row.row_key === cursor.row_key);

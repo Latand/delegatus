@@ -1364,11 +1364,12 @@ test("shared compact authority observations keep each job's own lane out of its 
 });
 
 test.each([
-  ["direct", "pinned", "dirty"], ["direct", "followed", "dirty"],
-  ["queued", "pinned", "dirty"], ["queued", "followed", "dirty"],
-  ["direct", "pinned", "due"], ["direct", "followed", "due"],
-  ["queued", "pinned", "due"], ["queued", "followed", "due"],
-] as const)("a %s lane with a %s base starts as %s despite a repeatedly timed-out dirty lane", async (admission, base, readiness) => {
+  ["direct", "pinned", "dirty", 1], ["direct", "followed", "dirty", 1],
+  ["queued", "pinned", "dirty", 1], ["queued", "followed", "dirty", 1],
+  ["direct", "pinned", "due", 1], ["direct", "followed", "due", 1],
+  ["queued", "pinned", "due", 1], ["queued", "followed", "due", 1],
+  ["direct", "pinned", "due", 2], ["direct", "pinned", "due", 3],
+] as const)("a %s lane with a %s base starts as %s despite %i repeatedly timed-out dirty lanes", async (admission, base, readiness, blockerCount) => {
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
   const { StoreBusyBeforeAdmissionError } = await import("@/lib/state/fileTransaction");
@@ -1387,7 +1388,15 @@ test.each([
   Object.assign(oldAttempt, { state: "needs_decision", conversationId: "conversation_blocked_stop" });
   oldAttempt.providerWait = { condition: { kind: "host_death", label: "host died", scope: null, resetLabel: null },
     accountId: null, text: "host died", turnTs: epoch, tries: 0, startedAt: h.ports.now(), resumeAt: h.ports.now(), resetsAt: null };
-  savePipelines([blocker]);
+  const blockers = Array.from({ length: blockerCount }, (_, index) => {
+    const peer = structuredClone(blocker);
+    peer.id = `always-dirty-${index}`;
+    Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+    Object.assign(peer.runs[0]!.attempts[0]!, { conversationId: `conversation_blocked_stop_${index}` });
+    return peer;
+  });
+  const blockerConversations = new Map(blockers.map(peer => [peer.runs[0]!.attempts[0]!.conversationId, peer.id]));
+  savePipelines(blockers);
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "provision-under-load-"));
   const repo = path.join(root, "repo");
   const origin = path.join(root, "origin.git");
@@ -1408,8 +1417,13 @@ test.each([
   await git(repo, "remote", "add", "origin", origin);
 
   let entered = latch(), release = latch();
+  let enteredBlocker: string | undefined;
+  const visitedBlockers = new Set<string>();
   h.ports.conversationOperatorStopped = async id => {
-    if (id !== oldAttempt.conversationId) return false;
+    const peer = blockerConversations.get(id);
+    if (peer === undefined) return false;
+    enteredBlocker = peer;
+    visitedBlockers.add(peer);
     entered.resolve();
     await release.promise;
     return false;
@@ -1463,10 +1477,13 @@ test.each([
       log: message => { log.push(message); },
     }, { phaseDeadlineMs: 500, requestDeadlineMs: 500, maxPasses: 1 });
     for (let pass = 0; pass < 8; pass++) {
-      entered = latch(); release = latch();
-      // Each pass receives a fresh dirty generation from the stopped lane.
-      db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.stateDetail',?) WHERE collection='pipelines' AND row_key=?")
-        .run(`peer update ${pass}`, blocker.id);
+      entered = latch(); release = latch(); enteredBlocker = undefined;
+      // Drive the blockers through the normal generation trigger. The
+      // controller records selection, then each hung call expires before ack.
+      for (const peer of blockers) {
+        db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.stateDetail',?) WHERE collection='pipelines' AND row_key=?")
+          .run(`peer update ${pass}`, peer.id);
+      }
       if (readiness === "due") {
         db.query("UPDATE pipeline_tick_work SET dirty=0,due_at=? WHERE row_key=?").run(epoch + elapsed, lane.id);
       }
@@ -1475,8 +1492,19 @@ test.each([
       await until(Promise.race([tick, entered.promise.then(() => { blocked = true; })]));
       elapsed += 500;
       setSystemTime(new Date(epoch + elapsed));
-      if (blocked) timers.findLast(timer => timer.active)!.callback();
+      const readWork = db.query<{ generation: number; dirty: number; attempt_cursor: number }, [string]>(
+        "SELECT generation,dirty,attempt_cursor FROM pipeline_tick_work WHERE row_key=?",
+      );
+      const timedOutPeer = enteredBlocker;
+      const before = timedOutPeer === undefined ? undefined : readWork.get(timedOutPeer);
+      if (blocked) {
+        // The production selection transaction must already be durable.
+        expect(db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_cursor WHERE id=1").get()?.row_key).toBe(timedOutPeer);
+        expect(before).toMatchObject({ dirty: 1 });
+        timers.findLast(timer => timer.active)!.callback();
+      }
       await until(tick);
+      if (timedOutPeer !== undefined) expect(readWork.get(timedOutPeer)).toEqual(before);
       release.resolve();
       await settlePipelineControllerJobs();
     }
@@ -1484,10 +1512,11 @@ test.each([
     const attempts = (await findControllerPipeline(lane.id))?.runs[0]?.attempts;
     if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
       const cursor = db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_cursor WHERE id=1").get();
-      console.log("dirty-peer-rotation-audit", JSON.stringify({ admission, base, readiness, deadlines,
-        attempts: attempts?.length ?? 0, cursorAtBlocker: cursor?.row_key === blocker.id }));
+      console.log("dirty-peer-rotation-audit", JSON.stringify({ admission, base, readiness, blockerCount, deadlines,
+        attempts: attempts?.length ?? 0, cursorAtBlocker: blockers.some(peer => peer.id === cursor?.row_key) }));
     }
     expect(deadlines).toBeGreaterThan(0);
+    expect(visitedBlockers.size).toBe(blockerCount);
     expect(attempts).toMatchObject([{ n: 1, state: "running" }]);
     expect(h.spawnInputs.filter(input => input.cwd === lane.worktreeDir)).toHaveLength(1);
     expect(adds).toBe(1);
@@ -1523,7 +1552,12 @@ test.each([
 
 test.each([
   ["direct", "pinned"], ["direct", "followed"], ["queued", "pinned"], ["queued", "followed"],
-] as const)("operator audit production-length deadline for cold provisioning: %s %s", async (admission, base) => {
+] as const)("operator audit production-length deadline for cold provisioning: %s %s", (admission, base) => auditIsolatedColdProvisioning(admission, base, 1), 30_000);
+
+test("the independent deadline holds for a cold lane beside three stalled stop reads",
+  () => auditIsolatedColdProvisioning("direct", "pinned", 3), 30_000);
+
+async function auditIsolatedColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number) {
   const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
   const previousRegistry = agentRegistry();
   const previousState = process.env.LLV_STATE_DIR;
@@ -1533,7 +1567,7 @@ test.each([
   try {
     registry = new AgentRegistry();
     setAgentRegistryForTests(registry);
-    await auditColdProvisioning(admission, base);
+    await auditColdProvisioning(admission, base, blockerCount);
   } finally {
     setAgentRegistryForTests(previousRegistry);
     registry?.close();
@@ -1541,9 +1575,9 @@ test.each([
     else process.env.LLV_STATE_DIR = previousState;
     fs.rmSync(state, { recursive: true, force: true });
   }
-}, 30_000);
+}
 
-async function auditColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed") {
+async function auditColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number) {
   const f = await realWorktreeLane("cold-provision-audit", BUILD_ONLY as never);
   const h = f.h;
   const old = loadPipelines()[0]!;
@@ -1551,10 +1585,23 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
   const requestedAt = h.ports.now();
   attempt.suspension = { reason: "account", detail: "suspended producer",
     requestedAt, stoppedAt: requestedAt, retryRequestedAt: requestedAt };
-  savePipelines([old]);
+  const blockers = [old];
+  for (let index = 1; index < blockerCount; index++) {
+    const peer = structuredClone(old);
+    peer.id = `cold-stalled-peer-${index}`;
+    peer.delivery = undefined;
+    Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+    Object.assign(peer.runs[0]!.attempts[0]!, { conversationId: `conversation_cold_peer_${index}`,
+      launchId: `fixture-cold-peer-${index}`, agentPath: `/codex/cold-peer-${index}.jsonl`, paneId: `%cold-peer-${index}` });
+    await f.git(f.repo, "worktree", "add", "-b", peer.branch, peer.worktreeDir, f.base);
+    blockers.push(peer);
+  }
+  savePipelines(blockers);
+  const blockedConversations = new Set(blockers.map(peer => peer.runs[0]!.attempts[0]!.conversationId));
+  const blockedPanes = new Set(blockers.map(peer => peer.runs[0]!.attempts[0]!.paneId));
   const account = attempt.accountId!;
-  h.ports.conversationAgentActive = async id => id !== attempt.conversationId;
-  h.ports.paneAgentAlive = async pane => pane !== attempt.paneId;
+  h.ports.conversationAgentActive = async id => !blockedConversations.has(id);
+  h.ports.paneAgentAlive = async pane => !blockedPanes.has(pane);
   h.ports.allowedAccountIds = () => [account];
   h.ports.resolveProjectSpawn = engine => ({ kind: "available", account: { engine, accountId: account,
     kind: "managed", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
@@ -1574,10 +1621,12 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
       }
     },
   });
+  const observedBlockers = new Set<string>();
   h.ports.conversationOperatorStopped = async id => {
-    if (id !== attempt.conversationId) return false;
+    if (!blockedConversations.has(id)) return false;
     stopReads++;
     if (!stalled) return false;
+    observedBlockers.add(id);
     blocked.resolve();
     const signal = currentOperationLease()?.abort.signal;
     await new Promise<void>(resolve => {
@@ -1680,6 +1729,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     ]), 24_000);
     expect(logs.filter(line => line.includes("pending at deadline"))).toEqual([]);
     expect(cancelledReads).toBeGreaterThan(0);
+    expect(observedBlockers.size).toBe(blockerCount);
     const retained = (await findControllerPipeline(old.id))!;
     expect(retained.stateDetail).toContain("operator stop evidence read timed out");
     expect(retained.runs[0]?.attempts).toMatchObject([{ n: 1, suspension: { retryRequestedAt: requestedAt } }]);
@@ -1696,18 +1746,22 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     const waitingForCpu = await findControllerPipeline(old.id);
     expect(waitingForCpu?.stateDetail).toContain("CPU queue");
     expect(waitingForCpu?.runs[0]?.attempts.at(-1)).toMatchObject({ n: 2, state: "pending" });
-    cpuNow += CPU_QUEUE_SPACING_MS;
-    for (let pass = 0; pass < 4; pass++) await controller.tick();
-    const recovered = await findControllerPipeline(old.id);
-    expect(recovered?.runs[0]?.attempts.map(({ n, state, accountId }) => ({ n, state, accountId })), recovered?.stateDetail ?? "").toEqual([
-      { n: 1, state: "failed", accountId: account }, { n: 2, state: "running", accountId: account },
-    ]);
+    for (let window = 0; window < blockerCount; window++) {
+      cpuNow += CPU_QUEUE_SPACING_MS;
+      for (let pass = 0; pass < 4; pass++) await controller.tick();
+    }
+    for (const peer of blockers) {
+      const recovered = await findControllerPipeline(peer.id);
+      expect(recovered?.runs[0]?.attempts.map(({ n, state, accountId }) => ({ n, state, accountId })), recovered?.stateDetail ?? "").toEqual([
+        { n: 1, state: "failed", accountId: account }, { n: 2, state: "running", accountId: account },
+      ]);
+    }
     expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, state: "running" }]);
     expect(h.spawnInputs.filter(input => input.cwd === cold.worktreeDir)).toHaveLength(1);
     observer.send("finished");
     await until(observationComplete.promise);
     if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
-      console.log("cold-controller-audit", JSON.stringify({ admission, base, ...observation, stopReads, cancelledReads }));
+      console.log("cold-controller-audit", JSON.stringify({ admission, base, blockerCount, ...observation, stopReads, cancelledReads }));
     }
     expect(observation).toMatchObject({ callbacks: 1, children: 1 });
     expect(observation?.deadlineReached, "independent acceptance-to-child deadline of 15000 ms").toBe(false);
