@@ -857,9 +857,16 @@ test("ACP error and cancelled replies release only their own outstanding request
 });
 
 test.each(["memory", "file"])("a settled host releases idle events, replays to subscribers and refills on its next turn (%s)", async kind => {
-  const eventStore = kind === "file"
-    ? new FileRuntimeEventStore(fs.mkdtempSync(path.join(os.tmpdir(), "host-refill-"))) : new MemoryEventStore();
-  const host = await CopilotAcpHost.start(options(new FakeCopilot()));
+  const directory = kind === "file" ? fs.mkdtempSync(path.join(os.tmpdir(), "host-refill-")) : undefined;
+  const fileStore = directory ? new class extends FileRuntimeEventStore {
+    scanCalls = 0;
+    override async scan(threadId: string, visit: (event: RuntimeEvent) => void): Promise<number> {
+      this.scanCalls += 1;
+      return super.scan(threadId, visit);
+    }
+  }(directory) : undefined;
+  const eventStore = fileStore ?? new MemoryEventStore();
+  const host = await CopilotAcpHost.start(options(new FakeCopilot(), { eventStore }));
   const idle = idleWindowFixture(host);
   try {
     const count = host.heapAttribution().events;
@@ -872,10 +879,15 @@ test.each(["memory", "file"])("a settled host releases idle events, replays to s
       for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
       expect(host.heapAttribution().events).toBeGreaterThan(0);
     } finally { await stream.return?.(); }
+    if (kind === "file") expect(fileStore?.scanCalls).toBe(1);
     expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
     await host.send({ id: "next-idle-turn", text: "continue" });
     expect(host.heapAttribution().events).toBeGreaterThan(0);
-  } finally { idle.cleanup(); await host.release(); }
+    if (kind === "file") expect(fileStore?.scanCalls).toBe(2);
+  } finally {
+    idle.cleanup(); await host.release();
+    if (directory) fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("ACP output is previewed only in the retained window and replay keeps its terminal outcome", async () => {

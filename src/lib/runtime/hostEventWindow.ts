@@ -253,37 +253,43 @@ const abandonedStreams = new FinalizationRegistry<Seat>(leaveSeat);
  */
 export function attachRuntimeEvents(afterSeq: number, source: RuntimeEventSource, refill?: () => Promise<void> | undefined): AsyncIterable<RuntimeEvent> {
   if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new Error("afterSeq must be a non-negative integer");
-  const ready = refill?.();
-  if (ready) {
-    let cancelled = false;
-    let active: AsyncIterator<RuntimeEvent> | null = null;
-    const pending = ready.then(() => {
-      if (cancelled) return null;
-      active = attachRuntimeEvents(afterSeq, source)[Symbol.asyncIterator]();
-      return active;
-    });
-    // An unread stream still owns its restoration failure; next() reports it.
-    void pending.catch(() => {});
-    const iterator: AsyncIterableIterator<RuntimeEvent> = {
-      next: async () => (await pending)?.next() ?? { done: true, value: undefined },
-      return: async () => {
-        cancelled = true;
-        return active?.return?.() ?? { done: true, value: undefined };
-      },
-      [Symbol.asyncIterator]() { return this; },
-    };
-    return iterator;
-  }
   const subscriber: RuntimeEventSubscriber = {
     afterSeq,
-    queue: runtimeEventsAfter(source.window(), afterSeq, () => source.ledger()),
+    queue: [],
     wake: null,
     closed: false,
   };
   source.subscribers.add(subscriber);
   const seat: Seat = { subscriber, subscribers: source.subscribers };
+  let ready: Promise<void> | undefined;
+  try {
+    const refillResult = refill?.();
+    if (refillResult) {
+      ready = refillResult.then(() => initializeQueue()).catch(error => {
+        leaveSeat(seat);
+        throw error;
+      });
+      // An unread stream still owns its restoration failure; next() reports it.
+      void ready.catch(() => {});
+    } else initializeQueue();
+  } catch (error) {
+    leaveSeat(seat);
+    throw error;
+  }
+
+  function initializeQueue(): void {
+    const replay = runtimeEventsAfter(source.window(), afterSeq, () => source.ledger());
+    // The seat was active during refill. Prefer those full live payloads over
+    // durable previews, while deduplicating events already present in replay.
+    const events = new Map(replay.map(event => [event.seq, event]));
+    for (const event of subscriber.queue) if (event.seq > afterSeq) events.set(event.seq, event);
+    subscriber.queue = [...events.values()].sort((left, right) => left.seq - right.seq);
+    subscriber.wake?.();
+  }
+
   async function* read(): AsyncGenerator<RuntimeEvent> {
     try {
+      await ready;
       while (true) {
         const event = subscriber.queue.shift();
         if (event) {
