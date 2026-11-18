@@ -9135,7 +9135,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
       }
       if (record.retry) {
         const retry = record.retry;
-        const retryExpired = () => unixMs(ports.now()) - unixMs(retry.requestedAt) >= RUNTIME_SWITCH_BUDGET_MS;
+        const retryExpired = () => unixMs(ports.now()) - unixMs(retry.cleanupRequestedAt ?? retry.requestedAt) >= RUNTIME_SWITCH_BUDGET_MS;
         let cleanupProven = false;
         try {
           if (retryExpired()) throw new Error(retry.pendingReason ?? "termination and retirement could not be verified");
@@ -9199,6 +9199,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
             next.activatedBy = current.activatedBy ? { ...current.activatedBy } : null;
             next.restartContext = { previousAttempt: current.n, transcriptPath: record.from.agentPath };
             next.runtimeAccountPin = configured.account?.trim() || null;
+            if (selected.target.fallbackReason) next.runtimeAccountFallbackReason = selected.target.fallbackReason;
             next.usageLimitedAccounts = (current.usageLimitedAccounts ?? []).map(limit => ({
               ...limit, engine: limit.engine ?? current.effectiveRole.engine,
             }));
@@ -9247,6 +9248,12 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           requestRuntimeSwitchRetry(pipeline, attempt, record, "runtime switch target changed after dispatch", ports.now());
           record.retry!.target = retarget.target;
           await checkpoint(); ports.scheduleTick?.(0); continue;
+        } else {
+          // The dispatched account remains pinned to its operation key. Refresh
+          // its classification in place so the dispatch fence sees the same
+          // account and the current binding reason after interrupt.
+          record.to = retarget.target;
+          await checkpoint();
         }
       } else if (retarget && !retarget.target && record.phase === "requested") {
         const now = ports.now();
@@ -17855,7 +17862,7 @@ async function applyPipelinePatch(
       }
       /* #1938: a resumed needs_review lane still names its unreviewed head. */
       const switchRetry = attempt && pendingRuntimeSwitchRetry(attempt)?.retry;
-      if (switchRetry && !switchRetry.completedAt && !switchRetry.blockedAt) switchRetry.requestedAt = pipeline.resumedAt;
+      if (switchRetry && !switchRetry.completedAt && !switchRetry.blockedAt) switchRetry.cleanupRequestedAt = pipeline.resumedAt;
       if (pipeline.state === "needs_decision" && switchRetry?.blockedAt) {
         pipeline.stateDetail = `runtime switch retry blocked: ${switchRetry.pendingReason ?? switchRetry.reason}; retry-stage to try again`;
       } else {
@@ -17901,11 +17908,17 @@ async function applyPipelinePatch(
         const replayed = !!switchRetry.retry && !switchRetry.retry.blockedAt;
         if (switchRetry.retry && (switchRetry.retry.blockedAt || switchRetry.retry.operatorStoppedAt)) {
           switchRetry.retry.requestedAt = ports.now();
+          switchRetry.retry.cleanupRequestedAt = switchRetry.retry.requestedAt;
           delete switchRetry.retry.blockedAt;
           delete switchRetry.retry.operatorStoppedAt;
           delete switchRetry.retry.pendingReason;
         }
         requestRuntimeSwitchRetry(pipeline, attempt, switchRetry, switchRetry.outcome ?? "runtime switch retry requested", ports.now());
+        const configured = currentStage(pipeline);
+        if (configured) {
+          const selected = selectConfiguredSwitchTarget(pipeline, configured, attempt, switchRetry, ports);
+          if (selected.target) switchRetry.retry!.target = selected.target;
+        }
         persist(); requestPipelineTick();
         return { pipeline, runtimeSwitch: switchRetry, replayed };
       }

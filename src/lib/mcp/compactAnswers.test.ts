@@ -424,6 +424,14 @@ test("stage metadata follows account pin precedence without treating a requested
   expect(pipelineStageRead(pipeline, stage.id).attempt!.accountPin).toBeNull();
 });
 
+test("stage answer carries fallback classification on the attempt that actually started", () => {
+  const { pipeline, stage, attempt } = metadataPipeline();
+  attempt.runtimeAccountFallbackReason = "selected a project fallback account because no allowed primary account was eligible";
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({
+    runtime: { accountId: "account-B", fallbackReason: attempt.runtimeAccountFallbackReason },
+  });
+});
+
 test.each(["pending", "spawning"] as const)("persisted %s attempts keep copied launch intent out of observed runtime", async (state) => {
   const { pipeline, stage, attempt } = metadataPipeline();
   Object.assign(attempt, {
@@ -636,7 +644,7 @@ test("list_pipelines state open and compact answer small rows for the lanes that
   expect(open.pipelines.map((row) => row.id)).toEqual(expected.map((pipeline) => pipeline.id));
   expect(new Set(open.pipelines.map((row) => row.state))).toEqual(new Set(["running", "needs_decision"]));
   /* #2187 §4.1: a compact row names the merge setting only when it is on. */
-  expect(Object.keys(open.pipelines[0]!).sort()).toEqual(["cursor", "id", "stages", "state", "stateDetail", "task"]);
+  expect(Object.keys(open.pipelines[0]!).sort()).toEqual(["cursor", "dismissedAt", "hiddenFromBoard", "id", "stages", "state", "stateDetail", "task"]);
   expect(open.pipelines[0]!.stages).toEqual([
     { id: "build", latestAttempt: { execution: { requestedRuntime: "local", executionRuntime: "local", reason: null }, n: 6, state: "passed", verdict: "pass" } },
     { id: "review", latestAttempt: { execution: { requestedRuntime: "local", executionRuntime: "local", reason: null }, n: 6, state: "passed", verdict: "pass" } },

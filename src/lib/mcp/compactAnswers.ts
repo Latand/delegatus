@@ -247,6 +247,7 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       runtime: cloud?.runtime ?? (selected.effectiveRole && hasRuntimeEvidence && !reservedHandoff ? {
         ...currentRuntimeSeat(selected),
         serviceTierSource: selected.effectiveRole.serviceTierSource ?? null,
+        ...(selected.runtimeAccountFallbackReason ? { fallbackReason: selected.runtimeAccountFallbackReason } : {}),
       } : null),
       accountPin: attemptAccountPin(stage, selected),
       roleParams: selected.definition?.role?.params ?? null,

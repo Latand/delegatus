@@ -331,6 +331,63 @@ test("November 17: retry cleanup gets a fresh bounded window after pause and acc
   expect(loadPipelines()[0]).toMatchObject({ worktreeDir: lane.worktreeDir, branch: lane.branch });
 });
 
+test("November 18: resume renews cleanup time without moving the explicit retry kill floor", async () => {
+  const h = switchHarness("2026-11-18T08:00:00Z");
+  const lane = await runningStage(h);
+  const operator = { kind: "operator" } as const;
+  await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.1-sol", effort: "high", applyNow: true }, h.ports, operator);
+  h.ports.runtimeSwitchKilled = async () => true;
+  const { drainRuntimeSwitches } = await import("./engine");
+  await drainRuntimeSwitches(h.ports);
+  const retryRequest = { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 } as const;
+  await patchPipeline(lane.id, retryRequest, h.ports, operator);
+  await patchPipeline(lane.id, { action: "pause" }, h.ports, operator);
+  await patchPipeline(lane.id, retryRequest, h.ports, operator);
+  const requestedAt = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry!.requestedAt;
+  let killedAt: string | null = null;
+  h.ports.conversationOperatorStopped = async (_id, since) => !!killedAt && killedAt >= since;
+  h.advance(60_000); killedAt = h.ports.now();
+  h.advance(11 * 60_000);
+  await patchPipeline(lane.id, { action: "resume" }, h.ports, operator);
+  await drainRuntimeSwitches(h.ports);
+  expect(h.spawnCount()).toBe(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.retry).toMatchObject({ requestedAt, operatorStoppedAt: expect.any(String) });
+  expect(loadPipelines()[0]!.stateDetail).toContain("retry-stage to try again");
+  killedAt = null;
+  h.ports.runtimeSwitchKilled = async () => false;
+  h.ports.fallbackAccountIds = (_project, engine) => engine === "codex" ? ["default"] : [];
+  h.ports.conversationOperatorStopped = async () => false;
+  h.ports.stopStageAgent = async () => ({ outcome: "not-running" });
+  const retried = await patchPipeline(lane.id, retryRequest, h.ports, operator);
+  expect(retried.runtimeSwitch?.retry?.target).toMatchObject({ accountId: "default", fallbackReason: expect.stringContaining("project fallback") });
+  await drainRuntimeSwitches(h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.runtimeAccountFallbackReason).toContain("project fallback");
+});
+
+test("a fallback reason that changes after interrupt is refreshed before same-engine reconfigure", async () => {
+  const h = switchHarness();
+  const requested = await requestSwitch(h, { model: "opus" });
+  const { switchOperationKey } = await import("./runtimeSwitch");
+  let interrupted = false;
+  h.ports.fallbackAccountIds = () => interrupted ? ["default"] : [];
+  const control = h.ports.runtimeSwitchControl!;
+  h.ports.runtimeSwitchControl = async (...args) => {
+    const value = await control(...args);
+    if (args[2] === "interrupt") interrupted = true;
+    return value;
+  };
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const record = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!;
+  expect(record.phase).toBe("committed");
+  expect(record.to).toMatchObject({ accountId: "default", fallbackReason: expect.stringContaining("project fallback") });
+  expect(h.operations.get(switchOperationKey(requested.runtimeSwitch!, "reconfigure"))).toBe("reconfigure");
+  expect(h.continuations).toHaveLength(1);
+});
+
 for (const edit of ["binding before cut", "binding during cut", "pin"] as const) test(`November 17: a pending handoff reports its fallback and reselects after a change to the ${edit}`, async () => {
   const { selectProjectAccount } = await import("@/lib/accounts/projectSelection");
   const h = switchHarness("2026-11-17T06:10:50Z");

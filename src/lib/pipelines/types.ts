@@ -412,6 +412,8 @@ export type PipelineRuntimeSwitch = {
   /** Withdraws this attempt's execution authority before any teardown. */
   retry?: {
     requestedAt: string; reason: string; completedAt?: string; pendingReason?: string; operatorStoppedAt?: string;
+    /** Cleanup can receive a fresh bounded window on resume without moving the kill-evidence floor. */
+    cleanupRequestedAt?: string;
     /** The old attempt stays fenced. Only an explicit retry opens another cleanup window. */
     blockedAt?: string;
     /** A replacement selection never rewrites the seat bound to an issued operation key. */
@@ -457,6 +459,8 @@ export type PipelineStageAttempt = {
   runtimeEvidenceSince?: string;
   /** Explicit account policy for the live attempt after an apply-now edit. */
   runtimeAccountPin?: string | null;
+  /** Why automatic account selection chose this fallback for this attempt. */
+  runtimeAccountFallbackReason?: string;
   /** Answer that created this continuation; forces lease-free activation. */
   decisionAnswerId?: string;
   /** Lineage-adopted evidence. Historical attempts never drive the execution cursor. */
