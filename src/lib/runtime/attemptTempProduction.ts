@@ -71,7 +71,12 @@ export function recordingAttemptTempState(store: AttemptTempStore,
   authority: (owner: AttemptTempOwner, inventory: RepositoryLinkInventory) => Promise<AttemptTempAuthority> = attemptScratchAuthority) {
   return async (owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> => {
     const observed = await authority(owner, inventory);
-    store.noteRetentionEnd(owner.directory, observed);
+    const current = store.owner(owner.directory);
+    if (observed.isCurrent() && current?.pipelineId === owner.pipelineId && current.launchId === owner.launchId
+      && current.createdAt === owner.createdAt && !!current.retainUntilClose === !!owner.retainUntilClose) {
+      if (observed.state === "closed" || observed.state === "expired") store.noteRetentionEnd(owner.directory, observed);
+      else { store.retainRoot(owner.directory, null); store.rootEligible(owner.directory, false); }
+    }
     return observed.state;
   };
 }
@@ -100,15 +105,8 @@ export async function backfillAttemptTempRetention(store: AttemptTempStore, opti
             const before = store.retentionExpiry(owner.directory);
             store.noteRetentionEnd(owner.directory, observed);
             if (before !== store.retentionExpiry(owner.directory)) updated++;
-          } else if (observed.state === "live") store.retainRoot(owner.directory, null);
-          else {
-            const pipeline = pipelineRecordReader(owner.pipelineId).read();
-            if (pipeline && pipeline.state !== "closed" && pipeline.state !== "completed" && observed.isCurrent()) {
-              const before = store.retentionExpiry(owner.directory);
-              store.retainRoot(owner.directory, null);
-              if (before !== null) updated++;
-            }
-          }
+          } else { const before = store.retentionExpiry(owner.directory); store.retainRoot(owner.directory, null);
+            store.rootEligible(owner.directory, false); if (before !== null) updated++; }
         }
       }
     } catch (error) {
