@@ -14,6 +14,7 @@ export function registryArchiveRetirement(args: string[]) {
   const json = statePath("agent-registry.json");
   const backend = resolveRegistryBackend(json);
   if (backend.mode !== "sqlite") throw new Error("registry archive retirement requires the SQLite backend");
+  if (backend.pendingJsonImport) throw new Error("registry import is pending; wait for the serving writer to publish SQLite");
   const filename = backend.sqliteFilename ?? defaultRegistrySqliteFilename(json);
   const identity = databaseFileIdentity(filename);
   const db = new Database(filename,{ readonly: true });

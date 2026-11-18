@@ -33,6 +33,8 @@ copy. They are distinct from filesystem pages and actual backup write bytes.
 The backup explanation states that the current hourly backup is a full
 `VACUUM INTO`; the product has no incremental database backup.
 
+A pending JSON import is refused until the serving writer publishes SQLite.
+
 The dry run installs no schema and writes no registry records, ledger or approval.
 SQLite may create its normal WAL reader sidecars when opening a WAL database;
 it reads the committed WAL snapshot, including commits absent from the main file.
@@ -103,7 +105,7 @@ grace, trigger refusal, rollback, high-water marks, ID gaps, concurrent observer
 approval withdrawal, a missing guard, held views and the cycle cap. The same file
 runs against the minimum supported SQLite 3.39, including the child processes.
 The CLI tests cover pre-upgrade read-only reporting, stale approval, bad arguments
-and a missing database. `stateOwnership.entryPoints.test.ts` starts the real CLI
+a missing database and a pending import in default or explicit SQLite mode. `stateOwnership.entryPoints.test.ts` starts the real CLI
 with an operator-shaped disposable home and no owner token preset.
 
 ### Measured fixture result

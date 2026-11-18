@@ -15,9 +15,9 @@ function fixture() {
   for (const name of ["home","config","tmp"]) fs.mkdirSync(path.join(root,name));
   return { root,filename };
 }
-async function run(root: string, args: string[]) {
+async function run(root: string, args: string[], explicit = true) {
   const env = { ...process.env,HOME: path.join(root,"home"),XDG_CONFIG_HOME: path.join(root,"config"),
-    LLV_STATE_DIR: root,TMPDIR: path.join(root,"tmp"),LLV_STATE_OWNER: undefined,LLV_AGENT_REGISTRY_SQLITE: "sqlite",
+    LLV_STATE_DIR: root,TMPDIR: path.join(root,"tmp"),LLV_STATE_OWNER: undefined,LLV_AGENT_REGISTRY_SQLITE: explicit ? "sqlite" : undefined,DELEGATUS_AGENT_REGISTRY_SQLITE: undefined,
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9" };
   const child = Bun.spawn([process.execPath,"scripts/registry-archive-retirement.ts",...args],{ env,stdout: "pipe",stderr: "pipe" });
   const [code,out,error] = await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);
@@ -64,4 +64,23 @@ test("invalid arguments and missing databases fail without creating an approval"
   for (const name of ["home","config","tmp"]) fs.mkdirSync(path.join(missing,name));
   const result = await run(missing,["--dry-run"]);
   expect(result.code).toBe(1); expect(fs.existsSync(path.join(missing,"agent-registry.sqlite"))).toBe(false);
+});
+
+
+test("a pending JSON import refuses reports and approval in explicit and default SQLite modes", async () => {
+  const { root,filename } = fixture();
+  fs.writeFileSync(path.join(root,"agent-registry.json"),JSON.stringify({ version: 2,entries: {},receipts: {} }));
+  for (const mode of ["off","dual-write"]) {
+    fs.writeFileSync(path.join(root,"agent-registry.backend.json"),JSON.stringify({ schemaVersion: 1,mode,
+      sqliteFile: mode === "off" ? null : "agent-registry.sqlite",publishedAt: "2026-10-01T00:00:00Z" }));
+    for (const explicit of [false,true]) {
+      const before = tree(root);
+      for (const args of [["--dry-run"],["--approve","0".repeat(64)]]) {
+        const result = await run(root,args,explicit);
+        expect(result.code).toBe(1); expect(result.error).toContain("registry import is pending");
+        expect(tree(root)).toEqual(before);
+        expect(fs.existsSync(retirementApprovalFile(filename))).toBe(false);
+      }
+    }
+  }
 });
