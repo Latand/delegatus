@@ -1,7 +1,6 @@
 import path from "node:path";
 
-import type { AgentRegistry } from "@/lib/agent/registry";
-type RegistrySnapshot = ReturnType<AgentRegistry["readOnlySnapshot"]>;
+import type { McpCallerRegistryRows } from "@/lib/agent/registry";
 import type { ProcessIdentity, ProcessIdentityStatus } from "@/lib/processIdentity";
 
 export type NativeCallerReason =
@@ -37,7 +36,7 @@ export interface NativeCallerSources {
   bootTime(): number | null;
   processStartedAt(pid: number): number | null;
   sessionHeldElsewhere(sessionId: string, pid: number): boolean;
-  snapshot(): Pick<RegistrySnapshot, "conversations" | "entries">;
+  snapshot(sessionId: string): McpCallerRegistryRows | null;
   generationProof(pid: number, transcript: string): string | null;
   association(evidence: NativeAdmissionEvidence): { status: "approved" | "waiting" | "refused"; proof: string };
   cwd(pid: number): string | null;
@@ -92,7 +91,9 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
       return refuse("record-predates-process");
     }
     if (sources.sessionHeldElsewhere(record.sessionId, pid)) return refuse("session-held-twice");
-    const snapshot = sources.snapshot();
+    const snapshot = sources.snapshot(record.sessionId);
+    if (!snapshot) return refuse("session-record-invalid");
+    if (snapshot.nativeGenerationAmbiguous) return refuse("generation-ambiguous");
     const matches = Object.values(snapshot.conversations).flatMap((conversation) => conversation.engine === "claude"
       ? conversation.generations.filter((generation) => generation.id === record.sessionId).map((generation) => ({ conversation, generation })) : []);
     if (!matches.length) return refuse("session-not-scanned");
@@ -107,11 +108,12 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
     const relative = transcript && projects ? path.relative(projects, transcript) : null;
     if (!transcript || !relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)
       || path.basename(transcript) !== `${record.sessionId}.jsonl`) return refuse("transcript-outside-home");
+    if (snapshot.nativeHostsIncomplete) return refuse("generation-hosted");
     for (const entry of Object.values(snapshot.entries)) {
+      if (!entry.structuredHost) continue;
       if (entry.artifactPath !== generation.path && sources.realpath(entry.artifactPath) !== transcript) continue;
-      const host = entry.structuredHost?.process;
-      if (entry.structuredHost && !host?.pid) return refuse("generation-hosted");
-      if (host?.pid && sources.hostStatus(host) !== "dead") return refuse("generation-hosted");
+      const host = entry.structuredHost.process;
+      if (!host?.pid || sources.hostStatus(host) !== "dead") return refuse("generation-hosted");
     }
     const recordBytes = JSON.stringify(record);
     const generationProof = sources.generationProof(pid, transcript);

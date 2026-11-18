@@ -7,8 +7,11 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { structuredHostFixture } from "@/lib/agent/registryTestFixtures";
 import { liveRootSession } from "@/lib/root/adopt";
 import { attentionCallerAuthority } from "@/lib/attention/callerAuthority";
+import { resolveNativeCaller, type NativeCallerSources } from "@/lib/attention/nativeCaller";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { hostedConversationsFromSnapshot, attentionCallerSources, productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } from "./bindings";
 import { runAsMcpHttpCaller } from "./callerContext";
+import { nativePeerProof, verifyNativePeer } from "./nativePeer";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, MUTATING_MCP_TOOL_NAMES, type McpToolBindings } from "./server";
 import crypto from "node:crypto";
 
@@ -234,6 +237,122 @@ test("credentialless calls inspect only the ancestry cohort as unrelated history
     }
     const miss = runAsMcpHttpCaller({}, () => attentionCallerAuthority(attentionCallerSources(f.registry, probe)));
     expect(miss).toMatchObject({ kind: "unidentified", admission: { reason: "no-claude-ancestor" } });
+  }
+});
+
+test.skipIf(process.platform !== "linux")("a shared transcript path gives neither of its live ancestry owners authority", async () => {
+  const f = fixture(1);
+  const peer = captureProcessIdentity(process.pid);
+  const db = new Database(f.sqliteFilename);
+  const other = "conversation_history_1";
+  db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.structuredHost',json(?)) WHERE collection='entries' AND row_key=?")
+    .run(JSON.stringify(structuredHostFixture(peer, "codex-app-server")), `codex:${session}`);
+  const body = JSON.stringify({ name: "list_tasks", arguments: {} });
+  const proof = await nativePeerProof(body);
+  const prior = process.env.LLV_SPAWN_CAPABILITY;
+  delete process.env.LLV_SPAWN_CAPABILITY;
+  try {
+    const verified = await verifyNativePeer(proof.header, body);
+    const stdio = () => attentionCallerAuthority(attentionCallerSources(f.registry));
+    const http = () => runAsMcpHttpCaller({ nativePeer: verified }, stdio);
+    const authority = { kind: "worker", conversationId: id, role: "worker" } as const;
+    expect(stdio()).toEqual(authority);
+    expect(http()).toEqual(authority);
+    db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.generations',json(?)) WHERE collection='conversations' AND row_key=?")
+      .run(JSON.stringify([{ id: "retained-generation", path: transcript, launchProfile: { role: "root" } }]), other);
+    const order = db.query("UPDATE registry_rows SET row_order=? WHERE collection='conversations' AND row_key=?");
+    for (const first of [0, 1]) {
+      order.run(first, id);
+      order.run(1 - first, other);
+      for (const call of [stdio, http]) {
+        expect(call()).toMatchObject({ kind: "unidentified", admission: { reason: "ancestry-ambiguous" } });
+      }
+      let probes = 0;
+      const changingProbe = {
+        pidAlive: () => true, bootEpoch: () => peer.bootEpoch ?? null,
+        processIdentity: () => ++probes === 1 ? peer.startIdentity : null,
+      };
+      expect(attentionCallerAuthority(attentionCallerSources(f.registry, changingProbe, () => [peer.pid])))
+        .toMatchObject({ kind: "unidentified", admission: { reason: "ancestry-ambiguous" } });
+      expect(probes).toBe(1);
+    }
+    db.query("DELETE FROM registry_rows WHERE collection='conversations' AND row_key=?").run(other);
+    expect(http()).toEqual(authority);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_SPAWN_CAPABILITY;
+    else process.env.LLV_SPAWN_CAPABILITY = prior;
+    db.close();
+    proof.close();
+  }
+});
+
+test.skipIf(process.platform !== "linux")("approved native generations read only their key and possible structured host aliases", () => {
+  for (const history of [10, 1000]) {
+    const f = fixture(history);
+    const home = path.dirname(f.sqliteFilename);
+    const projectsDir = path.join(home, "projects");
+    const nativePath = path.join(projectsDir, `${session}.jsonl`);
+    const alias = path.join(home, "host-alias.jsonl");
+    const unrelated = path.join(home, "unrelated.jsonl");
+    fs.mkdirSync(projectsDir);
+    fs.writeFileSync(nativePath, "");
+    fs.writeFileSync(unrelated, "");
+    const db = new Database(f.sqliteFilename);
+    try {
+      const nativeId = "conversation_external";
+      const row = { id: nativeId, engine: "claude", updatedAt: stamp,
+        generations: [{ id: session, path: nativePath, archivedAt: null, launchProfile: { role: "worker" } }] };
+      const put = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('conversations',?,?,?)");
+      put.run(nativeId, JSON.stringify(row), history + 1);
+      f.registry.readOnlySnapshot = () => { throw new Error("native authority opened the whole registry"); };
+      let realpaths = 0;
+      let checkedGenerations = 0;
+      const sources: NativeCallerSources = {
+        platform: "linux", ancestry: () => [99, 42], isClaude: pid => pid === 42,
+        hostStamp: () => null, home: () => home, accounts: () => [{ home, projectsDir }],
+        realpath: file => { realpaths++; try { return fs.realpathSync(file); } catch { return null; } },
+        record: () => ({ kind: "record", value: { pid: 42, sessionId: session, procStart: "100", pidDomain: "fixture-domain", startedAt: 11_000, kind: "interactive" } }),
+        identity: () => "42:100", domain: () => "fixture-domain", bootTime: () => 10_000, processStartedAt: () => 11_000,
+        sessionHeldElsewhere: () => false, cwd: () => home,
+        snapshot: sessionId => f.registry.mcpNativeCallerSnapshot(sessionId, null).snapshot,
+        generationProof: () => { checkedGenerations++; return "fixture-generation"; },
+        association: () => ({ status: "approved", proof: "fixture-approved" }), hostStatus: () => "alive",
+      };
+      const admitted = { kind: "admitted", conversationId: nativeId, proof: "fixture-approved" } as const;
+      for (let run = 0; run < 2; run++) {
+        f.reset(); realpaths = 0; checkedGenerations = 0;
+        expect(resolveNativeCaller(sources)).toEqual(admitted);
+        expect(f.count()).toBeLessThanOrEqual(2);
+        expect(realpaths).toBe(5);
+        expect(checkedGenerations).toBe(3);
+      }
+
+      fs.symlinkSync(nativePath, alias);
+      db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.artifactPath',?) WHERE collection='entries' AND row_key=?")
+        .run(alias, `codex:${session}`);
+      expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-hosted" });
+      db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.structuredHost.process',json('null')) WHERE collection='entries' AND row_key=?")
+        .run(`codex:${session}`);
+      expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-hosted" });
+      fs.unlinkSync(alias);
+      fs.symlinkSync(unrelated, alias);
+      expect(resolveNativeCaller(sources)).toEqual(admitted);
+
+      const duplicate = "conversation_external_duplicate";
+      put.run(duplicate, JSON.stringify({ ...row, id: duplicate }), history + 2);
+      expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-ambiguous" });
+      db.query("DELETE FROM registry_rows WHERE collection='conversations' AND row_key=?").run(duplicate);
+      expect(resolveNativeCaller(sources)).toEqual(admitted);
+      if (history > 256) {
+        db.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.structuredHost',json(?))
+          WHERE collection='entries' AND row_key LIKE 'history:%'`).run(JSON.stringify(structuredHostFixture(null)));
+        realpaths = 0;
+        expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-hosted" });
+        expect(realpaths).toBe(4);
+      }
+    } finally {
+      db.close();
+    }
   }
 });
 

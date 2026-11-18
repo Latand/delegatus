@@ -1359,35 +1359,38 @@ function rootSessionSource(): RootSessionSource {
  * carried null pids while its host was alive resolved to "unidentified" and was
  * refused every manager-only tool.
  */
-type CallerHost = NonNullable<NonNullable<RegistrySnapshot["entries"][string]["structuredHost"]>["process"]>;
-interface CallerRecord { conversationId: string; role: string | null; hosts: (CallerHost | null)[] }
-function callerRecordsFromSnapshot(snapshot: Pick<RegistrySnapshot, "conversations" | "entries">): CallerRecord[] {
-  const owners = new Map<string, string>();
-  const hosted = new Map<string, CallerRecord>();
-  for (const conversation of Object.values(snapshot.conversations)) {
-    for (const generation of conversation.generations) owners.set(generation.path, conversation.id);
-    hosted.set(conversation.id, { conversationId: conversation.id, role: conversationRole(conversation), hosts: [] });
-  }
-  for (const entry of Object.values(snapshot.entries)) {
-    const owner = owners.get(entry.artifactPath);
-    if (owner) hosted.get(owner)!.hosts.push(entry.structuredHost?.process ?? null);
-  }
-  return [...hosted.values()];
-}
-function hostedFromRecords(records: CallerRecord[], probe?: ProcessIdentityProbe) {
-  return records.map(({ hosts, ...conversation }) => ({ ...conversation, pids: hosts.filter(host => {
-    if (!host || typeof host.pid !== "number" || host.pid <= 0) return false;
-    if (!probe) return true;
-    const startIdentity = probe.processIdentity(host.pid);
-    return host.startIdentity != null && startIdentity != null && probe.pidAlive(host.pid)
-      && sameRecordedProcessIdentity({ pid: host.pid, startIdentity, bootEpoch: probe.bootEpoch() }, host);
-  }).map(host => host!.pid) }));
-}
+interface HostedCallerRecord { conversationId: string; role: string | null; pids: number[] }
 export function hostedConversationsFromSnapshot(
   snapshot: Pick<RegistrySnapshot, "conversations" | "entries">,
   probe?: ProcessIdentityProbe,
-): { conversationId: string; role: string | null; pids: number[] }[] {
-  return performanceSpans.sync("mcp.caller-enumeration", () => hostedFromRecords(callerRecordsFromSnapshot(snapshot), probe));
+): HostedCallerRecord[] {
+  return performanceSpans.sync("mcp.caller-enumeration", () => {
+    const hosted: HostedCallerRecord[] = [];
+    const owners = new Map<string, Set<HostedCallerRecord>>();
+    for (const conversation of Object.values(snapshot.conversations)) {
+      const record: HostedCallerRecord = { conversationId: conversation.id, role: conversationRole(conversation), pids: [] };
+      hosted.push(record);
+      for (const generation of conversation.generations) {
+        let matches = owners.get(generation.path);
+        if (!matches) owners.set(generation.path, matches = new Set());
+        matches.add(record);
+      }
+    }
+    for (const entry of Object.values(snapshot.entries)) {
+      const matches = owners.get(entry.artifactPath);
+      const host = entry.structuredHost?.process;
+      if (!matches || !host || typeof host.pid !== "number" || host.pid <= 0) continue;
+      if (probe) {
+        const startIdentity = probe.processIdentity(host.pid);
+        if (host.startIdentity == null || startIdentity == null || !probe.pidAlive(host.pid)
+          || !sameRecordedProcessIdentity({ pid: host.pid, startIdentity, bootEpoch: probe.bootEpoch() }, host)) continue;
+      }
+      // Every owner of the path sees the same live proof. Attribution refuses
+      // if that proof names more than one conversation.
+      for (const match of matches) match.pids.push(host.pid);
+    }
+    return hosted;
+  });
 }
 
 /** The value of the launch-injected spawn capability, resolved to the
@@ -1437,15 +1440,13 @@ export function attentionCallerSources(
   const configuredRoot = () => process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null;
   let selected: ReturnType<typeof registry.mcpCallerSnapshot> | undefined;
   const selection = () => selected ??= registry.mcpCallerSnapshot(callerId(), callerAncestry(), configuredRoot());
-  let nativeSnapshot: RegistrySnapshot | undefined;
+  let nativeSelection: ReturnType<typeof registry.mcpNativeCallerSnapshot> | undefined;
   return {
     /* An HTTP call is served from the Viewer's own process, whose ancestry
        leads to no agent host; the capability alone names that caller, exactly
        as it does for a stdio agent whose host pids were never recorded. */
     ancestry: callerAncestry,
-    rootConversationId: () => nativeSnapshot
-      ? registry.mcpCallerSnapshot(null, [], configuredRoot()).rootConversationId
-      : selection().rootConversationId,
+    rootConversationId: () => (nativeSelection ?? selection()).rootConversationId,
     hosted: () => {
       const snapshot = selection().snapshot;
       return snapshot ? hostedConversationsFromSnapshot(snapshot, probe) : null;
@@ -1454,11 +1455,16 @@ export function attentionCallerSources(
     nativeCaller: () => {
       if (httpCaller && (!httpCaller.nativePeer || processIdentityStatus(httpCaller.nativePeer) !== "alive")) return nativeCallerRefusal("no-claude-ancestor");
       if (procBackend.name !== "linux") return nativeCallerRefusal("platform-unverified");
-      try { return resolveNativeCaller(nativeCallerSources(() => nativeSnapshot = registry.readOnlySnapshot(), httpCaller?.nativePeer?.pid)); }
+      try {
+        return resolveNativeCaller(nativeCallerSources(sessionId => {
+          nativeSelection = registry.mcpNativeCallerSnapshot(sessionId, configuredRoot());
+          return nativeSelection.snapshot;
+        }, httpCaller?.nativePeer?.pid));
+      }
       catch { return nativeCallerRefusal("session-record-invalid"); }
     },
     nativeConversation: id => {
-      const conversation = nativeSnapshot?.conversations[id];
+      const conversation = nativeSelection?.snapshot?.conversations[id];
       return conversation ? { conversationId: conversation.id, role: conversationRole(conversation), pids: [] } : null;
     },
     capabilityCallerConversationId: callerId,

@@ -23,7 +23,7 @@ import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migratio
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
-import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
+import type { AgentRegistryEntry, ConversationAuthorityFacts, McpCallerRegistryRows, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
 import { sessionKeyId } from "./sessionKey";
 import { drainRegistryEndingChanges, endingInstant, OWNER_ENDINGS_CURSOR, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared, RETIRED_ENDING_TRIGGERS } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
@@ -249,6 +249,8 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
   db.exec("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('termination_projection_version','4')");
 }
 
+// Keep this predicate aligned with the kinds accepted by normalizeStructuredHost.
+const nativeCallerHost = "collection='entries' AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp')";
 const registryCallerIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_caller_roots_latest ON registry_caller_roots(updated_at DESC,row_order DESC)",
   "CREATE INDEX IF NOT EXISTS registry_caller_structured_pid ON registry_rows(collection,json_extract(value_json,'$.structuredHost.process.pid'),row_order)",
@@ -256,6 +258,7 @@ const registryCallerIndexes = declaredIndexes([
     WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid') IS NOT NULL
       AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
         OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS registry_caller_native_hosts ON registry_rows(row_key) WHERE ${nativeCallerHost}`,
 ]);
 
 // An oversized identity cohort cannot establish the caller. Read one extra
@@ -1839,25 +1842,12 @@ export class SqliteAgentRegistryStore {
 
   /** The capability's role, plus independent ancestry evidence by artifact.
       Both selectors read the same registry transaction. */
-  mcpCallerSnapshot(conversationId: string | null, ancestry: readonly number[], configuredRootId: string | null): {
-    snapshot: Pick<RegistryFile, "conversations" | "entries"> | null; rootConversationId: string | null;
-  } {
-    this.db.exec("BEGIN");
-    try {
-      const read = (collection: "conversations" | "entries", key: string) => {
-        const row = this.db.query<{ value_json: string; row_order: number }, [string, string]>(
-          "SELECT value_json,row_order FROM registry_rows WHERE collection=? AND row_key=?").get(collection, key);
-        this.onRowPayloadRead?.(collection, row ? 1 : 0);
-        return row ? { value: this.parseRow(collection, key, row.value_json, true), order: row.row_order } : null;
-      };
+  mcpCallerSnapshot(conversationId: string | null, ancestry: readonly number[], configuredRootId: string | null) {
+    return this.readMcpCallerSnapshot(configuredRootId, () => {
       const ids = new Set(conversationId ? [conversationId] : []);
       const ancestryEntries = new Map<string, string>();
       const selectedPaths = new Set<string>();
       let candidatesLeft = MCP_CALLER_CANDIDATE_LIMIT;
-      const refuse = () => {
-        this.db.exec("COMMIT");
-        return { snapshot: null, rootConversationId: null };
-      };
       for (const pid of new Set(ancestry)) {
         // Normalization can use exitProcess for a host with a retained scope
         // or memory unit. Treat its PID as a candidate until normalization
@@ -1872,7 +1862,7 @@ export class SqliteAgentRegistryStore {
                 OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)
               AND COALESCE(json_type(value_json,'$.structuredHost.process.pid'),'null') NOT IN ('integer','real')
           LIMIT ?`).all(pid, pid, candidatesLeft + 1);
-        if (entries.length > candidatesLeft) return refuse();
+        if (entries.length > candidatesLeft) return null;
         candidatesLeft -= entries.length;
         for (const { row_key, path } of entries) {
           if (typeof path !== "string") continue;
@@ -1881,16 +1871,16 @@ export class SqliteAgentRegistryStore {
           selectedPaths.add(path);
           const owners = this.db.query<{ conversation_id: string }, [string, number]>(
             "SELECT conversation_id FROM registry_generation_identities WHERE path=? LIMIT ?").all(path, candidatesLeft + 1);
-          if (owners.length > candidatesLeft) return refuse();
+          if (owners.length > candidatesLeft) return null;
           candidatesLeft -= owners.length;
           for (const owner of owners) ids.add(owner.conversation_id);
         }
       }
-      const selected = [...ids].flatMap(id => { const row = read("conversations", id); return row ? [{ id, ...row }] : []; })
-        .sort((a, b) => a.order - b.order);
-      const snapshot: Pick<RegistryFile, "conversations" | "entries"> = { conversations: {}, entries: {} };
+      const snapshot: McpCallerRegistryRows = { conversations: {}, entries: {} };
       const generationPaths = new Set<string>();
-      for (const { id, value } of selected) {
+      for (const id of ids) {
+        const value = this.readMcpCallerRow("conversations", id);
+        if (!value) continue;
         const conversation = this.normalizePartial({ version: 2, entries: {}, receipts: {}, conversations: { [id]: value } }).conversations[id];
         if (!conversation) continue;
         snapshot.conversations[id] = conversation;
@@ -1898,13 +1888,63 @@ export class SqliteAgentRegistryStore {
       }
       for (const [entryKey, artifact] of ancestryEntries) {
         if (!generationPaths.has(artifact)) continue;
-        const entry = read("entries", entryKey);
+        const entry = this.readMcpCallerRow("entries", entryKey);
         if (!entry) continue;
-        const normalized = this.normalizePartial({ version: 2, entries: { [entryKey]: entry.value }, receipts: {} }).entries[entryKey];
+        const normalized = this.normalizePartial({ version: 2, entries: { [entryKey]: entry }, receipts: {} }).entries[entryKey];
         if (normalized?.artifactPath === artifact) snapshot.entries[entryKey] = normalized;
       }
-      const configured = configuredRootId && this.db.query("SELECT 1 FROM registry_rows WHERE collection='conversations' AND row_key=?").get(configuredRootId);
-      const rootConversationId = configured ? configuredRootId : this.db.query<{ conversation_id: string }, []>(
+      return snapshot;
+    });
+  }
+
+  /** A native Claude generation is engine-qualified. Only structured hosts
+      can conflict with its transcript, including hosts recorded under aliases. */
+  mcpNativeCallerSnapshot(sessionId: string, configuredRootId: string | null) {
+    return this.readMcpCallerSnapshot(configuredRootId, () => {
+      const claims = this.db.query<{ conversation_id: string }, [string]>(
+        "SELECT conversation_id FROM registry_generation_identities WHERE entry_key=? LIMIT 2",
+      ).all(sessionKeyId({ engine: "claude", sessionId }));
+      const snapshot: McpCallerRegistryRows = { conversations: {}, entries: {} };
+      if (claims.length > 1) snapshot.nativeGenerationAmbiguous = true;
+      if (claims.length !== 1) return snapshot;
+      const id = claims[0]!.conversation_id;
+      const value = this.readMcpCallerRow("conversations", id);
+      if (!value) return snapshot;
+      snapshot.conversations = this.normalizePartial({ version: 2, entries: {}, receipts: {}, conversations: { [id]: value } }).conversations;
+
+      // The archive preserves the same payload in registry_rows. A structured
+      // reservation is relevant even without a PID. Canonical path comparison
+      // must also see entries whose recorded path differs from the transcript.
+      const hosts = this.db.query<{ row_key: string; value_json: string }, [number]>(`
+        SELECT row_key,value_json FROM registry_rows INDEXED BY registry_caller_native_hosts
+        WHERE ${nativeCallerHost} LIMIT ?`).all(MCP_CALLER_CANDIDATE_LIMIT + 1);
+      this.onRowPayloadRead?.("entries", hosts.length);
+      if (hosts.length > MCP_CALLER_CANDIDATE_LIMIT) {
+        snapshot.nativeHostsIncomplete = true;
+        return snapshot;
+      }
+      const entries = Object.fromEntries(hosts.map(row => [row.row_key, this.parseRow("entries", row.row_key, row.value_json, true)]));
+      snapshot.entries = this.normalizePartial({ version: 2, receipts: {}, entries }).entries;
+      return snapshot;
+    });
+  }
+
+  private readMcpCallerRow(collection: "conversations" | "entries", key: string) {
+    const row = this.db.query<{ value_json: string }, [string, string]>(
+      "SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?").get(collection, key);
+    this.onRowPayloadRead?.(collection, row ? 1 : 0);
+    return row ? this.parseRow(collection, key, row.value_json, true) : null;
+  }
+
+  private readMcpCallerSnapshot(configuredRootId: string | null, select: () => McpCallerRegistryRows | null): {
+    snapshot: McpCallerRegistryRows | null; rootConversationId: string | null;
+  } {
+    this.db.exec("BEGIN");
+    try {
+      const snapshot = select();
+      const configured = snapshot && configuredRootId
+        && this.db.query("SELECT 1 FROM registry_rows WHERE collection='conversations' AND row_key=?").get(configuredRootId);
+      const rootConversationId = !snapshot ? null : configured ? configuredRootId : this.db.query<{ conversation_id: string }, []>(
         "SELECT conversation_id FROM registry_caller_roots ORDER BY updated_at DESC,row_order DESC LIMIT 1").get()?.conversation_id ?? null;
       this.db.exec("COMMIT");
       return { snapshot, rootConversationId };
