@@ -7270,8 +7270,8 @@ export class AgentRegistry {
     });
   }
 
-  /** Caller identity reads only its generation keys, without a grant expansion. */
-  mcpCallerSnapshot(conversationId: string, ancestry: readonly number[], configuredRootId: string | null) {
+  /** Caller identity reads only the capability and ancestry candidates. */
+  mcpCallerSnapshot(conversationId: string | null, ancestry: readonly number[], configuredRootId: string | null) {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
       return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpCallerSnapshot(conversationId, ancestry, configuredRootId));
     }

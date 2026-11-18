@@ -5,7 +5,7 @@ type RegistrySnapshot = ReturnType<AgentRegistry["readOnlySnapshot"]>;
 import type { ProcessIdentity, ProcessIdentityStatus } from "@/lib/processIdentity";
 
 export type NativeCallerReason =
-  | "platform-unverified" | "no-claude-ancestor" | "capability-unresolved" | "capability-conflict"
+  | "platform-unverified" | "no-claude-ancestor" | "capability-unresolved" | "capability-conflict" | "ancestry-ambiguous"
   | "foreign-host" | "unknown-claude-home" | "session-record-missing" | "session-record-invalid"
   | "session-kind" | "process-identity-mismatch" | "domain-mismatch" | "record-predates-process"
   | "session-held-twice" | "session-not-scanned" | "generation-ambiguous"
@@ -149,6 +149,7 @@ const REASONS: Record<NativeCallerReason, string> = {
   "no-claude-ancestor": "This MCP server has no eligible Claude Code parent; HTTP callers need a launch credential.",
   "capability-unresolved": "The presented Delegatus launch credential is unrecognised or malformed. Start the session from this Delegatus.",
   "capability-conflict": "The process and launch credential name different conversations.",
+  "ancestry-ambiguous": "The registry could not establish a single conversation for the caller's process ancestry.",
   "foreign-host": "The Claude parent carries a Delegatus host stamp that this installation cannot attribute.",
   "unknown-claude-home": "The Claude parent's config directory is not a known account home.",
   "session-record-missing": "The Claude parent's session record is missing. Restart Claude Code.",

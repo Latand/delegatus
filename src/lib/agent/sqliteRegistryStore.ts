@@ -252,7 +252,15 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
 const registryCallerIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_caller_roots_latest ON registry_caller_roots(updated_at DESC,row_order DESC)",
   "CREATE INDEX IF NOT EXISTS registry_caller_structured_pid ON registry_rows(collection,json_extract(value_json,'$.structuredHost.process.pid'),row_order)",
+  `CREATE INDEX IF NOT EXISTS registry_caller_exit_pid ON registry_rows(json_extract(value_json,'$.structuredHost.exitProcess.pid'))
+    WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid') IS NOT NULL
+      AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
+        OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)`,
 ]);
+
+// An oversized identity cohort cannot establish the caller. Read one extra
+// candidate to distinguish a complete result from a truncated one.
+const MCP_CALLER_CANDIDATE_LIMIT = 256;
 
 /** State and recipient are equality seeks before the keyset bound and LIMIT. */
 export function openDeliverySelection(conversationId: string, state: string, after: string, limit: number) {
@@ -1829,10 +1837,10 @@ export class SqliteAgentRegistryStore {
     registryCallerIndexes.install(this.db, path.dirname(this.filename));
   }
 
-  /** One capability's generations, plus any independent ancestry evidence.
-      Raw identity fields do not consult grants or materialize their dependencies. */
-  mcpCallerSnapshot(conversationId: string, ancestry: readonly number[], configuredRootId: string | null): {
-    snapshot: Pick<RegistryFile, "conversations" | "entries">; rootConversationId: string | null;
+  /** The capability's role, plus independent ancestry evidence by artifact.
+      Both selectors read the same registry transaction. */
+  mcpCallerSnapshot(conversationId: string | null, ancestry: readonly number[], configuredRootId: string | null): {
+    snapshot: Pick<RegistryFile, "conversations" | "entries"> | null; rootConversationId: string | null;
   } {
     this.db.exec("BEGIN");
     try {
@@ -1842,45 +1850,58 @@ export class SqliteAgentRegistryStore {
         this.onRowPayloadRead?.(collection, row ? 1 : 0);
         return row ? { value: this.parseRow(collection, key, row.value_json, true), order: row.row_order } : null;
       };
-      const ids = new Set([conversationId]);
-      const ancestryEntries = new Map<string, { path: string; owners: Set<string> }>();
+      const ids = new Set(conversationId ? [conversationId] : []);
+      const ancestryEntries = new Map<string, string>();
+      const selectedPaths = new Set<string>();
+      let candidatesLeft = MCP_CALLER_CANDIDATE_LIMIT;
+      const refuse = () => {
+        this.db.exec("COMMIT");
+        return { snapshot: null, rootConversationId: null };
+      };
       for (const pid of new Set(ancestry)) {
-        const entries = this.db.query<{ row_key: string; path: string }, [number]>(`SELECT row_key,json_extract(value_json,'$.artifactPath') AS path
-          FROM registry_rows WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.process.pid')=? ORDER BY row_order`).all(pid);
+        // Normalization can use exitProcess for a host with a retained scope
+        // or memory unit. Treat its PID as a candidate until normalization
+        // and the process identity probe confirm it.
+        const entries = this.db.query<{ row_key: string; path: string | null }, [number, number, number]>(`
+          SELECT row_key,json_extract(value_json,'$.artifactPath') AS path FROM registry_rows
+            WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.process.pid')=?
+          UNION ALL
+          SELECT row_key,json_extract(value_json,'$.artifactPath') AS path FROM registry_rows
+            WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid')=?
+              AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
+                OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)
+              AND COALESCE(json_type(value_json,'$.structuredHost.process.pid'),'null') NOT IN ('integer','real')
+          LIMIT ?`).all(pid, pid, candidatesLeft + 1);
+        if (entries.length > candidatesLeft) return refuse();
+        candidatesLeft -= entries.length;
         for (const { row_key, path } of entries) {
-          const owners = new Set<string>();
-          for (const row of this.db.query<{ conversation_id: string }, [string]>(
-            "SELECT DISTINCT conversation_id FROM registry_generation_identities WHERE path=?").all(path)) {
-            ids.add(row.conversation_id);
-            owners.add(row.conversation_id);
-          }
-          if (owners.size) ancestryEntries.set(row_key, { path, owners });
+          if (typeof path !== "string") continue;
+          ancestryEntries.set(row_key, path);
+          if (selectedPaths.has(path)) continue;
+          selectedPaths.add(path);
+          const owners = this.db.query<{ conversation_id: string }, [string, number]>(
+            "SELECT conversation_id FROM registry_generation_identities WHERE path=? LIMIT ?").all(path, candidatesLeft + 1);
+          if (owners.length > candidatesLeft) return refuse();
+          candidatesLeft -= owners.length;
+          for (const owner of owners) ids.add(owner.conversation_id);
         }
       }
       const selected = [...ids].flatMap(id => { const row = read("conversations", id); return row ? [{ id, ...row }] : []; })
         .sort((a, b) => a.order - b.order);
       const snapshot: Pick<RegistryFile, "conversations" | "entries"> = { conversations: {}, entries: {} };
+      const generationPaths = new Set<string>();
       for (const { id, value } of selected) {
         const conversation = this.normalizePartial({ version: 2, entries: {}, receipts: {}, conversations: { [id]: value } }).conversations[id];
         if (!conversation) continue;
         snapshot.conversations[id] = conversation;
-        for (const generation of conversation.generations) {
-          const key = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
-          if (snapshot.entries[key]) continue;
-          const entry = read("entries", key);
-          if (entry) {
-            const normalized = this.normalizePartial({ version: 2, entries: { [key]: entry.value }, receipts: {} }).entries[key];
-            if (normalized && normalized.artifactPath === generation.path) snapshot.entries[key] = normalized;
-          }
-        }
-        const generationPaths = new Set(conversation.generations.map(generation => generation.path));
-        for (const [entryKey, evidence] of ancestryEntries) {
-          if (!evidence.owners.has(id) || !generationPaths.has(evidence.path) || snapshot.entries[entryKey]) continue;
-          const entry = read("entries", entryKey);
-          if (!entry) continue;
-          const normalized = this.normalizePartial({ version: 2, entries: { [entryKey]: entry.value }, receipts: {} }).entries[entryKey];
-          if (normalized && normalized.artifactPath === evidence.path) snapshot.entries[entryKey] = normalized;
-        }
+        for (const generation of conversation.generations) generationPaths.add(generation.path);
+      }
+      for (const [entryKey, artifact] of ancestryEntries) {
+        if (!generationPaths.has(artifact)) continue;
+        const entry = read("entries", entryKey);
+        if (!entry) continue;
+        const normalized = this.normalizePartial({ version: 2, entries: { [entryKey]: entry.value }, receipts: {} }).entries[entryKey];
+        if (normalized?.artifactPath === artifact) snapshot.entries[entryKey] = normalized;
       }
       const configured = configuredRootId && this.db.query("SELECT 1 FROM registry_rows WHERE collection='conversations' AND row_key=?").get(configuredRootId);
       const rootConversationId = configured ? configuredRootId : this.db.query<{ conversation_id: string }, []>(

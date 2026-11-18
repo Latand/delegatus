@@ -230,7 +230,7 @@ import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan, lastScannedFiles, lastScannedProjectCatalog, type FileScanSnapshot } from "@/lib/scanner/scanCache";
 import { completedScanForMcp } from "./completedScan";
 import { readCachedResourceSessions, readResources, readResourcesWithDiagnostic } from "@/lib/resources";
-import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
+import { adoptLiveRootSession, conversationRole, type RootSessionSource } from "@/lib/root/adopt";
 import { appendRoleMappingAudit, changedMappingRows, type RoleMappingAuditRow, roleLaunchChoices, roleMappingViolations, roleRegistryAnswer } from "@/lib/roles/mcpMapping";
 import { listRoles, resolveSpawnRole } from "@/lib/roles/registry";
 import { spawnSizingRefusal } from "@/lib/roles/sizing";
@@ -1390,22 +1390,6 @@ export function hostedConversationsFromSnapshot(
   return performanceSpans.sync("mcp.caller-enumeration", () => hostedFromRecords(callerRecordsFromSnapshot(snapshot), probe));
 }
 
-/** One legacy enumeration owner across compiled bundles. Snapshot identity
- * includes revision and database replacement; each call still verifies PIDs. */
-const LEGACY_CALLER_KEY = Symbol.for("llv.mcp.legacyCallerRecords");
-function legacyCallerMemo(snapshot: RegistrySnapshot, probe: ProcessIdentityProbe) {
-  const holder = globalThis as typeof globalThis & { [LEGACY_CALLER_KEY]?: { snapshot: RegistrySnapshot; boot: string | null; configuredRootId: string | null; rootConversationId: string | null; records: CallerRecord[] } };
-  const boot = probe.bootEpoch();
-  const configuredRootId = process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null;
-  let cached = holder[LEGACY_CALLER_KEY];
-  if (!cached || cached.snapshot !== snapshot || cached.boot !== boot || cached.configuredRootId !== configuredRootId) {
-    cached = holder[LEGACY_CALLER_KEY] = { snapshot, boot, configuredRootId,
-      rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null,
-      records: performanceSpans.sync("mcp.caller-enumeration", () => callerRecordsFromSnapshot(snapshot)) };
-  }
-  return cached;
-}
-
 /** The value of the launch-injected spawn capability, resolved to the
     conversation whose receipt holds its digest. Pure over its resolver so the
     admission lineage can be exercised without a registry on disk. */
@@ -1450,23 +1434,32 @@ export function attentionCallerSources(
   const callerAncestry = ancestry ?? (httpCaller ? () => httpCaller.nativePeer && processIdentityStatus(httpCaller.nativePeer) === "alive"
     ? processAncestry(httpCaller.nativePeer.pid, pid => procBackend.readPpid(pid)) : []
     : () => processAncestry(process.pid, pid => procBackend.readPpid(pid)));
+  const configuredRoot = () => process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null;
   let selected: ReturnType<typeof registry.mcpCallerSnapshot> | undefined;
-  const selection = () => selected ??= registry.mcpCallerSnapshot(callerId()!, callerAncestry(), process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null);
+  const selection = () => selected ??= registry.mcpCallerSnapshot(callerId(), callerAncestry(), configuredRoot());
+  let nativeSnapshot: RegistrySnapshot | undefined;
   return {
     /* An HTTP call is served from the Viewer's own process, whose ancestry
        leads to no agent host; the capability alone names that caller, exactly
        as it does for a stdio agent whose host pids were never recorded. */
     ancestry: callerAncestry,
-    rootConversationId: () => callerId() ? selection().rootConversationId
-      : legacyCallerMemo(registry.readOnlySnapshot(), probe).rootConversationId,
-    hosted: () => callerId() ? hostedConversationsFromSnapshot(selection().snapshot, probe)
-      : hostedFromRecords(legacyCallerMemo(registry.readOnlySnapshot(), probe).records, probe),
+    rootConversationId: () => nativeSnapshot
+      ? registry.mcpCallerSnapshot(null, [], configuredRoot()).rootConversationId
+      : selection().rootConversationId,
+    hosted: () => {
+      const snapshot = selection().snapshot;
+      return snapshot ? hostedConversationsFromSnapshot(snapshot, probe) : null;
+    },
     capabilityPresented: () => capability !== undefined,
     nativeCaller: () => {
       if (httpCaller && (!httpCaller.nativePeer || processIdentityStatus(httpCaller.nativePeer) !== "alive")) return nativeCallerRefusal("no-claude-ancestor");
       if (procBackend.name !== "linux") return nativeCallerRefusal("platform-unverified");
-      try { return resolveNativeCaller(nativeCallerSources(() => registry.readOnlySnapshot(), httpCaller?.nativePeer?.pid)); }
+      try { return resolveNativeCaller(nativeCallerSources(() => nativeSnapshot = registry.readOnlySnapshot(), httpCaller?.nativePeer?.pid)); }
       catch { return nativeCallerRefusal("session-record-invalid"); }
+    },
+    nativeConversation: id => {
+      const conversation = nativeSnapshot?.conversations[id];
+      return conversation ? { conversationId: conversation.id, role: conversationRole(conversation), pids: [] } : null;
     },
     capabilityCallerConversationId: callerId,
   };

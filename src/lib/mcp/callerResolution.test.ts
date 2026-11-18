@@ -39,7 +39,7 @@ function fixture(history: number) {
     put.run("receipts", "caller-launch", JSON.stringify({ launchId: "caller-launch", conversationId: id, spawnCapabilityDigest: digest }), 0);
     for (let n = 1; n <= history; n++) {
       put.run("conversations", `conversation_history_${n}`, JSON.stringify({ ...conversation, id: `conversation_history_${n}`, generations: [] }), n);
-      put.run("entries", `history:${n}`, JSON.stringify({ ...entry, artifactPath: `/history/${n}`, host: null }), n);
+      put.run("entries", `history:${n}`, JSON.stringify({ ...entry, artifactPath: `/history/${n}`, structuredHost: null }), n);
     }
   })(); db.close();
   let decoded = 0;
@@ -217,6 +217,89 @@ test("an ancestry entry with a stale generation key still conflicts with a forei
   });
 });
 
+test("credentialless calls inspect only the ancestry cohort as unrelated history grows", () => {
+  for (const history of [10, 1000]) {
+    const f = fixture(history);
+    const full = f.registry.readOnlySnapshot();
+    const expected = attentionCallerAuthority({
+      ancestry: () => [42], hosted: () => hostedConversationsFromSnapshot(full, probe), rootConversationId: () => null,
+    });
+    expect(expected).toEqual({ kind: "worker", conversationId: id, role: "worker" });
+    f.registry.readOnlySnapshot = () => { throw new Error("caller resolution opened the whole registry"); };
+    for (let run = 0; run < 2; run++) {
+      f.reset();
+      const legacy = runAsMcpHttpCaller({}, () => attentionCallerAuthority(attentionCallerSources(f.registry, probe, () => [42])));
+      expect(legacy).toEqual(expected);
+      expect(f.count()).toBeLessThanOrEqual(2);
+    }
+    const miss = runAsMcpHttpCaller({}, () => attentionCallerAuthority(attentionCallerSources(f.registry, probe)));
+    expect(miss).toMatchObject({ kind: "unidentified", admission: { reason: "no-claude-ancestor" } });
+  }
+});
+
+test("ancestry attributes a retained scope's exit identity without crossing engine namespaces", () => {
+  const f = fixture(10);
+  const db = new Database(f.sqliteFilename);
+  const other = "conversation_history_1";
+  db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.engine','claude','$.generations',json(?)) WHERE collection='conversations' AND row_key=?")
+    .run(JSON.stringify([{ id: session, path: `/claude/${session}.jsonl`, launchProfile: { role: "reviewer" } }]), other);
+  db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.structuredHost',json(?)) WHERE collection='entries' AND row_key=?")
+    .run(JSON.stringify({
+      ...structuredHostFixture(null, "codex-app-server"),
+      exitProcess: { pid: 42, startIdentity: "42:original", bootEpoch: "boot-fixture" },
+      scope: { unit: "delegatus-agent-fixture.scope", bootEpoch: "boot-fixture" },
+    }), `codex:${session}`);
+  db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('entries',?,?,?)").run(
+    `claude:${session}`, JSON.stringify({ key: { engine: "claude", sessionId: session }, artifactPath: `/claude/${session}.jsonl`,
+      structuredHost: structuredHostFixture({ pid: 44, startIdentity: "44:original", bootEpoch: "boot-fixture" }) }), 11);
+  db.close();
+  const probes = { ...probe, processIdentity: (pid: number) => `${pid}:original` };
+  for (const [pid, conversationId, role] of [[42, id, "worker"], [44, other, "reviewer"]] as const) {
+    const sources = () => attentionCallerSources(f.registry, probes, () => [pid]);
+    runAsMcpHttpCaller({}, () => {
+      const old = { ...sources(), hosted: () => hostedConversationsFromSnapshot(f.registry.readOnlySnapshot(), probes) };
+      const expected = { kind: "worker", conversationId, role };
+      expect(attentionCallerAuthority(old)).toEqual(expected);
+      expect(attentionCallerAuthority(sources())).toEqual(expected);
+    });
+  }
+  runAsMcpHttpCaller({ capability }, () => {
+    expect(attentionCallerAuthority(attentionCallerSources(f.registry, probes, () => [44, 42])))
+      .toMatchObject({ kind: "unidentified", admission: { reason: "capability-conflict" } });
+  });
+  const peer = new Database(f.sqliteFilename);
+  peer.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.structuredHost.process.pid',42,'$.structuredHost.process.startIdentity','42:original') WHERE collection='entries' AND row_key=?")
+    .run(`claude:${session}`);
+  peer.close();
+  for (const token of [undefined, capability]) {
+    const conflict = runAsMcpHttpCaller({ capability: token }, () => attentionCallerAuthority(attentionCallerSources(f.registry, probes, () => [42])));
+    expect(conflict).toMatchObject({ kind: "unidentified", admission: { reason: "ancestry-ambiguous" } });
+  }
+});
+
+test.each(["pid", "path"])("an oversized %s cohort refuses instead of trusting partial ancestry", (kind) => {
+  const f = fixture(257);
+  const db = new Database(f.sqliteFilename);
+  if (kind === "pid") {
+    db.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.structuredHost',json(?))
+      WHERE collection='entries' AND row_key LIKE 'history:%'`).run(
+      JSON.stringify(structuredHostFixture({ pid: 42, startIdentity: "42:original", bootEpoch: "boot-fixture" })),
+    );
+  } else {
+    db.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.generations',json(?))
+      WHERE collection='conversations' AND row_key LIKE 'conversation_history_%'`)
+      .run(JSON.stringify([{ id: session, path: transcript, launchProfile: { role: "worker" } }]));
+  }
+  db.close();
+  f.registry.readOnlySnapshot = () => { throw new Error("oversized ancestry fell back to a full registry"); };
+  for (const token of [undefined, capability]) {
+    f.reset();
+    const refusal = runAsMcpHttpCaller({ capability: token }, () => attentionCallerAuthority(attentionCallerSources(f.registry, probe, () => [42])));
+    expect(refusal).toMatchObject({ kind: "unidentified", admission: { reason: "ancestry-ambiguous", retryable: false } });
+    expect(f.count()).toBeLessThanOrEqual(1);
+  }
+});
+
 test("root ordering and configured-root precedence survive peer writes and reopen", () => {
   const f = fixture(10);
   const db = new Database(f.sqliteFilename);
@@ -303,44 +386,51 @@ test("ancestry and root selectors use scoped indexes", () => {
   db.close();
 });
 
-test("legacy enumeration memo belongs to one snapshot and boot, and resets in a fresh process", async () => {
+test("credentialless authority follows peer writes, process custody, and restart", async () => {
   const f = fixture(10);
   const driver = path.join(path.dirname(f.registry.filename), "legacy-memo.ts");
   fs.writeFileSync(driver, `
     import { Database } from "bun:sqlite";
     import { AgentRegistry } from ${JSON.stringify(path.resolve("src/lib/agent/registry.ts"))};
     import { attentionCallerSources } from ${JSON.stringify(path.resolve("src/lib/mcp/bindings.ts"))};
-    import { performanceSpans, performanceSites } from ${JSON.stringify(path.resolve("src/lib/performanceSpans.ts"))};
+    import { attentionCallerAuthority } from ${JSON.stringify(path.resolve("src/lib/attention/callerAuthority.ts"))};
+    import { runAsMcpHttpCaller } from ${JSON.stringify(path.resolve("src/lib/mcp/callerContext.ts"))};
     const r = new AgentRegistry(process.argv[2], undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: process.argv[3] });
-    delete process.env.LLV_SPAWN_CAPABILITY;
-    let boot = "boot-fixture", identity = "42:original", enumerations = 0;
-    const probe = { pidAlive: () => true, processIdentity: () => identity, bootEpoch: () => boot };
-    const site = performanceSites.indexOf("mcp.caller-enumeration");
-    performanceSpans.observeSite(value => { if (value === site) enumerations++; });
-    const read = () => attentionCallerSources(r, probe, () => [42]).hosted();
-    const counts = [];
-    counts.push(read().find(c => c.conversationId === "conversation_caller").pids.length);
-    read();
-    if (enumerations !== 1) throw new Error("legacy memo missed");
-    identity = "42:reused";
-    counts.push(read().find(c => c.conversationId === "conversation_caller").pids.length);
-    if (enumerations !== 1 || counts.join() !== "1,0") throw new Error("memo trusted a reused PID");
-    boot = "boot-next"; read();
-    if (enumerations !== 2) throw new Error("boot did not invalidate");
-    const writer = new Database(process.argv[3]);
-    writer.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.fixtureRevision',COALESCE(json_extract(value_json,'$.fixtureRevision'),0)+1) WHERE collection='conversations' AND row_key='conversation_caller'").run();
-    writer.close();
-    read();
-    if (enumerations !== 3) throw new Error("revision did not invalidate");
-    performanceSpans.observeSite(); r.close();
-    console.log("memo-ok");
+    r.readOnlySnapshot = () => { throw new Error("credentialless authority opened the whole registry"); };
+    let bootEpoch = "boot-fixture", identity = "42:original", alive = true, callerPid = 42;
+    const probe = { pidAlive: () => alive, processIdentity: () => identity, bootEpoch: () => bootEpoch };
+    const read = () => runAsMcpHttpCaller({}, () => attentionCallerAuthority(attentionCallerSources(r, probe, () => [callerPid])));
+    const assert = (kind, role) => {
+      const actual = read();
+      if (actual.kind !== kind || actual.role !== role) throw new Error(JSON.stringify(actual));
+    };
+    if (process.argv[4] === "reopen") {
+      callerPid = 43; identity = "43:replacement";
+      assert("worker", "reviewer");
+    } else {
+      assert("worker", "worker");
+      assert("worker", "worker");
+      alive = false; assert("unidentified"); alive = true;
+      identity = "42:reused"; assert("unidentified"); identity = "42:original";
+      bootEpoch = "boot-next"; assert("unidentified"); bootEpoch = "boot-fixture";
+      const writer = new Database(process.argv[3]);
+      const role = writer.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.generations[0].launchProfile.role',?) WHERE collection='conversations' AND row_key='conversation_caller'");
+      role.run("root"); assert("root");
+      role.run("reviewer"); assert("worker", "reviewer");
+      writer.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.structuredHost.process.pid',43,'$.structuredHost.process.startIdentity','43:replacement') WHERE collection='entries' AND row_order=0").run();
+      assert("unidentified");
+      callerPid = 43; identity = "43:replacement"; assert("worker", "reviewer");
+      writer.close();
+    }
+    r.close();
+    console.log("identity-ok");
   `);
-  for (let run = 0; run < 2; run++) {
-    const child = Bun.spawn([process.execPath, driver, f.registry.filename, f.sqliteFilename], {
-      env: { ...process.env, LLV_STATE_DIR: path.dirname(driver), LLV_SPAWN_CAPABILITY: undefined }, stdout: "pipe", stderr: "pipe",
+  for (const mode of ["initial", "reopen"]) {
+    const child = Bun.spawn([process.execPath, driver, f.registry.filename, f.sqliteFilename, mode], {
+      env: { ...process.env, LLV_STATE_DIR: path.dirname(driver), LLV_SPAWN_CAPABILITY: undefined, LLV_ROOT_CONVERSATION_ID: undefined }, stdout: "pipe", stderr: "pipe",
     });
     const [status, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect({ status, stderr }).toEqual({ status: 0, stderr: "" });
-    expect(stdout.trim()).toBe("memo-ok");
+    expect(stdout.trim()).toBe("identity-ok");
   }
 });
