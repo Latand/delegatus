@@ -350,5 +350,5 @@ resets the retention-backfill cursor. Fresh authority is still required at
 deletion. Copy expiries and recorded-check required-expiry admissions are
 unchanged. Reports expose `scratchPeriodDays: 1` and `evidencePeriodDays: 7`;
 the existing aggregate forecast remains a seven-day lookahead across both
-classes. Held manifest rows are rechecked in timestamp order on later invocations;
+classes. Held manifest rows rotate through durable journal order on later invocations;
 completed removal receipts remain sealed against replacement names.

@@ -142,9 +142,11 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
       let visited = 0;
       // Fresh rows go before interrupted ones so a bounded page of blocked
       // recoveries cannot starve the rest of the approved inventory.
+      const selected = new Map(proof.rows.map(root => [root.directory, root]));
+      // record() moves each admitted row to the durable tail. Reuse that
+      // order even when wall time is frozen or moves backwards.
       const ordered = [...proof.rows.filter(root => !rows.some(row => row.directory === root.directory)),
-        ...proof.rows.filter(root => rows.some(row => row.directory === root.directory)).sort((a, b) =>
-          rows.find(row => row.directory === a.directory)!.at.localeCompare(rows.find(row => row.directory === b.directory)!.at))];
+        ...rows.map(row => selected.get(row.directory)!)];
       for (const row of ordered) {
         const prior = rows.find(old => old.directory === row.directory);
         // A completed receipt cannot authorize a replacement with the same name.
