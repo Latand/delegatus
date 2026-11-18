@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { AttemptTempStore } from "./attemptTempRetention";
-import { savePipelines } from "../pipelines/store";
+import { pipelineIdentity, savePipelines } from "../pipelines/store";
 import { finishedLane } from "./attemptTempRetention.testSupport";
 import { plantKeepMarker } from "./keepMarker.testSupport";
 import { cleanupPressureFixtures, NOW, roots, realParentWorker, restoreEnvironment } from "./attemptTempPressure.testSupport";
@@ -19,7 +19,10 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
   let worker: ReturnType<typeof realParentWorker> | undefined;
   try {
     const ended = finishedLane(root, new Date(NOW - 3600_000).toISOString());
-    const live = { ...finishedLane(root, new Date(NOW - 3600_000).toISOString()), id: "live-lane", state: "running" as const };
+    const live = finishedLane(root, new Date(NOW - 3600_000).toISOString());
+    live.id = "live-lane"; Object.assign(live, pipelineIdentity(live.id, live.task, live.repoDir));
+    live.state = "running"; live.closedAt = null;
+    live.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
     savePipelines([ended, live]);
     for (let n = 0; n < count; n++) {
       const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`); directories.push(directory);
