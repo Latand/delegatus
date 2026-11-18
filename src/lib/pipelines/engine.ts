@@ -33,7 +33,7 @@ import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptP
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { buildReleaseTagPolicy } from "./releaseTagPolicy";
 import { controllerClosedHosts, controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
-import { startPipelineControllerJob, pipelineControllerJobLanes, waitForPipelineControllerJob } from "./controllerJobs";
+import { startPipelineControllerJob, pipelineControllerJobLanes, reportProvisioningPhase, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leasedOperationPorts, OperationLeaseExpiredError, operationPortIdentity, withoutOperationLease } from "@/lib/operationLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -11285,8 +11285,22 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           if (wait) return { code: 1, stdout: "", stderr: wait };
         }
         if (signal?.aborted) return { code: null, stdout: "", stderr: "pipeline provisioning cancelled" };
-        try { return await exec(command, args, cwd, signal, options); }
-        catch (error) { return { code: null, stdout: "", stderr: String(error) }; }
+        const step = command !== "git" ? null : args.includes("--git-common-dir") ? "common-directory"
+          : args[0] === "fetch" ? "fetch" : args[0] === "worktree" && args[1] === "add" ? "worktree-add" : null;
+        if (step === "common-directory") reportProvisioningPhase(job.pipeline.id, { phase: "state-validated" });
+        if (step) reportProvisioningPhase(job.pipeline.id, { phase: "git-started", step });
+        let succeeded = false;
+        try {
+          const result = await exec(command, args, cwd, signal, options);
+          succeeded = result.code === 0;
+          return result;
+        } catch (error) {
+          return { code: null, stdout: "", stderr: String(error) };
+        } finally {
+          if (step) reportProvisioningPhase(job.pipeline.id, {
+            phase: "git-finished", step, status: signal?.aborted ? "cancelled" : succeeded ? "ok" : "failed",
+          });
+        }
       };
       let releaseRepository: (() => void) | undefined;
       let repository: string | undefined, tail: Promise<void> | undefined;
@@ -15784,8 +15798,10 @@ async function admitPipelineFromRequest(
       if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
       const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
+      if (pipeline.state === "provisioning") reportProvisioningPhase(pipeline.id, { phase: "accepted", admission: "queued" }, entry.queuedAt);
       return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
     }
+    if (!replayed && created.state === "provisioning") reportProvisioningPhase(created.id, { phase: "accepted", admission: "direct" });
     return { pipeline: created, ...(replayed && options.conversationSource ? { replayed: true } : {}), ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   }
   return withPipelineMutation(async (pipelines, persist) => {
@@ -15815,6 +15831,7 @@ async function admitPipelineFromRequest(
     assignPipelineDelivery(pipeline, target, targetInput?.comparison);
     pipelines.push(pipeline);
     await persist();
+    if (pipeline.state === "provisioning") reportProvisioningPhase(pipeline.id, { phase: "accepted", admission: "direct" });
     return { pipeline, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   });
 }

@@ -2377,6 +2377,12 @@ export class SqliteStateCollection<T> {
       .get(now, JSON.stringify(excluded)));
   }
 
+  async recordPipelineTickSelection(work: PipelineTickWork): Promise<void> {
+    await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
+      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
+    });
+  }
+
   async acknowledgePipelineTick(work: PipelineTickWork, cursor: number, dueAt: number): Promise<void> {
     await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
       db.query("UPDATE pipeline_tick_work SET attempt_cursor=? WHERE row_key=?").run(cursor, work.row_key);
@@ -2386,7 +2392,6 @@ export class SqliteStateCollection<T> {
         (SELECT 1 FROM state_rows WHERE collection='pipelines' AND row_key=? AND controller_active=1)
         AND NOT EXISTS (SELECT 1 FROM pipeline_controller_work WHERE row_key=?)`)
         .run(work.row_key, work.generation, work.row_key, work.row_key);
-      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
     });
   }
 
@@ -2394,7 +2399,6 @@ export class SqliteStateCollection<T> {
     await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
       db.query("UPDATE pipeline_tick_work SET dirty=1,due_at=0 WHERE row_key=? AND generation=?")
         .run(work.row_key, work.generation);
-      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
     });
   }
 

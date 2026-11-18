@@ -59,18 +59,35 @@ export type PipelineTickWork = { row_key: string; row_order: number; generation:
  * It also covers runtime/account events that do not write a pipeline row. */
 export function selectPipelineTickWork(db: Database, now: number, excluded: readonly string[], limit: number): PipelineTickWork[] {
   if (!Number.isInteger(limit) || limit < 1 || limit > 4) throw new Error("invalid controller lane budget");
-  const skip = JSON.stringify(excluded);
-  const dirty = db.query<PipelineTickWork, [string, number]>(`SELECT * FROM pipeline_tick_work
-    WHERE dirty=1 AND row_key NOT IN (SELECT value FROM json_each(?))
-    ORDER BY row_order,row_key LIMIT ?`).all(skip, Math.max(1, limit - 2));
-  const due = db.query<PipelineTickWork, [number, string, number]>(`SELECT * FROM pipeline_tick_work
-    WHERE due_at<=? AND row_key NOT IN (SELECT value FROM json_each(?))
-    ORDER BY due_at,row_order,row_key LIMIT ?`).all(now, JSON.stringify([...excluded,...dirty.map(row=>row.row_key)]), Math.max(0, limit - dirty.length - 1));
-  const cursor = db.query<{ row_order: number; row_key: string }, []>("SELECT row_order,row_key FROM pipeline_tick_cursor WHERE id=1").get()!;
+  const cursor = db.query<{ row_order: number; row_key: string; ready: number }, [number]>(`SELECT row_order,row_key,
+    EXISTS (SELECT 1 FROM pipeline_tick_work work WHERE work.row_key=cursor.row_key AND (work.dirty=1 OR work.due_at<=?)) AS ready
+    FROM pipeline_tick_cursor cursor WHERE id=1`).get(now)!;
+  const priorityOrder = cursor.ready ? cursor.row_order : -1;
+  const priorityKey = cursor.ready ? cursor.row_key : "";
+  const dirtySkip = JSON.stringify(excluded);
+  const dirtyPage = (after: boolean, count: number) => db.query<PipelineTickWork, [number, string, string, number]>(`SELECT * FROM pipeline_tick_work
+    WHERE dirty=1 AND (row_order,row_key) ${after ? ">" : "<="} (?,?)
+      AND row_key NOT IN (SELECT value FROM json_each(?))
+    ORDER BY row_order,row_key LIMIT ?`).all(priorityOrder, priorityKey, dirtySkip, count);
+  // A deadline can leave the selected lane dirty. Resume past the last pick
+  // before wrapping back to it, including on the priority path.
+  const dirtyLimit = Math.max(1, limit - 2);
+  const dirty = dirtyPage(true, dirtyLimit);
+  if (dirty.length < dirtyLimit) dirty.push(...dirtyPage(false, dirtyLimit - dirty.length));
+  const dueSkip = JSON.stringify([...excluded, ...dirty.map(row => row.row_key)]);
+  const duePage = (after: boolean, count: number) => db.query<PipelineTickWork, [number, number, string, string, number]>(`SELECT * FROM pipeline_tick_work
+    WHERE due_at<=? AND (row_order,row_key) ${after ? ">" : "<="} (?,?)
+      AND row_key NOT IN (SELECT value FROM json_each(?))
+    ORDER BY due_at,row_order,row_key LIMIT ?`).all(now, priorityOrder, priorityKey, dueSkip, count);
+  const dueLimit = Math.max(0, limit - dirty.length - 1);
+  const due = dueLimit ? duePage(true, dueLimit) : [];
+  if (due.length < dueLimit) due.push(...duePage(false, dueLimit - due.length));
   const fairSkip = JSON.stringify([...excluded,...dirty.map(row=>row.row_key),...due.map(row=>row.row_key)]);
-  const fair = (order: number, key: string) => db.query<PipelineTickWork, [number, number, string, string, number]>(`SELECT * FROM pipeline_tick_work
-    WHERE row_order>=? AND (row_order>? OR row_key>?) AND row_key NOT IN (SELECT value FROM json_each(?))
-    ORDER BY row_order,row_key LIMIT ?`).all(order, order, key, fairSkip, limit - dirty.length - due.length);
-  const tail = fair(cursor.row_order, cursor.row_key);
-  return [...dirty,...due,...(tail.length ? tail : fair(-1,""))];
+  const fairPage = (after: boolean, count: number) => db.query<PipelineTickWork, [number, string, string, number]>(`SELECT * FROM pipeline_tick_work
+    WHERE (row_order,row_key) ${after ? ">" : "<="} (?,?) AND row_key NOT IN (SELECT value FROM json_each(?))
+    ORDER BY row_order,row_key LIMIT ?`).all(cursor.row_order, cursor.row_key, fairSkip, count);
+  const fairLimit = limit - dirty.length - due.length;
+  const fair = fairLimit ? fairPage(true, fairLimit) : [];
+  if (fair.length < fairLimit) fair.push(...fairPage(false, fairLimit - fair.length));
+  return [...dirty, ...due, ...fair];
 }

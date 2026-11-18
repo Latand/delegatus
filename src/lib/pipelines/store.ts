@@ -221,6 +221,9 @@ export async function pipelineRecoveryWindow(after: { row_order: number; row_key
 export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
   return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
 }
+export async function recordPipelineControllerSelection(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork) {
+  return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).recordPipelineTickSelection(work);
+}
 export async function deferPipelineControllerWork(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork) {
   return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).deferPipelineTick(work);
 }

@@ -5,9 +5,9 @@ import { assertOperationLease, awaitLeasedOperation, currentOperationLease } fro
 import type { FileEntry } from "@/lib/types";
 import { admitQueuedPipelineCreations } from "./creationQueue";
 import { tickPipelines, defaultPipelinePorts, type PipelinePorts } from "./engine";
-import { pipelineControllerJobLanes, takePipelineControllerJobChanges } from "./controllerJobs";
+import { pipelineControllerJobLanes, reportProvisioningPhase, takePipelineControllerJobChanges } from "./controllerJobs";
 import { withControllerPipelineScope } from "./controllerScope";
-import { controllerAttemptWindow, controllerPipelineVersion, deferPipelineControllerWork, acknowledgePipelineControllerWork, findControllerPipeline, selectPipelineControllerWork, pipelineControllerReady, PipelineStoreError } from "./store";
+import { controllerAttemptWindow, controllerPipelineVersion, deferPipelineControllerWork, acknowledgePipelineControllerWork, findControllerPipeline, recordPipelineControllerSelection, selectPipelineControllerWork, pipelineControllerReady, PipelineStoreError } from "./store";
 
 export const PIPELINE_CONTROLLER_ATTEMPTS_PER_LANE = 16;
 const owner = globalThis as typeof globalThis & { __llvPipelineControllerPass?: Promise<{ changed: boolean; pendingWork: number; readyWork: boolean }> };
@@ -30,8 +30,13 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
     for (const item of work) {
       assertOperationLease();
       try {
+        // A pass that loses its deadline during lane I/O still moves the
+        // scheduler cursor. Only acknowledgment clears its dirty generation.
+        await awaitLeasedOperation("recordPipelineControllerSelection", () => recordPipelineControllerSelection(item));
+        const selectedAt = Date.now();
         const version = await awaitLeasedOperation("controllerPipelineVersion", () => controllerPipelineVersion(item.row_key));
         const lane = await awaitLeasedOperation("findControllerPipeline", () => findControllerPipeline(item.row_key));
+        if (lane?.state === "provisioning") reportProvisioningPhase(item.row_key, { phase: "scheduler-selected" }, new Date(selectedAt).toISOString());
         const { window, current } = await awaitLeasedOperation("controllerAttemptWindow", () => controllerAttemptWindow(item.row_key, item.attempt_cursor, lane?.cursor?.stageId ?? ""));
         if (await awaitLeasedOperation("controllerPipelineVersion", () => controllerPipelineVersion(item.row_key)) !== version) throw new StateSnapshotChangedError();
         const refs = [...window];
@@ -44,7 +49,13 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
         changed ||= result.changed;
         if (result.retry) { await awaitLeasedOperation("deferPipelineControllerWork", () => deferPipelineControllerWork(item)); continue; }
         const fresh = await awaitLeasedOperation("findControllerPipeline", () => findControllerPipeline(item.row_key));
+        const firstStart = fresh?.runs[0]?.attempts[0]?.startedAt;
+        if (firstStart && !lane?.runs[0]?.attempts[0]?.startedAt) {
+          reportProvisioningPhase(item.row_key, { phase: "first-attempt" }, firstStart);
+        }
         let due = now + 30_000;
+        const provisionRetry = Date.parse(fresh?.provisioningWait?.retryAfter ?? "");
+        if (provisionRetry > now) due = Math.min(due, provisionRetry);
         for (const ref of refs) {
           const run = fresh?.runs[ref.run], attempt = run?.attempts[ref.attempt];
           if (run?.stageId !== ref.stageId || !attempt || attempt.n !== ref.n) continue;
