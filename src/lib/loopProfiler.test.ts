@@ -612,6 +612,51 @@ test("a native call made through a Bun module is credited to the repository fram
   expect(JSON.stringify(categories)).not.toContain("sqlite");
 });
 
+test("a native call through synchronous loop instrumentation names the first application caller", () => {
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [native("parse"),
+      { ...caller(174, 15), name: "sync", sourceURL: path.join(root, "src/lib/readAttribution.ts") },
+      { ...caller(104, 36), name: "sync", sourceURL: path.join(root, "src/lib/performanceSpans.ts") },
+      caller(8, 11), caller(9, 12)] },
+    { frames: [native("parse"),
+      { ...caller(1, 36), name: "delegatusReadAttributionSync" },
+      { ...caller(1, 53), name: "delegatusPerformanceSync" },
+      { ...caller(2, 11), name: "sync" }, caller(3, 12)] },
+  ] }, root);
+  expect(categories.callers).toEqual([
+    { native: "parse", positions: [[".next/server/chunks/57539.js:2:11", 1], [".next/server/chunks/57539.js:8:11", 1]] },
+  ]);
+});
+
+test("SQLite JSON parsing is credited to the row reader through both instrumentation wrappers", () => {
+  const sqliteSource = path.join(root, "src/lib/sqliteReadAttribution.ts");
+  const decode = { name: "decodeRow", sourceURL: path.join(root, "src/lib/agent/sqliteRegistryStore.ts"), line: 2125, column: 27 };
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [native("parse"),
+      { ...caller(122, 78), name: "", sourceURL: sqliteSource },
+      { ...caller(190, 20), name: "sync", sourceURL: path.join(root, "src/lib/readAttribution.ts") },
+      { ...caller(122, 27), name: "parseSqliteJson", sourceURL: sqliteSource }, decode] },
+    { frames: [native("parse"), native("bound parse"),
+      { ...caller(1, 203), name: "delegatusReadAttributionSync" },
+      { ...caller(1, 403), name: "delegatusSqliteInstrumentation" }, caller(5, 48)] },
+    { frames: [native("parse"), { ...caller(122, 78), name: "", sourceURL: sqliteSource }] },
+  ] }, root);
+  expect(categories.callers).toEqual([
+    { native: "parse", positions: [[".next/server/chunks/57539.js:5:48", 1], ["elsewhere", 1], ["src/lib/agent/sqliteRegistryStore.ts:2125:27", 1]] },
+  ]);
+});
+
+test("SQLite prepare passes through Bun and compiled SQLite instrumentation", () => {
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [native("prepare"),
+      { ...caller(347, 37), name: "prepare", sourceURL: "bun:sqlite" },
+      { ...caller(1, 215), name: "delegatusSqliteInstrumentation" },
+      { ...caller(1, 307), name: "delegatusReadAttributionSync" },
+      { ...caller(1, 418), name: "delegatusSqliteInstrumentation" }, caller(7, 12)] },
+  ] }, root);
+  expect(categories.callers).toEqual([{ native: "prepare", positions: [[".next/server/chunks/57539.js:7:12", 1]] }]);
+});
+
 test("the histogram stays within its byte budget for many files and callers", () => {
   const traces = Array.from({ length: 6000 }, (_, i) => i % 2
     ? { frames: [native(["structuredClone", "parse", "all", "stringify", "get"][i % 5]!), { name: "f", sourceURL: path.join(root, `.next/server/chunks/${"c".repeat(180)}${i % 300}.js`), line: 1, column: i + 1 }] }

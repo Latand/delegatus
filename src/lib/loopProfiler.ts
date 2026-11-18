@@ -136,6 +136,13 @@ function safeFile(sourceURL: string | undefined, root: string, known: Map<string
 }
 
 const runtimeModuleSource = /^(?:bun|node):|^builtin:\/\//;
+const instrumentationSources = new Set([
+  "src/lib/performanceSpans.ts", "src/lib/readAttribution.ts", "src/lib/sqliteReadAttribution.ts",
+]);
+// Bun reports displayName for these wrappers, including in minified Viewer chunks.
+const instrumentationFrameNames = new Set([
+  "delegatusPerformanceSync", "delegatusReadAttributionSync", "delegatusSqliteInstrumentation",
+]);
 
 /**
  * Where the sampled time went, by the leaf of each sample: a native function
@@ -164,21 +171,24 @@ export function categorizeLoopProfile(raw: LoopProfile, root: string) {
     }
     const name = typeof leaf.name === "string" && nativeNames.has(leaf.name) ? leaf.name : "other";
     native.set(name, (native.get(name) ?? 0) + 1);
-    // The nearest script frame names the caller of this native work. Bun's
-    // own modules (`bun:sqlite` wraps prepare and run) are passed over: the
-    // statement that matters is the repository frame that called into them.
-    let position: string | undefined, runtimeModule = false;
+    // Pass through runtime modules and instrumentation to the native call site.
+    let position: string | undefined, skippedCaller = false;
     for (let depth = 1; depth < Math.min(depthCap, frames.length); depth++) {
       const caller = frames[depth]!;
       if (!caller.sourceURL) continue;
-      if (runtimeModuleSource.test(caller.sourceURL)) { runtimeModule = true; continue; }
+      if (runtimeModuleSource.test(caller.sourceURL)) { skippedCaller = true; continue; }
       const file = safeFile(caller.sourceURL, root, known);
+      if (file && (instrumentationSources.has(file)
+        || (file.startsWith(".next/server/") && instrumentationFrameNames.has(caller.name)))) {
+        skippedCaller = true;
+        continue;
+      }
       position = file && Number.isSafeInteger(caller.line) && caller.line > 0 && caller.line !== 4294967295
         && Number.isSafeInteger(caller.column) && caller.column > 0 && caller.column !== 4294967295
         ? `${file}:${caller.line}:${caller.column}` : file ?? "elsewhere";
       break;
     }
-    if (position === undefined && runtimeModule) position = "elsewhere";
+    if (position === undefined && skippedCaller) position = "elsewhere";
     if (position !== undefined) {
       let held = callers.get(name);
       if (!held) callers.set(name, held = new Map());

@@ -85,7 +85,7 @@ export function createPerformanceSpans(now = monotonicNow) {
     ...(correlations.getStore() ? { correlation: correlations.getStore() } : {}),
   });
   const finish = (record: Slice) => { record.end = now(); record.totalMs = record.maxMs = record.end - record.start; add(record); };
-  return {
+  const recorder = {
     setEnabled(value: boolean) { enabled = value; },
     observeSite(observer?: (site: number) => void) { observeSite = observer; },
     request(id: string, method: string, timeoutMs?: number) {
@@ -137,6 +137,8 @@ export function createPerformanceSpans(now = monotonicNow) {
     },
     clear() { records.length = 0; longest.length = 0; cursor = 0; dropped = 0; droppedMs = 0; },
   };
+  Object.assign(recorder.sync, { displayName: "delegatusPerformanceSync" });
+  return recorder;
 }
 
 type ProcessIdentity = { pid: number; start: string; timeOrigin: number; revision: string | null };

@@ -162,7 +162,7 @@ export function createReadAttribution(now = () => performance.now(), read = main
     }
   });
   const operation = () => context.getStore() ?? "unscoped";
-  return {
+  const attribution = {
     operation,
     setEnabled(value: boolean) { enabled = value; },
     run<T>(name: string, work: () => T): T {
@@ -313,6 +313,8 @@ export function createReadAttribution(now = () => performance.now(), read = main
       observerBaseline = usesDefaultCounter && sampler ? Number(Atomics.load(sampler.cells, 3)) / 1000 : 0; samplerDegraded = false;
       workerBatches = workerTransportDropped = 0; },
   };
+  Object.assign(attribution.sync, { displayName: "delegatusReadAttributionSync" });
+  return attribution;
 }
 const shared = globalThis as typeof globalThis & { __delegatusReadAttribution?: ReturnType<typeof createReadAttribution> };
 export const readAttribution = shared.__delegatusReadAttribution ??= createReadAttribution();
