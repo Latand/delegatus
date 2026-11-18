@@ -107,7 +107,7 @@ test.skipIf(process.platform !== "linux")("24h boundaries upgrade legacy schedul
   const store = new AttemptTempStore(), directories: string[] = [];
   const copy = path.join(state, "evidence", "attempt-temp", "c".repeat(64));
   try {
-    for (let n = 0; n < 4; n++) {
+    for (let n = 0; n < 5; n++) {
       const directory = path.join(scratch, "llv-stage-age" + n); directories.push(directory); fs.mkdirSync(directory);
       fs.writeFileSync(path.join(directory, "data"), "protected fixture payload");
       store.register({ directory, pipelineId: n === 3 ? "unknown-lane" : lane.id, launchId: "retention-launch",
@@ -116,6 +116,7 @@ test.skipIf(process.platform !== "linux")("24h boundaries upgrade legacy schedul
     }
     plantKeepMarker(path.join(directories[1]!, ".delegatus-keep"));
     await holdFinishedRoot(directories[2]!, lane.id, "day-evidence"); store.requireRootExpiry(directories[2]!, legacyExpiry);
+    store.requireRootExpiry(directories[4]!, legacyExpiry);
     fs.mkdirSync(copy, { recursive: true }); fs.writeFileSync(path.join(copy, "data"), "retained evidence");
     store.registerCopy({ destination: copy, pipelineId: lane.id, launchId: "retention-launch", kind: "lane",
       createdAt: finish, expiresAt: legacyExpiry, checkedAt: legacyExpiry, bytes: 12288 });
@@ -135,6 +136,7 @@ test.skipIf(process.platform !== "linux")("24h boundaries upgrade legacy schedul
       const report = await realParentPass(true);
       expect(report.errors).toBe(0); expect(report.removed).toBe(delta > 0 ? 1 : 0);
       expect(report.retention).toMatchObject({ scratchPeriodDays: 1, evidencePeriodDays: 7 });
+      expect(report.retention.dueBytes).toBe(0);
       expect(store.scratchRetentionVersion()).toBe(1); expect(store.retentionExpiry(directories[1]!)).toBe(NOW + 1);
       expect(store.requiredRootExpiry(directories[2]!)).toBe(legacyExpiry); expect(store.copy(copy)!.expiresAt).toBe(legacyExpiry);
       expect(fs.readFileSync(path.join(copy, "data"), "utf8")).toBe("retained evidence");

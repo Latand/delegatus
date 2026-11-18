@@ -790,6 +790,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         }
         if (!expiryCurrent(state)) {
           disposition = "evidence"; reason = "previously held root awaits lane expiry";
+          store.rootEligible(owner.directory, false);
           if (requiredExpiry !== null && requiredExpiry > now()) store.defer(owner.directory, requiredExpiry);
           return false;
         }
