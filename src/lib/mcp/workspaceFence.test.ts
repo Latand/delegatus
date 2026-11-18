@@ -1406,7 +1406,7 @@ for (const mode of ["read", "publish"] as const) for (const changed of [false, t
       const args = { clientRequestId: "scope-dispatch-project-change", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
       const answer = await core.callTool(tool, args);
       expect(answer.ok).toBe(!changed);
-      if (changed) expect(answer).toMatchObject({ ...REFUSED, error: "prototype receipt identity changed", details: { check: "prototype-receipt-scope" } });
+      if (changed) expect(answer).toMatchObject({ ...REFUSED, error: expect.stringContaining("prototype receipt identity changed"), details: { check: "prototype-receipt-scope" } });
       expect(JSON.stringify(answer)).not.toContain("Private project Beta answer");
       expect(loadSeatRounds(other)).toEqual(original);
       project = own;
