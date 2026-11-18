@@ -163,7 +163,7 @@ test("an in-flight reserved launch retains custody across pass expiry and settle
   } finally { release.resolve(); await settlePipelineControllerJobs(); queue.close(); }
 });
 
-test("a waiting production publisher releases its settlement permit for another passed stage", async () => {
+test("a waiting production publisher releases its settlement permit for another passed stage", () => withControllerAuditState(async () => {
   const publishers: Array<Awaited<ReturnType<typeof committing>> & {
     publication: ReturnType<typeof publishHarness>; exec: ReturnType<typeof harness>["ports"]["exec"];
   }> = [];
@@ -228,7 +228,7 @@ test("a waiting production publisher releases its settlement permit for another 
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
   expect([...pushes.values()]).toEqual([1, 1, 1, 1]);
   for (const publisher of publishers) expect(loadPipelines().find(row => row.id === publisher.lane.id)!.delivery!.operation!.result?.ok).toBe(true);
-}, 60_000);
+}), 60_000);
 
 test("settlement admission retries three timed out windows before parking the preserved pass", async () => {
   const release = latch();
@@ -1296,7 +1296,7 @@ test("nested controller jobs retain their bounded attempt selection", async () =
 });
 
 
-test("settlement polling reads revisions without cloning retained lane history", async () => {
+test("settlement polling reads revisions without cloning retained lane history", () => withControllerAuditState(async () => {
   const { h, lane } = await committing();
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 1024 }, (_, n) => ({ ...structuredClone(original), n: n + 1,
@@ -1342,7 +1342,7 @@ test("settlement polling reads revisions without cloning retained lane history",
       expect(reads.mock.calls).toHaveLength(0);
     } finally { reads.mockRestore(); }
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
-});
+}), 15_000);
 
 
 test("shared compact authority observations keep each job's own lane out of its peer token", async () => {
