@@ -8603,6 +8603,7 @@ async function spawnCorrelatedRunStage(
           attempt.launchId = reservation.launchId;
           attempt.conversationId = reservation.conversationId;
           attempt.accountId = reservation.accountId ?? attempt.accountId ?? null;
+          recordAttemptAccountClassification(pipeline, stage, attempt, attempt.accountId, ports);
           /* The reservation committed this stage's membership (#1586); a
              fallback task it minted is the pipeline's task from here on,
              recorded before the agent is actuated. */
@@ -8769,6 +8770,7 @@ async function spawnCorrelatedRunStage(
     attempt.agentPath = spawned.transcript;
     attempt.paneId = spawned.paneId;
     attempt.accountId = spawned.accountId ?? attempt.accountId ?? null;
+    recordAttemptAccountClassification(pipeline, stage, attempt, attempt.accountId, ports);
     if (spawned.serviceTier !== undefined && attempt.effectiveRole.serviceTierSource === "role-default") {
       if (spawned.serviceTier === null) {
         attempt.effectiveRole.preferredServiceTier = attempt.effectiveRole.serviceTier;
@@ -9049,6 +9051,15 @@ function refreshPendingSwitchTarget(pipeline: Pipeline, stage: PipelineStage, at
   return selectRuntimeSwitchTarget(pipeline, attempt, ports, { engine, model, effort, serviceTier }, pin, preferredId);
 }
 
+function recordAttemptAccountClassification(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, accountId: string | null, ports: PipelinePorts): void {
+  const fallback = accountId && ports.fallbackAccountIds?.(pipeline.project, attempt.effectiveRole.engine).includes(accountId);
+  if (!fallback) { delete attempt.runtimeAccountFallbackReason; return; }
+  const pinned = attemptAccountPin(stage, attempt) === accountId;
+  attempt.runtimeAccountFallbackReason = pinned
+    ? "the stage pins this fallback account"
+    : "selected a project fallback account because no allowed primary account was eligible";
+}
+
 export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolean> {
   let changed = false;
   for (const snapshot of await selectControllerPipelines("hosts")) {
@@ -9147,7 +9158,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
             if (retryExpired()) throw new Error("termination and retirement could not be verified");
             const ignored = ["interrupt", "stop", "stop-launch", "retry-stop-0", "retry-stop-1"].map(action => switchOperationKey(record, action));
             for (const id of new Set([record.from.conversationId, record.launch?.conversationId].filter((id): id is string => !!id))) {
-              if (await ports.conversationOperatorStopped?.(id, retry.requestedAt, ignored)) {
+              if (await ports.conversationOperatorStopped?.(id, retry.stopEvidenceSince ?? retry.requestedAt, ignored)) {
                 retry.operatorStoppedAt ??= ports.now();
                 throw new Error("operator kill after retry request; request retry again to authorize a replacement");
               }
@@ -9311,9 +9322,14 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
             await checkpoint();
             throw new RuntimeSwitchSuperseded();
           }
-          if (selection?.target && (selection.target.accountId !== account.accountId || selection.target.accountPinned !== record.to.accountPinned
-            || selection.target.fallbackReason !== record.to.fallbackReason)) {
+          if (selection?.target && (selection.target.accountId !== account.accountId || selection.target.accountPinned !== record.to.accountPinned)) {
             throw new RuntimeSwitchSuperseded();
+          }
+          if (selection?.target && selection.target.fallbackReason !== record.to.fallbackReason) {
+            // Keep the issued operation on its pinned account while refreshing
+            // the classification used by the phase transition and stage answer.
+            record.to = selection.target;
+            await checkpoint();
           }
         }
       };
@@ -17907,8 +17923,9 @@ async function applyPipelinePatch(
         if (attempt.report) return { error: "stage already reported", status: 409 };
         const replayed = !!switchRetry.retry && !switchRetry.retry.blockedAt;
         if (switchRetry.retry && (switchRetry.retry.blockedAt || switchRetry.retry.operatorStoppedAt)) {
-          switchRetry.retry.requestedAt = ports.now();
-          switchRetry.retry.cleanupRequestedAt = switchRetry.retry.requestedAt;
+          const explicitRetryAt = ports.now();
+          switchRetry.retry.stopEvidenceSince = explicitRetryAt;
+          switchRetry.retry.cleanupRequestedAt = explicitRetryAt;
           delete switchRetry.retry.blockedAt;
           delete switchRetry.retry.operatorStoppedAt;
           delete switchRetry.retry.pendingReason;

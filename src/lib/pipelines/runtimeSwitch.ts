@@ -64,7 +64,7 @@ export function parkRuntimeSwitch(pipeline: Pipeline, attempt: PipelineStageAtte
 }
 
 export function requestRuntimeSwitchRetry(pipeline: Pipeline, attempt: PipelineStageAttempt, record: PipelineRuntimeSwitch, reason: string, now: string): void {
-  record.retry ??= { requestedAt: now, cleanupRequestedAt: now, reason: hardenedRedact(reason).slice(0, 2000) };
+  record.retry ??= { requestedAt: now, cleanupRequestedAt: now, stopEvidenceSince: now, reason: hardenedRedact(reason).slice(0, 2000) };
   record.phase = "failed"; record.settledAt ??= now;
   clearOldWaits(attempt);
   parkRuntimeSwitch(pipeline, attempt, record, record.retry.reason, now);

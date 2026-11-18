@@ -412,6 +412,8 @@ export type PipelineRuntimeSwitch = {
   /** Withdraws this attempt's execution authority before any teardown. */
   retry?: {
     requestedAt: string; reason: string; completedAt?: string; pendingReason?: string; operatorStoppedAt?: string;
+    /** Explicit retry authorization floor for later operator stop evidence. */
+    stopEvidenceSince?: string;
     /** Cleanup can receive a fresh bounded window on resume without moving the kill-evidence floor. */
     cleanupRequestedAt?: string;
     /** The old attempt stays fenced. Only an explicit retry opens another cleanup window. */
