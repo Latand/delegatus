@@ -471,9 +471,13 @@ function serviceCleanupIdentity(env: NodeJS.ProcessEnv): string | undefined {
   const runner = Bun.which("systemd-run", { PATH: env.PATH ?? "" });
   if (!systemctl || !runner) return;
   try {
-    if (spawnSync(systemctl, ["--user", "show-environment"], { env, stdio: "ignore", timeout: 5_000 }).status !== 0) return;
+    // Each file gets a new, empty runtime directory. Verify the session bus
+    // reachable independently of that directory before reusing a service run.
+    const managerEnv = { ...env };
+    delete managerEnv.XDG_RUNTIME_DIR;
+    if (spawnSync(systemctl, ["--user", "show-environment"], { env: managerEnv, stdio: "ignore", timeout: 5_000 }).status !== 0) return;
     return fingerprint([systemctl, fileFingerprint(systemctl), runner, fileFingerprint(runner),
-      env.XDG_RUNTIME_DIR ?? null, env.DBUS_SESSION_BUS_ADDRESS ?? null]);
+      env.DBUS_SESSION_BUS_ADDRESS ?? null]);
   } catch { return; }
 }
 
