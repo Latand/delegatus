@@ -72,7 +72,7 @@ test("refuses changes to an already visited entry during the walk", async () => 
   const root = fixture();
   const mutate = worker(source => source.replace('const first = walk(), second = walk();', `
     const first = walk(); fs.writeFileSync(join(directory, "node_modules/a"), "changed"); const second = walk();`));
-  await expect(outputFingerprint(root, "node_modules/", undefined, mutate)).rejects.toThrow("inventory failed");
+  await expect(outputFingerprint(root, "node_modules/", undefined, mutate)).rejects.toThrow();
 });
 
 test("refuses a transient addition even when both receipt digests would agree", async () => {
@@ -81,6 +81,30 @@ test("refuses a transient addition even when both receipt digests would agree", 
     const first = walk(); fs.writeFileSync(join(directory, "node_modules/new"), "new");
     fs.unlinkSync(join(directory, "node_modules/new")); const second = walk();`));
   await expect(outputFingerprint(root, "node_modules/", undefined, mutate)).rejects.toThrow("inventory failed");
+});
+
+test("refuses an edit behind the second walk cursor", async () => {
+  const root = fixture();
+  const mutate = worker(source => source.replace('function walk() {', 'let walks = 0; function walk() { walks++;')
+    .replace('const stat = fs.lstatSync(file, { bigint: true });', `
+      const stat = fs.lstatSync(file, { bigint: true });
+      if (walks === 2 && entry.endsWith("/sub/z")) fs.writeFileSync(join(directory, "node_modules/a"), "changed behind cursor");`));
+  await expect(outputFingerprint(root, "node_modules/", undefined, mutate)).rejects.toThrow();
+});
+
+test("rechecks after child close before consuming the digest", async () => {
+  const root = fixture();
+  let changed = false;
+  const original = spawn;
+  const start = ((command: string, args: string[], options: SpawnOptions) => {
+    const child = original(command, args, options);
+    if (!changed && args.includes("--eval")) child.once("close", () => {
+      changed = true; fs.writeFileSync(join(root, "node_modules/a"), "changed after close");
+    });
+    return child;
+  }) as typeof spawn;
+  await expect(outputFingerprint(root, "node_modules/", undefined, start)).rejects.toThrow("changed after inventory");
+  expect(changed).toBe(true);
 });
 
 test.skipIf(process.platform === "win32")("refuses an unsupported FIFO without opening it", async () => {

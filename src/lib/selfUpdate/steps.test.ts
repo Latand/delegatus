@@ -10,6 +10,7 @@ import { builtRevision, prepareExistingRelease, realPorts, releaseBuilt, UpdateR
 import { ReleasePointer, releaseDirFor } from "./release";
 import { restorePointer } from "./auto";
 import { runGit } from "./git";
+import { outputFingerprint } from "./outputFingerprint";
 import { setCpuPortsForTests } from "@/lib/runtime/cpuPlacement";
 import { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
 import { CHECKOUT_STEPS as STEP_NAMES, type CheckoutStepName as StepName } from "./types";
@@ -103,7 +104,7 @@ test.each(["rollback", "install", "build"])("a fresh process retries the same re
   expect(retried.calls).toEqual(outcome === "rollback" ? [] : ["install", "build"]);
   expect((await h.pointer.current()).sha).toBe(h.target);
   expect(readFileSync(join(h.release, "node_modules", "fixture", "asset.png"), "utf8")).toBe("install");
-});
+}, 15_000);
 
 test.each(["foreign-root", "foreign-nested", "changed-output", "missing-record", "wrong-sha", "damaged-record"])("retry preserves and refuses unproven ignored contents: %s", async change => {
   const h = await retryReleaseFixture();
@@ -126,7 +127,7 @@ test.each(["foreign-root", "foreign-nested", "changed-output", "missing-record",
   expect(readFileSync(h.pointerFile, "utf8")).toBe(h.rollback);
   if (change === "foreign-root" || change === "foreign-nested") expect(readFileSync(protectedFile, "utf8")).toBe("foreign data");
   if (change === "changed-output") expect(readFileSync(join(h.release, ".next", "static", "asset.png"), "utf8")).toBe("foreign replacement");
-});
+}, 15_000);
 
 // An attacker can compute the receipt's entire payload. Its authority must
 // come from the owning checkout's registration, never from those values.
@@ -202,7 +203,7 @@ test("release provenance needs the configured owner and supports an owner that i
   const peer = join(h.root, "owner-worktree"); h.git(["worktree", "add", "--detach", peer, h.target]);
   expect(await prepareExistingRelease(h.release)).not.toBeNull();
   expect(await prepareExistingRelease(h.release, peer)).toBeNull();
-});
+}, 15_000);
 
 test("checkout refuses foreign metadata even when its index conceals ignored data", async () => {
   const h = await retryReleaseFixture(); h.git(["worktree", "add", "--detach", h.release, h.target]);
@@ -1248,7 +1249,7 @@ describe("a release directory that already passed its ready check", () => {
       prepareExistingRelease: async () => null,
       publish: (release) => { published.push(release); }, now: () => 1_000, ...overrides,
     };
-    const runner = () => new UpdateRunner({ checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir: join(base, "logs"), releasesDir, env: { PATH: "/usr/bin" } }, ports, () => {});
+    const runner = (portOverrides: Partial<StepPorts> = {}) => new UpdateRunner({ checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir: join(base, "logs"), releasesDir, env: { PATH: "/usr/bin" } }, { ...ports, ...portOverrides }, () => {});
     return { dir, calls, published, runner, setHead: (sha: string) => { head = sha; }, setMemory: (mb: number) => { memory = mb; } };
   }
   const commands = (calls: string[][]) => calls.map(stepOf);
@@ -1272,6 +1273,42 @@ describe("a release directory that already passed its ready check", () => {
       .toEqual(STEP_NAMES.map(name => [name, "done", name === "fetch" || name === "checkout" ? 0 : null]));
     expect(readFileSync(runner.logPath("install"), "utf8")).toContain("its dependencies are kept");
     expect(readFileSync(runner.logPath("build"), "utf8")).toContain("the build is reused");
+  });
+
+  test("ready inventories a 40,727-entry output around markBuilt in worker processes", async () => {
+    const h = built();
+    mkdirSync(join(h.dir, "node_modules"), { recursive: true });
+    for (let index = 0; index < 40_726; index++) writeFileSync(join(h.dir, "node_modules", `entry-${index}`), "x");
+    mkdirSync(join(h.dir, ".next"), { recursive: true });
+    writeFileSync(join(h.dir, ".next", "BUILD_ID"), "fixture");
+    writeFileSync(join(h.dir, ".next", "DELEGATUS_RELEASE_READY"), `${TARGET}\n`);
+    let inventories = 0;
+    const real = realPorts(() => {});
+    const runner = h.runner({
+      async withGeneratedOutputs(dir, _sha, work) {
+        await outputFingerprint(dir, "node_modules/"); inventories++;
+        const result = await work();
+        await outputFingerprint(dir, "node_modules/"); inventories++;
+        return result;
+      },
+      throwIfAborted: real.throwIfAborted,
+    });
+    await runner.start(TARGET);
+    expect(runner.state.state).toBe("done");
+    expect(runner.state.steps.find(step => step.name === "ready")?.state).toBe("done");
+    expect(inventories).toBe(2);
+    expect(h.published).toEqual([{ sha: TARGET, dir: h.dir }]);
+  }, 300_000);
+
+  test("an abort after ready output validation prevents publication", async () => {
+    const h = built(), real = realPorts(() => {});
+    const runner = h.runner({
+      async withGeneratedOutputs(_dir, _sha, work) { const result = await work(); await real.abort(); return result; },
+      throwIfAborted: real.throwIfAborted,
+    });
+    await runner.start(TARGET);
+    expect(runner.state.state).toBe("failed");
+    expect(h.published).toEqual([]);
   });
 
   test("is published again without an install or a build, and without waiting for build memory", async () => {

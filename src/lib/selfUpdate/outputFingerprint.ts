@@ -32,7 +32,8 @@ function walk() {
   return [hash.digest("hex"), changes.digest("hex")];
 }
 const first = walk(), second = walk();
-if (first[0] !== second[0] || first[1] !== second[1]) throw new Error("Release output changed during inventory");
+if (first[0] !== second[0] || first[1] !== second[1])
+  throw new Error("Release output changed during inventory");
 process.stdout.write(first[0] + "\n");
 `;
 
@@ -41,7 +42,8 @@ export const OUTPUT_INVENTORY_TIMEOUT_MS = 120_000;
 /** Metadata work belongs to a bounded child of the pinned Bun running this
  * server. No dependency bytes or symlink destinations are traversed. Reject
  * only after close, including cancellation, so a retry owns no old worker. */
-export function outputFingerprint(dir: string, output: string, signal?: AbortSignal, start: (command: string, args: string[], options: SpawnOptions) => ChildProcess = spawn, timeoutMs = OUTPUT_INVENTORY_TIMEOUT_MS): Promise<string> {
+function runOutputFingerprint(dir: string, output: string, signal: AbortSignal | undefined,
+  start: (command: string, args: string[], options: SpawnOptions) => ChildProcess, timeoutMs: number): Promise<string> {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = start(process.execPath, ["--no-env-file", "--no-install", "--eval", OUTPUT_INVENTORY_SOURCE, absolutePath(dir), output], {
@@ -75,4 +77,17 @@ export function outputFingerprint(dir: string, output: string, signal?: AbortSig
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
   });
+}
+
+/** Require matching inventories from separate workers. The first worker's
+ * close handlers run before its result is consumed, so the second worker also
+ * validates that boundary. */
+export async function outputFingerprint(dir: string, output: string, signal?: AbortSignal,
+  start: (command: string, args: string[], options: SpawnOptions) => ChildProcess = spawn,
+  timeoutMs = OUTPUT_INVENTORY_TIMEOUT_MS): Promise<string> {
+  const first = await runOutputFingerprint(dir, output, signal, start, timeoutMs);
+  signal?.throwIfAborted();
+  const second = await runOutputFingerprint(dir, output, signal, start, timeoutMs);
+  if (first !== second) throw new Error("Release output changed after inventory");
+  return second;
 }

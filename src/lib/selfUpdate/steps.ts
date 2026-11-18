@@ -54,6 +54,7 @@ export interface StepPorts {
   prepareExistingRelease?(dir: string, checkout: string): Promise<string | null>;
   /** Records only outputs observed around this deployer's own commands. */
   withGeneratedOutputs?(dir: string, sha: string, work: () => Promise<number | null>, checkout: string): Promise<number | null>;
+  throwIfAborted?(): void;
 }
 
 /** Written by the ready step: the build in this release directory passed its
@@ -112,6 +113,8 @@ async function provenGeneratedOutputs(dir: string, ignored: string[], git: typeo
     for (const entry of ignored) if (GENERATED_OUTPUTS.has(entry) && typeof record.outputs?.[entry] === "string"
       && record.outputs[entry] === await outputFingerprint(dir, entry, signal)) proven.add(entry);
     signal?.throwIfAborted();
+    for (const entry of proven) if (record.outputs[entry] !== await outputFingerprint(dir, entry, signal)) proven.delete(entry);
+    signal?.throwIfAborted();
     if (JSON.stringify(await releaseIdentity(dir, checkout, git)) !== JSON.stringify(identity)) proven.clear();
   } catch { proven.clear(); /* Missing, stale or damaged provenance grants no additional paths. */ }
   signal?.throwIfAborted();
@@ -141,13 +144,32 @@ async function withGeneratedOutputs(dir: string, sha: string, work: () => Promis
       throw new Error("Release identity changed while inventorying outputs");
     signal.throwIfAborted();
     const temporary = `${identity.marker}.${process.pid}.tmp`;
+    const receipt = JSON.stringify({ version: 1, ...identity, marker: undefined, outputs });
+    let renamed = false;
     try {
-      await fs.writeFile(temporary, JSON.stringify({ version: 1, ...identity, marker: undefined, outputs }), { mode: 0o600, flag: "wx" });
+      await fs.writeFile(temporary, receipt, { mode: 0o600, flag: "wx" });
       signal.throwIfAborted();
       if (JSON.stringify(await releaseIdentity(dir, checkout, runGit)) !== JSON.stringify(identity))
         throw new Error("Release identity changed before recording outputs");
       signal.throwIfAborted();
       await fs.rename(temporary, identity.marker);
+      renamed = true;
+      signal.throwIfAborted();
+      for (const [entry, fingerprint] of Object.entries(outputs)) {
+        if (fingerprint !== await outputFingerprint(dir, entry, signal)) throw new Error("Release output changed before provenance was consumed");
+      }
+      signal.throwIfAborted();
+      if (JSON.stringify(await releaseIdentity(dir, checkout, runGit)) !== JSON.stringify(identity))
+        throw new Error("Release identity changed after recording outputs");
+    } catch (error) {
+      if (renamed) {
+        try {
+          const current = await fs.readFile(identity.marker, "utf8");
+          const stat = await fs.lstat(identity.marker);
+          if (current === receipt && stat.isFile() && stat.nlink === 1) await fs.rm(identity.marker);
+        } catch { /* A substituted or inaccessible receipt is left untouched. */ }
+      }
+      throw error;
     } finally { await fs.rm(temporary, { force: true }); }
   }
 }
@@ -497,7 +519,9 @@ export class UpdateRunner {
         const head = (await this.ports.revParse("HEAD", release)).trim();
         if (head !== target) throw new StepError({ kind: "head-mismatch", head: shortSha(head), expected: shortSha(target) }, `HEAD is ${shortSha(head)}, expected ${shortSha(target)}`);
         if (!this.ports.buildIdReadable(release)) throw new StepError({ kind: "build-id-missing" }, ".next/BUILD_ID is missing after the build");
+        this.ports.throwIfAborted?.();
         await generatedWork(async () => { this.ports.markBuilt?.(release, target); return null; });
+        this.ports.throwIfAborted?.();
         await this.ports.publish({ sha: target, dir: release });
         push(`${shortSha(target)} is built in ${release}; the next restart runs it`, false);
         return null;
@@ -520,6 +544,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
   let currentExit: Promise<number | null> | null = null;
   let currentScope: string | null = null;
   let generated: { controller: AbortController; done: Promise<unknown> } | null = null;
+  let abortRequested = false;
   return {
     async run(command, { cwd, env, onLine, lowPriority, work }) {
       const releaseWork = work === "update-install" || work === "update-build";
@@ -578,6 +603,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
       }
     },
     async abort() {
+      abortRequested = true;
       const inventory = generated;
       // A stopped install/build still records its partial outputs after its
       // command exits. Cancel preflight or an already-running inventory;
@@ -630,6 +656,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
       return done.finally(() => { if (generated === inventory) generated = null; });
     },
     withGeneratedOutputs(dir, sha, work, checkout) {
+      abortRequested = false;
       const controller = new AbortController();
       const done = withGeneratedOutputs(dir, sha, work, controller.signal, checkout);
       const inventory = { controller, done };
@@ -640,6 +667,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
       if (sha === null) rmSync(join(dir, BUILT_MARKER), { force: true });
       else writeFileSync(join(dir, BUILT_MARKER), `${sha}\n`);
     },
+    throwIfAborted() { if (abortRequested) throw new Error("Self-update was cancelled"); },
     publish,
     now: () => Date.now(),
     cpuLoad: () => ({ load1: loadavg()[0]!, cpus: cpus().length }),

@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
+import * as fsPromises from "node:fs/promises";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,9 +35,10 @@ function fixture() {
 // Inject at the real worker's terminal event, before its caller resumes.
 function afterInventory(effect: () => void) {
   const original = childProcess.spawn;
+  let applied = false;
   return spyOn(childProcess, "spawn").mockImplementation(((command: string, args: readonly string[] = [], options: childProcess.SpawnOptions = {}) => {
     const child = original(command, args, options);
-    if (command === process.execPath && args?.includes("--eval")) child.once("close", effect);
+    if (command === process.execPath && args?.includes("--eval") && !applied) child.once("close", () => { applied = true; effect(); });
     return child;
   }) as typeof childProcess.spawn);
 }
@@ -167,4 +169,41 @@ test("an abort after Git setup prevents the first worker from starting", async (
   try { await expect(prepareExistingRelease(h.release, h.root, git, controller.signal)).rejects.toThrow(); }
   finally { intercept.mockRestore(); }
   expect(workers).toBe(0);
+});
+
+test("cancellation at receipt rename rejects and withdraws the new receipt", async () => {
+  const h = fixture(), ports = realPorts(() => {}), original = fsPromises.rename;
+  let abortCompletion: Promise<void> | undefined;
+  const intercept = spyOn(fsPromises, "rename").mockImplementation(async (from, to) => {
+    abortCompletion = ports.abort();
+    await original(from, to);
+  });
+  try {
+    const outcome = ports.withGeneratedOutputs!(h.release, h.sha, h.generate, h.root).catch(error => error);
+    const error = await outcome;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("AbortError");
+    await abortCompletion;
+    expect(fs.existsSync(h.marker)).toBe(false);
+  } finally { intercept.mockRestore(); await ports.abort(); }
+});
+
+test("a mutation after receipt rename withdraws that receipt before provenance is consumed", async () => {
+  const h = fixture(), original = childProcess.spawn;
+  let changed = false;
+  const intercept = spyOn(childProcess, "spawn").mockImplementation(((command: string, args: readonly string[] = [], options: childProcess.SpawnOptions = {}) => {
+    const child = original(command, args, options);
+    if (command === process.execPath && args.includes("--eval")) child.once("close", () => {
+      if (!changed && fs.existsSync(h.marker)) {
+        changed = true;
+        fs.writeFileSync(join(h.release, "node_modules/asset.png"), "foreign after receipt rename");
+      }
+    });
+    return child;
+  }) as typeof childProcess.spawn);
+  try {
+    await expect(realPorts(() => {}).withGeneratedOutputs!(h.release, h.sha, h.generate, h.root)).rejects.toThrow();
+    expect(changed).toBe(true);
+    expect(fs.existsSync(h.marker)).toBe(false);
+  } finally { intercept.mockRestore(); }
 });
