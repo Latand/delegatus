@@ -3,6 +3,9 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { text as streamText } from "node:stream/consumers";
 import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
 import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
@@ -13,7 +16,7 @@ import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance"
 import * as merger from "./merge-batch";
 import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
 import { resolveGateRun } from "../src/lib/runtime/gateCheckRecord";
-import { waitForGate } from "../src/lib/runtime/gateWait";
+import { ownFixtureTree, stopFixtureTree } from "../src/lib/testing/fixtureProcess";
 import { bindMergerContract } from "../src/lib/pipelines/mergerContract.fixture";
 
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
@@ -456,13 +459,14 @@ esac
     BATCH_FIXTURE_GIT: realGit, BATCH_FIXTURE_PATH: process.env.PATH, BATCH_FIXTURE_BUN: process.execPath, BATCH_FIXTURE_SCRIPT: barrier,
   };
   const command = [process.execPath, join(import.meta.dir, "merge-batch.ts"), phase];
-  const child = Bun.spawn(command, { cwd: f.repo, env, stdout: "pipe", stderr: "pipe" });
-  const stdout = new Response(child.stdout).text();
-  const stderr = new Response(child.stderr).text();
+  const child = ownFixtureTree(spawn(command[0]!, command.slice(1), { cwd: f.repo, env, stdio: ["ignore", "pipe", "pipe"] }));
+  const closed = once(child, "close").then(([code]) => code as number | null);
+  const stdout = streamText(child.stdout);
+  const stderr = streamText(child.stderr);
   try {
     const ready = setTimeout(() => entered.reject(new Error("Batch did not reach its barrier")), 10_000);
     try {
-      await Promise.race([entered.promise, child.exited.then(async code => {
+      await Promise.race([entered.promise, closed.then(async code => {
         throw new Error(`Batch exited before reaching its barrier (${code}): ${await stderr}`);
       })]);
     } finally { clearTimeout(ready); }
@@ -471,16 +475,36 @@ esac
     const runId = entry!.replace(/\.json$/, "");
     const record = resolveGateRun(launch, runId);
     const args = { runId, reason: phase };
+    const readFresh = async (mode: "expire" | "read") => {
+      const reader = await commandRunner(import.meta.dir, [process.execPath, "-e", `
+        import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
+        const [root, args, mode] = process.argv.slice(-3);
+        if (mode === "expire") {
+          let now = 0;
+          const schedule = setTimeout;
+          Object.defineProperty(performance, "now", { value: () => now });
+          globalThis.setTimeout = (callback) => {
+            now = 24 * 60 * 60_000;
+            return schedule(callback, 0);
+          };
+        }
+        const result = await runGateCheckTool(JSON.parse(args!), bindGateCheckRoot(root!), new AbortController().signal);
+        console.log(JSON.stringify(result));
+      `, launch, JSON.stringify(args), mode], env);
+      expect(reader.code).toBe(0);
+      return JSON.parse(reader.output);
+    };
     let settled = false;
     const waiting = runGateCheckTool(args, binding, abort.signal).then(answer => { settled = true; return answer; });
-    expect(await waitForGate(record.log, 0)).toMatchObject({ state: "running", code: 124 });
+    const expired = await readFresh("expire");
+    expect(expired.success).toBe(true);
+    expect(JSON.parse(expired.contentItems[0].text)).toMatchObject({ terminal: false, outcome: "unknown", state: "running", code: 124, runId });
     expect(settled).toBe(false);
     expect(existsSync(lock)).toBe(true);
 
     if (result === "recorder lost") {
-      child.kill("SIGKILL");
-      await child.exited;
-      release.resolve();
+      await stopFixtureTree(child);
+      await closed;
       // Abort only as a bounded red control if owner loss fails to wake the wait.
       const deadline = setTimeout(() => abort.abort(), 5_000);
       try {
@@ -504,22 +528,17 @@ esac
     expect(answer.success).toBe(true);
     expect(JSON.parse(answer.contentItems[0]!.text)).toMatchObject({ terminal: true, code, runId });
     expect(existsSync(lock)).toBe(false);
-    expect(await child.exited).toBe(code);
+    expect(await closed).toBe(code);
     expect((await stdout).match(/runId=[a-f0-9]{64}/g)).toEqual([`runId=${runId}`]);
-    const reader = await commandRunner(import.meta.dir, [process.execPath, "-e", `
-      import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
-      const [root, args] = process.argv.slice(-2);
-      const result = await runGateCheckTool(JSON.parse(args!), bindGateCheckRoot(root!), new AbortController().signal);
-      console.log(JSON.stringify(result));
-    `, launch, JSON.stringify(args)], env);
-    expect(reader.code).toBe(0);
-    expect(JSON.parse(reader.output)).toEqual(answer);
+    expect(await readFresh("read")).toEqual(answer);
   } finally {
     abort.abort();
-    release.resolve();
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await child.exited;
-    await server.stop();
+    try { await stopFixtureTree(child); }
+    finally {
+      release.resolve();
+      await server.stop(true);
+    }
+    await closed;
   }
 }, 20_000);
 
