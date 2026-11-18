@@ -942,7 +942,7 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
   })]);
 });
 
-test("a rotation onto the built-in default records the CURRENT version, whatever the incumbent ran on", async () => {
+test.each(["codex", "claude"] as const)("a %s rotation delivers the current mandate to the successor", async (engine) => {
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
     ...spawnRequest("req_00000031"),
@@ -952,13 +952,18 @@ test("a rotation onto the built-in default records the CURRENT version, whatever
   expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(3);
 
   const successor = "conversation_66666666-6666-4666-8666-666666666666";
-  const { deps } = dependencies({
-    spawn: async () => ({ status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-default.jsonl" } }),
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      return { status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-default.jsonl" } };
+    },
   });
   const result = await executeOrchestratorRotation({
     project: "proj-a",
     clientRequestId: "req_00000032",
     mandate: ORCHESTRATOR_SYSTEM_PROMPT,
+    engine,
+    model: defaultModelFor(engine),
   }, deps);
 
   expect(result.status).toBe(200);
@@ -966,6 +971,13 @@ test("a rotation onto the built-in default records the CURRENT version, whatever
   const active = orchestratorSeatFor("proj-a").active;
   expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
   expect(active?.mandate).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(recorded.spawns).toHaveLength(1);
+  const launch = recorded.spawns[0]!;
+  expect(launch.engine).toBe(engine);
+  expect(launch.prompt).toBe(orchestratorMandateWithRoleTable(active!.mandate, active!.roleTable ?? null));
+  const workRules = String(launch.prompt).split("## How work runs\n")[1]!.split("\n\n")[0]!;
+  expect(workRules).toContain("one visible spawn_agent (live role, taskId, existing cwd)");
+  expect(workRules).toContain("isolated pipeline and required checks for repository edits");
 });
 
 test.each([false, true])("an older seat rotates onto the default version (legacy keep flag=%s)", async (keepIncumbentMandate) => {
