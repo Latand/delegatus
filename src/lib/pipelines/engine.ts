@@ -9044,7 +9044,6 @@ function refreshPendingSwitchTarget(pipeline: Pipeline, stage: PipelineStage, at
   if (attempt.report || record.inPlace || record.turbo || record.rollback || openRuntimeSwitch(attempt) !== record) return;
   const pin = stage.effectiveRole.engine === record.to.engine ? stage.account?.trim() || null
     : record.to.accountPinned ? record.to.accountId : null;
-  if (pin && record.to.accountPinned && pin === record.to.accountId) return;
   const { engine, model, effort, serviceTier } = record.to;
   const preferredId = record.from.engine === engine ? record.from.accountId : ports.resolveProjectSpawn ? null : record.to.accountId;
   return selectRuntimeSwitchTarget(pipeline, attempt, ports, { engine, model, effort, serviceTier }, pin, preferredId);
@@ -9300,7 +9299,13 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline);
         if (account === record.to && !record.rollback) {
           const selection = refreshPendingSwitchTarget(pipeline, stage, attempt, record, ports);
-          if (selection?.target && (selection.target.accountId !== account.accountId || selection.target.accountPinned !== record.to.accountPinned)) {
+          if (selection && !selection.target) {
+            requestRuntimeSwitchRetry(pipeline, attempt, record, selection.refusal.error, ports.now());
+            await checkpoint();
+            throw new RuntimeSwitchSuperseded();
+          }
+          if (selection?.target && (selection.target.accountId !== account.accountId || selection.target.accountPinned !== record.to.accountPinned
+            || selection.target.fallbackReason !== record.to.fallbackReason)) {
             throw new RuntimeSwitchSuperseded();
           }
         }
@@ -15366,7 +15371,10 @@ function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): Pi
   if (req.expectedStageId === undefined) return null;
   const pendingRetry = req.action === "retry-stage" && ["running", "paused"].includes(pipeline.state)
     && pipeline.cursor?.state === "pending" && unstartedPendingAttempt(currentAttempt(pipeline, pipeline.cursor.stageId));
-  const waiting = pipeline.state === "needs_decision" || (req.action === "retry-stage"
+  const cursorAttempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
+  const pausedSwitchRetry = req.action === "retry-stage" && pipeline.state === "paused"
+    && !!cursorAttempt && !!pendingRuntimeSwitchRetry(cursorAttempt);
+  const waiting = pipeline.state === "needs_decision" || pausedSwitchRetry || (req.action === "retry-stage"
     && (pipeline.state === "running" && ["running", "spawning"].includes(pipeline.cursor?.state ?? "")
       || pipeline.state === "paused" && pipeline.cursor?.state === "spawning")
     && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? "")) || pendingRetry
@@ -17847,6 +17855,7 @@ async function applyPipelinePatch(
       }
       /* #1938: a resumed needs_review lane still names its unreviewed head. */
       const switchRetry = attempt && pendingRuntimeSwitchRetry(attempt)?.retry;
+      if (switchRetry && !switchRetry.completedAt && !switchRetry.blockedAt) switchRetry.requestedAt = pipeline.resumedAt;
       if (pipeline.state === "needs_decision" && switchRetry?.blockedAt) {
         pipeline.stateDetail = `runtime switch retry blocked: ${switchRetry.pendingReason ?? switchRetry.reason}; retry-stage to try again`;
       } else {

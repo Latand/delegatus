@@ -2,6 +2,7 @@ import { registryKeysMatchingBounded, registryRowsMatching } from "@/lib/agent/s
 import type { AgentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { structuredRecoveryPending } from "@/lib/runtime/structuredRecovery";
+import { processIdentityStatus } from "@/lib/processIdentity";
 import { switchOperationKey } from "./runtimeSwitchFence";
 import type { PipelineRuntimeSwitch } from "./types";
 
@@ -10,6 +11,16 @@ import type { PipelineRuntimeSwitch } from "./types";
  * observe that fence and finish its own cleanup before host teardown starts. */
 export async function retireRuntimeSwitchProducers(record: PipelineRuntimeSwitch, registry: AgentRegistry): Promise<string | null> {
   if (!record.retry) throw new Error("runtime switch retry must be persisted before retirement");
+  if (record.launch?.launchId) {
+    const receipt = registry.spawnReceipt(record.launch.launchId);
+    if (!receipt) return "old switch launch receipt is unavailable";
+    if (!["completed", "failed", "conflicted"].includes(receipt.state)) return `old switch launch receipt is still ${receipt.state}`;
+    const setup = receipt.hostSetup;
+    if (setup?.phase === "executing" && setup.cleanupConfirmed !== true
+      && (!setup.processes.length || setup.processes.some(process => processIdentityStatus(process) !== "dead"))) {
+      return "old switch launch native setup processes are not proven retired";
+    }
+  }
   const id = record.from.conversationId as ViewerConversationId;
   if (structuredRecoveryPending(id)) return "old conversation host recovery is still settling";
   const conversation = registry.conversation(id);

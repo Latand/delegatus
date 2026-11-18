@@ -308,6 +308,29 @@ test("November 17: killed Codex-to-Claude switch bounds cleanup and retry uses t
   expect(h.spawnInputs[1]).toMatchObject({ cwd: lane.worktreeDir, requestedAccountId: "replacement", role: { engine: "claude", model: "sonnet" }, unavailableAccountIds: [] });
 });
 
+test("November 17: retry cleanup gets a fresh bounded window after pause and accepts guarded retry", async () => {
+  const h = switchHarness("2026-11-17T06:30:00Z");
+  const lane = await runningStage(h);
+  const operator = { kind: "operator" } as const;
+  expect((await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", engine: "codex",
+    model: "gpt-6.1-sol", effort: "high", applyNow: true }, h.ports, operator)).error).toBeUndefined();
+  h.ports.runtimeSwitchKilled = async () => true;
+  const { drainRuntimeSwitches } = await import("./engine");
+  await drainRuntimeSwitches(h.ports);
+  const retry = { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 } as const;
+  expect((await patchPipeline(lane.id, retry, h.ports, operator)).error).toBeUndefined();
+  expect((await patchPipeline(lane.id, { action: "pause", reason: "hold cleanup" }, h.ports, operator)).error).toBeUndefined();
+  expect((await patchPipeline(lane.id, retry, h.ports, operator)).error).toBeUndefined();
+  h.advance(11 * 60_000);
+  h.ports.runtimeSwitchKilled = async () => false;
+  h.ports.stopStageAgent = async () => ({ outcome: "not-running" });
+  expect((await patchPipeline(lane.id, { action: "resume" }, h.ports, operator)).error).toBeUndefined();
+  await drainRuntimeSwitches(h.ports); await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(2);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  expect(loadPipelines()[0]).toMatchObject({ worktreeDir: lane.worktreeDir, branch: lane.branch });
+});
+
 for (const edit of ["binding before cut", "binding during cut", "pin"] as const) test(`November 17: a pending handoff reports its fallback and reselects after a change to the ${edit}`, async () => {
   const { selectProjectAccount } = await import("@/lib/accounts/projectSelection");
   const h = switchHarness("2026-11-17T06:10:50Z");
@@ -387,6 +410,57 @@ test("November 17: an unavailable target after a cut settles cleanup and can be 
   await tickPipelines([], h.ports); await tickPipelines([], h.ports);
   expect(h.spawnCount()).toBe(2);
   expect(h.spawnInputs[1]).toMatchObject({ requestedAccountId: "target", cwd: chosen.pipeline!.worktreeDir });
+});
+
+test("November 17: cleanup refuses to reuse the prior account when the current pin is no longer bound", async () => {
+  const h = switchHarness("2026-11-17T06:20:00Z");
+  const lane = await runningStage(h);
+  h.ports.allowedAccountIds = () => ["account-a", "account-b"];
+  h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available",
+    account: switchAccount(engine as "claude" | "codex", request.requestedId ?? "account-a") });
+  const selected = await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", engine: "codex",
+    model: "gpt-6.1-sol", effort: "high", account: "account-a", applyNow: true }, h.ports, { kind: "operator" });
+  expect(selected.error).toBeUndefined();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  h.ports.stopStageAgent = async () => { entered.resolve(); await release.promise; return { outcome: "not-running" }; };
+  const cutting = tickPipelines([], h.ports);
+  await entered.promise;
+  expect((await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", account: "account-b" }, h.ports, { kind: "operator" })).error).toBeUndefined();
+  h.ports.allowedAccountIds = () => ["account-a"];
+  release.resolve(); await cutting;
+  await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(1);
+  expect(loadPipelines()[0]!.stateDetail).toMatch(/selected target account is no longer allowed/i);
+
+  h.ports.allowedAccountIds = () => ["account-a", "account-b"];
+  expect((await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports, { kind: "operator" })).error).toBeUndefined();
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(2);
+  expect(h.spawnInputs[1]).toMatchObject({ requestedAccountId: "account-b", cwd: lane.worktreeDir });
+});
+
+test("November 17: a pinned account is reclassified when its binding becomes fallback during the cut", async () => {
+  const h = switchHarness("2026-11-17T06:25:00Z");
+  const lane = await runningStage(h);
+  let fallback = false;
+  h.ports.allowedAccountIds = () => ["pinned", "primary"];
+  h.ports.fallbackAccountIds = () => fallback ? ["pinned"] : [];
+  h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available",
+    account: switchAccount(engine as "claude" | "codex", request.requestedId ?? "pinned") });
+  const selected = await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", engine: "codex",
+    model: "gpt-6.1-sol", effort: "high", account: "pinned", applyNow: true }, h.ports, { kind: "operator" });
+  expect(selected.error).toBeUndefined();
+  const entered = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+  h.ports.stopStageAgent = async () => { entered.resolve(); await release.promise; return { outcome: "not-running" }; };
+  const cutting = tickPipelines([], h.ports);
+  await entered.promise;
+  fallback = true;
+  release.resolve(); await cutting;
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  const record = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!;
+  expect(record.to).toMatchObject({ accountId: "pinned", accountPinned: true, fallbackReason: "the stage pins this fallback account" });
+  expect(h.spawnInputs[1]).toMatchObject({ requestedAccountId: "pinned" });
 });
 
 for (const engine of ["claude", "codex"] as const) for (const source of ["dead", "absent", "limited-idle", "limited-dead", "limited-unknown-reset"] as const) {
@@ -784,6 +858,43 @@ test("durable retry revokes reconfigure and host recovery across a registry reop
     registry.failSpawn(reserved.receipt.launchId, "old recovery retired");
     expect(await retireRuntimeSwitchProducers(record, registry)).toBeNull();
   } finally { registry.close(); }
+});
+
+test.each(["starting", "failed"] as const)("runtime-switch retry holds an unfinished %s receipt until its native setup process exits", async state => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { retireRuntimeSwitchProducers } = await import("./runtimeSwitchRecovery");
+  const h = switchHarness(); const chosen = await requestSwitch(h);
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `switch-setup-${state}.json`));
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
+  try {
+    const launch = registry.beginSpawnRequest({ engine: "claude", cwd: chosen.pipeline!.worktreeDir, accountId: "default",
+      transport: "structured", expectedArtifactPath: path.join(process.env.LLV_STATE_DIR!, `${state}.jsonl`),
+      launchProfile: emptyLaunchProfile({ cwd: chosen.pipeline!.worktreeDir, title: "Runtime switch setup custody" }) });
+    if (launch.kind !== "created") throw new Error("expected a launch receipt");
+    const owner = launch.receipt.admissionOwner!;
+    registry.beginStructuredHostSetup(launch.receipt.launchId, owner, Date.now());
+    const identity = captureProcessIdentity(child.pid!);
+    expect(identity).not.toBeNull();
+    registry.recordStructuredHostSetup(launch.receipt.launchId, owner, identity!);
+    if (state === "failed") registry.failSpawn(launch.receipt.launchId, "fixture launch failure");
+
+    const record = structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!);
+    record.launch = { clientAttemptId: "switch-target", launchId: launch.receipt.launchId, conversationId: launch.receipt.conversationId };
+    record.retry = { requestedAt: h.ports.now(), reason: "retry fixture" };
+    const held = await retireRuntimeSwitchProducers(record, registry);
+    expect(held).toContain(state === "starting" ? "receipt is still starting" : "native setup processes are not proven retired");
+    expect(h.spawnCount()).toBe(1);
+
+    child.kill("SIGTERM"); await exited;
+    if (state === "starting") registry.failSpawn(launch.receipt.launchId, "fixture launch retired");
+    expect(await retireRuntimeSwitchProducers(record, registry)).toBeNull();
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    await exited; registry.close();
+  }
 });
 
 test("the production runtime-switch control preserves the fast flag for Ultrafast", async () => {
