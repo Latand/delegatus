@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareExistingRelease, realPorts } from "./steps";
 import { runGit } from "./git";
+import { ReleasePointer } from "./release";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -206,4 +207,99 @@ test("a mutation after receipt rename withdraws that receipt before provenance i
     expect(changed).toBe(true);
     expect(fs.existsSync(h.marker)).toBe(false);
   } finally { intercept.mockRestore(); }
+});
+
+test("a second-root mutation during the later validation pass revokes the whole receipt", async () => {
+  const h = fixture();
+  await realPorts(() => {}).withGeneratedOutputs!(h.release, h.sha, async () => {
+    await h.generate();
+    fs.mkdirSync(join(h.release, ".next"), { recursive: true });
+    fs.writeFileSync(join(h.release, ".next/asset.png"), "generated");
+    return 0;
+  }, h.root);
+  const original = childProcess.spawn; let changed = false, nodeWorkers = 0;
+  const intercept = spyOn(childProcess, "spawn").mockImplementation(((command: string, args: readonly string[] = [], options: childProcess.SpawnOptions = {}) => {
+    const child = original(command, args, options);
+    if (command === process.execPath && args.includes("--eval") && args.at(-1) === "node_modules/" && ++nodeWorkers === 6) {
+      child.once("close", () => { changed = true; fs.writeFileSync(join(h.release, ".next/asset.png"), "foreign during final set check"); });
+    }
+    return child;
+  }) as typeof childProcess.spawn);
+  try {
+    expect(await prepareExistingRelease(h.release, h.root)).toContain("cannot be proven generated");
+    expect(fs.existsSync(h.marker)).toBe(true);
+  } finally { intercept.mockRestore(); }
+  expect(changed).toBe(true);
+});
+
+test("a second-root mutation during post-rename verification withdraws the new receipt", async () => {
+  const h = fixture(), original = childProcess.spawn;
+  let changed = false;
+  const intercept = spyOn(childProcess, "spawn").mockImplementation(((command: string, args: readonly string[] = [], options: childProcess.SpawnOptions = {}) => {
+    const child = original(command, args, options);
+    if (command === process.execPath && args.includes("--eval") && args.at(-1) === "node_modules/") {
+      child.once("close", () => {
+        if (!changed && fs.existsSync(h.marker)) {
+          changed = true;
+          fs.writeFileSync(join(h.release, ".next/asset.png"), "foreign after receipt rename");
+        }
+      });
+    }
+    return child;
+  }) as typeof childProcess.spawn);
+  try {
+    await expect(realPorts(() => {}).withGeneratedOutputs!(h.release, h.sha, async () => {
+      await h.generate();
+      fs.mkdirSync(join(h.release, ".next"), { recursive: true });
+      fs.writeFileSync(join(h.release, ".next/asset.png"), "generated");
+      return 0;
+    }, h.root)).rejects.toThrow();
+    expect(changed).toBe(true);
+    expect(fs.existsSync(h.marker)).toBe(false);
+  } finally { intercept.mockRestore(); }
+});
+
+test("cancellation at the final release identity lstat revokes the newly written receipt", async () => {
+  const h = fixture(), ports = realPorts(() => {}), original = fsPromises.lstat;
+  let abortCompletion: Promise<void> | undefined, triggered = false;
+  const intercept = spyOn(fsPromises, "lstat").mockImplementation(async (...args) => {
+    const result = await original(...args);
+    if (!triggered && String(args[0]) === h.release) {
+      triggered = true;
+      abortCompletion = ports.abort();
+    }
+    return result;
+  });
+  try {
+    const outcome = ports.withGeneratedOutputs!(h.release, h.sha, h.generate, h.root).catch(error => error);
+    const error = await outcome;
+    expect(triggered).toBe(true);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("AbortError");
+    await abortCompletion;
+    expect(fs.existsSync(h.marker)).toBe(false);
+  } finally { intercept.mockRestore(); await ports.abort(); }
+});
+
+test("real port timeout cleanup settles while delayed publication is fenced and withdraws its receipt", async () => {
+  const h = fixture(), pointerFile = join(h.root, "release-pointer.json");
+  let finishHead!: (value: string) => void;
+  let began!: () => void;
+  const entered = new Promise<void>(resolve => { began = resolve; });
+  const pointer = new ReleasePointer(pointerFile, h.root, async () => {
+    began(); return await new Promise<string>(resolve => { finishHead = resolve; });
+  });
+  const ports = realPorts((release, assertReady) => pointer.publish(release, assertReady));
+  const result = ports.withGeneratedOutputs!(h.release, h.sha, h.generate, h.root, async assertStable => {
+    await pointer.publish({ sha: h.sha, dir: h.release }, assertStable);
+  }).catch(error => error);
+  await entered;
+  const cleanup = ports.abort();
+  await cleanup;
+  expect(fs.existsSync(pointerFile)).toBe(false);
+  finishHead(h.sha);
+  const error = await result;
+  expect(error).toBeInstanceOf(Error);
+  expect(fs.existsSync(pointerFile)).toBe(false);
+  expect(fs.existsSync(h.marker)).toBe(false);
 });

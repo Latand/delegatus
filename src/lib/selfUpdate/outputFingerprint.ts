@@ -1,5 +1,6 @@
 import { dirname, resolve as absolutePath } from "node:path";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { lstatSync, watch, type FSWatcher } from "node:fs";
 import { recordHelperGroup } from "@/lib/helperLease";
 
 /** Embedded so checkout and bundled servers execute exactly the same worker,
@@ -38,6 +39,43 @@ process.stdout.write(first[0] + "\n");
 `;
 
 export const OUTPUT_INVENTORY_TIMEOUT_MS = 120_000;
+
+/** Watch the complete output set while its digest is being proved and consumed.
+ * Recursive native watches keep mutation observation off the server's walk
+ * path; any event or watcher failure revokes the proof. */
+export async function withOutputMutationGuard<T>(dir: string, outputs: string[], signal: AbortSignal | undefined,
+  consume: (assertStable: () => Promise<void>) => Promise<T>, verifyAfterConsume = true): Promise<T> {
+  signal?.throwIfAborted();
+  let changed = false;
+  let watcherFailure: Error | undefined;
+  const watchers: FSWatcher[] = [];
+  const changedByEvent = () => { changed = true; };
+  try {
+    for (const output of outputs) {
+      const path = absolutePath(dir, output);
+      const stat = lstatSync(path);
+      const target = stat.isDirectory() ? path : dirname(path);
+      const watcher = watch(target, { recursive: stat.isDirectory() });
+      watcher.on("change", changedByEvent);
+      watcher.on("error", error => { watcherFailure ??= error; });
+      watchers.push(watcher);
+    }
+    const assertStable = async () => {
+      signal?.throwIfAborted();
+      // fs.watch delivers native notifications on the event loop. Let events
+      // queued by the preceding await run before granting the proof.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      signal?.throwIfAborted();
+      if (watcherFailure) throw new Error("Release output mutation guard failed", { cause: watcherFailure });
+      if (changed) throw new Error("Release output changed while its proof was being consumed");
+    };
+    const value = await consume(assertStable);
+    if (verifyAfterConsume) await assertStable();
+    return value;
+  } finally {
+    for (const watcher of watchers) watcher.close();
+  }
+}
 
 /** Metadata work belongs to a bounded child of the pinned Bun running this
  * server. No dependency bytes or symlink destinations are traversed. Reject
@@ -79,15 +117,17 @@ function runOutputFingerprint(dir: string, output: string, signal: AbortSignal |
   });
 }
 
-/** Require matching inventories from separate workers. The first worker's
- * close handlers run before its result is consumed, so the second worker also
- * validates that boundary. */
+/** Require matching inventories from separate workers while a native watcher
+ * observes mutations through the final worker's close and digest consumption. */
 export async function outputFingerprint(dir: string, output: string, signal?: AbortSignal,
   start: (command: string, args: string[], options: SpawnOptions) => ChildProcess = spawn,
   timeoutMs = OUTPUT_INVENTORY_TIMEOUT_MS): Promise<string> {
-  const first = await runOutputFingerprint(dir, output, signal, start, timeoutMs);
-  signal?.throwIfAborted();
-  const second = await runOutputFingerprint(dir, output, signal, start, timeoutMs);
-  if (first !== second) throw new Error("Release output changed after inventory");
-  return second;
+  return withOutputMutationGuard(dir, [output], signal, async () => {
+    const first = await runOutputFingerprint(dir, output, signal, start, timeoutMs);
+    signal?.throwIfAborted();
+    const second = await runOutputFingerprint(dir, output, signal, start, timeoutMs);
+    if (first !== second) throw new Error("Release output changed after inventory");
+    signal?.throwIfAborted();
+    return second;
+  });
 }

@@ -15,7 +15,7 @@ import { recordHelperGroup } from "@/lib/helperLease";
 import { wrapReleaseCommand, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { machineCpuPressureGate, waitForCpuPressure, type CpuPressureGate } from "@/lib/runtime/cpuPressure";
 import { runGit, TIP_REF } from "./git";
-import { outputFingerprint } from "./outputFingerprint";
+import { outputFingerprint, withOutputMutationGuard } from "./outputFingerprint";
 import { classifyStatus, disposableIgnoredPath } from "@/lib/pipelines/worktreeSweep";
 import { readStartIdentity, sameProcess, signalGroup, type RecordedPid } from "./pid";
 import { releaseDirFor, type Release } from "./release";
@@ -38,7 +38,7 @@ export interface StepPorts {
   exists(path: string): boolean;
   buildIdReadable(dir: string): boolean;
   /** Makes a ready build the installed release. */
-  publish(release: Release): void | Promise<void>;
+  publish(release: Release, assertReady?: () => void | Promise<void>): void | Promise<void>;
   now(): number;
   cpuLoad?(): { load1: number; cpus: number };
   abort?(): void | Promise<void>;
@@ -53,7 +53,8 @@ export interface StepPorts {
   /** Refuses dirty existing checkouts; the real port restores proven missing paths. */
   prepareExistingRelease?(dir: string, checkout: string): Promise<string | null>;
   /** Records only outputs observed around this deployer's own commands. */
-  withGeneratedOutputs?(dir: string, sha: string, work: () => Promise<number | null>, checkout: string): Promise<number | null>;
+  withGeneratedOutputs?(dir: string, sha: string, work: () => Promise<number | null>, checkout: string,
+    afterRecord?: (assertStable: () => Promise<void>) => Promise<void>): Promise<number | null>;
   throwIfAborted?(): void;
 }
 
@@ -110,18 +111,23 @@ async function provenGeneratedOutputs(dir: string, ignored: string[], git: typeo
     const record = JSON.parse(await fs.readFile(identity.marker, "utf8"));
     if (record.version !== 1 || record.sha !== identity.sha || record.directory !== identity.directory
       || record.device !== identity.device || record.inode !== identity.inode) return proven;
-    for (const entry of ignored) if (GENERATED_OUTPUTS.has(entry) && typeof record.outputs?.[entry] === "string"
-      && record.outputs[entry] === await outputFingerprint(dir, entry, signal)) proven.add(entry);
-    signal?.throwIfAborted();
-    for (const entry of proven) if (record.outputs[entry] !== await outputFingerprint(dir, entry, signal)) proven.delete(entry);
-    signal?.throwIfAborted();
-    if (JSON.stringify(await releaseIdentity(dir, checkout, git)) !== JSON.stringify(identity)) proven.clear();
+    const entries = ignored.filter(entry => GENERATED_OUTPUTS.has(entry) && typeof record.outputs?.[entry] === "string");
+    await withOutputMutationGuard(dir, entries, signal, async () => {
+      for (const entry of entries) if (record.outputs[entry] === await outputFingerprint(dir, entry, signal)) proven.add(entry);
+      signal?.throwIfAborted();
+      for (const entry of proven) if (record.outputs[entry] !== await outputFingerprint(dir, entry, signal)) proven.clear();
+      signal?.throwIfAborted();
+      for (const entry of proven) if (record.outputs[entry] !== await outputFingerprint(dir, entry, signal)) proven.clear();
+      signal?.throwIfAborted();
+      if (JSON.stringify(await releaseIdentity(dir, checkout, git)) !== JSON.stringify(identity)) proven.clear();
+    });
   } catch { proven.clear(); /* Missing, stale or damaged provenance grants no additional paths. */ }
   signal?.throwIfAborted();
   return proven;
 }
 
-async function withGeneratedOutputs(dir: string, sha: string, work: () => Promise<number | null>, signal: AbortSignal, checkout: string): Promise<number | null> {
+async function withGeneratedOutputs(dir: string, sha: string, work: () => Promise<number | null>, signal: AbortSignal, checkout: string,
+  afterRecord?: (assertStable: () => Promise<void>) => Promise<void>): Promise<number | null> {
   const refusal = await prepareExistingRelease(dir, checkout, runGit, signal);
   signal.throwIfAborted();
   if (refusal) throw new Error(refusal);
@@ -131,7 +137,9 @@ async function withGeneratedOutputs(dir: string, sha: string, work: () => Promis
   try { return await work(); }
   finally {
     signal.throwIfAborted();
-    if (JSON.stringify(await releaseIdentity(dir, checkout, runGit)) !== JSON.stringify(identity))
+    const identityAfterWork = await releaseIdentity(dir, checkout, runGit);
+    signal.throwIfAborted();
+    if (JSON.stringify(identityAfterWork) !== JSON.stringify(identity))
       throw new Error("Release identity changed while generating outputs");
     // Failed commands can leave useful partial outputs too. A later process
     // accepts exactly this observed inventory, never everything under a name.
@@ -140,7 +148,9 @@ async function withGeneratedOutputs(dir: string, sha: string, work: () => Promis
     const outputs: Record<string, string> = {};
     for (const entry of classifyStatus(status.stdout, true).ignored) if (GENERATED_OUTPUTS.has(entry)) outputs[entry] = await outputFingerprint(dir, entry, signal);
     signal.throwIfAborted();
-    if (JSON.stringify(await releaseIdentity(dir, checkout, runGit)) !== JSON.stringify(identity))
+    const identityAfterInventory = await releaseIdentity(dir, checkout, runGit);
+    signal.throwIfAborted();
+    if (JSON.stringify(identityAfterInventory) !== JSON.stringify(identity))
       throw new Error("Release identity changed while inventorying outputs");
     signal.throwIfAborted();
     const temporary = `${identity.marker}.${process.pid}.tmp`;
@@ -149,18 +159,28 @@ async function withGeneratedOutputs(dir: string, sha: string, work: () => Promis
     try {
       await fs.writeFile(temporary, receipt, { mode: 0o600, flag: "wx" });
       signal.throwIfAborted();
-      if (JSON.stringify(await releaseIdentity(dir, checkout, runGit)) !== JSON.stringify(identity))
+      const identityBeforeReceipt = await releaseIdentity(dir, checkout, runGit);
+      signal.throwIfAborted();
+      if (JSON.stringify(identityBeforeReceipt) !== JSON.stringify(identity))
         throw new Error("Release identity changed before recording outputs");
       signal.throwIfAborted();
       await fs.rename(temporary, identity.marker);
       renamed = true;
       signal.throwIfAborted();
-      for (const [entry, fingerprint] of Object.entries(outputs)) {
-        if (fingerprint !== await outputFingerprint(dir, entry, signal)) throw new Error("Release output changed before provenance was consumed");
-      }
-      signal.throwIfAborted();
-      if (JSON.stringify(await releaseIdentity(dir, checkout, runGit)) !== JSON.stringify(identity))
-        throw new Error("Release identity changed after recording outputs");
+      await withOutputMutationGuard(dir, Object.keys(outputs), signal, async assertStable => {
+        for (let pass = 0; pass < 2; pass++) {
+          for (const [entry, fingerprint] of Object.entries(outputs)) {
+            if (fingerprint !== await outputFingerprint(dir, entry, signal)) throw new Error("Release output changed before provenance was consumed");
+            signal.throwIfAborted();
+          }
+        }
+        signal.throwIfAborted();
+        const identityAfterReceipt = await releaseIdentity(dir, checkout, runGit);
+        signal.throwIfAborted();
+        if (JSON.stringify(identityAfterReceipt) !== JSON.stringify(identity))
+          throw new Error("Release identity changed after recording outputs");
+        if (afterRecord) await afterRecord(assertStable);
+      }, !afterRecord);
     } catch (error) {
       if (renamed) {
         try {
@@ -457,8 +477,9 @@ export class UpdateRunner {
     const { checkout, remote, branch, bun, env } = this.config;
     const target = this.state.target!;
     const release = this.state.releaseDir!;
-    const generatedWork = (work: () => Promise<number | null>) => this.ports.withGeneratedOutputs
-      ? this.ports.withGeneratedOutputs(release, target, work, checkout) : work();
+    const generatedWork = (work: () => Promise<number | null>, afterRecord?: (assertStable: () => Promise<void>) => Promise<void>) => this.ports.withGeneratedOutputs
+      ? this.ports.withGeneratedOutputs(release, target, work, checkout, afterRecord)
+      : work().then(async result => { await afterRecord?.(async () => {}); return result; });
     const command = async (argv: string[], cwd: string, work?: string): Promise<number> => {
       push(`$ ${argv.join(" ")}   (in ${cwd})`, false);
       const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line), lowPriority: this.state.trigger === "auto" && name !== "build" && name !== "install", ...(work ? { work } : {}) });
@@ -520,9 +541,14 @@ export class UpdateRunner {
         if (head !== target) throw new StepError({ kind: "head-mismatch", head: shortSha(head), expected: shortSha(target) }, `HEAD is ${shortSha(head)}, expected ${shortSha(target)}`);
         if (!this.ports.buildIdReadable(release)) throw new StepError({ kind: "build-id-missing" }, ".next/BUILD_ID is missing after the build");
         this.ports.throwIfAborted?.();
-        await generatedWork(async () => { this.ports.markBuilt?.(release, target); return null; });
+        await generatedWork(async () => { this.ports.markBuilt?.(release, target); return null; }, async assertStable => {
+          this.ports.throwIfAborted?.();
+          await this.ports.publish({ sha: target, dir: release }, async () => {
+            this.ports.throwIfAborted?.();
+            await assertStable();
+          });
+        });
         this.ports.throwIfAborted?.();
-        await this.ports.publish({ sha: target, dir: release });
         push(`${shortSha(target)} is built in ${release}; the next restart runs it`, false);
         return null;
       }
@@ -543,7 +569,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
   let waiting: AbortController | null = null;
   let currentExit: Promise<number | null> | null = null;
   let currentScope: string | null = null;
-  let generated: { controller: AbortController; done: Promise<unknown> } | null = null;
+  let generated: { controller: AbortController; done: Promise<unknown>; publishing: boolean } | null = null;
   let abortRequested = false;
   return {
     async run(command, { cwd, env, onLine, lowPriority, work }) {
@@ -631,7 +657,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
       await stop();
       // Finish this attempt's receipt before another attempt can inspect or
       // overwrite it. A cancelled preflight must never start its command.
-      await inventory?.done.catch(() => {});
+      if (!inventory?.publishing) await inventory?.done.catch(() => {});
     },
     childAlive() {
       if (waiting) return true;
@@ -651,15 +677,20 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
     prepareExistingRelease(dir, checkout) {
       const controller = new AbortController();
       const done = prepareExistingRelease(dir, checkout, runGit, controller.signal);
-      const inventory = { controller, done };
+      const inventory = { controller, done, publishing: false };
       generated = inventory;
       return done.finally(() => { if (generated === inventory) generated = null; });
     },
-    withGeneratedOutputs(dir, sha, work, checkout) {
+    withGeneratedOutputs(dir, sha, work, checkout, afterRecord) {
       abortRequested = false;
       const controller = new AbortController();
-      const done = withGeneratedOutputs(dir, sha, work, controller.signal, checkout);
-      const inventory = { controller, done };
+      const inventory = { controller, done: Promise.resolve<unknown>(null), publishing: false };
+      const done = withGeneratedOutputs(dir, sha, work, controller.signal, checkout, async assertStable => {
+        if (!afterRecord) return;
+        inventory.publishing = true;
+        await afterRecord(assertStable);
+      });
+      inventory.done = done;
       generated = inventory;
       return done.finally(() => { if (generated === inventory) generated = null; });
     },

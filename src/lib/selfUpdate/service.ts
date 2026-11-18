@@ -1491,7 +1491,7 @@ export class SelfUpdateService {
       logDir: join(this.deps.dir, "steps"),
       releasesDir: record.releasesDir,
       env: this.deps.buildEnv(scratch),
-    }, (release) => pointer.publish(release), () => this.changed());
+    }, (release, assertReady) => pointer.publish(release, assertReady), () => this.changed());
     this.runnerRecord = record.releasePointer;
     if (this.savedUpdate && this.savedUpdate.steps.every((step) => (CHECKOUT_STEPS as readonly string[]).includes(step.name))) {
       this.runner.restore(this.savedUpdate);

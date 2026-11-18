@@ -103,7 +103,23 @@ test("rechecks after child close before consuming the digest", async () => {
     });
     return child;
   }) as typeof spawn;
-  await expect(outputFingerprint(root, "node_modules/", undefined, start)).rejects.toThrow("changed after inventory");
+  await expect(outputFingerprint(root, "node_modules/", undefined, start)).rejects.toThrow("changed");
+  expect(changed).toBe(true);
+});
+
+test("a mutation at the second worker close is caught by the final inventory", async () => {
+  const root = fixture();
+  const original = spawn; let workers = 0, changed = false;
+  const start = ((command: string, args: string[], options: SpawnOptions) => {
+    const child = original(command, args, options);
+    if (args.includes("--eval") && ++workers === 2) child.once("close", () => {
+      changed = true;
+      fs.writeFileSync(join(root, "node_modules/a"), "changed at final boundary");
+    });
+    return child;
+  }) as typeof spawn;
+  await expect(outputFingerprint(root, "node_modules/", undefined, start)).rejects.toThrow("changed");
+  expect(workers).toBe(2);
   expect(changed).toBe(true);
 });
 
@@ -125,7 +141,7 @@ test("refuses spawn failure", async () => {
 });
 
 test("refuses a missing output", async () => {
-  await expect(outputFingerprint(fixture(), "missing/")).rejects.toThrow("inventory failed");
+  await expect(outputFingerprint(fixture(), "missing/")).rejects.toThrow();
 });
 
 test("an already aborted signal starts no child", async () => {

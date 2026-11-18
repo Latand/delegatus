@@ -1249,7 +1249,7 @@ describe("a release directory that already passed its ready check", () => {
       prepareExistingRelease: async () => null,
       publish: (release) => { published.push(release); }, now: () => 1_000, ...overrides,
     };
-    const runner = (portOverrides: Partial<StepPorts> = {}) => new UpdateRunner({ checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir: join(base, "logs"), releasesDir, env: { PATH: "/usr/bin" } }, { ...ports, ...portOverrides }, () => {});
+    const runner = (portOverrides: Partial<StepPorts> = {}, configOverrides: Partial<ConstructorParameters<typeof UpdateRunner>[0]> = {}) => new UpdateRunner({ checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir: join(base, "logs"), releasesDir, env: { PATH: "/usr/bin" }, ...configOverrides }, { ...ports, ...portOverrides }, () => {});
     return { dir, calls, published, runner, setHead: (sha: string) => { head = sha; }, setMemory: (mb: number) => { memory = mb; } };
   }
   const commands = (calls: string[][]) => calls.map(stepOf);
@@ -1285,10 +1285,11 @@ describe("a release directory that already passed its ready check", () => {
     let inventories = 0;
     const real = realPorts(() => {});
     const runner = h.runner({
-      async withGeneratedOutputs(dir, _sha, work) {
+      async withGeneratedOutputs(dir, _sha, work, _checkout, afterRecord) {
         await outputFingerprint(dir, "node_modules/"); inventories++;
         const result = await work();
         await outputFingerprint(dir, "node_modules/"); inventories++;
+        await afterRecord?.(async () => {});
         return result;
       },
       throwIfAborted: real.throwIfAborted,
@@ -1309,6 +1310,59 @@ describe("a release directory that already passed its ready check", () => {
     await runner.start(TARGET);
     expect(runner.state.state).toBe("failed");
     expect(h.published).toEqual([]);
+  });
+
+  test("a delayed pointer HEAD read cannot publish after the ready deadline", async () => {
+    const h = built();
+    const pointerFile = join(h.dir, "..", "..", "release-pointer.json");
+    writeFileSync(pointerFile, "previous pointer\n");
+    let finishHead!: (value: string) => void;
+    let began!: () => void;
+    const entered = new Promise<void>(resolve => { began = resolve; });
+    const delayedPointer = new ReleasePointer(pointerFile, CHECKOUT, async () => {
+      began(); return await new Promise<string>(resolve => { finishHead = resolve; });
+    });
+    let cancelled = false;
+    const publishing = delayedPointer.publish({ sha: TARGET, dir: h.dir }, () => { if (cancelled) throw new Error("Self-update was cancelled"); });
+    await entered;
+    cancelled = true;
+    finishHead("checkout-head");
+    await expect(publishing).rejects.toThrow("cancelled");
+    expect(readFileSync(pointerFile, "utf8")).toBe("previous pointer\n");
+    expect(existsSync(`${pointerFile}.${process.pid}.tmp`)).toBe(false);
+  });
+
+  test("real ready timeout prevents a delayed ReleasePointer HEAD read from committing", async () => {
+    const h = built(), real = realPorts(() => {});
+    const pointerFile = join(h.dir, "..", "..", "release-pointer.json");
+    writeFileSync(pointerFile, "previous pointer\n");
+    let finishHead!: (value: string) => void;
+    let began!: () => void;
+    let settled!: () => void;
+    const entered = new Promise<void>(resolve => { began = resolve; });
+    const completed = new Promise<void>(resolve => { settled = resolve; });
+    const pointer = new ReleasePointer(pointerFile, CHECKOUT, async () => {
+      began(); return await new Promise<string>(resolve => { finishHead = resolve; });
+    });
+    const runner = h.runner({
+      withGeneratedOutputs: async (_dir, _sha, work, _checkout, afterRecord) => {
+        const result = await work();
+        await afterRecord?.(async () => {});
+        return result;
+      },
+      markBuilt: real.markBuilt,
+      publish: async (release, guard) => { try { await pointer.publish(release, guard); } finally { settled(); } },
+      abort: real.abort,
+      throwIfAborted: real.throwIfAborted,
+    }, { stepTimeoutMs: { ready: 20 } });
+    await runner.start(TARGET);
+    await entered;
+    expect(runner.state.state).toBe("failed");
+    expect(runner.state.steps.find(step => step.name === "ready")?.failure?.kind).toBe("timeout");
+    expect(readFileSync(pointerFile, "utf8")).toBe("previous pointer\n");
+    finishHead("checkout-head");
+    await completed;
+    expect(readFileSync(pointerFile, "utf8")).toBe("previous pointer\n");
   });
 
   test("is published again without an install or a build, and without waiting for build memory", async () => {
