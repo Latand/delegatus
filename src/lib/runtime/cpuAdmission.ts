@@ -265,6 +265,18 @@ export class CpuAdmissionQueue {
     rows.forEach((row, index) => assign.run(index + 1, row.seq + offset));
     this.db.query("UPDATE sqlite_sequence SET seq = ? WHERE name = 'tickets'").run(rows.length);
   }
+  private stalledDuration(now: number, headSince: number, last: number | null): number | undefined {
+    const elapsed = now - Math.max(headSince + this.maxWaitMs, last ?? 0);
+    return elapsed > CPU_QUEUE_STALE_GRACE_MS ? elapsed : undefined;
+  }
+  /** A ready command stays at the head while its outer slot is unavailable. */
+  slotWait(key: string): { waitedMs: number; stalledMs?: number } {
+    const row = this.db.query<{ since: number; last: number | null }, [string]>(
+      "SELECT since, last FROM tickets CROSS JOIN admission WHERE key = ? AND admission.id = 1",
+    ).get(key)!;
+    const now = this.now();
+    return { waitedMs: Math.max(0, now - row.since), stalledMs: this.stalledDuration(now, row.since, row.last) };
+  }
   /** Only the release owning this pipeline namespace reconciles stage tickets. */
   reconcile(prefix: string, active: ReadonlySet<string>, eligible = active): void {
     this.db.transaction(() => {
@@ -427,11 +439,11 @@ export class CpuAdmissionQueue {
       }
       // A lane head past its pressure bound, with no recent machine
       // admission, is stalled. This reading never estimates a remaining wait.
-      const stalledMs = now - Math.max(head.since + this.maxWaitMs, last ?? 0);
+      const stalledMs = this.stalledDuration(now, head.since, last);
       return {
         since: ticket.since, position, waitedMs, heldBy: observationChanged || position > 1 || spacing > 0 ? "queue" as const : "pressure" as const,
         ...(ticket.priority === 1 ? {} : { priority: ticket.priority === 0 ? "high" as const : "low" as const }),
-        ...(stalledMs > CPU_QUEUE_STALE_GRACE_MS ? { stalledMs } : {}),
+        ...(stalledMs !== undefined ? { stalledMs } : {}),
       };
     }).immediate();
     for (const line of decisions) (this.observer.log ?? logOwnerDecision)(line);

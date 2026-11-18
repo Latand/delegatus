@@ -12,7 +12,7 @@ import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext 
 
 const policy = cpuPressurePolicy();
 const pressure = new GateCpuPressure(policy ? { ...policy, releaseAfterMs: Number(process.env.LLV_GATE_PSI_RELEASE_SECONDS ?? 10) * 1000 } : null);
-const [mode, key, pid, queuedAt] = process.argv.slice(2);
+const [mode, key, pid, claimSlot] = process.argv.slice(2);
 if (mode === "--reuse-slot") {
   if (inheritedCpuSlot()) process.exit(0);
   if (process.env.LLV_GATE_SLOT_BROKER && process.env.LLV_GATE_SLOT_LEASE) {
@@ -62,16 +62,32 @@ const priority = cpuPriorityFromEnv();
 const lockWait = admissionLockWait(Number(process.env.LLV_CPU_ADMISSION_LOCK_TIMEOUT_MS ?? 30_000));
 const endWait = reportCpuWait();
 let queue: CpuAdmissionQueue | undefined;
-function slotAvailable(): boolean {
-  if (spawnSync("which", ["flock"], { stdio: "ignore" }).status !== 0) return true;
+const configuredSlots = Number(process.env.LLV_GATE_SLOTS || 6);
+const flock = Bun.which("flock");
+/** Return the effective cap only if it is full. The final claim runs under
+ * the shell's admission lock and excludes the slot it just took. */
+function fullSlotLimit(ownSlot?: string): number | undefined {
+  if (!flock) return undefined;
   const dir = process.env.LLV_GATE_LOCK_DIR ?? "/var/tmp";
-  fs.mkdirSync(dir, { recursive: true });
-  for (let i = 1; i <= Number(process.env.LLV_GATE_SLOTS ?? 6); i++) {
-    if (spawnSync("flock", ["-n", path.join(dir, `llv-heavy-gate.slot${i}.lock`), "true"], { stdio: "ignore" }).status === 0) return true;
+  const files = fs.readdirSync(dir);
+  const locked = (file: string) => {
+    const result = spawnSync(flock, ["-n", path.join(dir, file), "/bin/sh", "-c", ":"], { stdio: "ignore", timeout: 1_000 });
+    if (result.status === 0) return false;
+    if (result.status === 1) return true;
+    throw new Error("could not probe a heavy command slot lock");
+  };
+  let cap = configuredSlots;
+  for (const file of files) {
+    const match = /^llv-heavy-gate\.cap([1-9]\d*)\.lock$/.exec(file);
+    if (match && Number(match[1]) < cap && locked(file)) cap = Number(match[1]);
   }
-  return false;
+  let busy = 0;
+  for (const file of files) {
+    const match = /^llv-heavy-gate\.slot([1-9]\d*)\.lock$/.exec(file);
+    if (match && match[1] !== ownSlot && locked(file) && ++busy >= cap) return cap;
+  }
+  return undefined;
 }
-const queuedSince = Number.isFinite(Number(queuedAt)) ? Number(queuedAt) * 1000 : Date.now();
 const cancel = () => {
   // Dead command owners are reaped by the next successful queue check if
   // this best-effort delete cannot obtain the store lock.
@@ -100,19 +116,28 @@ try {
     return { reason, wait };
   };
   if (mode === "--claim") {
-    const { reason, wait } = await lockWait(check);
-    if (wait?.heldBy === "pressure" && reason) console.error(`gate-slot: ${reason}`);
-    process.exitCode = !wait ? 0 : 75;
+    if (claimSlot && fullSlotLimit(claimSlot) !== undefined) process.exitCode = 75;
+    else {
+      const { reason, wait } = await lockWait(check);
+      if (wait?.heldBy === "pressure" && reason) console.error(`gate-slot: ${reason}`);
+      process.exitCode = !wait ? 0 : 75;
+    }
   } else {
     let shown = "";
     for (;;) {
       const { reason, wait } = await lockWait(check);
-      if (!wait && slotAvailable()) break;
-      const waitedMinutes = Math.floor(Math.max(0, Date.now() - queuedSince) / 60_000);
-      const text = wait
-        ? wait.heldBy === "pressure" && reason ? `${reason} · ${ordinal(wait.position)} in CPU queue · waited ${Math.floor(wait.waitedMs / 60_000)} min`
-          : cpuQueueDetail(wait.position, wait.waitedMs, wait.stalledMs, wait.priority, wait.heldBy)
-        : `Waiting for a heavy command slot · all ${Number(process.env.LLV_GATE_SLOTS ?? 6)} busy · waited ${waitedMinutes} min`;
+      let text;
+      if (wait) {
+        text = wait.heldBy === "pressure" && reason && !wait.stalledMs
+          ? `${reason} · ${ordinal(wait.position)} in CPU queue · waited ${Math.floor(wait.waitedMs / 60_000)} min`
+          : cpuQueueDetail(wait.position, wait.waitedMs, wait.stalledMs, wait.priority, wait.heldBy);
+      } else {
+        const cap = fullSlotLimit();
+        if (cap === undefined) break;
+        const { waitedMs, stalledMs } = queue.slotWait(key);
+        const duration = stalledMs === undefined ? `waited ${Math.floor(waitedMs / 60_000)}` : `stalled for ${Math.floor(stalledMs / 60_000)}`;
+        text = `Waiting for a heavy command slot · all ${cap} busy · ${duration} min`;
+      }
       if (text !== shown) { console.error(`gate-slot: ${text}`); shown = text; }
       await Bun.sleep(Number(process.env.LLV_GATE_POLL_SECONDS ?? 2) * 1000);
     }

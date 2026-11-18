@@ -253,7 +253,9 @@ still needs its slot lock and the spacing.
 When the head of a ticket's lane is past its ten-minute bound and nothing has
 been admitted on the machine for a minute since, the wait no longer promises minutes: the state detail reads
 `Waiting for the CPU queue · 7th · stalled for 62 min · high priority`, the card says the
-queue is stalled, and gate-slot prints the same line.
+queue is stalled, and gate-slot prints the same line. When a ready check is
+waiting on slots, gate-slot keeps the slot cause in the line, for example
+`Waiting for a heavy command slot · all 1 busy · stalled for 2 min`.
 
 A stage waits before its spawn reservation and wakes every five seconds. Its
 state detail and board card name the queue position, what holds it, and the
@@ -665,8 +667,12 @@ Other tests:
     `Waiting for a heavy command slot · all 1 busy · waited 0 min`;
   - a V3 stage check on the same queue file is admitted meanwhile;
   - a holder count sampled from the lock files never exceeds 1;
-  - under high fake pressure an aged command stays held, and its line names the
-    pressure reason.
+  - sustained high fake pressure holds both commands before ten minutes.
+    After their tickets reach the bound, both start in FIFO order while PSI
+    stays high;
+  - with different slot caps, an aged command waits for the stricter active
+    cap at readiness and at the final claim. A lone aged head waiting for a
+    locked slot reports the slot cause and the stalled duration after the grace.
 - `src/lib/pipelines/engine.cpuQueue.test.ts`: a pending stage behind an owned
   command ticket waiting for a slot launches. A held stage's `stateDetail`
   shows the queue and pressure forms with waited minutes.
@@ -707,7 +713,11 @@ minute 10; (b) the stage check returns `null`.
 
 `scripts/gate-slot.sh` locks `/var/tmp/llv-heavy-gate.slot<N>.lock`, the files
 the installed `/var/tmp/llv-gate` uses, so both gates count against the same six
-slots. `LLV_GATE_LOCK_DIR` still overrides the directory, and the hooks pass the
+slots by default. Before accepting a final claim, gate-slot serializes the
+check of occupied slots and applies the lowest cap among the caller and active
+gate-slot jobs. Each admitted job holds a shared lock for its cap alongside
+its slot until the owned runner exits. The legacy gate contributes its slot
+occupancy. `LLV_GATE_LOCK_DIR` overrides the directory, and the hooks pass the
 shared directory into their isolated environment.
 
 ## Installation files (written by the operator, applied at a quiet moment)

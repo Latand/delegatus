@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Heavy commands wait for low CPU pressure and a free shared machine slot in
-# the same pass, then run in their own scope in the CPU work slice
+# Heavy commands wait for CPU queue readiness and a free shared machine slot,
+# then run in their own scope in the CPU work slice
 # (docs/design/cpu-placement.md). The slot lock files are the ones the installed
 # /var/tmp/llv-gate uses, so both gates count against one set of slots.
 set -euo pipefail
@@ -203,24 +203,36 @@ fi
 # Propagate helper failures; only a lost slot race retries.
 claim() {
   local code=0
-  "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid" || code=$?
+  "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid" "$@" || code=$?
   if [[ $code != 0 && $code != 75 ]]; then exit "$code"; fi
   return "$code"
 }
 queue_key="command:$$:$RANDOM:$RANDOM"
-queued_at=$(date +%s)
 while :; do
-  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid" "$queued_at"
+  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
   if ! command -v flock >/dev/null; then
     if claim; then end_cpu_wait; run "$@"; fi
   else
-    for ((i=1; i<=slots; i++)); do
-      exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
-      if flock -n 9; then
-        if claim; then end_cpu_wait; run "$@"; fi
-      fi
-      exec 9>&-
-    done
+    # Serialize the slot and cap check with other final claims. The shared
+    # cap lock lives alongside fd 9 for the owned runner's whole lifetime.
+    exec 8>"$lock_dir/llv-heavy-gate.claim.lock"
+    if flock -n 8; then
+      for ((i=1; i<=slots; i++)); do
+        exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
+        if flock -n 9; then
+          exec 7>"$lock_dir/llv-heavy-gate.cap$slots.lock"
+          if flock -s -n 7 && claim "$i"; then
+            exec 8>&-
+            end_cpu_wait
+            run "$@"
+          fi
+          exec 9>&- 7>&-
+          break
+        fi
+        exec 9>&-
+      done
+    fi
+    exec 8>&-
   fi
   sleep "$poll"
 done

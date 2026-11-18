@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
+import { cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { realExec } from "../src/lib/workflows/provision";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
@@ -135,6 +135,71 @@ test("gate-slot lifts the pressure hold at ten minutes and preserves FIFO throug
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n"); f.age(); await Promise.allSettled(pending); f.close(); }
 }, 20_000);
 
+test.skipIf(process.platform !== "linux")("an aged gate respects the strictest active cap under sustained pressure", async () => {
+  const f = fixture(), control = new AbortController();
+  const pending: ReturnType<typeof realExec>[] = [];
+  const release = path.join(f.dir, "release"), stderr = path.join(f.dir, "stderr");
+  const bin = path.join(f.dir, "bin"), bun = path.join(bin, "gate-bun");
+  const stale = path.join(f.dir, "stale-readiness"), refused = path.join(f.dir, "claim-refused");
+  fs.mkdirSync(bin);
+  // Model a readiness observation that missed the strict cap. Only the wait
+  // helper's probe lies. The shell and the fresh claim helper use real locks.
+  fs.writeFileSync(path.join(bin, "flock"), `#!/bin/bash
+if [[ \${CPU_SLOT_WAIT_PROBE:-} == yes && -f "$CPU_SLOT_STALE" && "$2" == *.cap1.lock ]]; then exit 0; fi
+exec "$CPU_SLOT_REAL_FLOCK" "$@"
+`, { mode: 0o755 });
+  fs.writeFileSync(bun, `#!/bin/bash
+if [[ "$2" == --wait ]]; then export CPU_SLOT_WAIT_PROBE=yes; fi
+"$CPU_SLOT_REAL_BUN" "$@"
+code=$?
+if [[ "$2" == --claim && $code == 75 && -f "$CPU_SLOT_STALE" ]]; then
+  rm -- "$CPU_SLOT_STALE"
+  : > "$CPU_SLOT_REFUSED"
+fi
+exit "$code"
+`, { mode: 0o755 });
+  const log = () => fs.existsSync(stderr) ? fs.readFileSync(stderr, "utf8") : "";
+  const last = () => f.db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last;
+  try {
+    pending.push(realExec("bash", ["scripts/gate-slot.sh", "bash", "-c", 'echo one >> "$CPU_QUEUE_OUTPUT"; while [[ ! -f "$CPU_SLOT_RELEASE" ]]; do sleep 0.02; done'],
+      process.cwd(), { ...f.env, LLV_GATE_SLOTS: "1", CPU_SLOT_RELEASE: release }, { timeoutMs: 20_000, signal: control.signal }));
+    await until(() => f.count() === 1);
+    f.age();
+    await until(() => fs.existsSync(f.env.CPU_QUEUE_OUTPUT));
+    const firstAdmission = last();
+    expect(firstAdmission).not.toBeNull();
+    pending.push(realExec("bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "slot-fixture", ...f.command("two")],
+      process.cwd(), {
+        ...f.env, LLV_GATE_SLOTS: "2", CPU_SLOT_STDERR: stderr, LLV_GATE_BUN: bun,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, CPU_SLOT_REAL_BUN: process.execPath,
+        CPU_SLOT_REAL_FLOCK: Bun.which("flock")!, CPU_SLOT_STALE: stale, CPU_SLOT_REFUSED: refused,
+      }, { timeoutMs: 20_000, signal: control.signal }));
+    await until(() => f.count() === 1);
+    f.age();
+    // Wait for the post-spacing decision, whichever result the gate reaches.
+    await until(() => log().includes("Waiting for a heavy command slot · all 1 busy") || last() !== firstAdmission);
+    expect(last()).toBe(firstAdmission);
+    fs.writeFileSync(stale, "");
+    await until(() => fs.existsSync(refused) || last() !== firstAdmission);
+    expect(last()).toBe(firstAdmission);
+    expect(fs.existsSync(refused)).toBe(true);
+    await until(() => Bun.spawnSync(["flock", "-n", path.join(f.dir, "llv-heavy-gate.slot2.lock"), "/bin/true"]).exitCode === 0);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("one\n");
+    expect(f.count()).toBe(1);
+    fs.writeFileSync(release, "release");
+    const results = await Promise.all(pending);
+    expect(results.map(result => result.code), log()).toEqual([0, 0]);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("one\ntwo\n");
+    expect(last()! - firstAdmission!).toBeGreaterThanOrEqual(CPU_QUEUE_SPACING_MS);
+    expect(f.count()).toBe(0);
+  } finally {
+    fs.writeFileSync(release, "release");
+    control.abort();
+    await Promise.allSettled(pending);
+    f.close();
+  }
+}, 30_000);
+
 test("a restarted claim helper refuses high pressure before the queue bound and accepts it after", async () => {
   const f = fixture();
   const claim = async () => {
@@ -226,11 +291,11 @@ test("dead and unverifiable owners at the head stop blocking real gates, each wi
   } finally { await Promise.allSettled(pending); f.close(); }
 }, 30_000);
 
-test.skipIf(process.platform !== "linux")("an aged gate under sustained pressure still waits for a locked slot", async () => {
+for (const lockedSlot of [1, 2]) test.skipIf(process.platform !== "linux")(`an aged gate under sustained pressure still waits for a locked slot (slot ${lockedSlot}, cap 1)`, async () => {
   const f = fixture(), control = new AbortController();
   const stderr = path.join(f.dir, "stderr");
   const env = { ...f.env, LLV_GATE_SLOTS: "1", CPU_SLOT_STDERR: stderr };
-  const lock = path.join(f.dir, "llv-heavy-gate.slot1.lock");
+  const lock = path.join(f.dir, `llv-heavy-gate.slot${lockedSlot}.lock`);
   const holder = Bun.spawn(["flock", lock, "bash", "-c", 'printf "ready\n"; read -r line'], {
     stdin: "pipe", stdout: "pipe", stderr: "inherit", env,
   });
@@ -249,6 +314,13 @@ test.skipIf(process.platform !== "linux")("an aged gate under sustained pressure
     } catch {
       throw new Error(`The aged gate never became ready to take a slot. ${log()}`);
     }
+    expect(log()).not.toContain("stalled for");
+    expect(f.db.query("SELECT last FROM admission").get()).toEqual({ last: null });
+    // The lone ticket is still the ready head. Age its persisted timestamp
+    // past the grace while its shell and the held slot stay the same.
+    f.db.query("UPDATE tickets SET since = ?").run(Date.now() - CPU_QUEUE_MAX_WAIT_MS - 2 * 60_000);
+    await until(() => log().includes("Waiting for a heavy command slot · all 1 busy · stalled for 2 min") || log().includes("waited 12 min"));
+    expect(log()).toContain("Waiting for a heavy command slot · all 1 busy · stalled for 2 min");
     expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
     expect(f.count()).toBe(1);
     holder.stdin.write("release\n");
