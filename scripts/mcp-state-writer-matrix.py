@@ -60,17 +60,20 @@ def environment(root):
 
 
 def shared_export(root, side, revision, bun, dependencies):
-    """Use the common exact-revision exporter and its dependency input fence."""
-    result = subprocess.check_output([str(bun), "scripts/review-export.ts", revision],
-                                     cwd=REPO, env={**os.environ, "TMPDIR": str(root)}, text=True)
-    exported = json.loads(result)
-    checkout = pathlib.Path(exported["directory"])
-    if exported["dependencies"] != "shared" or (checkout / "node_modules").resolve() != dependencies.resolve():
-        shutil.rmtree(checkout.parent)
-        raise RuntimeError("matrix requires matching read-only dependencies for every selected revision")
+    """Keep the matrix's frozen candidate dependency graph on every side.
+
+    Historical product inputs intentionally differ. Their dependencies stay
+    normalized to the candidate snapshot named in every manifest, as before.
+    """
     target = root / side
-    checkout.rename(target)
-    shutil.rmtree(checkout.parent)
+    subprocess.run([str(bun), "-e", """
+        import { sharedCheckout } from './scripts/source-checkout.ts';
+        import { checkAttemptTmpBudget } from './scripts/attempt-tmp-budget.ts';
+        checkAttemptTmpBudget();
+        sharedCheckout(process.cwd(), process.argv[1], process.argv[2]);
+        checkAttemptTmpBudget();
+    """, str(target), revision], cwd=REPO, check=True)
+    (target / "node_modules").symlink_to(dependencies, target_is_directory=True)
     return target
 
 
@@ -1159,6 +1162,7 @@ def main():
                         "observerSha256": digest(observer), "bunVersion": subprocess.check_output([str(bun), "--version"], text=True).strip(),
                         "bunSha256": digest(bun), "nodeVersion": subprocess.check_output([str(runtime / "node"), "--version"], text=True).strip(),
                         "nodeSha256": digest(runtime / "node"), "pythonVersion": platform.python_version(),
+                        "dependencySourceRevision": head,
                         "dependencyLockSha256": digest(REPO / "bun.lock"), "capabilitiesFileSha256": digest(capabilities),
                         "dependencySnapshotSha256": dependency_hash_file.read_text(),
                         "kernel": platform.release(), "quotaHierarchyLeafFirst": quotas(), "seedSha256": seed_hash}

@@ -40,11 +40,11 @@ sys.exit(result.returncode)
   }
 });
 
-function fixture(incompatible: boolean, missingAudit = false) {
+function fixture(incompatible: boolean, missingAudit = false, privateDependencies = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-setup-")); roots.push(root);
   const source = path.join(root, "source"), output = path.join(root, "output");
   fs.mkdirSync(path.join(source, "scripts"), { recursive: true });
-  for (const name of ["review-export.ts", "source-checkout.ts", "attempt-tmp-budget.ts"])
+  for (const name of ["source-checkout.ts", "attempt-tmp-budget.ts"])
     fs.copyFileSync(path.join(import.meta.dir, name), path.join(source, "scripts", name));
   fs.writeFileSync(path.join(source, "package.json"), JSON.stringify({ dependencies: {} }));
   fs.writeFileSync(path.join(source, "bun.lock"), "{}");
@@ -67,6 +67,10 @@ function fixture(incompatible: boolean, missingAudit = false) {
   fs.mkdirSync(path.join(output, "runtime"), { recursive: true });
   fs.symlinkSync(process.execPath, path.join(output, "runtime/bun"));
   fs.symlinkSync(execFileSync("which", ["node"], { encoding: "utf8" }).trim(), path.join(output, "runtime/node"));
+  if (privateDependencies) {
+    fs.mkdirSync(path.join(output, "node_modules"));
+    fs.writeFileSync(path.join(output, "node_modules/preserved"), "old output");
+  }
   const result = spawnSync("python3", ["-B", "-c", load + `
 m.REPO = pathlib.Path(${JSON.stringify(source)})
 m.HARNESS = ["harness.ts"]
@@ -94,6 +98,7 @@ test.skipIf(process.platform !== "linux")("real matrix setup shares objects and 
     expect(manifest.sourceRevision).toBe(side === "candidate" ? f.head : f.baseline);
     expect(manifest.sourceTree).toBe(side === "candidate" ? f.tree : f.baselineTree);
     expect(manifest.harnessRevision).toBe(f.head);
+    expect(manifest.dependencySourceRevision).toBe(f.head);
     expect(manifest.harnessFiles["harness.ts"]).toBe(new Bun.CryptoHasher("sha256").update("candidate harness").digest("hex"));
     expect(fs.readFileSync(path.join(target, "harness.ts"), "utf8")).toBe("candidate harness");
     expect(fs.readFileSync(path.join(target, "payload"))[0]).toBe(side === "candidate" ? 2 : 1);
@@ -108,12 +113,16 @@ test.skipIf(process.platform !== "linux")("real matrix setup shares objects and 
   expect(fs.readFileSync(dependency)).toEqual(Buffer.alloc(4 * 1024 ** 2, 3));
 });
 
-test.skipIf(process.platform !== "linux")("matrix refuses incompatible revision dependencies before sample dispatch", () => {
+test.skipIf(process.platform !== "linux")("historical dependency inputs keep the declared frozen candidate snapshot", () => {
   const f = fixture(true);
-  expect(f.result.status).toBe(1);
-  expect(f.result.stderr).toContain("matrix requires matching read-only dependencies");
-  expect(f.result.stdout).not.toContain("first sample dispatched");
-  expect(fs.existsSync(path.join(f.output, "main"))).toBeFalse();
+  expect({ code: f.result.status, error: f.result.stderr }).toMatchObject({ code: 0 });
+  expect(f.result.stdout).toContain("first sample dispatched");
+  const manifest = JSON.parse(fs.readFileSync(path.join(f.output, "main.manifest.json"), "utf8"));
+  expect(manifest.dependencySourceRevision).toBe(f.head);
+  expect(manifest.dependencySnapshotSha256).toBe(JSON.parse(fs.readFileSync(path.join(f.output, "candidate.manifest.json"), "utf8")).dependencySnapshotSha256);
+  expect(manifest.dependencyLockSha256).toBe(new Bun.CryptoHasher("sha256").update(fs.readFileSync(path.join(f.source, "bun.lock"))).digest("hex"));
+  expect(fs.readFileSync(path.join(f.output, "main/bun.lock"), "utf8")).toBe("{}");
+  expect(fs.realpathSync(path.join(f.output, "main/node_modules"))).toBe(path.join(f.source, "node_modules"));
   expect(fs.readdirSync(f.output).some(name => name.startsWith("llv-review-export-"))).toBeFalse();
   expect(f.git("status", "--porcelain")).toBe("");
 });
@@ -123,4 +132,12 @@ test.skipIf(process.platform !== "linux")("unselected revisions need no ref or c
   expect({ code: f.result.status, error: f.result.stderr }).toMatchObject({ code: 0 });
   expect(f.result.stdout).toContain("first sample dispatched");
   expect(fs.existsSync(path.join(f.output, "audit"))).toBeFalse();
+});
+
+test.skipIf(process.platform !== "linux")("resume refuses an output with private dependencies without changing them", () => {
+  const f = fixture(false, false, true);
+  expect(f.result.status).toBe(1);
+  expect(f.result.stderr).toContain("resume requires the same shared read-only dependency installation");
+  expect(f.result.stdout).not.toContain("first sample dispatched");
+  expect(fs.readFileSync(path.join(f.output, "node_modules/preserved"), "utf8")).toBe("old output");
 });
