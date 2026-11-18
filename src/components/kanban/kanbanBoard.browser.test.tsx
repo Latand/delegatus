@@ -46234,3 +46234,112 @@ describe("seat tick toggle shows its state in the card's first frame", () => {
     } finally { release?.(); await browser.close(); sockets.close(); server.stop(); }
   }, 600_000);
 });
+
+
+describe("Relay targets answered by another install", () => {
+  browserTest("answer sources and explicit per-clone moves in English and Ukrainian", async () => {
+    const out = process.env.LLV_EVIDENCE_DIR ? path.join(process.env.LLV_EVIDENCE_DIR, "relay-answer-source") : path.resolve(".artifacts/relay-answer-source");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: scheme, ...(phone ? { isMobile: true, hasTouch: true } : {}) });
+        try {
+          await context.addInitScript(({ lang }) => {
+            localStorage.setItem("llv_lang", lang);
+            const names = lang === "uk" ? ["Спільний клон", "Місцевий клон", "Клон сервісу"] : ["Shared clone", "Local clone", "Service clone"];
+            const targets = names.map((name, i) => ({ id: `clone-${i}`, name, answered_by: i === 1 ? "install" : "service", answered_elsewhere: i === 0,
+              engine: "codex-cloud", model: "gpt-6.1-sol", fallback: "service", enabled: true, effort: null, project: null, concurrency: 1, hardCapMinutes: 30 }));
+            const relay = { id: "fixture-relay", origin: "https://relay.example", name: "Relay", description: "", paused: false,
+              owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-11-17T12:00:00Z", targets };
+            const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+            const writes: unknown[] = [];
+            Object.assign(window, { relayOwnershipWrites: writes });
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true, get: () => fetcher, set: (next: typeof fetch) => {
+              fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                const url = new URL(String(input), location.origin);
+                if (url.pathname === "/api/external-relay") return json({ relays: [relay], pending: [], status: [{ id: relay.id, state: { state: "polling" }, running: {} }] });
+                if (url.pathname === "/api/external-relay/known") return json({ known: [] });
+                if (url.pathname.startsWith("/api/external-relay/")) {
+                  if (init?.method === "PATCH" && url.pathname.endsWith("/targets/clone-0")) {
+                    const patch = JSON.parse(String(init.body)); writes.push(patch);
+                    Object.assign(targets[0]!, { answered_by: "install", answered_elsewhere: false });
+                    return json({ target: targets[0] });
+                  }
+                  return json({ error: "not_found" });
+                }
+                return next(input, init);
+              }) as typeof fetch;
+            } });
+          }, { lang });
+          const page = await context.newPage();
+          await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
+          await page.goto(server.base);
+          await page.waitForSelector(phone ? "[data-mobile2-shell], [data-mobile-shell], [data-phone-card]" : "[data-kanban-board]");
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const rows = page.locator("[data-external-relay-target]");
+          await rows.first().waitFor();
+          expect(await page.locator("[data-external-relay-release-elsewhere]").textContent()).toBe(lang === "en"
+            ? "Switching on moves it here from the other install." : "Увімкнення перенесе його сюди з іншої інсталяції.");
+          expect(await page.getByText(lang === "en" ? "Answered by this install" : "Відповідає ця інсталяція", { exact: true }).count()).toBe(1);
+          const labels = await page.locator("[data-external-relay-answer-source]").allTextContents();
+          expect(labels).toEqual(lang === "en" ? ["Answered by another install", "Answered by this install", "Answered by the service"]
+            : ["Відповідає інша інсталяція", "Відповідає ця інсталяція", "Відповідає сервіс"]);
+          const geometry = await rows.evaluateAll((rows, phone) => rows.map(row => {
+            const label = row.querySelector<HTMLElement>("[data-external-relay-answer-source]")!;
+            const control = row.querySelector<HTMLElement>("[data-external-relay-answered-by]")!;
+            const box = control.getBoundingClientRect();
+            const edgeHits = [[box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2], [box.left + box.width / 2, box.top + 1], [box.left + box.width / 2, box.bottom - 1]].every(([x, y]) => control.contains(document.elementFromPoint(x!, y!)));
+            const range = document.createRange(); range.selectNodeContents(row.querySelector("[data-external-relay-target-fold]")!);
+            const text = range.getBoundingClientRect(); const own = row.getBoundingClientRect();
+            return { label: label.textContent, clipped: label.scrollWidth > label.clientWidth + 1, width: box.width, height: box.height, edgeHits,
+              clearTop: text.top - own.top, clearBottom: own.bottom - text.bottom,
+              phone, touch: navigator.maxTouchPoints > 0, coarse: matchMedia("(pointer: coarse)").matches };
+          }), phone);
+          fs.writeFileSync(path.join(out, "latest-geometry.json"), JSON.stringify({ width, lang, scheme, geometry }, null, 2));
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-${width}.png`), fullPage: true });
+          for (const row of geometry) {
+            expect(row.clipped).toBe(false); expect(row.edgeHits).toBe(true);
+            expect(row.clearTop).toBeGreaterThanOrEqual(4); expect(row.clearBottom).toBeGreaterThanOrEqual(4);
+            if (phone) { expect(row.width).toBeGreaterThanOrEqual(44); expect(row.height).toBeGreaterThanOrEqual(44); expect(row.touch && row.coarse).toBe(true); }
+          }
+          const frame = `${lang}-${scheme}-${width}.png`;
+          const control = rows.first().locator("[data-external-relay-answered-by]");
+          const press = () => phone ? control.tap() : control.click();
+          const writes = () => page.evaluate(() => (window as unknown as { relayOwnershipWrites: unknown[] }).relayOwnershipWrites);
+          const nativeDialogs: string[] = [];
+          page.on("dialog", dialog => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); });
+          const confirmation = page.locator("[data-external-relay-move-confirm]");
+          await press();
+          await confirmation.waitFor();
+          const text = (await confirmation.textContent()) ?? "";
+          expect(text).toContain(lang === "en" ? "from the other install to this install" : "з іншої інсталяції до цієї");
+          expect(text).toContain(lang === "en" ? "Shared clone" : "Спільний клон");
+          const goLabel = lang === "en" ? "Move here" : "Перенести сюди";
+          const cancelLabel = lang === "en" ? "Cancel" : "Скасувати";
+          expect(await confirmation.locator("button").allTextContents()).toEqual([cancelLabel, goLabel]);
+          const confirmBox = await confirmation.evaluate(el => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, inside: r.left >= 0 && r.right <= innerWidth }; });
+          expect(confirmBox.inside).toBe(true);
+          await page.screenshot({ path: path.join(out, `confirm-${frame}`), fullPage: true });
+          await (phone ? confirmation.locator("[data-external-relay-move-cancel]").tap() : confirmation.locator("[data-external-relay-move-cancel]").click());
+          await confirmation.waitFor({ state: "detached" });
+          expect(await writes()).toEqual([]);
+          await press();
+          await confirmation.waitFor();
+          await (phone ? confirmation.locator("[data-external-relay-move-go]").tap() : confirmation.locator("[data-external-relay-move-go]").click());
+          await page.waitForFunction(() => document.querySelector("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]")?.getAttribute("aria-checked") === "true");
+          expect(await writes()).toEqual([{ answered_by: "install", confirmTakeover: true }]);
+          expect(nativeDialogs).toEqual([]);
+          readings.push({ frame, width, lang, scheme, geometry });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); server.stop(); sockets.close(); }
+  }, 300_000);
+});

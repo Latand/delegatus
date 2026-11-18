@@ -25,6 +25,8 @@ export const targetSchema = z.object({
   target_id: id,
   name: label,
   answered_by: z.enum(["install", "service"]),
+  // Relative to this pairing: service routing may belong to another install (§B.2 rule 10).
+  answered_elsewhere: z.boolean().optional(),
   fallback: z.enum(["service", "none"]),
 });
 // Endpoint 6. One entry per target id: a list naming a target twice cannot
