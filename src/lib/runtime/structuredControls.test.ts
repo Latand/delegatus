@@ -919,6 +919,24 @@ test("a kill transport timeout after journal admission reports the durable recei
   });
 });
 
+test("an owned kill leaves an uncertain acknowledgement for its caller to reconcile", async () => {
+  const fixture = structuredConversation();
+  let commands = 0, reads = 0;
+  const client = {
+    command: async () => {
+      commands++;
+      throw new RuntimeHostUnavailableError("runtime host request timed out");
+    },
+    operationStatus: async () => { reads++; return null; },
+  } as unknown as RuntimeHostClient;
+  const result = await dispatchStructuredControl({
+    path: fixture.path, conversationId: fixture.conversationId, action: "kill", operationId: "owned-fixture-stop",
+    onlyIfIdle: { revision: 1, writerClaim: "fixture-writer" },
+  }, { registry: fixture.registry, client, enabled: () => true, recoverTransportReceipt: false });
+  expect(result).toEqual({ status: 503, body: { error: "runtime host request timed out" } });
+  expect({ commands, reads }).toEqual({ commands: 1, reads: 0 });
+});
+
 test("a kill transport timeout with no durable record stays a retryable failure", async () => {
   const fixture = structuredConversation();
   const client = {

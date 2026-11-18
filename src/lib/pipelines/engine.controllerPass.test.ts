@@ -4,6 +4,7 @@ import { requestPipelineTick } from "./controllerSignal";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineStopReadLanes } from "./controllerStopRead";
 import { createServer } from "node:net";
+import { ownedStageControl } from "./fixtures/ownedStageControl";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
 import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withDeliveryMutationAsync, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
 import { SqliteStateCollection, StateSnapshotChangedError, resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "@/lib/state/sqliteStateStore";
@@ -1585,7 +1586,156 @@ test.each([
   "a slow scoped RPC returns %s after %i ms while an unrelated cold lane starts before the deadline",
   (reply, responseMs) => auditIsolatedColdProvisioning("direct", "pinned", 1, { reply, responseMs }), 30_000);
 
+test.each(["stop", "withdrawal"] as const)(
+  "an accepted peer %s remains pending while the controller starts an unrelated child",
+  mutation => auditIsolatedColdProvisioning("direct", "pinned", 1, { mutation }), 30_000);
+
+test.each([
+  ["stop", false], ["withdrawal", false], ["stop", true], ["withdrawal", true],
+] as const)(
+  "a fresh process reconciles an owned %s after its sender exits, admission still pending %s",
+  (mutation, holdBeforeAdmission) => withControllerAuditState(async () => {
+    const fixture = await ownedStageControl(mutation, "2026-11-18T12:00:00.000Z", holdBeforeAdmission);
+    const target = {
+      conversationId: fixture.conversationId, launchId: fixture.launchId, agentPath: fixture.transcriptPath,
+      stageId: "build", attempt: 1, paneId: null,
+    };
+    const source = `
+      import { defaultPipelinePorts, invalidateProviderContinuation } from "./src/lib/pipelines/engine.ts";
+      import { terminalIdleStopKey } from "./src/lib/pipelines/stageControlCustody.ts";
+      const { mutation, target } = JSON.parse(process.argv[1]);
+      try {
+        const outcome = mutation === "stop"
+          ? await defaultPipelinePorts().stopStageAgent(target, { onlyIfIdle: true, operationId: terminalIdleStopKey(target) })
+          : (await invalidateProviderContinuation(target.conversationId, undefined, { key: "fixture-restart-withdrawal", artifactPath: target.agentPath }), { outcome: "confirmed" });
+        console.log("owned-control-result", JSON.stringify(outcome));
+      } catch (error) {
+        console.log("owned-control-result", JSON.stringify({ outcome: "unknown", reason: String(error) }));
+      }
+    `;
+    const start = () => Bun.spawn([process.execPath, "-e", source, JSON.stringify({ mutation, target })], {
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const incumbent = start();
+    const initialError = new Response(incumbent.stderr).text();
+    const initialOutput = new Response(incumbent.stdout).text();
+    const observe = async () => {
+      const process = start();
+      try {
+        const result = Promise.all([process.exited, new Response(process.stderr).text(), new Response(process.stdout).text()]);
+        await until(result, 6_000);
+        const [code, errors, output] = await result;
+        expect(code, errors).toBe(0);
+        const observed = output.split("\n").find(line => line.startsWith("owned-control-result "));
+        if (!observed) throw new Error("restarted mutation observer did not report an outcome");
+        return JSON.parse(observed.slice("owned-control-result ".length));
+      } finally {
+        if (process.exitCode === null && process.signalCode === null) process.kill();
+        await process.exited;
+      }
+    };
+    try {
+      const held = holdBeforeAdmission ? fixture.mutationEntered : fixture.mutationAccepted;
+      await until(Promise.race([held, incumbent.exited.then(async code => {
+        throw new Error(`owned mutation sender exited before it reached the held phase (${code}): ${await initialError} ${await initialOutput}`);
+      })]), 6_000);
+      incumbent.kill();
+      await incumbent.exited;
+      const pending = await observe();
+      expect(fixture.dispatches).toHaveLength(1);
+      if (holdBeforeAdmission) {
+        expect(fixture.stops).toHaveLength(0);
+        expect(fixture.withdrawals).toHaveLength(0);
+        expect(pending.outcome).toBe(mutation === "stop" ? "unconfirmed" : "unknown");
+        if (mutation === "withdrawal") expect(pending.reason).toContain("awaits a confirmed receipt");
+        fixture.release();
+        await until(fixture.mutationAccepted);
+      }
+      const reconciled = holdBeforeAdmission ? await observe() : pending;
+      expect(fixture.dispatches).toHaveLength(1);
+      if (mutation === "stop") {
+        expect(fixture.stops).toHaveLength(1);
+        expect(reconciled).toMatchObject({ outcome: "unconfirmed", operationId: fixture.stops[0]!.operationId });
+        const { claimIdleStop, readIdleStop, terminalIdleStopKey } = await import("./stageControlCustody");
+        const binding = await readIdleStop(terminalIdleStopKey(target));
+        if (!binding) throw new Error("the accepted stop has no ownership binding");
+        const alias = terminalIdleStopKey({ ...target, launchId: "another-attempt-for-the-same-host" });
+        const { kind: _kind, operationId: _operationId, ...identity } = binding;
+        expect(await claimIdleStop(alias, identity)).toEqual({ acquired: false, binding });
+        expect(await readIdleStop(alias)).toEqual(binding);
+      } else {
+        expect(fixture.withdrawals).toHaveLength(1);
+        expect(reconciled).toEqual({ outcome: "confirmed" });
+      }
+    } finally {
+      if (incumbent.exitCode === null && incumbent.signalCode === null) incumbent.kill();
+      await incumbent.exited;
+      await fixture.dispose();
+    }
+  }), 25_000);
+
+test.each(["stop", "withdrawal"] as const)(
+  "a delayed %s cannot act on a replacement turn",
+  mutation => withControllerAuditState(async () => {
+    const fixture = await ownedStageControl(mutation, "2026-11-18T12:00:00.000Z", true);
+    const { terminalIdleStopKey } = await import("./stageControlCustody");
+    const { defaultPipelinePorts, invalidateProviderContinuation } = await import("./engine");
+    const target = {
+      conversationId: fixture.conversationId, launchId: fixture.launchId, agentPath: fixture.transcriptPath,
+      stageId: "build", attempt: 1, paneId: null,
+    };
+    const stop = () => defaultPipelinePorts().stopStageAgent(target, { onlyIfIdle: true, operationId: terminalIdleStopKey(target) });
+    const withdraw = () => invalidateProviderContinuation(target.conversationId, undefined, { key: "fixture-stale-withdrawal", artifactPath: target.agentPath });
+    try {
+      if (mutation === "withdrawal") {
+        await expect(invalidateProviderContinuation(target.conversationId, undefined, {
+          key: "fixture-other-generation", artifactPath: target.agentPath + ".old",
+        })).rejects.toThrow("cannot prove session authority");
+        expect(fixture.dispatches).toHaveLength(0);
+      }
+      const pending = (mutation === "stop" ? stop() : withdraw()).then(
+        value => ({ value, error: null }), error => ({ value: null, error: String(error) }),
+      );
+      await until(fixture.mutationEntered);
+      fixture.publish("running", "fixture-writer-two");
+      const current = fixture.journal.readSession({ conversationId: fixture.conversationId });
+      if (!current) throw new Error("the replacement turn has no session row");
+      fixture.release();
+      const result = await pending;
+      const settled = fixture.journal.readSession({ conversationId: fixture.conversationId });
+      // A refused kill publishes its receipt while leaving session authority intact.
+      const rejected = fixture.stops[0]?.receipt;
+      if (mutation === "stop" && !rejected) throw new Error("the refused stop has no journal receipt");
+      expect(settled).toEqual({ ...current, recentReceipts: rejected ? [rejected] : current.recentReceipts });
+      expect(current.activeTurnId).toBe("fixture-new-turn");
+      expect(fixture.dispatches).toHaveLength(1);
+      if (mutation === "withdrawal") {
+        expect(result.error).toContain("session row changed");
+        expect(fixture.withdrawals).toHaveLength(0);
+        await expect(withdraw()).rejects.toThrow("awaits a confirmed receipt");
+        expect(fixture.dispatches).toEqual(["append-session-fenced"]);
+        return;
+      }
+      expect(result.value).toEqual({ outcome: "deferred" });
+      expect(fixture.stops[0]?.receipt).toMatchObject({ status: "rejected", reason: "idle-retirement-deferred" });
+      expect(await stop()).toEqual({ outcome: "deferred" });
+      expect(fixture.dispatches).toHaveLength(1);
+
+      fixture.publish("idle", "fixture-writer-two");
+      const fresh = await stop();
+      expect(fixture.stops).toHaveLength(2);
+      expect(fixture.stops[1]?.receipt.status).toBe("queued");
+      expect(fixture.stops[1]?.operationId).not.toBe(fixture.stops[0]?.operationId);
+      expect(fresh).toMatchObject({ outcome: "unconfirmed", operationId: fixture.stops[1]?.operationId });
+      expect(await stop()).toEqual(fresh);
+      expect(fixture.dispatches).toHaveLength(2);
+    } finally {
+      await fixture.dispose();
+    }
+  }), 12_000);
+
 type StopReadCase = { reply: "clear" | "operator-stop" | "clear-after-pause"; responseMs: number };
+type ColdProvisionScenario = StopReadCase | { mutation: "stop" | "withdrawal" };
 
 async function delayedScopedStopServer(conversationId: string, admittedAt: string, scenario: StopReadCase, pause: () => Promise<void>) {
   const { reply, responseMs } = scenario;
@@ -1642,7 +1792,7 @@ async function delayedScopedStopServer(conversationId: string, admittedAt: strin
   } };
 }
 
-function auditIsolatedColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, scenario?: StopReadCase) {
+function auditIsolatedColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, scenario?: ColdProvisionScenario) {
   return withControllerAuditState(() => auditColdProvisioning(admission, base, blockerCount, scenario));
 }
 
@@ -1666,8 +1816,10 @@ async function withControllerAuditState(audit: () => Promise<void>) {
   }
 }
 
-async function auditColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, scenario?: StopReadCase) {
-  const reply = scenario?.reply;
+async function auditColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, scenario?: ColdProvisionScenario) {
+  const rpc = scenario && "reply" in scenario ? scenario : undefined;
+  const mutation = scenario && "mutation" in scenario ? scenario.mutation : undefined;
+  const reply = rpc?.reply;
   const f = await realWorktreeLane("cold-provision-audit", BUILD_ONLY as never);
   const h = f.h;
   const old = loadPipelines()[0]!;
@@ -1713,8 +1865,9 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
   });
   const observedBlockers = new Set<string>();
   let stopServer: Awaited<ReturnType<typeof delayedScopedStopServer>> | undefined;
+  let heldControl: Awaited<ReturnType<typeof ownedStageControl>> | undefined;
   h.ports.conversationOperatorStopped = async (id, since, ignored) => {
-    if (!blockedConversations.has(id)) return false;
+    if (mutation || !blockedConversations.has(id)) return false;
     stopReads++;
     if (!stalled && !stopServer) return false;
     observedBlockers.add(id);
@@ -1775,7 +1928,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
   let tick: Promise<void> | undefined;
   try {
     await until(observerReady.promise);
-    if (scenario) stopServer = await delayedScopedStopServer(attempt.conversationId!, requestedAt, scenario, async () => {
+    if (rpc) stopServer = await delayedScopedStopServer(attempt.conversationId!, requestedAt, rpc, async () => {
       await withPipelineMutation(async (rows, persist) => {
         const paused = rows.find(row => row.id === old.id)!;
         paused.pausedState = "running";
@@ -1784,6 +1937,27 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
         await persist([paused]);
       });
     });
+    if (mutation) {
+      heldControl = await ownedStageControl(mutation, requestedAt);
+      const { conversationId, launchId, transcriptPath } = heldControl;
+      Object.assign(attempt, { conversationId, launchId, agentPath: transcriptPath, paneId: null });
+      blockedConversations.clear();
+      blockedConversations.add(conversationId);
+      blockedPanes.clear();
+      if (mutation === "stop") {
+        old.state = "completed";
+        old.cursor = null;
+        Object.assign(attempt, { state: "passed", completedAt: requestedAt, verdict: { status: "pass" } });
+        delete attempt.suspension;
+        const real = defaultPipelinePorts();
+        h.ports.stopStageAgent = real.stopStageAgent;
+        h.ports.stageHostResident = real.stageHostResident;
+      } else {
+        h.ports.invalidateProviderContinuation = defaultPipelinePorts().invalidateProviderContinuation;
+      }
+      savePipelines(blockers);
+      void heldControl.mutationAccepted.then(() => { observedBlockers.add(conversationId); blocked.resolve(); });
+    }
     if (process.env.LLV_COLD_CONTROLLER_LATE === "1") {
       const exec = h.ports.provisionExec!;
       h.ports.provisionExec = async (command, args, cwd, signal, options) => {
@@ -1832,18 +2006,35 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     expect(logs.filter(line => line.includes("pending at deadline"))).toEqual([]);
     expect(observedBlockers.size).toBe(blockerCount);
     const retained = (await findControllerPipeline(old.id))!;
-    if (!reply) expect(retained.runs[0]?.attempts).toMatchObject([{ n: 1, suspension: { retryRequestedAt: requestedAt } }]);
+    if (!reply && mutation !== "stop") expect(retained.runs[0]?.attempts).toMatchObject([{ n: 1, suspension: { retryRequestedAt: requestedAt } }]);
     expect(cpuKeys.size).toBeGreaterThan(0);
     expect(await f.git(cold.worktreeDir, "rev-parse", "HEAD")).toBe(f.base);
     const worktrees = (await f.git(f.repo, "worktree", "list", "--porcelain")).split("\n");
     expect(worktrees.filter(line => line === `worktree ${cold.worktreeDir}`)).toHaveLength(1);
 
+    if (heldControl) {
+      for (let pass = 0; pass < 4; pass++) await controller.tick();
+      expect(heldControl.stops).toHaveLength(mutation === "stop" ? 1 : 0);
+      expect(heldControl.withdrawals).toHaveLength(mutation === "withdrawal" ? 1 : 0);
+      if (mutation === "stop") {
+        const operation = heldControl.stops[0]!;
+        expect(operation.receipt.status).toBe("queued");
+        heldControl.publish("running", "fixture-writer-two");
+        const refused = heldControl.journal.transitionOperation(operation.operationId, "delivering");
+        expect(refused.receipt).toMatchObject({ status: "failed", reason: "idle-retirement-deferred" });
+        expect(heldControl.journal.readSession({ conversationId: heldControl.conversationId })?.activeTurnId).toBe("fixture-new-turn");
+      }
+      heldControl.release();
+    }
     stalled = false;
     release.resolve();
     await settlePipelineStopReadLanes();
     for (let pass = 0; pass < 4; pass++) await controller.tick();
     const waitingForCpu = await findControllerPipeline(old.id);
-    if (reply === "operator-stop") {
+    if (mutation === "stop") {
+      expect(waitingForCpu?.state).toBe("completed");
+      expect(heldControl?.stops).toHaveLength(1);
+    } else if (reply === "operator-stop") {
       expect(waitingForCpu?.stateDetail).toContain("stopped by operator");
       const stopped = waitingForCpu?.runs[0]?.attempts[0]?.suspension?.operatorStoppedAt;
       expect(typeof stopped).toBe("string");
@@ -1861,7 +2052,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     }
     for (const peer of blockers) {
       const recovered = await findControllerPipeline(peer.id);
-      if (reply && reply !== "clear") {
+      if (mutation === "stop" || reply && reply !== "clear") {
         expect(recovered?.runs[0]?.attempts.map(item => item.n)).toEqual([1]);
         expect(h.spawnInputs.filter(input => input.cwd === old.worktreeDir)).toHaveLength(1);
         continue;
@@ -1873,22 +2064,29 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, state: "running" }]);
     expect(h.spawnInputs.filter(input => input.cwd === cold.worktreeDir)).toHaveLength(1);
     if (stopServer) expect(stopServer.evidence).toEqual({ requests: 1, responses: 1, closedBeforeResponse: 0 });
+    if (heldControl) {
+      expect(heldControl.stops).toHaveLength(mutation === "stop" ? 1 : 0);
+      expect(heldControl.withdrawals).toHaveLength(mutation === "withdrawal" ? 1 : 0);
+    }
     observer.send("finished");
     await until(observationComplete.promise);
     if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
-      console.log("cold-controller-audit", JSON.stringify({ admission, base, blockerCount, ...observation, stopReads, cancelledReads, scenario, rpc: stopServer?.evidence }));
+      console.log("cold-controller-audit", JSON.stringify({ admission, base, blockerCount, ...observation, stopReads, cancelledReads, scenario, rpc: stopServer?.evidence,
+        dispatchedStops: heldControl?.stops.length, withdrawals: heldControl?.withdrawals.length }));
     }
     expect(observation).toMatchObject({ callbacks: 1, children: 1 });
     expect(observation?.deadlineReached, "independent acceptance-to-child deadline of 15000 ms").toBe(false);
   } finally {
     stalled = false;
     release.resolve();
+    heldControl?.release();
     unregister();
     if (child?.exitCode === null) child.kill();
     await child?.exited;
     await Promise.allSettled([tick, wake]);
     await settlePipelineStopReadLanes();
     await stopServer?.close();
+    await heldControl?.dispose();
     if (observer.exitCode === null) observer.kill();
     await observer.exited;
     for (const timer of timers) clearTimeout(timer);

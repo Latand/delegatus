@@ -109,10 +109,13 @@ test.each(["stop", "delivery", "withdrawal"] as const)("explicit suspended retry
     ? { outcome: "unconfirmed", operationId: args[1]!.operationId!, detail: "pending" } : stop(...args);
   f.h.ports.conversationDeliveryOutstanding = () => fence === "delivery" && held;
   f.h.ports.invalidateProviderContinuation = async () => { if (fence === "withdrawal" && held) throw Error("host unavailable"); };
+  const stopCount = () => f.h.calls.filter(call => call.startsWith("stop-host:")).length;
+  const before = stopCount();
   expect((await f.retry()).error).toBeUndefined();
   await tickPipelines([], f.h.ports);
   expect(f.attempts()).toHaveLength(1);
   expect(f.h.spawnInputs).toHaveLength(1);
+  if (fence === "withdrawal") expect(stopCount()).toBe(before);
   held = false;
   await tickPipelines([], f.h.ports); await tickPipelines([], f.h.ports);
   expect(f.attempts()).toHaveLength(2);
