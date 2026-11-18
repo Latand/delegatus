@@ -426,7 +426,7 @@ export class CpuAdmissionQueue {
       // The active gate's fence is visible to older command checkers. It is
       // outside this release's FIFO. At its bound a current shell also passes
       // older pressure-only shells, which cannot act on an expired hold.
-      const passLegacyGates = key.startsWith(BOUNDED_GATE_PREFIX) && budget === 0 && !pressureAllows;
+      const passLegacyGates = key.startsWith(BOUNDED_GATE_PREFIX) && budget === 0;
       const gateFilter = passLegacyGates ? `AND (low_pressure = 0 OR key GLOB '${BOUNDED_GATE_PREFIX}*')` : "";
       const counted = `${lane} AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*' ${gateFilter} AND (${agedClass} < ? OR (${agedClass} = ? AND fifo_seq <= ?)) AND (? = 0 OR low_pressure = 0 OR key = ?) AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)`;
       const args: [number, number, number, number, number, number, number, number, string] = [now, this.maxWaitMs, effectiveClass, now, this.maxWaitMs, effectiveClass, ticket.fifo_seq, passesLowPressure, key];

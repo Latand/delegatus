@@ -69,6 +69,16 @@ test("a slot observation made before another admission cannot consume a ready ga
   expect(peer.check("stage:next", true)).toBeNull();
 });
 
+test("a bounded gate outwaits a legacy pressure-only head even with a different pressure setting", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), queue = f.open();
+  const legacy = "command:legacy", key = "command:bounded:current";
+  expect(queue.check(legacy, false, owner, false, undefined, true)).toMatchObject({ position: 1, heldBy: "pressure" });
+  expect(queue.check(key, true, owner, false, undefined, true)).toMatchObject({ position: 2, heldBy: "queue" });
+  f.at(CPU_QUEUE_MAX_WAIT_MS);
+  expect(queue.check(key, true, owner, true, undefined, true)).toBeNull();
+  expect(queue.check(legacy, false, owner, false, undefined, true)).toMatchObject({ since: 0, position: 1 });
+});
+
 test.each(["stage", "workflow"])("a gate held for pressure at the head lets a %s start at its own bound; gates keep FIFO", prefix => {
   const f = fixture(), owner = captureProcessIdentity(process.pid), gates = f.open(), key = `${prefix}:s`;
   const gate = (name: string, low = false) => gates.check(name, low, owner, true, undefined, true);

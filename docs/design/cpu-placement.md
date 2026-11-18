@@ -722,10 +722,11 @@ fences current claims because the older holder's cap is unknown. The hand-run
 gate also contributes occupied slots.
 
 Older installed and checkout wrappers can keep polling during the transition.
-At high pressure, an aged current ticket can pass older pressure-only tickets.
-Current tickets keep their FIFO order within their effective priority and use
-the same spacing. Older tickets keep their stored place for when their own
-pressure check permits a start. A current claim records a live fence at the
+After reaching the wait bound, a current ticket can pass older pressure-only
+tickets, even if the two wrappers use different pressure settings. Current
+tickets keep their FIFO order within their effective priority and use the same
+spacing. Older tickets keep their stored place for when their own pressure
+check permits a start. A current claim records a live fence at the
 front of the older command queue, in the same transaction that consumes its
 ticket. Older wrappers reap the fence when its owner exits. A change to the
 last admission during the kernel slot probe forces a fresh claim. Stage

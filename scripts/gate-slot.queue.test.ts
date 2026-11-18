@@ -164,12 +164,14 @@ test.skipIf(!hasLegacyGate)("an older pressure-only head yields to bounded gates
     const initial = f.db.query<{ key: string }, []>(`SELECT key ${queuedTickets} ORDER BY fifo_seq`).all();
     expect(output()).toBe("");
     f.age();
+    await until(() => output().includes("second\n"), 15_000);
     const current = await Promise.all(pending.slice(1));
     expect(current.map(result => result.code), JSON.stringify(current)).toEqual([0, 0]);
     expect(output()).toBe("first\nsecond\n");
     expect(f.db.query(`SELECT key ${queuedTickets}`).all()).toEqual([initial[0]]);
     expect(fs.readFileSync(f.env.LLV_GATE_PSI_FILE, "utf8")).toContain("avg10=90.00");
     fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+    await until(() => output().includes("legacy\n"), 15_000);
     expect((await pending[0]!).code).toBe(0);
     expect(output()).toBe("first\nsecond\nlegacy\n");
     expect(f.count()).toBe(0);
@@ -209,6 +211,7 @@ for (const legacyHolds of [true, false]) test.skipIf(!hasLegacyGate)(`mixed wrap
     expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("holder\n");
     expect(f.count()).toBe(1);
     fs.writeFileSync(release, "release");
+    await until(() => fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8").includes("entrant\n"), 15_000);
     const results = await Promise.all(pending);
     expect(results.map(result => result.code), log()).toEqual([0, 0]);
     expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("holder\nentrant\n");
