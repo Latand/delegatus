@@ -1,4 +1,4 @@
-import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
+import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, normalizeInputMediaDescriptor, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
 import { z } from "zod";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
@@ -25,6 +25,8 @@ export const targetSchema = z.object({
   target_id: id,
   name: label,
   answered_by: z.enum(["install", "service"]),
+  // Relative to this pairing: service routing may belong to another install (§B.2 rule 10).
+  answered_elsewhere: z.boolean().optional(),
   fallback: z.enum(["service", "none"]),
 });
 // Endpoint 6. One entry per target id: a list naming a target twice cannot
@@ -97,6 +99,7 @@ const inputMediaSchema = z.object({
   mime_type: boundedString(100).optional(), filename: boundedString(128).optional(),
   byte_size: z.number().int().positive().max(20971520).optional(), expires_at: time.optional(),
 }).strict();
+const claimMediaSchema = inputMediaSchema.extend({ byte_size: z.number().int().positive().safe().optional() });
 const mentionSchema = z.object({ author_key: id, offset: z.number().int().min(0).max(31999), length: z.number().int().min(1).max(128) }).strict();
 const messageSchema = z.object({
   id,
@@ -131,13 +134,13 @@ const toolSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).refine((value) => Buffer.byteLength(JSON.stringify(value)) <= 8192).optional(),
   audience: z.enum(["admin", "owner"]).optional(),
 });
-export const relayAnswerDescription = "Only while you answer a relay message as its owner: text is your reply posted in the chat (without it, your last message is posted); format, buttons, mentions and attachments choose how it is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; mentions annotates person labels at original Unicode-scalar offsets; attachments are files under your document roots. Photo references use stable attachment_id values from the receipt; several photos form one carousel with your message. Each call replaces the previous one. Refused in every other conversation and after the answer.";
+export const relayAnswerDescription = "Only while you answer a relay message as its owner: text is your reply posted in the chat (without it, your last message is posted); format, buttons, mentions and attachments choose how it is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; mentions annotates person labels at original Unicode-scalar offsets; attachments select exactly one path under your document roots or an unexpired media_ref downloaded in this request. Photo references use stable attachment_id values from the receipt; several photos form one carousel with your message. Each call replaces the previous one. Refused in every other conversation and after the answer.";
 export const relayAnswerSchema = z.object({
   text: z.string().min(1).max(32000).optional().describe("Your reply as posted in the chat."),
   mentions: z.array(mentionSchema).max(16).optional(),
   format: z.enum(["plain","rich_markdown"]).optional(),
   buttons: z.array(z.array(z.object({text:boundedString(64).refine(v => v.length > 0),url:boundedString(2048).refine(v => v.length > 0)})).min(1).max(3)).max(2).optional(),
-  attachments: z.array(z.object({path:z.string().min(1).max(4096),kind:z.enum(["photo","document","audio","video"]),caption:z.string().max(1024).optional(),filename:boundedString(128).refine(v => v.length > 0).optional()})).max(4).optional(),
+  attachments: z.array(z.object({path:z.string().min(1).max(4096).optional(),media_ref:z.string().regex(/^media_[0-9a-f]{32}$/).optional(),kind:z.enum(["photo","document","audio","video"]),caption:z.string().max(1024).optional(),filename:boundedString(128).refine(v => v.length > 0).optional()}).refine(v => (v.path !== undefined) !== (v.media_ref !== undefined), { message: "Choose exactly one path or media_ref" })).max(4).optional(),
 });
 
 export const mediaKindSchema = z.enum(["photo", "document", "audio", "video"]);
@@ -217,16 +220,28 @@ const answerRequestSchema = z.object({
     progress: z.enum(["notes", "none"]),
   }),
 });
-/** Normalize each history photo independently; anchor media stays fail-closed. */
+/** Normalize item policy refusals on anchors; malformed anchors stay fail-closed. */
 export const requestSchema = z.preprocess(raw => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const value = raw as Record<string, unknown>;
+  let value = raw as Record<string, unknown>;
   const inbound = Array.isArray(value.features) && value.features.includes("relay_media_in");
   if (!value.input || typeof value.input !== "object" || Array.isArray(value.input)) return raw;
-  const input = value.input as Record<string, unknown>;
+  let input = value.input as Record<string, unknown>;
   const trigger = Array.isArray(input.conversation) ? input.conversation.find(message =>
     message && typeof message === "object" && message.id === input.respond_to) : undefined;
   const allowed = new Set([trigger?.id, trigger?.reply_to].filter(candidate => typeof candidate === "string"));
+  if (inbound && Array.isArray(input.conversation)) {
+    input = { ...input, conversation: input.conversation.map(message => {
+      if (!message || !allowed.has(message.id) || !Array.isArray(message.media)) return message;
+      return { ...message, media: message.media.map((rawMedia: unknown) => {
+        const parsed = claimMediaSchema.safeParse(rawMedia);
+        if (!parsed.success) return rawMedia;
+        try { return normalizeInputMediaDescriptor(parsed.data, value.features as string[]); }
+        catch { return rawMedia; }
+      }) };
+    }) };
+    value = { ...value, input };
+  }
   const history = inbound && (value.delivery === "guest" || (value.features as string[]).includes(RELAY_HISTORY_MEDIA));
   // Anchor descriptors take precedence over conflicting historical copies.
   const refs = new Map<string, InputMedia>();

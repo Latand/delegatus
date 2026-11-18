@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import "./launcher-inherited-children.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";

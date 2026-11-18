@@ -45,12 +45,17 @@ async function olderStore(root: string, vocabulary: [string, string] = ['"deploy
   // Exercise the real store with an older role vocabulary (pre-merger by
   // default), including its separate SQLite cache. All other validation and
   // persistence code is intact.
-  const original = fs.readFileSync(path.join(import.meta.dir, "store.ts"), "utf8");
+  const original = fs.readFileSync(path.join(import.meta.dir, "storedRecord.ts"), "utf8");
   expect(original).toContain(vocabulary[0]);
-  const source = original
-    .replace(vocabulary[0], vocabulary[1])
+  const resolveImports = (source: string) => source
     .replaceAll('from "@/lib/', `from "${path.resolve(import.meta.dir, '..')}/`)
     .replaceAll('from "./', `from "${import.meta.dir}/`);
+  const validatorPath = path.join(root, "older-stored-record.ts");
+  fs.writeFileSync(validatorPath, resolveImports(original.replace(vocabulary[0], vocabulary[1])));
+  // Both the store's internal validators and its public reexports must use
+  // this reader's vocabulary, independently of the current reader's module.
+  const source = resolveImports(fs.readFileSync(path.join(import.meta.dir, "store.ts"), "utf8")
+    .replaceAll('from "./storedRecord"', `from "${validatorPath}"`));
   const modulePath = path.join(root, "older-store.ts");
   fs.writeFileSync(modulePath, source);
   return import(modulePath);

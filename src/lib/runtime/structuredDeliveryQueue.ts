@@ -28,7 +28,7 @@ import {
   type StructuredMessageContent,
 } from "./structuredContent";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
-import { StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
+import { StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
 import { StageAttemptSettledError } from "./stageGitEnvironment";
 import type { DeliveryProgressNote, DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
 import { ACTIVE_DELIVERY_PHASES, type DeliveryWaitReason } from "./deliveryWaitReason";
@@ -853,6 +853,8 @@ function forgetRetirementOperation(operationId: string, executorId?: string): vo
 
 export class StructuredDeliveryQueue {
   private activeDrain: Promise<void> | null = null;
+  private postAdmissionDrain: Promise<void> | null = null;
+  private postAdmissionPredecessor: Promise<void> | null = null;
   private rerun = false;
   private readonly targetErrors = new Map<string, string>();
   private readonly passRetry = new RetryBackoff();
@@ -996,12 +998,18 @@ export class StructuredDeliveryQueue {
   }
 
   /** Guarantees a drain pass whose journal read starts after this request. */
-  async drainAfterAdmission(freshAdmission = false): Promise<void> {
+  drainAfterAdmission(freshAdmission = false): Promise<void> {
     const precedingDrain = this.activeDrain;
+    if (this.postAdmissionDrain && this.postAdmissionPredecessor === precedingDrain) return this.postAdmissionDrain;
     /* The preceding drain owner reports its own failure. This barrier still
        evaluates the journal state created by the completed admission. */
-    if (precedingDrain) await precedingDrain.catch(() => undefined);
-    await this.drain({ freshAdmission });
+    const run = (async () => {
+      if (precedingDrain) await precedingDrain.catch(() => undefined);
+      await this.drain({ freshAdmission });
+    })().finally(() => { if (this.postAdmissionDrain === run) this.postAdmissionDrain = null; });
+    this.postAdmissionPredecessor = precedingDrain;
+    this.postAdmissionDrain = run;
+    return run;
   }
 
   /** Admission names its recipient. Share the ordinary target lane and all
@@ -1037,6 +1045,7 @@ export class StructuredDeliveryQueue {
 
   private async drainUntilSettled(safety = false): Promise<void> {
     let first = true;
+    let passes = 0;
     do {
       this.rerun = false;
       try {
@@ -1053,7 +1062,8 @@ export class StructuredDeliveryQueue {
         this.lastPassError = failureReason(error);
         throw error;
       }
-    } while (this.rerun && !this.retirementExecutor.retired);
+    } while (this.rerun && ++passes < 2 && !this.retirementExecutor.retired);
+    if (this.rerun && !this.retirementExecutor.retired) this.retrySoon();
   }
 
   private async drainPass(safety = false, freshConversationId?: string, kickAt?: number): Promise<void> {
@@ -1157,7 +1167,9 @@ export class StructuredDeliveryQueue {
           ? right.eventSeq - left.eventSeq
           : left.eventSeq - right.eventSeq);
     });
+    const effectKinds = new Map<string, DeliveryEffect["kind"]>();
     for (const effect of effects) {
+      effectKinds.set(effect.operationId, effect.kind);
       this.markTiming(effect.operationId, "queue-kick", new Date(kickAt ?? listingStartedAt).toISOString());
       const target = grouped.get(effect.conversationId) ?? [];
       target.push(effect);
@@ -1179,7 +1191,8 @@ export class StructuredDeliveryQueue {
         if (conversationId === freshConversationId) this.freshReruns.add(conversationId);
         for (const effect of grouped.get(conversationId) ?? []) {
           if (effect.operationId !== busy.current?.operationId) {
-            this.noteWait(effect, "conversation-busy", { wake: "event" });
+            this.noteWait(effect, "conversation-busy", { wake: "event", detail:
+              `earlier ${effectKinds.get(busy.current?.operationId ?? "") ?? "delivery"} is still settling in ${busy.current?.phase ?? "host observation"}` });
           }
         }
         continue;
@@ -2862,19 +2875,20 @@ export class StructuredDeliveryQueue {
     }
     const receipt = outcome.receipt;
     if (receipt.outcome === "rejected") {
+      const refusal = receipt.refusal ?? receipt.reason;
       if (receipt.reason === "stale-turn") {
         /* A send that lost a race with a turn change goes back to the queue.
            An interrupt-and-resend retries its interrupt path as well. */
         if ((effect.kind === "send" && effect.policy !== "steer-if-active") || context.steerByInterrupt) {
-          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
-          this.noteWait(effect, "awaiting-turn", { detail: "the turn changed before the hand-over" });
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: refusal });
+          this.noteWait(effect, "awaiting-turn", { detail: receipt.refusal ?? "the turn changed before the hand-over" });
           return "stop";
         }
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: receipt.reason });
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: refusal });
         return "next";
       }
-      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
-      this.noteWait(effect, "awaiting-turn", { detail: receipt.reason ?? "the host declined the hand-over" });
+      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: refusal });
+      this.noteWait(effect, "awaiting-turn", { detail: receipt.refusal ?? receipt.reason ?? "the host declined the hand-over" });
       return "stop";
     }
     await this.transitionUnlessSettled(effect.operationId, "delivered", {
@@ -3675,6 +3689,21 @@ export class StructuredDeliveryQueue {
         return;
       }
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
+        this.retrySoon();
+        return;
+      }
+      /* An orphan with work in flight is stopped once its grace ends; the
+         operation stays queued and names the wait. */
+      if (error instanceof StructuredOrphanGraceError) {
+        this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
+        this.retrySoon();
+        return;
+      }
+      /* An orphan whose stop was refused holds the send for a bounded time,
+         in case the refusal clears (a pending action ends, survivors exit);
+         past it the send fails with that refusal as its reason. */
+      if (error instanceof StructuredOrphanStopRefusedError && error.holding) {
+        this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
         this.retrySoon();
         return;
       }

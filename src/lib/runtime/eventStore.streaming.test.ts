@@ -1,0 +1,106 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { expect, spyOn, test } from "bun:test";
+import { FileRuntimeEventStore } from "./eventStore";
+import type { RuntimeEvent } from "./engineHost";
+
+const event = (seq: number): RuntimeEvent => ({ kind: "delta", turnId: "turn", text: "дані 🌱", seq });
+function fixture(contents: string) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "event-stream-"));
+  const filename = path.join(directory, "thread.jsonl");
+  fs.writeFileSync(filename, contents);
+  return { filename, store: new FileRuntimeEventStore(directory), directory };
+}
+const line = (seq: number) => JSON.stringify(event(seq));
+
+test.each([
+  ["malformed JSON", "{broken}"],
+  ["invalid event", JSON.stringify({ kind: "unknown", seq: 1 })],
+  ["empty record", ""],
+  ["sequence gap after 1", `${line(1)}\n${line(3)}`],
+  ["sequence gap after 1", `${line(1)}\n${line(1)}`],
+])("stream validates discarded prefix: %s", async (reason, prefix) => {
+  const f = fixture(`${prefix}\n${Array.from({ length: 2100 }, (_, i) => line(i + 4)).join("\n")}\n`);
+  await expect(f.store.scan("thread", () => {})).rejects.toThrow(reason);
+});
+
+test.each(["{partial", JSON.stringify({ kind: "unknown", seq: 3 }), ""])("stream preserves partial final record semantics: %s", async tail => {
+  const f = fixture(`${line(1)}\n${line(2)}\n${tail}`);
+  const seen: RuntimeEvent[] = [];
+  expect(await f.store.scan("thread", e => seen.push(e))).toBe(2);
+  expect(seen).toEqual(f.store.load("thread"));
+  expect(fs.readFileSync(f.filename, "utf8")).toBe(`${line(1)}\n${line(2)}\n${tail}`);
+});
+
+test("valid unterminated tail is included and its sequence is checked", async () => {
+  const f = fixture(`${line(41)}\n${line(42)}`);
+  const seen: RuntimeEvent[] = [];
+  expect(await f.store.scan("thread", e => seen.push(e))).toBe(42);
+  expect(seen).toEqual([event(41), event(42)]);
+  fs.writeFileSync(f.filename, `${line(41)}\n${line(43)}`);
+  await expect(f.store.scan("thread", () => {})).rejects.toThrow("sequence gap after 41");
+});
+
+test("stream reads writer output after reopening, including UTF-8 across chunks, without whole-file reads", async () => {
+  const f = fixture(`${line(1)}\n`);
+  const large = { ...event(2), text: "🌱ї".repeat(30_000) } as RuntimeEvent;
+  f.store.append("thread", large);
+  const reopened = new FileRuntimeEventStore(f.directory);
+  const read = spyOn(fs, "readFileSync");
+  const seen: RuntimeEvent[] = [];
+  try {
+    expect(await reopened.scan("thread", e => seen.push(e))).toBe(2);
+    expect(read).not.toHaveBeenCalled();
+  } finally { read.mockRestore(); }
+  expect(seen).toEqual([event(1), large]);
+  expect(seen).toEqual(reopened.load("thread"));
+  reopened.append("thread", event(3));
+  expect(await new FileRuntimeEventStore(f.directory).scan("thread", () => {})).toBe(3);
+});
+
+test("stream propagates visitor failures and can reopen afterwards", async () => {
+  const f = fixture(`${line(1)}\n`);
+  await expect(f.store.scan("thread", () => { throw new Error("consumer failed"); })).rejects.toThrow("consumer failed");
+  expect(await f.store.scan("thread", () => {})).toBe(1);
+  expect(await f.store.scan("missing", () => {})).toBe(0);
+  const empty = fixture("");
+  await expect(empty.store.scan("thread", () => {})).rejects.toThrow("empty record");
+});
+
+test("a replaced or truncated prefix refuses the read; concurrent append stays outside the snapshot", async () => {
+  for (const change of ["replace", "truncate", "append"]) {
+    const f = fixture(`${line(1)}\n${line(2)}\n`);
+    const seen: RuntimeEvent[] = [];
+    const pending = f.store.scan("thread", e => {
+      seen.push(e);
+      if (e.seq !== 1) return;
+      if (change === "replace") {
+        const replacement = path.join(f.directory, "replacement.jsonl");
+        fs.writeFileSync(replacement, `${line(1)}\n`);
+        fs.renameSync(replacement, f.filename);
+      } else if (change === "truncate") fs.truncateSync(f.filename, 0);
+      else f.store.append("thread", event(3));
+    });
+    if (change === "append") {
+      expect(await pending).toBe(2);
+      expect(seen).toEqual([event(1), event(2)]);
+    } else await expect(pending).rejects.toThrow("changed during window refill");
+  }
+});
+
+
+test("stream read errors and the refill deadline reject without stranding the descriptor", async () => {
+  const f = fixture(`${line(1)}\n`);
+  const timeout = spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort());
+  try { await expect(f.store.scan("thread", () => {})).rejects.toThrow("window refill exceeded its read deadline"); }
+  finally { timeout.mockRestore(); }
+  const duringRead = new AbortController();
+  const readTimeout = spyOn(AbortSignal, "timeout").mockReturnValue(duringRead.signal);
+  try {
+    await expect(f.store.scan("thread", () => { duringRead.abort(); })).rejects.toThrow("window refill exceeded its read deadline");
+  } finally { readTimeout.mockRestore(); }
+  fs.mkdirSync(path.join(f.directory, "directory.jsonl"));
+  await expect(f.store.scan("directory", () => {})).rejects.toThrow();
+  expect(await f.store.scan("thread", () => {})).toBe(1);
+});
