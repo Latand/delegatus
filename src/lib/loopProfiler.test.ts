@@ -612,11 +612,24 @@ test("a native call made through a Bun module is credited to the repository fram
   expect(JSON.stringify(categories)).not.toContain("sqlite");
 });
 
+test("snapshot work keeps its source position across deeper instrumentation wrappers", () => {
+  const attribution = path.join(root, "src/lib/readAttribution.ts");
+  const spans = path.join(root, "src/lib/performanceSpans.ts");
+  const categories = categorizeLoopProfile({ traces: [{ frames: [native("sort"),
+    { ...caller(280, 22), name: "snapshot", sourceURL: attribution },
+    { ...caller(171, 15), name: "sync", sourceURL: attribution },
+    { ...caller(97, 36), name: "sync", sourceURL: spans },
+    caller(8, 11)] }] }, root);
+  expect(categories.callers).toEqual([
+    { native: "sort", positions: [["src/lib/readAttribution.ts:280:22", 1]] },
+  ]);
+});
+
 test("a native call through synchronous loop instrumentation names the first application caller", () => {
   const categories = categorizeLoopProfile({ traces: [
     { frames: [native("parse"),
-      { ...caller(174, 15), name: "sync", sourceURL: path.join(root, "src/lib/readAttribution.ts") },
-      { ...caller(104, 36), name: "sync", sourceURL: path.join(root, "src/lib/performanceSpans.ts") },
+      { ...caller(171, 15), name: "sync", sourceURL: path.join(root, "src/lib/readAttribution.ts") },
+      { ...caller(97, 36), name: "sync", sourceURL: path.join(root, "src/lib/performanceSpans.ts") },
       caller(8, 11), caller(9, 12)] },
     { frames: [native("parse"),
       { ...caller(1, 36), name: "delegatusReadAttributionSync" },
@@ -634,7 +647,7 @@ test("SQLite JSON parsing is credited to the row reader through both instrumenta
   const categories = categorizeLoopProfile({ traces: [
     { frames: [native("parse"),
       { ...caller(122, 78), name: "", sourceURL: sqliteSource },
-      { ...caller(190, 20), name: "sync", sourceURL: path.join(root, "src/lib/readAttribution.ts") },
+      { ...caller(171, 20), name: "sync", sourceURL: path.join(root, "src/lib/readAttribution.ts") },
       { ...caller(122, 27), name: "parseSqliteJson", sourceURL: sqliteSource }, decode] },
     { frames: [native("parse"), native("bound parse"),
       { ...caller(1, 203), name: "delegatusReadAttributionSync" },

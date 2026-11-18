@@ -136,8 +136,14 @@ function safeFile(sourceURL: string | undefined, root: string, known: Map<string
 }
 
 const runtimeModuleSource = /^(?:bun|node):|^builtin:\/\//;
-const instrumentationSources = new Set([
-  "src/lib/performanceSpans.ts", "src/lib/readAttribution.ts", "src/lib/sqliteReadAttribution.ts",
+// Source paths are useful in uncompiled stacks, but filtering an entire
+// instrumentation module hides real work performed by that module (notably
+// readAttribution.snapshot). Keep this list to the source lines that forward
+// into measured work; compiled chunks use the explicit wrapper names below.
+const instrumentationSourceLines = new Map([
+  ["src/lib/performanceSpans.ts", [[97, 97]]],
+  ["src/lib/readAttribution.ts", [[171, 171]]],
+  ["src/lib/sqliteReadAttribution.ts", [[17, 18], [51, 60], [77, 89], [104, 105], [116, 124], [135, 135]]],
 ]);
 // Bun reports displayName for these wrappers, including in minified Viewer chunks.
 const instrumentationFrameNames = new Set([
@@ -178,8 +184,11 @@ export function categorizeLoopProfile(raw: LoopProfile, root: string) {
       if (!caller.sourceURL) continue;
       if (runtimeModuleSource.test(caller.sourceURL)) { skippedCaller = true; continue; }
       const file = safeFile(caller.sourceURL, root, known);
-      if (file && (instrumentationSources.has(file)
-        || (file.startsWith(".next/server/") && instrumentationFrameNames.has(caller.name)))) {
+      const sourceLines = file ? instrumentationSourceLines.get(file) : undefined;
+      const isSourceWrapper = Number.isSafeInteger(caller.line)
+        && sourceLines?.some(([first, last]) => caller.line! >= first && caller.line! <= last);
+      if (isSourceWrapper
+        || (file?.startsWith(".next/server/") && instrumentationFrameNames.has(caller.name))) {
         skippedCaller = true;
         continue;
       }
