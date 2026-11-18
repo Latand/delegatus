@@ -174,7 +174,7 @@ test.each([240, 6 * 1024 * 1024])("a retained live original survives candidate e
   const durable = [{ ...liveTwo, text: `${liveTwo.text}12345678` }, liveThree, liveFour];
   let resume!: () => void;
   const gate = new Promise<void>(resolve => { resume = resolve; });
-  const history = [first];
+  const history: RuntimeEvent[] = [first];
   const store: RuntimeEventStore = {
     load: () => history.slice(),
     append: (_id, value) => { history.push(value); },
