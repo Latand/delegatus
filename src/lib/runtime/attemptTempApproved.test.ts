@@ -173,3 +173,20 @@ test("a standalone row without a lane retirement claim is retained with an expli
     expect(fs.readFileSync(path.join(f.directories[0]!, "data"), "utf8")).toBe("fixture payload");
   } finally { f.close(); }
 });
+
+test("a journal cannot introduce an outside target or invalid recovered outcome", async () => {
+  const f = fixture();
+  try {
+    await f.run({ LLV_TEMP_SWEEP: "dry-run" });
+    const journal = path.join(f.state, "attempt-temp-approved", reviewId + ".json"), valid = fs.readFileSync(journal, "utf8");
+    for (const change of ["outside", "invalid-reason"] as const) {
+      const prior = JSON.parse(valid);
+      if (change === "outside") prior.rows[0].directory = f.directories[1];
+      else prior.rows[0].reason = null;
+      fs.writeFileSync(journal, JSON.stringify(prior));
+      await expect(f.run()).rejects.toThrow("journal does not belong");
+      expect(fs.readFileSync(path.join(f.directories[0]!, "data"), "utf8")).toBe("fixture payload");
+      expect(fs.readFileSync(path.join(f.directories[1]!, "data"), "utf8")).toBe("fixture payload");
+    }
+  } finally { f.close(); }
+}, 60000);
