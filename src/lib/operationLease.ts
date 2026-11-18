@@ -13,11 +13,23 @@ export class OperationLease {
   readonly abort = new AbortController();
   private readonly pending = new Map<object, { name: string; start: number }>();
   private omitted = 0;
+  private readonly children = new Set<OperationLease>();
+  observe(child: OperationLease): () => void {
+    this.children.add(child);
+    return () => { this.children.delete(child); };
+  }
   run<T>(work: () => T): T { return context.run(this, work); }
   expire() { this.abort.abort(new OperationLeaseExpiredError()); }
   snapshot() {
     const now = performance.now();
-    return { operations: [...this.pending.values()].map(op => ({ name: op.name, durationMs: Math.round(now - op.start) })), omitted: this.omitted };
+    const operations = [...this.pending.values()].map(op => ({ name: op.name, durationMs: Math.round(now - op.start) }));
+    let omitted = this.omitted;
+    for (const child of this.children) {
+      const snapshot = child.snapshot();
+      operations.push(...snapshot.operations);
+      omitted += snapshot.omitted;
+    }
+    return { operations: operations.slice(0, 256), omitted: omitted + Math.max(0, operations.length - 256) };
   }
   track<T>(name: string, work: () => T): T {
     this.abort.signal.throwIfAborted();
