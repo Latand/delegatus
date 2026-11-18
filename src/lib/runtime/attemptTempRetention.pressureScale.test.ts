@@ -30,10 +30,10 @@ test("a thousand roots progress through real helper deadlines, cancellation and 
     const pinned = directories[1]!; plantKeepMarker(path.join(pinned, ".delegatus-keep"));
     store.close();
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
-    // The parent sends a real monotonic six-second deadline. No mutation fence,
+    // The parent sends a real monotonic five-second deadline. No mutation fence,
     // remover or clock is replaced. Only fixture-owned external observations
     // (free space, processes, containers) are supplied by the existing preload.
-    const deadlineMs = 6000, maxTicks = 100;
+    const deadlineMs = 5000, maxTicks = 48;
     let removed = 0, ticks = 0;
     worker = realParentWorker(true, deadlineMs);
     for (; ticks < maxTicks; ticks++) {
