@@ -289,7 +289,9 @@ def observe_switch(adapter, target, samples, interval, timeout):
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
     unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
-    verdict = "fail" if not healthy or "lost" in outcomes else "needs_decision" if unknown else "pass"
+    relocation_ready = (relocation is not None and relocation.get("released") is True
+                        and relocation.get("placement") == "placed" and relocation.get("started") is True)
+    verdict = "fail" if not healthy or "lost" in outcomes or not relocation_ready else "needs_decision" if unknown else "pass"
     result = {"verdict": verdict, "target": target, "serving": serving,
               "protected": protected, "interrupted": interrupted,
               "interruptedUnreadable": unreadable, "relocation": relocation, "diagnostics": diagnostics}
@@ -1100,7 +1102,12 @@ class Checkout:
         read loses any link, that member remains in ``found`` and the normal
         LeftoverProcesses fence refuses preflight.
         """
-        first = self._custody_once(group, candidates)
+        try:
+            first = self._custody_once(group, candidates)
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
+            first = {}
+            for member in candidates:
+                member["reason"] = "custody evidence changed before final admission"
         if not first:
             return first
         try:
@@ -1259,6 +1266,7 @@ class Checkout:
             unchanged(host["pid"], start_identity(host_stat))
             host_identity = {"pid": host["pid"], "startIdentity": start_identity(host_stat)}
             wait_proof = {"hostCgroup": host_group, "scope": dict(scope),
+                          "directoryPath": str(directory),
                           "directory": [launch_info.st_dev, launch_info.st_ino, launch_info.st_mode, launch_info.st_uid],
                           "exitBindingFile": [info.st_dev, info.st_ino, info.st_mode, info.st_uid],
                           "exitBinding": binding}
@@ -1323,10 +1331,86 @@ class Checkout:
                           {"fifo": list(fifo), "waiterProof": waiter["proof"]})
         # Recheck every admitted identity after the final filesystem/systemd
         # read, so an earlier member cannot change while later proof runs.
+        # Mutable custody links receive their own complete reread here, after
+        # all candidates have been scanned. The initial and scan-time reads
+        # alone leave a window in which an earlier FIFO, scope or receipt can
+        # change while this proof is still processing later members.
+        self._validate_custody_links(admitted)
         for pid, evidence in admitted.items():
             unchanged(pid, evidence["startIdentity"])
             unchanged(evidence["hostPid"], evidence["hostStartIdentity"])
         return admitted
+
+    def _validate_custody_links(self, admitted):
+        """Re-read mutable external links at the completed proof boundary."""
+        owners = {}
+        expected_scopes = {}
+        for pid, evidence in admitted.items():
+            proof = evidence["proof"]
+            waiter = proof if evidence["role"] == "wait-owner" else proof.get("waiterProof")
+            if waiter is None:
+                raise RuntimeError("custody owner proof unavailable")
+            owners[pid] = proof.get("fifo")
+            if evidence["role"] == "wait-owner":
+                expected_scopes[waiter["scope"].get("Id")] = waiter["scope"]
+                try:
+                    host_group = kernel_cgroup(self.process_read(evidence["hostPid"], "cgroup"))
+                except (OSError, RuntimeError, KeyError):
+                    raise RuntimeError("custody host cgroup changed before final admission") from None
+                if host_group != waiter["hostCgroup"]:
+                    raise RuntimeError("custody host cgroup changed before final admission")
+                directory = pathlib.Path(waiter["directoryPath"])
+                try:
+                    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        directory_info = os.fstat(directory_fd)
+                        directory_identity = [directory_info.st_dev, directory_info.st_ino,
+                                              directory_info.st_mode, directory_info.st_uid]
+                        if directory_identity != waiter["directory"]:
+                            raise RuntimeError("custody launch directory changed before final admission")
+                        fd = os.open("host-exit.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                     dir_fd=directory_fd)
+                        try:
+                            info = os.fstat(fd)
+                            if [info.st_dev, info.st_ino, info.st_mode, info.st_uid] != waiter["exitBindingFile"]:
+                                raise RuntimeError("custody exit receipt changed before final admission")
+                            data = os.read(fd, 4097)
+                            if len(data) > 4096 or json.loads(data) != waiter["exitBinding"]:
+                                raise RuntimeError("custody exit receipt changed before final admission")
+                        finally:
+                            os.close(fd)
+                    finally:
+                        os.close(directory_fd)
+                except (OSError, ValueError, TypeError, KeyError, IndexError):
+                    raise RuntimeError("custody launch binding unreadable before final admission") from None
+        if expected_scopes:
+            try:
+                output = self.command(["systemctl", "--user", "show", *sorted(expected_scopes),
+                                       "-p", "Id", "-p", "BindsTo", "-p", "After", "-p",
+                                       "ControlGroup", "-p", "ActiveState"])
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                raise RuntimeError("custody host scope unreadable before final admission") from None
+            observed = {}
+            for block in output.strip().split("\n\n"):
+                value = systemd_properties(block)
+                name = value.get("Id")
+                if name in observed:
+                    raise RuntimeError("custody host scope ambiguous before final admission")
+                observed[name] = value
+            if observed != expected_scopes:
+                raise RuntimeError("custody host scope changed before final admission")
+        for pid, expected in owners.items():
+            if expected is None:
+                continue
+            try:
+                descriptors = self.process_read(pid, "fds")
+            except (OSError, RuntimeError):
+                raise RuntimeError("custody FIFO unreadable before final admission") from None
+            expected = tuple(expected)
+            matches = (expected in descriptors if len(expected) == 4 else
+                       any(fifo and (dev, inode) == expected for _, dev, inode, fifo in descriptors))
+            if not matches:
+                raise RuntimeError("custody FIFO changed before final admission")
 
     def leftovers(self, group):
         record = json.loads(self.record_file.read_text())

@@ -53,6 +53,8 @@ class Switch:
         self.old = [{"pid": 101, "startIdentity": "old"}]
         self.hosts = [{"pid": 102, "startIdentity": "stage", "stageId": "build", "attempt": 1}]
         self.restart_error = None
+        self.relocation = {"released": True, "placement": "placed", "started": True,
+                           "stopSubmitted": False, "startAttempts": 0, "diagnostics": []}
         self.process_error = None
         self.mcp_errors = 0
         self.outcome = "recovered"
@@ -69,6 +71,7 @@ class Switch:
     def restart(self):
         if self.restart_error:
             raise self.restart_error
+        return self.relocation
 
     def process(self, entry):
         if self.process_error:
@@ -1256,23 +1259,30 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertEqual((result["relocation"]["survivors"], self.signals), ([], []))
 
     def test_lingering_custody_refuses_retirement_but_always_starts(self):
-        self.relocating()
-        group = self.helper_groups()[0]
-        self.surviving = {group["waiter"]}
-        # Fixture hosts end at the bound scope stop, independently of the
-        # service cgroup membership. All other process reads remain synthetic.
-        read = self.adapter.process_read
-        def process(pid, field):
-            if self.old_gone and pid == group["host"]:
-                raise FileNotFoundError()
-            return read(pid, field)
-        self.adapter.process_read = process
-        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
-        relocation = result["relocation"]
-        self.assertEqual((result["verdict"], relocation["outcome"], relocation["placement"]), ("fail", "unproven-survivors", "failed"))
-        self.assertEqual(relocation["survivors"][0]["reason"], "protected helper custody; host ended")
-        self.assertEqual(self.signals, [])
-        self.assert_back_in_service(result)
+        for misaligned in [False, True]:
+            with self.subTest(initially_misaligned=misaligned):
+                self.setUp()
+                if misaligned:
+                    self.relocating()
+                group = self.helper_groups()[0]
+                self.surviving = {group["waiter"]}
+                # Fixture hosts end at the bound scope stop, independently of
+                # cgroup membership. Other process reads remain synthetic.
+                read = self.adapter.process_read
+                def process(pid, field):
+                    if self.old_gone and pid == group["host"]:
+                        raise FileNotFoundError()
+                    return read(pid, field)
+                self.adapter.process_read = process
+                result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+                relocation = result["relocation"]
+                expected_placement = "failed" if misaligned else "placed"
+                self.assertEqual((result["verdict"], relocation["outcome"], relocation["placement"]),
+                                 ("fail", "unproven-survivors", expected_placement))
+                self.assertFalse(relocation["released"])
+                self.assertEqual(relocation["survivors"][0]["reason"], "protected helper custody; host ended")
+                self.assertEqual((self.surviving, self.signals), ({group["waiter"]}, []))
+                self.assert_back_in_service(result)
 
     def test_waiter_identity_registry_parent_and_scope_fences(self):
         mutations = ["missing-writer", "missing-field", "missing-host", "duplicate-row", "host-reused", "waiter-reused", "waiter-boot", "boot", "parent", "inside", "no-scope",
@@ -1389,8 +1399,8 @@ class CheckoutIntegration(unittest.TestCase):
                 self.moving.add(group["waiter"])
             return result
         self.adapter.command = changed
-        with self.assertRaisesRegex(RuntimeError, "service cgroup member changed while it was read"):
-            self.adapter.preflight()
+        refused = self.custody_refusal(group["pids"], "custody evidence changed before final admission")
+        self.assertEqual(len(refused), len(group["pids"]))
         self.assert_no_switch()
 
     def test_host_and_drain_changes_during_descriptor_reads_refuse(self):
@@ -1406,17 +1416,14 @@ class CheckoutIntegration(unittest.TestCase):
                         else: self.moving.add(group["host"] if changed == "host" else group["leader"])
                     return value
                 self.adapter.process_read = process
-                with self.assertRaises(RuntimeError) as refusal:
+                with self.assertRaises(deploy.LeftoverProcesses) as refusal:
                     self.adapter.preflight()
-                if isinstance(refusal.exception, deploy.LeftoverProcesses):
-                    reason = "wait owner: host is not its child" if changed == "host-parent" else "wait owner: host identity differs from registry"
-                    self.assertEqual(refusal.exception.members[0]["reason"], reason)
-                else:
-                    self.assertEqual(str(refusal.exception), "service cgroup member changed while it was read")
+                self.assertTrue(all(row["reason"] == "custody evidence changed before final admission"
+                                    for row in refusal.exception.members))
                 self.assert_no_switch()
 
     def test_mutable_fifo_scope_and_exit_binding_must_survive_final_admission(self):
-        for changed in ["fifo", "scope", "exit-binding"]:
+        for changed in ["fifo", "scope-cgroup", "scope-binding", "exit-binding"]:
             with self.subTest(changed=changed):
                 self.setUp()
                 group = self.helper_groups()[0]
@@ -1432,8 +1439,10 @@ class CheckoutIntegration(unittest.TestCase):
                             # Replace the source table after this read returned
                             # its earlier snapshot; the final proof sees inode drift.
                             self.descriptors[group["waiter"]] = [(2, 9, 9999, True)]
-                        elif changed == "scope":
+                        elif changed == "scope-cgroup":
                             self.groups[group["host"]] = self.service_group + "/unbound"
+                        elif changed == "scope-binding":
+                            group["scope"]["BindsTo"] = "other.service"
                         else:
                             deploy.write_json(group["directory"] / "host-exit.json", {"discard": True})
                     return value
@@ -1443,6 +1452,34 @@ class CheckoutIntegration(unittest.TestCase):
                     "custody evidence changed before final admission")
                 self.assertTrue(mutated)
                 self.assert_no_switch()
+
+    def test_mutable_links_changed_during_second_scan_refuse_final_admission(self):
+        for changed in ["fifo", "scope-cgroup", "scope-binding", "exit-binding"]:
+            with self.subTest(changed=changed):
+                self.setUp()
+                group = self.helper_groups()[0]
+                read = self.adapter.process_read
+                leader_reads = 0
+
+                def process(pid, field):
+                    nonlocal leader_reads
+                    value = read(pid, field)
+                    if pid == group["leader"] and field == "fds":
+                        leader_reads += 1
+                        if leader_reads == 3:
+                            if changed == "fifo":
+                                self.descriptors[group["waiter"]] = [(2, 9, 9999, True)]
+                            elif changed == "scope-cgroup":
+                                self.groups[group["host"]] = self.service_group + "/unbound"
+                            elif changed == "scope-binding":
+                                group["scope"]["BindsTo"] = "other.service"
+                            else:
+                                deploy.write_json(group["directory"] / "host-exit.json", {"discard": True})
+                    return value
+
+                self.adapter.process_read = process
+                self.custody_refusal(group["pids"], "custody evidence changed before final admission")
+                self.assertEqual(leader_reads, 3)
 
     def test_older_release_refusal_never_enters_custody(self):
         group = self.helper_groups(parent=102)[0]
