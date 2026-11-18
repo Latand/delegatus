@@ -4063,7 +4063,7 @@ export class SqliteAgentRegistryStore {
         const holds = (receipt: RegistryFile["receipts"][string]) => values.includes(lookupValue(receipt, field) as string);
         return pinnedReceipts ? pinnedReceipts(indexed, holds) : Object.keys(file.receipts).filter(key => holds(file.receipts[key]!));
       }
-      if (collection === "heldDeliveries" && (field === "conversationId" || field === "clientMessageId")) {
+      if (collection === "heldDeliveries" && (field === "conversationId" || field === "clientMessageId" || field === "state")) {
         const holds = (delivery: RegistryFile["heldDeliveries"][string]) => values.includes(lookupValue(delivery, field) as string);
         return pinnedDeliveries ? pinnedDeliveries(indexed, holds) : Object.keys(file.heldDeliveries).filter(key => holds(file.heldDeliveries[key]!));
       }
@@ -5770,7 +5770,9 @@ export class SqliteAgentRegistryStore {
               const stored = readBaseline(key);
               if (stored === null && collection !== "deliveryOperationOwners") return undefined;
               const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
-              input[collection] = stored === null ? {} : { [key]: structuredClone(this.parseRow(collection, key, stored, useRowCache)) };
+              // Uncached parses already belong to this read; cached rows must stay isolated.
+              const parsed = stored === null ? undefined : this.parseRow(collection, key, stored, useRowCache);
+              input[collection] = stored === null ? {} : { [key]: useRowCache ? structuredClone(parsed) : parsed };
               if (stored === null && collection === "deliveryOperationOwners") {
                 const delivery = registryRowsMatching(file, "heldDeliveries", "command.operationId", key)[0];
                 if (!delivery) return undefined;
@@ -5795,12 +5797,13 @@ export class SqliteAgentRegistryStore {
             const unloaded: Record<string, unknown> = {};
             for (const row of stored) {
               if (!Object.hasOwn(rows, row.row_key) && !deleted.has(row.row_key)) {
-                unloaded[row.row_key] = structuredClone(this.parseRow(
+                const parsed = this.parseRow(
                   collection,
                   row.row_key,
                   row.value_json,
                   useRowCache,
-                ));
+                );
+                unloaded[row.row_key] = useRowCache ? structuredClone(parsed) : parsed;
               }
             }
             const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };

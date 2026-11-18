@@ -80,6 +80,17 @@ pass; their other children still need a serving or agent owner. Missing or
 changing MainPID, identity, ancestry, cgroup or launcher record refuses preflight.
 A serving descendant whose executable, script or working directory names an
 older release is also refused. Agent-owned tools may use other release checkouts.
+For otherwise unowned members, preflight also proves native wait-owner custody:
+the recorded exit writer must match the waiter's current identity and boot,
+its live child must match the registry identity, and that child's active agent
+scope must have both `BindsTo` and `After` the service. The private launch
+directory must name the same host-exit slot. A stderr drain additionally needs
+the waiter's FIFO inode, its single shell leader, and matching session,
+process-group and parent links. Failed links remain refusals with fixed reasons.
+Successful read-only preflight adds `Protected helper custody: <n> wait owners
+and <m> helpers of live agent hosts` before its pass line; worker runs record
+their identities in a private `custody` event. See
+`docs/design/checkout-helper-custody.md` for the proof and switch fate.
 Any other member refuses the switch before publication or restart and is named
 on standard error and in `switch.log`, with its refusal reason:
 pid, start identity, start time, parent pid and the base names of its
@@ -228,6 +239,12 @@ and `CPUWeight=1000` and still ran in `app.slice/delegatus.service`, with no
    Helpers must still belong to the captured Viewer's process group, including
    at the pidfd validation before each signal. A chain that reaches an agent
    host, the user manager, a reused PID or an exited process proves nothing.
+   Proven wait owners and drains are excluded from capture and retirement.
+   Bound hosts end before the service stops; their waiters write their own
+   receipts and drains finish at FIFO EOF within the existing release wait.
+   A lingering custody member remains unproven with reason `protected helper
+   custody; host ended` or `protected helper custody; host alive`, keeping the
+   `unproven-survivors` outcome and failed placement. Nothing is migrated.
    If every survivor is proven, each one
    gets SIGTERM and, after five seconds, SIGKILL. The signal goes through a
    pidfd opened before the start identity and cgroup are rechecked. The

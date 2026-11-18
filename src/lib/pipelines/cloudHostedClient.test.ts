@@ -806,3 +806,28 @@ test("a known offline cause with private diagnostic detail retries without publi
   expect(f.frames.filter(frame => frame.method === "command/exec")).toHaveLength(41);
   expect(f.frames.some(frame => frame.method === "turn/start")).toBe(false);
 });
+
+for (const selectedModel of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+  test(`Cloud stage submits and observes the pinned ${selectedModel}`, async () => {
+    const f = fixture();
+    const selectedTurn = { ...turn, model: selectedModel };
+    f.respond((frame, socket) => {
+      if (frame.method === "thread/start" || frame.method === "thread/read") return { model: selectedModel, thread };
+      if (frame.method === "turn/start") return { turn: selectedTurn };
+      if (frame.method === "thread/turns/list") return { data: [selectedTurn], nextCursor: null };
+      return f.original(frame, socket);
+    });
+    for (const effort of [null, "low", "medium", "high", "xhigh", "max", "ultra"]) expect(f.client.supportsModel(selectedModel, effort)).toBe(true);
+    expect(f.client.supportsModel(selectedModel, "unknown")).toBe(false);
+    const submitted = await f.client.submit({ ...f.input, model: selectedModel, reasoningEffort: "max" });
+    expect(submitted.thread?.hosted?.model).toBe(selectedModel);
+    const access = { ...f.access, thread: submitted.thread };
+    expect(await f.client.poll(access)).toEqual({ state: "completed", model: selectedModel });
+    expect((await f.client.readFinalMessage(access)).model).toBe(selectedModel);
+    expect(f.frames.find(frame => frame.method === "thread/start")?.params).toMatchObject({ model: selectedModel, allowProviderModelFallback: false, config: { model_reasoning_effort: "max" } });
+    expect(f.frames.find(frame => frame.method === "turn/start")?.params).toMatchObject({ model: selectedModel, allowProviderModelFallback: false });
+    // A different admitted model is still a reroute from this receipt.
+    f.respond((frame, socket) => frame.method === "thread/read" ? { model, thread } : f.original(frame, socket));
+    await expect(f.client.poll(access)).rejects.toThrow("resolved model mismatch");
+  });
+}
