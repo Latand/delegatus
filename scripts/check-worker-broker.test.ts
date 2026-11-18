@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,7 @@ import { startCheckBroker } from "./check-worker-broker";
 import { CheckAdmission } from "./check-admission";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { onlineCpuCount } from "../src/lib/runtime/cpuPlacement";
-import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import * as ownerContext from "../src/lib/runtime/signalSandboxContext";
 import { captureProcessIdentity } from "../src/lib/processIdentity";
 import { inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
@@ -21,6 +22,133 @@ async function until(check: () => boolean) {
     if (performance.now() > deadline) throw new Error("broker fixture did not reach its barrier");
     await Bun.sleep(10);
   }
+}
+
+for (const abandoned of ["holder", "restrictive waiter"] as const) {
+  test.skipIf(process.platform !== "linux")(`a nested request uses slack after an independent ${abandoned} crashes before the writer lock`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "broker-crash-saturation-"));
+    const file = path.join(root, "checks.sqlite"), ready = path.join(root, "ready");
+    const go = path.join(root, "go"), admitted = path.join(root, "admitted"), peerReady = path.join(root, "peer-ready");
+    const queue = new CheckAdmission(file), broker = await startCheckBroker();
+    const env = { LLV_CHECK_ADMISSION_FILE: file, DELEGATUS_GATE_CPU_HEADROOM: String(onlineCpuCount() - 2) };
+    const request = `const address=${broker.address},socket=net.connect(address.port,"127.0.0.1");
+      socket.once("connect",()=>socket.write(JSON.stringify({nonce:address.nonce,pid:process.pid,kind:"test",env:${JSON.stringify(env)}})+"\\n"));`;
+    const childSource = `import net from "node:net";import fs from "node:fs";
+      while(!fs.existsSync(${JSON.stringify(go)}))await Bun.sleep(1);${request}
+      socket.once("data",()=>fs.writeFileSync(${JSON.stringify(admitted)},"ready"));setInterval(()=>{},1000);`;
+    const workerSource = `import net from "node:net";import fs from "node:fs";import{spawn}from"node:child_process";${request}
+      socket.once("data",()=>{const child=spawn(process.execPath,["-e",${JSON.stringify(childSource)}],{stdio:"ignore"});
+        fs.writeFileSync(${JSON.stringify(ready)},String(child.pid));});setInterval(()=>{},1000);`;
+    const worker = spawn(process.execPath, ["-e", workerSource], { stdio: "ignore" });
+    const peer = spawn(process.execPath, ["-e", `require("node:fs").writeFileSync(${JSON.stringify(peerReady)},"ready");setInterval(()=>{},1000);`], { stdio: "ignore" });
+    let descendant: ReturnType<typeof captureProcessIdentity> | undefined;
+    let peerIdentity: ReturnType<typeof captureProcessIdentity> | undefined;
+    let armed = false, crashed = false, stops = 0;
+    const originalExec = Database.prototype.exec, originalKill = process.kill;
+    const lock = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, sql) {
+      if (sql === "BEGIN IMMEDIATE" && armed && !crashed) {
+        crashed = true;
+        originalKill(peer.pid!, "SIGKILL");
+        // Keep the persisted ticket. Positive kernel exit proof must replace
+        // it in the locked saturation calculation before any SIGSTOP.
+        const deadline = performance.now() + 2_000;
+        while (ownerContext.cpuOwnerStatus(peerIdentity!) !== "dead" && !ownerContext.cpuOwnerExited(peerIdentity!)) {
+          if (performance.now() > deadline) throw new Error("owned crashed peer did not exit");
+          Bun.sleepSync(1);
+        }
+      }
+      return originalExec.call(this, sql);
+    });
+    const signals = spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === worker.pid && signal === "SIGSTOP") stops++;
+      return originalKill(pid, signal);
+    });
+    try {
+      await until(() => fs.existsSync(ready) && fs.existsSync(peerReady));
+      descendant = captureProcessIdentity(Number(fs.readFileSync(ready, "utf8")));
+      peerIdentity = captureProcessIdentity(peer.pid!);
+      expect(queue.claim(peerIdentity, abandoned === "holder" ? 2 : 1)).toBe(abandoned === "holder");
+      armed = true; fs.writeFileSync(go, "go");
+      // The red implementation stops the parent. The repaired implementation
+      // admits the real child without lending or suspending either worker.
+      await until(() => crashed && (stops > 0 || fs.existsSync(admitted)));
+      expect(crashed).toBe(true);
+      expect(stops).toBe(0);
+      expect(fs.existsSync(admitted)).toBe(true);
+      expect(queue.holds(cpuOwnerIdentity(worker.pid!))).toBe(true);
+      expect(queue.holds(descendant)).toBe(true);
+    } finally {
+      lock.mockRestore(); signals.mockRestore();
+      if (descendant) await stopFixtureIdentity(descendant);
+      await stopFixtureProcess(worker); await stopFixtureProcess(peer);
+      await broker.close(); queue.close(); fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+}
+
+for (const scenario of ["slack", "slack ancestor", "saturated", "freed before lock", "waiter removed before lock", "strictest cap",
+  "unverified holder", "unverified cap", "exited holder", "exited cap"] as const) {
+  test.skipIf(process.platform !== "linux")(`nested lending checks current saturation: ${scenario}`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "broker-saturation-"));
+    const file = path.join(root, "checks.sqlite"), ready = path.join(root, "ready");
+    const queue = new CheckAdmission(file), broker = await startCheckBroker();
+    const env = { LLV_CHECK_ADMISSION_FILE: file, DELEGATUS_GATE_CPU_HEADROOM: String(onlineCpuCount() - 2) };
+    const source = `import net from "node:net";import fs from "node:fs";import {spawn} from "node:child_process";
+      const address=${broker.address}, socket=net.connect(address.port,"127.0.0.1");
+      socket.once("connect",()=>socket.write(JSON.stringify({nonce:address.nonce,pid:process.pid,kind:"test",env:${JSON.stringify(env)}})+"\\n"));
+      socket.once("data",()=>{const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});
+        fs.writeFileSync(${JSON.stringify(ready)},String(child.pid));});setInterval(()=>{},1000);`;
+    const worker = spawn(process.execPath, ["-e", source], { stdio: "ignore" });
+    let descendant: ReturnType<typeof captureProcessIdentity> | undefined;
+    let polls = 0, stops = 0, lends = 0, changed = false;
+    const originalStatus = ownerContext.cpuOwnerStatus, originalKill = process.kill;
+    const originalExited = ownerContext.cpuOwnerExited;
+    const originalCancel = CheckAdmission.prototype.cancel, originalExec = Database.prototype.exec;
+    const status = spyOn(ownerContext, "cpuOwnerStatus").mockImplementation((owner, env) => {
+      if (owner.pid === worker.pid) polls++;
+      if (changed && owner.pid === process.pid && scenario.startsWith("unverified")) return "unverified";
+      return originalStatus(owner, env);
+    });
+    const exited = spyOn(ownerContext, "cpuOwnerExited").mockImplementation((owner, env) =>
+      changed && owner.pid === process.pid && scenario.startsWith("exited") ? true : originalExited(owner, env));
+    const signals = spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (pid === worker.pid && signal === "SIGSTOP") stops++;
+      return originalKill(pid, signal);
+    });
+    const cancel = spyOn(CheckAdmission.prototype, "cancel").mockImplementation(function (this: CheckAdmission, owner) {
+      if (owner.pid === worker.pid) lends++;
+      return originalCancel.call(this, owner);
+    });
+    const lock = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, sql) {
+      if (sql === "BEGIN IMMEDIATE" && !changed && descendant) {
+        changed = true;
+        if (scenario === "freed before lock") queue.cancel(cpuOwnerIdentity(process.pid));
+        if (scenario === "waiter removed before lock") queue.cancel(descendant);
+      }
+      return originalExec.call(this, sql);
+    });
+    try {
+      await until(() => fs.existsSync(ready));
+      descendant = captureProcessIdentity(Number(fs.readFileSync(ready, "utf8")));
+      if (["saturated", "freed before lock", "waiter removed before lock"].includes(scenario)) expect(queue.claim(cpuOwnerIdentity(process.pid), 2)).toBe(true);
+      if (scenario.endsWith("holder")) expect(queue.claim(cpuOwnerIdentity(process.pid), 2)).toBe(true);
+      if (scenario === "exited cap" || scenario === "unverified cap") expect(queue.claim(cpuOwnerIdentity(process.pid), 1)).toBe(false);
+      queue.db.query("INSERT INTO checks(owner, capacity) VALUES (?, ?)").run(JSON.stringify(scenario === "slack ancestor" ? cpuOwnerIdentity(process.pid) : descendant), scenario === "strictest cap" ? 1 : 2);
+      polls = 0;
+      const shouldLend = scenario === "saturated" || scenario === "strictest cap" || scenario.startsWith("unverified");
+      await until(() => shouldLend ? lends > 0 : polls >= 12);
+      expect(stops).toBe(shouldLend ? 1 : 0);
+      expect(lends).toBe(shouldLend ? 1 : 0);
+      if (scenario.includes("before lock")) expect(changed).toBe(true);
+      if (scenario.startsWith("exited") || scenario.startsWith("unverified")) expect(changed).toBe(true);
+      if (!shouldLend) expect(queue.holds(cpuOwnerIdentity(worker.pid!))).toBe(true);
+    } finally {
+      status.mockRestore(); exited.mockRestore(); signals.mockRestore(); cancel.mockRestore(); lock.mockRestore();
+      if (descendant) await stopFixtureIdentity(descendant);
+      await stopFixtureProcess(worker); await broker.close(); queue.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
 }
 
 for (const refusal of ["nonce", "ancestor", "self", "host namespace", "kind", "malformed", "oversized"] as const) test(`broker refuses ${refusal} before recording a worker`, async () => {
