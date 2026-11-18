@@ -101,16 +101,19 @@ compatibility raises the major version.
   paths ([#4099]).
 - **Cloud checks reuse the environment's installed dependencies** and report a
   session timeout as a timeout instead of a generic failure ([#4116]).
-- **GitHub text uses the publication language.** Pull request titles and
-  bodies, issue comments, batch merge text and automatic revert pull requests
-  are written in English whatever the board language. Board titles, chat and
-  task summaries keep your language, and a hint tells the seat when a title or
-  body line looks foreign ([#4118]).
-- **Stage checks never run more test and typecheck processes than the machine
-  can carry.** Workers started through package scripts, nested runs and
-  compiler entry points all count against one limit ([#3978]). Free check slots
-  are filled at once in arrival order, and a healthy nested check is suspended
-  only when every slot is taken ([#4164]).
+- **GitHub text uses the publication language.** Generated pull request
+  titles and bodies, issue comments, batch merge text and automatic revert
+  pull requests are written in English whatever the board language. An
+  explicit title and any description a refresh retains keep their text; a
+  script-based hint tells the seat when a title or body line looks foreign and
+  never refuses publication. Board titles, chat and task summaries keep your
+  language ([#4118]).
+- **Stage checks share a configured limit on test and typecheck workers**,
+  so they do not run more of them than the machine can carry. On Linux,
+  workers started through package scripts and nested compiler entry points
+  count against that limit too ([#3978]). Free check slots are filled at once
+  in arrival order, and a healthy nested check is suspended only when every
+  slot is taken ([#4164]).
 - **A closed lane's temporary data expires after seven days.** Release records
   the deadline at once, and a rotating pass covers lanes closed after release
   ([#4093]).
@@ -119,8 +122,11 @@ compatibility raises the major version.
   streaming the journal: in the maintainers' benchmark on a 163 MB journal,
   peak memory fell from about 820–840 MiB to about 160–170 MiB and the longest
   event-loop stall from 560–780 ms to 4–6 ms, with identical retained events
-  ([#4165]). The seat tick reads fewer registry rows and alias records
-  ([#4170], [#4161]).
+  ([#4165]). A registry read copies fewer newly parsed rows ([#4161]). The
+  seat tick narrows its failed-delivery lookup and shares one project alias
+  snapshot ([#4170]). The release output fingerprint that an update proves is
+  computed in a separate worker process, so a large output no longer holds
+  the server loop ([#4168]).
 
 ### Fixed
 - **A stage resumed after a pause runs on its configured engine and account**
@@ -129,8 +135,16 @@ compatibility raises the major version.
   retirement target changed", so idle hosts, including those left by restarts,
   piled up. A host that is already gone is recorded as gone, not as a failed
   cleanup ([#4082], [#4098]).
-- **A stage start stops every earlier agent of its lane** and confirms that
-  their processes are gone, without a separate command ([#4030]).
+- **A stage start stops the settled earlier agents of its lane itself.** It
+  verifies that their processes are gone before the new stage starts, and
+  waits for conversations that have not settled. If processes survive, or
+  retries run out, the lane parks explicitly and the agents may need a manual
+  stop ([#4030]).
+- **Recovery details from the test repair.** The MCP server's restart timer
+  re-arms when it wakes before its deadline, so the child recovers without
+  another client request. Abandoned-lease diagnostics go to stderr instead of
+  stdout. A resource request waits for verified worker containment before it
+  is sent ([#4027]).
 - **The worktree sweep finishes its pass and removes worktrees.** On a 495-worktree
   fixture the pass completes in about two seconds, with 66 discovery calls
   instead of 10,560 ([#4091]). Stage temporary data over its cap is reclaimed on
@@ -173,8 +187,12 @@ compatibility raises the major version.
   claim is recorded as changed instead of a failed cleanup ([#4132]).
 - **A stage whose host died settles within a bound and can be retried**
   ([#4067]). A message to a stage attempt that already passed, failed or
-  waits for a decision is refused at once with a 409 that names `retry-stage`,
-  instead of waiting ten minutes ([#4122]).
+  waits for a decision, and whose delivery would have to restart that attempt's
+  guarded host, is refused at once with a 409 when the message is proven
+  unsent. The reply names `retry-stage`, `resolve-decision` for an attempt
+  awaiting a decision, and a live successor where one exists, instead of
+  waiting ten minutes. A send that was already journaled stays
+  delivery-uncertain ([#4122]).
 - **Seats and deliveries recover on their own.** A designated seat whose host a
   release handover cut off starts again without waiting for a message
   ([#4124]). An adopted Claude host no longer counts its previous writer's
@@ -186,8 +204,10 @@ compatibility raises the major version.
 - **A started check keeps its verdict.** `wait_for_check` reads the log named
   by the run record ([#4104]), and the verdict reaches the waiting stage across
   a release handover ([#4120]).
-- **A one-time publication repair ends in a commit or an explicit refusal**,
-  never in a dirty worktree and a parked lane ([#4039]).
+- **A one-time publication repair cleans up after itself.** Proven repair
+  output ends in a commit or is removed automatically. When another owner holds
+  custody of the checkout, the repair refuses explicitly with a decision
+  request and leaves the checkout as it found it ([#4039]).
 - **Relay requests fail less often.** A busy delivery-record lock at launch and
   a lost continuation no longer end in a generic failure ([#4100]). When an
   attached or replied-to picture cannot be read, the text is still answered
@@ -239,8 +259,8 @@ compatibility raises the major version.
   Codex Cloud ([#4119]).
 - **Merge and test tooling.** The batch gate names the member that adds a
   failing test instead of refusing the whole batch ([#4069]). Main's own
-  failing tests were classified and the deterministic ones repaired ([#4027]),
-  and [#4061], [#4097] and [#4145] make a Claude broker test, a retirement
+  failing tests were classified and the deterministic ones repaired
+  ([#4027]; its runtime fixes are under Fixed), and [#4061], [#4097] and [#4145] make a Claude broker test, a retirement
   reader test and the README geometry controls deterministic.
 - **Release preparation.** The release changelog, version and README pictures
   were first prepared in [#4133] and the release branch was joined to main in
@@ -6937,5 +6957,6 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4162]: https://github.com/Latand/delegatus/pull/4162
 [#4164]: https://github.com/Latand/delegatus/pull/4164
 [#4165]: https://github.com/Latand/delegatus/pull/4165
+[#4168]: https://github.com/Latand/delegatus/pull/4168
 [#4169]: https://github.com/Latand/delegatus/pull/4169
 [#4170]: https://github.com/Latand/delegatus/pull/4170
