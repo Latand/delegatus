@@ -20,7 +20,10 @@ function fixture(count = 40) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(),"archive-retirement-")); roots.push(root);
   const filename = retirementFixture(root,count);
   const db = new Database(filename); db.run("PRAGMA foreign_keys=ON"); handles.push(db);
-  const store = new SqliteAgentRegistryStore(filename,{ normalize: normalizeRegistry }); handles.push(store);
+  const store = new SqliteAgentRegistryStore(filename,{
+    normalize: normalizeRegistry,
+    initialSnapshot: () => { throw new Error("retirement fixture must already be imported"); },
+  }); handles.push(store);
   return { root,filename,db,store };
 }
 function eligible(db: Database) {
