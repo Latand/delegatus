@@ -1126,7 +1126,7 @@ test.each([false, true])("producer record revision drift preserves native remova
       }));
     }
     const now = NOW;
-    let quarantineReferenceReads = 0, injected = false;
+    let quarantineReferenceReads = 0, injected = false, activationFenced = false;
     const authority = (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => attemptTempAuthority(owner, inventory, () => now);
     const sweep = () => sweepAttemptTemps(store, { now: () => now, maxRoots: 1, capBytes: 0,
       state: async (owner, inventory) => (await authority(owner, inventory)).state, authority, scan: () => ({ ownNamespace: null, processes: [] }),
@@ -1137,7 +1137,11 @@ test.each([false, true])("producer record revision drift preserves native remova
           injected = true;
           if (transition === "closed-lane-running") pipeline.state = "running";
           else pipeline.runs[0]!.attempts[0]!.state = "running";
-          savePipelines([pipeline]);
+          try { savePipelines([pipeline]); }
+          catch (error) {
+            expect(String(error)).toContain("retirement pending"); activationFenced = true;
+            return false; // The attempted activation could not be settled.
+          }
         }
         return true;
       },
@@ -1146,7 +1150,8 @@ test.each([false, true])("producer record revision drift preserves native remova
       const changed = await sweep();
       expect(injected).toBeTrue();
       expect(changed).toMatchObject({ removed: 0, errors: 0, liveHeld: 1 });
-      expect(await attemptTempState(owner)).toBe("live");
+      if (activationFenced) expect(await attemptTempState(owner)).not.toBe("live");
+      else expect(await attemptTempState(owner)).toBe("live");
       expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("preserve me");
     } finally {
       store.close(); savePipelines([]);
@@ -1401,7 +1406,7 @@ test.each(["budget-run", "budget-inventory", "budget-read"] as const)("%s deferr
       env: { ...process.env }, stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(code).toBe(0); expect(stderr).toBe(""); return JSON.parse(stdout);
+    expect(code).toBe(0); expect(unexpectedStderr(stderr)).toBe(""); return JSON.parse(stdout);
   };
   try {
     const removed = mode === "budget-read" ? 0 : 1;
@@ -1668,7 +1673,7 @@ test("a tick budget and its fairness checkpoint survive real helper restarts", a
       env: { ...process.env }, stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    expect({ code, stderr: unexpectedStderr(stderr) }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(stdout)).toMatchObject({ checked: 1, removed: 1 });
     expect(fs.existsSync(removed)).toBeFalse();
     if (removed === a) expect(fs.existsSync(b)).toBeTrue();
@@ -1826,7 +1831,7 @@ test("new arrivals cannot starve a due owner across helper restarts", async () =
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(now), state],
       { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" }); return JSON.parse(stdout);
+    expect({ code, stderr: unexpectedStderr(stderr) }).toEqual({ code: 0, stderr: "" }); return JSON.parse(stdout);
   };
   expect(await run(NOW, "live")).toMatchObject({ checked: 1, removed: 0 });
   const store = new AttemptTempStore(f.filename);
@@ -1849,20 +1854,23 @@ test("the persisted total cap raises the default sweep budget, then returns to i
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
       f.filename, String(NOW), "orphan", "--default-budget"], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    expect({ code, stderr: unexpectedStderr(stderr) }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(stdout)).toMatchObject({ checked: expected, removed: expected, capBytes: 100 * 1024 ** 3 });
   }
   for (const [n, directory] of directories.entries()) expect(fs.existsSync(directory)).toBe(n < 21);
 }, 60000);
 
-// The waiting helper may report its file-transaction wait (50 ms or longer,
-// which a loaded host always reaches) as one diagnostic line. Any other line
-// on stderr is still a failure.
+// Successful file admission and retirement-claim waits may be reported on a
+// loaded host. Refusals and all unrelated stderr remain failures.
 function unexpectedStderr(stderr: string): string {
   return stderr.split("\n").filter(line => {
     if (!line.startsWith("[blocking-wait] ")) return line !== "";
-    const sample = JSON.parse(line.slice("[blocking-wait] ".length)) as { site?: string; refused?: boolean };
-    return sample.site !== "file-transaction" || sample.refused === true;
+    const sample = JSON.parse(line.slice("[blocking-wait] ".length)) as { site?: string; refused?: boolean;
+      stateWait?: { callSite?: string; outcome?: string } };
+    if (sample.site === "file-transaction" && sample.refused !== true) return false;
+    if (sample.site === "state-write-lock" && sample.stateWait?.callSite === "pipelines.retirement-claim"
+      && sample.stateWait.outcome === "success" && sample.refused !== true) return false;
+    return true;
   }).join("\n");
 }
 

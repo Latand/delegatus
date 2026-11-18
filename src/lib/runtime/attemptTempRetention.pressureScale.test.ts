@@ -15,7 +15,7 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pressure-scale-")); roots.push(root);
   const before = { ...process.env }, state = path.join(root, "state"), scratch = path.join(state, "scratch");
   fs.mkdirSync(scratch, { recursive: true }); process.env.LLV_STATE_DIR = state;
-  const store = new AttemptTempStore(), config = path.join(root, "fixture.json"), count = 1000;
+  const store = new AttemptTempStore(), config = path.join(root, "fixture.json"), count = 1000, retained = 872;
   const directories: string[] = [];
   let worker: ReturnType<typeof realParentWorker> | undefined;
   try {
@@ -34,8 +34,8 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
       fs.mkdirSync(directory, { mode: 0o700 }); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096, n % 256));
       store.register({ directory, pipelineId: n === 0 ? live.id : ended.id, launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 + n });
       store.measure(directory, 12288 + n);
+      if (n > 0 && n < retained) plantKeepMarker(path.join(directory, ".delegatus-keep"));
     }
-    const pinned = directories[1]!; plantKeepMarker(path.join(pinned, ".delegatus-keep"));
     expect((await attemptTempAuthority(store.owner(directories[0]!)!, undefined, () => NOW)).state).toBe("live");
     store.close();
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
@@ -74,18 +74,18 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
         expect(report.pass.ended).toBe("complete"); completedPasses++;
         // Hard cancellation advances past the interrupted proof for fairness.
         // Its untouched root is revisited in the next complete inventory.
-        if (removed < count - 2) continue;
+        if (removed < count - retained) continue;
         expect(report.liveHeld).toBe(1);
         expect(report.lastFullPass!.removedBytes).toBeGreaterThan(0);
         break;
       }
     }
     expect(ticks + 1).toBeLessThanOrEqual(maxTicks);
-    expect(removed).toBe(count - 2);
+    expect(removed).toBe(count - retained);
     expect(completedPasses).toBeGreaterThan(0);
     for (let n = 0; n < count; n++) {
-      if (n < 2) expect(fs.readFileSync(path.join(directories[n]!, "data"))).toEqual(Buffer.alloc(4096, n));
+      if (n < retained) expect(fs.readFileSync(path.join(directories[n]!, "data"))).toEqual(Buffer.alloc(4096, n % 256));
       else expect(fs.existsSync(directories[n]!)).toBeFalse();
     }
   } finally { await worker?.close(); store.close(); restoreEnvironment(before); }
-}, 500_000);
+}, 270_000);

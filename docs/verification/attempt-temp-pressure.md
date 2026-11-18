@@ -16,7 +16,7 @@ manifest execution, native removal races and persistent descendant inventory:
   65,536-directory tree, helper restarts, a late keep marker in an already
   checkpointed descendant, and eventual retirement after its removal.
 - `src/lib/runtime/attemptTempRetention.pressureScale.test.ts`: 1,000 real roots
-  under small real monotonic helper deadlines, first-tick deletion, cancellation
+  (128 eligible and 872 protected) under small real monotonic helper deadlines, first-tick deletion, cancellation
   and cold restarts, with live and keep roots surviving.
 - `src/lib/runtime/attemptProtectionInventory.test.ts`: writer/reader output,
   quarantine rebasing, incomplete inventories and rejected escaping paths.

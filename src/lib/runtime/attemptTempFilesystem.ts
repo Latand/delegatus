@@ -484,7 +484,7 @@ export async function repositoryReferencesAttemptTemp(repository: string, origin
 export function attemptProcessReferencesClear(original: string, current: string, scan: ProcessScan): boolean {
   const roots = attemptRoots(original, current);
   const held = referencesRoot(roots);
-  const referenced = (file: string) => {
+  const referenced = (file: string, strict = false) => {
     if (held(file)) return true;
     try {
       // A path can traverse a protected root and finish outside it. Keep
@@ -493,10 +493,11 @@ export function attemptProcessReferencesClear(original: string, current: string,
       return followLinkChain(path.isAbsolute(file) ? file : path.resolve(file)).some(held);
     } catch (error) {
       if (error instanceof AttemptTempBudgetDeferred) throw error;
+      if (strict) throw error;
       return true; // An unresolved live input grants no deletion authority.
     }
   };
-  return !scan.processes.some(process => process.paths.some(referenced)
+  return !scan.processes.some(process => process.paths.some(file => referenced(file, true))
     // An input can be a flag value or an embedded shell argument even if
     // the command has no file open there yet.
     || process.references?.some(value => {
