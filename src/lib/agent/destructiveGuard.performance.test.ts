@@ -7,6 +7,8 @@ import { guardFixture } from "./destructiveGuard.fixture";
 import { ensureDestructiveGuard } from "./destructiveGuard";
 let reportSerial = 0;
 
+// The five paired campaigns include setup and separate rm processes. Their
+// harness budget stays below the gate's five-minute file deadline.
 test("five fresh runs measure wrapper cost for 3000 owned targets", () => {
   const f = guardFixture();
   const observations: Record<string, number[]> = {};
@@ -70,4 +72,4 @@ test("five fresh runs measure wrapper cost for 3000 owned targets", () => {
     expect(summary["wrapped-separate"]!.median).toBeLessThanOrEqual(summary["plain-separate"]!.median * 1.5);
     expect(hook.p95).toBeLessThanOrEqual(60); expect(summary.verify!.median).toBeLessThanOrEqual(20);
   } finally { f.cleanup(); }
-}, 180_000);
+}, 270_000);
