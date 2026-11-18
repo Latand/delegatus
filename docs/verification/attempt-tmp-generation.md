@@ -20,6 +20,7 @@ The initial code baseline is `a63693d9f75645725ec7b68fd7b500dfcdd32ab1`.
 | --- | --- | --- |
 | `scripts/check-source.ts`, `createRuntimeCheckTree` in `scripts/local-gate.ts` | One source copy per helper invocation; one tree shared by all build consumers of a publication hook. Dependencies were already linked. | Detached clone shares Git objects and keeps a private index and refs. Current staged, unstaged and untracked inputs overlay the checkout; deletions and executable modes survive. The helper releases its owned tree after consumers settle. |
 | `scripts/review-export.ts` | One full source archive plus its extraction per invocation; matching dependencies already linked. Repeated agent invocations accumulated exports. | Shared clone removes the intermediate archive, retains the requested commit and upstream identity, and links dependencies only when manifests, lockfile, Bun configuration and patches match. |
+| `scripts/mcp-state-writer-matrix.py` | Once per fresh matrix output: one recursive dependency snapshot and three full source archives plus three extracted trees, even when fewer sides were selected. | Each selected side uses the common shared-object exporter and matching read-only dependencies. Unselected sides allocate no checkout. Manifests retain the commit, Git tree id and harness file hashes without intermediate archives. Incompatible dependency inputs refuse before sample dispatch. |
 | `scripts/local-gate-tests.ts` | Zero baseline checkouts for a green head; at most one shared clone per comparator invocation for a red head. One private environment per explicit test file. Matching dependencies linked; incompatible graphs installed privately. | Existing object/dependency sharing and comparison semantics preserved. |
 | `scripts/merge-batch.ts` | Existing Git worktrees for batch, baseline, attribution and trusted privacy subjects. Dependency gates installed separately for repeated subjects. | Dependency gates use the trusted driver's preparation helper. Linked Delegatus worktrees reuse the fenced dependency store keyed by the full input graph; unmanaged subjects retain frozen installation and failure propagation. |
 | `scripts/cloud-check-dependencies.ts` | One independent dependency copy per Cloud setup reuse; checks can write into it. | Prefer filesystem copy-on-write extents, with an independent-copy fallback. Preserve private writes and internal executable links. Hardlinks would violate this writer contract. |
@@ -53,6 +54,16 @@ after a process restart. No in-memory allowance grants a new budget.
 This is an admission guard. A running command can exceed the threshold before
 the next measurement. It neither deletes data nor interrupts existing
 consumers. Cleanup and retention code are unchanged.
+
+The matrix environment preserves the attempt root, its device/inode identity
+and its configured cap, along with the validated admission lease. Its focused
+test starts two fresh production owned runners after matrix isolation; both
+refuse with exit 73 before a marker command executes. The audit also checked
+`checkEnvironment`, `isolatedEnvironment`, merge-batch, remote gate transport
+and the agent sandbox allowlists: their attempt contract remains intact. The
+other wholesale filters, in the call-cost benchmark and board capture, isolate
+already admitted product children and do not dispatch nested gate runners;
+the matrix sample/report entry points return before the call-cost filter.
 
 ## Dependency artifact caches and Python environments
 

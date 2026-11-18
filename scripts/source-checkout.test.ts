@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { afterEach, expect, test } from "bun:test";
 import { currentCheckout, sharedCheckout } from "./source-checkout";
 import { fixtureGitEnv } from "./local-gate.fixture";
+import { createRuntimeCheckTree } from "./local-gate";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -86,4 +87,56 @@ test("comparison refs retain upstream main when the source's local main differs"
   const git = (...args: string[]) => execFileSync("git", args, { cwd: target, encoding: "utf8" }).trim();
   expect(git("rev-parse", "refs/remotes/origin/main")).toBe(original);
   expect(git("rev-parse", "HEAD")).toBe(f.git("rev-parse", "HEAD"));
+});
+
+test.each([false, true])("runtime export accepts an ordinary file-to-directory transition (staged=%s)", staged => {
+  const f = fixture();
+  fs.rmSync(path.join(f.source, "input"));
+  fs.mkdirSync(path.join(f.source, "input/deep"), { recursive: true });
+  fs.writeFileSync(path.join(f.source, "input/new.ts"), "current bytes");
+  fs.writeFileSync(path.join(f.source, "input/deep/child.ts"), "nested bytes");
+  if (staged) f.git("add", "-A");
+  const status = f.git("status", "--porcelain"), index = fs.readFileSync(path.join(f.source, ".git/index"));
+  const tree = createRuntimeCheckTree(f.source, f.root);
+  expect(fs.readFileSync(path.join(tree, "input/new.ts"), "utf8")).toBe("current bytes");
+  expect(fs.readFileSync(path.join(tree, "input/deep/child.ts"), "utf8")).toBe("nested bytes");
+  expect(f.git("status", "--porcelain")).toBe(status);
+  expect(fs.readFileSync(path.join(f.source, ".git/index"))).toEqual(index);
+});
+
+test.each([false, true])("runtime export accepts directory-to-file transitions (staged=%s)", staged => {
+  const f = fixture();
+  fs.mkdirSync(path.join(f.source, "folder"));
+  fs.writeFileSync(path.join(f.source, "folder/child"), "old");
+  f.git("add", "."); f.git("commit", "-qm", "directory fixture");
+  fs.rmSync(path.join(f.source, "folder"), { recursive: true });
+  fs.writeFileSync(path.join(f.source, "folder"), "replacement");
+  if (staged) f.git("add", "-A");
+  const status = f.git("status", "--porcelain"), index = fs.readFileSync(path.join(f.source, ".git/index"));
+  const tree = createRuntimeCheckTree(f.source, f.root);
+  expect(fs.readFileSync(path.join(tree, "folder"), "utf8")).toBe("replacement");
+  expect(f.git("status", "--porcelain")).toBe(status);
+  expect(fs.readFileSync(path.join(f.source, ".git/index"))).toEqual(index);
+});
+
+test("replacing a committed symlink ancestor cannot write into its old target", () => {
+  const f = fixture(), outside = path.join(f.root, "outside"); fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "child"), "untouched");
+  fs.symlinkSync(outside, path.join(f.source, "link"));
+  f.git("add", "link"); f.git("commit", "-qm", "link fixture");
+  fs.unlinkSync(path.join(f.source, "link")); fs.mkdirSync(path.join(f.source, "link"));
+  fs.writeFileSync(path.join(f.source, "link/child"), "current");
+  const tree = createRuntimeCheckTree(f.source, f.root);
+  expect(fs.readFileSync(path.join(tree, "link/child"), "utf8")).toBe("current");
+  expect(fs.readFileSync(path.join(outside, "child"), "utf8")).toBe("untouched");
+});
+
+test.each(["untracked", "replacement", "gitlink"])("nested repository still refuses (%s)", kind => {
+  const f = fixture(), nested = path.join(f.source, kind === "replacement" ? "input" : "nested");
+  if (kind === "replacement") fs.unlinkSync(nested);
+  fs.mkdirSync(nested);
+  execFileSync("git", ["init", "-q"], { cwd: nested, env: fixtureGitEnv() });
+  fs.writeFileSync(path.join(nested, "child"), "nested repository");
+  if (kind === "gitlink") f.git("update-index", "--add", "--cacheinfo", `160000,${f.git("rev-parse", "HEAD")},nested`);
+  expect(() => createRuntimeCheckTree(f.source, f.root)).toThrow("nested repositories need their own check");
 });

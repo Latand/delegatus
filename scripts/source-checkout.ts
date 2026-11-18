@@ -29,17 +29,37 @@ export function currentCheckout(source: string, target: string): void {
   const wanted = new Set(git("ls-files", "--cached", "--others", "--exclude-standard", "-z").split("\0")
     .filter(file => file && !generated.has(file.split("/")[0]!)));
   const previous = execFileSync("git", ["ls-files", "-z"], { cwd: target, encoding: "utf8" }).split("\0").filter(Boolean);
+  const cachedFiles = new Set(git("ls-files", "--stage", "-z").split("\0")
+    .filter(entry => entry && !entry.startsWith("160000 ")).map(entry => entry.slice(entry.indexOf("\t") + 1)));
+  const inputStat = (file: string) => {
+    try { return fs.lstatSync(file, { throwIfNoEntry: false }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined; throw error; }
+  };
   for (const file of previous) {
-    if (!wanted.has(file) || !fs.lstatSync(path.join(source, file), { throwIfNoEntry: false }))
+    if (!wanted.has(file) || !inputStat(path.join(source, file)))
       fs.rmSync(path.join(target, file), { recursive: true, force: true });
   }
   // Compare bytes instead of trusting Git's stat cache or assume-unchanged
   // flags. The export must include every current byte even under those flags.
   for (const file of wanted) {
     const from = path.join(source, file), to = path.join(target, file);
-    const stat = fs.lstatSync(from, { throwIfNoEntry: false });
+    const stat = inputStat(from);
     if (!stat) continue;
-    if (stat.isDirectory()) throw new Error("source check requires a file input; nested repositories need their own check");
+    if (stat.isDirectory()) {
+      // A cached plain file may now be an ordinary directory. Its current
+      // children are separate inputs; Git does not retain empty directories.
+      if (cachedFiles.has(file) && !fs.existsSync(path.join(from, ".git"))) continue;
+      throw new Error("source check requires a file input; nested repositories need their own check");
+    }
+    // Remove obsolete file or symlink ancestors before looking up a child.
+    // Following a committed symlink here could write outside the export.
+    let parent = target;
+    for (const part of file.split("/").slice(0, -1)) {
+      parent = path.join(parent, part);
+      const entry = fs.lstatSync(parent, { throwIfNoEntry: false });
+      if (entry && !entry.isDirectory()) fs.rmSync(parent, { force: true });
+      fs.mkdirSync(parent, { recursive: true });
+    }
     const old = fs.lstatSync(to, { throwIfNoEntry: false });
     if (stat.isSymbolicLink() && old?.isSymbolicLink() && fs.readlinkSync(from) === fs.readlinkSync(to)) continue;
     if (stat.isFile() && old?.isFile() && stat.mode === old.mode && fs.readFileSync(from).equals(fs.readFileSync(to))) continue;
