@@ -61,7 +61,7 @@ import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversati
 import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { canonicalOrchestratorProject, isCurrentOrchestratorSeat, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 
-import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, type RuntimeHostClient } from "./client";
+import { isRuntimeHostTransportFailure, readRuntimeSession, runtimeHostClient, RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapability, type RuntimeEventInput, type RuntimeOperationReceipt, type RuntimeSession } from "./contracts";
 import { readConfirmedSendEvidence } from "./confirmedSend";
 import { readEvidence } from "./evidence";
@@ -322,6 +322,26 @@ export async function publishStructuredHostProjection(
 ): Promise<void> {
   await client.append(event);
   await publishFilesRevision(client);
+}
+
+const stagedFilesInvalidations = new WeakMap<RuntimeHostClient, { pending: boolean }>();
+
+function invalidateStagedHostFiles(client: RuntimeHostClient): void {
+  const queued = stagedFilesInvalidations.get(client);
+  if (queued) {
+    queued.pending = true;
+    return;
+  }
+  const batch = { pending: false };
+  stagedFilesInvalidations.set(client, batch);
+  withoutOperationLease(() => {
+    void publishFilesRevision(client).catch(() => {
+      controllerDiagnosticError("[structured delivery] staged host file invalidation failed");
+    }).finally(() => {
+      stagedFilesInvalidations.delete(client);
+      if (batch.pending) invalidateStagedHostFiles(client);
+    });
+  });
 }
 
 function hostResolver(
@@ -682,6 +702,7 @@ async function publishHostState(
   adopted: StructuredDeliveryHost,
   state: HostState | null,
   projectionKey?: string,
+  launch?: { id: string; ownsWriter: () => boolean },
 ): Promise<void> {
   const entry = entryForHost(registry, adopted);
   if (!entry) return;
@@ -708,31 +729,35 @@ async function publishHostState(
      engine drain, an active-account reseat — which otherwise wait on a 60s
      poll. */
   if (turn === "idle" && pendingAccountSwitch(registry, conversationId)) requestAccountMigrationTick();
-  await publishStructuredHostProjection(client, {
+  const producerKind = runtimeHostKindForEngine(adopted.key.engine);
+  const producerKey = [
+    "structured-host",
+    sessionKeyId(adopted.key),
+    entry.claimEpoch,
+    state.eventCursor,
+    state.status,
+    state.activeTurnRef ?? "idle",
+    state.pendingAttention.join(","),
+    ...(projectionKey ? [projectionKey] : []),
+  ].join(":");
+  const launchPrefix = launch ? `structured-launch:${launch.id}:${producerKey}:` : null;
+  const writerClaim = entry.claimOwner && entry.structuredHost ? `${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` : null;
+  const event: RuntimeEventInput = {
     scope: { type: "session", id: conversationId },
     kind: "session-status",
     producer: {
-      kind: runtimeHostKindForEngine(adopted.key.engine),
-      eventKey: [
-        "structured-host",
-        sessionKeyId(adopted.key),
-        entry.claimEpoch,
-        state.eventCursor,
-        state.status,
-        state.activeTurnRef ?? "idle",
-        state.pendingAttention.join(","),
-        ...(projectionKey ? [projectionKey] : []),
-      ].join(":"),
+      kind: producerKind,
+      eventKey: launchPrefix ? `${launchPrefix}1` : producerKey,
     },
     payload: {
       conversationId,
       sessionKey: adopted.key,
-      hostKind: runtimeHostKindForEngine(adopted.key.engine),
+      hostKind: producerKind,
       host,
       turn,
       provenance: "structured",
       accountId: entry.accountId,
-      writerClaim: entry.claimOwner && entry.structuredHost ? `${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` : null,
+      writerClaim,
       parentConversationId: entry.launchProfile?.parentConversationId ?? null,
       cwd: entry.cwd,
       artifactPath: entry.artifactPath,
@@ -755,7 +780,45 @@ async function publishHostState(
       activeTurnId: state.activeTurnRef,
       diagnostics: state.diagnostics,
     },
-  });
+  };
+  if (!launch || !launchPrefix) {
+    await publishStructuredHostProjection(client, event);
+    return;
+  }
+  const assertWriter = () => {
+    if (!launch.ownsWriter()) throw new Error("staged launch writer changed before host projection");
+  };
+  assertWriter();
+  let lostReply = false;
+  try {
+    await client.append(event, assertWriter);
+  } catch (error) {
+    if (!isRuntimeHostTransportFailure(error) || !client.readSession || !writerClaim || !launch.ownsWriter()) throw error;
+    lostReply = true;
+  }
+  if (client.readSession && writerClaim) {
+    /* The producer receipt proves this exact append. The session read proves
+       that the projection still belongs to the same writer, including when
+       append answered from an older idempotency receipt. */
+    let receipt: number;
+    let session: RuntimeSession | null;
+    try {
+      [receipt, session] = await Promise.all([
+        lostReply ? client.producerCursor(producerKind, launchPrefix) : 1,
+        client.readSession({ conversationId }),
+      ]);
+    } catch (error) {
+      if (!isRuntimeHostTransportFailure(error)) throw error;
+      throw new RuntimeHostUnavailableError("staged host projection reconciliation timed out", "HOST_BUSY");
+    }
+    if (!launch.ownsWriter() || receipt !== 1 || !session || session.writerClaim !== writerClaim
+      || session.conversationId !== conversationId || session.artifactPath !== entry.artifactPath
+      || session.accountId !== entry.accountId
+      || sessionKeyId(session.sessionKey) !== sessionKeyId(adopted.key)
+      || session.host !== host || session.turn !== turn || session.activeTurnId !== state.activeTurnRef) {
+      throw new RuntimeHostUnavailableError("staged host projection acknowledgement could not be verified", "HOST_BUSY");
+    }
+  }
 }
 
 /* One guard per registry for the life of the process, so a controller swap
@@ -1871,7 +1934,8 @@ export async function bindStructuredDeliveryQueue(
       catch { break; }
       const current = hostlessConversationEvidence(registry.conversationRetentionSnapshot(conversationId), conversationId);
       if (!current || current.key !== row.key || current.endedAt !== row.endedAt || registrations.has(row.key)) continue;
-      if (session && sessionClaimsOpenTurn(session)) {
+      if (session && (sessionClaimsOpenTurn(session)
+        || (session.host === "hosted" && sessionKeyId(session.sessionKey) === row.key))) {
         /* A write the journal refused or never received settles nothing, as
            a failed read does. */
         try { await publishCurrentFallback(conversationId, session, session.revision); }
@@ -1976,6 +2040,23 @@ export async function bindStructuredDeliveryQueue(
     const publicationConversationId = publicationEntry
       ? conversationIdForEntry(registry, publicationEntry)
       : null;
+    const launchId = ownsOperation ? publicationEntry?.structuredHostOperationId : null;
+    const ownsLaunchWriter = () => {
+      if (!launchId || !publicationEntry || superseded() || abandoned()
+        || registrations.get(key) !== (seat ?? undefined)) return false;
+      const snapshot = registry.spawnRecoverySnapshot([launchId]);
+      const receipt = snapshot.receipts[launchId];
+      const current = snapshot.entries[key];
+      const originalProcess = publicationEntry.structuredHost?.process;
+      const process = current?.structuredHost?.process;
+      return receipt?.state === "path-pending" && receipt.conversationId === publicationConversationId
+        && !!receipt.key && sessionKeyId(receipt.key) === key
+        && receipt.artifactPath === publicationEntry.artifactPath && current?.artifactPath === receipt.artifactPath
+        && current.structuredHostOperationId === launchId
+        && current.claimOwner === publicationEntry.claimOwner && current.claimEpoch === publicationEntry.claimEpoch
+        && current.structuredHost?.writerClaimEpoch === item.writerEpoch
+        && (originalProcess ? !!process && sameRecordedProcessIdentity(originalProcess, process) : !process);
+    };
     let acknowledgedEventCursor = 0;
     if (publicationConversationId) {
       /* A transport failure leaves durable acknowledgement unknown. Pause the
@@ -1996,12 +2077,26 @@ export async function bindStructuredDeliveryQueue(
     /* The journal read above is an await of its own: the operation is asked
        again before anything about this host is projected. */
     if (ownsOperation && !await ownsOperation()) return async () => {};
-    await publishHostState(client, registry, item, initialState);
+    await publishHostState(client, registry, item, initialState, undefined,
+      launchId ? { id: launchId, ownsWriter: ownsLaunchWriter } : undefined);
     if (abandoned() || (ownsOperation && !await ownsOperation())) {
       const restoreCurrentProjection = async () => {
+        if (launchId) {
+          if (!publicationConversationId || !client.readSession || !client.appendSessionFenced || !ownsLaunchWriter()) return;
+          const session = await client.readSession({ conversationId: publicationConversationId });
+          if (!ownsLaunchWriter() || !session || sessionKeyId(session.sessionKey) !== key
+            || !publicationEntry?.claimOwner
+            || session.writerClaim !== `${publicationEntry.claimOwner}:${item.writerEpoch}`) return;
+          await publishCurrentFallback(publicationConversationId, session, session.revision);
+          return;
+        }
         await refreshCurrentProjection(publicationConversationId);
       };
-      await restoreCurrentProjection();
+      const restoration = restoreCurrentProjection();
+      if (launchId) await restoration.catch(() => {
+        controllerDiagnosticError("[structured delivery] refused host projection could not be restored");
+      });
+      else await restoration;
       return restoreCurrentProjection;
     }
     /* The last yield point before the commit. Nothing below awaits, so a
@@ -2011,6 +2106,7 @@ export async function bindStructuredDeliveryQueue(
        existed at the swap, and re-driving a released host would republish it. */
     if (abandoned()) return async () => {};
     if (superseded()) return await registerThroughSuccessor(item, ownsOperation);
+    if (launchId && !ownsLaunchWriter()) throw new Error("staged launch writer changed before host registration");
     const observable = item.host as ObservableEngineHost;
     let deliveryState = deliveryStateKey(initialState);
     let projectedState = hostProjectionKey(initialState);
@@ -2113,6 +2209,9 @@ export async function bindStructuredDeliveryQueue(
     registration.attachment = { unsubscribe, stopEvents };
     seatRegistration(key, registration);
     if (unpublishedLaunchHosts.get(key)?.host === item.host) unpublishedLaunchHosts.delete(key);
+    // File observers can wait for an invalidation. Delivery can use the
+    // confirmed journal projection and registered writer immediately.
+    if (launchId) invalidateStagedHostFiles(client);
     requestDrain();
     if (conversationId) wakeRecordedChecks(undefined, true, conversationId);
     return () => unregisterHost(key, item.host);
