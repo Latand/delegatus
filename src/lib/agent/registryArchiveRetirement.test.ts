@@ -126,6 +126,32 @@ test("held lazy and projected views require a fresh snapshot after retirement", 
   expect(store.readOnlySnapshot().file.receipts["retention-launch-10"]!.error).toBe("new version");
 });
 
+test("duplicate cold mappings share one archive fetch and stay readable after restart and retirement", () => {
+  const { filename,db,store } = fixture(8);
+  const duplicate = db.query<{ archive_id: number }, []>(
+    "SELECT archive_id FROM registry_cold WHERE collection='receipts' AND row_key='retention-launch-5'").get()!.archive_id;
+  db.run("UPDATE registry_cold SET archive_id=? WHERE collection='receipts' AND row_key='retention-launch-4'",[duplicate]);
+  const projector = { id: "retirement-duplicate-receipt-launch",collection: "receipts" as const,project: (row: { launchId: string }) => row.launchId };
+  const readLaunchIds = () => registryRowProjection(store.readOnlySnapshot().file,projector);
+  expect(readLaunchIds()).toHaveLength(8);
+  expect(readLaunchIds().map(([key]) => key)).toContain("retention-launch-4");
+
+  store.close();
+  handles.splice(handles.indexOf(store),1);
+  const reopened = new SqliteAgentRegistryStore(filename,{
+    initialSnapshot: () => { throw new Error("retirement fixture must already be imported"); },
+    normalize: normalizeRegistry,
+  }); handles.push(reopened);
+  expect(registryRowProjection(reopened.readOnlySnapshot().file,projector)).toHaveLength(8);
+
+  approveFixture(filename);
+  const observation = reopened.prepareArchiveRetirement()!;
+  reopened.retireSupersededArchive(observation,RETIREMENT_NOW);
+  reopened.retireSupersededArchive(undefined,RETIREMENT_NOW+RETIREMENT_GRACE_MS+1);
+  expect(registryRowProjection(reopened.readOnlySnapshot().file,projector)).toHaveLength(8);
+  expect(db.query("SELECT 1 FROM registry_archive WHERE id=?").get(duplicate)).not.toBeNull();
+});
+
 test("sparse AUTOINCREMENT history counts retained rows and resumes across a process restart", async () => {
   const { filename,db } = fixture();
   db.run("DELETE FROM registry_cold");
@@ -140,7 +166,7 @@ test("sparse AUTOINCREMENT history counts retained rows and resumes across a pro
       const id=20_000_000+n*1_000_000, key=`mapped-${n}`;
       archive.run(id,key); mapping.run(key,id);
     }
-    db.query("INSERT INTO registry_archive(id,collection,row_key,value_json,row_order) VALUES (2_020_000_000,'receipts','eligible','{}',1)").run();
+    db.query("INSERT INTO registry_archive(id,collection,row_key,value_json,row_order) VALUES (?,'receipts','eligible','{}',1)").run(2_020_000_000);
   })();
   installArchiveRetirement(db);
   approveFixture(filename);

@@ -4279,7 +4279,13 @@ export class SqliteAgentRegistryStore {
     let results = this.coldRowProjectionResults.get(projector.id);
     if (!results) this.coldRowProjectionResults.set(projector.id,results = new Map());
     const missing: Array<[string, number]> = [];
-    for (const [key,id] of cold) if (!results.has(id)) missing.push([key,id]);
+    const requested = new Set<number>();
+    for (const [key,id] of cold) {
+      if (!results.has(id) && !requested.has(id)) {
+        missing.push([key,id]);
+        requested.add(id);
+      }
+    }
     if (missing.length) {
       if (databaseFileIdentity(this.filename) !== identity) throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
       const keyOf = new Map(missing.map(([key,id]) => [id,key]));
@@ -4289,7 +4295,10 @@ export class SqliteAgentRegistryStore {
         const batch = missing.slice(offset,offset+500).map(([,id]) => id);
         const reopens = this.databaseReopens;
         const stored = select(batch.length).all(...batch);
-        if (stored.length !== batch.length) throw new DatabaseReplacedError("registry archive version was retired; request a fresh snapshot");
+        const storedIds = new Set(stored.map(({ id }) => id));
+        if (storedIds.size !== batch.length || batch.some(id => !storedIds.has(id))) {
+          throw new DatabaseReplacedError("registry archive version was retired; request a fresh snapshot");
+        }
         // The statement moved this connection to a file that replaced the view's.
         if (reopens !== this.databaseReopens) throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
         this.onRowPayloadRead?.(collection,stored.length);
