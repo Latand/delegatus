@@ -13,8 +13,8 @@ import { stateDatabaseBusy, stateLockAttempt, stateLockDeferral, waitForStateLoc
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { AgentLivenessPipelineRef, LivenessFlow } from "@/lib/lifecycle/liveness";
 import type { fleetLimitWaits } from "@/lib/mcp/agentFleet";
-import { isStoredPipeline } from "@/lib/pipelines/store";
-import { isStoredFlow } from "@/lib/flows/store";
+import { isStoredPipeline } from "@/lib/pipelines/storedRecord";
+import { isStoredFlow } from "@/lib/flows/validation";
 
 const tracked = (row: string) => `${row}.collection IN ('pipelines','pipelines_archive','flows')`;
 const enqueue = (row: string) => `INSERT INTO history_pending SELECT ${row}.collection,${row}.row_key WHERE ${tracked(row)} ON CONFLICT(collection,row_key) DO NOTHING;`;

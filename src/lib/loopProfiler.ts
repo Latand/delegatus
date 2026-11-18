@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, statSync } from "node:fs";
+import { LoopProfilerFailure } from "./loopProfilerFailure";
 
 export const LOOP_PROFILE_WINDOW_MS = 5000;
 export const LOOP_PROFILE_ARM_MS = 30 * 60_000;
@@ -15,7 +16,7 @@ type Categories = ReturnType<typeof categorizeLoopProfile>;
 /** A gap of two seconds or more carries named frames and the category
  * histogram; a shorter gap carries the histogram alone. */
 export type LoopGapProfile = { status: "captured"; from: number; to: number; intervalUs: number; frames?: Summary; categories?: Categories }
-  | { status: "unavailable" | "not-armed" | "skipped"; reason: string };
+  | { status: "unavailable" | "not-armed" | "skipped"; reason: string; phase?: LoopProfilerFailure["phase"]; code?: string };
 /** Shortest gap that gets a category histogram; named frames need LOOP_PROFILE_FRAMES_GAP_MS. */
 export const LOOP_PROFILE_GAP_MS = 500;
 export const LOOP_PROFILE_FRAMES_GAP_MS = 2000;
@@ -260,6 +261,7 @@ export interface LoopProfilerPorts {
   phase<T>(phase: "collect" | "trim" | "settings", work: () => T): T;
   root: string;
   completed?(profile: LoopGapProfile): void;
+  failed?(failure: LoopProfilerFailure): void;
   beforeCollect?(): Promise<boolean>;
   /** Synchronous boundary immediately before native sampling starts. */
   captureStarted?(): void;
@@ -285,6 +287,7 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
   const capture = async () => {
     if (!await enabled()) return false;
     const current = window = { from: ports.now(), pending: [] as { emit: Emit; frames: boolean }[] };
+    let phase: "collect" | "trim" = "collect";
     try {
       if (ports.beforeCollect && !await ports.beforeCollect()) {
         inactive = { status: "not-armed", reason: "waiting-for-capture" };
@@ -304,6 +307,7 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
       if (current.pending.length || ports.completed) {
         // The histogram reads no source files. Named frames are requested
         // by long gaps or the explicitly admitted capture callback.
+        phase = "trim";
         const { categories, frames } = ports.phase("trim", () => ({
           categories: categorizeLoopProfile(raw.stackTraces as LoopProfile, ports.root),
           frames: ports.completed || current.pending.some(gap => gap.frames) ? trimLoopProfile(raw.stackTraces as LoopProfile, ports.root) : undefined,
@@ -315,9 +319,11 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
         ports.completed?.(record(true));
         for (const gap of current.pending.splice(0)) gap.emit(record(gap.frames));
       }
-    } catch {
+    } catch (error) {
       stopped = true;
-      inactive = { status: "unavailable", reason: "capture-failed" };
+      const failure = new LoopProfilerFailure(phase, error);
+      inactive = { status: "unavailable", reason: "capture-failed", phase: failure.phase, code: failure.code };
+      ports.failed?.(failure);
     } finally {
       // Admission can refuse after correlate has accepted a deferred record.
       // Every exit finishes those records with the fixed refusal or failure.

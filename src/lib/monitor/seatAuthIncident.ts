@@ -31,18 +31,19 @@ export function normalizeSeatAuthCardNotice(value: unknown): SeatAuthCardNotice 
 
 export interface SeatAuthTelegramNotice {
   id: string;
-  chat: string;
-  html: string;
-  topicId?: number;
+  audience: "operator";
+  text: string;
 }
 
 export function normalizeSeatAuthTelegramNotice(value: unknown): SeatAuthTelegramNotice | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
   if (typeof row.id !== "string" || !row.id.startsWith("seat-auth:") || row.id.length > 512
-    || typeof row.chat !== "string" || !row.chat || typeof row.html !== "string" || !row.html) return null;
-  if (row.topicId !== undefined && (typeof row.topicId !== "number" || !Number.isSafeInteger(row.topicId) || row.topicId <= 0)) return null;
-  return { id: row.id, chat: row.chat, html: row.html, ...(typeof row.topicId === "number" ? { topicId: row.topicId } : {}) };
+    || row.audience !== "operator" || typeof row.text !== "string" || !row.text) return null;
+  // Legacy copies addressed a project's report chat. Never replay or retarget
+  // them after an upgrade; the board retains the private diagnostic.
+  if (row.chat !== undefined || row.topicId !== undefined || row.html !== undefined) return null;
+  return { id: row.id, audience: "operator", text: row.text };
 }
 
 export interface SeatAuthIncident {

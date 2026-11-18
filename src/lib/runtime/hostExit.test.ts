@@ -5,12 +5,37 @@ import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { statePath } from "@/lib/configDir";
-import { bindHostExitWriter, discardHostExitWriter, hostExitText, observeHostExit, readHostExit, readHostExitSpool, recordHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
+import { bindHostExitWriter, discardHostExitWriter, hostExitText, observeHostExit, readHostExit, readHostExitSpool, readHostExitWriterBinding, recordHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { launcherFile, spawnManagedEngine } from "./agentSignalSandbox";
 import { socketWaitOwnerSource } from "./codexSocketTransport";
 import path from "node:path";
 import { terminateStructuredHostTree } from "./structuredHostControl";
 import { AgentMemoryCell, type AgentMemoryPlan } from "./agentMemory";
+
+test("custody reader round trips real writer output without changing its slots", () => {
+  const directory = fs.mkdtempSync(path.join(process.env.TMPDIR!, "custody-reader-"));
+  const host = { pid: 2147482000, startIdentity: "custody-host", bootEpoch: "fixture-boot" };
+  const writer = { pid: 2147482001, startIdentity: "custody-writer", bootEpoch: "fixture-boot" };
+  try {
+    expect(readHostExitWriterBinding(host)).toBeNull();
+    bindHostExitWriter(directory, host, writer);
+    const exitFile = JSON.parse(fs.readFileSync(path.join(directory, "host-exit.json"), "utf8")).file as string;
+    const slot = exitFile.replace(/\.exit\.json$/, ".writer.json");
+    for (const input of [JSON.stringify(writer), JSON.stringify({ ...writer, bootEpoch: undefined }), "{", "null",
+      JSON.stringify({ ...writer, pid: 0 }), JSON.stringify({ ...writer, startIdentity: 9 }),
+      JSON.stringify({ ...writer, bootEpoch: 9 }), " ".repeat(4097)]) {
+      fs.writeFileSync(slot, input);
+      const before = fs.readFileSync(slot);
+      const binding = readHostExitWriterBinding(host);
+      if (input === JSON.stringify(writer)) expect(binding).toEqual({ process: writer, exitFile });
+      else if (input === JSON.stringify({ ...writer, bootEpoch: undefined })) expect(binding).toEqual({ process: { ...writer, bootEpoch: null }, exitFile });
+      else expect(binding).toBeNull();
+      expect(fs.readFileSync(slot)).toEqual(before);
+    }
+    fs.rmSync(slot);
+    expect(readHostExitWriterBinding(host)).toBeNull();
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 for (const discard of [false, true]) for (const existing of [false, true]) test.skipIf(process.platform !== "linux")(`exit binding stays readable during publication (discard=${discard}, existing=${existing})`, async () => {
   const directory = fs.mkdtempSync(path.join(process.env.TMPDIR!, "binding-publication-"));

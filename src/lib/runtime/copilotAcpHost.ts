@@ -1,7 +1,6 @@
 import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { readNativePromptAnchor } from "@/lib/agentState/transcript";
 import type { NativePromptAnchor } from "@/lib/agentState/model";
-import { assertReleasedHostEventLedger } from "./hostEventWindow";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
 import { hostExitProcess, observeHostExit, recordHostStop, withHostStopOrigin } from "./hostExit";
@@ -351,12 +350,13 @@ export class CopilotAcpHost implements EngineHost {
     });
   }
 
-  private refillEventWindow(): void {
+  private eventWindowRefill: Promise<void> | undefined;
+
+  private refillEventWindow(): Promise<void> | undefined {
     if (!this.eventWindowReleased) return;
-    const stored = this.eventStore.load(this.identity.sessionId);
-    assertReleasedHostEventLedger(this.events, stored);
-    this.eventWindow.restore(stored);
-    this.eventWindowReleased = false;
+    return this.eventWindowRefill ??= this.eventWindow.refill(this.eventStore, this.identity.sessionId).then(() => {
+      this.eventWindowReleased = false;
+    }).finally(() => { this.eventWindowRefill = undefined; });
   }
 
   private readonly pending = new Map<number, PendingRequest>();
@@ -572,12 +572,11 @@ export class CopilotAcpHost implements EngineHost {
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
     this.eventWindowRevision += 1;
-    this.refillEventWindow();
     return attachRuntimeEvents(afterSeq, {
       window: () => this.events,
       ledger: () => this.eventStore.load(this.identity.sessionId),
       subscribers: this.subscribers,
-    });
+    }, () => this.refillEventWindow());
   }
 
   /**
@@ -589,6 +588,8 @@ export class CopilotAcpHost implements EngineHost {
    * explicit, recorded one in {@link interrupt}.
    */
   async send(entry: QueueEntry): Promise<DeliveryReceipt> {
+    const refill = this.dead || this.releasing || this.released ? undefined : this.refillEventWindow();
+    if (refill) await refill;
     if (this.unavailable()) return { outcome: "rejected", reason: "dead-host" };
     const normalized = normalizeQueueEntry(entry);
     const already = this.sentEntries.get(normalized.id);
@@ -874,7 +875,7 @@ export class CopilotAcpHost implements EngineHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
-    try { this.refillEventWindow(); this.eventStore.append(this.identity.sessionId, sequenced); }
+    try { this.eventStore.append(this.identity.sessionId, sequenced); }
     catch (error) {
       this.cursor = this.events.at(-1)?.seq ?? Math.max(0, this.cursor - 1);
       this.ledgerFailed = true;

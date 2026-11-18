@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { accountManager, ProjectAccountRefusedError } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
-import { bridgeReportsEnabled, effectiveReportTelegram, reportHeaderName } from "@/lib/projects/settings";
+import { bridgeReportsEnabled, reportHeaderName } from "@/lib/projects/settings";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import { seatTurnProgressing } from "./seatTick";
@@ -16,7 +16,7 @@ import type { TelegramBotService } from "@/lib/telegram/bot/service";
 
 export interface SeatAuthRecoveryPorts {
   rotate?: typeof executeOrchestratorRotation;
-  telegram?: TelegramBotService["send"];
+  telegram?: TelegramBotService["sendOwnerReview"];
 }
 
 function telegramRefusedBeforeSend(error: unknown): boolean {
@@ -26,6 +26,10 @@ function telegramRefusedBeforeSend(error: unknown): boolean {
 
 export function seatAuthRotationKey(id: string): string {
   return `seat-auth-${createHash("sha256").update(id).digest("hex")}`;
+}
+
+function operatorMessage(text: string) {
+  return { markdown: text.replace(/([\\`*_{}\[\]()#+.!|<>~-])/g, "\\$1"), plainText: text, images: [] };
 }
 
 /** Owns no clock: the ordinary seat check drives detection, recovery and telling. */
@@ -66,56 +70,44 @@ export async function recoverSeatAuthentication(
     const locale = operatorLocale() === "en" ? "en" : "uk";
     const notice = seatAuthNotice(pending, new Map(accounts.map((row) => [row.id, row.label])),
       allowed ? accounts.filter((row) => !allowed.includes(row.id)).map((row) => row.id) : [], locale, reportHeaderName(input.project, locale));
-    const { renderReport, renderPlain, REPORT_ITEM_MAX_CHARS } = await import("@/lib/bridge/reportRender");
-    const { renderTelegram } = await import("@/lib/bridge/telegramReport");
+    const { renderReport, renderPlain } = await import("@/lib/bridge/reportRender");
     const { recordManagerReport } = await import("@/lib/bridge/service");
-    const { findBridgeReport, scopedReportId, recordBridgeReportTelegram } = await import("@/lib/bridge/store");
+    const { findBridgeReport, scopedReportId } = await import("@/lib/bridge/store");
     const reportClass = pending.rotation.state === "rotated" || pending.recoveredThrough !== undefined ? "status" : "blocked";
-    const items = (paragraph: string): string[] => {
-      const chunks: string[] = [];
-      let chunk = "";
-      for (const word of paragraph.split(/\s+/)) {
-        if (chunk && chunk.length + word.length + 1 > REPORT_ITEM_MAX_CHARS) { chunks.push(chunk); chunk = ""; }
-        chunk += `${chunk ? " " : ""}${word.slice(0, REPORT_ITEM_MAX_CHARS)}`;
-      }
-      if (chunk) chunks.push(chunk);
-      return chunks;
-    };
+    // The bridge may be relayed publicly. Only a fixed status crosses its
+    // ordinary scrub; account labels, provider diagnostics and login actions
+    // belong to the board and the independently verified private owner chat.
     const rendered = renderReport({ class: reportClass, name: "Delegatus", at: new Date(pending.firstFailedAt), locale,
-      timeZone: operatorTimeZone(), summary: notice.summary,
-      // The renderer preserves the decision section when it cuts for size.
-      // Keep the login action there so a long diagnostic cannot crowd it out.
-      sections: { decision: items(notice.action), inProgress: [notice.failure, ...(notice.pool ? [notice.pool] : [])].flatMap(items) } });
-    const destination = effectiveReportTelegram(input.project);
-    const html = renderTelegram(rendered.cut);
+      timeZone: operatorTimeZone(), summary: locale === "en" ? "Seat authentication recovery." : "Відновлення автентифікації сіта." });
     if (activeDrain()) return false;
     const report = bridgeReportsEnabled(input.project)
       ? recordManagerReport({ key: pending.id, origin: { kind: "agent", role: "seat-tick", conversationId: null },
         project: input.project, targetSeatConversationId: pending.conversationId, class: reportClass, at,
-        body: renderPlain(rendered.cut), ...(destination ? { telegram: { chat: destination.chat, html, ...(destination.topicId ? { topicId: destination.topicId } : {}) } } : {}) })
+        body: renderPlain(rendered.cut) })
         ?? findBridgeReport(scopedReportId(input.project, pending.id)) : null;
     let telegram: "sent" | "failed" | "skipped" = "skipped";
-    if (destination) {
-      try {
-        let send = ports.telegram;
-        if (!send) {
-          const service = (await import("@/lib/telegram/bot/service")).telegramBotService();
-          send = service.send.bind(service);
-        }
-        if (activeDrain()) return false;
-        const sent = await send({ conversationId: null, clientRequestId: pending.id, chat: destination.chat,
-          ...(destination.topicId ? { topicId: destination.topicId } : {}), text: html, format: "html", silent: false });
-        telegram = "sent";
-        if (report) recordBridgeReportTelegram(report.id, { state: "sent", at, messageIds: sent.messageIds });
-      } catch (error) {
-        telegram = "failed";
-        if (telegramRefusedBeforeSend(error) && !input.state.authTelegramOwed?.some((notice) => notice.id === pending.id)) {
-          input.state = { ...input.state, authTelegramOwed: [...(input.state.authTelegramOwed ?? []), {
-            id: pending.id, chat: destination.chat, html, ...(destination.topicId ? { topicId: destination.topicId } : {}),
-          }] };
-          persist();
-        }
-        if (report) recordBridgeReportTelegram(report.id, { state: "failed", at, code: error instanceof Error && "code" in error ? String(error.code) : "telegram_failed" });
+    try {
+      let send = ports.telegram;
+      if (!send) {
+        const service = (await import("@/lib/telegram/bot/service")).telegramBotService();
+        send = service.sendOwnerReview.bind(service);
+      }
+      if (activeDrain()) return false;
+      const sent = await send({ clientRequestId: pending.id, message: operatorMessage(notice.body) });
+      telegram = sent ? "sent" : "skipped";
+      if (!sent && !input.state.authTelegramOwed?.some((notice) => notice.id === pending.id)) {
+        input.state = { ...input.state, authTelegramOwed: [...(input.state.authTelegramOwed ?? []), {
+          id: pending.id, audience: "operator", text: notice.body,
+        }] };
+        persist();
+      }
+    } catch (error) {
+      telegram = "failed";
+      if (telegramRefusedBeforeSend(error) && !input.state.authTelegramOwed?.some((notice) => notice.id === pending.id)) {
+        input.state = { ...input.state, authTelegramOwed: [...(input.state.authTelegramOwed ?? []), {
+          id: pending.id, audience: "operator", text: notice.body,
+        }] };
+        persist();
       }
     }
     // Create then resolve a recovered notice: a resolved write alone creates no
@@ -146,25 +138,18 @@ export async function recoverSeatAuthentication(
   if (owedTelegram && !activeDrain()) {
     let settled = false;
     let sent: Awaited<ReturnType<NonNullable<SeatAuthRecoveryPorts["telegram"]>>> | undefined;
-    let failure: unknown;
     try {
       let send = ports.telegram;
       if (!send) {
         const service = (await import("@/lib/telegram/bot/service")).telegramBotService();
-        send = service.send.bind(service);
+        send = service.sendOwnerReview.bind(service);
       }
       if (!activeDrain()) {
-        sent = await send({ conversationId: null, clientRequestId: owedTelegram.id, chat: owedTelegram.chat,
-          ...(owedTelegram.topicId ? { topicId: owedTelegram.topicId } : {}), text: owedTelegram.html, format: "html", silent: false });
-        settled = true;
+        sent = await send({ clientRequestId: owedTelegram.id, message: operatorMessage(owedTelegram.text) });
+        settled = sent !== null;
       }
-    } catch (error) { failure = error; settled = !telegramRefusedBeforeSend(error); }
+    } catch (error) { settled = !telegramRefusedBeforeSend(error); }
     if (settled) {
-      const { findBridgeReport, scopedReportId, recordBridgeReportTelegram } = await import("@/lib/bridge/store");
-      const report = findBridgeReport(scopedReportId(input.project, owedTelegram.id));
-      if (report) recordBridgeReportTelegram(report.id, sent
-        ? { state: "sent", at, messageIds: sent.messageIds }
-        : { state: "failed", at, code: failure instanceof Error && "code" in failure ? String(failure.code) : "telegram_failed" });
       if (sent && incident?.id === owedTelegram.id && incident.notice) incident.notice.telegram = "sent";
       input.state = { ...input.state, authTelegramOwed: input.state.authTelegramOwed?.filter((notice) => notice.id !== owedTelegram.id) };
       persist();

@@ -3,8 +3,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { ownerIndex, ownerRequest, x1Claim, x1Request, x1Results } from "./toolLoop.fixture";
 import { expect, test } from "bun:test";
-import { checkedAnswer, checkedRound, toolCallResultSchema, descriptorSchema, requestSchema } from "./protocol";
-import type { ExternalRelayRequest } from "./protocol";
+import { checkedAnswer, checkedRound, toolCallResultSchema, descriptorSchema, requestSchema, targetSchema, targetsSchema, pairingStatusSchema, pairingConfirmedSchema } from "./protocol";
+import type { ExternalRelayRequest, ExternalRelayTarget } from "./protocol";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 
 test("paired service windows and late claims parse in requests and descriptors", () => {
@@ -275,4 +275,17 @@ test("owner answer URL button labels and filenames use Unicode code point limits
   expect(relayAnswerSchema.safeParse({ buttons: [[{ text: "😀".repeat(65), url: "https://example.com/" }]] }).success).toBe(false);
   expect(relayAnswerSchema.safeParse({ attachments: [{ path: "/file", kind: "document", filename: "😀".repeat(124) + ".pdf" }] }).success).toBe(true);
   expect(relayAnswerSchema.safeParse({ attachments: [{ path: "/file", kind: "document", filename: "😀".repeat(125) + ".pdf" }] }).success).toBe(false);
+});
+
+test("target ownership survives list and pairing schemas; malformed ownership is refused", () => {
+  const target = { target_id: "clone", name: "Clone", answered_by: "service", fallback: "service", answered_elsewhere: true } satisfies ExternalRelayTarget;
+  const owner = { namespace: "test", id: "owner", display_name: "Owner", handle: null };
+  expect(targetSchema.parse(target)).toEqual(target);
+  expect(targetsSchema.parse({ targets: [target] }).targets).toEqual([target]);
+  expect(pairingStatusSchema.parse({ status: "awaiting_install", owner, targets: [target] }).targets).toEqual([target]);
+  expect(pairingConfirmedSchema.parse({ credential: "x".repeat(43), version: 1, owner, targets: [target] }).targets).toEqual([target]);
+  for (const value of ["true", 1, null, {}]) expect(targetSchema.safeParse({ ...target, answered_elsewhere: value }).success).toBe(false);
+  expect(targetSchema.parse({ ...target, answered_elsewhere: false }).answered_elsewhere).toBe(false);
+  const { answered_elsewhere: _, ...legacy } = target;
+  expect(targetSchema.parse(legacy).answered_elsewhere).toBeUndefined();
 });

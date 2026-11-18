@@ -23,7 +23,7 @@ import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity"
 import { DELEGATUS_COAUTHOR } from "@/lib/git/repositoryCommitIdentity";
 import { mcpHttpAccessToken, MCP_HTTP_ACCESS_HEADER } from "@/lib/mcp/httpAccess";
 
-import type { RuntimeEventStore } from "./eventStore";
+import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-copilot-acp-"));
@@ -856,8 +856,17 @@ test("ACP error and cancelled replies release only their own outstanding request
   } finally { await host.release(); }
 });
 
-test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
-  const host = await CopilotAcpHost.start(options(new FakeCopilot()));
+test.each(["memory", "file"])("a settled host releases idle events, replays to subscribers and refills on its next turn (%s)", async kind => {
+  const directory = kind === "file" ? fs.mkdtempSync(path.join(os.tmpdir(), "host-refill-")) : undefined;
+  const fileStore = directory ? new class extends FileRuntimeEventStore {
+    scanCalls = 0;
+    override async scan(threadId: string, visit: (event: RuntimeEvent) => void): Promise<number> {
+      this.scanCalls += 1;
+      return super.scan(threadId, visit);
+    }
+  }(directory) : undefined;
+  const eventStore = fileStore ?? new MemoryEventStore();
+  const host = await CopilotAcpHost.start(options(new FakeCopilot(), { eventStore }));
   const idle = idleWindowFixture(host);
   try {
     const count = host.heapAttribution().events;
@@ -867,13 +876,18 @@ test("a settled host releases idle events, replays to subscribers and refills on
     expect(host.heapAttribution().events).toBe(0);
     const stream = host.attach(0)[Symbol.asyncIterator]();
     try {
-      expect(host.heapAttribution().events).toBeGreaterThan(0);
       for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
     } finally { await stream.return?.(); }
+    if (kind === "file") expect(fileStore?.scanCalls).toBe(1);
     expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
     await host.send({ id: "next-idle-turn", text: "continue" });
     expect(host.heapAttribution().events).toBeGreaterThan(0);
-  } finally { idle.cleanup(); await host.release(); }
+    if (kind === "file") expect(fileStore?.scanCalls).toBe(2);
+  } finally {
+    idle.cleanup(); await host.release();
+    if (directory) fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("ACP output is previewed only in the retained window and replay keeps its terminal outcome", async () => {

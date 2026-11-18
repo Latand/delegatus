@@ -1082,6 +1082,32 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
   };
 }
 
+test("Codex host persists a media-free copy while its live event retains the response", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-private-media-ledger-"));
+  const threadId = "thread-private-media";
+  const store = new FileRuntimeEventStore(path.join(directory, "events"));
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: directory, eventStore: store, spawnProcess: fakeSpawn(server) });
+  try {
+    const emit = (host as unknown as { emit(event: object): void }).emit.bind(host);
+    const ref = `media_${"a".repeat(32)}`;
+    const pixels = "cHJpdmF0ZS1waXhlbHM=";
+    emit({ kind: "item", turnId: "turn-private", phase: "completed", item: {
+      type: "mcpToolCall", tool: "relay_service_tools", result: { content: [{ type: "image", data: pixels }], ref },
+    }, voiceResponse: { responseId: "voice-private", text: `spoken ${ref}` } });
+    emit({ kind: "delta", turnId: "turn-private", text: `media_${"b".repeat(9)}` });
+    emit({ kind: "delta", turnId: "turn-private", text: "b".repeat(23) });
+    const stored = JSON.stringify(store.load(threadId));
+    expect(stored).not.toContain(ref);
+    expect(stored).not.toContain(pixels);
+    expect(stored).not.toContain(`media_${"b".repeat(32)}`);
+    expect(JSON.stringify((host as unknown as { events: RuntimeEvent[] }).events)).toContain(pixels);
+  } finally {
+    await host.release();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("Codex refuses fresh and adopted launches with missing or empty Viewer tools before queue recovery", async () => {
   for (const resume of [false, true]) for (const status of [[], [{ name: "viewer", tools: {} }]]) {
     const child = new FakeAppServer();
@@ -8701,9 +8727,11 @@ test("central native completion releases an unanswered old tool and admits the n
   } finally { await host.release(); }
 });
 
-test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+test.each(["memory", "file"])("a settled host releases idle events, replays to subscribers and refills on its next turn (%s)", async kind => {
+  const eventStore = kind === "file"
+    ? new FileRuntimeEventStore(fs.mkdtempSync(path.join(os.tmpdir(), "host-refill-"))) : new MemoryEventStore();
   const server = new FakeAppServer("idle-window-thread");
-  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore, spawnProcess: fakeSpawn(server) });
   const idle = idleWindowFixture(host);
   try {
     const count = host.heapAttribution().events;
@@ -8713,8 +8741,8 @@ test("a settled host releases idle events, replays to subscribers and refills on
     expect(host.heapAttribution().events).toBe(0);
     const stream = host.attach(0)[Symbol.asyncIterator]();
     try {
-      expect(host.heapAttribution().events).toBeGreaterThan(0);
       for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
     } finally { await stream.return?.(); }
     expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
     await host.send({ id: "next-idle-turn", text: "continue" });
