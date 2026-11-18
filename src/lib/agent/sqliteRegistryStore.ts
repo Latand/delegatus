@@ -5154,7 +5154,9 @@ export class SqliteAgentRegistryStore {
     return { result, file: null, revision };
   }
 
-  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string; noWait?: boolean } = {}): SqliteRegistryMutation<T> {
+  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: {
+    operationName?: string; noWait?: boolean; skipColdKeyInitialization?: boolean;
+  } = {}): SqliteRegistryMutation<T> {
     if (this.mutationBatch) return this.mutateBatchMember(operation, includeSnapshot);
     let operationName = options.operationName ?? operation.name;
     /* {@link withWriter} already opened the write transaction for this call. */
@@ -5171,7 +5173,10 @@ export class SqliteAgentRegistryStore {
       let result: T;
       try {
         if (pessimistic && !writerHeld) this.noteWriterWait(performance.now() - waitStartedAt, operationName, options.noWait);
-        current = this.loadLazyInTransaction();
+        // A keyed sweep already selected its candidates. Read each payload
+        // directly from the admitted revision without refreshing the archive
+        // index or filling the hot cache with historical rows.
+        current = this.loadLazyInTransaction(true, !options.skipColdKeyInitialization, false, options.skipColdKeyInitialization);
         result = operation(current.file);
         changes = current.changes();
         if (!pessimistic) this.db.exec("COMMIT");
@@ -6216,6 +6221,12 @@ export class SqliteAgentRegistryStore {
       `).run(collection, key, JSON.stringify(value), order);
       return;
     }
+    const json = JSON.stringify(value);
+    // Existing rows, including the compatibility copy of archived rows,
+    // retain their position. Their update triggers promote cold payloads.
+    // Skip the archive and ordering lookups on this common write path.
+    if (this.db.query("UPDATE registry_rows SET value_json=? WHERE collection=? AND row_key=?")
+      .run(json, collection, key).changes) return;
     /* The next position comes from the two order indexes. Aggregating over
        registry_records expanded every cold row of the collection on each
        insert, under the writer lock (#2761). */
@@ -6226,7 +6237,7 @@ export class SqliteAgentRegistryStore {
       SELECT ?1, ?2, ?3, COALESCE((SELECT row_order FROM ${this.recordsSource} WHERE collection=?4 AND row_key=?5),
         MAX(COALESCE((SELECT MAX(row_order) FROM registry_rows WHERE collection=?6),-1), COALESCE(${archived},-1)) + 1) WHERE true
       ON CONFLICT(collection, row_key) DO UPDATE SET value_json = excluded.value_json
-    `).run(collection, key, JSON.stringify(value), collection, key, collection);
+    `).run(collection, key, json, collection, key, collection);
   }
 
   private persistRowOrder(collection: RowCollection, keys: string[]): void {

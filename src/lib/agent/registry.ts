@@ -1517,6 +1517,10 @@ export interface MigrationOptOut {
     by key, so the registry's write lock is held for this many rows at most
     (docs/design/viewer-stalls-root-cause.md, section 4.1). */
 export const MIGRATION_STOP_SLICE_ROWS = 32;
+const MIGRATION_STOP_SWEEP_ROWS = 16;
+// A competing writer polls SQLite every 5 ms. Give it a chance to acquire
+// between slices even when the migration worker has no other work ready.
+const MIGRATION_STOP_SWEEP_GAP_MS = 8;
 
 /**
  * The ids of the conversations of one reading that match, found a few
@@ -6313,7 +6317,7 @@ export class AgentRegistry {
     }
   }
 
-  private mutate<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean } = {}): T {
+  private mutate<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean; skipColdKeyInitialization?: boolean } = {}): T {
     noteWriterAdmitted();
     const startedAt = performance.now();
     const result = this.mutateStorage(fn, options);
@@ -6327,7 +6331,7 @@ export class AgentRegistry {
     return result;
   }
 
-  private mutateStorage<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean }): T {
+  private mutateStorage<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean; skipColdKeyInitialization?: boolean }): T {
     /* Host-state mutations sweep staged supersedence edges (issue #383) after
        their own writes, so whichever transition marks a predecessor host dead —
        terminate, recovery, reconcile — retires its round in that same
@@ -6341,7 +6345,9 @@ export class AgentRegistry {
     };
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
       const operationName = new Error().stack?.split("\n")[3]?.match(/at (\w+)/)?.[1] ?? "anonymous";
-      const mutation = this.sqliteStore!.mutate(mutator, false, { operationName, noWait: accountMutationHeld() });
+      const mutation = this.sqliteStore!.mutate(mutator, false, {
+        operationName, noWait: accountMutationHeld(), skipColdKeyInitialization: options.skipColdKeyInitialization,
+      });
       if (this.sqliteMode === "read") {
         this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
         if (this.mirrorDirty) this.scheduleRollbackMirrorForCadence();
@@ -11899,7 +11905,7 @@ export class AgentRegistry {
     return this.readKeyed((file) => {
       const intent = file.migrationIntents[id];
       return intent?.state === "stopped" && intent.stopSweep ? stopSweepKey(intent.stopSweep) : null;
-    });
+    }, { skipColdKeyInitialization: true });
   }
 
   /**
@@ -11975,16 +11981,20 @@ export class AgentRegistry {
     if (!reading) return true;
     if (reading === "behind") return false;
     const ids = await conversationIdsWhere(reading.conversations, reading.owes);
-    for (let offset = 0; offset < ids.length; offset += MIGRATION_STOP_SLICE_ROWS) {
-      const slice = ids.slice(offset, offset + MIGRATION_STOP_SLICE_ROWS);
+    const indexed = this.sqliteMode === "read" || this.sqliteMode === "sqlite";
+    const rowsPerWrite = indexed ? MIGRATION_STOP_SWEEP_ROWS : MIGRATION_STOP_SLICE_ROWS;
+    const mutation = { deliveryOnly: true, skipColdKeyInitialization: indexed };
+    for (let offset = 0; offset < ids.length; offset += rowsPerWrite) {
+      const slice = ids.slice(offset, offset + rowsPerWrite);
       const written = await this.deliveryWrite({ label: "migration.stop.sweep" },
-        () => this.mutate((file) => sweepStoppedMigrationIntentInFile(file, id, reading.sweepKey, slice, reason), { deliveryOnly: true }));
+        () => this.mutate((file) => sweepStoppedMigrationIntentInFile(file, id, reading.sweepKey, slice, reason), mutation));
       if (!written.acquired) return false;
       if (!written.value) return true;
-      await yieldToRuntime();
+      if (indexed) await Bun.sleep(MIGRATION_STOP_SWEEP_GAP_MS);
+      else await yieldToRuntime();
     }
     const finished = await this.deliveryWrite({ label: "migration.stop.sweep" },
-      () => this.mutate((file) => finishStoppedMigrationSweepInFile(file, id, reading.sweepKey), { deliveryOnly: true }));
+      () => this.mutate((file) => finishStoppedMigrationSweepInFile(file, id, reading.sweepKey), mutation));
     return finished.acquired;
   }
 

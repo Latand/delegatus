@@ -34,6 +34,7 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 afterEach(() => { setSystemTime(); });
 
 /* More source conversations than two slices, so a sweep is several transactions. */
+const SWEEP_ROWS_PER_WRITE = 16;
 const SHAPE: MigrationStopFixtureShape = {
   sourceConversations: MIGRATION_STOP_SLICE_ROWS * 2 + 30,
   targetConversations: 20,
@@ -337,8 +338,19 @@ test("a stale revision refuses the stop before anything is written", async () =>
  * fix that pass holds one write transaction for the whole stop and the first
  * delivery write made meanwhile is refused.
  */
-test("a stale intent is stopped at incident size without holding other writers out", async () => {
+test.each(["hot", "archived"] as const)("a stale intent is stopped at incident size with bounded %s sweep writes", async history => {
   const fixture = incidentCopy();
+  if (history === "archived") {
+    const archive = open(fixture);
+    try {
+      // Use the same immutable template for both histories and exercise normal archival.
+      for (let moved = 0; moved < 20_000;) {
+        const count = archive.archiveInactiveRows(2_000);
+        expect(count).toBeGreaterThan(0);
+        moved += count;
+      }
+    } finally { archive.close(); }
+  }
   const directory = path.dirname(fixture.filename);
   const ready = path.join(directory, "ready");
   const release = path.join(directory, "release");
@@ -352,6 +364,17 @@ test("a stale intent is stopped at incident size without holding other writers o
     fixture.filename, fixture.intentUpdatedAt, ready, release, result,
   ], { stdout: "ignore", stderr: "inherit", env: { ...process.env, NODE_ENV: "test" } });
   const admissions: Array<{ acquired: boolean; waitedMs: number; duringStop: boolean }> = [];
+  let fastProbes = 0;
+  let fastRefusals = 0;
+  let firstThousandRefusals = 0;
+  const probe = setInterval(() => {
+    if (!fs.existsSync(`${ready}.started`) || fs.existsSync(result)) return;
+    fastProbes += 1;
+    if (!registry.deliveryWriteNow({ label: "delivery.sweep-probe" }, () => undefined, { recordRefusal: false }).acquired) {
+      fastRefusals += 1;
+      if (fastProbes <= 1_000) firstThousandRefusals += 1;
+    }
+  }, 10);
   try {
     registry.readOnlySnapshot();
     while (!fs.existsSync(ready)) {
@@ -373,6 +396,13 @@ test("a stale intent is stopped at incident size without holding other writers o
     expect(refused).toEqual([]);
     expect(await child.exited).toBe(0);
     const pass = JSON.parse(fs.readFileSync(result, "utf8")) as { transactions: Array<{ label: string; heldMs: number; rows: number }> };
+    const sweep = pass.transactions.filter(transaction => transaction.label === "migration.stop.sweep");
+    const sweepHolds = sweep.map(transaction => transaction.heldMs).sort((left, right) => left - right);
+    console.info("migration stop measurement", JSON.stringify({ history, transactions: sweep.length,
+      totalHoldMs: Math.round(sweepHolds.reduce((sum, held) => sum + held, 0)),
+      p99HoldMs: Math.round(sweepHolds[Math.floor(sweepHolds.length * 0.99)]!),
+      maxHoldMs: Math.round(sweepHolds.at(-1)!), fastProbes, fastRefusals, firstThousandRefusals, expiredAdmissions: refused.length }));
+    expect(Math.max(...sweep.map(transaction => transaction.rows))).toBeLessThanOrEqual(SWEEP_ROWS_PER_WRITE);
     /* The bound that does not depend on the machine: no transaction writes more than the stop's own rows or one slice. */
     expect(Math.max(...pass.transactions.map(transaction => transaction.rows))).toBeLessThanOrEqual(MIGRATION_STOP_SLICE_ROWS * 2);
     /* And in time. Measured, the longest hold is 93 to 204 ms; a commit that the
@@ -389,6 +419,7 @@ test("a stale intent is stopped at incident size without holding other writers o
     expect(stopped.migrationIntents[fixture.intentId]!.stopSweep).toBeUndefined();
     expect(optedOut(stopped, fixture.sourceConversationIds)).toHaveLength(MIGRATION_STOP_INCIDENT_SHAPE.sourceConversations);
   } finally {
+    clearInterval(probe);
     if (child.exitCode === null) child.kill();
     await child.exited;
     registry.close();
@@ -741,8 +772,8 @@ test("the loop gets a turn between every two transactions of a stop", async () =
     observed.mockRestore();
     registry.close();
   }
-  /* The stop, a slice for every 32 conversations, and the last transaction that ends the sweep. */
-  expect(startedOnTurn.length).toBe(1 + Math.ceil(SHAPE.sourceConversations / MIGRATION_STOP_SLICE_ROWS) + 1);
+  /* The stop, the sweep slices, and the transaction that clears its marker. */
+  expect(startedOnTurn.length).toBe(1 + Math.ceil(SHAPE.sourceConversations / SWEEP_ROWS_PER_WRITE) + 1);
   for (let index = 1; index < startedOnTurn.length; index += 1) {
     expect(startedOnTurn[index]!).toBeGreaterThan(startedOnTurn[index - 1]!);
   }

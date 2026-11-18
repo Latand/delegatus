@@ -38,6 +38,8 @@ const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
 const FAILURE = `${REGISTRY_WRITER_BUSY} (spawn.setup-custody)`;
 
+type PreHostWriter = "registry.rotateSpawnCapabilityForReceipt" | "registry.setReceiptViewerMcpTransport";
+
 interface CustodyControl {
   queued: (filename: string) => Promise<void>;
   hold: (filename: string) => Promise<void>;
@@ -45,7 +47,7 @@ interface CustodyControl {
   sleep: (ms: number, now: number) => Promise<number>;
 }
 
-async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" | "native-retained" | "native-retained-expired" | "native-retained-concurrent" | "socket-retained" | "socket-retained-expired" | "native-retained-fence" | "native-retained-fence-expired" | "socket-retained-fence" | "socket-retained-fence-expired" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
+async function fixture(held: "released" | "late-release" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" | "native-retained" | "native-retained-expired" | "native-retained-concurrent" | "socket-retained" | "socket-retained-expired" | "native-retained-fence" | "native-retained-fence-expired" | "socket-retained-fence" | "socket-retained-fence-expired" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl, preHostWriter?: PreHostWriter) {
   const retainingFence = held.includes("-fence");
   const retainingSocket = held.startsWith("socket-retained");
   const retainingNative = held.startsWith("native-retained") || retainingSocket;
@@ -64,7 +66,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);
   });
-  const storage = sqliteRegistryFixture("launch-custody");
+  const storage = sqliteRegistryFixture("launch-custody", preHostWriter ? { sqliteWriterDeadlineMs: 60 } : {});
   cleanups.push(storage.cleanup);
   const { registry, root } = storage;
   // TASKS_FILE is captured when the module loads. Each registry fixture uses
@@ -78,7 +80,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
     LLV_RUNTIME_HOST_SOCKET: path.join(root, "unused.sock") });
   const holder = control
     ? { hold: () => control.hold(storage.sqliteFilename), release: control.release }
-    : registryLockHolder(storage.sqliteFilename);
+    : registryLockHolder(storage.sqliteFilename, preHostWriter ? "migration.stop.sweep" : "");
   if ("close" in holder) cleanups.push(() => holder.close());
   let nativeWriter: Database | undefined;
   const releaseNativeWriter = () => {
@@ -127,6 +129,22 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
   let submitted: Record<string, unknown> = {};
   const submissions = new Map<string, Record<string, unknown>>();
   const spec = { engine: "claude", model: "opus", cwd: root, title: "Inspect fixture", prompt: "Inspect fixture", mcpServers: [] };
+  let preHostRefusals = 0;
+  if (preHostWriter) {
+    const write = registry.deliveryWriteOrBusy.bind(registry);
+    const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, action) => {
+      if (correlation.label !== preHostWriter || preHostRefusals) return write(correlation, action);
+      await holder.hold();
+      try { return await write(correlation, action); }
+      catch (error) {
+        expect((error as Error).message).toContain(`${REGISTRY_WRITER_BUSY} (${preHostWriter}); holder=migration.stop.sweep`);
+        preHostRefusals++;
+        if (held === "revoked") authorized = false;
+        throw error;
+      } finally { await holder.release(); }
+    });
+    cleanups.push(() => admission.mockRestore());
+  }
   const launch = async (body: Record<string, unknown>, authorize?: () => void) => {
     submitted = body;
     submissions.set(String(body.clientAttemptId), body);
@@ -184,8 +202,9 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
             if (held === "revoked" || held === "retained-revoked") authorized = false;
             if (retainingNative) {
               if (!held.endsWith("expired") || clock >= Date.parse("2026-11-13T12:00:02Z")) releaseNativeWriter();
-            } else if ((held !== "expired" && held !== "retained-expired")
-              || (retaining && clock >= Date.parse("2026-11-13T12:00:02Z"))) await holder.release();
+            } else if (held === "late-release" ? clock >= Date.parse("2026-11-13T12:00:02.250Z")
+              : held !== "expired" && held !== "retained-expired"
+                || retaining && clock >= Date.parse("2026-11-13T12:00:02Z")) await holder.release();
             if (held === "retained-concurrent") custodyResolved.resolve();
             if (held === "retained-owner-released") {
               await stopFirstNative!();
@@ -197,7 +216,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
           startHost: async current => {
             launchIds.push(current.receipt.launchId);
             const ordinal = ++attempts;
-            if (!retaining) await holder.hold();
+            if (!retaining && !preHostWriter) await holder.hold();
             let child: ChildProcessWithoutNullStreams | undefined;
             let close: (() => Promise<void>) | undefined;
             try {
@@ -316,12 +335,15 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
     submission: (clientAttemptId: string) => submissions.get(clientAttemptId)!,
     drain: async () => { for (const work of pending.splice(0)) await work(); },
     drainConcurrent: async () => { await Promise.all(pending.splice(0).map(work => work())); },
+    preHostRefusals: () => preHostRefusals,
     counts: () => ({ attempts, starts, sends, waits }),
   };
 }
 
-for (const held of ["released", "expired"] as const) test(`owner relay launch with custody writer ${held}`, async () => {
-  const f = await fixture(held);
+for (const [held, preHostWriter] of [
+  ["released", undefined], ["expired", undefined], ["released", "registry.rotateSpawnCapabilityForReceipt"],
+] as const) test(`owner relay launch with writer ${preHostWriter ?? "spawn.setup-custody"} ${held}`, async () => {
+  const f = await fixture(held, undefined, undefined, undefined, preHostWriter);
   const delivered: string[] = [];
   const service = await startTestRelay((req, body) => {
     if (req.url!.endsWith("/send")) { delivered.push((body as { text: string }).text); return { body: cloneReceipt() }; }
@@ -355,6 +377,7 @@ for (const held of ["released", "expired"] as const) test(`owner relay launch wi
     },
     stop: async () => {},
   } });
+  expect(f.preHostRefusals()).toBe(preHostWriter ? 1 : 0);
   expect(result?.outcome).toBe("answered");
   expect(delivered).toEqual([held === "released" ? "Fixture answer" : "Please try again."]);
   expect(f.counts().starts).toBe(held === "released" ? 1 : 0);
@@ -401,15 +424,18 @@ async function connect(f: Awaited<ReturnType<typeof fixture>>) {
     dispatches: () => dispatches };
 }
 
-for (const held of ["released", "expired", "revoked"] as const) test(`SDK spawn_agent with custody writer ${held}`, async () => {
-  const f = await fixture(held);
+for (const [held, preHostWriter] of [
+  ["released", undefined], ["expired", undefined], ["revoked", undefined],
+  ["released", "registry.setReceiptViewerMcpTransport"], ["revoked", "registry.setReceiptViewerMcpTransport"],
+] as const) test(`SDK spawn_agent with writer ${preHostWriter ?? "spawn.setup-custody"} ${held}`, async () => {
+  const f = await fixture(held, undefined, undefined, undefined, preHostWriter);
   const sdk = await connect(f);
   const answer = await sdk.call();
   expect(answer.isError, JSON.stringify(answer)).not.toBe(true);
   await f.drain();
   const receipts = Object.values(f.registry.readOnlySnapshot().receipts);
   expect(receipts).toHaveLength(1);
-  expect(new Set(f.launchIds).size).toBe(1);
+  expect(new Set(f.launchIds).size).toBe(preHostWriter && held === "revoked" ? 0 : 1);
   expect(f.counts().starts).toBe(held === "released" ? 1 : 0);
   expect(f.counts().sends).toBe(held === "released" ? 1 : 0);
   if (held === "released") {
@@ -418,15 +444,31 @@ for (const held of ["released", "expired", "revoked"] as const) test(`SDK spawn_
     expect(Object.values(f.registry.readOnlySnapshot().entries)).toHaveLength(1);
   }
   else expect(receipts[0]).toMatchObject({ state: "failed", error: held === "expired" ? FAILURE : "fixture authority revoked" });
-  if (held !== "expired") expect(f.counts().waits).toBe(1);
+  expect(f.preHostRefusals()).toBe(preHostWriter ? 1 : 0);
+  if (held !== "expired") expect(f.counts().waits).toBe(preHostWriter ? 0 : 1);
   else {
     expect(f.counts().waits).toBeGreaterThan(1);
-    expect(f.delays.reduce((sum, ms) => sum + ms, 0)).toBe(2_000);
+    expect(f.delays.reduce((sum, ms) => sum + ms, 0)).toBe(5_000);
     expect(Math.max(...f.delays)).toBeLessThanOrEqual(250);
   }
   expect((await sdk.call()).isError).not.toBe(true);
   expect(sdk.dispatches()).toBe(1);
   expect(Object.values(f.registry.readOnlySnapshot().receipts)).toHaveLength(1);
+}, 30_000);
+
+test("SDK spawn_agent keeps its original key when the setup writer outlasts the short wait", async () => {
+  const f = await fixture("late-release");
+  const sdk = await connect(f);
+  expect((await sdk.call()).isError).not.toBe(true);
+  const original = Object.values(f.registry.readOnlySnapshot().receipts)[0]!;
+  await f.drain();
+  expect(f.delays.reduce((sum, delay) => sum + delay, 0)).toBeGreaterThan(2_000);
+  expect(f.counts()).toMatchObject({ attempts: 1, starts: 1, sends: 1 });
+  expect(Object.values(f.registry.readOnlySnapshot().receipts)).toMatchObject([
+    { launchId: original.launchId, conversationId: original.conversationId, state: "completed" },
+  ]);
+  expect((await sdk.call()).isError).not.toBe(true);
+  expect(sdk.dispatches()).toBe(1);
 }, 30_000);
 
 for (const mode of ["retained-concurrent", "native-retained-concurrent"] as const)
