@@ -26,7 +26,7 @@ function fixture() {
         scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
     return { parent, directory, lane, store, options, close() { store.close(); fs.rmSync(parent, { recursive: true, force: true }); savePipelines([]); } };
 }
-for (const mode of ["flag-alias", "plain-symlink-dotdot", "relative-flag-alias", "relative-symlink-dotdot", "flag-alias-spaces"] as const)
+for (const mode of ["flag-alias", "plain-symlink-dotdot", "relative-flag-alias", "relative-symlink-dotdot", "flag-alias-spaces", "flag-hop-outside", "flag-dotdot-outside"] as const)
     test.skipIf(process.platform !== "linux")(`a pending live command input survives (${mode})`, async () => {
         const f = fixture();
         let child: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined;
@@ -37,7 +37,18 @@ for (const mode of ["flag-alias", "plain-symlink-dotdot", "relative-flag-alias",
             fs.writeFileSync(script, 'import sys\np=sys.argv[1]\np=p.split("=",1)[1] if p.startswith("--input=") else p\nprint(open(p).read(),flush=True)\nsys.stdin.read()\n');
             const alias = path.join(consumer, mode.endsWith("spaces") ? "external alias" : "external-alias");
             let input: string;
-            if (mode.includes("flag")) {
+            let outside: string | undefined;
+            if (mode === "flag-hop-outside") {
+                const target = path.join(consumer, "external-data"); fs.mkdirSync(target);
+                outside = path.join(target, "data"); fs.writeFileSync(outside, "protected payload");
+                fs.symlinkSync(f.directory, alias); fs.symlinkSync(target, path.join(f.directory, "forward"));
+                input = "--input=" + alias + "/forward/data";
+            }
+            else if (mode === "flag-dotdot-outside") {
+                outside = path.join(f.parent, "outside-data"); fs.writeFileSync(outside, "protected payload");
+                fs.symlinkSync(f.directory, alias); input = "--input=" + alias + "/../outside-data";
+            }
+            else if (mode.includes("flag")) {
                 fs.symlinkSync(f.directory, alias);
                 input = "--input=" + alias + "/data";
             }
@@ -71,6 +82,7 @@ for (const mode of ["flag-alias", "plain-symlink-dotdot", "relative-flag-alias",
             const released = await sweepAttemptTemps(f.store, { ...f.options, scan,
                 references: (original, current, observed) => attemptReferencesClear(original, current, observed, async () => true) });
             expect(released.removed).toBe(1);
+            if (outside) expect(fs.readFileSync(outside, "utf8")).toBe("protected payload");
         }
         finally {
             if (child) {

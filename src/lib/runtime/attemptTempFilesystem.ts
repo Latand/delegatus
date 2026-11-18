@@ -76,7 +76,7 @@ function followLinkChain(candidate: string): string[] {
     checkAttemptTempDeadline();
     const name = pending.shift()!;
     if (name === ".") continue;
-    if (name === "..") { reached = path.dirname(reached); continue; }
+    if (name === "..") { places.push(reached); reached = path.dirname(reached); continue; }
     const current = path.join(reached, name);
     let stat: fs.Stats;
     try { stat = fs.lstatSync(current); }
@@ -484,7 +484,18 @@ export async function repositoryReferencesAttemptTemp(repository: string, origin
 export function attemptProcessReferencesClear(original: string, current: string, scan: ProcessScan): boolean {
   const roots = attemptRoots(original, current);
   const held = referencesRoot(roots);
-  const referenced = (file: string) => [file, ...resolveObservedPhysicalPaths(file)].some(held);
+  const referenced = (file: string) => {
+    if (held(file)) return true;
+    try {
+      // A path can traverse a protected root and finish outside it. Keep
+      // every forwarding hop and each directory climbed by '..', even when
+      // realpath could return a final destination immediately.
+      return followLinkChain(path.isAbsolute(file) ? file : path.resolve(file)).some(held);
+    } catch (error) {
+      if (error instanceof AttemptTempBudgetDeferred) throw error;
+      return true; // An unresolved live input grants no deletion authority.
+    }
+  };
   return !scan.processes.some(process => process.paths.some(referenced)
     // An input can be a flag value or an embedded shell argument even if
     // the command has no file open there yet.
