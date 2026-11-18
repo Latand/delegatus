@@ -37,7 +37,9 @@ holds the existing retirement claim until the remover and journal cleanup
 settle, including pressure cleanup before ordinary expiry. Pipeline activation
 writers honor that claim. Physical ancestry is checked at retirement as well
 as registration; an unchanged leaf inode beneath a rebound ancestor grants
-no authority. Command arguments and embedded absolute input values use the
+no authority. Stable ancestor aliases remain valid while their physical parent
+binding stays unchanged. Command arguments, relative flag values and embedded
+absolute input values use the
 checkout link resolver's component-wise traversal, preserving symlink/`..`
 semantics.
 

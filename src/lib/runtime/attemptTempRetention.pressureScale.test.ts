@@ -47,9 +47,9 @@ test("a thousand roots progress through real helper deadlines, cancellation and 
       expect(report.errors).toBe(0);
       if (ticks === 0) {
         expect(report.removed).toBeGreaterThan(0);
+        expect(fs.existsSync(directories[count - 1]!)).toBeFalse();
         expect(report.outcomes.some((row: { reason: string }) => row.reason.includes("real helper measurement deadline"))).toBeTrue();
         expect(report.pass.position).toBeLessThan(count);
-        expect(fs.existsSync(directories[count - 1]!)).toBeFalse();
       }
       removed += report.removed;
       if (report.pass.ended) {

@@ -138,7 +138,7 @@ test("a finished lane cannot reopen while its native removal is in flight", asyn
         f.close();
     }
 }, 60000);
-test("a registered root moved beneath protected evidence through an ancestor alias survives", async () => {
+test.each(["before-sweep", "reference-await"])("an ancestor rebound beneath protected evidence survives (%s)", async phase => {
     const f = fixture();
     const { statePath } = await import("../configDir");
     const evidence = statePath("evidence", "rebound-protected");
@@ -152,11 +152,17 @@ test("a registered root moved beneath protected evidence through an ancestor ali
         f.store.register({ directory, pipelineId: f.lane.id, launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 });
         f.store.measure(directory, 12288);
         fs.mkdirSync(path.dirname(evidence), { recursive: true });
-        fs.renameSync(container, evidence);
-        fs.symlinkSync(evidence, container);
+        let rebound = false;
+        const rebind = () => {
+            if (rebound) return;
+            fs.renameSync(container, evidence);
+            fs.symlinkSync(evidence, container);
+            rebound = true;
+        };
+        if (phase === "before-sweep") rebind();
+        const report = await sweepAttemptTemps(f.store, { ...f.options, references: async () => { rebind(); return true; } });
         const physical = fs.realpathSync(directory);
         expect(physical.startsWith(statePath("evidence") + path.sep)).toBeTrue();
-        const report = await sweepAttemptTemps(f.store, f.options);
         expect(report.removed).toBe(0);
         expect(fs.readFileSync(path.join(physical, "data"), "utf8")).toBe("protected payload");
     }
@@ -164,4 +170,19 @@ test("a registered root moved beneath protected evidence through an ancestor ali
         f.close();
         fs.rmSync(evidence, { recursive: true, force: true });
     }
+}, 60000);
+
+test("a stable ancestor alias still admits an eligible root", async () => {
+    const f = fixture();
+    try {
+        f.store.forget(f.directory);
+        fs.unlinkSync(path.join(f.directory, ".delegatus-attempt-owner"));
+        const alias = path.join(f.parent, "stable-alias"); fs.symlinkSync(f.parent, alias);
+        const directory = path.join(alias, path.basename(f.directory));
+        f.store.register({ directory, pipelineId: f.lane.id, launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 });
+        f.store.measure(directory, 12288);
+        const report = await sweepAttemptTemps(f.store, f.options);
+        expect(report).toMatchObject({ removed: 1, errors: 0 });
+        expect(fs.existsSync(f.directory)).toBeFalse();
+    } finally { f.close(); }
 }, 60000);

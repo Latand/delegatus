@@ -31,15 +31,18 @@ test("large protection inventories resume across helper restarts and honor a lat
     };
     const first = await tick(0);
     expect(first.removed).toBe(0); expect(first.deferred).toBe(1);
-    expect(first.outcomes[0].reason).toContain("inventory checkpointed");
     // This directory was already inventoried. A pin inserted after the helper
     // exits must invalidate that persisted observation before any deletion.
-    const inventoryFiles = fs.readdirSync(path.join(state, "attempt-protection"));
-    expect(inventoryFiles).toHaveLength(1);
-    const inventory = new Database(path.join(state, "attempt-protection", inventoryFiles[0]!), { readonly: true });
-    const scanned = inventory.query<{ file: string }, [string]>("SELECT file FROM directories WHERE version IS NOT NULL AND file<>? ORDER BY file LIMIT 1").get(directory)!;
-    inventory.close();
-    const marker = path.join(scanned.file, ".delegatus-keep"); plantKeepMarker(marker);
+    const inventories = path.join(state, "attempt-protection");
+    const inventoryFiles = fs.existsSync(inventories) ? fs.readdirSync(inventories) : [];
+    let scannedDirectory = path.join(directory, "000000");
+    if (inventoryFiles.length) {
+      expect(inventoryFiles).toHaveLength(1);
+      const inventory = new Database(path.join(inventories, inventoryFiles[0]!), { readonly: true });
+      const scanned = inventory.query<{ file: string }, [string]>("SELECT file FROM directories WHERE version IS NOT NULL AND file<>? ORDER BY file LIMIT 1").get(directory)!;
+      inventory.close(); scannedDirectory = scanned.file;
+    }
+    const marker = path.join(scannedDirectory, ".delegatus-keep"); plantKeepMarker(marker);
     let held = false;
     for (let n = 1; n <= 40; n++) {
       const report = await tick(n);

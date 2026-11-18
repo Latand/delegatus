@@ -68,8 +68,8 @@ export const BLOCKED_SUBTREE_RETRY_MS = 60 * 60_000;
 /** An unchanged leaf inode cannot authorize a rebound parent or evidence. */
 function attemptTempPathAdmitted(directory: string): boolean {
   try {
-    const physical = fs.realpathSync(directory), evidence = resolvePhysicalPath(statePath("evidence"));
-    return physical === path.resolve(directory) && physical !== evidence && !physical.startsWith(evidence + path.sep);
+    const physical = resolvePhysicalPath(directory), evidence = resolvePhysicalPath(statePath("evidence"));
+    return physical !== evidence && !physical.startsWith(evidence + path.sep);
   } catch { return false; }
 }
 /** Roots whose blocked subtrees one report lists in full. */
@@ -542,6 +542,17 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       recoveredTrash = store.recoveredTrash(owner.directory);
       requiredExpiry = store.requiredRootExpiry(owner.directory);
       const stat = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
+      // Stable aliases are valid (including platform temp-directory aliases).
+      // Bind the physical parent and its inode throughout this visit, rather
+      // than assuming an unchanged leaf still has its admitted ancestry.
+      const parent = path.dirname(owner.directory), parentPhysical = resolvePhysicalPath(parent);
+      const parentStat = fs.statSync(parent, { throwIfNoEntry: false });
+      const pathCurrent = (directory: string) => {
+        const current = fs.statSync(parent, { throwIfNoEntry: false });
+        return current?.dev === parentStat?.dev && current?.ino === parentStat?.ino
+          && resolvePhysicalPath(parent) === parentPhysical && attemptTempPathAdmitted(directory);
+      };
+      if (!pathCurrent(owner.directory)) { outcome(owner.directory, "held", bytes, "physical ancestry changed or protected"); return; }
       if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== owner.identity)) { outcome(owner.directory, disposition, bytes, reason); return; }
       // Custody survives a missing namespace with zero allocation. A pending
       // quarantine retains its allocation projection until replay resolves.
@@ -644,7 +655,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       };
       const retirementAuthorityCurrent = (directory: string, validateCheckouts = true) => {
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
-        return attemptTempPathAdmitted(directory) && !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
+        return pathCurrent(directory) && !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
           && (!validateCheckouts || inventory.unchangedAll()) && ownerAuthorityCurrent();
       };
       // The evidence snapshot must match until content deletion dispatches.
@@ -727,7 +738,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         reason = state === "live" ? "live lane or checkout dependency" : state === "settled" && owner.retainUntilClose
           ? "declared evidence until lane close" : `ownership ${state}`;
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
-        if (!attemptTempPathAdmitted(directory) || !current?.isDirectory() || current.isSymbolicLink() || `${current.dev}:${current.ino}` !== owner.identity) { reason = "physical ancestry or identity changed during authority read"; return false; }
+        if (!pathCurrent(directory) || !current?.isDirectory() || current.isSymbolicLink() || `${current.dev}:${current.ino}` !== owner.identity) { reason = "physical ancestry or identity changed during authority read"; return false; }
         const settled = state === "closed" || state === "expired" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled) return false;

@@ -937,8 +937,10 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
       const version = signature(stat), children: string[] = [], markersHere = new Map<string, { version: string; content?: Buffer }>();
       visited++;
       if (stat.dev !== BigInt(device)) {
-        if (inventory) inventory.record(current, version, false, [], markersHere);
-        else directories.set(current, version);
+        // A mount is a boundary, not an opaque descendant needing namespace
+        // inspection. Keep its binding watched; the removal mount guard holds it.
+        if (inventory) inventory.record(current, version, true, [], markersHere);
+        else { directories.set(current, version); readableDirectories.push(current); }
         active = undefined;
         continue;
       }
