@@ -308,8 +308,14 @@ because 1,000 rows held the lock about 160 ms idle and 0.8 s loaded
 
 **Rate.** Four batches per 60 s cycle retire about 60,000 versions an hour,
 against churn of about 10,600 an hour. The 321,240-version backlog clears in
-roughly 6.5 hours. Afterwards the superseded population stays near grace × churn,
-about 10,600 versions or 17 MB.
+roughly 6.5 hours. Discovery examines 120,000 existing archive rows an hour,
+so its delay depends on the physical row count, not the largest historical id.
+Using the measured 163,118 live archive rows, 10,600 versions/hour of churn and
+the 1,693-byte mean superseded payload, a conservative full-sweep estimate is
+`S = 10,600 × (1 hour + (163,118 + S) / 120,000 per hour)`: about 27,400
+superseded versions or 46 MB at steady state. Recalculate this estimate when
+the live archive count or churn changes; the earlier 10,600-row / 17 MB figure
+counted only the grace hour and omitted discovery delay.
 
 **Held views.** A missing version read through a view currently throws a plain
 `Error("registry archive version is missing")` (`sqliteRegistryStore.ts:3568`); the
