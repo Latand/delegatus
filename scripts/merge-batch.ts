@@ -1620,9 +1620,9 @@ if (import.meta.main) {
     let recording: Awaited<ReturnType<typeof openGateRecording>> | undefined;
     let output = "";
     try {
-      mkdirSync(lock); held = true;
-      // The batch already schedules its heavy children. Record the driver in
-      // its own process so a hosted check wait holds no extra admission slot.
+      // Register before claiming the batch lock so a competing invocation can
+      // return its own refusal without waiting on or releasing the active run.
+      // The driver already admits its heavy children individually.
       const launchRoot = process.env[GATE_CHECK_ROOT_ENV];
       if (launchRoot && (command === "gate" || command === "land")) {
         const log = join(launchRoot, `merge-${command}-${randomUUID()}.log`);
@@ -1630,6 +1630,7 @@ if (import.meta.main) {
         writeFileSync(join(recording.dir, "running"), "running\n", { flag: "wx", mode: 0o600 });
         process.stdout.write(`merge-batch: recording started\nrunId=${recording.runId}\n`);
       }
+      mkdirSync(lock); held = true;
       const batch = new MergeBatch(process.cwd(), stateFile);
       let state: RunState;
       if (command === "build" && argument) state = await batch.build(argument);

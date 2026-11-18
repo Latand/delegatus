@@ -19,12 +19,13 @@ bun scripts/merge-batch.ts land
 ```
 
 On a native Codex launch, `gate` and `land` print a fresh `runId` before
-starting work. If the command yields while still running, call the native `wait_for_check` once with that ID and the
-phase as its `reason`. The callback returns the exit code and the report tail
-as soon as the driver releases its batch lock. This includes early failures
-and runs that finish before the wait attaches. The driver owns the hosted
-check loop and schedules each heavy child. Run it directly to leave the
-shared slot available between checks. A nonterminal or interrupted wait
+starting work. If the command yields while still running, call the native
+`wait_for_check` once with that ID and the phase as its `reason`. The callback
+returns the exit code and report tail after the phase ends and releases any
+batch lock it owns. This includes a refusal because another run owns the
+lock, and runs that finish before the wait attaches. The driver owns the
+hosted check loop and schedules each heavy child. Run it directly to leave
+the shared slot available between checks. A nonterminal or interrupted wait
 leaves the original batch state available for reconciliation.
 
 `build` fetches fresh main and each listed PR, checks its open/non-draft/main
