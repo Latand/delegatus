@@ -1,5 +1,4 @@
 import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
-import { assertReleasedHostEventLedger } from "./hostEventWindow";
 import { clearEngineHostText, createEngineHostLedgerProjection } from "./engineHostEvents";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
@@ -1381,12 +1380,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     });
   }
 
-  private refillEventWindow(): void {
+  private eventWindowRefill: Promise<void> | undefined;
+
+  private refillEventWindow(): Promise<void> | undefined {
     if (!this.eventWindowReleased) return;
-    const stored = this.storedEvents();
-    assertReleasedHostEventLedger(this.events, stored);
-    this.eventWindow.restore(stored);
-    this.eventWindowReleased = false;
+    return this.eventWindowRefill ??= this.eventWindow.refill(this.eventStore, this.identity.threadId, event => event.kind === "item" && nativeCodexActivityMethod(event.item) && event.activityAt === undefined
+        ? { ...event, activityAt: null } : event).then(() => {
+      this.eventWindowReleased = false;
+    }).finally(() => { this.eventWindowRefill = undefined; });
   }
 
   /** Newest turn-started and turn-ended events, beyond the event window. */
@@ -1964,12 +1965,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
     this.eventWindowRevision += 1;
-    this.refillEventWindow();
     return attachRuntimeEvents(afterSeq, {
       window: () => this.events,
       ledger: () => this.storedEvents(),
       subscribers: this.subscribers,
-    });
+    }, () => this.refillEventWindow());
   }
 
   /** On-demand retry of capability discovery after a probe fault. A verdict
@@ -2348,6 +2348,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   async send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt> {
+    const refill = this.dead || this.releasing || this.released ? undefined : this.refillEventWindow();
+    if (refill) await refill;
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       return { outcome: "rejected", reason: "dead-host" };
     }
@@ -4030,7 +4032,6 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
     if (sequenced.kind === "item") this.observeViewerMcp(sequenced);
     try {
-      this.refillEventWindow();
       this.eventStore.append(this.identity.threadId, (durableTail ? { ...durableTail, seq: nextCursor } : this.projectLedgerEvent(sequenced)));
     } catch (error) {
       this.ledgerFailed = true;
@@ -5023,7 +5024,6 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private acceptNotification(method: string, params: JsonObject, reconcileBufferedLifecycle = false, receivedAt?: string): void {
-    if (method.startsWith("turn/") || method.startsWith("item/")) this.refillEventWindow();
     const accountingAt = reconcileBufferedLifecycle ? undefined : receivedAt ?? new Date().toISOString();
     /* #1629: the canonical transcript. These are the app-server's own
        notifications, so they survive a data-channel drop and are what the

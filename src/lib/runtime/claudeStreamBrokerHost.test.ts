@@ -5287,11 +5287,13 @@ test("central Claude session completion releases the local queue reference and a
   } finally { await host.release(); }
 });
 
-test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+test.each(["memory", "file"])("a settled host releases idle events, replays to subscribers and refills on its next turn (%s)", async kind => {
+  const eventStore = kind === "file"
+    ? new FileRuntimeEventStore(fs.mkdtempSync(path.join(os.tmpdir(), "host-refill-"))) : new MemoryEventStore();
   const ledger = new RecordingDeliveryLedger();
   const child = new FakeClaude(ledger);
   const host = await ClaudeStreamBrokerHost.start({ cwd: "/repo", sessionId: "idle-window-session", env: { NODE_ENV: "test" },
-    eventStore: new MemoryEventStore(), deliveryLedger: ledger, readTranscript: () => [],
+    eventStore, deliveryLedger: ledger, readTranscript: () => [],
     readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
     spawnProcess: fakeSpawn(child, {}) });
   const idle = idleWindowFixture(host);
@@ -5303,8 +5305,8 @@ test("a settled host releases idle events, replays to subscribers and refills on
     expect(host.heapAttribution().events).toBe(0);
     const stream = host.attach(0)[Symbol.asyncIterator]();
     try {
-      expect(host.heapAttribution().events).toBeGreaterThan(0);
       for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
     } finally { await stream.return?.(); }
     expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
     const sent = host.send({ id: "next-idle-turn", text: "continue" });
