@@ -879,7 +879,7 @@ function openRawDatabase(filename: string): Database {
         }
         if ([...stateSchemaNames,
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
-          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
+          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete", "pipeline_tick_priority_cursor"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
           && pipelineControllerReferencesReady(db, names)
           && pipelineControllerReferenceIndexesCurrent(db)
@@ -2377,9 +2377,13 @@ export class SqliteStateCollection<T> {
       .get(now, JSON.stringify(excluded)));
   }
 
-  async recordPipelineTickSelection(work: PipelineTickWork): Promise<void> {
+  async recordPipelineTickSelection(work: PipelineTickWork, now: number): Promise<void> {
     await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
       db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
+      if (work.dirty === 1 || work.due_at <= now) {
+        db.query("UPDATE pipeline_tick_priority_cursor SET due_at=?,row_order=?,row_key=? WHERE kind=?")
+          .run(work.due_at, work.row_order, work.row_key, work.dirty === 1 ? "dirty" : "due");
+      }
     });
   }
 

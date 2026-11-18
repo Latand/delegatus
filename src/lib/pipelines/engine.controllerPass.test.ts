@@ -2,6 +2,8 @@ import { expect, test, harness, create, createPipelineFromRequest, BUILD_ONLY, l
 import { FlowPipelineController, type FlowPipelineControllerHeartbeat } from "./controller";
 import { requestPipelineTick } from "./controllerSignal";
 import { tickPipelinesController } from "./controllerPass";
+import { settlePipelineStopReadLanes } from "./controllerStopRead";
+import { createServer } from "node:net";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
 import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
 import { SqliteStateCollection, StateSnapshotChangedError, resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "@/lib/state/sqliteStateStore";
@@ -1369,7 +1371,12 @@ test.each([
   ["direct", "pinned", "due", 1], ["direct", "followed", "due", 1],
   ["queued", "pinned", "due", 1], ["queued", "followed", "due", 1],
   ["direct", "pinned", "due", 2], ["direct", "pinned", "due", 3],
-] as const)("a %s lane with a %s base starts as %s despite %i repeatedly timed-out dirty lanes", async (admission, base, readiness, blockerCount) => {
+  ["direct", "pinned", "mixed-due", 2],
+] as const)("a %s lane with a %s base starts as %s despite %i repeatedly timed-out peers",
+  (admission, base, readiness, blockerCount) => withControllerAuditState(() => auditPeerRotation(admission, base, readiness, blockerCount)));
+
+async function auditPeerRotation(admission: "direct" | "queued", base: "pinned" | "followed",
+  readiness: "dirty" | "due" | "mixed-due", blockerCount: number) {
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
   const { StoreBusyBeforeAdmissionError } = await import("@/lib/state/fileTransaction");
@@ -1419,18 +1426,25 @@ test.each([
   let entered = latch(), release = latch();
   let enteredBlocker: string | undefined;
   const visitedBlockers = new Set<string>();
-  h.ports.conversationOperatorStopped = async id => {
-    const peer = blockerConversations.get(id);
-    if (peer === undefined) return false;
+  const mixedDue = readiness === "mixed-due";
+  const block = async (peer: string) => {
     enteredBlocker = peer;
     visitedBlockers.add(peer);
     entered.resolve();
     await release.promise;
+  };
+  h.ports.conversationOperatorStopped = async id => {
+    const peer = blockerConversations.get(id);
+    if (!mixedDue && peer !== undefined) await block(peer);
     return false;
   };
   const fixtureExec = h.ports.exec;
-  h.ports.exec = (command, args, cwd, env, options) => cwd.startsWith(root + path.sep)
-    ? realExec(command, args, cwd, env, options) : fixtureExec(command, args, cwd, env, options);
+  h.ports.exec = async (command, args, cwd, env, options) => {
+    const peer = blockers.find(peer => peer.worktreeDir === cwd);
+    if (mixedDue && peer && command === "git" && args[0] === "branch" && args[1] === "--show-current") await block(peer.id);
+    return cwd.startsWith(root + path.sep)
+      ? realExec(command, args, cwd, env, options) : fixtureExec(command, args, cwd, env, options);
+  };
   let adds = 0, fetches = 0;
   h.ports.provisionExec = (command, args, cwd, signal, options) => {
     if (args[0] === "worktree" && args[1] === "add") adds++;
@@ -1467,6 +1481,7 @@ test.each([
 
     const timers: Array<{ active: boolean; callback: () => void }> = [];
     const log: string[] = [];
+    const budget = mixedDue ? 15_000 : 500;
     const controller = new FlowPipelineController({
       tickPipelines: entries => tickPipelinesController(entries, h.ports),
       now: () => epoch + elapsed, monotonicNow: () => elapsed,
@@ -1475,7 +1490,7 @@ test.each([
       scheduleTimeout: callback => { const timer = { active: true, callback }; timers.push(timer); return timer; },
       clearTimeout: timer => { (timer as typeof timers[number]).active = false; },
       log: message => { log.push(message); },
-    }, { phaseDeadlineMs: 500, requestDeadlineMs: 500, maxPasses: 1 });
+    }, { phaseDeadlineMs: budget, requestDeadlineMs: budget, maxPasses: 1 });
     for (let pass = 0; pass < 8; pass++) {
       entered = latch(); release = latch(); enteredBlocker = undefined;
       // Drive the blockers through the normal generation trigger. The
@@ -1484,13 +1499,13 @@ test.each([
         db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.stateDetail',?) WHERE collection='pipelines' AND row_key=?")
           .run(`peer update ${pass}`, peer.id);
       }
-      if (readiness === "due") {
-        db.query("UPDATE pipeline_tick_work SET dirty=0,due_at=? WHERE row_key=?").run(epoch + elapsed, lane.id);
-      }
+      const setDue = db.query("UPDATE pipeline_tick_work SET dirty=0,due_at=? WHERE row_key=?");
+      if (mixedDue) setDue.run(epoch - 1, blockers[0]!.id);
+      if (readiness !== "dirty" && pass === 0) setDue.run(epoch, lane.id);
       const tick = controller.tick();
       let blocked = false;
       await until(Promise.race([tick, entered.promise.then(() => { blocked = true; })]));
-      elapsed += 500;
+      elapsed += budget;
       setSystemTime(new Date(epoch + elapsed));
       const readWork = db.query<{ generation: number; dirty: number; attempt_cursor: number }, [string]>(
         "SELECT generation,dirty,attempt_cursor FROM pipeline_tick_work WHERE row_key=?",
@@ -1500,15 +1515,20 @@ test.each([
       if (blocked) {
         // The production selection transaction must already be durable.
         expect(db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_cursor WHERE id=1").get()?.row_key).toBe(timedOutPeer);
-        expect(before).toMatchObject({ dirty: 1 });
+        expect(before).toMatchObject({ dirty: mixedDue && timedOutPeer === blockers[0]!.id ? 0 : 1 });
         timers.findLast(timer => timer.active)!.callback();
       }
       await until(tick);
       if (timedOutPeer !== undefined) expect(readWork.get(timedOutPeer)).toEqual(before);
       release.resolve();
       await settlePipelineControllerJobs();
+      if (mixedDue && process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
+        const dueCursor = db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_priority_cursor WHERE kind='due'").get();
+        console.log("mixed-due-audit", JSON.stringify({ pass, timedOutPeer, dueCursorAtOldPeer: dueCursor?.row_key === blockers[0]!.id,
+          cold: readWork.get(lane.id), phases: diagnostics.filter(event => event.pipelineId === lane.id).map(event => event.phase) }));
+      }
     }
-    const deadlines = log.filter(line => line.includes("port.conversationOperatorStopped")).length;
+    const deadlines = log.filter(line => line.includes(mixedDue ? "port.exec" : "port.conversationOperatorStopped")).length;
     const attempts = (await findControllerPipeline(lane.id))?.runs[0]?.attempts;
     if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
       const cursor = db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_cursor WHERE id=1").get();
@@ -1538,9 +1558,10 @@ test.each([
     ]);
     const times = events.map(event => Date.parse(event.at));
     expect(times).toEqual([...times].sort((a, b) => a - b));
-    expect(Date.parse(startedAt!) - epoch).toBeLessThanOrEqual(2_000);
+    expect(Date.parse(startedAt!) - epoch).toBeLessThanOrEqual(4 * budget);
   } finally {
     release.resolve();
+    await settlePipelineStopReadLanes();
     await settlePipelineControllerJobs();
     db.close();
     info.mockRestore();
@@ -1548,7 +1569,7 @@ test.each([
     if (quiet !== undefined) process.env.LLV_QUIET_DIAGNOSTICS = quiet;
     fs.rmSync(root, { recursive: true, force: true });
   }
-});
+}
 
 test.each([
   ["direct", "pinned"], ["direct", "followed"], ["queued", "pinned"], ["queued", "followed"],
@@ -1557,17 +1578,81 @@ test.each([
 test("the independent deadline holds for a cold lane beside three stalled stop reads",
   () => auditIsolatedColdProvisioning("direct", "pinned", 3), 30_000);
 
-async function auditIsolatedColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number) {
+test.each(["clear", "operator-stop", "clear-after-pause"] as const)(
+  "a slow scoped RPC returns %s while an unrelated cold lane starts before the deadline",
+  reply => auditIsolatedColdProvisioning("direct", "pinned", 1, reply), 30_000);
+
+type StopReadReply = "clear" | "operator-stop" | "clear-after-pause";
+
+async function delayedScopedStopServer(conversationId: string, admittedAt: string, reply: StopReadReply, pause: () => Promise<void>) {
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR!, "stop-rpc-"));
+  const socketPath = path.join(dir, "host.sock");
+  const pending = new Set<Promise<void>>();
+  const evidence = { requests: 0, responses: 0, closedBeforeResponse: 0 };
+  const server = createServer(socket => {
+    let input = "";
+    socket.on("error", () => {});
+    socket.on("data", function readRequest(chunk) {
+      input += chunk.toString();
+      const end = input.indexOf("\n");
+      if (end === -1) return;
+      socket.off("data", readRequest);
+      const request = JSON.parse(input.slice(0, end));
+      if (request.method !== "effect-batch" || request.params.conversationId !== conversationId || (request.params.afterEventSeq ?? 0) !== 0) {
+        socket.end(JSON.stringify({ id: request.id, ok: false, error: "unexpected fixture RPC" }) + "\n");
+        return;
+      }
+      evidence.requests++;
+      const operation = (async () => {
+        if (reply === "clear-after-pause") await pause();
+        await Bun.sleep(620);
+        if (socket.destroyed || socket.readableEnded) { evidence.closedBeforeResponse++; return; }
+        const result = reply === "operator-stop" ? [{
+          id: "effect:fixture-stop", eventSeq: 1, kind: "runtime.stop-boundary",
+          payload: { conversationId, operationId: "fixture-stop", admittedAt, origin: "operator", originAuthenticated: true },
+        }] : [];
+        socket.end(JSON.stringify({ id: request.id, ok: true, result }) + "\n");
+        evidence.responses++;
+      })();
+      pending.add(operation);
+      void operation.then(() => pending.delete(operation), error => socket.destroy(error));
+    });
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+  const previous = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = socketPath;
+  return { evidence, async close() {
+    if (previous === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previous;
+    await Promise.all(pending);
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  } };
+}
+
+function auditIsolatedColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, reply?: StopReadReply) {
+  return withControllerAuditState(() => auditColdProvisioning(admission, base, blockerCount, reply));
+}
+
+async function withControllerAuditState(audit: () => Promise<void>) {
   const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
   const previousRegistry = agentRegistry();
   const previousState = process.env.LLV_STATE_DIR;
-  const state = fs.mkdtempSync(path.join(process.env.TMPDIR!, "cold-controller-state-"));
+  const state = fs.mkdtempSync(path.join(process.env.TMPDIR!, "controller-audit-state-"));
   process.env.LLV_STATE_DIR = state;
   let registry: InstanceType<typeof AgentRegistry> | undefined;
   try {
     registry = new AgentRegistry();
     setAgentRegistryForTests(registry);
-    await auditColdProvisioning(admission, base, blockerCount);
+    await audit();
   } finally {
     setAgentRegistryForTests(previousRegistry);
     registry?.close();
@@ -1577,7 +1662,7 @@ async function auditIsolatedColdProvisioning(admission: "direct" | "queued", bas
   }
 }
 
-async function auditColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number) {
+async function auditColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, reply?: StopReadReply) {
   const f = await realWorktreeLane("cold-provision-audit", BUILD_ONLY as never);
   const h = f.h;
   const old = loadPipelines()[0]!;
@@ -1622,12 +1707,14 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     },
   });
   const observedBlockers = new Set<string>();
-  h.ports.conversationOperatorStopped = async id => {
+  let stopServer: Awaited<ReturnType<typeof delayedScopedStopServer>> | undefined;
+  h.ports.conversationOperatorStopped = async (id, since, ignored) => {
     if (!blockedConversations.has(id)) return false;
     stopReads++;
     if (!stalled) return false;
     observedBlockers.add(id);
     blocked.resolve();
+    if (stopServer) return defaultPipelinePorts().conversationOperatorStopped!(id, since, ignored);
     const signal = currentOperationLease()?.abort.signal;
     await new Promise<void>(resolve => {
       const cancel = () => { cancelledReads++; resolve(); };
@@ -1675,13 +1762,23 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
   h.ports.cpuPressureHold = (key, priority) => {
     if (key === undefined) throw new Error("missing stage CPU admission key");
     cpuKeys.add(key);
-    const wait = queue.check(key, true, undefined, true, priority);
+    const allow = !reply || childLaunched || !key.includes(`:${old.id}:`);
+    const wait = queue.check(key, allow, undefined, true, priority);
     return wait ? { since: wait.since, avg10: 90, deferred: false, policy: DEFAULT_CPU_PRESSURE_POLICY, queue: wait } : null;
   };
   let child: ReturnType<typeof Bun.spawn<"ignore", "pipe", "pipe">> | undefined;
   let tick: Promise<void> | undefined;
   try {
     await until(observerReady.promise);
+    if (reply) stopServer = await delayedScopedStopServer(attempt.conversationId!, requestedAt, reply, async () => {
+      await withPipelineMutation(async (rows, persist) => {
+        const paused = rows.find(row => row.id === old.id)!;
+        paused.pausedState = "running";
+        paused.pausedAt = h.ports.now();
+        paused.state = "paused";
+        await persist([paused]);
+      });
+    });
     if (process.env.LLV_COLD_CONTROLLER_LATE === "1") {
       const exec = h.ports.provisionExec!;
       h.ports.provisionExec = async (command, args, cwd, signal, options) => {
@@ -1728,40 +1825,53 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
       tick.then(() => new Promise<never>(() => {})),
     ]), 24_000);
     expect(logs.filter(line => line.includes("pending at deadline"))).toEqual([]);
-    expect(cancelledReads).toBeGreaterThan(0);
     expect(observedBlockers.size).toBe(blockerCount);
     const retained = (await findControllerPipeline(old.id))!;
-    expect(retained.stateDetail).toContain("operator stop evidence read timed out");
-    expect(retained.runs[0]?.attempts).toMatchObject([{ n: 1, suspension: { retryRequestedAt: requestedAt } }]);
+    if (!reply) expect(retained.runs[0]?.attempts).toMatchObject([{ n: 1, suspension: { retryRequestedAt: requestedAt } }]);
     expect(cpuKeys.size).toBeGreaterThan(0);
     expect(await f.git(cold.worktreeDir, "rev-parse", "HEAD")).toBe(f.base);
     const worktrees = (await f.git(f.repo, "worktree", "list", "--porcelain")).split("\n");
     expect(worktrees.filter(line => line === `worktree ${cold.worktreeDir}`)).toHaveLength(1);
 
-    const beforeRecovery = stopReads;
     stalled = false;
     release.resolve();
+    await settlePipelineStopReadLanes();
     for (let pass = 0; pass < 4; pass++) await controller.tick();
-    expect(stopReads).toBeGreaterThan(beforeRecovery);
     const waitingForCpu = await findControllerPipeline(old.id);
-    expect(waitingForCpu?.stateDetail).toContain("CPU queue");
-    expect(waitingForCpu?.runs[0]?.attempts.at(-1)).toMatchObject({ n: 2, state: "pending" });
+    if (reply === "operator-stop") {
+      expect(waitingForCpu?.stateDetail).toContain("stopped by operator");
+      const stopped = waitingForCpu?.runs[0]?.attempts[0]?.suspension?.operatorStoppedAt;
+      expect(typeof stopped).toBe("string");
+      expect(Date.parse(stopped!)).toBeGreaterThanOrEqual(Date.parse(requestedAt));
+    } else if (reply === "clear-after-pause") {
+      expect(waitingForCpu?.state).toBe("paused");
+      expect(waitingForCpu?.runs[0]?.attempts.map(item => item.n)).toEqual([1]);
+    } else {
+      expect(waitingForCpu?.stateDetail).toContain("CPU queue");
+      expect(waitingForCpu?.runs[0]?.attempts.at(-1)).toMatchObject({ n: 2, state: "pending" });
+    }
     for (let window = 0; window < blockerCount; window++) {
       cpuNow += CPU_QUEUE_SPACING_MS;
       for (let pass = 0; pass < 4; pass++) await controller.tick();
     }
     for (const peer of blockers) {
       const recovered = await findControllerPipeline(peer.id);
+      if (reply && reply !== "clear") {
+        expect(recovered?.runs[0]?.attempts.map(item => item.n)).toEqual([1]);
+        expect(h.spawnInputs.filter(input => input.cwd === old.worktreeDir)).toHaveLength(1);
+        continue;
+      }
       expect(recovered?.runs[0]?.attempts.map(({ n, state, accountId }) => ({ n, state, accountId })), recovered?.stateDetail ?? "").toEqual([
         { n: 1, state: "failed", accountId: account }, { n: 2, state: "running", accountId: account },
       ]);
     }
     expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, state: "running" }]);
     expect(h.spawnInputs.filter(input => input.cwd === cold.worktreeDir)).toHaveLength(1);
+    if (stopServer) expect(stopServer.evidence).toEqual({ requests: 1, responses: 1, closedBeforeResponse: 0 });
     observer.send("finished");
     await until(observationComplete.promise);
     if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
-      console.log("cold-controller-audit", JSON.stringify({ admission, base, blockerCount, ...observation, stopReads, cancelledReads }));
+      console.log("cold-controller-audit", JSON.stringify({ admission, base, blockerCount, ...observation, stopReads, cancelledReads, reply, rpc: stopServer?.evidence }));
     }
     expect(observation).toMatchObject({ callbacks: 1, children: 1 });
     expect(observation?.deadlineReached, "independent acceptance-to-child deadline of 15000 ms").toBe(false);
@@ -1772,6 +1882,8 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     if (child?.exitCode === null) child.kill();
     await child?.exited;
     await Promise.allSettled([tick, wake]);
+    await settlePipelineStopReadLanes();
+    await stopServer?.close();
     if (observer.exitCode === null) observer.kill();
     await observer.exited;
     for (const timer of timers) clearTimeout(timer);

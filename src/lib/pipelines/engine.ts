@@ -11455,7 +11455,7 @@ async function tickPipeline(
   return performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline) !== before);
 }
 
-const tickStore = globalThis as unknown as { __llvPipelineTick?: boolean | symbol; __llvCpuIngressReads?: Map<string, number> };
+const tickStore = globalThis as unknown as { __llvPipelineTick?: symbol; __llvScopedPipelineTicks?: Map<string, symbol>; __llvCpuIngressReads?: Map<string, number> };
 
 const APPROVED_REMOTE_HEAD_UNVERIFIED = "approved review flow could not verify the remote pipeline head";
 const APPROVED_REMOTE_HEAD_WAIT_PREFIX = "approved review flow waiting for the remote pipeline head: ";
@@ -14160,7 +14160,10 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
   assertOperationLease();
   ports = leasedOperationPorts(ports);
-  const scoped = Boolean(controllerPipelineKeys());
+  const keys = controllerPipelineKeys();
+  const scoped = Boolean(keys);
+  const lane = keys?.length === 1 ? JSON.stringify([stateDir(), keys[0]]) : null;
+  const scopedTicks = tickStore.__llvScopedPipelineTicks ??= new Map<string, symbol>();
   if (!hasLocalPipelineController() && ports.structuredDeliveryPublication?.() === "unbound") {
     // An inventory sidecar owns no delivery publisher. Hand off before Git,
     // registry reconciliation or another lane can delay the controller wake.
@@ -14173,13 +14176,20 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     await phaseDone;
     return run(waitOutsideCapacity);
   }, () => controllerPipelineVersion(id), kind);
-  if (tickStore.__llvPipelineTick) {
+  if (tickStore.__llvPipelineTick || (lane === null ? scopedTicks.size > 0 : scopedTicks.has(lane))) {
     await ports.cpuAdmissionReconcile?.(ports);
-    return { pipelines: [], changed: false };
+    return { pipelines: [], changed: false, ...(scoped ? { retry: true } : {}) };
   }
   const tickOwner = Symbol("pipeline tick");
-  tickStore.__llvPipelineTick = tickOwner;
+  if (lane === null) tickStore.__llvPipelineTick = tickOwner;
+  else scopedTicks.set(lane, tickOwner);
   const previousStageBranchProtections = ports.stageBranchProtections;
+  const releaseTick = () => {
+    if ((lane === null ? tickStore.__llvPipelineTick : scopedTicks.get(lane)) !== tickOwner) return;
+    ports.stageBranchProtections = previousStageBranchProtections;
+    if (lane === null) delete tickStore.__llvPipelineTick;
+    else scopedTicks.delete(lane);
+  };
   let followUp = false;
   let admissionWork: Promise<void> | null = null, activationWork: Promise<void> | null = null, admissionChanged = false;
   const ingressHeads: Awaited<ReturnType<typeof collectReviewIngressHeads>> = new Map();
@@ -14264,10 +14274,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   const signal = currentOperationLease()?.abort.signal;
   const abandon = () => withoutOperationLease(() => {
     if (admissionWatch) clearInterval(admissionWatch);
-    if (tickStore.__llvPipelineTick === tickOwner) {
-      ports.stageBranchProtections = previousStageBranchProtections;
-      tickStore.__llvPipelineTick = false;
-    }
+    releaseTick();
     completePhase();
   });
   signal?.addEventListener("abort", abandon, { once: true });
@@ -14591,10 +14598,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     if (!scoped && pending.length && publicationPass < 3) {
       await stopAdmissionPolling();
-      if (tickStore.__llvPipelineTick === tickOwner) {
-        ports.stageBranchProtections = previousStageBranchProtections;
-        tickStore.__llvPipelineTick = false;
-      }
+      releaseTick();
       const settled = await tickPipelines(entries, ports, publicationPass + 1);
       return { ...settled, changed: true };
     }
@@ -14622,10 +14626,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   } finally {
     await stopAdmissionPolling();
     signal?.removeEventListener("abort", abandon);
-    if (tickStore.__llvPipelineTick === tickOwner) {
-      ports.stageBranchProtections = previousStageBranchProtections;
-      tickStore.__llvPipelineTick = false;
-    }
+    releaseTick();
     completePhase();
     /* Scheduled after the re-entry guard clears so the microtask tick cannot
        be swallowed by it. */
