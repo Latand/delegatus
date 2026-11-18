@@ -27,6 +27,9 @@ export class ReleaseValidationRefusal extends Error {
   constructor(readonly digest: string, reason: string) { super(reason); }
 }
 const NOT_APPLICABLE = "release: not applicable (origin/main has no root package.json)";
+function retireInapplicableBlocker(project: string) {
+  mutateReleaseProject(project, current => current.blocked ? { ...current, blocked: null } : current);
+}
 const lockKey = Symbol.for("delegatus.release.controller");
 const globalLocks = globalThis as typeof globalThis & { [lockKey]?: Map<string, Promise<string | null>> };
 function serialized(project: string, work: () => Promise<string | null>): Promise<string | null> {
@@ -50,7 +53,7 @@ async function admit(project: string, ports: ReleasePorts): Promise<string | nul
   const claim = run;
   const observed = await ports.observe(project, run.cut);
   if (!ports.settings(project)?.enabled) return null;
-  if (!observed) return NOT_APPLICABLE;
+  if (!observed) { retireInapplicableBlocker(project); return NOT_APPLICABLE; }
   row = readReleaseProject(project);
   run = row.live;
   if (!run || run.key !== claim.key || run.cut !== claim.cut || run.pipelineId || !run.request) return null;
@@ -189,7 +192,7 @@ export function productionReleaseController(ports: ReleasePorts): ReleaseControl
       if (!setting?.enabled || !input.settings.enabled || !input.seat) return null;
       const observed = await ports.observe(project);
       if (!ports.settings(project)?.enabled) return null;
-      if (!observed) return NOT_APPLICABLE;
+      if (!observed) { retireInapplicableBlocker(project); return NOT_APPLICABLE; }
       const decision = await releaseState({ ...observed.policy, hold: row.hold?.reason ?? null, requested: !!row.request,
         settled: row.history.at(-1) ?? null });
       if (!ports.settings(project)?.enabled) return null;

@@ -15,7 +15,7 @@ import { deepFreeze } from "@/lib/deepFreeze";
 import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { shortId } from "@/lib/shortIds";
-import { seatTickCatchUp } from "./seatTick";
+import { seatTickCatchUp, seatTickSignalVersion } from "./seatTick";
 import { pendingAutonomyReports } from "./autonomy";
 import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
@@ -30,7 +30,7 @@ import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { memoryProblemSignals, prepareMemoryProblemRead } from "@/lib/memory/roleProblems";
-import { curationPanelRunMetadata } from "@/lib/memory/curation/store";
+import { acknowledgeCurationNoAccountWarning, curationNoAccountWarning } from "@/lib/memory/curation/store";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
@@ -1603,15 +1603,19 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
   return { covered: false, sweeps };
 }
 
-function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
+function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources, shown: readonly string[] = []): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
   if (seat) {
     try {
-      const { last } = curationPanelRunMetadata(project);
-      if (last?.state === "failed" && last.failure === "no-account") found.push({
-        id: "curator-no-account", episode: last.noAccountEpisode ?? last.id, actionable: true,
-        label: "The role memory curator could not run because no account was available for this project (no-account).",
-      });
+      const warning = curationNoAccountWarning(project);
+      if (warning) {
+        const signal = {
+          id: "curator-no-account", episode: warning.episode, actionable: true,
+          label: "The role memory curator could not run because no account was available for this project (no-account).",
+        };
+        if (shown.includes(seatTickSignalVersion(signal, seat))) acknowledgeCurationNoAccountWarning(project, warning.episode);
+        else found.push(signal);
+      }
     } catch { /* An unreadable curation store leaves other wake evidence available. */ }
   }
   for (const lane of projectRows(sources.pipelines(), project)) {
@@ -2664,6 +2668,7 @@ async function childWork(
     // A vanished host and both records gone have a named failure receipt.
     // Keep the cursor and every earlier outcome for a later recovery.
     const ledgerGap = source.cursor.gap !== null && !lost;
+    if (ledgerGap && !read.cursor.atEnd && read.outcomes.length >= OUTCOME_LIMIT) readablePageLimited = true;
     if (ledgerGap) {
       if (child.input.status === "unknown") children.push(child.input);
       const id = `child-ledger:${child.input.conversationId}:${generation.id}`;
@@ -2684,6 +2689,7 @@ async function childWork(
   };
 
   let catchUpPending = false;
+  let readablePageLimited = false;
   try {
     const active = await seatTickMutation("owner", () => accounting.owner(seat.conversationId, seat.seatEpoch));
     if (await seatTickMutation("discoverRevokedOwners", () => accounting.discoverRevokedOwners(orchestratorSeatRevocationSource(), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project))) {
@@ -2774,8 +2780,8 @@ async function childWork(
       const next = accounting.page("poll", 1)[0];
       const pending = next?.kind === "poll" && (next.key.startsWith(`poll/${encodeURIComponent(project)}/!`)
         || Number(next.key.slice(next.key.lastIndexOf("/") + 1)) <= catchUpPollThrough);
-      catchUpPending = !!pending;
-      if (pending) gaps.add("ledger-pending");
+      catchUpPending = !!pending || readablePageLimited;
+      if (catchUpPending) gaps.add("ledger-pending");
       else await seatTickMutation("endCatchUpPoll", () => accounting.endCatchUpPoll());
     }
     // Page the persisted ready queue, yielding between pages. The cutoff is
@@ -3482,7 +3488,7 @@ async function gatherSeatTickInputWork(
   try {
     const release = readReleaseProject(canonical);
     for (const run of release.history) if (now - run.at <= policy.backlogAfterMs) releaseAlerts.push({ kind: "release-settled", id: `release-settled:${run.key}:${run.at}`, label: `Release ${run.outcome}; task ${run.taskId}, lane ${run.pipelineId}. Read its stage summaries for any product defect seen in the README pictures.` });
-    if (release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
+    if (settings.release?.enabled && release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
   } catch { /* The release controller journals store failures; other seat work still wakes. */ }
 
 
@@ -3565,7 +3571,7 @@ async function gatherSeatTickInputWork(
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...ledgerWarnings, ...signals(canonical, seat, sources), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? []), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

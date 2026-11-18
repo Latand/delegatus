@@ -88,6 +88,20 @@ test("self-update sends one wait or off signal from its durable state", () => {
   expect(selfUpdateSignals({ ...quiet, off: { at: "2026-01-02", target: "a".repeat(40), stage: "build", reason: "build failed" }, noticeAt: null, waitingSince: null })).toMatchObject([{ id: "self-update-off" }]);
 });
 
+test("a paused automatic release leaves its queued request unannounced", async () => {
+  const { mutateReleaseProject, readReleaseProject } = await import("@/lib/release/store");
+  mutateReleaseProject(PROJECT, row => ({ ...row,
+    request: { at: "2026-08-27T00:00:00Z", by: { kind: "gateway", project: PROJECT, conversationId: null, seatEpoch: null }, why: "queued" },
+    blocked: { kind: 1, since: NOW - 25 * 60 * 60_000, episode: "old-blocker" },
+  }));
+  const input = await gather({ settings: { ...defaultSeatTickSettings(PROJECT), release: {
+    enabled: false, askBeforePublish: true, minChanges: 30, minGapHours: 12,
+    updatedAt: new Date(NOW).toISOString(), setBy: { kind: "gateway", project: PROJECT, conversationId: null, seatEpoch: null }, why: null,
+  } } });
+  expect(input.releaseAlerts).toEqual([]);
+  expect(readReleaseProject(PROJECT).request).toMatchObject({ why: "queued" });
+});
+
 test("drain notice names unfinished work and the operator choices", () => {
   const drain = { id: "drain", target: { sha: "a".repeat(40), short: "aaaaaaa", version: "1", date: "" }, since: "2026-01-01T04:00:00Z", overranAt: "2026-01-01T06:00:00Z",
     blockers: { turns: 1, stages: 1, busy: false, memoryMb: null, unreadable: null, operatorActiveAt: null,
@@ -2433,7 +2447,7 @@ function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typ
 
 /** A production SQLite layout with fixed identities and clocks for recovery
  * regressions. The JSON seed is normalized by the production reader. */
-function replayChildren(name: string, cases: { title: string; unobserved?: boolean; host?: "dead" | "live"; ledger?: boolean | "partial"; generations?: number; admissionOwned?: boolean }[]) {
+function replayChildren(name: string, cases: { title: string; unobserved?: boolean; host?: "dead" | "live"; ledger?: boolean | "partial"; generations?: number; admissionOwned?: boolean; turn?: "busy" | "idle" | "terminal" | "unknown" }[]) {
   const dir = fs.mkdtempSync(path.join(SANDBOX, `${name}-`));
   const cwd = path.join(dir, "repo");
   fs.mkdirSync(cwd);
@@ -2441,8 +2455,9 @@ function replayChildren(name: string, cases: { title: string; unobserved?: boole
   const seatId = `conversation_${name}_seat`;
   const successorId = `conversation_${name}_successor`;
   const createdAt = new Date(NOW - 10 * MINUTE_MS).toISOString();
-  const conversation = (id: string, generations: unknown[] = []) => ({ id, engine: "claude", generations,
-    turn: { state: "unknown", source: "empty", terminalAt: null, observedAt: null }, createdAt, updatedAt: createdAt });
+  const conversation = (id: string, generations: unknown[] = [], turn: { state: string; source: string; terminalAt: string | null; observedAt: string | null } = {
+    state: "unknown", source: "empty", terminalAt: null, observedAt: null,
+  }) => ({ id, engine: "claude", generations, turn, createdAt, updatedAt: createdAt });
   const file = normalizeRegistry({ version: 2, entries: {}, receipts: {}, conversations: {
     [seatId]: conversation(seatId), [successorId]: conversation(successorId),
   } });
@@ -2465,7 +2480,8 @@ function replayChildren(name: string, cases: { title: string; unobserved?: boole
         state: options.unobserved ? "starting" : "completed", transport: "structured", launchProfile: profile,
         admissionOwner: options.admissionOwned ? { pid: 42, startIdentity: null } : null,
         artifactPath: options.unobserved ? null : childPath, key: options.unobserved ? null : key },
-    }, conversations: options.unobserved ? {} : { [id]: conversation(id, generations.map((item) => ({ id: item.id, path: item.path, accountId: null, launchProfile: profile, host: null, createdAt }))) } });
+    }, conversations: options.unobserved ? {} : { [id]: conversation(id, generations.map((item) => ({ id: item.id, path: item.path, accountId: null, launchProfile: profile, host: null, createdAt })),
+      { state: options.turn ?? "unknown", source: "assistant", terminalAt: options.turn === "terminal" ? createdAt : null, observedAt: createdAt }) } });
     Object.assign(file.receipts, seed.receipts);
     Object.assign(file.conversations, seed.conversations);
     if (options.host) file.entries[`claude:${generation}`] = { key, artifactPath: childPath, cwd, accountId: null,
@@ -2618,7 +2634,7 @@ test("a missing curator account reaches the seat once across retries and is repo
   const landed = seatTickWakeCommit(decision.state, commit, f.now);
   const next = f.now + CURATION_INTERVAL_MS;
   expect(finish(next, "no-account").noAccountEpisode).toBe(first.id);
-  expect(seatTickDecision(await childGather(f, { now: next }, landed)).verdict.kind).toBe("quiet");
+  expect((await childGather(f, { now: next }, landed)).signals.some(signal => signal.id === "curator-no-account")).toBe(false);
 
   finish(next + CURATION_INTERVAL_MS, null);
   expect((await childGather(f, { now: next + CURATION_INTERVAL_MS }, landed)).signals).toEqual([]);
@@ -2627,6 +2643,95 @@ test("a missing curator account reaches the seat once across retries and is repo
   expect(seatTickDecision(await childGather(f, { now: recurrence }, landed)).verdict).toMatchObject({
     kind: "wake", items: [expect.objectContaining({ id: "curator-no-account" })],
   });
+});
+
+test("a readable page limit keeps catch-up debt when another child ledger has a gap", async () => {
+  const f = replayChildren("catchup-readable-gap", [
+    { title: "damaged worker with readable outcomes", turn: "terminal" },
+    { title: "healthy finished worker", turn: "terminal", ledger: true },
+  ]);
+  const damaged = f.workers[0]!;
+  const ledgerDir = statePath("structured-host-events");
+  fs.mkdirSync(ledgerDir, { recursive: true });
+  const ledgerFile = path.join(ledgerDir, `${damaged.generation}.jsonl`);
+  fs.rmSync(ledgerFile, { force: true });
+  const rows: Record<string, unknown>[] = [];
+  let seq = 1;
+  for (let index = 0; index < 257; index++) {
+    if (index === 1) seq++;
+    rows.push({ kind: "turn-started", turnId: `readable-${index}`, seq: seq++ });
+    rows.push({ kind: "turn-ended", turnId: `readable-${index}`, status: "completed", seq: seq++ });
+  }
+  fs.writeFileSync(ledgerFile, `${rows.map(row => JSON.stringify(row)).join("\n")}\n`);
+  const backlog = new Date(f.now - 2 * 60 * MINUTE_MS).toISOString();
+  let gathered = await childGather(f, {}, { ...emptySeatTickState(), unreachableSince: backlog, unreachableBacklogSince: backlog });
+  expect(gathered.childrenCatchUpPending).toBe(true);
+  expect(gathered.children).toEqual(expect.arrayContaining([expect.objectContaining({ conversationId: f.workers[1]!.id })]));
+  const outcomes = new Set(gathered.children.map(child => child.outcomeId).filter((id): id is string => !!id));
+  for (let pass = 0; gathered.childrenCatchUpPending && pass < 20; pass++) {
+    gathered = await childGather(f, {}, gathered.state);
+    for (const child of gathered.children) if (child.outcomeId) outcomes.add(child.outcomeId);
+  }
+  expect(gathered.childrenCatchUpPending).toBe(false);
+  expect(outcomes.size).toBeGreaterThanOrEqual(257);
+});
+
+test("a deferred no-account warning survives another failure and is acknowledged after delivery", async () => {
+  const f = replayChildren("curator-deferred", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning } = await import("@/lib/memory/curation/store");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Preserve the undelivered account warning.", why: "The seat must receive the cause." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (now: number, failure: string) => {
+    const pass = claimPass({ project: f.project, repoDir: f.cwd, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: "failed", endedAt: new Date(now).toISOString(), failure });
+    return pass;
+  };
+  const first = finish(f.now, "no-account");
+  const warning = curationNoAccountWarning(f.project)!;
+  const { CURATION_INTERVAL_MS } = await import("@/lib/memory/roleTypes");
+  finish(f.now + CURATION_INTERVAL_MS, "launch-refused");
+  expect(curationNoAccountWarning(f.project)).toEqual(warning);
+  const pending = await childGather(f);
+  expect(pending.signals).toEqual(expect.arrayContaining([expect.objectContaining({ id: "curator-no-account", episode: warning.episode })]));
+  const { seatTickSignalVersion } = await import("./seatTick");
+  const version = seatTickSignalVersion(pending.signals.find(signal => signal.id === "curator-no-account")!, pending.seat);
+  const deliveredState = { ...pending.state, itemsShown: [...(pending.state.itemsShown ?? []), version] };
+  const afterDelivery = await childGather(f, {}, deliveredState);
+  expect(afterDelivery.signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+  expect(curationNoAccountWarning(f.project)).toBeNull();
+  finish(f.now + 2 * CURATION_INTERVAL_MS, "no-account");
+  expect(curationNoAccountWarning(f.project)?.episode).not.toBe(first.id);
+});
+
+test("the tick reads a fixed-size curator warning record as pass history grows", async () => {
+  const f = replayChildren("curator-warning-size", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning, curationCollection } = await import("@/lib/memory/curation/store");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Keep the warning lookup bounded.", why: "Tick reads must remain predictable." }],
+    now: new Date(f.now).toISOString() });
+  const pass = claimPass({ project: f.project, repoDir: f.cwd, now: f.now })!;
+  patchPass(pass.id, { state: "failed", endedAt: new Date(f.now).toISOString(), failure: "no-account" });
+  const collection = curationCollection()!;
+  collection.boundedPatch(4, tx => {
+    const row = tx.get(`p:${f.project}`);
+    if (row?.kind === "project") tx.put({ ...row, passes: [...row.passes, ...Array.from({ length: 5000 }, (_, index) => `retained-${index}`)] });
+  });
+  const reads: { key: string; bytes: number }[] = [];
+  const original = collection.get.bind(collection);
+  const observed = spyOn(collection, "get").mockImplementation((key: string) => {
+    const row = original(key);
+    reads.push({ key, bytes: row ? Buffer.byteLength(JSON.stringify(row)) : 0 });
+    return row;
+  });
+  try {
+    expect(curationNoAccountWarning(f.project)).toMatchObject({ episode: pass.id });
+    expect(reads).toEqual([{ key: `w:${f.project}`, bytes: expect.any(Number) }]);
+    expect(reads[0]!.bytes).toBeLessThan(200);
+  } finally { observed.mockRestore(); }
 });
 
 test("an expired launch without a conversation is a named failure owed until its wake lands", async () => {

@@ -36,6 +36,7 @@ export interface CuratorPass extends CuratorPassView {
   budgetSweep?: { scope: string; candidates: number; restored: number; integrated: number; remaining: number }[];
 }
 type ProjectRow = { kind: "project"; project: string; current: string | null; lastClaimAt: string; claimRevisions?: Record<string, number>; lastAt: string | null; passes: string[] };
+type NoAccountWarning = { kind: "no-account-warning"; project: string; episode: string; passId: string };
 export interface CurationOperation {
   kind: "operation";
   version: 1;
@@ -77,8 +78,8 @@ export function validCurationOperation(value: unknown): value is CurationOperati
     && !!row.counts && countFields.every(field => integer(row.counts[field])) && row.counts.calls === 1
     && !!row.maintenance && [row.maintenance.counts, row.maintenance.knownValues, row.maintenance.cleanup].every(value => value === "pending" || value === "complete");
 }
-type Row = CurationOperation | CuratorPass | ProjectRow | { kind: "machine"; current: string | null; budgetSweepAttemptedAt?: string; budgetSweepEndedAt?: string; budgetSweepCompletedAt?: string } | { kind: "conversation"; conversationId: string; pass: string };
-const key = (row: Row) => row.kind === "operation" ? `o:${row.id}` : row.kind === "pass" ? `r:${row.id}` : row.kind === "project" ? `p:${row.project}` : row.kind === "machine" ? "machine" : `c:${row.conversationId}`;
+type Row = CurationOperation | CuratorPass | ProjectRow | NoAccountWarning | { kind: "machine"; current: string | null; budgetSweepAttemptedAt?: string; budgetSweepEndedAt?: string; budgetSweepCompletedAt?: string } | { kind: "conversation"; conversationId: string; pass: string };
+const key = (row: Row) => row.kind === "operation" ? `o:${row.id}` : row.kind === "pass" ? `r:${row.id}` : row.kind === "project" ? `p:${row.project}` : row.kind === "no-account-warning" ? `w:${row.project}` : row.kind === "machine" ? "machine" : `c:${row.conversationId}`;
 const seed = { collection: "role_memory_curation", schemaVersion: 1, migrationId: "role-memory-curation-v1", key, loadRecords: (): Row[] => [] };
 const cache = new Map<string, SqliteStateCollection<Row>>();
 export function curationCollection(create = false) {
@@ -90,7 +91,9 @@ export function curationCollection(create = false) {
     decode: value => {
       const row = value as Row | null;
       return row && (row.kind === "operation" && validCurationOperation(row) || row.kind === "pass" && typeof row.id === "string" && Array.isArray(row.scopes)
-        || row.kind === "project" && Array.isArray(row.passes) || row.kind === "machine" || row.kind === "conversation" && typeof row.pass === "string") ? row : null;
+        || row.kind === "project" && Array.isArray(row.passes)
+        || row.kind === "no-account-warning" && typeof row.project === "string" && typeof row.episode === "string" && typeof row.passId === "string"
+        || row.kind === "machine" || row.kind === "conversation" && typeof row.pass === "string") ? row : null;
     } });
   cache.set(file, held); return held;
 }
@@ -105,6 +108,21 @@ export function readPassAuthority(id: string): CuratorPass | null {
     const row = curationCollection()?.get(`r:${id}`);
     return row?.kind === "pass" ? row : null;
   });
+}
+/** Tick-safe warning lookup: this keyed row stays constant-sized as pass history grows. */
+export function curationNoAccountWarning(project: string) {
+  const row = curationCollection()?.get(`w:${canonicalProject(project)}`);
+  return row?.kind === "no-account-warning" ? { episode: row.episode, passId: row.passId } : null;
+}
+/** A delivered seat wake acknowledges the exact retained warning episode. */
+export function acknowledgeCurationNoAccountWarning(project: string, episode: string): boolean {
+  const canonical = canonicalProject(project);
+  return curationCollection()?.boundedPatch(4, tx => {
+    const row = tx.get(`w:${canonical}`);
+    if (row?.kind !== "no-account-warning" || row.episode !== episode) return false;
+    tx.delete(`w:${canonical}`);
+    return true;
+  }) ?? false;
 }
 type CountMemo = { sourceVersion: string; stamp: string; rowStamp: string; scopeKeys: string[]; familyKeys: string[]; counts: CuratorPass["counts"]; bytes: number };
 const countOwner = process as typeof process & { __llvCurationCounts?: Map<string, CountMemo> };
@@ -620,6 +638,14 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     if (!passIsLive(next)) Object.assign(next, sweepCounts(next));
     tx.put(next);
     if (next.conversationId) tx.put({ kind: "conversation", conversationId: next.conversationId, pass: id });
+    if (next.state === "failed" && next.failure === "no-account") {
+      const warningKey = `w:${next.project}`;
+      const warning = tx.get(warningKey);
+      if (warning?.kind !== "no-account-warning") tx.put({
+        kind: "no-account-warning", project: next.project,
+        episode: next.noAccountEpisode ?? next.id, passId: next.id,
+      });
+    }
     if (!passIsLive(next)) {
       const machine = tx.get("machine"); if (machine?.kind === "machine" && machine.current === id) tx.put({ ...machine, current: null,
         ...(held.budgetSweepCandidates ? { budgetSweepEndedAt: next.endedAt ?? held.claimedAt } : {}),
