@@ -24,6 +24,9 @@ test.skipIf(process.platform !== "linux")("large protection inventories resume a
     store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 });
     store.measure(directory, 8 * 1024 ** 3); store.close();
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
+    // Leave one complete helper deadline and teardown inside the file budget,
+    // so a stalled proof fails through this fixture's own awaited cleanup.
+    const until = performance.now() + 170_000;
     const tick = async (n: number) => {
       fs.writeFileSync(config, JSON.stringify({ now: NOW + n * 105_000, freeBytes: 1e12, realClock: true, measureCost: 0 }));
       expect(await realParentPass(true)).not.toBeNull();
@@ -44,7 +47,7 @@ test.skipIf(process.platform !== "linux")("large protection inventories resume a
     }
     const marker = path.join(scannedDirectory, ".delegatus-keep"); plantKeepMarker(marker);
     let held = false;
-    for (let n = 1; n <= 40; n++) {
+    for (let n = 1; n <= 40 && performance.now() < until; n++) {
       const report = await tick(n);
       expect(report.removed).toBe(0); expect(report.errors).toBe(0);
       expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("retained payload");
@@ -53,7 +56,7 @@ test.skipIf(process.platform !== "linux")("large protection inventories resume a
     expect(held).toBeTrue();
     fs.unlinkSync(marker);
     let removed = false;
-    for (let n = 41; n <= 110; n++) {
+    for (let n = 41; n <= 110 && performance.now() < until; n++) {
       const report = await tick(n);
       expect(report.errors).toBe(0);
       if (report.removed > 0) { removed = true; break; }
