@@ -57,7 +57,7 @@ function fixture(count = 1) {
   const request = { reviewId, manifest };
   return { root, state, scratch, store, lane, contents, directories, bindingFile, tasksFile, request, references, writeManifest,
     changeDecision(change: (round: PrototypeReviewRound) => void) { mutateTaskPrototypeRound("approved-task", reviewId, round => change(round!), tasksFile); },
-    async run(env: NodeJS.ProcessEnv = {}) { return runApprovedAttemptTempSweep(request, { scan }, { LLV_TEMP_SWEEP: "on", ...env }); },
+    async run(env: { LLV_TEMP_SWEEP?: string } = {}) { return runApprovedAttemptTempSweep(request, { scan }, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on", ...env }); },
     close() { references.mockRestore(); store.close(); for (const key of Object.keys(process.env)) if (!(key in before)) delete process.env[key];
       Object.assign(process.env, before); fs.rmSync(root, { recursive: true, force: true }); } };
 }

@@ -525,10 +525,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     retained: options.checkoutReads, validationReuseMs: options.checkoutReads ? 5_000 : 0 });
   const references = options.references
     ?? ((original: string, current: string, scan: ProcessScan) => attemptReferencesClear(original, current, scan, undefined, inventory));
-  if (!options.selection) {
-    const recovery = store.recoverTrash(now, deadline, budgetNow);
-    for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
-  }
+  const recovery = options.selection ? { entries: 0, manifestEntries: 0, checks: 0, restored: 0, outcomes: [] }
+    : store.recoverTrash(now, deadline, budgetNow);
+  for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
   const visit = async (owner: Row) => {
     report.checked++;
     let bytes = owner.bytes;
