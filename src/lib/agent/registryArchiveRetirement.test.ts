@@ -140,7 +140,7 @@ test("sparse AUTOINCREMENT history counts retained rows and resumes across a pro
       const id=20_000_000+n*1_000_000, key=`mapped-${n}`;
       archive.run(id,key); mapping.run(key,id);
     }
-    archive.run(2_020_000_000,"eligible");
+    db.query("INSERT INTO registry_archive(id,collection,row_key,value_json,row_order) VALUES (2_020_000_000,'receipts','eligible','{}',1)").run();
   })();
   installArchiveRetirement(db);
   approveFixture(filename);
