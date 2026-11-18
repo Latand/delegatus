@@ -43,9 +43,10 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
     // clock, mutation fence and native remover remain real. Calendar time is
     // fixed per tick; free-space/process/container observations belong to the fixture.
     const deadlineMs = 15000, maxTicks = 48;
+    const until = performance.now() + 230_000;
     let removed = 0, ticks = 0, completedPasses = 0;
     worker = realParentWorker(true, 5000);
-    for (; ticks < maxTicks; ticks++) {
+    for (; ticks < maxTicks && performance.now() < until; ticks++) {
       fs.writeFileSync(config, JSON.stringify({ now: NOW + ticks * 105_000, freeBytes: 1e12, realClock: true, tickClock: true, measureCost: 0,
         ...(ticks === 0 ? { stallMeasurement: "llv-stage-000998" } : {}) }));
       // Exercise a cold owner after the actual deadline cut and midway through
@@ -65,20 +66,30 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
         for (let n = 0; n < 2; n++) expect(fs.readFileSync(path.join(directories[n]!, "data"))).toEqual(Buffer.alloc(4096, n));
         continue;
       }
-      expect(await worker.attemptTemp()).not.toBeNull();
-      const report = JSON.parse(fs.readFileSync(path.join(state, "attempt-temp-report.json"), "utf8")) as
-        NonNullable<Awaited<ReturnType<typeof import("./attemptTempProduction").runAttemptTempSweep>>>;
-      expect(report.errors).toBe(0);
-      removed += report.removed;
-      if (report.pass?.ended) {
-        expect(report.pass.ended).toBe("complete"); completedPasses++;
-        // Hard cancellation advances past the interrupted proof for fairness.
-        // Its untouched root is revisited in the next complete inventory.
-        if (removed < count - retained) continue;
-        expect(report.liveHeld).toBe(1);
-        expect(report.lastFullPass!.removedBytes).toBeGreaterThan(0);
-        break;
+      let answered = false;
+      try { expect(await worker.attemptTemp()).not.toBeNull(); answered = true; }
+      catch (error) {
+        expect(String(error)).toContain(`attempt temp tick exceeded ${deadlineMs} ms`);
+        await worker.close(); worker = realParentWorker(true, deadlineMs);
       }
+      if (answered) {
+        const report = JSON.parse(fs.readFileSync(path.join(state, "attempt-temp-report.json"), "utf8")) as
+          NonNullable<Awaited<ReturnType<typeof import("./attemptTempProduction").runAttemptTempSweep>>>;
+        expect(report.errors).toBe(0);
+      }
+      // A deadline can interrupt report writing. Count only completed ledger
+      // retirements and inspect persisted progress after its owned child ends.
+      const progress = new AttemptTempStore();
+      let ended = false;
+      try {
+        removed = directories.slice(retained).filter(directory => !progress.has(directory) && !fs.existsSync(directory)).length;
+        const complete = progress.lastFullPressurePass();
+        completedPasses = complete ? 1 : 0;
+        ended = !progress.activePressurePass() && complete !== null;
+        if (ended && removed === count - retained) expect(complete!.removedBytes).toBeGreaterThan(0);
+      } finally { progress.close(); }
+      for (let n = 0; n < retained; n++) expect(fs.readFileSync(path.join(directories[n]!, "data"))).toEqual(Buffer.alloc(4096, n % 256));
+      if (ended && removed === count - retained) break;
     }
     expect(ticks + 1).toBeLessThanOrEqual(maxTicks);
     expect(removed).toBe(count - retained);

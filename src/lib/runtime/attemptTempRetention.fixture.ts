@@ -131,6 +131,7 @@ try {
   const repository = path.join(path.dirname(process.argv[2]!), "budget-repository");
   const report = await sweepAttemptTemps(store, {
     now: () => now, runBudgetMs: budgetMode && process.argv[4] === "budget-run" ? 40_000 : undefined,
+    availableBytes: () => 1e12,
     ...(process.argv[4] === "production" ? { authority: (owner, inventory) => attemptTempAuthority(owner, inventory, () => now) } : {}),
     maxRoots: process.argv[4] === "expired-pressure" ? 32 : process.argv[4] === "pressure" ? 4 : budgetMode ? 2 : process.argv.includes("--default-budget") ? undefined : 1,
     capBytes: process.argv[4] === "expired-pressure" || process.argv[4] === "pressure" || budgetMode ? 0 : undefined,
