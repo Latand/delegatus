@@ -252,6 +252,7 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
 // Termination can retain a retired signal domain, and a failed same-path
 // resume can retain its event cursor without a domain. Neither released
 // record represents custody once the process, scope and claims are cleared.
+// A failed resume can still have a recorded process exit to reconcile.
 // A new name installs the revised predicate alongside any older reader's index.
 const nativeCallerHostIndex = "registry_caller_native_host_evidence_v2";
 const nativeCallerHost = `collection='entries'
@@ -264,7 +265,10 @@ const nativeCallerHost = `collection='entries'
         AND json_type(value_json,'$.structuredHost.signalDomain.retired')='true')
       OR (json_extract(value_json,'$.structuredHost.signalDomain') IS NULL
         AND json_type(value_json,'$.structuredHost.eventCursor') IN ('integer','real')
-        AND json_extract(value_json,'$.structuredHost.eventCursor')>0)
+        AND json_extract(value_json,'$.structuredHost.eventCursor')>0
+        AND json_extract(value_json,'$.structuredHost.exitProcess') IS NULL
+        AND json_extract(value_json,'$.hostExitProcess') IS NULL
+        AND COALESCE(json_array_length(value_json,'$.pendingHostExits'),0)=0)
     )
     AND json_extract(value_json,'$.host') IS NULL
     AND json_extract(value_json,'$.structuredHost.process') IS NULL

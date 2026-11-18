@@ -407,6 +407,21 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
           claim.run(unrelated, null, null, rowKey);
           expect(resolveNativeCaller(sources)).toEqual(admitted);
         }
+        const keepExit = db.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.artifactPath',?,?,json(?))
+          WHERE collection='entries' AND row_key=?`);
+        const clearExit = db.query(`UPDATE registry_rows SET value_json=json_remove(json_set(value_json,'$.artifactPath',?),?)
+          WHERE collection='entries' AND row_key=?`);
+        const exitProcess = { pid: 42, startIdentity: "42:original", bootEpoch: "boot-fixture" };
+        for (const [field, value] of [
+          ["$.structuredHost.exitProcess", exitProcess],
+          ["$.hostExitProcess", exitProcess],
+          ["$.pendingHostExits", [{ process: exitProcess, launchId: null }]],
+        ] as const) {
+          keepExit.run(alias, field, JSON.stringify(value), releasedResumeKey);
+          expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-hosted" });
+          clearExit.run(unrelated, field, releasedResumeKey);
+          expect(resolveNativeCaller(sources)).toEqual(admitted);
+        }
         fs.unlinkSync(alias);
       }
 
