@@ -220,3 +220,11 @@ export function testFile(h: Harness, name: string, body: string): string {
 export const privateValue = () => `pv${randomBytes(9).toString("hex")}`;
 
 export const withoutRunnerLines = (text: string) => text.split("\n").filter(line => !line.startsWith("gate-runner: ")).join("\n");
+
+/** Compare command output across admissions with different queue timings. */
+export const normalizeRunnerOutput = (text: string) => withoutRunnerLines(text)
+  .replace(/\[[\d.]+m?s\]/g, "[t]")
+  .replace(/^bun test v.*$/m, "")
+  .replace(/^gate-slot: Waiting for the CPU queue.*\n/gm, "")
+  .replace(/^gate-slot: delegatus-gate-.*pids\.peak=.*\n?/gm, "")
+  .replace(/^gate-slot: (?:waiting for CPU admission queue SQLite lock \(deadline \d+ ms\)|CPU admission queue lock acquired after \d+ ms)\r?$\n?/gm, "");

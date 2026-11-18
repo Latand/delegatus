@@ -3,7 +3,27 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { makeHarness } from "./harness.fixture";
+import { makeHarness, normalizeRunnerOutput } from "./harness.fixture";
+import { admissionLockWait } from "../cpu-admission-lock";
+
+test("runner parity ignores queue timings emitted by admission and preserves its failure", async () => {
+  for (const extra of [0, 37]) {
+    let now = 0, calls = 0;
+    const lines: string[] = [];
+    await admissionLockWait(1000, line => lines.push(line), {
+      now: () => now, sleep: async ms => { now += ms + extra; },
+    })(() => { if (calls++ === 0) throw Object.assign(new Error("fixture lock"), { code: "SQLITE_BUSY" }); return "ok"; });
+    expect(lines).toHaveLength(2);
+    expect(normalizeRunnerOutput(lines.join("\n") + "\napplication output\n")).toBe("application output\n");
+  }
+  let now = 0;
+  const lines: string[] = [];
+  const failure = await admissionLockWait(50, line => lines.push(line), {
+    now: () => now, sleep: async ms => { now += ms; },
+  })<never>(() => { throw Object.assign(new Error("fixture lock"), { code: "SQLITE_LOCKED" }); }).catch(error => error as Error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(normalizeRunnerOutput(lines.join("\n") + "\n" + failure.message + "\n")).toBe(failure.message + "\n");
+});
 
 test("SSH double records and refuses arbitrary shell text, including metacharacters around a known verb", () => {
   const h = makeHarness();
