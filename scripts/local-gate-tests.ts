@@ -357,6 +357,10 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
     env.NO_COLOR = "1"; env.FORCE_COLOR = "0";
     const report = path.join(privateRoot, "junit.xml"), log = path.join(privateRoot, "output.log");
+    // A fixture can put this sandbox below the head checkout. Normalize its
+    // exact allocation before checkout replacement would hide that prefix on
+    // only one side; preserve the path within it and the actual error cause.
+    const sandboxDiagnostic = (value: string) => value.split(privateRoot).join("<sandbox>");
     const fd = openSync(log, "w");
     let result: Bun.Subprocess;
     let exitCode: number;
@@ -375,7 +379,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     // The owned runner ends the service cgroup. A group number after the root
     // exits is neither a bound handle nor proof against PID reuse.
     try {
-      const output = readFileSync(log, "utf8");
+      const output = sandboxDiagnostic(readFileSync(log, "utf8"));
       survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
       const task = gateTaskDiagnostics(output);
       taskPeak = task.peak;
@@ -404,7 +408,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
         if (message === "runner did not finish (124)") throw new BudgetExhausted(detail);
         throw new Error(detail);
       }
-      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });
+      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${sandboxDiagnostic(message).split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2
