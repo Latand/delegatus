@@ -1,10 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import * as nativeFs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { outputFingerprint } from "./outputFingerprint";
+import { outputFingerprint, withOutputMutationGuard } from "./outputFingerprint";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -146,6 +147,46 @@ test("every last-child-close mutation rejects without returning a digest", async
   console.log(`last-child-close: ${outcomes.filter(Boolean).length}/${outcomes.length} rejected under Bun ${Bun.version}`);
   expect(outcomes).toEqual(Array(40).fill(true));
 }, 120_000);
+
+test("the observation boundary waits for native event consumption before accepting a proof", async () => {
+  const root = fixture(), original = fs.watch;
+  const deliveries: Array<() => void> = [];
+  let observed!: () => void, settled = false, deliver = false;
+  const notification = new Promise<void>(resolve => { observed = resolve; });
+  const intercept = spyOn(nativeFs, "watch").mockImplementation(((path: fs.PathLike, options: fs.WatchOptionsWithStringEncoding, listener: fs.WatchListener<string>) => original(path, options, (event, filename) => {
+    if (deliver) { listener(event, filename); return; }
+    deliveries.push(() => listener(event, filename));
+    observed();
+  })) as typeof fs.watch);
+  try {
+    const proof = withOutputMutationGuard(root, ["node_modules/"], undefined, async () => "proof");
+    void proof.then(() => { settled = true; }, () => { settled = true; });
+    await notification;
+    // A complete loop turn without native callback delivery cannot certify a
+    // proof. Release the actual notifications only after checking that fence.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(settled).toBe(false);
+    deliver = true;
+    while (deliveries.length) deliveries.shift()!();
+    expect(await proof).toBe("proof");
+    expect(fs.readdirSync(root).filter(name => name.startsWith(".delegatus-inventory-"))).toEqual([]);
+  } finally { deliver = true; while (deliveries.length) deliveries.shift()!(); intercept.mockRestore(); }
+});
+
+test("cancellation while native notifications are withheld revokes the proof and removes its marker", async () => {
+  const root = fixture(), original = fs.watch, controller = new AbortController();
+  let observed!: () => void;
+  const notification = new Promise<void>(resolve => { observed = resolve; });
+  const intercept = spyOn(nativeFs, "watch").mockImplementation(((path: fs.PathLike, options: fs.WatchOptionsWithStringEncoding) => original(path, options, () => observed())) as typeof fs.watch);
+  try {
+    const proof = withOutputMutationGuard(root, ["node_modules/"], controller.signal, async () => "proof");
+    const outcome = proof.catch(error => error);
+    await notification;
+    controller.abort();
+    expect(String(await outcome)).toContain("cancelled");
+    expect(fs.readdirSync(root).filter(name => name.startsWith(".delegatus-inventory-"))).toEqual([]);
+  } finally { intercept.mockRestore(); }
+});
 
 test.skipIf(process.platform === "win32")("refuses an unsupported FIFO without opening it", async () => {
   const root = fixture();

@@ -134,64 +134,70 @@ async function withGeneratedOutputs(dir: string, sha: string, work: () => Promis
   const identity = await releaseIdentity(dir, checkout, runGit);
   signal.throwIfAborted();
   if (identity.sha !== sha) throw new Error("Release output revision does not match the target");
-  try { return await work(); }
-  finally {
+  let result: number | null = null;
+  let workFailure: { error: unknown } | undefined;
+  try { result = await work(); }
+  catch (error) { workFailure = { error }; }
+  // Record partial outputs even on failure, but only successful work grants a
+  // continuation. In particular a failed ready-marker write cannot publish.
+  const continuation = !workFailure && (result === 0 || result === null) ? afterRecord : undefined;
+  signal.throwIfAborted();
+  const identityAfterWork = await releaseIdentity(dir, checkout, runGit);
+  signal.throwIfAborted();
+  if (JSON.stringify(identityAfterWork) !== JSON.stringify(identity))
+    throw new Error("Release identity changed while generating outputs");
+  // Failed commands can leave useful partial outputs too. A later process
+  // accepts exactly this observed inventory, never everything under a name.
+  const status = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
+  if (status.code) throw new Error("Cannot record generated release outputs");
+  const outputs: Record<string, string> = {};
+  for (const entry of classifyStatus(status.stdout, true).ignored) if (GENERATED_OUTPUTS.has(entry)) outputs[entry] = await outputFingerprint(dir, entry, signal);
+  signal.throwIfAborted();
+  const identityAfterInventory = await releaseIdentity(dir, checkout, runGit);
+  signal.throwIfAborted();
+  if (JSON.stringify(identityAfterInventory) !== JSON.stringify(identity))
+    throw new Error("Release identity changed while inventorying outputs");
+  signal.throwIfAborted();
+  const temporary = `${identity.marker}.${process.pid}.tmp`;
+  const receipt = JSON.stringify({ version: 1, ...identity, marker: undefined, outputs });
+  let renamed = false;
+  try {
+    await fs.writeFile(temporary, receipt, { mode: 0o600, flag: "wx" });
     signal.throwIfAborted();
-    const identityAfterWork = await releaseIdentity(dir, checkout, runGit);
+    const identityBeforeReceipt = await releaseIdentity(dir, checkout, runGit);
     signal.throwIfAborted();
-    if (JSON.stringify(identityAfterWork) !== JSON.stringify(identity))
-      throw new Error("Release identity changed while generating outputs");
-    // Failed commands can leave useful partial outputs too. A later process
-    // accepts exactly this observed inventory, never everything under a name.
-    const status = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
-    if (status.code) throw new Error("Cannot record generated release outputs");
-    const outputs: Record<string, string> = {};
-    for (const entry of classifyStatus(status.stdout, true).ignored) if (GENERATED_OUTPUTS.has(entry)) outputs[entry] = await outputFingerprint(dir, entry, signal);
+    if (JSON.stringify(identityBeforeReceipt) !== JSON.stringify(identity))
+      throw new Error("Release identity changed before recording outputs");
     signal.throwIfAborted();
-    const identityAfterInventory = await releaseIdentity(dir, checkout, runGit);
+    await fs.rename(temporary, identity.marker);
+    renamed = true;
     signal.throwIfAborted();
-    if (JSON.stringify(identityAfterInventory) !== JSON.stringify(identity))
-      throw new Error("Release identity changed while inventorying outputs");
-    signal.throwIfAborted();
-    const temporary = `${identity.marker}.${process.pid}.tmp`;
-    const receipt = JSON.stringify({ version: 1, ...identity, marker: undefined, outputs });
-    let renamed = false;
-    try {
-      await fs.writeFile(temporary, receipt, { mode: 0o600, flag: "wx" });
-      signal.throwIfAborted();
-      const identityBeforeReceipt = await releaseIdentity(dir, checkout, runGit);
-      signal.throwIfAborted();
-      if (JSON.stringify(identityBeforeReceipt) !== JSON.stringify(identity))
-        throw new Error("Release identity changed before recording outputs");
-      signal.throwIfAborted();
-      await fs.rename(temporary, identity.marker);
-      renamed = true;
-      signal.throwIfAborted();
-      await withOutputMutationGuard(dir, Object.keys(outputs), signal, async assertStable => {
-        for (let pass = 0; pass < 2; pass++) {
-          for (const [entry, fingerprint] of Object.entries(outputs)) {
-            if (fingerprint !== await outputFingerprint(dir, entry, signal)) throw new Error("Release output changed before provenance was consumed");
-            signal.throwIfAborted();
-          }
+    await withOutputMutationGuard(dir, Object.keys(outputs), signal, async assertStable => {
+      for (let pass = 0; pass < 2; pass++) {
+        for (const [entry, fingerprint] of Object.entries(outputs)) {
+          if (fingerprint !== await outputFingerprint(dir, entry, signal)) throw new Error("Release output changed before provenance was consumed");
+          signal.throwIfAborted();
         }
-        signal.throwIfAborted();
-        const identityAfterReceipt = await releaseIdentity(dir, checkout, runGit);
-        signal.throwIfAborted();
-        if (JSON.stringify(identityAfterReceipt) !== JSON.stringify(identity))
-          throw new Error("Release identity changed after recording outputs");
-        if (afterRecord) await afterRecord(assertStable);
-      }, !afterRecord);
-    } catch (error) {
-      if (renamed) {
-        try {
-          const current = await fs.readFile(identity.marker, "utf8");
-          const stat = await fs.lstat(identity.marker);
-          if (current === receipt && stat.isFile() && stat.nlink === 1) await fs.rm(identity.marker);
-        } catch { /* A substituted or inaccessible receipt is left untouched. */ }
       }
-      throw error;
-    } finally { await fs.rm(temporary, { force: true }); }
-  }
+      signal.throwIfAborted();
+      const identityAfterReceipt = await releaseIdentity(dir, checkout, runGit);
+      signal.throwIfAborted();
+      if (JSON.stringify(identityAfterReceipt) !== JSON.stringify(identity))
+        throw new Error("Release identity changed after recording outputs");
+      if (continuation) await continuation(assertStable);
+    }, !continuation);
+  } catch (error) {
+    if (renamed) {
+      try {
+        const current = await fs.readFile(identity.marker, "utf8");
+        const stat = await fs.lstat(identity.marker);
+        if (current === receipt && stat.isFile() && stat.nlink === 1) await fs.rm(identity.marker);
+      } catch { /* A substituted or inaccessible receipt is left untouched. */ }
+    }
+    throw error;
+  } finally { await fs.rm(temporary, { force: true }); }
+  if (workFailure) throw workFailure.error;
+  return result;
 }
 
 export function builtRevision(dir: string): string | null {
@@ -685,11 +691,10 @@ export function realPorts(publish: (release: Release, assertReady?: () => void |
       abortRequested = false;
       const controller = new AbortController();
       const inventory = { controller, done: Promise.resolve<unknown>(null), publishing: false };
-      const done = withGeneratedOutputs(dir, sha, work, controller.signal, checkout, async assertStable => {
-        if (!afterRecord) return;
+      const done = withGeneratedOutputs(dir, sha, work, controller.signal, checkout, afterRecord ? async assertStable => {
         inventory.publishing = true;
         await afterRecord(assertStable);
-      });
+      } : undefined);
       inventory.done = done;
       generated = inventory;
       return done.finally(() => { if (generated === inventory) generated = null; });

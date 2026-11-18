@@ -1,6 +1,7 @@
-import { dirname, resolve as absolutePath } from "node:path";
+import { dirname, relative, resolve as absolutePath, sep } from "node:path";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { lstatSync, watch, type FSWatcher } from "node:fs";
+import { rmSync, watch, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { recordHelperGroup } from "@/lib/helperLease";
 
 /** Embedded so checkout and bundled servers execute exactly the same worker,
@@ -48,32 +49,58 @@ export async function withOutputMutationGuard<T>(dir: string, outputs: string[],
   signal?.throwIfAborted();
   let changed = false;
   let watcherFailure: Error | undefined;
-  const watchers: FSWatcher[] = [];
-  const changedByEvent = () => { changed = true; };
-  try {
-    for (const output of outputs) {
-      const path = absolutePath(dir, output);
-      const stat = lstatSync(path);
-      const target = stat.isDirectory() ? path : dirname(path);
-      const watcher = watch(target, { recursive: stat.isDirectory() });
-      watcher.on("change", changedByEvent);
-      watcher.on("error", error => { watcherFailure ??= error; });
-      watchers.push(watcher);
+  const roots = outputs.map(output => relative(dir, absolutePath(dir, output)));
+  // A sibling of the outputs supplies an event on the SAME recursive watch.
+  // Seeing its create and remove acknowledges consumption of the native event
+  // stream after the preceding work. A timer alone cannot supply that proof.
+  const marker = `.delegatus-inventory-${randomUUID()}`;
+  const markerPath = absolutePath(dir, marker);
+  let pending: { resolve(): void; reject(error: Error): void } | undefined;
+  const watcher = watch(dir, { recursive: true }, (_event, filename) => {
+    const entry = filename?.toString();
+    if (entry === marker) { pending?.resolve(); return; }
+    if (!entry || roots.some(root => entry === root || entry.startsWith(root + sep) || root.startsWith(entry + sep))) changed = true;
+  });
+  const failed = (error: Error) => { watcherFailure ??= error; pending?.reject(error); };
+  watcher.on("error", failed);
+  watcher.on("close", () => failed(new Error("Release output mutation watch closed")));
+  const acknowledge = async (effect: () => void) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const abort = () => pending?.reject(new Error("Release output mutation guard cancelled"));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        pending = { resolve, reject };
+        timer = setTimeout(() => reject(new Error("Release output mutation acknowledgement timed out")), OUTPUT_INVENTORY_TIMEOUT_MS);
+        signal?.addEventListener("abort", abort, { once: true });
+        signal?.throwIfAborted();
+        if (watcherFailure) throw watcherFailure;
+        effect();
+      });
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      pending = undefined;
     }
-    const assertStable = async () => {
-      signal?.throwIfAborted();
-      // fs.watch delivers native notifications on the event loop. Let events
-      // queued by the preceding await run before granting the proof.
-      await new Promise<void>(resolve => setImmediate(resolve));
+  };
+  let markerOwned = false;
+  try {
+    const check = () => {
       signal?.throwIfAborted();
       if (watcherFailure) throw new Error("Release output mutation guard failed", { cause: watcherFailure });
       if (changed) throw new Error("Release output changed while its proof was being consumed");
+    };
+    const assertStable = async () => {
+      check();
+      await acknowledge(() => { writeFileSync(markerPath, "", { flag: "wx", mode: 0o600 }); markerOwned = true; });
+      await acknowledge(() => { rmSync(markerPath); markerOwned = false; });
+      check();
     };
     const value = await consume(assertStable);
     if (verifyAfterConsume) await assertStable();
     return value;
   } finally {
-    for (const watcher of watchers) watcher.close();
+    watcher.close();
+    if (markerOwned) rmSync(markerPath, { force: true });
   }
 }
 
