@@ -284,19 +284,19 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
     || path.basename(path.dirname(link.file)) !== ".bin" || typeof link.target !== "string"
     || !link.target || path.isAbsolute(link.target))) throw new Error("invalid dependency CLI link receipt");
 
-  let reseal = (root.mode & 0o222n) !== 0n;
+  let reseal = (Number(root.mode) & 0o222) !== 0;
   const writable: { filename: string; entry: BigIntStats }[] = [];
   const parents = async (filename: string) => {
     for (let parent = path.dirname(filename); parent !== modules; parent = path.dirname(parent)) {
       const entry = await reads.read(parent);
-      if (entry?.isDirectory() && (entry.mode & 0o222n) !== 0n
+      if (entry?.isDirectory() && (Number(entry.mode) & 0o222) !== 0
         && !(path.basename(parent) === ".bin" && path.basename(path.dirname(parent)) === "node_modules")) reseal = true;
     }
   };
   await validateRequiredDependencies(modules, plan.required, check, async filename => {
     await parents(filename);
     const entry = await reads.read(filename);
-    if (entry?.isFile() && (entry.mode & 0o222n) !== 0n) reseal = true;
+    if (entry?.isFile() && (Number(entry.mode) & 0o222) !== 0) reseal = true;
   });
   await inBatches(executables, async file => {
     check();
@@ -304,8 +304,8 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
     await parents(filename);
     const entry = await reads.read(filename);
     if (!(await fs.realpath(filename)).startsWith(modules + path.sep)) throw new Error("dependency executable leaves the installation");
-    if (!entry?.isFile() || entry.nlink !== 1n) throw new Error("dependency executable changed during preparation");
-    if ((entry.mode & 0o222n) !== 0n) writable.push({ filename, entry });
+    if (!entry?.isFile() || Number(entry.nlink) !== 1) throw new Error("dependency executable changed during preparation");
+    if ((Number(entry.mode) & 0o222) !== 0) writable.push({ filename, entry });
   });
   await inBatches(cliLinks as CliLink[], async link => {
     check();
@@ -595,7 +595,7 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
           for (const { filename, entry } of checked.writable) {
             assertWriter();
             if (!sameVersion(entry, entryNow(filename))) throw new Error("dependency executable changed before repair");
-            chmodSync(filename, Number(entry.mode & 0o555n));
+            chmodSync(filename, Number(entry.mode) & 0o555);
           }
         }
         enter("validation", "repaired graph seal");
@@ -624,7 +624,7 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
         assertWriter();
         await fs.symlink(modules, link, process.platform === "win32" ? "junction" : "dir");
         const staged = entryNow(link);
-        if (!staged?.isSymbolicLink() || staged.nlink !== 1n || !linksDirectlyTo(link, modules)
+        if (!staged?.isSymbolicLink() || Number(staged.nlink) !== 1 || !linksDirectlyTo(link, modules)
           || await dependencyTarget(link) !== modules) throw new Error("staged dependency link is invalid");
         const destination = readlinkSync(link);
         if (previous && !previous.isSymbolicLink()) {
