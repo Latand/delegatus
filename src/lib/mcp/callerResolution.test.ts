@@ -45,10 +45,11 @@ function fixture(history: number) {
       put.run("entries", `history:${n}`, JSON.stringify({ ...entry, artifactPath: `/history/${n}`, structuredHost: null }), n);
     }
   })(); db.close();
-  let decoded = 0;
+  let decoded = 0, read = 0;
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename,
+    onSqliteRowPayloadRead: (_collection, count) => { read += count; },
     onSqliteRowPayloadParse: (_collection, count) => { decoded += count; } }); registries.push(registry);
-  return { registry, sqliteFilename, reset: () => { decoded = 0; }, count: () => decoded };
+  return { registry, sqliteFilename, reset: () => { decoded = 0; read = 0; }, count: () => decoded, reads: () => read };
 }
 
 test("one caller resolution serves a mutating tool's policy and binding", async () => {
@@ -305,6 +306,7 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
       const put = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('conversations',?,?,?)");
       put.run(nativeId, JSON.stringify(row), history + 1);
       let retiredKey: string | undefined;
+      let releasedResumeKey: string | undefined;
       if (history > 256) {
         const key = { engine: "codex" as const, sessionId: "retained-domain-0" };
         const identity = (pid: number) => ({ pid, startIdentity: `${pid}:fixture`, bootEpoch: "fixture-boot" });
@@ -324,11 +326,39 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
           "SELECT value_json FROM registry_rows WHERE collection='entries' AND row_key=?").get(retiredKey)!;
         const retired = JSON.parse(stored.value_json);
         expect(retired).toMatchObject({ status: "dead", structuredHost: { endpoint: "stdio:released", process: null, signalDomain: { retired: true } } });
+
+        const resumeSession = ["00000000", "0000", "4000", "8000", "000000000002"].join("-");
+        const resumePath = path.join(home, `${resumeSession}.jsonl`);
+        const resume = f.registry.ensureConversation("codex", resumePath, "fixture");
+        const resumeKey = { engine: "codex" as const, sessionId: resume.generations[0]!.id };
+        const spawn = f.registry.beginSpawnRequest({
+          engine: "codex", cwd: home, accountId: "fixture", transport: "structured", conversationId: resume.id,
+          purpose: "resume-successor", expectedArtifactPath: resumePath, launchProfile: { cwd: home, title: "Fixture resume" },
+        });
+        if (spawn.kind !== "created") throw new Error("fixture did not reserve the resume");
+        const staged = f.registry.stageStructuredSpawn(spawn.receipt.launchId, {
+          key: resumeKey, artifactPath: resumePath, cwd: home, accountId: "fixture", status: "idle",
+          host: null, claimEpoch: 1, claimOwner: null, pendingAction: "spawn",
+          structuredHost: { ...structuredHostFixture(null, "codex-app-server"), eventCursor: 1 },
+        });
+        expect(staged.kind).toBe("settled");
+        expect(f.registry.failStructuredSpawn(spawn.receipt.launchId, "fixture resume failed", { announce: false }).claimed).toBe(true);
+        releasedResumeKey = `codex:${resumeKey.sessionId}`;
+        const released = JSON.parse(db.query<{ value_json: string }, [string]>(
+          "SELECT value_json FROM registry_rows WHERE collection='entries' AND row_key=?").get(releasedResumeKey)!.value_json);
+        expect(released).toMatchObject({ status: "dead", host: null, claimOwner: null, pendingAction: null,
+          structuredHost: { endpoint: "stdio:released", process: null, eventCursor: 1 } });
+        expect(released.structuredHost.signalDomain).toBeUndefined();
+
         const insert = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('entries',?,?,?)");
         db.transaction(() => {
           for (let n = 1; n <= 256; n++) {
             const sessionId = `retained-domain-${n}`;
             insert.run(`codex:${sessionId}`, JSON.stringify({ ...retired, key: { ...key, sessionId }, artifactPath: `/fixture/retired/${n}.jsonl` }), history + 1 + n);
+          }
+          for (let n = 1; n < 1024; n++) {
+            const sessionId = `released-resume-${n}`;
+            insert.run(`codex:${sessionId}`, JSON.stringify({ ...released, key: { ...resumeKey, sessionId }, artifactPath: `/fixture/resume/${n}.jsonl` }), history + 257 + n);
           }
         })();
       }
@@ -350,26 +380,33 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
       for (let run = 0; run < 2; run++) {
         f.reset(); realpaths = 0; checkedGenerations = 0;
         expect(resolveNativeCaller(sources)).toEqual(admitted);
-        expect(f.count()).toBeLessThanOrEqual(2);
+        expect(f.reads()).toBe(2);
         expect(realpaths).toBe(5);
         expect(checkedGenerations).toBe(3);
       }
-      if (retiredKey) {
-        expect(f.registry.archiveInactiveRows(2000)).toBeGreaterThanOrEqual(257);
-        const archived = db.query<{ count: number }, []>(
-          "SELECT COUNT(*) AS count FROM registry_cold WHERE collection='entries' AND row_key LIKE 'codex:retained-domain-%'").get();
-        expect(archived?.count).toBe(257);
-        realpaths = 0;
+      if (retiredKey && releasedResumeKey) {
+        expect(f.registry.archiveInactiveRows(4000)).toBeGreaterThanOrEqual(1281);
+        const archived = db.query<{ count: number }, [string]>(
+          "SELECT COUNT(*) AS count FROM registry_cold WHERE collection='entries' AND row_key LIKE ?");
+        expect(archived.get("codex:retained-domain-%")?.count).toBe(257);
+        expect(archived.get("codex:released-resume-%")?.count).toBe(1023);
+        expect(archived.get(releasedResumeKey)?.count).toBe(1);
+        f.reset(); realpaths = 0;
         expect(resolveNativeCaller(sources)).toEqual(admitted);
+        expect(f.reads()).toBe(2);
         expect(realpaths).toBe(5);
-        // A reopened claim puts even a historically retired row back in the
-        // cohort. This alias matches without sharing the recorded pathname.
+        // A new claim or pending spawn makes either released row relevant.
         fs.symlinkSync(nativePath, alias);
-        const claim = db.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.artifactPath',?,'$.claimOwner',?) WHERE collection='entries' AND row_key=?");
-        claim.run(alias, "fixture-replacement-claim", retiredKey);
-        expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-hosted" });
-        claim.run(unrelated, null, retiredKey);
-        expect(resolveNativeCaller(sources)).toEqual(admitted);
+        const claim = db.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.artifactPath',?,'$.claimOwner',?,'$.pendingAction',?)
+          WHERE collection='entries' AND row_key=?`);
+        for (const rowKey of [retiredKey, releasedResumeKey]) {
+          claim.run(alias, "fixture-replacement-claim", null, rowKey);
+          expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-hosted" });
+          claim.run(alias, null, "spawn", rowKey);
+          expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-hosted" });
+          claim.run(unrelated, null, null, rowKey);
+          expect(resolveNativeCaller(sources)).toEqual(admitted);
+        }
         fs.unlinkSync(alias);
       }
 
