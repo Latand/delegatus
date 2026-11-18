@@ -191,19 +191,33 @@ Time saved by earlier stage reads is available to the serving checks. Replies
 that miss their cutoff expire and the worker's process group is stopped.
 The evidence budget for the whole observation is at most 68 minutes including
 the 20 waits. Preflight, stop and start jobs, verdict writes, and owner recovery
-have their own scope. An uninterruptible kernel wait during worker teardown
-holds the lock until the killed reader can be reaped and aborts observation.
+have their own scope. Worker launch is supervised from before exec, and each
+lane must send an explicit completion frame. A premature EOF records its exit
+code or signal on unresolved host rows. Teardown signals the worker group and
+reaps only until the sample cutoff; an overdue reap is recorded as
+`worker-cleanup-pending` and forces `needs_decision`, even when serving is
+healthy. Evidence children never inherit the installation lock. The sample
+owner keeps their process-group identities through the bounded cleanup attempt,
+then exits without an unlimited wait.
 
 A vanished protected host is reconciled with the stage's current attempt.
 Attempts come from the matching `stageId` entry in `pipeline.runs`; stage
 definitions in `pipeline.stages` carry no attempt history. Recovery requires
-complete targeted activity evidence and a live process. Terminal attempts are
-classified directly from their recorded state and error even when activity
-reads are unavailable.
+complete read-only census evidence for the matching conversation and a live
+process. It does not call `agent_activity`, which would write a durable tool
+receipt and refresh the lifecycle journal. The `get_pipeline` request omits
+`clientRequestId`, so the MCP server handles each call as a fresh, receipt-free
+read. Terminal attempts are classified
+directly from their recorded state and error even when census reads are
+unavailable. The sample owner also checks the named unit before its first
+sample and whenever service evidence is missing; this recovers an inactive
+unit even if the launcher record cannot be read. `recover_start` verifies the
+unit's active state and pending jobs before issuing a start, and only the
+installation-lock owner may call it.
 The outcome names preserved work, recovery, a fresh attempt that started,
 completed work, confirmed loss, or an unknown outcome. Each row retains its
 captured host, conversation and attempt. Unknown rows give the reason, such as
-a pending successor, incomplete targeted evidence, a refused transport, or an
+a pending successor, incomplete census evidence, a refused transport, or an
 expired read. A queued replacement alone cannot prove recovery. An unknown
 outcome requests a decision after the bounded reads if serving is healthy.
 A terminal host-loss error without a live replacement
