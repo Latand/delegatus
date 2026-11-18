@@ -3711,6 +3711,84 @@ test.each((["operator", "agent"] as const).flatMap(origin => (["running", "idle"
   journal.close();
 });
 
+test("stop lookup scopes every runtime RPC page and preserves legacy and current authorship", async () => {
+  const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
+  const dir = sandbox("scoped-stop-lookup");
+  const filename = path.join(dir, "events.sqlite");
+  const options = { structuredHosts: true, now: () => 1000 };
+  const conversationId = "conversation_scoped_stop";
+  const since = new Date(1000).toISOString();
+  new RuntimeJournal(filename, options).close();
+  const legacyIds = Array.from({ length: 101 }, (_, index) => `legacy-interrupt-${index}`);
+  // Old software wrote a separate receipt for each interrupt, even on one
+  // conversation. Opening the current journal materializes those boundaries.
+  const database = new Database(filename);
+  const insert = database.query("INSERT INTO operations(operation_id, conversation_id, idempotency_key, request_hash, request_json, receipt_json, event_seq) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  database.transaction(() => {
+    for (const [index, id] of legacyIds.entries()) {
+      for (const scope of [conversationId, "unrelated"]) {
+        const operationId = `${scope}-${id}`;
+        const request = { conversationId: scope, kind: "interrupt", idempotencyKey: operationId };
+        const receipt = { ...request, operationId, admittedAt: since, at: since, status: "interrupted" };
+        insert.run(operationId, scope, operationId, operationId, JSON.stringify(request), JSON.stringify(receipt),
+          2 * index + (scope === conversationId ? 2 : 1));
+      }
+    }
+  })();
+  database.close();
+
+  const socketPath = path.join(dir, "runtime.sock");
+  const journal = new RuntimeJournal(filename, options);
+  const server = serveRuntimeHost(socketPath, new RuntimeHost(journal, undefined, undefined, true));
+  const client = new UnixRuntimeHostClient(socketPath);
+  const effects = client.effectBatch.bind(client);
+  const batches: Array<{ scope?: string; after: number; sequences: number[] }> = [];
+  const traced: Pick<UnixRuntimeHostClient, "effectBatch" | "operationStatus"> = {
+    async effectBatch(kinds, after = 0, options) {
+      const rows = await effects(kinds, after, options);
+      batches.push({ scope: options?.conversationId, after, sequences: rows.map(row => row.eventSeq) });
+      return rows;
+    },
+    operationStatus: client.operationStatus.bind(client),
+  };
+  try {
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    const ignored = legacyIds.map(id => `${conversationId}-${id}`);
+    await expect(hasRuntimeSwitchKill(traced, conversationId, since, ignored.slice(0, -1), true)).rejects.toThrow("legacy stop authorship");
+    expect(batches.splice(0)).toEqual([
+      { scope: conversationId, after: 0, sequences: Array.from({ length: 100 }, (_, index) => 2 * index + 2) },
+      { scope: conversationId, after: 200, sequences: [202] },
+    ]);
+    expect(await hasRuntimeSwitchKill(traced, conversationId, since, ignored, true)).toBe(false);
+    expect(await hasRuntimeSwitchKill(traced, conversationId, new Date(1001).toISOString(), [], true)).toBe(false);
+    expect(await hasRuntimeSwitchKill(traced, "unrelated' OR 1=1 --", since, [], true)).toBe(false);
+    expect(batches.at(-1)).toEqual({ scope: "unrelated' OR 1=1 --", after: 0, sequences: [] });
+
+    const current = "conversation_current_stop";
+    const sessionKey = { engine: "codex" as const, sessionId: "current-stop" };
+    journal.append({ scope: runtimeScope("session", current), kind: "session-status", payload: {
+      conversationId: current, sessionKey, host: "hosted", turn: "running", activeTurnId: "stop-turn",
+    } });
+    await client.command({ kind: "interrupt", conversationId: current, operationId: "system-interrupt",
+      idempotencyKey: "system-interrupt", origin: { kind: "agent" } });
+    expect(await hasRuntimeSwitchKill(traced, current, since, [], true)).toBe(false);
+    await client.command({ kind: "kill", conversationId: current, sessionKey, operationId: "operator-kill",
+      idempotencyKey: "operator-kill", origin: { kind: "operator" } });
+    expect(await hasRuntimeSwitchKill(traced, current, since, [], true)).toBe(true);
+    expect(await hasRuntimeSwitchKill(traced, current, since, ["operator-kill"], true)).toBe(false);
+    expect(await hasRuntimeSwitchKill(traced, current, since)).toBe(false);
+    await client.transitionOperation("operator-kill", "delivering");
+    await client.transitionOperation("operator-kill", "delivered");
+    expect(await hasRuntimeSwitchKill(traced, current, since)).toBe(true);
+    expect(await hasRuntimeSwitchKill(traced, current, new Date(1001).toISOString())).toBe(false);
+    expect(batches.slice(-2).map(batch => batch.scope)).toEqual([current, current]);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a base-release interrupt keeps its cancellation fence after upgrade and compaction", async () => {
   const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
   const filename = path.join(sandbox("legacy-stop-upgrade"), "events.sqlite");
