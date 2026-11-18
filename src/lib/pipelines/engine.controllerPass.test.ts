@@ -1591,12 +1591,14 @@ test.each(["stop", "withdrawal", "close-withdrawal"] as const)(
   mutation => auditIsolatedColdProvisioning("direct", "pinned", 1, { mutation }), 30_000);
 
 test.each([
-  ["stop", false, false], ["withdrawal", false, false], ["stop", true, false],
-  ["withdrawal", true, false], ["withdrawal", true, true],
+  ["stop", false, "none"], ["withdrawal", false, "none"], ["stop", true, "none"],
+  ["withdrawal", true, "none"], ["withdrawal", true, "stale"], ["withdrawal", false, "legacy"],
+  ["withdrawal", false, "unclassified"],
 ] as const)(
-  "a fresh process reconciles an owned %s after its sender exits, admission still pending %s, stale refusal %s",
-  (mutation, holdBeforeAdmission, staleRefusal) => withControllerAuditState(async () => {
-    const fixture = await ownedStageControl(mutation, "2026-11-18T12:00:00.000Z", holdBeforeAdmission);
+  "a fresh process reconciles an owned %s after its sender exits, admission still pending %s, refusal %s",
+  (mutation, holdBeforeAdmission, refusal) => withControllerAuditState(async () => {
+    const withdrawalRefusal = refusal === "legacy" || refusal === "unclassified" ? refusal : undefined;
+    const fixture = await ownedStageControl(mutation, "2026-11-18T12:00:00.000Z", holdBeforeAdmission, { withdrawalRefusal });
     const target = {
       conversationId: fixture.conversationId, launchId: fixture.launchId, agentPath: fixture.transcriptPath,
       stageId: "build", attempt: 1, paneId: null,
@@ -1636,11 +1638,36 @@ test.each([
       }
     };
     try {
-      const held = holdBeforeAdmission ? fixture.mutationEntered : fixture.mutationAccepted;
+      const held = holdBeforeAdmission || withdrawalRefusal ? fixture.mutationEntered : fixture.mutationAccepted;
       await until(Promise.race([held, incumbent.exited.then(async code => {
         throw new Error(`owned mutation sender exited before it reached the held phase (${code}): ${await initialError} ${await initialOutput}`);
       })]), 6_000);
-      if (staleRefusal) {
+      if (withdrawalRefusal) {
+        expect(await incumbent.exited).toBe(0);
+        expect(await initialOutput).toContain("requires a session-status event and its observed revision");
+        expect(fixture.dispatches).toEqual(["append-session-fenced"]);
+        expect(fixture.withdrawals).toHaveLength(0);
+        const initialRevision = fixture.journal.readSession({ conversationId: fixture.conversationId })?.revision;
+        expect(initialRevision).toBeDefined();
+        fixture.upgradeRuntime();
+        fixture.release();
+        if (withdrawalRefusal === "unclassified") {
+          const unknown = { outcome: "unknown", reason: expect.stringContaining("awaits a confirmed receipt") };
+          expect(await observe()).toMatchObject(unknown);
+          expect(await observe()).toMatchObject(unknown);
+          expect(fixture.dispatches).toEqual(["append-session-fenced"]);
+          expect(fixture.withdrawals).toHaveLength(0);
+          return;
+        }
+        expect(await observe()).toEqual({ outcome: "confirmed" });
+        expect(await observe()).toEqual({ outcome: "confirmed" });
+        expect(fixture.dispatches).toEqual(["append-session-fenced", "append-session-fenced"]);
+        expect(fixture.withdrawalKeys).toEqual([expect.any(String), fixture.withdrawalKeys[0]]);
+        expect(fixture.withdrawals).toHaveLength(1);
+        expect(fixture.withdrawals[0]?.expectedSessionRevision).toBe(initialRevision!);
+        return;
+      }
+      if (refusal === "stale") {
         fixture.publish("running", "fixture-writer-two");
         fixture.release();
         expect(await incumbent.exited).toBe(0);

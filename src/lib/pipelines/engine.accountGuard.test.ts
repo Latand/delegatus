@@ -235,6 +235,48 @@ test("a failed continuation withdrawal still stops usage and holds replacement u
   expect(f.current().runs[0]!.attempts[1]!.accountId).toBe("account-b");
 });
 
+test("account guard fences and stops a denied host before a multi-read withdrawal uses the lane deadline", async () => {
+  const { ownedStageControl } = await import("./fixtures/ownedStageControl");
+  const { claimWithdrawal } = await import("./stageControlCustody");
+  const { defaultPipelinePorts } = await import("./engine");
+  const { tickPipelinesController } = await import("./controllerPass");
+  const { settlePipelineStopReadLanes } = await import("./controllerStopRead");
+  const f = await fixture();
+  const requestedAt = f.h.ports.now();
+  f.h.ports.now = () => requestedAt;
+  const control = await ownedStageControl("withdrawal", requestedAt, false, { readDelayMs: 8_000 });
+  try {
+    f.allow(["account-b"]);
+    const lane = f.current();
+    const active = lane.runs[0]!.attempts[0]!;
+    Object.assign(active, { conversationId: control.conversationId, launchId: control.launchId, agentPath: control.transcriptPath,
+      suspension: { reason: "account", detail: "fixture account is now disallowed", requestedAt } });
+    savePipelines([lane]);
+    const previous = control.journal.readSession({ conversationId: control.conversationId })!;
+    const owner = `stage-continuation-withdrawal:${lane.id}:build:${active.n}:${requestedAt}`;
+    expect((await claimWithdrawal(owner, { conversationId: control.conversationId, sessionKey: control.key,
+      artifactPath: control.transcriptPath, revision: previous.revision, writerClaim: previous.writerClaim ?? null })).acquired).toBe(true);
+    control.publish("idle", "fixture-writer-two");
+    f.h.durableTurns.set(control.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(requestedAt) });
+    f.h.ports.invalidateProviderContinuation = defaultPipelinePorts().invalidateProviderContinuation;
+    const stops: Array<{ operationId?: string; reads: number }> = [];
+    f.h.ports.stopStageAgent = async (target, options) => {
+      expect(target).toMatchObject({ conversationId: control.conversationId, launchId: control.launchId, agentPath: control.transcriptPath });
+      expect(options?.automatic).toBe(true);
+      stops.push({ operationId: options?.operationId, reads: control.reads.length });
+      return { outcome: "stopped" };
+    };
+    await tickPipelinesController([], f.h.ports);
+    await settlePipelineStopReadLanes();
+    const attempts = f.current().runs[0]!.attempts;
+    expect(control.reads).toEqual(["producer-cursor", "session-read"]);
+    expect(control.withdrawals).toEqual([]);
+    expect(stops).toEqual([{ operationId: `stage-suspend-${lane.id}-build-1-${Date.parse(requestedAt)}-0`, reads: 0 }]);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.suspension?.stoppedAt).toBe(requestedAt);
+  } finally { await control.dispose(); }
+}, 28_000);
+
 test("an absent registry host still requires the recorded pane to stop", async () => {
   const f = await fixture();
   f.allow(["account-b"]);

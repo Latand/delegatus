@@ -2404,6 +2404,11 @@ export class SqliteStateCollection<T> {
     });
   }
 
+  async consumePipelineControlOwnership(key: string, binding: string): Promise<boolean> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db =>
+      db.query("DELETE FROM pipeline_control_ownership WHERE control_key=? AND binding_json=?").run(key, binding).changes === 1);
+  }
+
   async recordPipelineTickSelection(work: PipelineTickWork, now: number): Promise<void> {
     await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
       db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);

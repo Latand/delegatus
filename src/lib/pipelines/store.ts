@@ -230,6 +230,10 @@ export async function claimPipelineControlOwnership(key: string, binding: string
   return (await waitForStateLock("pipelines.control-ownership", pipelineStore)).claimPipelineControlOwnership(key, binding, ownerKey, replaces);
 }
 
+export async function consumePipelineControlOwnership(key: string, binding: string) {
+  return (await waitForStateLock("pipelines.control-ownership", pipelineStore)).consumePipelineControlOwnership(key, binding);
+}
+
 export async function recordPipelineControllerSelection(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork, now: number) {
   return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).recordPipelineTickSelection(work, now);
 }

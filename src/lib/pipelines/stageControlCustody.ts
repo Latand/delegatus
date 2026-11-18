@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { RuntimeOperationResult } from "@/lib/runtime/contracts";
-import { claimPipelineControlOwnership, pipelineControlOwnership } from "./store";
+import { claimPipelineControlOwnership, consumePipelineControlOwnership, pipelineControlOwnership } from "./store";
 import type { PipelineStageHostRef } from "./types";
 
 const idleStopBinding = z.object({
@@ -79,4 +79,22 @@ export async function claimWithdrawal(key: string, identity: Omit<WithdrawalBind
   const record = await claimPipelineControlOwnership(key, JSON.stringify(binding), "pipeline-withdrawal-fence-" + authority,
     replaces && JSON.stringify(replaces));
   return { acquired: record.acquired, binding: withdrawalBinding.parse(JSON.parse(record.binding)) };
+}
+
+function withdrawalRefusalKey(binding: WithdrawalBinding): string {
+  return "pipeline-withdrawal-refusal-" + digest(binding.producerPrefix);
+}
+
+/** An explicit pre-admission refusal permits one retry of the same event.
+ * Consume it before dispatch so interrupted recovery stays in custody. */
+export async function recordWithdrawalRefusal(binding: WithdrawalBinding, reason: string): Promise<void> {
+  await claimPipelineControlOwnership(withdrawalRefusalKey(binding), JSON.stringify(reason));
+}
+
+export async function hasWithdrawalRefusal(binding: WithdrawalBinding, reason: string): Promise<boolean> {
+  return await pipelineControlOwnership(withdrawalRefusalKey(binding)) === JSON.stringify(reason);
+}
+
+export async function consumeWithdrawalRefusal(binding: WithdrawalBinding, reason: string): Promise<boolean> {
+  return consumePipelineControlOwnership(withdrawalRefusalKey(binding), JSON.stringify(reason));
 }

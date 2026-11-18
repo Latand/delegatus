@@ -14,7 +14,8 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 /** Private journal and socket. The fixture answers the RPC after the journal
  * has recorded it, with an optional held acknowledgement. It runs no delivery
  * workers and the only process it stops is the child it created. */
-export async function ownedStageControl(hold: "stop" | "withdrawal", now: string, holdBeforeAdmission = false) {
+export async function ownedStageControl(hold: "stop" | "withdrawal", now: string, holdBeforeAdmission = false,
+  options: { withdrawalRefusal?: "legacy" | "unclassified"; readDelayMs?: number } = {}) {
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR!, "stage-control-"));
   const socketPath = path.join(dir, "host.sock");
   const sessionId = ["00000000", "0000", "4000", "8000", "000000000001"].join("-");
@@ -26,13 +27,16 @@ export async function ownedStageControl(hold: "stop" | "withdrawal", now: string
   const pending = new Set<Promise<void>>();
   const journal = new RuntimeJournal(path.join(dir, "runtime.sqlite"), { structuredHosts: true, now: () => Date.parse(now) });
   const runtime = new RuntimeHost(journal, undefined, undefined, true);
+  let withdrawalRefusal = options.withdrawalRefusal;
   let release!: () => void;
   const acknowledgement = new Promise<void>(resolve => { release = resolve; });
   const stops: RuntimeOperationResult[] = [];
   const dispatches: RuntimeSocketRequest["method"][] = [];
+  const reads: RuntimeSocketRequest["method"][] = [];
   let entered!: () => void;
   const mutationEntered = new Promise<void>(resolve => { entered = resolve; });
   const withdrawals: RuntimeEventInput[] = [];
+  const withdrawalKeys: Array<string | undefined> = [];
   let accepted!: () => void;
   const mutationAccepted = new Promise<void>(resolve => { accepted = resolve; });
   const server = createServer(socket => {
@@ -52,13 +56,21 @@ export async function ownedStageControl(hold: "stop" | "withdrawal", now: string
         const stop = request.method === "command" && command?.kind === "kill";
         const withdrawal = (request.method === "append-session-fenced" || request.method === "append")
           && event?.kind === "pipeline.provider-continuation-cancelled";
+        if (withdrawal) withdrawalKeys.push(event?.producer?.eventKey);
         const held = (hold === "stop" && stop) || (hold === "withdrawal" && withdrawal);
         if (held) {
           dispatches.push(request.method);
           entered();
           if (holdBeforeAdmission) await acknowledgement;
         }
-        const response = await runtime.handle(request);
+        if (options.readDelayMs && (request.method === "producer-cursor" || request.method === "session-read")) {
+          reads.push(request.method);
+          await Bun.sleep(options.readDelayMs);
+        }
+        const response = withdrawalRefusal && withdrawal
+          ? { id: request.id, ok: false as const, error: "a fenced session append requires a session-status event and its observed revision",
+            ...(withdrawalRefusal === "unclassified" ? { code: "unclassified-refusal" } : {}) }
+          : await runtime.handle(request);
         if (response.ok && stop) stops.push(response.result as RuntimeOperationResult);
         if (response.ok && withdrawal) withdrawals.push(event!);
         if (held && response.ok) {
@@ -120,7 +132,8 @@ export async function ownedStageControl(hold: "stop" | "withdrawal", now: string
     });
     process.env.LLV_RUNTIME_HOST_SOCKET = socketPath;
     process.env.LLV_STRUCTURED_HOSTS = "1";
-    return { journal, publish, conversationId, launchId, transcriptPath, key, stops, withdrawals, dispatches, mutationEntered, mutationAccepted, release, dispose };
+    return { journal, publish, conversationId, launchId, transcriptPath, key, stops, withdrawals, withdrawalKeys, dispatches, reads,
+      upgradeRuntime: () => { withdrawalRefusal = undefined; }, mutationEntered, mutationAccepted, release, dispose };
   } catch (error) {
     await dispose();
     throw error;

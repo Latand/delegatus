@@ -42,7 +42,7 @@ import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
 import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts } from "./controllerSnapshot";
-import { claimIdleStop, claimWithdrawal, idleStopReceiptMatches, readIdleStop, readWithdrawal, terminalIdleStopKey, terminalIdleStopOwner, type IdleStopBinding, type WithdrawalBinding } from "./stageControlCustody";
+import { claimIdleStop, claimWithdrawal, consumeWithdrawalRefusal, hasWithdrawalRefusal, idleStopReceiptMatches, readIdleStop, readWithdrawal, recordWithdrawalRefusal, terminalIdleStopKey, terminalIdleStopOwner, type IdleStopBinding, type WithdrawalBinding } from "./stageControlCustody";
 import { pipelineStageHostTerminationSourceCurrent, probePipelineStageHostTermination, type HostTerminationInput, type HostTerminationProbe } from "./hostTermination";
 import { guardHostTerminationCheckpoint, hostTerminationKey } from "./hostTerminationProof";
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, recoverableRuntimeSwitch, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
@@ -108,7 +108,7 @@ import type { Flow, FlowEngine } from "@/lib/flows/types";
 import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isVisualCriticStage, visualCriticSkipRefusal } from "@/lib/prototypeReview/criticGate";
-import { isRuntimeHostTransportFailure, runtimeHostClient, withRuntimeRecoveryReads, type RuntimeHostClient } from "@/lib/runtime/client";
+import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, withRuntimeRecoveryReads, type RuntimeHostClient } from "@/lib/runtime/client";
 import { runtimeHostSocket, structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
 import { readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { restartCutEvidenceUnresolved } from "@/lib/runtime/restartCutHold";
@@ -4165,6 +4165,9 @@ async function stopStageForRecovery(target: PipelineStageHostRef, ports: Pipelin
 
 type ContinuationWithdrawalOwner = { key: string; artifactPath: string | null };
 
+// Older runtime handlers return this exact refusal before opening the journal.
+const LEGACY_WITHDRAWAL_REFUSAL = "a fenced session append requires a session-status event and its observed revision";
+
 function closeWithdrawalOwner(pipelineId: string, target: PipelineStageHostRef): ContinuationWithdrawalOwner {
   return { key: `stage-close-withdrawal:${pipelineId}:${target.conversationId}`, artifactPath: target.agentPath };
 }
@@ -4205,28 +4208,42 @@ export async function invalidateProviderContinuation(conversationId: string, cli
   if (!session || session.conversationId !== conversationId || !artifactPath || session.artifactPath !== artifactPath) {
     throw previous ? pending() : new Error("provider withdrawal cannot prove session authority");
   }
+  let retry: WithdrawalBinding | undefined;
   if (previous) {
-    if (session.revision <= previous.revision || session.sessionKey.engine !== previous.sessionKey.engine
+    if (session.revision < previous.revision || session.sessionKey.engine !== previous.sessionKey.engine
       || session.sessionKey.sessionId !== previous.sessionKey.sessionId || !session.writerClaim
       || session.host !== "hosted" || session.turn !== "idle" || session.activeTurnId !== null
       || session.attentionIds.length !== 0) throw pending();
+    if (session.revision === previous.revision) {
+      if (session.writerClaim !== previous.writerClaim || !await hasWithdrawalRefusal(previous, LEGACY_WITHDRAWAL_REFUSAL)) throw pending();
+      retry = previous;
+    }
     // Once the row has advanced, the journal cannot admit the old revision.
     // Read its producer receipt again to account for an append that won just
-    // before the revision changed. Only absence now proves no effect.
+    // before the revision changed or a resumed operation that already settled.
     const cursor = await cursorFor(previous);
     if (cursor === 1) return;
     if (cursor !== 0) throw pending();
   }
   const issued = await tryConversationActuation(conversationId, async lease => {
     assertOperationLease();
-    const claim = await claimWithdrawal(owner.key, { conversationId, sessionKey: session.sessionKey,
-      artifactPath, revision: session.revision, writerClaim: session.writerClaim ?? null }, previous ?? undefined);
+    const claim = retry
+      ? { acquired: await consumeWithdrawalRefusal(retry, LEGACY_WITHDRAWAL_REFUSAL), binding: retry }
+      : await claimWithdrawal(owner.key, { conversationId, sessionKey: session.sessionKey,
+        artifactPath, revision: session.revision, writerClaim: session.writerClaim ?? null }, previous ?? undefined);
     if (!claim.acquired) return claim.binding;
     assertOperationLease();
     const eventKey = claim.binding.producerPrefix + "1";
     lease.act(eventKey);
-    await awaitLeasedOperation("pipelines.provider-continuation-withdrawal", () =>
-      appendFenced.call(client, { ...event(eventKey), expectedSessionRevision: claim.binding.revision }, { signal }));
+    try {
+      await awaitLeasedOperation("pipelines.provider-continuation-withdrawal", () =>
+        appendFenced.call(client, { ...event(eventKey), expectedSessionRevision: claim.binding.revision }, { signal }));
+    } catch (error) {
+      if (error instanceof RuntimeHostUnavailableError && error.code === undefined && error.message === LEGACY_WITHDRAWAL_REFUSAL) {
+        await recordWithdrawalRefusal(claim.binding, error.message);
+      }
+      throw error;
+    }
     return null;
   });
   if (!issued.acquired) throw new Error("provider withdrawal is waiting for its conversation owner");
@@ -9549,29 +9566,29 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
   ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
   const suspension = attempt.suspension!;
   await persist();
-  let withdrawalFailure: string | undefined;
-  try {
-    const alreadyWithdrawn = attempt.providerWait?.retryCancelled && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE;
-    if (attempt.conversationId && !alreadyWithdrawn) {
-      const withdrawalKey = `stage-continuation-withdrawal:${pipeline.id}:${stage.id}:${attempt.n}:${suspension.requestedAt}`;
-      await ports.invalidateProviderContinuation?.(attempt.conversationId, { key: withdrawalKey, artifactPath: attempt.agentPath });
+  const withdraw = async (): Promise<string | undefined> => {
+    try {
+      const alreadyWithdrawn = attempt.providerWait?.retryCancelled && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE;
+      if (attempt.conversationId && !alreadyWithdrawn) {
+        const withdrawalKey = `stage-continuation-withdrawal:${pipeline.id}:${stage.id}:${attempt.n}:${suspension.requestedAt}`;
+        await ports.invalidateProviderContinuation?.(attempt.conversationId, { key: withdrawalKey, artifactPath: attempt.agentPath });
+      }
+    } catch (error) {
+      return redactBounded(String(error), 300);
     }
-  } catch (error) {
-    withdrawalFailure = redactBounded(String(error), 300);
-  }
+  };
   const target = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
     conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
-  // A paused lane keeps its receipt while its host and pane remain absent.
-  // Running recovery still needs a fresh stop before replacement admission.
-  // Check after withdrawal: a host may have resumed during that await.
-  // Unreadable host probes report resident and still require a fresh stop.
-  if (suspension.stoppedAt && (pipeline.state !== "paused" || await ports.stageHostResident(target)
-    || target.paneId && await ports.paneAgentAlive(target.paneId))) {
-    suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
-    delete suspension.stoppedAt;
-    await persist();
-  }
-  if (!suspension.stoppedAt) {
+  const stop = async (refresh: boolean): Promise<boolean> => {
+    // A host can resume while awaiting a receipt. An unreadable probe
+    // reports resident and still requires a fresh stop.
+    if (suspension.stoppedAt && (refresh || await ports.stageHostResident(target)
+      || target.paneId && await ports.paneAgentAlive(target.paneId))) {
+      suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
+      delete suspension.stoppedAt;
+      await persist();
+    }
+    if (suspension.stoppedAt) return true;
     try {
       let stopped = await ports.stopStageAgent(target,
       { automatic: true, operationId: suspensionStopKey(pipeline, stage, attempt),
@@ -9591,11 +9608,19 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
       pipeline.stateDetail = `${suspension.detail}; stop pending: ${redactBounded(String(error), 300)}`;
       await persist(); ports.scheduleTick?.(1_000); return false;
     }
-  }
+    return true;
+  };
+  const stopFirst = suspension.reason === "account";
+  // Termination of an ineligible host gets its own bounded port before a
+  // multi-read withdrawal can use the rest of the detached lane's budget.
+  if (stopFirst && !await stop(pipeline.state !== "paused")) return false;
+  const withdrawalFailure = await withdraw();
+  if (!stopFirst && !await stop(pipeline.state !== "paused")) return false;
   if (withdrawalFailure !== undefined) {
     pipeline.stateDetail = `${suspension.detail}; host stopped, waiting to withdraw queued continuation: ${withdrawalFailure}`;
     await persist(); ports.scheduleTick?.(1_000); return false;
   }
+  if (stopFirst && !await stop(false)) return false;
   if (pipelineSurvivorRefusal(pipeline) || attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
     pipeline.stateDetail = `${suspension.detail}; host stopped, waiting for pending delivery settlement`;
     await persist(); ports.scheduleTick?.(1_000); return false;
