@@ -2,20 +2,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { expect, test, spyOn } from "bun:test";
+import { afterEach, expect, test, spyOn } from "bun:test";
 import { saveTasks, mutateTaskPrototypeRound } from "@/lib/tasks/store";
 import { savePipelines } from "@/lib/pipelines/store";
 import type { PrototypeReviewRound } from "@/lib/prototypeReview/types";
 import { approvedAttemptTempSelection, runApprovedAttemptTempSweep, type AttemptTempApprovalBinding } from "./attemptTempApproved";
 import { AttemptTempStore } from "./attemptTempRetention";
 import { finishedLane, holdFinishedRoot } from "./attemptTempRetention.testSupport";
-import { plantKeepMarker } from "./keepMarker.testSupport";
+import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import * as filesystem from "./attemptTempFilesystem";
 import { WorktreeSweepWorker } from "../pipelines/worktreeSweepWorker";
 
 const NOW = Date.parse("2030-01-20T00:00:00Z"), at = new Date(NOW).toISOString();
 const reviewId = "pr_" + "a".repeat(32), inputDigest = "b".repeat(64);
 const scan = () => ({ ownNamespace: null, processes: [] });
+afterEach(removeKeepMarkers);
 function fixture(count = 1) {
   const before = { ...process.env }, root = fs.mkdtempSync(path.join(os.tmpdir(), "approved-attempt-"));
   const state = path.join(root, "state"), scratch = path.join(state, "scratch");
