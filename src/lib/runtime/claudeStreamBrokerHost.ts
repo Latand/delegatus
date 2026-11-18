@@ -1,7 +1,6 @@
 import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { CLAUDE_NATIVE_INPUT_LIMIT, claudeNativeUuid, nativeBoundary, nativeTurnBoundary, nativeTurnBoundaryMember, nativeConsumed, nativeInput, nativeResult, nativeResultMembers, nativeMergedContent, nativeMergedMembers, nativeTerminal, nativeUuids, sameNativeWriter,
   deliveryRecord, parseDeliveryRecords, replayClaudeDeliveries, sameNormalizedEntry, type ClaudeNativeTurnBoundary, type ClaudeNativeConsumed, type ClaudeNativeInput, type ClaudeNativeResult, type ClaudeNativeTerminal, type ClaudeNativeWriter } from "./claudeNativeDelivery";
-import { assertReleasedHostEventLedger } from "./hostEventWindow";
 import { clearEngineHostText, createEngineHostLedgerProjection } from "./engineHostEvents";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
 import { heapAttribution } from "@/lib/heapAttribution";
@@ -986,12 +985,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     });
   }
 
-  private refillEventWindow(): void {
+  private eventWindowRefill: Promise<void> | undefined;
+
+  private refillEventWindow(): Promise<void> | undefined {
     if (!this.eventWindowReleased) return;
-    const stored = this.eventStore.load(this.identity.sessionId);
-    assertReleasedHostEventLedger(this.events, stored);
-    this.eventWindow.restore(stored);
-    this.eventWindowReleased = false;
+    return this.eventWindowRefill ??= this.eventWindow.refill(this.eventStore, this.identity.sessionId).then(() => {
+      this.eventWindowReleased = false;
+    }).finally(() => { this.eventWindowRefill = undefined; });
   }
 
   private readonly deliveries: ClaudeDeliveryState[] = [];
@@ -1386,16 +1386,17 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   attach(afterSeq: number): AsyncIterable<RuntimeEvent> {
     this.eventWindowRevision += 1;
-    this.refillEventWindow();
     return attachRuntimeEvents(afterSeq, {
       window: () => this.events,
       ledger: () => this.eventStore.load(this.identity.sessionId),
       subscribers: this.subscribers,
-    });
+    }, () => this.refillEventWindow());
   }
 
   async send(entry: QueueEntry, _firstDispatch?: import("./engineHost").FirstDispatchEvidence, authorizeDispatch?: () => void,
     observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt> {
+    const refill = this.dead || this.releasing || this.released ? undefined : this.refillEventWindow();
+    if (refill) await refill;
     const restored = this.deliveries.find(state => state.entry.id === entry.id);
     if (restored?.native || restored?.nativeUnverified || this.nativeWriter && !restored) {
       return this.sendNative(entry, authorizeDispatch, observeTiming);
@@ -2430,7 +2431,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
-    try { this.refillEventWindow(); this.eventStore.append(this.identity.sessionId, (durableTail ? { ...durableTail, seq: nextCursor } : this.projectLedgerEvent(sequenced))); }
+    try { this.eventStore.append(this.identity.sessionId, (durableTail ? { ...durableTail, seq: nextCursor } : this.projectLedgerEvent(sequenced))); }
     catch (error) {
       this.cursor = this.events.at(-1)?.seq ?? Math.max(0, this.cursor - 1);
       this.ledgerFailed = true;

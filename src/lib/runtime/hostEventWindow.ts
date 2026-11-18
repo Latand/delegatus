@@ -1,3 +1,4 @@
+import type { RuntimeEventStore } from "./eventStore";
 import { RuntimeReplayGapError, type RuntimeEvent } from "./engineHost";
 
 /**
@@ -96,11 +97,14 @@ export class HostEventWindow {
     windowWatermarks.set(this.events, Math.max(windowWatermarks.get(this.events) ?? 0, event.seq));
     const preview = event.kind === "item" ? previewItem(event.item) : { value: null, trimmed: false };
     const retained = preview.trimmed && event.kind === "item" ? { ...event, item: preview.value } : event;
-    const bytes = Buffer.byteLength(JSON.stringify(retained));
-    this.events.push(retained);
-    this.sizes.push({ bytes, trimmed: preview.trimmed });
-    this.bytes += bytes;
-    this.trimmed += Number(preview.trimmed);
+    this.appendRetained(retained, { bytes: Buffer.byteLength(JSON.stringify(retained)), trimmed: preview.trimmed });
+  }
+
+  private appendRetained(event: RuntimeEvent, size: { bytes: number; trimmed: boolean }): void {
+    this.events.push(event);
+    this.sizes.push(size);
+    this.bytes += size.bytes;
+    this.trimmed += Number(size.trimmed);
     let remove = 0;
     while (this.events.length - remove > HOST_EVENT_WINDOW || this.bytes > this.byteLimit) {
       const oldest = this.sizes[remove++]!;
@@ -119,6 +123,55 @@ export class HostEventWindow {
     this.trimmed = 0;
     windowWatermarks.set(this.events, 0);
     for (const event of newest) this.append(event);
+  }
+
+  /** Restore into a private candidate. A failed prefix leaves live payloads
+   * and the released watermark untouched, so a later attach can retry. */
+  async refill(store: RuntimeEventStore, threadId: string, project: (event: RuntimeEvent) => RuntimeEvent = event => event): Promise<void> {
+    const required = windowWatermarks.get(this.events) ?? 0;
+    const candidate = new HostEventWindow(this.byteLimit);
+    const retain = (event: RuntimeEvent) => {
+      // The scan still validates every row. Overlapping live sequences join
+      // the candidate below using their original sizes, so a larger durable
+      // projection cannot evict historical rows before that merge.
+      if (event.seq > required && event.seq <= (windowWatermarks.get(this.events) ?? 0)) return;
+      candidate.append(project(event));
+    };
+    let lastSeq: number;
+    if (store.scan) lastSeq = await store.scan(threadId, retain);
+    else {
+      const stored = store.load(threadId);
+      for (const event of stored) retain(event);
+      lastSeq = stored.at(-1)?.seq ?? 0;
+    }
+    if (lastSeq < required) throw new RuntimeReplayGapError(0, required);
+    const current = windowWatermarks.get(this.events) ?? 0;
+    // An evicted live prefix cannot be resurrected from the older candidate,
+    // including when its durable projection fitted in the snapshot window.
+    const evictedLivePrefix = current > required && (this.events[0]?.seq ?? current + 1) > required + 1;
+    if (evictedLivePrefix) candidate.release();
+    // Appends can land before the descriptor snapshot is taken. Keep their
+    // original live payloads in preference to the ledger projection.
+    const retainedBySeq = new Map<number, { event: RuntimeEvent; size: { bytes: number; trimmed: boolean } }>();
+    for (let index = 0; index < candidate.events.length; index++) {
+      retainedBySeq.set(candidate.events[index]!.seq, { event: candidate.events[index]!, size: candidate.sizes[index]! });
+    }
+    for (let index = 0; index < this.events.length; index++) {
+      const event = this.events[index]!;
+      // A durable projection can be larger than its live original and may
+      // therefore be evicted from the candidate while the live copy still
+      // fits. Every retained live sequence participates in the ordered merge.
+      retainedBySeq.set(event.seq, { event, size: this.sizes[index]! });
+    }
+    const merged = new HostEventWindow(this.byteLimit);
+    for (const { event, size } of [...retainedBySeq.values()].sort((left, right) => left.event.seq - right.event.seq)) {
+      merged.appendRetained(event, size);
+    }
+    this.events.splice(0, this.events.length, ...merged.events);
+    this.sizes.splice(0, this.sizes.length, ...merged.sizes);
+    this.bytes = merged.bytes;
+    this.trimmed = merged.trimmed;
+    windowWatermarks.set(this.events, Math.max(current, lastSeq));
   }
 
   release(): void {
@@ -209,18 +262,52 @@ const abandonedStreams = new FinalizationRegistry<Seat>(leaveSeat);
  * subscribed for the host's life, collecting every later event. A stream
  * dropped unread gives its seat back when it is collected.
  */
-export function attachRuntimeEvents(afterSeq: number, source: RuntimeEventSource): AsyncIterable<RuntimeEvent> {
+export function attachRuntimeEvents(afterSeq: number, source: RuntimeEventSource, refill?: () => Promise<void> | undefined): AsyncIterable<RuntimeEvent> {
   if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) throw new Error("afterSeq must be a non-negative integer");
   const subscriber: RuntimeEventSubscriber = {
     afterSeq,
-    queue: runtimeEventsAfter(source.window(), afterSeq, () => source.ledger()),
+    queue: [],
     wake: null,
     closed: false,
   };
   source.subscribers.add(subscriber);
   const seat: Seat = { subscriber, subscribers: source.subscribers };
+  let cancelled = false;
+  let cancelRead!: () => void;
+  const cancellation = new Promise<void>(resolve => { cancelRead = resolve; });
+  let ready: Promise<void> | undefined;
+  try {
+    const refillResult = refill?.();
+    if (refillResult) {
+      ready = refillResult.catch(error => {
+        leaveSeat(seat);
+        throw error;
+      });
+      // An unread stream still owns its restoration failure; next() reports it.
+      void ready.catch(() => {});
+    } else initializeQueue();
+  } catch (error) {
+    leaveSeat(seat);
+    throw error;
+  }
+
+  function initializeQueue(): void {
+    const replay = runtimeEventsAfter(source.window(), afterSeq, () => source.ledger());
+    // The seat was active during refill. Prefer those full live payloads over
+    // durable previews, while deduplicating events already present in replay.
+    const events = new Map(replay.map(event => [event.seq, event]));
+    for (const event of subscriber.queue) if (event.seq > afterSeq) events.set(event.seq, event);
+    subscriber.queue = [...events.values()].sort((left, right) => left.seq - right.seq);
+    subscriber.wake?.();
+  }
+
   async function* read(): AsyncGenerator<RuntimeEvent> {
     try {
+      if (ready) {
+        const outcome = await Promise.race([ready.then(() => "ready" as const), cancellation.then(() => "cancelled" as const)]);
+        if (outcome === "cancelled" || cancelled) return;
+        initializeQueue();
+      }
       while (true) {
         const event = subscriber.queue.shift();
         if (event) {
@@ -246,6 +333,8 @@ export function attachRuntimeEvents(afterSeq: number, source: RuntimeEventSource
         stream,
         next: () => generator.next(),
         return: (value?: unknown) => {
+          cancelled = true;
+          cancelRead();
           leaveSeat(seat);
           return generator.return(value as never);
         },
