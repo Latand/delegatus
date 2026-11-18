@@ -291,3 +291,49 @@ space observation is reported explicitly and leaves low-space mode disabled.
 The effective cap also accounts for available scratch-filesystem space. See
 [Closed lane scratch deadlines](closed-lane-scratch-retention.md) for the
 current reserve, metadata backfill and source-export lifecycle.
+# Approved manifest execution
+
+`bun scripts/attempt-temp-approved.ts --review <full-review-id> --manifest <retained-json>`
+requests a bounded page from the existing leased attempt-temp helper. This local
+operations entry belongs to the authorized cleanup executor after the reviewed
+release is deployed. It performs no discovery or deletion outside the manifest.
+The ordinary timer and the exact selection share the attempt-temp sweep lock,
+retirement claims, fresh authority and reference checks, protection inventory,
+native mutation fence and remover. The manifest path grants no authority itself.
+
+Before execution, the release/operations owner installs the reviewed private
+binding as `$STATE/attempt-temp-approvals/<full-review-id>.json`, owned by the
+installation uid and without group/other write permission. Its version-1 fields
+are `taskId`, `project`, `reviewId`, the stored form's full `inputDigest`, the
+retained artifact's full `manifestSha256`, `manifestName`, `count`,
+`scopeQuestionId` and `executeQuestionId`. The retained evidence must establish
+that exact artifact/form association. The executor cannot create bindings through
+this command. This supports historical approvals whose form named the retained
+file and observation window while their primary inventory report held its hash;
+installing the binding preserves the existing decision. No live binding is
+installed by development tests.
+
+The helper reads the local primary task round and verifies its project, task,
+form digest and explicit human answers to both scope and execution questions.
+Agent decisions, recommendations, skipped/custom/declined answers and changed
+forms fail closed. Binding/decision changes revoke dispatch across awaited
+observations. The manifest is limited to 4 MiB and 1,024 unique direct physical
+scratch children; its exact bytes, count and basename must match the binding.
+Each row uses the retained inventory's `path`, `laneId`, `launchId` and
+`evidence.registry` fields `devInode`, `createdAt`, `released`,
+`retainUntilClose` and `uid`. Fresh directory identity and registry ownership
+must agree. An approved selection uses the existing closed-root pressure policy;
+it grants no evidence or live-owner exemption. Shared recorded-check holds are
+kept because releasing them could affect another root.
+
+Each invocation visits at most 32 rows within the existing helper deadline and
+writes intent and per-row results durably to
+`$STATE/attempt-temp-approved/<full-review-id>.json`. It reports allocated bytes
+retired and free bytes before/after on the same filesystem; other disk activity
+may also affect free space. Exit 2 means pending rows remain; reconcile their
+native retirement journals with the attempt-temp owner before retrying. Exit 0
+means every row has a terminal result, including skips, and does not imply every
+row was removed. A fresh invocation resumes the journal. A completed removal
+receipt never authorizes a replacement at the same path. Dry-run previews can
+later be executed under the same unchanged approval. The command never runs
+global recovery, adoption, copy retention or a pressure-cursor transition.

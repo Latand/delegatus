@@ -8,6 +8,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { TempSweepReport } from "@/lib/tempSweep";
 import type { DiskPressure } from "@/lib/state/diskPressure";
 import type { WorktreeSweepMode, WorktreeSweepReport } from "./worktreeSweep";
+import type { ApprovedAttemptTempRequest, ApprovedAttemptTempReport } from "../runtime/attemptTempApproved";
 
 export const WORKTREE_SWEEP_DEADLINE_MS = 45 * 60_000;
 const MAX_REPLY_BYTES = 8 * 1024 * 1024;
@@ -29,9 +30,10 @@ export function worktreeSweepWorkerLaunch(cwd = process.cwd()): SweepWorkerLaunc
 type SweepRequest = { kind: "worktrees"; mode: WorktreeSweepMode }
   | { kind: "temp"; env: Pick<NodeJS.ProcessEnv, "LLV_TEMP_SWEEP" | "LLV_TEMP_SWEEP_MAX_AGE_HOURS"> }
   | { kind: "attempt-temp" }
+  | { kind: "attempt-temp-approved"; approval: ApprovedAttemptTempRequest }
   | { kind: "maintenance" }
   | { kind: "disk-pressure" };
-type SweepResult = WorktreeSweepReport | TempSweepReport | DiskPressure | Awaited<ReturnType<typeof import("../runtime/attemptTempProduction").runAttemptTempSweep>> | { checked: number; removed: number } | null;
+type SweepResult = WorktreeSweepReport | TempSweepReport | DiskPressure | ApprovedAttemptTempReport | Awaited<ReturnType<typeof import("../runtime/attemptTempProduction").runAttemptTempSweep>> | { checked: number; removed: number } | null;
 type Pending = { request: SweepRequest; resolve: (report: SweepResult) => void; reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>; finishPhase?: () => void; failure?: Error };
 /** The leased child keeps directory observers between passes. No filesystem
@@ -83,7 +85,7 @@ export class WorktreeSweepWorker {
           }
           const report = response?.report;
           const kind = this.pending.request.kind;
-          const valid = kind === "attempt-temp" || kind === "maintenance" ? report === null || report && Number.isInteger(report.checked) && Number.isInteger(report.removed)
+          const valid = kind === "attempt-temp" || kind === "attempt-temp-approved" || kind === "maintenance" ? report === null || report && Number.isInteger(report.checked) && Number.isInteger(report.removed)
             : kind === "disk-pressure"
             ? report && typeof report.at === "string" && Number.isFinite(Date.parse(report.at))
               && Array.isArray(report.volumes) && Array.isArray(report.consumers)
@@ -127,13 +129,13 @@ export class WorktreeSweepWorker {
 
   private request(request: SweepRequest): Promise<SweepResult> {
     const existing = this.jobs.get(request.kind);
-    if (existing) return request.kind === "worktrees"
+    if (existing) return request.kind === "worktrees" || request.kind === "attempt-temp-approved"
       ? Promise.reject(new Error("worktree sweep is already running")) : existing;
     const generation = this.generation;
     const timeoutMs = request.kind === "disk-pressure" ? Math.min(this.timeoutMs, DISK_PRESSURE_REQUEST_TIMEOUT_MS)
-      : request.kind === "attempt-temp" || request.kind === "maintenance" ? Math.min(this.timeoutMs, ATTEMPT_TEMP_REQUEST_TIMEOUT_MS) : this.timeoutMs;
+      : request.kind === "attempt-temp" || request.kind === "attempt-temp-approved" || request.kind === "maintenance" ? Math.min(this.timeoutMs, ATTEMPT_TEMP_REQUEST_TIMEOUT_MS) : this.timeoutMs;
     const deadline = this.clock.now() + timeoutMs;
-    const operation = request.kind === "attempt-temp" || request.kind === "temp" || request.kind === "maintenance" ? "temp.sweep" : request.kind === "disk-pressure" ? "resources.read" : "worktrees.sweep";
+    const operation = request.kind === "attempt-temp" || request.kind === "attempt-temp-approved" || request.kind === "temp" || request.kind === "maintenance" ? "temp.sweep" : request.kind === "disk-pressure" ? "resources.read" : "worktrees.sweep";
     const deadlineLabel = request.kind === "attempt-temp" ? "attempt temp tick" : request.kind === "worktrees" ? "worktree sweep" : request.kind === "temp" ? "temp sweep" : "disk pressure refresh";
     // At most one job per kind; polls join rather than retaining an unbounded
     // queue. The same deadline includes time behind another sweep.
@@ -193,6 +195,13 @@ export class WorktreeSweepWorker {
       return this.attemptWorker.attemptTemp();
     }
     return this.request({ kind: "attempt-temp" });
+  }
+  approvedAttemptTemp(approval: ApprovedAttemptTempRequest): Promise<ApprovedAttemptTempReport> {
+    if (!this.attemptOnly) {
+      this.attemptWorker ??= new WorktreeSweepWorker(this.launch, this.timeoutMs, this.clock, false, true);
+      return this.attemptWorker.approvedAttemptTemp(approval);
+    }
+    return this.request({ kind: "attempt-temp-approved", approval }) as Promise<ApprovedAttemptTempReport>;
   }
   maintenance() { return this.request({ kind: "maintenance" }); }
   diskPressure(): Promise<DiskPressure> {

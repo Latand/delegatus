@@ -417,6 +417,10 @@ export type AttemptTempSweepOptions = {
    * lets one reference observation reuse a validation of the last seconds. */
   checkoutReads?: RetainedCheckoutReads;
   availableBytes?: (scratch: string) => number;
+  /** An independently verified operator manifest. This path performs no
+   * discovery, global recovery, evidence copying or pressure-cursor writes. */
+  selection?: { directories: readonly string[]; current: (owner: AttemptTempOwner & { identity: string; released: number }) => boolean;
+    watches: string[] };
 };
 export async function sweepAttemptTemps(store: AttemptTempStore, options: AttemptTempSweepOptions) {
   // Serving generations may overlap. One process-shared owner must retain the
@@ -436,7 +440,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const checkBudget = () => { checkAttemptTempDeadline(); if (remaining() <= 0) throw new AttemptTempBudgetDeferred("run budget exhausted"); };
   // A continuation already owns its fixed inventory. Discover legacy roots
   // once at the next pass boundary, rather than sorting scratch every tick.
-  const adoption = store.activePressurePass() ? { adopted: 0, errors: 0 } : store.adopt(now());
+  const adoption = options.selection || store.activePressurePass() ? { adopted: 0, errors: 0 } : store.adopt(now());
   const configuredCapBytes = options.capBytes ?? DEFAULT_ATTEMPT_TEMP_CAP_BYTES;
   const scratch = path.join(path.dirname(store.filename), "scratch");
   let freeBytes: number | null = null, spaceError: string | null = null;
@@ -452,7 +456,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   // working reserve on small filesystems. A fixed cap alone reacts too late.
   const capBytes = freeBytes === null ? configuredCapBytes : Math.min(configuredCapBytes,
     Math.max(0, Math.floor(Math.min((store.bytes() + freeBytes) / 2, store.bytes() + freeBytes - ATTEMPT_TEMP_LOW_SPACE_BYTES))));
-  const pressure = lowSpace || store.bytes() > capBytes;
+  const pressure = !!options.selection || lowSpace || store.bytes() > capBytes;
   type Outcome = { directory: string; disposition: "deferred" | "live" | "evidence" | "held" | "operator" | "failed" | "removed"; bytes: number; reason: string;
     /** Part of the tree could not be read; `bytes` counts the rest. */
     unreadable?: true; allocation?: "recorded" };
@@ -490,8 +494,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     retained: options.checkoutReads, validationReuseMs: options.checkoutReads ? 5_000 : 0 });
   const references = options.references
     ?? ((original: string, current: string, scan: ProcessScan) => attemptReferencesClear(original, current, scan, undefined, inventory));
-  const recovery = store.recoverTrash(now, deadline, budgetNow);
-  for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
+  if (!options.selection) {
+    const recovery = store.recoverTrash(now, deadline, budgetNow);
+    for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
+  }
   const visit = async (owner: Row) => {
     report.checked++;
     let bytes = owner.bytes;
@@ -539,6 +545,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       }
     };
     try {
+      if (options.selection && !options.selection.current(owner)) {
+        outcome(owner.directory, "held", bytes, "approved manifest binding or root identity changed"); return;
+      }
       store.defer(owner.directory, now() + 60_000);
       recoveredTrash = store.recoveredTrash(owner.directory);
       requiredExpiry = store.requiredRootExpiry(owner.directory);
@@ -610,6 +619,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // toward pressure within this pass's existing root budget.
       let retentionExpiry: number | null = null;
       if (recordedRootHeld(owner.directory)) {
+        // Expiring one check releases its other roots as a cascade. Exact-list
+        // execution leaves that shared transition to the ordinary owner.
+        if (options.selection) { outcome(owner.directory, "evidence", bytes, "recorded check evidence hold; exact selection cannot release shared holds"); return; }
         const initialAuthority = await observeOwner(owner);
         retentionExpiry = initialAuthority.expiresAt ?? null;
         checkBudget();
@@ -644,6 +656,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const binding = store.owner(owner.directory);
         requiredExpiry = store.requiredRootExpiry(owner.directory);
         return binding?.identity === owner.identity && binding.pipelineId === owner.pipelineId && binding.launchId === owner.launchId
+          && (!options.selection || options.selection.current(binding))
           && binding.createdAt === owner.createdAt && binding.retainUntilClose === owner.retainUntilClose
           && !recordedRootHeld(owner.directory)
           && (!pressure || ledgerLinkedEvidence(owner.directory).length === 0)
@@ -661,7 +674,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // The evidence snapshot must match until content deletion dispatches.
       // Its directory metadata and entries change during our own cleanup;
       // the final empty-root fence retains the independent authority checks.
-      const authorityWatches = () => [...attemptPathWatches([store.filename, store.filename + "-wal", statePath("state.sqlite"),
+      const authorityWatches = () => [...attemptPathWatches(options.selection?.watches ?? [], "authority"), ...attemptPathWatches([store.filename, store.filename + "-wal", statePath("state.sqlite"),
         statePath("state.sqlite-wal")], "authority"), ...attemptPathWatches([statePath("project-aliases.json")]),
         ...(!owner.pipelineId ? attemptPathWatches([statePath("agent-registry.json"), statePath("agent-registry.sqlite"),
           statePath("agent-registry.sqlite-wal")], "authority") : []),
@@ -723,6 +736,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const eligible = async (directory = owner.directory) => {
         currentDirectory = directory;
         checkBudget();
+        if (options.selection && !options.selection.current(owner)) { reason = "approved manifest authority changed"; return false; }
         const state = await options.state(owner, inventory);
         if (recoveredTrash && state !== "expired") {
           disposition = authorityDisposition(state); reason = `ownership ${state}; recovered trash requires expired lane`; return false;
@@ -732,6 +746,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           if (requiredExpiry !== null && requiredExpiry > now()) store.defer(owner.directory, requiredExpiry);
           return false;
         }
+        if (options.selection && !options.selection.current(owner)) { reason = "approved manifest authority changed after owner observation"; return false; }
         if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && state === "expired")) { disposition = "evidence"; reason = "recorded check evidence hold"; return false; }
         checkBudget();
         disposition = state === "live" ? "live" : state === "settled" && owner.retainUntilClose ? "evidence" : "held";
@@ -952,7 +967,17 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     }
   };
   let pass: PressurePass | null = null, passEnded: CompletedPressurePass["ended"] | null = null;
-  if (!pressure) {
+  if (options.selection) {
+    // Exact input order, bounded to one page. Neither a missing row nor a
+    // deferred row admits another directory from the ordinary sweep.
+    for (const directory of options.selection.directories.slice(0, 32)) {
+      const owner = store.owner(directory);
+      if (!owner) { outcome(directory, "held", 0, "approved root absent from registry"); continue; }
+      if (remaining() <= 0) { outcome(directory, "deferred", owner.bytes, "run budget exhausted; retry selected root"); continue; }
+      const window = Math.min(ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS, remaining());
+      await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
+    }
+  } else if (!pressure) {
     for (const owner of store.due(now(), budget)) {
       if (remaining() <= 0) { outcome(owner.directory, "deferred", owner.bytes, "run budget exhausted; retry next tick"); continue; }
       await visit(owner);
@@ -1019,7 +1044,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   report.overCapBytes = Math.max(0, report.bytes - capBytes);
   // A cleared pressure episode ends its pass; the next episode starts a new
   // inventory, with the largest roots first.
-  if (!lowSpace && report.overCapBytes === 0 && store.activePressurePass()) {
+  if (!options.selection && !lowSpace && report.overCapBytes === 0 && store.activePressurePass()) {
     pass ??= store.activePressurePass();
     store.endPressurePass(now(), "pressure-cleared"); passEnded = "pressure-cleared";
   }
