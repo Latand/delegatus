@@ -2,10 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { pipelineIdentity, savePipelines } from "../pipelines/store";
 import { AttemptTempStore } from "./attemptTempRetention";
-import { attemptTempAuthority } from "./attemptTempProduction";
-import { finishedLane } from "./attemptTempRetention.testSupport";
+import { attemptTempAuthority, attemptScratchAuthority } from "./attemptTempProduction";
+import { finishedLane, holdFinishedRoot } from "./attemptTempRetention.testSupport";
 import { plantKeepMarker } from "./keepMarker.testSupport";
 import { cleanupPressureFixtures, NOW, roots, realParentPass, restoreEnvironment } from "./attemptTempPressure.testSupport";
 
@@ -90,5 +91,58 @@ test.skipIf(process.platform !== "linux")("the ordinary persisted cursor measure
       if (n <= prefix) expect(fs.readFileSync(path.join(directories[n]!, "data"))).toEqual(Buffer.alloc(4096, n));
       else expect(fs.existsSync(directories[n]!)).toBeFalse();
     }
+  } finally { store.close(); restoreEnvironment(before); }
+}, 180000);
+
+test.skipIf(process.platform !== "linux")("24h boundaries upgrade legacy scheduling across real restarts without shortening evidence", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "completion-age-")); roots.push(root);
+  const before = { ...process.env }, state = path.join(root, "state"), scratch = path.join(state, "scratch"), day = 86400000;
+  fs.mkdirSync(scratch, { recursive: true }); process.env.LLV_STATE_DIR = state;
+  const finish = NOW - day, legacyExpiry = finish + 7 * day;
+  const lane = finishedLane(root, new Date(finish).toISOString()); savePipelines([lane]);
+  const store = new AttemptTempStore(), directories: string[] = [];
+  const copy = path.join(state, "evidence", "attempt-temp", "c".repeat(64));
+  try {
+    for (let n = 0; n < 4; n++) {
+      const directory = path.join(scratch, "llv-stage-age" + n); directories.push(directory); fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, "data"), "protected fixture payload");
+      store.register({ directory, pipelineId: n === 3 ? "unknown-lane" : lane.id, launchId: "retention-launch",
+        retainUntilClose: false, createdAt: NOW - 100 * day }); store.release(directory); store.measure(directory, 12288);
+      fs.utimesSync(directory, 1, 1);
+    }
+    plantKeepMarker(path.join(directories[1]!, ".delegatus-keep"));
+    await holdFinishedRoot(directories[2]!, lane.id, "day-evidence"); store.requireRootExpiry(directories[2]!, legacyExpiry);
+    fs.mkdirSync(copy, { recursive: true }); fs.writeFileSync(path.join(copy, "data"), "retained evidence");
+    store.registerCopy({ destination: copy, pipelineId: lane.id, launchId: "retention-launch", kind: "lane",
+      createdAt: finish, expiresAt: legacyExpiry, checkedAt: legacyExpiry, bytes: 12288 });
+    for (const delta of [-1, 0, 1]) {
+      const authority = await attemptScratchAuthority(store.owner(directories[0]!)!, undefined, () => NOW + delta);
+      expect(authority.state).toBe(delta > 0 ? "expired" : "closed"); expect(authority.expiresAt).toBe(NOW + 1);
+    }
+    const old = new Database(store.filename);
+    try {
+      old.query("UPDATE root_retention SET expiresAt=? WHERE expiresAt IS NOT NULL").run(legacyExpiry);
+      old.query("UPDATE roots SET checkedAt=?").run(legacyExpiry); old.exec("PRAGMA user_version=0");
+    } finally { old.close(); }
+    const config = path.join(root, "fixture.json"); process.env.LLV_PRESSURE_FIXTURE = config;
+    process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0";
+    for (const delta of [-1, 0, 1]) {
+      fs.writeFileSync(config, JSON.stringify({ now: NOW + delta, freeBytes: 1e12, realClock: true, measureCost: 0 }));
+      const report = await realParentPass(true);
+      expect(report.errors).toBe(0); expect(report.removed).toBe(delta > 0 ? 1 : 0);
+      expect(report.retention).toMatchObject({ scratchPeriodDays: 1, evidencePeriodDays: 7 });
+      expect(store.scratchRetentionVersion()).toBe(1); expect(store.retentionExpiry(directories[1]!)).toBe(NOW + 1);
+      expect(store.requiredRootExpiry(directories[2]!)).toBe(legacyExpiry); expect(store.copy(copy)!.expiresAt).toBe(legacyExpiry);
+      expect(fs.readFileSync(path.join(copy, "data"), "utf8")).toBe("retained evidence");
+      for (const directory of directories.slice(1)) expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("protected fixture payload");
+    }
+    const { recordedRootHeld } = await import("../recordedChecks/store"); expect(recordedRootHeld(directories[2]!)).toBeTrue();
+    const reopened = await attemptScratchAuthority(store.owner(directories[1]!)!, undefined, () => NOW + 1);
+    fs.unlinkSync(path.join(directories[1]!, ".delegatus-keep"));
+    lane.state = "paused"; lane.closedAt = null; savePipelines([lane]);
+    expect(reopened.isCurrent()).toBeFalse();
+    expect((await attemptScratchAuthority(store.owner(directories[1]!)!, undefined, () => NOW + 1)).state).toBe("unknown");
+    const resumed = await realParentPass(true); expect(resumed.removed).toBe(0);
+    expect(fs.readFileSync(path.join(directories[1]!, "data"), "utf8")).toBe("protected fixture payload");
   } finally { store.close(); restoreEnvironment(before); }
 }, 180000);

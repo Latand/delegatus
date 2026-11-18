@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { AttemptTempStore } from "./attemptTempRetention";
-import { attemptTempAuthority, backfillAttemptTempRetention } from "./attemptTempProduction";
+import { attemptScratchAuthority as attemptTempAuthority, backfillAttemptTempRetention } from "./attemptTempProduction";
 import { finishedLane } from "./attemptTempRetention.testSupport";
 import { savePipelines } from "../pipelines/store";
 
@@ -51,7 +51,7 @@ test("backfill persists its page across real helper restarts and tolerates a van
   }
   const store = new AttemptTempStore(f.filename);
   try {
-    for (const directory of directories) expect(store.retentionExpiry(directory)).toBe(Date.parse("2035-01-21T00:00:00Z"));
+    for (const directory of directories) expect(store.retentionExpiry(directory)).toBe(Date.parse("2035-01-15T00:00:00.001Z"));
     expect(fs.existsSync(directories[2]!)).toBeFalse();
     expect(await backfillAttemptTempRetention(store)).toEqual({ checked: 0, updated: 0 });
     expect(await backfillAttemptTempRetention(store)).toEqual({ checked: 5, updated: 0 });
@@ -129,4 +129,14 @@ test("a spent backfill deadline leaves the durable cursor available for the next
     expect(await backfillAttemptTempRetention(f.store, { remaining: () => 0 })).toEqual({ checked: 0, updated: 0 });
     expect(await backfillAttemptTempRetention(f.store)).toEqual({ checked: 1, updated: 1 });
   } finally { f.store.close(); }
+});
+
+test("a newer scratch policy version fails closed without altering a root", () => {
+  const f = fixture(), directory = f.make("future-policy");
+  const db = new Database(f.filename);
+  try {
+    db.exec("PRAGMA user_version=2");
+    expect(() => f.store.upgradeScratchRetention()).toThrow("unsupported scratch retention policy version");
+    expect(fs.existsSync(directory)).toBeTrue(); expect(f.store.retentionExpiry(directory)).toBeNull();
+  } finally { db.close(); f.store.close(); }
 });

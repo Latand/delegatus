@@ -12,6 +12,7 @@ import { finishedLane, holdFinishedRoot } from "./attemptTempRetention.testSuppo
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import * as filesystem from "./attemptTempFilesystem";
 import { WorktreeSweepWorker } from "../pipelines/worktreeSweepWorker";
+import { realParentWorker } from "./attemptTempPressure.testSupport";
 
 const NOW = Date.parse("2030-01-20T00:00:00Z"), at = new Date(NOW).toISOString();
 const reviewId = "pr_" + "a".repeat(32), inputDigest = "b".repeat(64);
@@ -21,7 +22,7 @@ function fixture(count = 1) {
   const before = { ...process.env }, root = fs.mkdtempSync(path.join(os.tmpdir(), "approved-attempt-"));
   const state = path.join(root, "state"), scratch = path.join(state, "scratch");
   fs.mkdirSync(scratch, { recursive: true }); process.env.LLV_STATE_DIR = state;
-  const lane = finishedLane(root, new Date(NOW - 3600000).toISOString()); savePipelines([lane]);
+  const lane = finishedLane(root, "2020-01-01T00:00:00Z"); savePipelines([lane]);
   const store = new AttemptTempStore(), directories: string[] = [];
   for (let n = 0; n <= count; n++) {
     const directory = path.join(scratch, "llv-stage-" + String(n).padStart(6, "0")); directories.push(directory);
@@ -212,5 +213,23 @@ test.skipIf(process.platform !== "linux")("a fresh helper resumes after the exac
     expect(last.freeBefore).toBe(first.freeBefore);
     for (const directory of f.directories.slice(0, 32)) expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("fixture payload");
     expect(fs.readFileSync(path.join(f.directories[34]!, "data"), "utf8")).toBe("fixture payload");
+  } finally { await worker?.close(); f.close(); }
+}, 120000);
+
+test.skipIf(process.platform !== "linux")("approved lists require strictly more than 24h and reconsider retained rows after a process restart", async () => {
+  const f = fixture();
+  let worker: ReturnType<typeof realParentWorker> | undefined;
+  try {
+    f.lane.closedAt = new Date(NOW - 86400000).toISOString(); savePipelines([f.lane]);
+    const config = path.join(f.root, "fixture.json"); process.env.LLV_PRESSURE_FIXTURE = config;
+    for (const delta of [-1, 0, 1]) {
+      fs.writeFileSync(config, JSON.stringify({ now: NOW + delta, freeBytes: 1e12, realClock: true, measureCost: 0 }));
+      worker = realParentWorker(true);
+      const report = await worker.approvedAttemptTemp(f.request);
+      expect(report.removedThisRun).toBe(delta > 0 ? 1 : 0);
+      expect(fs.existsSync(f.directories[0]!)).toBe(delta <= 0);
+      expect(fs.readFileSync(path.join(f.directories[1]!, "data"), "utf8")).toBe("fixture payload");
+      await worker.close(); worker = undefined;
+    }
   } finally { await worker?.close(); f.close(); }
 }, 120000);

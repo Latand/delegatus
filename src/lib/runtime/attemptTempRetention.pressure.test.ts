@@ -204,7 +204,7 @@ test.each([
     finally { await worker.close(); }
   };
   try {
-    savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+    savePipelines([finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString())]);
     for (let n = 0; n <= prefix; n++) {
       const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`); directories.push(directory);
       fs.mkdirSync(directory, { mode: 0o700 }); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));

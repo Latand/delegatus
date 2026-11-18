@@ -23,7 +23,7 @@ for (const lowSpace of [false, true]) for (const phase of ["allocation", "protec
     const store = new AttemptTempStore(), config = path.join(root, "fixture.json");
     const directories: { directory: string; identity: string }[] = [];
     try {
-      savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+      savePipelines([finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString())]);
       // Eight exhausted proofs, one available ended root, forty expensive
       // protected roots: the latter must leave the retry reserve usable.
       for (let n = 0; n < 49; n++) {
@@ -71,7 +71,7 @@ test.each([false, true])("real parent resumes behind a held suffix without an em
   process.env.LLV_STATE_DIR = state;
   const store = new AttemptTempStore(), config = path.join(root, "fixture.json");
   try {
-    savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+    savePipelines([finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString())]);
     const ended = path.join(scratch, "llv-stage-000000"), held = path.join(scratch, "llv-stage-000001");
     for (const [index, directory] of [ended, held].entries()) {
       fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));

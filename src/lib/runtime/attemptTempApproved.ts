@@ -9,7 +9,7 @@ import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, tempSweepMode } from "@/lib/tempSweep";
 import { attemptTempRemaining } from "./attemptTempDeadline";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempSweepOptions } from "./attemptTempRetention";
-import { attemptTempAuthority, recordingAttemptTempState } from "./attemptTempProduction";
+import { attemptTempAuthority, attemptScratchAuthority, recordingAttemptTempState } from "./attemptTempProduction";
 
 /** Installed by the release/operations owner from reviewed retained evidence.
  * The executor has no operation that creates or amends these bindings. Legacy
@@ -143,34 +143,36 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
       // Fresh rows go before interrupted ones so a bounded page of blocked
       // recoveries cannot starve the rest of the approved inventory.
       const ordered = [...proof.rows.filter(root => !rows.some(row => row.directory === root.directory)),
-        ...proof.rows.filter(root => rows.some(row => row.directory === root.directory))];
+        ...proof.rows.filter(root => rows.some(row => row.directory === root.directory)).sort((a, b) =>
+          rows.find(row => row.directory === a.directory)!.at.localeCompare(rows.find(row => row.directory === b.directory)!.at))];
       for (const row of ordered) {
         const prior = rows.find(old => old.directory === row.directory);
         // A completed receipt cannot authorize a replacement with the same name.
-        if (prior && prior.disposition !== "pending" && !(prior.disposition === "preview" && mode === "on")) continue;
+        if (prior?.disposition === "removed") continue;
         if (++visited > 32 || Math.min(attemptTempRemaining(40_000), deadline - performance.now()) <= 1000) break;
         if (!proof.current()) throw new Error("operator decision or approval binding changed");
-        record({ directory: row.directory, identity: row.identity, disposition: "pending", bytes: 0, reason: "admitted; reconcile native retirement journal after interruption", at: new Date().toISOString() });
+        record({ directory: row.directory, identity: row.identity, disposition: "pending", bytes: 0, reason: "admitted; reconcile native retirement journal after interruption", at: new Date(Date.now()).toISOString() });
         if (!row.pipelineId) {
           record({ directory: row.directory, identity: row.identity, disposition: "held", bytes: 0,
-            reason: "standalone root has no lane retirement claim; retained for its lifecycle owner", at: new Date().toISOString() }); continue;
+            reason: "standalone root has no lane retirement claim; retained for its lifecycle owner", at: new Date(Date.now()).toISOString() }); continue;
         }
         const stat = fs.lstatSync(row.directory, { throwIfNoEntry: false });
         if (!stat || !stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== row.identity || stat.uid !== row.uid) {
           record({ directory: row.directory, identity: row.identity, disposition: "held", bytes: 0,
-            reason: stat ? "fresh root identity differs from manifest" : "root absent; reclaimed allocation unknown", at: new Date().toISOString() }); continue;
+            reason: stat ? "fresh root identity differs from manifest" : "root absent; reclaimed allocation unknown", at: new Date(Date.now()).toISOString() }); continue;
         }
         if (fs.existsSync(attemptTempJournalPath(row.directory))) {
           record({ directory: row.directory, identity: row.identity, disposition: "pending", bytes: 0,
-            reason: "native retirement journal requires owner reconciliation", at: new Date().toISOString() }); continue;
+            reason: "native retirement journal requires owner reconciliation", at: new Date(Date.now()).toISOString() }); continue;
         }
-        const report = await sweepAttemptTemps(store, { scan: ports.scan, state: recordingAttemptTempState(store), authority: attemptTempAuthority,
+        const report = await sweepAttemptTemps(store, { scan: ports.scan, state: recordingAttemptTempState(store), authority: attemptScratchAuthority,
+          evidenceAuthority: attemptTempAuthority, requireExpired: true,
           mode, runBudgetMs: Math.min(attemptTempRemaining(40_000), deadline - performance.now()), selection: { ...proof.selection, directories: [row.directory] } });
         const outcome = report.outcomes.at(-1);
         if (mode === "on" && outcome?.disposition === "removed") { removedThisRun++; removedBytesThisRun += outcome.bytes; }
         record({ directory: row.directory, identity: row.identity,
           disposition: mode === "dry-run" ? "preview" : outcome?.disposition === "deferred" ? "pending" : outcome?.disposition ?? "pending",
-          bytes: mode === "dry-run" ? 0 : outcome?.bytes ?? 0, reason: outcome?.reason ?? "no final outcome; reconcile before retry", at: new Date().toISOString() });
+          bytes: mode === "dry-run" ? 0 : outcome?.bytes ?? 0, reason: outcome?.reason ?? "no final outcome; reconcile before retry", at: new Date(Date.now()).toISOString() });
       }
       const report = result(); writeJsonDurably(journal, report); return report;
     } finally { store.close(); }

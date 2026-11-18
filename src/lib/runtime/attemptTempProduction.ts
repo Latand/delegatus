@@ -14,6 +14,7 @@ import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import { agentRegistry } from "@/lib/agent/registry";
 import { finishedAgent } from "./temporaryDataProduction";
 import { stateDatabaseBusy } from "@/lib/state/lockWait";
+import { ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, ATTEMPT_SCRATCH_RETENTION_MS } from "./attemptScratchPolicy";
 
 /** The sweep helper serves every minute tick from one process. */
 const checkoutReads: RetainedCheckoutReads = new Map();
@@ -56,13 +57,18 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory =
   return observed("live");
 }
 export async function attemptTempState(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> {
-  return (await attemptTempAuthority(owner, inventory)).state;
+  return (await attemptScratchAuthority(owner, inventory)).state;
+}
+/** The common authority above retains the evidence clock. Ordinary scratch
+ * and approved scratch lists use this separate, strict completion-age clock. */
+export function attemptScratchAuthority(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory(), now = Date.now) {
+  return attemptTempAuthority(owner, inventory, now, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS);
 }
 /** The sweep's state port. Every read that finds the lane finished also
  * records when its retention ends, including for a root that a later
  * observation holds, so the ledger can order expired roots across pages. */
 export function recordingAttemptTempState(store: AttemptTempStore,
-  authority: (owner: AttemptTempOwner, inventory: RepositoryLinkInventory) => Promise<AttemptTempAuthority> = attemptTempAuthority) {
+  authority: (owner: AttemptTempOwner, inventory: RepositoryLinkInventory) => Promise<AttemptTempAuthority> = attemptScratchAuthority) {
   return async (owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> => {
     const observed = await authority(owner, inventory);
     store.noteRetentionEnd(owner.directory, observed);
@@ -78,12 +84,13 @@ export async function backfillAttemptTempRetention(store: AttemptTempStore, opti
   remaining?: () => number;
   limit?: number;
 } = {}) {
+  store.upgradeScratchRetention();
   let checked = 0, updated = 0, errors = 0, deferred = 0;
   for (const owner of store.retentionPage(options.limit)) {
     if ((options.remaining?.() ?? 1) <= 0) break;
     try {
       if (owner.released && owner.pipelineId) {
-        const observed = await (options.authority ?? attemptTempAuthority)(owner);
+        const observed = await (options.authority ?? attemptScratchAuthority)(owner);
         // The owner or its ledger binding may have changed while awaiting a read.
         const current = store.owner(owner.directory);
         if (observed.isCurrent() && current?.identity === owner.identity && current.released
@@ -149,7 +156,8 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     const continuing = store.activePressurePass() !== null;
     const options: AttemptTempSweepOptions = {
       runBudgetMs: attemptTempRemaining(40_000),
-      state: recordingAttemptTempState(store), authority: attemptTempAuthority, mode, scan: ports.scan, checkoutReads,
+      state: recordingAttemptTempState(store), authority: attemptScratchAuthority, evidenceAuthority: attemptTempAuthority,
+      requireExpired: true, mode, scan: ports.scan, checkoutReads,
       onRetired: (count, bytes) => console.log(`[attempt temp] retired ${count} directories, ${bytes} attributed bytes`),
       capBytes: setting(env.LLV_ATTEMPT_TEMP_CAP_BYTES, 100 * 1024 ** 3),
       maxAgeMs: setting(env.LLV_ATTEMPT_TEMP_MAX_AGE_DAYS, 1) * 86400000,
@@ -160,8 +168,10 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     // after the first slice without delaying the first reclamation.
     const backfill: Awaited<ReturnType<typeof backfillAttemptTempRetention>> = continuing ? { checked: 0, updated: 0 }
       : await backfillAttemptTempRetention(store, { remaining: () => attemptTempRemaining() });
-    const copies = await sweepEvidenceCopies(store, options, { agentCopiesManagedSeparately: true });
-    const report = { ...roots, errors: roots.errors + (backfill.errors ?? 0), copies, backfill, retention: store.retention(Date.now(), options.retentionMs) };
+    const copies = await sweepEvidenceCopies(store, { ...options, authority: attemptTempAuthority }, { agentCopiesManagedSeparately: true });
+    const report = { ...roots, errors: roots.errors + (backfill.errors ?? 0), copies, backfill,
+      retention: { ...store.retention(Date.now(), options.retentionMs), scratchPeriodDays: ATTEMPT_SCRATCH_RETENTION_MS / 86400000,
+        evidencePeriodDays: FINISHED_LANE_RETENTION_MS / 86400000 } };
     const file = statePath("attempt-temp-report.json");
     const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, ...(report.lowSpace ? { lowSpace: true } : {}),
       failing: report.errors > 0 || copies.errors > 0 || report.spaceError !== null };

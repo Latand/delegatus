@@ -24,6 +24,7 @@ import { pipelineRecordReader } from "@/lib/pipelines/store";
 import { laneFinish } from "@/lib/pipelines/laneFinish";
 import { stateDatabaseBusy } from "@/lib/state/lockWait";
 import { AttemptProtectionInventory, forgetAttemptProtection } from "./attemptProtectionInventory";
+import { ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS } from "./attemptScratchPolicy";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
 export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; revision: string; isCurrent: () => boolean };
@@ -143,6 +144,10 @@ export class AttemptTempStore {
         })();
       }
       this.reporting = new AttemptRetentionReporting(this.db, path.dirname(filename));
+      // Fresh ledgers already use the new writer policy. Existing ledgers are
+      // upgraded once by the ordinary owner before selecting its next page.
+      if (!this.db.query("SELECT 1 FROM roots LIMIT 1").get() && this.scratchRetentionVersion() === 0)
+        this.db.exec("PRAGMA user_version=1");
       fs.chmodSync(filename, 0o600);
     } catch (error) { this.db.close(); this.releaseMemoryTracking(); this.releaseMemoryTracking = undefined; throw error; }
   }
@@ -199,14 +204,32 @@ export class AttemptTempStore {
   has(directory: string) { return !!this.db.query("SELECT 1 FROM roots WHERE directory=?").get(directory); }
   owner(directory: string): Row | null { return this.db.query<Row, [string]>("SELECT * FROM roots WHERE directory=?").get(directory); }
   release(directory: string) {
+    this.upgradeScratchRetention();
     this.db.query("UPDATE roots SET released=1,checkedAt=0 WHERE directory=?").run(directory);
     const owner = this.owner(directory);
     if (owner?.pipelineId) {
       const pipeline = pipelineRecordReader(owner.pipelineId).read();
-      const finish = pipeline && laneFinish(pipeline);
+      const finish = pipeline && laneFinish(pipeline, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS);
       if (finish && finish.finished) this.retainRoot(directory, finish.expiresAt);
       else this.retainRoot(directory, null);
     }
+  }
+  scratchRetentionVersion() { return this.db.query<{ user_version: number }, []>("PRAGMA user_version").get()!.user_version; }
+  /** Convert only legacy scratch scheduling projections. Every deletion still
+   * reads authoritative completion again; evidence copies and required expiry
+   * admissions retain their existing lifetimes. The transaction is replay-safe. */
+  upgradeScratchRetention() {
+    const version = this.scratchRetentionVersion();
+    if (version === 1) return;
+    if (version !== 0) throw new Error("unsupported scratch retention policy version");
+    this.db.transaction(() => {
+      const current = this.scratchRetentionVersion();
+      if (current === 1) return;
+      if (current !== 0) throw new Error("unsupported scratch retention policy version");
+      this.db.query("UPDATE root_retention SET expiresAt=expiresAt-?+? WHERE expiresAt IS NOT NULL")
+        .run(FINISHED_LANE_RETENTION_MS, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS);
+      this.db.exec("UPDATE roots SET checkedAt=0; DELETE FROM retention_cursor; PRAGMA user_version=1");
+    })();
   }
   /** Indexed, durable rotation independent of expensive filesystem visits.
    * Revisit open lanes too: a later close must supply their missing clock. */
@@ -401,6 +424,10 @@ export type AttemptTempSweepOptions = {
   now?: () => number;
   state: (owner: AttemptTempOwner, inventory: RepositoryLinkInventory) => Promise<AttemptTempState>;
   authority?: (owner: AttemptTempOwner, inventory: RepositoryLinkInventory) => Promise<AttemptTempAuthority>;
+  evidenceAuthority?: (owner: AttemptTempOwner, inventory: RepositoryLinkInventory) => Promise<AttemptTempAuthority>;
+  /** Production scratch requires a confirmed completion older than 24h,
+   * including under pressure. Creation age grants no deletion authority. */
+  requireExpired?: true;
   scan: (directories: readonly string[]) => ProcessScan;
   references?: (original: string, current: string, scan: ProcessScan) => Promise<boolean>;
   maxRoots?: number;
@@ -430,6 +457,10 @@ export async function sweepAttemptTemps(store: AttemptTempStore, options: Attemp
 }
 
 async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptTempSweepOptions) {
+  if (options.requireExpired) {
+    if (options.selection && store.scratchRetentionVersion() !== 1) throw new Error("ordinary attempt-temp owner must upgrade scratch retention before exact-list execution");
+    if (!options.selection) store.upgradeScratchRetention();
+  }
   const now = options.now ?? Date.now;
   const retentionMs = options.retentionMs ?? FINISHED_LANE_RETENTION_MS;
   const observeOwner = async (owner: AttemptTempOwner): Promise<AttemptTempAuthority> => options.authority
@@ -624,6 +655,18 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (options.selection) { outcome(owner.directory, "evidence", bytes, "recorded check evidence hold; exact selection cannot release shared holds"); return; }
         const initialAuthority = await observeOwner(owner);
         retentionExpiry = initialAuthority.expiresAt ?? null;
+        let custodyExpiry = retentionExpiry;
+        let custodyCurrent = () => true;
+        if (options.evidenceAuthority) {
+          const custody = await options.evidenceAuthority(owner, inventory);
+          checkBudget();
+          if (custody.state !== "expired" || !custody.isCurrent()) {
+            store.retainRoot(owner.directory, retentionExpiry); store.rootEligible(owner.directory, false);
+            outcome(owner.directory, "evidence", bytes, "recorded check retains its independent evidence lifetime"); return;
+          }
+          custodyExpiry = custody.expiresAt ?? null;
+          custodyCurrent = custody.isCurrent;
+        }
         checkBudget();
         if (initialAuthority.state === "expired") await claim();
         const observedAt = now();
@@ -636,9 +679,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (unpinned && initialAuthority.state === "expired" && owner.pipelineId && initialAuthority.isCurrent() && options.mode !== "dry-run") {
           // The CAS releases the whole check, including roots outside this
           // page. Persist their prerequisites together before that await.
-          await expireRecordedRootHolds(owner.directory, owner.pipelineId, now(), () => initialAuthority.isCurrent()
+          await expireRecordedRootHolds(owner.directory, owner.pipelineId, now(), () => initialAuthority.isCurrent() && custodyCurrent()
             && now() >= observedAt && now() - observedAt < ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS && protection.current(),
-            row => store.requireRecordedRootExpiry(row, retentionExpiry), remaining);
+            row => store.requireRecordedRootExpiry(row, custodyExpiry), remaining);
           requiredExpiry = store.requiredRootExpiry(owner.directory);
         }
         if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && initialAuthority.state === "expired")) {
@@ -664,6 +707,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           && (dispatchAuthority?.isCurrent() ?? true)
           && (dispatchAuthority?.state ?? dispatchState) === dispatchState
           && (dispatchState !== undefined)
+          && (!options.requireExpired || dispatchState === "expired")
           && expiryCurrent(dispatchState);
       };
       const retirementAuthorityCurrent = (directory: string, validateCheckouts = true) => {
@@ -738,6 +782,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         checkBudget();
         if (options.selection && !options.selection.current(owner)) { reason = "approved manifest authority changed"; return false; }
         const state = await options.state(owner, inventory);
+        if (options.requireExpired && state !== "expired") {
+          disposition = state === "live" ? "live" : "held";
+          reason = "scratch requires confirmed completion strictly older than 24 hours"; return false;
+        }
         if (recoveredTrash && state !== "expired") {
           disposition = authorityDisposition(state); reason = `ownership ${state}; recovered trash requires expired lane`; return false;
         }

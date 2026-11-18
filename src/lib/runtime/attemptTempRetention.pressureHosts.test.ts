@@ -92,7 +92,7 @@ test("real parent and restarted helper reclaim a thousand-root inventory five ti
   const store = new AttemptTempStore(path.join(state, "attempt-temp.sqlite"));
   const held: string[] = [];
   try {
-    const ended = finishedLane(root, new Date(NOW - 3600_000).toISOString());
+    const ended = finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString());
     const live = buildPipeline({ id: "pressure-live", task: "Live pressure fixture", project: "fixture", repoDir: root,
       stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: ended.stages[0]!.effectiveRole }],
       srcPath: null, srcConversationId: null, now: "2030-01-19T00:00:00Z" });

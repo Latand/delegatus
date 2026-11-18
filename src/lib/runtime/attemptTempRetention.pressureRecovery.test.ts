@@ -21,7 +21,7 @@ test.each([
   process.env.LLV_STATE_DIR = state;
   const store = new AttemptTempStore(), config = path.join(f.root, "fixture.json");
   try {
-    savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+    savePipelines([finishedLane(f.root, new Date(NOW - 2 * 86400_000).toISOString())]);
     for (let n = 0; n < 33; n++) {
       const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`);
       fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
@@ -68,7 +68,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
     const directories: { directory: string; identity: string }[] = [];
     const finiteCount = timeoutPrefix === 1 ? 32 : 8, count = timeoutPrefix + finiteCount;
     try {
-      savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+      savePipelines([finishedLane(f.root, new Date(NOW - 2 * 86400_000).toISOString())]);
       for (let n = 0; n < count; n++) {
         const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`);
         fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
@@ -126,7 +126,7 @@ test.each(["timeout", "permission-denied"] as const)("real parent retains pressu
   process.env.LLV_STATE_DIR = state;
   const store = new AttemptTempStore(), config = path.join(f.root, "fixture.json"), directories: string[] = [];
   try {
-    savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+    savePipelines([finishedLane(f.root, new Date(NOW - 2 * 86400_000).toISOString())]);
     for (let n = 0; n < 2; n++) {
       const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`); directories.push(directory);
       fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));

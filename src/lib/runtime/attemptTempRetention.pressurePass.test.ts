@@ -200,7 +200,7 @@ test.each(["allocation", "protection"] as const)("a large recorded root can fini
   fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
   const store = new AttemptTempStore();
   try {
-    savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+    savePipelines([finishedLane(f.root, new Date(NOW - 2 * 86400_000).toISOString())]);
     store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 });
     store.measure(directory, 8 * 1024 ** 3);
     fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, fixtureMutationFence: true, fixtureRemoval: true,
@@ -223,7 +223,7 @@ test.each(["closed", "completed"] as const)("a large %s lane root retires in one
   fs.mkdirSync(directory, { recursive: true });
   const store = new AttemptTempStore();
   try {
-    const lane = finishedLane(f.root, new Date(NOW - 3600_000).toISOString()); lane.state = state; savePipelines([lane]);
+    const lane = finishedLane(f.root, new Date(NOW - 2 * 86400_000).toISOString()); lane.state = state; savePipelines([lane]);
     for (let n = 0; n < 10001; n++) fs.mkdirSync(path.join(directory, pad(n)));
     const payload = fs.openSync(path.join(directory, "data"), "w");
     try { fs.ftruncateSync(payload, 16 * 1024 ** 3); } finally { fs.closeSync(payload); }
@@ -528,7 +528,7 @@ test("the real helper resumes one pass across restarts and reports its progress 
   const count = 96, directories: string[] = [];
   let worker: ReturnType<typeof realParentWorker> | undefined;
   try {
-    savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+    savePipelines([finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString())]);
     for (let n = 0; n < count; n++) {
       const directory = path.join(scratch, `llv-stage-${pad(n)}`); directories.push(directory);
       fs.mkdirSync(directory, { mode: 0o700 }); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));

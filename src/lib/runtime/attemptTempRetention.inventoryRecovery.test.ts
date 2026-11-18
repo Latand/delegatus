@@ -18,7 +18,7 @@ test.skipIf(process.platform !== "linux")("large protection inventories resume a
   const store = new AttemptTempStore(), config = path.join(root, "fixture.json");
   const directory = path.join(scratch, "llv-stage-000001"), count = 65_536;
   try {
-    savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+    savePipelines([finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString())]);
     fs.mkdirSync(directory, { mode: 0o700 }); fs.writeFileSync(path.join(directory, "data"), "retained payload");
     for (let n = 0; n < count; n++) fs.mkdirSync(path.join(directory, String(n).padStart(6, "0")));
     store.register({ directory, pipelineId: "retention-lane", launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 });

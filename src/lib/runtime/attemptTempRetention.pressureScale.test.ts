@@ -19,8 +19,8 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
   const directories: string[] = [];
   let worker: ReturnType<typeof realParentWorker> | undefined;
   try {
-    const ended = finishedLane(root, new Date(NOW - 3600_000).toISOString());
-    const live = finishedLane(root, new Date(NOW - 3600_000).toISOString());
+    const ended = finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString());
+    const live = finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString());
     live.id = "live-lane"; Object.assign(live, pipelineIdentity(live.id, live.task, live.repoDir));
     live.state = "running"; live.closedAt = null;
     live.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };

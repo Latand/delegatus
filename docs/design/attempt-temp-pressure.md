@@ -72,16 +72,17 @@ An unavailable shared ledger at connection setup defers the tick safely.
 `completed` and `closed` both count as finished through `laneFinish`;
 `engine.ts` stamps `closedAt` on completion. A valid finish clock, settled
 activity and no running/unconfirmed attempts or active delivery/merge remain
-required. The ordinary lifetime is seven days from the latest terminal event;
-pressure can reclaim disposable scratch sooner. Archiving changes visibility,
+required. Scratch becomes eligible strictly more than 24 hours after the latest
+authoritative terminal event, including under pressure. Evidence copies and
+recorded-check custody keep their independent seven-day lifetimes. Archiving changes visibility,
 and the underlying lane state still decides retention.
 
-A missing lane record is `orphan`. Its root becomes eligible after one day
-from root creation (configurable with `LLV_ATTEMPT_TEMP_MAX_AGE_DAYS`), with
-all identity, process, evidence and tree guards still required. A root without
-a pipeline binding first checks its durable standalone launch/host: live,
-starting and pending-resume owners stay protected; a missing launch receipt
-uses the same orphan grace. Unknown ownership never authorizes retirement.
+A missing lane record is `orphan` and grants no production scratch retirement
+authority. Creation time and mtime cannot establish a completion. A root
+without a pipeline binding checks its durable standalone launch/host: live,
+starting, pending-resume and missing-receipt owners stay protected.
+`LLV_ATTEMPT_TEMP_MAX_AGE_DAYS` is the legacy orphan-age setting and does not
+replace the strict completion-age policy.
 
 `attempt-temp-report.json` and the tick line expose `pass` progress, tick and
 visit counts, cumulative removed roots/bytes and elapsed time. `lastPass`
@@ -324,7 +325,7 @@ Each row uses the retained inventory's `path`, `laneId`, `launchId` and
 `retainUntilClose` and `uid`. Fresh directory identity and registry ownership
 must agree. Standalone roots are reported as held because this executor cannot
 take a lane retirement claim for them; their lifecycle owner retains custody.
-An approved selection uses the existing closed-root pressure policy;
+An approved selection requires the same strict completion age over 24 hours;
 it grants no evidence or live-owner exemption. Shared recorded-check holds are
 kept because releasing them could affect another root.
 
@@ -342,3 +343,12 @@ row was removed. A fresh invocation resumes the journal. A completed removal
 receipt never authorizes a replacement at the same path. Dry-run previews can
 later be executed under the same unchanged approval. The command never runs
 global recovery, adoption, copy retention or a pressure-cursor transition.
+
+The ordinary owner upgrades legacy seven-day scratch scheduling dates once in
+an atomic ledger transaction (`user_version=1`), requeues old deferred rows and
+resets the retention-backfill cursor. Fresh authority is still required at
+deletion. Copy expiries and recorded-check required-expiry admissions are
+unchanged. Reports expose `scratchPeriodDays: 1` and `evidencePeriodDays: 7`;
+the existing aggregate forecast remains a seven-day lookahead across both
+classes. Held manifest rows are rechecked in timestamp order on later invocations;
+completed removal receipts remain sealed against replacement names.
