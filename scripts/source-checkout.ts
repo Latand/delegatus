@@ -32,11 +32,20 @@ export function currentCheckout(source: string, target: string): void {
   const cachedFiles = new Set(git("ls-files", "--stage", "-z").split("\0")
     .filter(entry => entry && !entry.startsWith("160000 ")).map(entry => entry.slice(entry.indexOf("\t") + 1)));
   const inputStat = (file: string) => {
-    try { return fs.lstatSync(file, { throwIfNoEntry: false }); }
+    try {
+      // Cached descendants can survive a directory-to-symlink replacement.
+      // Only the current link is an input; never follow it to stale children.
+      let parent = source;
+      for (const part of file.split("/").slice(0, -1)) {
+        parent = path.join(parent, part);
+        if (!fs.lstatSync(parent, { throwIfNoEntry: false })?.isDirectory()) return undefined;
+      }
+      return fs.lstatSync(path.join(source, file), { throwIfNoEntry: false });
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined; throw error; }
   };
   for (const file of previous) {
-    const stat = inputStat(path.join(source, file));
+    const stat = inputStat(file);
     if (!wanted.has(file) || !stat || stat.isDirectory())
       fs.rmSync(path.join(target, file), { recursive: true, force: true });
   }
@@ -44,7 +53,7 @@ export function currentCheckout(source: string, target: string): void {
   // flags. The export must include every current byte even under those flags.
   for (const file of wanted) {
     const from = path.join(source, file), to = path.join(target, file);
-    const stat = inputStat(from);
+    const stat = inputStat(file);
     if (!stat) continue;
     if (stat.isDirectory()) {
       // A cached plain file may now be an ordinary directory. Its current

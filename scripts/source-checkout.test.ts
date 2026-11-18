@@ -133,6 +133,35 @@ test.each(["empty", "ignored children"])("replacing a file with a directory reta
   expect(fs.readFileSync(path.join(f.source, ".git/index"))).toEqual(index);
 });
 
+test.each(["unstaged", "staged"])("runtime export preserves directory-to-symlink transitions (%s)", state => {
+  const f = fixture(), outside = path.join(f.root, "outside");
+  fs.mkdirSync(path.join(f.source, "folder/deep"), { recursive: true });
+  fs.writeFileSync(path.join(f.source, "folder/child.ts"), "committed child");
+  fs.writeFileSync(path.join(f.source, "folder/deep/child.ts"), "committed nested child");
+  f.git("add", "."); f.git("commit", "-qm", "directory fixture");
+  fs.mkdirSync(path.join(outside, "deep"), { recursive: true });
+  fs.writeFileSync(path.join(outside, "child.ts"), "external child");
+  fs.writeFileSync(path.join(outside, "deep/child.ts"), "external nested child");
+  fs.writeFileSync(path.join(outside, "extra.ts"), "external extra");
+  fs.rmSync(path.join(f.source, "folder"), { recursive: true });
+  fs.symlinkSync(outside, path.join(f.source, "folder"));
+  if (state === "staged") f.git("add", "-A");
+  const status = f.git("status", "--porcelain"), index = fs.readFileSync(path.join(f.source, ".git/index"));
+  const tree = createRuntimeCheckTree(f.source, f.root);
+  expect(fs.lstatSync(path.join(tree, "folder")).isSymbolicLink()).toBeTrue();
+  expect(fs.readlinkSync(path.join(tree, "folder"))).toBe(outside);
+  expect(fs.readFileSync(path.join(tree, "folder/extra.ts"), "utf8")).toBe("external extra");
+  expect(fs.readlinkSync(path.join(f.source, "folder"))).toBe(outside);
+  expect(fs.readdirSync(outside).sort()).toEqual(["child.ts", "deep", "extra.ts"]);
+  expect(fs.readdirSync(path.join(outside, "deep"))).toEqual(["child.ts"]);
+  expect(fs.readFileSync(path.join(outside, "child.ts"), "utf8")).toBe("external child");
+  expect(fs.readFileSync(path.join(outside, "deep/child.ts"), "utf8")).toBe("external nested child");
+  expect(fs.readFileSync(path.join(outside, "extra.ts"), "utf8")).toBe("external extra");
+  expect(fs.readFileSync(path.join(f.source, "input"), "utf8")).toBe("committed");
+  expect(f.git("status", "--porcelain")).toBe(status);
+  expect(fs.readFileSync(path.join(f.source, ".git/index"))).toEqual(index);
+});
+
 test("replacing a committed symlink ancestor cannot write into its old target", () => {
   const f = fixture(), outside = path.join(f.root, "outside"); fs.mkdirSync(outside);
   fs.writeFileSync(path.join(outside, "child"), "untouched");
