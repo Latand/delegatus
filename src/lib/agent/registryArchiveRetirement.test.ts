@@ -149,7 +149,10 @@ test("sparse AUTOINCREMENT history counts retained rows and resumes across a pro
   expect(page.rows).toEqual([]);
   expect(page.nextCursor).toBe(2_019_000_000);
   expect(db.query("SELECT COUNT(*) AS n FROM registry_archive_retirements").get()).toEqual({ n: 0 });
-  const store = new SqliteAgentRegistryStore(filename,{ normalize: normalizeRegistry }); handles.push(store);
+  const store = new SqliteAgentRegistryStore(filename,{
+    initialSnapshot: () => { throw new Error("sparse retirement fixture must already be imported"); },
+    normalize: normalizeRegistry,
+  }); handles.push(store);
   store.retireSupersededArchive(page,RETIREMENT_NOW); // Persist the page before the reader process restarts.
   expect(observeSupersededArchive(db).cursor).toBe(2_019_000_000);
   expect(await child(filename,"observe")).toEqual([0,"",""]);
