@@ -6,7 +6,7 @@ import { afterAll, beforeEach, expect, test } from "bun:test";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-message-bounds-"));
 const previous = { ...process.env };
 process.env.HOME = path.join(root, "home"); process.env.TMPDIR = root; process.env.LLV_STATE_DIR = path.join(root, "state"); process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
-const { queueSeatMessage, seatMessagesPart, acceptSeatMessages, validSeatMessagePart, seatMessageReceipt, messagesPending, resolveSeatMessageMachine, SeatMessageRefusal } = await import("./seatMessages");
+const { queueSeatMessage, seatMessagesPart, acceptSeatMessages, validSeatMessagePart, seatMessageReceipt, messagesPending, resolveSeatMessageMachine, seatMessageMachineAddress, SeatMessageRefusal } = await import("./seatMessages");
 const { recordSeatMessages, updateRemoteProjects } = await import("./boardLinks");
 const { atomicWrite, linkFile, setShared, readPeers, writePeers } = await import("./state");
 const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
@@ -52,6 +52,29 @@ test("an unambiguous label or install prefix resolves to the linked peer", () =>
 test("here, the local install id and an unambiguous local label resolve locally", () => {
   for (const machine of ["here", selfId, "Local", "this machine"]) {
     expect(resolveSeatMessageMachine(machine, project.project)).toBeNull();
+  }
+});
+
+test("a peer called Here advertises its install id while here remains local", () => {
+  labelSelf("Here");
+  const herePeer = { ...link, label: "Here" };
+  expect(resolveSeatMessageMachine("Here", project.project)).toBeNull();
+  expect(seatMessageMachineAddress(herePeer)).toBe(peerId);
+  expect(resolveSeatMessageMachine(seatMessageMachineAddress(herePeer), project.project)).toMatchObject({ install: peerId });
+  expect(seatMessageMachineAddress({ ...link, label: selfId })).toBe(peerId);
+});
+
+test("a revoked full install ID cannot fall through to a local or linked label", () => {
+  const prior = readPeers();
+  const secondId = ["22334455", "6677", "4888", "99aa", "bbccddeeff00"].join("-");
+  const original = prior.peers[0]!;
+  writePeers({ v: 1, peers: [
+    { ...original, state: "revoked" },
+    { ...original, id: secondId, install: secondId, grantId: secondId, store: secondId, label: peerId },
+  ] });
+  for (const localLabel of ["Local", peerId]) {
+    labelSelf(localLabel);
+    expect(() => resolveSeatMessageMachine(peerId, project.project)).toThrow(expect.objectContaining({ code: "link_revoked" }));
   }
 });
 

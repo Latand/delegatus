@@ -13,7 +13,7 @@ process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
 const { recordProjectRemote } = await import("@/lib/projects/aliases");
-const { atomicWrite, linkFile, setShared } = await import("@/lib/links/state");
+const { atomicWrite, linkFile, readPeers, setShared, writePeers } = await import("@/lib/links/state");
 const { updateRemoteProjects, recordSeatMessages } = await import("@/lib/links/boardLinks");
 const { queueSeatMessage, resolveSeatMessageMachine, recoverSeatMessage, seatMessageRetryFence, drainSeatMessages } = await import("@/lib/links/seatMessages");
 const { acceptAgents, dropAgents } = await import("@/lib/links/agentFeed");
@@ -94,6 +94,7 @@ test("remote orchestrator recovery reads the queued outbound row after a lost re
 });
 
 test("remote relay binds and dispatches withheld lesson text; local binding stays verbatim", async () => {
+  expect(resolveSeatMessageMachine("Other", project.project)).toMatchObject({ install });
   const { leaveLessons, recordLessonRequest, roleMemoryCollection } = await import("@/lib/memory/roleStore");
   const rule = "Inspect the current durable owner before replaying a saved acknowledgement.";
   const source = { project: project.project, pipelineId: "relay-fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: caller };
@@ -102,6 +103,7 @@ test("remote relay binds and dispatches withheld lesson text; local binding stay
   const recoverable = viewerMcpRecoverableTools(domain).send_message_to_orchestrator!;
   const args = { project: project.project, machine: "Other", text: rule, clientRequestId: "linked-private-rule" };
   const bound = await recoverable.bind(args);
+  expect(bound.target.identity).toBe(`machine:${install}`);
   expect(bound.sendPayload!.text).toContain("[learned rule]");
   expect(bound.sendPayload!.text).not.toContain(rule);
   for (const machine of [undefined, "Here", "this machine", selfId]) {
@@ -604,7 +606,7 @@ test("get_orchestrator ignores a peer seat timestamp outside the JavaScript date
 });
 
 test("get_orchestrator distinguishes seats on linked installs with the same machine label", async () => {
-  const second = randomUUID();
+  const second = ["22334455", "6677", "4888", "99aa", "bbccddeeff00"].join("-");
   atomicWrite(linkFile("peers"), { v: 1, peers: [install, second].map(id => ({ id, install: id, grantId: randomUUID(), token: "fixture", label: "Other", url: "http://127.0.0.1:1", store: randomUUID(), state: "active", lastCall: Date.now(), error: null })) });
   updateRemoteProjects(second, [{ key: project.project, name: "widget" }], randomUUID());
   for (const [id, engine] of [[install, "codex"], [second, "claude"]] as const) {
@@ -613,7 +615,18 @@ test("get_orchestrator distinguishes seats on linked installs with the same mach
   }
   const bindings = viewerMcpBindings(undefined, { post: async () => ({}) }, domain);
   expect(await bindings.get_orchestrator!({ project: project.project })).toMatchObject({ linkedSeats: [
-    { machine: "Other", install, seat: { engine: "codex" } },
-    { machine: "Other", install: second, seat: { engine: "claude" } },
+    { machine: install, install, seat: { engine: "codex" } },
+    { machine: second, install: second, seat: { engine: "claude" } },
   ] });
+});
+
+test("get_orchestrator advertises a full install ID when a peer label collides with here", async () => {
+  const peers = readPeers();
+  writePeers({ ...peers, peers: peers.peers.map(peer => peer.install === install ? { ...peer, label: "Here" } : peer) });
+  try {
+    const bindings = viewerMcpBindings(undefined, { post: async () => ({}) }, domain);
+    expect(await bindings.get_orchestrator!({ project: project.project })).toMatchObject({ linkedSeats: [{ machine: install, install }] });
+  } finally {
+    writePeers(peers);
+  }
 });

@@ -64,11 +64,14 @@ export function resolveSeatMessageMachine(machine: string, project: string): Lin
   if (wanted === "here" || wanted === context.self?.id) return null;
   // Full install IDs disambiguate labels and prefixes.
   const exact = context.links.filter(link => wanted === link.install);
-  const matches = exact.length ? exact : context.links.filter(link => wanted === link.label.toLowerCase() || wanted === link.prefix);
-  const local = !exact.length && (wanted === "this machine" || wanted === readSelf()?.label.toLowerCase());
+  // A UUID-shaped selector is always an install ID. If that install vanished
+  // between MCP binding and HTTP admission, never reinterpret it as a label.
+  const byName = exact.length === 0 && !UUID.test(wanted);
+  const matches = byName ? context.links.filter(link => wanted === link.label.trim().toLowerCase() || wanted === link.prefix) : exact;
+  const local = byName && (wanted === "this machine" || wanted === readSelf()?.label.trim().toLowerCase());
   if (!matches.length) {
     if (local) return null;
-    const revoked = peerRows().some(peer => peer.state === "revoked" && [peer.id, peer.install, peer.install.slice(0, 8), peer.label.toLowerCase()].includes(wanted));
+    const revoked = peerRows().some(peer => peer.state === "revoked" && [peer.id, peer.install, peer.install.slice(0, 8), peer.label.trim().toLowerCase()].includes(wanted));
     const previous = wasSeatLinkRevoked(wanted) || rows().some(row => row.link === wanted || row.link.slice(0, 8) === wanted);
     refuse(revoked || previous ? "link_revoked" : "machine_unknown", `${machine} is ${revoked || previous ? "no longer linked" : "not linked"} to this machine.`);
   }
@@ -83,6 +86,19 @@ export function resolveSeatMessageMachine(machine: string, project: string): Lin
   if (health?.state === "failing" || (link.side === "grant" && Date.now() - (health?.lastCall ?? 0) > 900_000)) refuse("peer_unreachable", `${link.label} has not been reachable recently.`);
   if (!peerSeatMessages(link.key)) refuse("peer_cannot_relay", `${link.label} runs a Delegatus without seat messages; update it.`);
   return link;
+}
+
+/** Return a linked-seat address that resolves back to this exact installation. */
+export function seatMessageMachineAddress(link: LinkedPeer): string {
+  const context = linkedContext();
+  const label = link.label.trim().toLowerCase();
+  const selfLabel = readSelf()?.label.trim().toLowerCase();
+  const collidesWithSelector = label === "here" || label === "this machine" || label === selfLabel || label === context.self?.id;
+  const collidesWithLink = context.links.some(candidate => candidate.install !== link.install && (
+    label === candidate.label.trim().toLowerCase() || label === candidate.install || label === candidate.prefix
+  ));
+  // Labels shaped like an install ID are reserved for exact identity routing.
+  return collidesWithSelector || collidesWithLink || UUID.test(label) ? link.install : link.label;
 }
 
 export function queueSeatMessage(link: LinkedPeer, project: string, text: string, seatConversationId: string, clientMessageId: string, admissionFence?: string) {
