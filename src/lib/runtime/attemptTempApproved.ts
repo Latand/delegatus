@@ -28,7 +28,7 @@ export type ApprovedAttemptTempReport = { version: 1; reviewId: string; manifest
   removedThisRun: number; removedBytesThisRun: number;
   complete: boolean; freeBefore: number; freeBeforeThisRun: number; freeAfter: number; filesystem: string; rows: ReceiptRow[] };
 const digest = (text: string | Buffer) => createHash("sha256").update(text).digest("hex");
-const MAX_MANIFEST_BYTES = 4 * 1024 * 1024, MAX_ROOTS = 1024;
+const MAX_MANIFEST_BYTES = 4 * 1024 * 1024, MAX_JOURNAL_BYTES = 8 * 1024 * 1024, MAX_ROOTS = 1024;
 
 function regularFile(file: string, maxBytes: number): Buffer {
   const stat = fs.lstatSync(file);
@@ -77,6 +77,7 @@ export function approvedAttemptTempSelection(request: ApprovedAttemptTempRequest
     const registry = row.evidence?.registry, directory = row.path;
     if (typeof directory !== "string" || path.resolve(directory) !== directory || path.dirname(directory) !== scratch
       || !/^llv-(?:stage|read-only-stage|stage-config)-[A-Za-z0-9]+$/.test(path.basename(directory)) || seen.has(directory)
+      || Buffer.byteLength(path.basename(directory)) > 255
       || !registry || !/^\d+:\d+$/.test(registry.devInode) || !Number.isFinite(Date.parse(registry.createdAt))
       || typeof registry.released !== "boolean" || typeof registry.retainUntilClose !== "boolean"
       || !Number.isInteger(registry.uid) || typeof row.launchId !== "string" || !row.launchId
@@ -117,12 +118,12 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
       let freeBefore = freeBeforeThisRun, removedThisRun = 0, removedBytesThisRun = 0;
       let rows: ReceiptRow[] = [];
       if (fs.existsSync(journal)) {
-        const prior = JSON.parse(regularFile(journal, MAX_MANIFEST_BYTES).toString()) as ApprovedAttemptTempReport;
+        const prior = JSON.parse(regularFile(journal, MAX_JOURNAL_BYTES).toString()) as ApprovedAttemptTempReport;
         if (prior.version !== 1 || prior.reviewId !== request.reviewId || prior.manifestSha256 !== proof.binding.manifestSha256
           || prior.filesystem !== filesystem || !Array.isArray(prior.rows) || prior.rows.length > MAX_ROOTS
           || prior.rows.some(row => !proof.rows.some(root => root.directory === row.directory && root.identity === row.identity)
             || !["pending", "removed", "preview", "held", "live", "evidence", "operator", "failed"].includes(row.disposition)
-            || !Number.isFinite(row.bytes) || row.bytes < 0 || typeof row.reason !== "string" || !Number.isFinite(Date.parse(row.at)))
+            || !Number.isFinite(row.bytes) || row.bytes < 0 || typeof row.reason !== "string" || row.reason.length > 512 || !Number.isFinite(Date.parse(row.at)))
           || new Set(prior.rows.map(row => row.directory)).size !== prior.rows.length)
           throw new Error("execution journal does not belong to approved manifest");
         if (!Number.isFinite(prior.freeBefore) || prior.freeBefore < 0) throw new Error("invalid execution journal space observation");
@@ -135,7 +136,9 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
         removedThisRun, removedBytesThisRun,
         skipped: rows.filter(row => row.disposition !== "removed" && row.disposition !== "pending").length,
         complete: rows.length === proof.rows.length && rows.every(row => row.disposition !== "pending"), freeBefore, freeBeforeThisRun, freeAfter: space(), filesystem, rows });
-      const record = (row: ReceiptRow) => { rows = [...rows.filter(old => old.directory !== row.directory), row]; writeJsonDurably(journal, result()); };
+      // Bound every writer's diagnostic so its complete manifest output fits
+      // both the replay reader and the helper's 8 MiB response protocol.
+      const record = (row: ReceiptRow) => { rows = [...rows.filter(old => old.directory !== row.directory), { ...row, reason: row.reason.slice(0, 512) }]; writeJsonDurably(journal, result()); };
       let visited = 0;
       // Fresh rows go before interrupted ones so a bounded page of blocked
       // recoveries cannot starve the rest of the approved inventory.
