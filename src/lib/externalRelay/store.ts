@@ -13,6 +13,7 @@ export type RelayTargetSettings = {
   id: string;
   name: string;
   answered_by: "install" | "service";
+  answered_elsewhere?: boolean;
   fallback: "service" | "none";
   enabled: boolean;
   engine: "claude" | "codex" | "codex-cloud" | null;
@@ -562,6 +563,7 @@ export function newTargetSettings(
     id: target.target_id,
     name: target.name,
     answered_by: target.answered_by,
+    answered_elsewhere: target.answered_elsewhere,
     fallback: target.fallback,
     enabled: true,
     engine: "codex-cloud",
@@ -590,6 +592,7 @@ export function mergeRelayTargets(
           ...kept,
           name: target.name,
           answered_by: target.answered_by,
+          answered_elsewhere: target.answered_elsewhere,
           fallback: target.fallback,
         }
       : newTargetSettings(target);
