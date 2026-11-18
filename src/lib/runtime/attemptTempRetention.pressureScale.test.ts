@@ -30,14 +30,14 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
     const pinned = directories[1]!; plantKeepMarker(path.join(pinned, ".delegatus-keep"));
     store.close();
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
-    // The parent sends a real monotonic five-second deadline. No mutation fence,
-    // remover or clock is replaced. Only fixture-owned external observations
-    // (free space, processes, containers) are supplied by the existing preload.
+    // The parent sends a real monotonic five-second deadline. The deadline
+    // clock, mutation fence and native remover remain real. Calendar time is
+    // fixed per tick; free-space/process/container observations belong to the fixture.
     const deadlineMs = 5000, maxTicks = 48;
     let removed = 0, ticks = 0;
     worker = realParentWorker(true, deadlineMs);
     for (; ticks < maxTicks; ticks++) {
-      fs.writeFileSync(config, JSON.stringify({ now: NOW + ticks * 105_000, freeBytes: 1e12, realClock: true, measureCost: 0,
+      fs.writeFileSync(config, JSON.stringify({ now: NOW + ticks * 105_000, freeBytes: 1e12, realClock: true, tickClock: true, measureCost: 0,
         ...(ticks === 0 ? { exhaustMeasurement: "llv-stage-000998" } : {}) }));
       // Exercise a cold owner after the actual deadline cut and midway through
       // the inventory; the remaining ticks use production warm continuations.
