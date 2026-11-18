@@ -7,7 +7,9 @@ manifest execution, native removal races and persistent descendant inventory:
 
 - `src/lib/runtime/attemptTempRetention.automatic.test.ts`: ordinary cleanup of
   expired registered scratch without pressure, live/protected/unknown holds,
-  and zero-cache roots beyond a protected prefix across real helper restarts.
+  zero-cache roots beyond a protected prefix, and strict 24h−/24h/24h+ boundaries
+  across real helper restarts. Legacy seven-day scheduling is upgraded once;
+  copy lifetimes, keep markers and independent custody admissions survive.
 - `src/lib/runtime/attemptTempRetention.safety.test.ts`: native removal held
   behind a child barrier while a lane tries to reopen; live inputs reached
   through flags, relative paths, aliases and symlink/parent traversal; evidence
@@ -22,7 +24,8 @@ manifest execution, native removal races and persistent descendant inventory:
   quarantine rebasing, incomplete inventories and rejected escaping paths.
 - `src/lib/runtime/attemptTempApproved.test.ts`: exact manifest/form binding,
   primary human decisions, hostile inputs, identity and shared retention holds,
-  durable receipts, 32-row pages and replacement names across helper restarts.
+  durable receipts, 32-row pages, strict completion-age boundaries and replacement
+  names across helper restarts.
 
 The automatic path and the manual approved list have separate inventories.
 Neither path treats forgetting a vanished root's cached allocation as a
