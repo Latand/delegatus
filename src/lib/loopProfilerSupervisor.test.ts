@@ -5,6 +5,67 @@ import { createLoopProfileStore, LOOP_PROFILE_STORED_CAP, LOOP_PROFILE_STORE_BYT
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
+import { LoopProfilerFailure, loopProfilerFailureReason } from "./loopProfilerFailure";
+import { FileTransactionBusyError } from "./state/fileTransaction";
+
+test("profiler diagnostics retain only the phase and allowlisted error code", () => {
+  for (const [error, code] of [
+    [new FileTransactionBusyError("private diagnostic input"), "BUSY"],
+    [new SyntaxError("private diagnostic input"), "PROFILE_INVALID"],
+    [Object.assign(new Error("private diagnostic input"), { code: "EIO" }), "EIO"],
+    [Object.assign(new Error("private diagnostic input"), { code: "private diagnostic input".repeat(1000) }), "UNKNOWN"],
+    ["private diagnostic input", "UNKNOWN"],
+  ] as const) {
+    const failure = new LoopProfilerFailure("persist", error);
+    expect(loopProfilerFailureReason("persistence-failed", failure, "settle"))
+      .toBe(`persistence-failed phase=persist code=${code}`);
+  }
+});
+
+test("atomic profile settlement replays once and every stored row survives a fresh process reader", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "profile-atomic-"));
+  const file = path.join(directory, "loop-profiler-captures.json");
+  const revision = "a".repeat(40);
+  try {
+    const store = createLoopProfileStore(directory);
+    for (let i = 0; i < LOOP_PROFILE_STORED_CAP + 2; i++) {
+      const at = 1_000_000 + i * LOOP_PROFILE_COOLDOWN_MS;
+      const captured = { revision, capturedAt: at + 5000,
+        profile: { status: "captured" as const, from: at, to: at + 5000, intervalUs: 10000 } };
+      expect(await store.reserve(at)).toBe(true);
+      expect(await store.beginCapture(at, at)).toBe(true);
+      expect(await store.completeCapture(at, at, captured)).toBe(true);
+      expect(await store.completeCapture(at, at, captured)).toBe(false);
+      const child = Bun.spawn([process.execPath, "--eval", `
+        import { createLoopProfileStore } from "./src/lib/loopProfilerStore";
+        console.log(await createLoopProfileStore(process.env.LLV_STATE_DIR).reserve(${at + 5000}));
+      `], { env: { ...process.env, LLV_STATE_DIR: directory }, stdout: "pipe", stderr: "pipe" });
+      expect(await new Response(child.stdout).text()).toBe("false\n");
+      expect(await new Response(child.stderr).text()).toBe("");
+      expect(await child.exited).toBe(0);
+      const saved = JSON.parse(await readFile(file, "utf8"));
+      expect(saved.profiles).toHaveLength(Math.min(i + 1, LOOP_PROFILE_STORED_CAP));
+      expect(saved.profiles.at(-1)).toEqual(captured);
+      expect(saved.pendingCapture).toBeUndefined();
+      expect(Buffer.byteLength(JSON.stringify(saved))).toBeLessThanOrEqual(LOOP_PROFILE_STORE_BYTES);
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a collected profile cannot be acknowledged against a missing admission or a different row", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "profile-token-"));
+  try {
+    const store = createLoopProfileStore(directory);
+    const captured = { revision: "a".repeat(40), capturedAt: 1_005_000,
+      profile: { status: "captured" as const, from: 0, to: 5000, intervalUs: 10000 } };
+    await expect(store.completeCapture(1_000_000, 1_000_000, captured)).rejects.toThrow("profile-store-invalid");
+    expect(await store.reserve(1_000_000)).toBe(true);
+    expect(await store.beginCapture(1_000_000, 1_000_000)).toBe(true);
+    await expect(store.completeCapture(1_000_000, 1_000_000, { ...captured, capturedAt: -1 })).rejects.toThrow("profile-store-invalid");
+    expect(await store.completeCapture(1_000_000, 1_000_000, captured)).toBe(true);
+    await expect(store.completeCapture(1_000_000, 1_000_000, { ...captured, capturedAt: captured.capturedAt + 1 })).rejects.toThrow("profile-store-invalid");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 function harness() {
   let at = 1_000_000, calls = 0, next = 0;
@@ -119,7 +180,7 @@ test("final capture guard rechecks expiry and source after asynchronous loading"
 
 test("capture and settings failures have fixed reasons and allow later recovery", async () => {
   const h = harness(); h.capture(async () => { throw new Error("private input"); });
-  h.supervisor.stall(6000); await h.supervisor.refresh(); expect(h.decisions.at(-1)).toBe("capture-failed");
+  h.supervisor.stall(6000); await h.supervisor.refresh(); expect(h.decisions.at(-1)).toBe("capture-failed phase=collect code=UNKNOWN");
   h.read(async () => { throw new Error("private input"); }); await h.supervisor.refresh();
   expect(h.decisions.at(-1)).toBe("settings-unavailable");
   expect(JSON.stringify(h.decisions)).not.toContain("private input");

@@ -280,7 +280,7 @@ export function claudeEnvPrefix(home: string, mcpServers: readonly string[] = []
     ...(provider ? ["ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_CUSTOM_HEADERS"] : []),
   ];
   const providerEnv = provider
-    ? ` bun ${shellQuote(claudeProviderLauncherPath(home))} --home ${shellQuote(home)} --base-url ${shellQuote(provider.baseUrl)} --default-model ${shellQuote(provider.model)} --small-model ${shellQuote(provider.smallFastModel ?? "")} --header-names ${shellQuote(JSON.stringify(provider.customHeaderNames ?? []))} --`
+    ? ` bun --no-env-file ${shellQuote(claudeProviderLauncherPath(home))} --home ${shellQuote(home)} --base-url ${shellQuote(provider.baseUrl)} --default-model ${shellQuote(provider.model)} --small-model ${shellQuote(provider.smallFastModel ?? "")} --header-names ${shellQuote(JSON.stringify(provider.customHeaderNames ?? []))} --`
     : "";
   return `env ${unsets.map((key) => `-u ${key}`).join(" ")} CLAUDE_CONFIG_DIR=${shellQuote(home)}${providerEnv}`;
 }

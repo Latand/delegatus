@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 
 import {
   CODEX_ASTRA_MODEL,
+  CODEX_GPT62_SOL_MODEL,
+  CODEX_GPT62_ASTRA_MODEL,
   CODEX_GPT61_SOL_MODEL,
   CODEX_GPT61_TERRA_MODEL,
   launchModelIds,
@@ -24,6 +26,8 @@ import {
 test("the model catalog exposes Opus 5.5 and GPT-6.1-Sol as launch defaults while retaining the catalogue", () => {
   expect(ENGINE_MODELS.claude[0]).toEqual({ id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" });
   expect(ENGINE_MODELS.codex).toEqual([
+    { id: CODEX_GPT62_SOL_MODEL, label: "GPT-6.2-Sol", shortLabel: "6.2-Sol", use: "review" },
+    { id: CODEX_GPT62_ASTRA_MODEL, label: "GPT-6.2-Astra", shortLabel: "6.2-Astra", use: "review" },
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
     { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review" },
     { id: CODEX_GPT61_TERRA_MODEL, label: "GPT-6.1-Terra", shortLabel: "6.1-Terra", use: "implement" },
@@ -54,11 +58,11 @@ test("GPT-6-Sol and GPT-6-Luna are launchable and take image input", () => {
   }
 });
 
-test("GPT-6.1-Sol is launchable, takes image input and sits right after Astra", () => {
+test("GPT-6.1-Sol is launchable, takes image input and follows the GPT-6.2 additions and Astra", () => {
   expect(CODEX_GPT61_SOL_MODEL).toBe("gpt-6.1-sol");
   expect(validateLaunchModel("codex", CODEX_GPT61_SOL_MODEL)).toEqual({ model: CODEX_GPT61_SOL_MODEL });
   expect(codexModelSupportsImages(CODEX_GPT61_SOL_MODEL)).toBeTrue();
-  expect(ENGINE_MODELS.codex.map((option) => option.id).slice(0, 3)).toEqual([CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL, CODEX_GPT61_TERRA_MODEL]);
+  expect(ENGINE_MODELS.codex.map((option) => option.id).slice(0, 5)).toEqual([CODEX_GPT62_SOL_MODEL, CODEX_GPT62_ASTRA_MODEL, CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL, CODEX_GPT61_TERRA_MODEL]);
   // Catalogue order does not determine the shipped launch fallback.
   expect(defaultModelFor("codex")).toBe(CODEX_GPT61_SOL_MODEL);
 });
@@ -254,7 +258,7 @@ test("Haiku 5.5 is listed once while the CLI alias stays a valid launch id", () 
 });
 
 test("fresh menus offer only the current Codex choices and one Haiku 5.5 row", () => {
-  expect(listedModels("codex").map((option) => option.id)).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]);
+  expect(listedModels("codex").map((option) => option.id)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]);
   expect(listedModels("codex", "").map((option) => option.id)).toEqual(listedModels("codex").map((option) => option.id));
   expect(listedModels("claude").map((option) => option.id)).toEqual(["opus", "claude-fable-5-2", "sonnet", "claude-sonnet-5-5", "claude-haiku-5-5"]);
   // Every offered row launches and carries the effort ladder the backend admitted.
@@ -284,7 +288,7 @@ test("a saved retired selection stays listed under its own label in its catalogu
 
 test("several current choices keep each retired row and one row per Haiku release", () => {
   expect(listedModels("codex", [CODEX_GPT61_TERRA_MODEL, CODEX_SOL_MODEL, null, undefined]).map((option) => option.id))
-    .toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", CODEX_SOL_MODEL]);
+    .toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", CODEX_SOL_MODEL]);
   // The drafted choice decides between the alias and its pinned row: never two Haiku 5.5 rows.
   const haikuRows = (current: string[]) => listedModels("claude", current).filter((option) => option.label === "Haiku 5.5").map((option) => option.id);
   expect(haikuRows(["claude-haiku-5-5", "haiku"])).toEqual(["claude-haiku-5-5"]);
@@ -292,3 +296,14 @@ test("several current choices keep each retired row and one row per Haiku releas
   expect(haikuRows(["claude-haiku-4-5", "haiku"])).toEqual(["haiku"]);
   expect(listedModels("claude", ["claude-haiku-4-5", "haiku"]).map((option) => option.id)).toContain("claude-haiku-4-5");
 });
+
+for (const model of [CODEX_GPT62_SOL_MODEL, CODEX_GPT62_ASTRA_MODEL]) {
+  test(`${model} is offered, launchable and supports image input`, () => {
+    expect(listedModels("codex").map(row => row.id)).toContain(model);
+    expect(validateLaunchModel("codex", model)).toEqual({ model });
+    expect(codexModelSupportsImages(model)).toBeTrue();
+    expect(validateLaunchModel("claude", model)).toHaveProperty("error");
+    expect(validateLaunchModel("codex", `${model}-unknown`)).toHaveProperty("error");
+    expect(codexModelSupportsImages(`${model}-unknown`)).toBeFalse();
+  });
+}

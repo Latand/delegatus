@@ -4,6 +4,8 @@ import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { existingInternalServiceHeaders } from "@/lib/agent/callerClaims";
 import { deadlineSignal } from "@/lib/deadline";
+import { isInboundImage, MAX_INPUT_MEDIA_REFS, MAX_IMAGE_PREVIEW_BYTES } from "@/lib/externalRelay/mediaInputValidation";
+import { withRelayImages, MAX_RELAY_IMAGE_CONTENT_BYTES, RELAY_IMAGE_LIMIT_NOTE, type RelayImageContent } from "@/lib/externalRelay/ownerToolContent";
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import { callTaskChannel, decodeTaskChannel, TASK_CHANNEL_HEADER, TASK_CHANNEL_REQUEST_HEADER, TASK_CHANNEL_TOOLS, type TaskChannel } from "./taskChannel";
 import type { McpToolArgs, McpToolCallContext, McpToolName, McpToolResult } from "./server";
@@ -15,6 +17,54 @@ function record(value: unknown): Record<string, unknown> | null {
 const CHANNEL_KEY = Symbol.for("llv.mcp.adapterTaskChannel");
 type ChannelCache = { key: string; channel: TaskChannel };
 const channels = globalThis as typeof globalThis & { [CHANNEL_KEY]?: ChannelCache };
+
+/** Bound the HTTP envelope before parsing private image data. The extra KiB
+ * covers JSON-RPC framing outside the serializer's content budget. */
+async function relayEnvelope(response: Response) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("malformed relay media response");
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > MAX_RELAY_IMAGE_CONTENT_BYTES + 1024) {
+        await reader.cancel(); throw new Error("relay media response exceeds answer_size_limit");
+      }
+      chunks.push(next.value);
+    }
+    return record(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+  } catch { throw new Error("malformed or oversized relay media response"); }
+  finally { reader.releaseLock(); }
+}
+
+function relayResult(payload: Record<string, unknown> | null) {
+  const content = Array.isArray(payload?.content) ? payload.content : [];
+  if (Buffer.byteLength(JSON.stringify({ content })) > MAX_RELAY_IMAGE_CONTENT_BYTES) throw new Error("oversized relay image content");
+  const first = record(content[0]);
+  let metadata = record(payload?.structuredContent);
+  if (!metadata && first?.type === "text" && typeof first.text === "string") {
+    try { metadata = record(JSON.parse(first.text)); } catch { /* fixed refusal below */ }
+  }
+  const images: RelayImageContent[] = [];
+  let note: string | undefined;
+  // Only transport shape is checked here; the common collector has already
+  // downloaded, decoded and validated every image. Never download it again.
+  for (const block of content.slice(1)) {
+    const item = record(block);
+    if (item?.type === "text" && item.text === RELAY_IMAGE_LIMIT_NOTE && !note) { note = item.text; continue; }
+    if (item?.type !== "image" || typeof item.mimeType !== "string" || !isInboundImage(item.mimeType)
+      || typeof item.data !== "string" || item.data.length > 4 * Math.ceil(MAX_IMAGE_PREVIEW_BYTES / 3)
+      || !/^[A-Za-z0-9+/]*={0,2}$/.test(item.data)
+      || !item.data.length || images.length >= MAX_INPUT_MEDIA_REFS) throw new Error("malformed relay image content");
+    const bytes = Buffer.from(item.data, "base64");
+    if (bytes.length > MAX_IMAGE_PREVIEW_BYTES || bytes.toString("base64") !== item.data) throw new Error("malformed relay image content");
+    images.push({ type: "image", mimeType: item.mimeType, data: item.data });
+  }
+  return metadata ? withRelayImages(metadata, images, undefined, note) : null;
+}
 
 /** One stateless call, with no response cache or agent-local receipt claim. */
 export async function callViewerMcp(toolName: McpToolName, args: McpToolArgs, context: McpToolCallContext): Promise<McpToolResult> {
@@ -88,20 +138,23 @@ export async function callViewerMcp(toolName: McpToolName, args: McpToolArgs, co
       await response.body?.cancel();
       throw new Error(`Viewer MCP request refused with status ${response.status}`);
     }
-    const envelope = record(await response.json());
+    const media = toolName === "relay_service_tools";
+    const envelope = media ? await relayEnvelope(response) : record(await response.json());
     const rpcError = record(envelope?.error);
     if (envelope?.id === id && envelope?.jsonrpc === "2.0" && envelope.result === undefined
       && typeof rpcError?.code === "number" && Number.isInteger(rpcError.code)
       && typeof rpcError.message === "string") {
-      throw new Error(`Viewer MCP JSON-RPC error ${rpcError.code}: ${rpcError.message}`);
+      throw new Error(media ? "Viewer MCP relay request refused" : `Viewer MCP JSON-RPC error ${rpcError.code}: ${rpcError.message}`);
     }
-    const result = record(record(envelope?.result)?.structuredContent);
+    const payload = record(envelope?.result);
+    const result = media ? relayResult(payload) : record(payload?.structuredContent);
     if (envelope?.id !== id || envelope?.jsonrpc !== "2.0" || !result
       || typeof result.ok !== "boolean" || result.toolName !== toolName) {
       throw new Error("Viewer MCP request returned a malformed response");
     }
     return result as McpToolResult;
   } catch (error) {
+    if (toolName === "relay_service_tools") throw new Error("Viewer MCP relay request failed; response unavailable");
     throw new Error(`Viewer MCP request failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   } finally { native?.close(); deadline.release(); }
 }
