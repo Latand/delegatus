@@ -7,7 +7,7 @@ import { AgentRegistry, normalizeRegistry } from "./registry";
 import { registryRowProjection, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 import { installRegistryArchive } from "./registryArchive";
 import { DatabaseReplacedError } from "@/lib/state/currentDatabase";
-import { archiveRetirementReport, observeSupersededArchive, RETIREMENT_GRACE_MS, retirementApproval, retirementApprovalFile } from "./registryArchiveRetirement";
+import { archiveRetirementReport, installArchiveRetirement, observeSupersededArchive, RETIREMENT_GRACE_MS, retirementApproval, retirementApprovalFile } from "./registryArchiveRetirement";
 import { approveFixture, preservation, replayAnswers, RETIREMENT_NOW, retirementFixture } from "./registryArchiveRetirement.fixture";
 
 const roots: string[] = [];
@@ -126,20 +126,26 @@ test("held lazy and projected views require a fresh snapshot after retirement", 
   expect(store.readOnlySnapshot().file.receipts["retention-launch-10"]!.error).toBe("new version");
 });
 
-test("observation scans at most 2000 ids, wraps on empty pages, and finds newly superseded rows behind its cursor", () => {
-  const { filename,db,store } = fixture(); approveFixture(filename);
-  db.run("INSERT INTO registry_archive(id,collection,row_key,value_json,row_order) VALUES (10000,'receipts','future-high-water','{}',999999)");
-  const first = observeSupersededArchive(db);
-  expect(first.nextCursor).toBe(2000);
-  store.retireSupersededArchive(first,RETIREMENT_NOW);
-  const stale = first;
-  store.retireSupersededArchive(stale,RETIREMENT_NOW); // Concurrent observer cannot rewind.
-  expect(observeSupersededArchive(db).cursor).toBe(2000);
-  for (let n=0;n<4;n++) store.retireSupersededArchive(store.prepareArchiveRetirement(),RETIREMENT_NOW);
-  expect(observeSupersededArchive(db).cursor).toBe(0);
-  const mapped = db.query<{ archive_id: number }, []>("SELECT archive_id FROM registry_cold WHERE collection='receipts' LIMIT 1").get()!.archive_id;
-  db.run("DELETE FROM registry_cold WHERE archive_id=?",[mapped]);
-  expect(observeSupersededArchive(db).rows.some(r => r.id===mapped)).toBe(true);
+test("sparse AUTOINCREMENT history is observed in one restarted bounded sweep", async () => {
+  const { filename,db } = fixture();
+  db.run("DELETE FROM registry_cold");
+  db.run("DROP TRIGGER registry_archive_immutable_delete");
+  db.run("DELETE FROM registry_archive");
+  db.run("DELETE FROM registry_rows");
+  db.run("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('receipts','current','{}',10)");
+  db.run("INSERT INTO registry_archive(id,collection,row_key,value_json,row_order) VALUES (20000000,'receipts','eligible','{}',1)");
+  db.run("INSERT INTO registry_archive(id,collection,row_key,value_json,row_order) VALUES (20000001,'receipts','mapped','{}',10)");
+  db.run("INSERT INTO registry_cold(collection,row_key,archive_id) VALUES ('receipts','mapped',20000001)");
+  installArchiveRetirement(db);
+  db.run("INSERT OR REPLACE INTO registry_archive_retirement_state(key,value) VALUES ('cursor',19999999)");
+  approveFixture(filename);
+
+  const page = observeSupersededArchive(db);
+  expect(page.rows).toEqual([{ id: 20000000,collection: "receipts",bytes: 2 }]);
+  expect(page.nextCursor).toBe(0);
+  expect(await child(filename,"observe")).toEqual([0,"",""]);
+  expect(db.query("SELECT id FROM registry_archive_retirements").all()).toEqual([{ id: 20000000 }]);
+  expect(db.query("SELECT id FROM registry_archive").all()).toEqual([{ id: 20000000 },{ id: 20000001 }]);
 });
 
 test("revoking approval during writer admission or after a committed batch stops further work", async () => {

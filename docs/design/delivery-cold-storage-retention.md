@@ -282,11 +282,13 @@ uses the covering `registry_rows_collection_order`. Product code must use
 **Observe step.** Eligibility only ever grows: a version, once unmapped, stays
 unmapped. Observation therefore runs in a read transaction, outside the write
 lock, as the archive candidates do (`registryArchive.ts:187-197`). It examines at
-most 2,000 ids after the persisted cursor (`id > cursor AND id <= cursor + 2000`)
-and records the eligible ones with `observed_at` in a short write. The bound
-counts ids examined. The prototype counted eligible rows found, and a cycle
-with nothing to find then held the lock for 620 ms. When the
-cursor reaches the newest id it wraps to 0, so versions superseded behind it are
+most 2,000 existing archive rows after the persisted cursor (`id > cursor
+ORDER BY id LIMIT 2000`) and records the eligible ones with `observed_at` in a
+short write. The bound counts existing rows examined, including retained rows;
+deleted AUTOINCREMENT gaps do not consume the page or delay discovery. The
+cursor advances to the last examined id and wraps when the page is short or
+empty. The prototype counted eligible rows found, and a cycle with nothing to
+find then held the lock for 620 ms. Versions superseded behind the cursor are
 found on the next sweep.
 
 **Retire step.** In each `BEGIN IMMEDIATE` transaction:

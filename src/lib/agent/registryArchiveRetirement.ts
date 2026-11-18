@@ -68,16 +68,19 @@ export interface RetirementObservation {
   nextCursor: number;
   rows: { id: number; collection: string; bytes: number }[];
 }
-/** Bounded primary-key interval, including holes and retained rows. Read before
+/** Bounded page of existing primary keys, including retained rows. Read before
  * writer admission. A concurrent observer is fenced by the cursor at commit. */
 export function observeSupersededArchive(db: Database): RetirementObservation {
   return db.transaction(() => {
     const start = cursor(db);
-    const max = db.query<{ id: number }, []>("SELECT COALESCE(MAX(id),0) AS id FROM registry_archive").get()!.id;
-    const end = Math.min(max, start + RETIREMENT_OBSERVE_IDS);
+    const examined = db.query<{ id: number }, [number, number]>(`SELECT id FROM registry_archive
+      WHERE id>? ORDER BY id LIMIT ?`).all(start, RETIREMENT_OBSERVE_IDS);
+    const last = examined.at(-1)?.id;
+    const nextCursor = last === undefined || examined.length < RETIREMENT_OBSERVE_IDS ? 0 : last;
+    if (last === undefined) return { cursor: start, nextCursor: 0, rows: [] };
     const rows = db.query<RetirementObservation["rows"][number], [number, number]>(`SELECT a.id,a.collection,length(CAST(a.value_json AS BLOB)) AS bytes
-      FROM registry_archive a WHERE a.id>? AND a.id<=? AND ${SUPERSEDED_ARCHIVE}`).all(start, end);
-    return { cursor: start, nextCursor: end >= max ? 0 : end, rows };
+      FROM registry_archive a WHERE a.id>? AND a.id<=? AND ${SUPERSEDED_ARCHIVE}`).all(start, last);
+    return { cursor: start, nextCursor, rows };
   })();
 }
 
