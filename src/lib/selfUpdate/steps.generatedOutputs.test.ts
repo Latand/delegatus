@@ -262,14 +262,14 @@ test("a second-root mutation during post-rename verification withdraws the new r
 test("cancellation at the final release identity lstat revokes the newly written receipt", async () => {
   const h = fixture(), ports = realPorts(() => {}), original = fsPromises.lstat;
   let abortCompletion: Promise<void> | undefined, triggered = false;
-  const intercept = spyOn(fsPromises, "lstat").mockImplementation(async (...args) => {
+  const intercept = spyOn(fsPromises, "lstat").mockImplementation((async (...args) => {
     const result = await original(...args);
     if (!triggered && String(args[0]) === h.release) {
       triggered = true;
       abortCompletion = ports.abort();
     }
     return result;
-  });
+  }) as typeof original);
   try {
     const outcome = ports.withGeneratedOutputs!(h.release, h.sha, h.generate, h.root).catch(error => error);
     const error = await outcome;

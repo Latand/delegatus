@@ -105,7 +105,7 @@ export interface ServiceDeps {
     unit?(record: LauncherRecord): string | null };
   check(input: CheckInput): Promise<CheckOutcome>;
   describe(repo: string, revision: string): Promise<Revision>;
-  createRunner(config: RunnerConfig, publish: (release: Release) => void | Promise<void>, onChange: () => void): RunnerPort;
+  createRunner(config: RunnerConfig, publish: (release: Release, assertReady?: () => void | Promise<void>) => void | Promise<void>, onChange: () => void): RunnerPort;
   requestRestart(record: LauncherRecord, role: LauncherRole): string;
   processAlive(pid: number, startIdentity: string): boolean;
   /** The identity the runtime host reports for itself in its health answer,
