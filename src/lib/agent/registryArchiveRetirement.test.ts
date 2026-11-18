@@ -126,26 +126,35 @@ test("held lazy and projected views require a fresh snapshot after retirement", 
   expect(store.readOnlySnapshot().file.receipts["retention-launch-10"]!.error).toBe("new version");
 });
 
-test("sparse AUTOINCREMENT history is observed in one restarted bounded sweep", async () => {
+test("sparse AUTOINCREMENT history counts retained rows and resumes across a process restart", async () => {
   const { filename,db } = fixture();
   db.run("DELETE FROM registry_cold");
   db.run("DROP TRIGGER registry_archive_immutable_delete");
   db.run("DELETE FROM registry_archive");
   db.run("DELETE FROM registry_rows");
   db.run("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('receipts','current','{}',10)");
-  db.run("INSERT INTO registry_archive(id,collection,row_key,value_json,row_order) VALUES (20000000,'receipts','eligible','{}',1)");
-  db.run("INSERT INTO registry_archive(id,collection,row_key,value_json,row_order) VALUES (20000001,'receipts','mapped','{}',10)");
-  db.run("INSERT INTO registry_cold(collection,row_key,archive_id) VALUES ('receipts','mapped',20000001)");
+  const archive = db.query("INSERT INTO registry_archive(id,collection,row_key,value_json,row_order) VALUES (?,'receipts',?,'{}',10)");
+  const mapping = db.query("INSERT INTO registry_cold(collection,row_key,archive_id) VALUES ('receipts',?,?)");
+  db.transaction(() => {
+    for (let n=0;n<2_000;n++) {
+      const id=20_000_000+n*1_000_000, key=`mapped-${n}`;
+      archive.run(id,key); mapping.run(key,id);
+    }
+    archive.run(2_020_000_000,"eligible");
+  })();
   installArchiveRetirement(db);
-  db.run("INSERT OR REPLACE INTO registry_archive_retirement_state(key,value) VALUES ('cursor',19999999)");
   approveFixture(filename);
 
   const page = observeSupersededArchive(db);
-  expect(page.rows).toEqual([{ id: 20000000,collection: "receipts",bytes: 2 }]);
-  expect(page.nextCursor).toBe(0);
+  expect(page.rows).toEqual([]);
+  expect(page.nextCursor).toBe(2_019_000_000);
+  expect(db.query("SELECT COUNT(*) AS n FROM registry_archive_retirements").get()).toEqual({ n: 0 });
+  const store = new SqliteAgentRegistryStore(filename,{ normalize: normalizeRegistry }); handles.push(store);
+  store.retireSupersededArchive(page,RETIREMENT_NOW); // Persist the page before the reader process restarts.
+  expect(observeSupersededArchive(db).cursor).toBe(2_019_000_000);
   expect(await child(filename,"observe")).toEqual([0,"",""]);
-  expect(db.query("SELECT id FROM registry_archive_retirements").all()).toEqual([{ id: 20000000 }]);
-  expect(db.query("SELECT id FROM registry_archive").all()).toEqual([{ id: 20000000 },{ id: 20000001 }]);
+  expect(db.query("SELECT id FROM registry_archive_retirements").all()).toEqual([{ id: 2_020_000_000 }]);
+  expect(db.query("SELECT COUNT(*) AS n FROM registry_archive").get()).toEqual({ n: 2_001 });
 });
 
 test("revoking approval during writer admission or after a committed batch stops further work", async () => {
