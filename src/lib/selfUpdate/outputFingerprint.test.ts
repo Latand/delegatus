@@ -19,18 +19,18 @@ function fixture() {
 }
 
 // The original receipt format, independent of the worker's implementation.
-export function legacyFingerprint(dir: string, output: string) {
+async function legacyFingerprint(dir: string, output: string) {
   const hash = createHash("sha256"), pending = [output.replace(/\/$/, "")];
   let visited = 0;
   while (pending.length) {
     if (++visited > 250_000) throw new Error("limit");
-    const entry = pending.pop()!, file = join(dir, entry), stat = fs.lstatSync(file, { bigint: true });
+    const entry = pending.pop()!, file = join(dir, entry), stat = await fs.promises.lstat(file, { bigint: true });
     hash.update(JSON.stringify([entry, String(stat.dev), String(stat.ino), String(stat.mode)]));
     if (stat.isDirectory()) {
-      for (const name of fs.readdirSync(file).sort().reverse()) pending.push(`${entry}/${name}`);
+      for (const name of (await fs.promises.readdir(file)).sort().reverse()) pending.push(`${entry}/${name}`);
     } else if (stat.isFile() || stat.isSymbolicLink()) {
       hash.update(JSON.stringify([String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs),
-        stat.isSymbolicLink() ? fs.readlinkSync(file) : null]));
+        stat.isSymbolicLink() ? await fs.promises.readlink(file) : null]));
     } else throw new Error("unsupported");
   }
   return hash.digest("hex");
@@ -51,8 +51,8 @@ test("matches the original ordered digest with dangling and cyclic symlinks and 
   fs.writeFileSync(join(root, ".env"), "BUN_OPTIONS=--preload ./missing-preload.ts\n");
   fs.writeFileSync(join(root, "bunfig.toml"), 'preload = ["./unexpected.ts"]\n');
   fs.writeFileSync(join(root, "unexpected.ts"), 'throw new Error("Release configuration was loaded");');
-  expect(await outputFingerprint(root, "node_modules/", undefined, worker(source => source))).toBe(legacyFingerprint(root, "node_modules/"));
-  expect(await outputFingerprint(root, "node_modules/a")).toBe(legacyFingerprint(root, "node_modules/a"));
+  expect(await outputFingerprint(root, "node_modules/", undefined, worker(source => source))).toBe(await legacyFingerprint(root, "node_modules/"));
+  expect(await outputFingerprint(root, "node_modules/a")).toBe(await legacyFingerprint(root, "node_modules/a"));
 });
 
 for (const variant of ["add", "remove", "replace", "write", "symlink"]) {
@@ -63,7 +63,7 @@ for (const variant of ["add", "remove", "replace", "write", "symlink"]) {
     if (variant === "replace") { fs.renameSync(join(root, "node_modules/a"), join(root, "old")); fs.writeFileSync(join(root, "node_modules/a"), "first"); }
     if (variant === "write") fs.writeFileSync(join(root, "node_modules/a"), "changed");
     if (variant === "symlink") { fs.unlinkSync(join(root, "node_modules/sub/link")); fs.symlinkSync("elsewhere", join(root, "node_modules/sub/link")); }
-    expect(await outputFingerprint(root, "node_modules/")).toBe(legacyFingerprint(root, "node_modules/"));
+    expect(await outputFingerprint(root, "node_modules/")).toBe(await legacyFingerprint(root, "node_modules/"));
     expect(await outputFingerprint(root, "node_modules/")).not.toBe(before);
   });
 }
@@ -122,8 +122,8 @@ test("an abort during child setup also waits for its exit", async () => {
 test("cancellation during a real walk rejects after the child exits, then permits reopening", async () => {
   const root = fixture(), controller = new AbortController();
   let child: ChildProcess | undefined;
-  const start = worker(source => source.replace('const stat = fs.lstatSync(file, { bigint: true });', `
-    const stat = fs.lstatSync(file, { bigint: true });
+  const start = worker(source => source.replace('const stat = await fs.promises.lstat(file, { bigint: true });', `
+    const stat = await fs.promises.lstat(file, { bigint: true });
     if (visited === 2) { process.stderr.write("walking"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); }`), c => {
     child = c; c.stderr!.once("data", () => controller.abort());
   });
@@ -131,7 +131,7 @@ test("cancellation during a real walk rejects after the child exits, then permit
   expect(controller.signal.aborted).toBe(true);
   expect(child!.signalCode).toBe("SIGKILL");
   expect(() => process.kill(child!.pid!, 0)).toThrow();
-  expect(await outputFingerprint(root, "node_modules/")).toBe(legacyFingerprint(root, "node_modules/"));
+  expect(await outputFingerprint(root, "node_modules/")).toBe(await legacyFingerprint(root, "node_modules/"));
 });
 
 test("the deadline kills a stalled worker and waits for close", async () => {
@@ -149,14 +149,14 @@ test("the deadline kills a stalled worker and waits for close", async () => {
 test("accepts exactly 250000 entries and refuses one more in a fresh worker", async () => {
   const root = fs.mkdtempSync(join(tmpdir(), "inventory-limit-")); roots.push(root);
   const output = join(root, "node_modules"); fs.mkdirSync(output);
-  // Each bucket stays below the filesystem's per-inode hardlink bound.
-  for (let bucket = 0; bucket < 4; bucket++) {
+  // Keep per-inode link counts small across supported filesystems.
+  for (let bucket = 0; bucket < 250; bucket++) {
     const directory = join(output, String(bucket)); fs.mkdirSync(directory);
     const seed = join(directory, "seed"); fs.writeFileSync(seed, "");
-    const count = bucket === 0 ? 62_495 : 62_500;
+    const count = bucket === 0 ? 998 : 999;
     for (let i = 1; i < count; i++) fs.linkSync(seed, join(directory, String(i)));
   }
-  expect(await outputFingerprint(root, "node_modules/")).toBe(legacyFingerprint(root, "node_modules/"));
+  expect(await outputFingerprint(root, "node_modules/")).toBe(await legacyFingerprint(root, "node_modules/"));
   fs.writeFileSync(join(output, "extra"), "");
   await expect(outputFingerprint(root, "node_modules/")).rejects.toThrow("inventory failed");
 }, 120_000);

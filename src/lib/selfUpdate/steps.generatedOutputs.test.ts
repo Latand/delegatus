@@ -105,12 +105,22 @@ for (const change of ["sha", "directory", "backlink"]) {
 test("a failed later inventory clears earlier proven outputs", async () => {
   const h = fixture();
   await realPorts(() => {}).withGeneratedOutputs!(h.release, h.sha, async () => {
-    await h.generate(); fs.mkdirSync(join(h.release, ".next")); fs.writeFileSync(join(h.release, ".next/asset.png"), "generated"); return 0;
+    await h.generate();
+    fs.renameSync(join(h.release, "node_modules/asset.png"), join(h.release, "node_modules/asset.js"));
+    fs.mkdirSync(join(h.release, ".next")); fs.writeFileSync(join(h.release, ".next/asset.png"), "generated"); return 0;
   }, h.root);
-  let calls = 0;
-  const intercept = afterInventory(() => { if (++calls === 1) fs.unlinkSync(join(h.release, "node_modules/asset.png")); });
+  const original = childProcess.spawn; let workers = 0;
+  const intercept = spyOn(childProcess, "spawn").mockImplementation(((command: string, args: readonly string[] = [], options: childProcess.SpawnOptions = {}) => {
+    if (command !== process.execPath || !args.includes("--eval")) return original(command, args, options);
+    const argv = [...args]; const index = ++workers;
+    if (index === 2) argv[3] = "process.exit(7)";
+    const child = original(command, argv, options);
+    if (index === 1) child.once("close", () => fs.writeFileSync(join(h.release, ".next/asset.png"), "foreign"));
+    return child;
+  }) as typeof childProcess.spawn);
   try { expect(await prepareExistingRelease(h.release, h.root)).toContain("cannot be proven generated"); }
   finally { intercept.mockRestore(); }
+  expect(workers).toBe(2);
 });
 
 for (const phase of ["generate", "prepare"]) {
