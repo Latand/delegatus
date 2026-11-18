@@ -16,8 +16,10 @@ const E2E_TIMEOUT = 240_000;
 const harnesses: Harness[] = [];
 afterEach(() => { for (const h of harnesses.splice(0)) h.cleanup(); });
 function harness(options?: Parameters<typeof makeHarness>[0]): Harness { const h = makeHarness(options); harnesses.push(h); return h; }
-// Timings and the local CPU queue's waiting lines differ between any two runs.
-const normalized = (text: string) => withoutRunnerLines(text).replace(/\[[\d.]+m?s\]/g, "[t]").replace(/^bun test v.*$/m, "").replace(/^gate-slot: Waiting for the CPU queue.*\n/gm, "")
+// Compare the test output after removing progress from either machine's admission queue.
+const normalized = (text: string) => withoutRunnerLines(text).replace(/\[[\d.]+m?s\]/g, "[t]").replace(/^bun test v.*$/m, "")
+  .replace(/^gate-slot: Waiting for (?:the CPU queue|a heavy command slot|measured CPU pressure).*\n/gm, "")
+  .replace(/^gate-slot: (?:waiting for CPU admission queue SQLite lock \(deadline \d+ ms\)|CPU admission queue lock acquired after \d+ ms)\n/gm, "")
   .replace(/^gate-slot: .*\.service: pids\.peak=.*\n/gm, "");
 const RUNNING = /^gate-runner: running on the gate runner \(run [0-9a-f]{12}, tree [0-9a-f]{12}\)$/m;
 
