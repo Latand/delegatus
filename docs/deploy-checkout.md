@@ -319,7 +319,7 @@ export HOME="$test_root/home" XDG_CONFIG_HOME="$test_root/config"
 export TMPDIR="$test_root/tmp" LLV_STATE_DIR="$test_root/state"
 export LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1
 bash scripts/gate-slot.sh bun test ./scripts/deploy-checkout.test.ts
-bash scripts/gate-slot.sh bun test ./src/lib/roles/defaults.test.ts
+bash scripts/gate-slot.sh bun test ./scripts/protected-host-census.test.ts
 ```
 
 The tests inject processes, clock, commands and transports. Their registry and
