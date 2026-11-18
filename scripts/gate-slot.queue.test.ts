@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
-import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
+import { cpuOwnerIdentity, cpuOwnerStatus } from "../src/lib/runtime/signalSandboxContext";
 import { realExec } from "../src/lib/workflows/provision";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { runSteps } from "./local-gate";
@@ -13,8 +13,6 @@ import { runSteps } from "./local-gate";
 // This release predates bounded gate waits and cap locks. Use its actual
 // shell, helper and queue, including the legacy SQL used on final claim.
 const legacyRevision = "2c7e437a553f56d81afa39e71878f60a1e6d73a3";
-const hasLegacyGate = process.platform === "linux" &&
-  Bun.spawnSync(["git", "cat-file", "-e", `${legacyRevision}:scripts/gate-slot.sh`], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
 
 function legacyGateTree(directory: string) {
   const tree = path.join(directory, "legacy");
@@ -76,6 +74,7 @@ for (const hasFlock of [false, true]) test.skipIf(process.platform === "win32")(
 case "$2" in
   --reuse-slot) exit 75 ;;
   --watch-wait) echo ready > "$3/ready"; while [[ ! -f "$3/done" ]]; do /bin/sleep 0.01; done; exit 0 ;;
+  --lock-fd) exec "$CPU_SLOT_REAL_BUN" "$@" ;;
   --wait) exit 0 ;;
   --claim) echo 'gate-slot: CPU admission queue lock deadline exceeded; checks did not start' >&2; exit 1 ;;
   *) exit 99 ;;
@@ -83,7 +82,7 @@ esac
 `, { mode: 0o755 });
   try {
     const result = await realExec("/bin/bash", ["scripts/gate-slot.sh", "/bin/bash", "-c", 'echo started > "$CPU_QUEUE_OUTPUT"'], process.cwd(), {
-      ...f.env, LLV_GATE_BUN: helper, LLV_GATE_RUNNER: "off", LLV_CPU_WAIT_ROOTS: "[]", LLV_GATE_SLOTS: "1",
+      ...f.env, LLV_GATE_BUN: helper, LLV_GATE_RUNNER: "off", LLV_CPU_WAIT_ROOTS: "[]", LLV_GATE_SLOTS: "1", CPU_SLOT_REAL_BUN: process.execPath,
       PATH: hasFlock ? process.env.PATH : bin,
     }, { timeoutMs: 5000 });
     expect(result.code, result.stderr).toBe(1);
@@ -150,7 +149,66 @@ test("gate-slot lifts the pressure hold at ten minutes and preserves FIFO throug
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n"); f.age(); await Promise.allSettled(pending); f.close(); }
 }, 20_000);
 
-test.skipIf(!hasLegacyGate)("an older pressure-only head yields to bounded gates in FIFO order under sustained pressure", async () => {
+for (const [holderHasFlock, entrantHasFlock] of [[false, false], [false, true], [true, false]]) {
+  test.skipIf(process.platform !== "linux")(`wrappers share a lifetime cap under pressure (flock: ${holderHasFlock}/${entrantHasFlock})`, async () => {
+    const f = fixture(), control = new AbortController();
+    const pending: ReturnType<typeof realExec>[] = [];
+    const release = path.join(f.dir, "release"), stderr = path.join(f.dir, "entrant-stderr"), holderStderr = path.join(f.dir, "holder-stderr");
+    const bin = path.join(f.dir, "bin");
+    fs.mkdirSync(bin);
+    for (const command of ["bash", "mkdir", "dirname", "sleep", "touch", "rm", "realpath", "mktemp", "systemctl", "systemd-run", "getconf", "uname"]) {
+      const executable = Bun.which(command);
+      if (executable) fs.symlinkSync(executable, path.join(bin, command));
+    }
+    const env = (hasFlock: boolean, slots: string) => ({
+      ...f.env, PATH: hasFlock ? process.env.PATH : bin, LLV_GATE_BUN: process.execPath, LLV_GATE_RUNNER: "off", LLV_GATE_SLOTS: slots,
+      CPU_SLOT_RELEASE: release, CPU_SLOT_STDERR: stderr,
+    });
+    const output = () => fs.existsSync(f.env.CPU_QUEUE_OUTPUT) ? fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8") : "";
+    const log = () => fs.existsSync(stderr) ? fs.readFileSync(stderr, "utf8") : "";
+    const last = () => f.db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last;
+    const holderEnv = { ...env(holderHasFlock, "1"), CPU_SLOT_STDERR: holderStderr, CPU_SLOT_REAL_BUN: process.execPath };
+    if (!holderHasFlock && !entrantHasFlock) {
+      // Leave the compatibility row behind after the runner closes. The next
+      // real gate must prove the cap lock is free and reclaim the exact row.
+      const helper = path.join(bin, "skip-release");
+      fs.writeFileSync(helper, '#!/bin/bash\nif [[ "$2" == --release-slot ]]; then exit 70; fi\nexec "$CPU_SLOT_REAL_BUN" "$@"\n', { mode: 0o755 });
+      holderEnv.LLV_GATE_BUN = helper;
+    }
+    try {
+      pending.push(realExec("bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "portable-gate", "bash", "scripts/gate-slot.sh", "bash", "-c",
+        'echo holder >> "$CPU_QUEUE_OUTPUT"; while [[ ! -f "$CPU_SLOT_RELEASE" ]]; do sleep 0.02; done; echo released >> "$CPU_QUEUE_OUTPUT"; exit 23'],
+      process.cwd(), holderEnv, { timeoutMs: 20_000, signal: control.signal }));
+      await until(() => f.count() === 1);
+      pending.push(realExec("bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "portable-gate", ...f.command("entrant")],
+        process.cwd(), env(entrantHasFlock, "2"), { timeoutMs: 20_000, signal: control.signal }));
+      await until(() => f.count() === 2);
+      expect(output()).toBe("");
+      f.age();
+      await until(() => output().includes("holder\n")).catch(() => {
+        throw new Error(`holder did not start: ${fs.readFileSync(holderStderr, "utf8")}`);
+      });
+      const admitted = last();
+      await until(() => last() !== admitted || log().includes("Waiting for a heavy command slot · all 1 busy"));
+      expect(last(), log()).toBe(admitted);
+      expect(output()).toBe("holder\n");
+      expect(Bun.spawnSync(["flock", "-n", path.join(f.dir, "llv-heavy-gate.slot1.lock"), "true"]).exitCode).toBe(1);
+      fs.writeFileSync(release, "release");
+      const results = await Promise.all(pending);
+      expect(results.map(result => result.code), log()).toEqual([23, 0]);
+      expect(output()).toBe("holder\nreleased\nentrant\n");
+      expect(f.count()).toBe(0);
+      expect(f.db.query("SELECT key FROM gate_slots").all()).toEqual([]);
+    } finally {
+      fs.writeFileSync(release, "release");
+      control.abort();
+      await Promise.allSettled(pending);
+      f.close();
+    }
+  }, 45_000);
+}
+
+test.skipIf(process.platform !== "linux")("an older pressure-only head yields to bounded gates in FIFO order under sustained pressure", async () => {
   const f = fixture(), control = new AbortController();
   const pending: ReturnType<typeof realExec>[] = [];
   const output = () => fs.existsSync(f.env.CPU_QUEUE_OUTPUT) ? fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8") : "";
@@ -178,7 +236,7 @@ test.skipIf(!hasLegacyGate)("an older pressure-only head yields to bounded gates
   } finally { control.abort(); await Promise.allSettled(pending); f.close(); }
 }, 45_000);
 
-for (const legacyHolds of [true, false]) test.skipIf(!hasLegacyGate)(`mixed wrappers wait for a cap-one holder (legacy holds: ${legacyHolds})`, async () => {
+for (const legacyHolds of [true, false]) test.skipIf(process.platform !== "linux")(`mixed wrappers wait for a cap-one holder (legacy holds: ${legacyHolds})`, async () => {
   const f = fixture(), control = new AbortController();
   const pending: ReturnType<typeof realExec>[] = [];
   const release = path.join(f.dir, "release"), stderr = path.join(f.dir, "entrant-stderr");
@@ -210,12 +268,33 @@ for (const legacyHolds of [true, false]) test.skipIf(!hasLegacyGate)(`mixed wrap
     expect(last(), log()).toBe(holderAdmission);
     expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("holder\n");
     expect(f.count()).toBe(1);
+    if (!legacyHolds) {
+      // Give the real legacy subprocess a recorded owner from another PID
+      // namespace. The current wrapper retains its actual kernel slot.
+      const fence = f.db.query<{ key: string; owner: string }, []>("SELECT key, owner FROM tickets WHERE key GLOB 'command:gate-active:*'").get()!;
+      const owner = JSON.parse(fence.owner);
+      owner.bootEpoch = owner.bootEpoch.replace(/:pidns:pid:\[\d+\]$/, ":pidns:pid:[1]");
+      expect(cpuOwnerStatus(owner)).toBe("unverified");
+      const entrantPoll = () => f.db.query<{ polled: number }, []>(`SELECT polled ${queuedTickets}`).get()?.polled;
+      try {
+        for (const age of [61_000, 24 * 60 * 60_000 + 1_000]) {
+          const changedAt = Date.now();
+          f.db.query("UPDATE tickets SET owner = ?, polled = ? WHERE key = ?").run(JSON.stringify(owner), changedAt - age, fence.key);
+          await until(() => last() !== holderAdmission || (entrantPoll() ?? 0) > changedAt + 250);
+          expect(last(), log()).toBe(holderAdmission);
+          expect(f.db.query("SELECT key FROM suspended WHERE key = ?").get(fence.key)).toBeNull();
+          expect(f.db.query("SELECT key FROM tickets WHERE key = ?").get(fence.key)).toEqual({ key: fence.key });
+          expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("holder\n");
+        }
+      } finally { f.db.query("UPDATE tickets SET owner = ?, polled = ? WHERE key = ?").run(fence.owner, Date.now(), fence.key); }
+    }
     fs.writeFileSync(release, "release");
     await until(() => fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8").includes("entrant\n"), 15_000);
     const results = await Promise.all(pending);
     expect(results.map(result => result.code), log()).toEqual([0, 0]);
     expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("holder\nentrant\n");
     expect(f.count()).toBe(0);
+    if (!legacyHolds) expect(f.db.query("SELECT key FROM gate_slots").all()).toEqual([]);
   } finally {
     fs.writeFileSync(release, "release"); control.abort(); await Promise.allSettled(pending); f.close();
   }

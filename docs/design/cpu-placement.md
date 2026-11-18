@@ -716,10 +716,12 @@ minute 10; (b) the stage check returns `null`.
 the installed `/var/tmp/llv-gate` uses, so both gates count against the same six
 slots by default. Before accepting a final claim, gate-slot serializes the
 check of occupied slots and applies the lowest cap among the caller and active
-current gate-slot jobs. Each admitted job holds a per-slot cap lock alongside
-its slot until the owned runner exits. An occupied slot without that marker
-fences current claims because the older holder's cap is unknown. The hand-run
-gate also contributes occupied slots.
+current gate-slot jobs. On Unix, each admitted job holds a per-slot cap lock
+alongside its slot through owned runner cleanup. Hosts without the flock CLI
+take the same kernel locks through Bun. An occupied slot without a cap marker
+fences current claims because the older holder's cap is unknown. Native
+Windows records the cap and wrapper owner in the shared queue and checks
+capacity inside the claim transaction.
 
 Older installed and checkout wrappers can keep polling during the transition.
 After reaching the wait bound, a current ticket can pass older pressure-only
@@ -728,7 +730,11 @@ tickets keep their FIFO order within their effective priority and use the same
 spacing. Older tickets keep their stored place for when their own pressure
 check permits a start. A current claim records a live fence at the
 front of the older command queue, in the same transaction that consumes its
-ticket. Older wrappers reap the fence when its owner exits. A change to the
+ticket. The queue keeps the fence visible to older wrappers when they cannot
+verify its owner across PID namespaces. The wrapper retires the fence after
+cleanup. Current wrappers also reclaim abandoned claims once they observe a
+free cap lock on Unix or a dead wrapper identity on Windows. An interrupted
+wrapper relies on a current gate invocation for this recovery. A change to the
 last admission during the kernel slot probe forces a fresh claim. Stage
 admission keeps its own queue order.
 

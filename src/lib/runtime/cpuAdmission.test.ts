@@ -60,13 +60,30 @@ test("a slot observation made before another admission cannot consume a ready ga
   const lastBeforeProbe = gate.lastAdmission();
   expect(peer.check("stage:peer", true)).toBeNull();
   f.at(CPU_QUEUE_SPACING_MS);
-  expect(gate.check(key, true, owner, true, undefined, true, { lastBeforeProbe })).toMatchObject({ since: 0, heldBy: "queue" });
+  expect(gate.check(key, true, owner, true, undefined, true, { lastBeforeProbe, slot: 1, cap: 1 })).toMatchObject({ since: 0, heldBy: "queue" });
   expect(gate.lastAdmission()).toBe(0);
-  expect(gate.check(key, true, owner, true, undefined, true, { lastBeforeProbe: gate.lastAdmission() })).toBeNull();
+  expect(gate.check(key, true, owner, true, undefined, true, { lastBeforeProbe: gate.lastAdmission(), slot: 1, cap: 1 })).toBeNull();
   expect(gate.lastAdmission()).toBe(CPU_QUEUE_SPACING_MS);
   f.at(2 * CPU_QUEUE_SPACING_MS);
   // The live reservation affects the old command lane only.
   expect(peer.check("stage:next", true)).toBeNull();
+});
+
+test.each([[1, 2], [2, 1]] as const)("portable final claims enforce the minimum of holder cap %i and entrant cap %i", (holderCap, entrantCap) => {
+  const f = fixture(), holder = f.open(), owner = captureProcessIdentity(process.pid);
+  expect(holder.check("command:bounded:holder", true, owner, true, undefined, true, { lastBeforeProbe: null, slot: null, cap: holderCap })).toBeNull();
+  const entrant = f.open(), key = "command:bounded:entrant";
+  expect(entrant.check(key, false, owner, false, undefined, true)).toMatchObject({ since: 0, position: 1 });
+  f.at(CPU_QUEUE_MAX_WAIT_MS);
+  const claim = () => entrant.check(key, false, owner, true, undefined, true, { lastBeforeProbe: entrant.lastAdmission(), slot: null, cap: entrantCap });
+  expect(claim()).toMatchObject({ since: 0, position: 1, heldBy: "queue" });
+  expect(entrant.lastAdmission()).toBe(0);
+  const [lease] = entrant.activeGateSlots();
+  entrant.releaseGateSlot(lease!.key, "a different owner");
+  expect(claim()).toMatchObject({ since: 0, heldBy: "queue" });
+  holder.releaseGateSlot(lease!.key, lease!.owner);
+  expect(claim()).toBeNull();
+  expect(entrant.lastAdmission()).toBe(CPU_QUEUE_MAX_WAIT_MS);
 });
 
 test("a bounded gate outwaits a legacy pressure-only head even with a different pressure setting", () => {

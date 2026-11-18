@@ -207,24 +207,54 @@ claim() {
   if [[ $code != 0 && $code != 75 ]]; then exit "$code"; fi
   return "$code"
 }
+try_lock() {
+  local code=0
+  if command -v flock >/dev/null; then flock -n "$1" || code=$?
+  else "${LLV_GATE_BUN:-bun}" "$admission" --lock-fd "$1" || code=$?; fi
+  if [[ $code != 0 && $code != 1 ]]; then exit "$code"; fi
+  return "$code"
+}
+# Keep the claim across the owned runner's execution and cleanup, even where
+# exec cannot preserve the shell's native PID. The runner inherits the Unix
+# lock descriptors for its own lifetime and for nested-slot proof.
+run_claimed() {
+  local runner="" signal="" result
+  trap 'signal=TERM; if [[ -n $runner ]]; then kill -TERM "$runner" 2>/dev/null || true; fi' TERM
+  trap 'signal=INT; if [[ -n $runner ]]; then kill -INT "$runner" 2>/dev/null || true; fi' INT
+  end_cpu_wait
+  run "$@" <&0 &
+  runner=$!
+  if [[ -n $signal ]]; then kill -s "$signal" "$runner" 2>/dev/null || true; fi
+  while :; do
+    result=0; wait "$runner" || result=$?
+    kill -0 "$runner" 2>/dev/null || break
+  done
+  runner=""
+  "${LLV_GATE_BUN:-bun}" "$admission" --release-slot "$queue_key" "$owner_pid" || {
+    echo "gate-slot: could not release the completed command's slot" >&2
+    if [[ $result == 0 ]]; then result=1; fi
+  }
+  exit "$result"
+}
 queue_key="command:bounded:$$:$RANDOM:$RANDOM"
 while :; do
   "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
-  if ! command -v flock >/dev/null; then
-    if claim; then end_cpu_wait; run "$@"; fi
+  if [[ $OSTYPE == msys || $OSTYPE == cygwin ]]; then
+    # Native Windows uses the shared queue's atomic claim and the native
+    # wrapper PID as its slot proof.
+    if claim portable; then run_claimed "$@"; fi
   else
     # Serialize current final claims. The cap lock identifies this particular
     # slot's protocol and stays held alongside fd 9 for the runner's lifetime.
     exec 8>"$lock_dir/llv-heavy-gate.claim.lock"
-    if flock -n 8; then
+    if try_lock 8; then
       for ((i=1; i<=slots; i++)); do
         exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
-        if flock -n 9; then
+        if try_lock 9; then
           exec 7>"$lock_dir/llv-heavy-gate.slot$i.cap$slots.lock"
-          if flock -n 7 && claim "$i"; then
+          if try_lock 7 && claim "$i"; then
             exec 8>&-
-            end_cpu_wait
-            run "$@"
+            run_claimed "$@"
           fi
           exec 9>&- 7>&-
           break

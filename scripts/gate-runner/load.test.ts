@@ -73,7 +73,7 @@ test("an active gate fence leaves the routing queue empty after spacing", () => 
   const file = path.join(root, "admission.sqlite"), now = 10_000;
   const queue = new CpuAdmissionQueue(file, () => now);
   try {
-    expect(queue.check("command:bounded:holder", true, cpuOwnerIdentity(process.pid), true, undefined, true, { lastBeforeProbe: null })).toBeNull();
+    expect(queue.check("command:bounded:holder", true, cpuOwnerIdentity(process.pid), true, undefined, true, { lastBeforeProbe: null, slot: 1, cap: 1 })).toBeNull();
     expect(queueReady(file, now + CPU_QUEUE_SPACING_MS - 1)).toBeFalse();
     expect(queueReady(file, now + CPU_QUEUE_SPACING_MS)).toBeTrue();
     queue.check("command:bounded:waiting", false, cpuOwnerIdentity(process.pid), false, undefined, true);

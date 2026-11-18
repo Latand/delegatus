@@ -26,6 +26,8 @@ export const ACTIVE_GATE_PREFIX = "command:gate-active:";
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; waitedMs: number; heldBy: "queue" | "pressure"; priority?: TaskPriority; stalledMs?: number };
 type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null; low_pressure: number };
+type GateSlot = { slot: number | null; cap: number };
+type ActiveGateSlot = GateSlot & { key: string; owner: string };
 /** The queue judges owners with these; `log` receives one line for each ticket
  * it removes or passes over because of its owner. */
 export type CpuOwnerObserver = { status(identity: ProcessIdentity): ProcessIdentityStatus; exited(identity: ProcessIdentity): boolean; log?(line: string): void };
@@ -282,6 +284,35 @@ export class CpuAdmissionQueue {
   lastAdmission(): number | null {
     return this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
   }
+  activeGateSlots(): ActiveGateSlot[] {
+    if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gate_slots'").get()) return [];
+    return this.db.query<ActiveGateSlot, []>("SELECT tickets.key, owner, slot, cap FROM gate_slots JOIN tickets USING (key)").all();
+  }
+  // Retire precisely the observed claim. The caller has either reaped its
+  // owned runner or proved that its lifetime lock is free.
+  releaseGateSlot(key: string, owner: string): void {
+    this.db.transaction(() => {
+      if (this.db.query("DELETE FROM gate_slots WHERE key = ? AND EXISTS (SELECT 1 FROM tickets WHERE key = ? AND owner = ?)").run(key, key, owner).changes) {
+        this.cancel(key);
+      }
+    }).immediate();
+  }
+  private recordGateSlot(key: string, gate: GateSlot): void {
+    if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gate_slots'").get()) {
+      // Older releases still write these tables directly. Slot recovery
+      // belongs to the wrapper that can verify the lifetime proof.
+      this.db.exec(`
+        CREATE TABLE gate_slots (key TEXT PRIMARY KEY, slot INTEGER, cap INTEGER NOT NULL);
+        CREATE TRIGGER gate_slot_keep BEFORE DELETE ON tickets
+          WHEN OLD.key IN (SELECT key FROM gate_slots) BEGIN SELECT RAISE(IGNORE); END;
+        CREATE TRIGGER gate_slot_count BEFORE INSERT ON suspended
+          WHEN NEW.key IN (SELECT key FROM gate_slots) BEGIN SELECT RAISE(IGNORE); END;
+        CREATE TRIGGER gate_slot_polled BEFORE INSERT ON unpolled
+          WHEN NEW.key IN (SELECT key FROM gate_slots) BEGIN SELECT RAISE(IGNORE); END;
+      `);
+    }
+    this.db.query("INSERT INTO gate_slots VALUES (?, ?, ?)").run(key, gate.slot, gate.cap);
+  }
   /** Only the release owning this pipeline namespace reconciles stage tickets. */
   reconcile(prefix: string, active: ReadonlySet<string>, eligible = active): void {
     this.db.transaction(() => {
@@ -304,7 +335,7 @@ export class CpuAdmissionQueue {
     }).immediate();
   }
   check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource, requireLowPressure = false,
-    gateSlot?: { lastBeforeProbe: number | null }): CpuQueueWait | null {
+    gateSlot?: GateSlot & { lastBeforeProbe: number | null }): CpuQueueWait | null {
     // Process probes and reads of the task database must not hold this
     // queue's writer. Re-read the rows under the lock and match observations
     // by their exact owner/binding and observed rank. Peers may poll or reorder
@@ -338,9 +369,12 @@ export class CpuAdmissionQueue {
     const decisions: string[] = [];
     const wait = this.db.transaction(() => {
       const now = this.now();
+      const activeSlots = this.activeGateSlots();
+      const gateHolders = new Set(activeSlots.map(gate => gate.key));
       // A release that predates polls released these from a hold since the last check.
       this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(now);
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NOT NULL").all()) {
+        if (gateHolders.has(row.key)) continue;
         const observed = owners.get(row.owner!);
         if (!observed) continue;
         const { identity, status, dead } = observed;
@@ -438,7 +472,9 @@ export class CpuAdmissionQueue {
       // The durable wait bound lifts the pressure hold in both lanes.
       // Readiness and claim still require the same queue position and spacing.
       const slotObservationChanged = gateSlot !== undefined && gateSlot.lastBeforeProbe !== last;
-      if (!observationChanged && !slotObservationChanged && position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
+      const portableSlots = gateSlot?.slot === null ? activeSlots.filter(gate => gate.slot === null) : [];
+      const portableFull = gateSlot?.slot === null && portableSlots.length >= Math.min(gateSlot.cap, ...portableSlots.map(gate => gate.cap));
+      if (!observationChanged && !slotObservationChanged && !portableFull && position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
         if (consume) {
           // Commands settle at their kernel slot claim. Stages retain a
           // recoverable admission until their own start checkpoint is read.
@@ -452,6 +488,7 @@ export class CpuAdmissionQueue {
             this.db.query(`INSERT INTO tickets (key, since, owner, priority, low_pressure, fifo_seq)
               VALUES (?, ?, ?, -1, 1, -(SELECT next FROM ticket_order WHERE id = 1))`)
               .run(`${ACTIVE_GATE_PREFIX}${key}`, now, JSON.stringify(owner));
+            this.recordGateSlot(`${ACTIVE_GATE_PREFIX}${key}`, gateSlot);
             this.db.exec("UPDATE ticket_order SET next = next + 1 WHERE id = 1");
           }
           this.db.query("UPDATE admission SET last = ? WHERE id = 1").run(now);
@@ -462,7 +499,7 @@ export class CpuAdmissionQueue {
       // admission, is stalled. This reading never estimates a remaining wait.
       const stalledMs = this.stalledDuration(now, head.since, last);
       return {
-        since: ticket.since, position, waitedMs, heldBy: observationChanged || position > 1 || spacing > 0 || slotObservationChanged ? "queue" as const : "pressure" as const,
+        since: ticket.since, position, waitedMs, heldBy: observationChanged || position > 1 || spacing > 0 || slotObservationChanged || portableFull ? "queue" as const : "pressure" as const,
         ...(ticket.priority === 1 ? {} : { priority: ticket.priority === 0 ? "high" as const : "low" as const }),
         ...(stalledMs !== undefined ? { stalledMs } : {}),
       };
