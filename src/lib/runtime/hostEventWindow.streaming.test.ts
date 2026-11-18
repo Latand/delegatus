@@ -7,7 +7,7 @@ import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import { RuntimeReplayGapError, type RuntimeEvent } from "./engineHost";
 import { attachRuntimeEvents, HostEventWindow, runtimeEventsAfter, type RuntimeEventSubscriber } from "./hostEventWindow";
 
-const event = (seq: number, text = `part ${seq}`): RuntimeEvent => ({ kind: "delta", turnId: "turn", text, seq });
+const event = (seq: number, text = `part ${seq}`): Extract<RuntimeEvent, { kind: "delta" }> => ({ kind: "delta", turnId: "turn", text, seq });
 const hash = (events: readonly RuntimeEvent[]) => createHash("sha256").update(events.map(e => JSON.stringify(e)).join("")).digest("hex");
 function pausedStore(events: RuntimeEvent[]) {
   let resume!: () => void;
