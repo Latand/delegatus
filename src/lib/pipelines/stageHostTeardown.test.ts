@@ -405,7 +405,7 @@ test("the residency probe reads host state without dispatching anything (#670)",
   setAgentRegistryForTests(null);
 });
 
-test("an unstamped attempt requires positive idle evidence before retiring a host without a stream", async () => {
+test.each([true, false])("owned orphan retirement checks the recorded attempt authority (idle evidence required %s)", async requireIdleEvidence => {
   const pid = 2_000_000_124;
   const signals: number[] = [];
   let alive = true;
@@ -418,15 +418,18 @@ test("an unstamped attempt requires positive idle evidence before retiring a hos
     const processRef = captureProcessIdentity(pid);
     const fixture = hostedConversation({ status: "dead", process: processRef });
     const { retirePipelineStageAgent } = await import("./engine");
-    const result = await retirePipelineStageAgent({ ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId }, {
-      requireIdleEvidence: true,
+    const { terminalIdleStopKey } = await import("./stageControlCustody");
+    const recorded = { ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId };
+    const result = await retirePipelineStageAgent(recorded, {
+      operationId: terminalIdleStopKey(recorded),
+      ...(requireIdleEvidence ? { requireIdleEvidence: true as const } : {}),
       termination: { processIdentity: identity, bootEpoch: () => processRef.bootEpoch ?? null, pidAlive: living,
         ppidMap: () => new Map(), processGroupId: () => null,
         signal: candidate => { signals.push(candidate); alive = false; }, sleep: async () => {}, terminateOwnedHost: async () => false,
         retireRegistryEntry: () => true },
     });
-    expect(signals).toEqual([]);
-    expect(result).toEqual({ outcome: "deferred" });
+    expect(signals).toEqual(requireIdleEvidence ? [] : [pid]);
+    expect(result.outcome).toBe(requireIdleEvidence ? "deferred" : "stopped");
     expect(killed).toEqual([]);
   } finally { identitySpy.mockRestore(); aliveSpy.mockRestore(); }
 });

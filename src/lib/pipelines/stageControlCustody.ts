@@ -69,10 +69,14 @@ export async function readWithdrawal(key: string): Promise<WithdrawalBinding | n
   return record === null ? null : withdrawalBinding.parse(JSON.parse(record));
 }
 
-export async function claimWithdrawal(key: string, identity: Omit<WithdrawalBinding, "kind" | "producerPrefix">) {
+export async function claimWithdrawal(key: string, identity: Omit<WithdrawalBinding, "kind" | "producerPrefix">,
+  replaces?: WithdrawalBinding) {
+  const authority = digest([identity.conversationId, identity.sessionKey.engine, identity.sessionKey.sessionId,
+    identity.artifactPath, identity.revision, identity.writerClaim]);
   const binding = withdrawalBinding.parse({
-    kind: "continuation-withdrawal", producerPrefix: "pipeline-withdrawal:" + digest([key, identity]) + ":", ...identity,
+    kind: "continuation-withdrawal", producerPrefix: "pipeline-withdrawal:" + authority + ":", ...identity,
   });
-  const record = await claimPipelineControlOwnership(key, JSON.stringify(binding));
+  const record = await claimPipelineControlOwnership(key, JSON.stringify(binding), "pipeline-withdrawal-fence-" + authority,
+    replaces && JSON.stringify(replaces));
   return { acquired: record.acquired, binding: withdrawalBinding.parse(JSON.parse(record.binding)) };
 }

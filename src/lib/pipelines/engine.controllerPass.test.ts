@@ -1586,15 +1586,16 @@ test.each([
   "a slow scoped RPC returns %s after %i ms while an unrelated cold lane starts before the deadline",
   (reply, responseMs) => auditIsolatedColdProvisioning("direct", "pinned", 1, { reply, responseMs }), 30_000);
 
-test.each(["stop", "withdrawal"] as const)(
+test.each(["stop", "withdrawal", "close-withdrawal"] as const)(
   "an accepted peer %s remains pending while the controller starts an unrelated child",
   mutation => auditIsolatedColdProvisioning("direct", "pinned", 1, { mutation }), 30_000);
 
 test.each([
-  ["stop", false], ["withdrawal", false], ["stop", true], ["withdrawal", true],
+  ["stop", false, false], ["withdrawal", false, false], ["stop", true, false],
+  ["withdrawal", true, false], ["withdrawal", true, true],
 ] as const)(
-  "a fresh process reconciles an owned %s after its sender exits, admission still pending %s",
-  (mutation, holdBeforeAdmission) => withControllerAuditState(async () => {
+  "a fresh process reconciles an owned %s after its sender exits, admission still pending %s, stale refusal %s",
+  (mutation, holdBeforeAdmission, staleRefusal) => withControllerAuditState(async () => {
     const fixture = await ownedStageControl(mutation, "2026-11-18T12:00:00.000Z", holdBeforeAdmission);
     const target = {
       conversationId: fixture.conversationId, launchId: fixture.launchId, agentPath: fixture.transcriptPath,
@@ -1639,6 +1640,22 @@ test.each([
       await until(Promise.race([held, incumbent.exited.then(async code => {
         throw new Error(`owned mutation sender exited before it reached the held phase (${code}): ${await initialError} ${await initialOutput}`);
       })]), 6_000);
+      if (staleRefusal) {
+        fixture.publish("running", "fixture-writer-two");
+        fixture.release();
+        expect(await incumbent.exited).toBe(0);
+        expect(await initialOutput).toContain("the session row changed");
+        expect(fixture.withdrawals).toHaveLength(0);
+        const active = await observe();
+        expect(active).toMatchObject({ outcome: "unknown", reason: expect.stringContaining("awaits a confirmed receipt") });
+        expect(fixture.dispatches).toHaveLength(1);
+        fixture.publish("idle", "fixture-writer-two");
+        expect(await observe()).toEqual({ outcome: "confirmed" });
+        expect(await observe()).toEqual({ outcome: "confirmed" });
+        expect(fixture.withdrawals).toHaveLength(1);
+        expect(fixture.dispatches).toEqual(["append-session-fenced", "append-session-fenced"]);
+        return;
+      }
       incumbent.kill();
       await incumbent.exited;
       const pending = await observe();
@@ -1666,6 +1683,13 @@ test.each([
       } else {
         expect(fixture.withdrawals).toHaveLength(1);
         expect(reconciled).toEqual({ outcome: "confirmed" });
+        const { claimWithdrawal, readWithdrawal } = await import("./stageControlCustody");
+        const binding = await readWithdrawal("fixture-restart-withdrawal");
+        if (!binding) throw new Error("the accepted withdrawal has no ownership binding");
+        const { kind: _kind, producerPrefix: _prefix, ...identity } = binding;
+        const closeOwner = "fixture-close-withdrawal";
+        expect(await claimWithdrawal(closeOwner, identity)).toEqual({ acquired: false, binding });
+        expect(await readWithdrawal(closeOwner)).toEqual(binding);
       }
     } finally {
       if (incumbent.exitCode === null && incumbent.signalCode === null) incumbent.kill();
@@ -1734,8 +1758,71 @@ test.each(["stop", "withdrawal"] as const)(
     }
   }), 12_000);
 
+test.each(["cancel", "settle"] as const)("an earlier stop receipt read shares the confirmation deadline (%s)",
+  mode => withControllerAuditState(async () => {
+    const { retirePipelineStageAgent } = await import("./engine");
+    const { terminalIdleStopKey } = await import("./stageControlCustody");
+    const { runtimeHostClient } = await import("@/lib/runtime/client");
+    const fixture = await ownedStageControl("stop", "2026-11-18T12:00:00.000Z", true);
+    const target = { conversationId: fixture.conversationId, launchId: fixture.launchId,
+      agentPath: fixture.transcriptPath, stageId: "build", attempt: 1, paneId: null };
+    const operationId = terminalIdleStopKey(target);
+    const first = retirePipelineStageAgent(target, { operationId });
+    const entered = latch(), hold = latch();
+    const cancel = new AbortController();
+    let pending: ReturnType<typeof retirePipelineStageAgent> | undefined;
+    try {
+      await until(fixture.mutationEntered);
+      fixture.publish("running", "fixture-writer-two");
+      fixture.release();
+      expect(await first).toEqual({ outcome: "deferred" });
+      expect(fixture.stops[0]?.receipt.reason).toBe("idle-retirement-deferred");
+      fixture.publish("idle", "fixture-writer-two");
+      const real = runtimeHostClient()!;
+      const reads: Array<{ signal?: AbortSignal; timeoutMs?: number }> = [];
+      let now = 0;
+      const client = new Proxy(real, {
+        get(subject, key, receiver) {
+          if (key === "operationStatus") return async (id: string, options?: { signal?: AbortSignal; timeoutMs?: number }) => {
+            reads.push(options ?? {});
+            if (reads.length === 1) {
+              entered.resolve();
+              await hold.promise;
+            }
+            return subject.operationStatus(id, options);
+          };
+          const value = Reflect.get(subject, key, receiver);
+          return typeof value === "function" ? value.bind(subject) : value;
+        },
+      });
+      pending = retirePipelineStageAgent(target, { operationId, client, signal: cancel.signal,
+        budgetMs: 1_500, now: () => now, sleep: async () => { now = 1_500; } });
+      await until(entered.promise);
+      if (mode === "cancel") cancel.abort(new Error("caller cancelled during receipt read"));
+      else now = 1_100;
+      hold.resolve();
+      const result = await pending;
+      if (mode === "cancel") {
+        expect(reads[0]?.signal?.aborted).toBe(true);
+        expect(reads.map(read => read.timeoutMs)).toEqual([1_500]);
+        expect(fixture.dispatches).toHaveLength(1);
+        expect(result).toMatchObject({ outcome: "unconfirmed", operationId: fixture.stops[0]?.operationId });
+      } else {
+        expect(reads.map(read => read.timeoutMs)).toEqual([1_500, 400]);
+        expect(fixture.dispatches).toHaveLength(2);
+        expect(result).toMatchObject({ outcome: "unconfirmed", operationId: fixture.stops[1]?.operationId });
+      }
+    } finally {
+      cancel.abort();
+      hold.resolve();
+      fixture.release();
+      await Promise.allSettled([first, pending]);
+      await fixture.dispose();
+    }
+  }), 12_000);
+
 type StopReadCase = { reply: "clear" | "operator-stop" | "clear-after-pause"; responseMs: number };
-type ColdProvisionScenario = StopReadCase | { mutation: "stop" | "withdrawal" };
+type ColdProvisionScenario = StopReadCase | { mutation: "stop" | "withdrawal" | "close-withdrawal" };
 
 async function delayedScopedStopServer(conversationId: string, admittedAt: string, scenario: StopReadCase, pause: () => Promise<void>) {
   const { reply, responseMs } = scenario;
@@ -1938,7 +2025,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
       });
     });
     if (mutation) {
-      heldControl = await ownedStageControl(mutation, requestedAt);
+      heldControl = await ownedStageControl(mutation === "stop" ? "stop" : "withdrawal", requestedAt);
       const { conversationId, launchId, transcriptPath } = heldControl;
       Object.assign(attempt, { conversationId, launchId, agentPath: transcriptPath, paneId: null });
       blockedConversations.clear();
@@ -1954,6 +2041,16 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
         h.ports.stageHostResident = real.stageHostResident;
       } else {
         h.ports.invalidateProviderContinuation = defaultPipelinePorts().invalidateProviderContinuation;
+        if (mutation === "close-withdrawal") {
+          old.state = "closed";
+          old.closedAt = requestedAt;
+          old.cursor = null;
+          old.closeTeardown = { id: "fixture-close-withdrawal", phase: "pending", waitingForActivation: false,
+            acknowledgeHosts: false, flow: null };
+          old.closeReport = { status: "pending", pending: [], pendingContinuations: [{
+            stageId: old.runs[0]!.stageId, attempt: attempt.n, conversationId, launchId, agentPath: transcriptPath, paneId: null,
+          }], stopped: [], alreadyStopped: [], unconfirmed: [], reviewers: [], acknowledged: [], stillRunning: [], notes: [], worktree: null };
+        }
       }
       savePipelines(blockers);
       void heldControl.mutationAccepted.then(() => { observedBlockers.add(conversationId); blocked.resolve(); });
@@ -2006,7 +2103,9 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     expect(logs.filter(line => line.includes("pending at deadline"))).toEqual([]);
     expect(observedBlockers.size).toBe(blockerCount);
     const retained = (await findControllerPipeline(old.id))!;
-    if (!reply && mutation !== "stop") expect(retained.runs[0]?.attempts).toMatchObject([{ n: 1, suspension: { retryRequestedAt: requestedAt } }]);
+    if (!reply && mutation !== "stop" && mutation !== "close-withdrawal") {
+      expect(retained.runs[0]?.attempts).toMatchObject([{ n: 1, suspension: { retryRequestedAt: requestedAt } }]);
+    }
     expect(cpuKeys.size).toBeGreaterThan(0);
     expect(await f.git(cold.worktreeDir, "rev-parse", "HEAD")).toBe(f.base);
     const worktrees = (await f.git(f.repo, "worktree", "list", "--porcelain")).split("\n");
@@ -2015,7 +2114,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     if (heldControl) {
       for (let pass = 0; pass < 4; pass++) await controller.tick();
       expect(heldControl.stops).toHaveLength(mutation === "stop" ? 1 : 0);
-      expect(heldControl.withdrawals).toHaveLength(mutation === "withdrawal" ? 1 : 0);
+      expect(heldControl.withdrawals).toHaveLength(mutation === "stop" ? 0 : 1);
       if (mutation === "stop") {
         const operation = heldControl.stops[0]!;
         expect(operation.receipt.status).toBe("queued");
@@ -2034,6 +2133,8 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     if (mutation === "stop") {
       expect(waitingForCpu?.state).toBe("completed");
       expect(heldControl?.stops).toHaveLength(1);
+    } else if (mutation === "close-withdrawal") {
+      expect(waitingForCpu).toMatchObject({ state: "closed", closeReport: { status: "settled", pendingContinuations: [] } });
     } else if (reply === "operator-stop") {
       expect(waitingForCpu?.stateDetail).toContain("stopped by operator");
       const stopped = waitingForCpu?.runs[0]?.attempts[0]?.suspension?.operatorStoppedAt;
@@ -2052,7 +2153,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     }
     for (const peer of blockers) {
       const recovered = await findControllerPipeline(peer.id);
-      if (mutation === "stop" || reply && reply !== "clear") {
+      if (mutation === "stop" || mutation === "close-withdrawal" || reply && reply !== "clear") {
         expect(recovered?.runs[0]?.attempts.map(item => item.n)).toEqual([1]);
         expect(h.spawnInputs.filter(input => input.cwd === old.worktreeDir)).toHaveLength(1);
         continue;
@@ -2066,7 +2167,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     if (stopServer) expect(stopServer.evidence).toEqual({ requests: 1, responses: 1, closedBeforeResponse: 0 });
     if (heldControl) {
       expect(heldControl.stops).toHaveLength(mutation === "stop" ? 1 : 0);
-      expect(heldControl.withdrawals).toHaveLength(mutation === "withdrawal" ? 1 : 0);
+      expect(heldControl.withdrawals).toHaveLength(mutation === "stop" ? 0 : 1);
     }
     observer.send("finished");
     await until(observationComplete.promise);
