@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { buildPipeline } from "../store";
 import { realExec } from "../../workflows/provision";
+import { tryLockFenceExclusive } from "../../../runtime-host/fenceLock";
 
 function removeFixture(root: string): void {
   const writable = (filename: string) => {
@@ -86,7 +87,29 @@ export async function lockedFixture(options: { registry?: boolean } = {}) {
         fs.writeFileSync(manifestFile, manifestBytes); fs.writeFileSync(lockFile, lockBytes);
       }
     };
-    return { root, repoDir, worktreeDir, run, server, pipeline, makeLagging,
+    const cache = path.join(repoDir, ".git/delegatus-dependencies/v4");
+    const addWorktree = async (name: string) => {
+      const cwd = path.join(root, name);
+      await run(["git", "worktree", "add", "--detach", cwd]);
+      return cwd;
+    };
+    const holdWriter = () => {
+      const filename = path.join(cache, "owner.lock");
+      const fd = fs.openSync(filename, "r+");
+      const lease = tryLockFenceExclusive({ filename, fd });
+      if (!lease) {
+        fs.closeSync(fd);
+        throw new Error("fixture dependency writer already held");
+      }
+      let closed = false;
+      return () => {
+        if (closed) return;
+        closed = true;
+        lease.release();
+        fs.closeSync(fd);
+      };
+    };
+    return { root, repoDir, worktreeDir, run, server, pipeline, makeLagging, cache, addWorktree, holdWriter,
       close: () => { server.stop(true); removeFixture(root); } };
   } catch (error) { server.stop(true); removeFixture(root); throw error; }
 }
