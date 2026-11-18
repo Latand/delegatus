@@ -1391,7 +1391,8 @@ test.each([
   fs.mkdirSync(repo);
   const git = async (cwd: string, ...args: string[]) => {
     const result = await realExec("git", args, cwd, {
-      GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+      GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid",
+      GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.invalid",
       GIT_AUTHOR_DATE: h.ports.now(), GIT_COMMITTER_DATE: h.ports.now(),
     });
     if (result.code !== 0) throw new Error(result.stderr || result.stdout);
@@ -1510,6 +1511,26 @@ test.each([
 test.each([
   ["direct", "pinned"], ["direct", "followed"], ["queued", "pinned"], ["queued", "followed"],
 ] as const)("operator audit production-length deadline for cold provisioning: %s %s", async (admission, base) => {
+  const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const previousRegistry = agentRegistry();
+  const previousState = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(process.env.TMPDIR!, "cold-controller-state-"));
+  process.env.LLV_STATE_DIR = state;
+  let registry: InstanceType<typeof AgentRegistry> | undefined;
+  try {
+    registry = new AgentRegistry();
+    setAgentRegistryForTests(registry);
+    await auditColdProvisioning(admission, base);
+  } finally {
+    setAgentRegistryForTests(previousRegistry);
+    registry?.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+}, 30_000);
+
+async function auditColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed") {
   const f = await realWorktreeLane("cold-provision-audit", BUILD_ONLY as never);
   const h = f.h;
   const old = loadPipelines()[0]!;
@@ -1525,8 +1546,9 @@ test.each([
   h.ports.resolveProjectSpawn = engine => ({ kind: "available", account: { engine, accountId: account,
     kind: "managed", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
 
-  const blocked = latch(), release = latch(), launched = latch();
-  let stalled = true, stopReads = 0, cancelledReads = 0, spawnedAt = 0, acceptedAt = 0;
+  const blocked = latch(), release = latch(), launched = latch(), deadline = latch(), launchTickExited = latch();
+  let stalled = true, stopReads = 0, cancelledReads = 0;
+  let acceptedAt = 0, spawnCallbackAt = 0, childLaunchedAt = 0, tickExitedAt = 0, children = 0;
   h.ports.conversationOperatorStopped = async id => {
     if (id !== attempt.conversationId) return false;
     stopReads++;
@@ -1549,7 +1571,9 @@ test.each([
   const controller = new FlowPipelineController({
     tickPipelines: entries => tickPipelinesController(entries, h.ports),
     scan: async () => ({ files: [], complete: false }),
-    publishHeartbeat: () => {},
+    publishHeartbeat: heartbeat => {
+      if (heartbeat.state === "timed-out") deadline.resolve();
+    },
     scheduleTimeout: (callback, delay) => {
       const timer = setTimeout(() => { timers.delete(timer); callback(); }, delay);
       timers.add(timer);
@@ -1562,8 +1586,15 @@ test.each([
     },
     log: message => { logs.push(message); },
   }, { phaseDeadlineMs: 15_000, maxPasses: 1 });
+  const runTick = async () => {
+    await controller.tick();
+    if (childLaunchedAt && !tickExitedAt) {
+      tickExitedAt = performance.now();
+      launchTickExited.resolve();
+    }
+  };
   let wake: Promise<void> | undefined;
-  const unregister = registerPipelineTick(() => (wake = controller.tick()));
+  const unregister = registerPipelineTick(() => (wake = runTick()));
   h.ports.scheduleTick = delay => { if (delay === 0) requestPipelineTick(); };
   let cpuNow = Date.parse(requestedAt);
   const queue = new CpuAdmissionQueue(path.join(f.root, "cold-cpu.sqlite"), () => cpuNow);
@@ -1594,24 +1625,29 @@ test.each([
     expect(fs.existsSync(cold.worktreeDir)).toBe(false);
     const spawnAgent = h.ports.spawnAgent;
     h.ports.spawnAgent = async (input, reserve) => {
+      if (input.cwd !== cold.worktreeDir) return spawnAgent(input, reserve);
+      spawnCallbackAt ||= performance.now();
       const result = await spawnAgent(input, reserve);
-      if (input.cwd !== cold.worktreeDir) return result;
       // The reservation must already be durable before the child can execute.
       expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, launchId: result.launchId }]);
       child = Bun.spawn([process.execPath, "-e", "console.log('fixture first launch')"],
         { cwd: input.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      children++;
+      childLaunchedAt ||= performance.now();
       const [exit, output] = await Promise.all([child.exited, new Response(child.stdout).text()]);
       expect({ exit, output: output.trim() }).toEqual({ exit: 0, output: "fixture first launch" });
-      spawnedAt = performance.now();
       launched.resolve();
       return result;
     };
-    tick = controller.tick();
-    await until(blocked.promise);
-    // The production wake chain must carry Git settlement through attempt
-    // persistence and launch while the peer still refuses every stop read.
-    await until(launched.promise, 8_000);
-    expect(spawnedAt - acceptedAt).toBeLessThan(8_000);
+    tick = runTick();
+    // Git settlement and attempt persistence must lead to a child before
+    // the controller reports its first deadline, with the peer still stalled.
+    const first = await Promise.race([
+      Promise.all([blocked.promise, launched.promise, launchTickExited.promise]).then(() => "launched"),
+      deadline.promise.then(() => "deadline"),
+      tick.then(() => new Promise<never>(() => {})),
+    ]);
+    expect(first).toBe("launched");
     expect(logs.filter(line => line.includes("pending at deadline"))).toEqual([]);
     expect(cancelledReads).toBeGreaterThan(0);
     const retained = (await findControllerPipeline(old.id))!;
@@ -1638,8 +1674,13 @@ test.each([
     ]);
     expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, state: "running" }]);
     expect(h.spawnInputs.filter(input => input.cwd === cold.worktreeDir)).toHaveLength(1);
+    expect(children).toBe(1);
     if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
-      console.log("cold-controller-audit", JSON.stringify({ admission, base, firstMs: Math.round(spawnedAt - acceptedAt), stopReads, cancelledReads }));
+      console.log("cold-controller-audit", JSON.stringify({ admission, base,
+        callbackMs: Math.round(spawnCallbackAt - acceptedAt),
+        childMs: Math.round(childLaunchedAt - acceptedAt),
+        tickExitMs: Math.round(tickExitedAt - acceptedAt),
+        children, stopReads, cancelledReads }));
     }
   } finally {
     stalled = false;
@@ -1651,10 +1692,11 @@ test.each([
     await wake;
     for (const timer of timers) clearTimeout(timer);
     await settlePipelineControllerJobs();
+    await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
     queue.close();
     fs.rmSync(f.root, { recursive: true, force: true });
   }
-}, 25_000);
+}
 
 test.each(["recovers", "exhausts"] as const)("a classified provisioning lock retry %s across controller processes", async outcome => {
   const f = await realWorktreeLane("provision-lock-restart", BUILD_ONLY as never);

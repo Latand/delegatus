@@ -59,11 +59,12 @@ export type PipelineTickWork = { row_key: string; row_order: number; generation:
  * It also covers runtime/account events that do not write a pipeline row. */
 export function selectPipelineTickWork(db: Database, now: number, excluded: readonly string[], limit: number): PipelineTickWork[] {
   if (!Number.isInteger(limit) || limit < 1 || limit > 4) throw new Error("invalid controller lane budget");
-  const cursor = db.query<{ row_order: number; row_key: string; ready: number }, [number]>(`SELECT row_order,row_key,
-    EXISTS (SELECT 1 FROM pipeline_tick_work work WHERE work.row_key=cursor.row_key AND (work.dirty=1 OR work.due_at<=?)) AS ready
-    FROM pipeline_tick_cursor cursor WHERE id=1`).get(now)!;
-  const priorityOrder = cursor.ready ? cursor.row_order : -1;
-  const priorityKey = cursor.ready ? cursor.row_key : "";
+  const cursor = db.query<{ row_order: number; row_key: string; due_at: number | null }, [number]>(`
+    SELECT cursor.row_order,cursor.row_key,work.due_at FROM pipeline_tick_cursor cursor
+    LEFT JOIN pipeline_tick_work work ON work.row_key=cursor.row_key AND (work.dirty=1 OR work.due_at<=?)
+    WHERE cursor.id=1`).get(now)!;
+  const priorityOrder = cursor.due_at === null ? -1 : cursor.row_order;
+  const priorityKey = cursor.due_at === null ? "" : cursor.row_key;
   const dirtySkip = JSON.stringify(excluded);
   const dirtyPage = (after: boolean, count: number) => db.query<PipelineTickWork, [number, string, string, number]>(`SELECT * FROM pipeline_tick_work
     WHERE dirty=1 AND (row_order,row_key) ${after ? ">" : "<="} (?,?)
@@ -75,10 +76,12 @@ export function selectPipelineTickWork(db: Database, now: number, excluded: read
   const dirty = dirtyPage(true, dirtyLimit);
   if (dirty.length < dirtyLimit) dirty.push(...dirtyPage(false, dirtyLimit - dirty.length));
   const dueSkip = JSON.stringify([...excluded, ...dirty.map(row => row.row_key)]);
-  const duePage = (after: boolean, count: number) => db.query<PipelineTickWork, [number, number, string, string, number]>(`SELECT * FROM pipeline_tick_work
-    WHERE due_at<=? AND (row_order,row_key) ${after ? ">" : "<="} (?,?)
+  // Match the due index's full key so a cursor near the end seeks directly
+  // to the next candidate, even when every row has the same due time.
+  const duePage = (after: boolean, count: number) => db.query<PipelineTickWork, [number, number, number, string, string, number]>(`SELECT * FROM pipeline_tick_work
+    WHERE due_at<=? AND (due_at,row_order,row_key) ${after ? ">" : "<="} (?,?,?)
       AND row_key NOT IN (SELECT value FROM json_each(?))
-    ORDER BY due_at,row_order,row_key LIMIT ?`).all(now, priorityOrder, priorityKey, dueSkip, count);
+    ORDER BY due_at,row_order,row_key LIMIT ?`).all(now, cursor.due_at ?? -1, priorityOrder, priorityKey, dueSkip, count);
   const dueLimit = Math.max(0, limit - dirty.length - 1);
   const due = dueLimit ? duePage(true, dueLimit) : [];
   if (due.length < dueLimit) due.push(...duePage(false, dueLimit - due.length));
