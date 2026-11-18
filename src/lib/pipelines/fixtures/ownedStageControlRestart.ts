@@ -104,7 +104,7 @@ export function auditOwnedStageControlRestart(mutation: "stop" | "withdrawal", h
           expect(fixture.dispatches).toEqual(["append-session-fenced"]);
           expect(fixture.withdrawals).toHaveLength(0);
           if (refusal === "dead" || refusal === "unhosted") {
-            const { claimWithdrawal, readWithdrawal } = await import("./stageControlCustody");
+            const { claimWithdrawal, readWithdrawal } = await import("../stageControlCustody");
             const ownerKey = "fixture-restart-withdrawal";
             const old = await readWithdrawal(ownerKey);
             if (!old) throw new Error("the pending withdrawal has no durable owner");
@@ -145,7 +145,7 @@ export function auditOwnedStageControlRestart(mutation: "stop" | "withdrawal", h
         expect(fixture.dispatches).toEqual(["append-session-fenced", "append-session-fenced"]);
         return;
       }
-      const { claimIdleStop, readIdleStop, terminalIdleStopKey } = await import("./stageControlCustody");
+      const { claimIdleStop, readIdleStop, terminalIdleStopKey } = await import("../stageControlCustody");
       const stopBinding = mutation === "stop" ? await readIdleStop(terminalIdleStopKey(target)) : null;
       if (mutation === "stop" && !stopBinding) throw new Error("the in-flight stop has no ownership binding");
       incumbent.kill();
@@ -177,7 +177,7 @@ export function auditOwnedStageControlRestart(mutation: "stop" | "withdrawal", h
       } else {
         expect(fixture.withdrawals).toHaveLength(1);
         expect(reconciled).toEqual({ outcome: "confirmed" });
-        const { claimWithdrawal, readWithdrawal } = await import("./stageControlCustody");
+        const { claimWithdrawal, readWithdrawal } = await import("../stageControlCustody");
         const binding = await readWithdrawal("fixture-restart-withdrawal");
         if (!binding) throw new Error("the accepted withdrawal has no ownership binding");
         const { kind: _kind, producerPrefix: _prefix, ...identity } = binding;
