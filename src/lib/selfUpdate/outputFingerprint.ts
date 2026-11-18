@@ -1,5 +1,5 @@
 import { dirname, resolve as absolutePath } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { recordHelperGroup } from "@/lib/helperLease";
 
 /** Embedded so checkout and bundled servers execute exactly the same worker,
@@ -41,7 +41,7 @@ export const OUTPUT_INVENTORY_TIMEOUT_MS = 120_000;
 /** Metadata work belongs to a bounded child of the pinned Bun running this
  * server. No dependency bytes or symlink destinations are traversed. Reject
  * only after close, including cancellation, so a retry owns no old worker. */
-export function outputFingerprint(dir: string, output: string, signal?: AbortSignal, start = spawn, timeoutMs = OUTPUT_INVENTORY_TIMEOUT_MS): Promise<string> {
+export function outputFingerprint(dir: string, output: string, signal?: AbortSignal, start: (command: string, args: string[], options: SpawnOptions) => ChildProcess = spawn, timeoutMs = OUTPUT_INVENTORY_TIMEOUT_MS): Promise<string> {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = start(process.execPath, ["--no-env-file", "--no-install", "--eval", OUTPUT_INVENTORY_SOURCE, absolutePath(dir), output], {
