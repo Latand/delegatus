@@ -92,5 +92,10 @@ export function selectPipelineTickWork(db: Database, now: number, excluded: read
   const fairLimit = limit - dirty.length - due.length;
   const fair = fairLimit ? fairPage(true, fairLimit) : [];
   if (fair.length < fairLimit) fair.push(...fairPage(false, fairLimit - fair.length));
-  return [...dirty, ...due, ...fair];
+  const work = [...dirty, ...due, ...fair];
+  // The cursor may still name the only dirty row after a deadline. A wrapped
+  // selection must give the other candidates a turn before retrying that row.
+  const previous = work.findIndex(row => row.row_key === cursor.row_key);
+  if (previous !== -1 && previous !== work.length - 1) work.push(...work.splice(previous, 1));
+  return work;
 }

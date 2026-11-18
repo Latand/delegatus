@@ -1364,8 +1364,11 @@ test("shared compact authority observations keep each job's own lane out of its 
 });
 
 test.each([
-  ["direct", "pinned"], ["direct", "followed"], ["queued", "pinned"], ["queued", "followed"],
-] as const)("a %s lane with a %s base starts despite a repeatedly timed-out dirty lane", async (admission, base) => {
+  ["direct", "pinned", "dirty"], ["direct", "followed", "dirty"],
+  ["queued", "pinned", "dirty"], ["queued", "followed", "dirty"],
+  ["direct", "pinned", "due"], ["direct", "followed", "due"],
+  ["queued", "pinned", "due"], ["queued", "followed", "due"],
+] as const)("a %s lane with a %s base starts as %s despite a repeatedly timed-out dirty lane", async (admission, base, readiness) => {
   const { realExec } = await import("@/lib/workflows/provision");
   const { realProvisionExec } = await import("./git");
   const { StoreBusyBeforeAdmissionError } = await import("@/lib/state/fileTransaction");
@@ -1464,6 +1467,9 @@ test.each([
       // Each pass receives a fresh dirty generation from the stopped lane.
       db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.stateDetail',?) WHERE collection='pipelines' AND row_key=?")
         .run(`peer update ${pass}`, blocker.id);
+      if (readiness === "due") {
+        db.query("UPDATE pipeline_tick_work SET dirty=0,due_at=? WHERE row_key=?").run(epoch + elapsed, lane.id);
+      }
       const tick = controller.tick();
       let blocked = false;
       await until(Promise.race([tick, entered.promise.then(() => { blocked = true; })]));
@@ -1474,8 +1480,15 @@ test.each([
       release.resolve();
       await settlePipelineControllerJobs();
     }
-    expect(log.some(line => line.includes("port.conversationOperatorStopped"))).toBe(true);
-    expect((await findControllerPipeline(lane.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, state: "running" }]);
+    const deadlines = log.filter(line => line.includes("port.conversationOperatorStopped")).length;
+    const attempts = (await findControllerPipeline(lane.id))?.runs[0]?.attempts;
+    if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
+      const cursor = db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_cursor WHERE id=1").get();
+      console.log("dirty-peer-rotation-audit", JSON.stringify({ admission, base, readiness, deadlines,
+        attempts: attempts?.length ?? 0, cursorAtBlocker: cursor?.row_key === blocker.id }));
+    }
+    expect(deadlines).toBeGreaterThan(0);
+    expect(attempts).toMatchObject([{ n: 1, state: "running" }]);
     expect(h.spawnInputs.filter(input => input.cwd === lane.worktreeDir)).toHaveLength(1);
     expect(adds).toBe(1);
     expect(fetches).toBe(base === "pinned" ? 0 : 1);
@@ -1546,9 +1559,21 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
   h.ports.resolveProjectSpawn = engine => ({ kind: "available", account: { engine, accountId: account,
     kind: "managed", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
 
-  const blocked = latch(), release = latch(), launched = latch(), deadline = latch(), launchTickExited = latch();
-  let stalled = true, stopReads = 0, cancelledReads = 0;
-  let acceptedAt = 0, spawnCallbackAt = 0, childLaunchedAt = 0, tickExitedAt = 0, children = 0;
+  const blocked = latch(), release = latch(), launched = latch(), launchTickExited = latch();
+  let stalled = true, stopReads = 0, cancelledReads = 0, childLaunched = false;
+  const observerReady = latch(), observationComplete = latch();
+  let observation: { children: number; callbacks: number; deadlineReached: boolean;
+    callbackMs: number | null; childMs: number | null; tickExitMs: number | null } | undefined;
+  const observer = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures", "coldLaunchDeadline.ts")], {
+    stdin: "ignore", stdout: "ignore", stderr: "inherit",
+    ipc(message) {
+      if (message === "ready") observerReady.resolve();
+      else {
+        observation = message as typeof observation;
+        observationComplete.resolve();
+      }
+    },
+  });
   h.ports.conversationOperatorStopped = async id => {
     if (id !== attempt.conversationId) return false;
     stopReads++;
@@ -1571,9 +1596,6 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
   const controller = new FlowPipelineController({
     tickPipelines: entries => tickPipelinesController(entries, h.ports),
     scan: async () => ({ files: [], complete: false }),
-    publishHeartbeat: heartbeat => {
-      if (heartbeat.state === "timed-out") deadline.resolve();
-    },
     scheduleTimeout: (callback, delay) => {
       const timer = setTimeout(() => { timers.delete(timer); callback(); }, delay);
       timers.add(timer);
@@ -1586,10 +1608,12 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     },
     log: message => { logs.push(message); },
   }, { phaseDeadlineMs: 15_000, maxPasses: 1 });
+  let tickExitReported = false;
   const runTick = async () => {
     await controller.tick();
-    if (childLaunchedAt && !tickExitedAt) {
-      tickExitedAt = performance.now();
+    if (childLaunched && !tickExitReported) {
+      tickExitReported = true;
+      observer.send("tick-exit");
       launchTickExited.resolve();
     }
   };
@@ -1608,6 +1632,14 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
   let child: ReturnType<typeof Bun.spawn<"ignore", "pipe", "pipe">> | undefined;
   let tick: Promise<void> | undefined;
   try {
+    await until(observerReady.promise);
+    if (process.env.LLV_COLD_CONTROLLER_LATE === "1") {
+      const exec = h.ports.provisionExec!;
+      h.ports.provisionExec = async (command, args, cwd, signal, options) => {
+        if (args[0] === "worktree" && args[1] === "add") await Bun.sleep(15_100);
+        return exec(command, args, cwd, signal, options);
+      };
+    }
     const store = await import("./store");
     const { StoreBusyBeforeAdmissionError } = await import("@/lib/state/fileTransaction");
     const busy = admission === "queued" ? spyOn(store, "createPipelineWithDelivery").mockRejectedValueOnce(
@@ -1618,7 +1650,7 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
       stages: BUILD_ONLY as never, ...(base === "pinned" ? { baseRef: f.base } : {}),
     }, h.ports, { queueWhenBusy: true, creationRequest: { key: "cold-provision-audit", digest: base } })
       .finally(() => busy?.mockRestore());
-    acceptedAt = performance.now();
+    observer.send("accepted");
     const cold = created.pipeline!;
     expect(cold.state).toBe("provisioning");
     expect(Boolean(created.queued)).toBe(admission === "queued");
@@ -1626,28 +1658,26 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     const spawnAgent = h.ports.spawnAgent;
     h.ports.spawnAgent = async (input, reserve) => {
       if (input.cwd !== cold.worktreeDir) return spawnAgent(input, reserve);
-      spawnCallbackAt ||= performance.now();
+      observer.send("callback");
       const result = await spawnAgent(input, reserve);
       // The reservation must already be durable before the child can execute.
       expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, launchId: result.launchId }]);
       child = Bun.spawn([process.execPath, "-e", "console.log('fixture first launch')"],
         { cwd: input.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-      children++;
-      childLaunchedAt ||= performance.now();
+      observer.send("child");
+      childLaunched = true;
       const [exit, output] = await Promise.all([child.exited, new Response(child.stdout).text()]);
       expect({ exit, output: output.trim() }).toEqual({ exit: 0, output: "fixture first launch" });
       launched.resolve();
       return result;
     };
     tick = runTick();
-    // Git settlement and attempt persistence must lead to a child before
-    // the controller reports its first deadline, with the peer still stalled.
-    const first = await Promise.race([
-      Promise.all([blocked.promise, launched.promise, launchTickExited.promise]).then(() => "launched"),
-      deadline.promise.then(() => "deadline"),
+    // The independent process owns the acceptance-to-child deadline. This
+    // wait also lets a deliberately late child report its actual launch.
+    await until(Promise.race([
+      Promise.all([blocked.promise, launched.promise, launchTickExited.promise]),
       tick.then(() => new Promise<never>(() => {})),
-    ]);
-    expect(first).toBe("launched");
+    ]), 24_000);
     expect(logs.filter(line => line.includes("pending at deadline"))).toEqual([]);
     expect(cancelledReads).toBeGreaterThan(0);
     const retained = (await findControllerPipeline(old.id))!;
@@ -1674,22 +1704,22 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     ]);
     expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, state: "running" }]);
     expect(h.spawnInputs.filter(input => input.cwd === cold.worktreeDir)).toHaveLength(1);
-    expect(children).toBe(1);
+    observer.send("finished");
+    await until(observationComplete.promise);
     if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
-      console.log("cold-controller-audit", JSON.stringify({ admission, base,
-        callbackMs: Math.round(spawnCallbackAt - acceptedAt),
-        childMs: Math.round(childLaunchedAt - acceptedAt),
-        tickExitMs: Math.round(tickExitedAt - acceptedAt),
-        children, stopReads, cancelledReads }));
+      console.log("cold-controller-audit", JSON.stringify({ admission, base, ...observation, stopReads, cancelledReads }));
     }
+    expect(observation).toMatchObject({ callbacks: 1, children: 1 });
+    expect(observation?.deadlineReached, "independent acceptance-to-child deadline of 15000 ms").toBe(false);
   } finally {
     stalled = false;
     release.resolve();
     unregister();
     if (child?.exitCode === null) child.kill();
     await child?.exited;
-    await tick;
-    await wake;
+    await Promise.allSettled([tick, wake]);
+    if (observer.exitCode === null) observer.kill();
+    await observer.exited;
     for (const timer of timers) clearTimeout(timer);
     await settlePipelineControllerJobs();
     await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
