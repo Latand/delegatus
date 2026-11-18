@@ -2699,7 +2699,7 @@ test.each([["session", 1], ["session", 2], ["account", 1], ["account", 2]] as co
   expect(loadPipelines()[0]!.state).toBe("needs_decision");
   const generation = h.ports.conversationGeneration!(STAGE_CONVERSATION)!;
   let reads = 0;
-  h.ports.runtimeSwitchTierCut = async () => {
+  h.ports.runtimeSwitchTierCut = async (): Promise<"cancelled"> => {
     if (++reads === changeOnRead) {
       if (change === "session") h.ports.conversationGeneration = () => ({ ...generation, sessionId: "session-replacement" });
       else h.ports.allowedAccountIds = () => [];

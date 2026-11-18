@@ -15,11 +15,11 @@ async function confirmationPark() {
     staged: true, currentGeneration: true, stagedTranscript: pathname };
   let message: RuntimeOperationResult = { operationId: "spawn_message_launch-1", replayed: false,
     receipt: { operationId: "spawn_message_launch-1", conversationId: receipt.conversationId,
-      kind: "send", idempotencyKey: "spawn_message_launch-1", at: NOW,
+      kind: "send", idempotencyKey: "spawn_message_launch-1", at: NOW, revision: 1,
       status: "failed", deliveryUnverified: true, reason: TIMEOUT } };
   const launch: RuntimeOperationResult = { operationId: "launch-1", replayed: false,
     receipt: { operationId: "launch-1", conversationId: receipt.conversationId, kind: "spawn",
-      idempotencyKey: "launch-1", at: NOW, status: "applied" } };
+      idempotencyKey: "launch-1", at: NOW, revision: 1, status: "applied" } };
   const client = { operationStatus: async (id: string) => id === launch.operationId ? launch : message } as RuntimeHostClient;
   h.ports.originalLaunchOperations = defaultPipelinePorts({ spawnRecoveryClient: () => client }).originalLaunchOperations;
   const spawn = h.ports.spawnAgent;
@@ -68,7 +68,7 @@ test.each(["rejected", "foreign", "generation", "decision", "replaced", "old-tur
   if (fence === "empty") fs.writeFileSync(f.pathname, "");
   if (fence === "rejected" || fence === "foreign") f.setMessage({ operationId: "spawn_message_launch-1", replayed: false,
     receipt: { operationId: "spawn_message_launch-1", conversationId: fence === "foreign" ? "conversation_other" : f.receipt.conversationId,
-      kind: "send", idempotencyKey: "spawn_message_launch-1", at: NOW,
+      kind: "send", idempotencyKey: "spawn_message_launch-1", at: NOW, revision: 1,
       status: fence === "foreign" ? "delivered" : "rejected" } });
   if (fence === "generation") f.receipt.currentGeneration = false;
   if (fence === "decision" || fence === "replaced") {
