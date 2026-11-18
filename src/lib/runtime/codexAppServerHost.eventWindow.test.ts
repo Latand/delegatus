@@ -147,9 +147,11 @@ test("central native completion releases an unanswered old tool and admits the n
   } finally { await host.release(); }
 });
 
-test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+test.each(["memory", "file"])("a settled host releases idle events, replays to subscribers and refills on its next turn (%s)", async kind => {
+  const eventStore = kind === "file"
+    ? new FileRuntimeEventStore(fs.mkdtempSync(path.join(os.tmpdir(), "host-refill-"))) : new MemoryEventStore();
   const server = new FakeAppServer("idle-window-thread");
-  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore, spawnProcess: fakeSpawn(server) });
   const idle = idleWindowFixture(host);
   try {
     const count = host.heapAttribution().events;
@@ -159,8 +161,8 @@ test("a settled host releases idle events, replays to subscribers and refills on
     expect(host.heapAttribution().events).toBe(0);
     const stream = host.attach(0)[Symbol.asyncIterator]();
     try {
-      expect(host.heapAttribution().events).toBeGreaterThan(0);
       for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
     } finally { await stream.return?.(); }
     expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
     await host.send({ id: "next-idle-turn", text: "continue" });
