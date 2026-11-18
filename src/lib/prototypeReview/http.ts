@@ -23,6 +23,10 @@ import { postPrototypeReviewToTelegram } from "./telegramPost";
 import { isTelegramDestinationConfigurationReason } from "./telegramPostSignals";
 import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
 
+class PrototypeSeatAuthorityError extends PrototypeError {
+  constructor() { super("taskless forms require the current authorized seat", 403); }
+}
+
 class PrototypeReceiptScopeError extends PrototypeError {
   constructor() { super("prototype receipt identity changed", 403); }
 }
@@ -37,6 +41,9 @@ function assertPrototypeReceiptScope(request: NextRequest, caller: PrototypeCall
 export function prototypeFailure(error: unknown, route = "prototype review"): NextResponse {
   if (error instanceof PrototypeReceiptScopeError) return NextResponse.json({
     error: error.message, code: "workspace_forbidden", check: "prototype-receipt-scope",
+  }, { status: error.status });
+  if (error instanceof PrototypeSeatAuthorityError) return NextResponse.json({
+    error: error.message, code: "workspace_forbidden", check: "prototype-seat-authority",
   }, { status: error.status });
   const ambiguous = error instanceof PrototypeError && (error as { code?: string }).code === "short_id_ambiguous";
   if (!(error instanceof PrototypeError)) console.error(`[prototype review] ${route}`, error);
@@ -84,7 +91,9 @@ export async function resendTelegramPOST(request: NextRequest, world: PrototypeW
 /** The project whose designated orchestrator is calling, or null. Only that
     seat may ask without a task (docs/design/operator-decision-forms.md §2.1). */
 function seatProject(caller: PrototypeCaller,world: PrototypeWorld): string | null {
-  return caller.conversationId && caller.project && world.orchestrator(caller.project) === caller.conversationId ? caller.project : null;
+  if (!caller.conversationId) return null;
+  if (!caller.project || world.orchestrator(caller.project) !== caller.conversationId) throw new PrototypeSeatAuthorityError();
+  return caller.project;
 }
 /** The task a review read is about: the one named, or the caller's pipeline's
     own. A seat that names none reads its own questions (`taskId: null`). */

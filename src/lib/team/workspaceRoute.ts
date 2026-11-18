@@ -245,8 +245,10 @@ async function targetProjects(route: string, request: Request, ctx?: Context): P
   if (["/api/prototype-reviews", "/api/prototype-reviews/scope", "/api/prototype-reviews/read"].includes(route)
     && !supplied("taskId") && agentCapabilityClaim(request) === "valid") {
     const caller = callerConversationId(request);
-    const { activeOrchestratorSeats } = await import("@/lib/orchestrator/seats");
-    const seat = activeOrchestratorSeats().find(seat => seat.conversationId === caller);
+    const [{ authorizedManagerSeats }, { productionManagerAuthoritySources }] = await Promise.all([
+      import("@/lib/orchestrator/authority"), import("@/lib/orchestrator/managerAuthoritySources"),
+    ]);
+    const seat = authorizedManagerSeats(productionManagerAuthoritySources()).find(seat => seat.conversationId === caller);
     projects.push(seat?.project ?? null);
   }
   const params = await ctx?.params;

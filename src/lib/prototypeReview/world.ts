@@ -5,7 +5,8 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { findPipelineRecord, loadPipelinesForList } from "@/lib/pipelines/store";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { currentSeat } from "@/lib/orchestrator/seatChannel";
+import { authorizedManagerSeats } from "@/lib/orchestrator/authority";
+import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { loadPrototypeTask } from "@/lib/tasks/store";
 import { runsElsewhere } from "@/lib/links/linked";
 import type { PrototypeReviewRound } from "./types";
@@ -41,7 +42,8 @@ export const prototypeWorld: PrototypeWorld = {
     return prototypeStageForConversation(conversationId);
   },
   orchestrator(project) {
-    return currentSeat(project)?.conversationId ?? null;
+    return authorizedManagerSeats(productionManagerAuthoritySources()).find(seat =>
+      seat.project && canonicalProject(seat.project) === canonicalProject(project))?.conversationId ?? null;
   },
 };
 export function taskForPrototype(taskId: string, caller: PrototypeCaller, write = false) {

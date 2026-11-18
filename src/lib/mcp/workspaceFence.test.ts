@@ -96,6 +96,14 @@ const call = (tool: string, args: McpToolArgs = {}) => service.callTool(tool, { 
 const REFUSED = { ok: false, code: "workspace_forbidden", retryable: false };
 const formQuestions = [{ id: "choice", text: "Choose a path", options: [{ label: "First", recommended: true }, { label: "Second" }] }];
 
+function fixtureAuthority(registry: AgentRegistry) {
+  return spyOn(registry, "conversationAuthorityFacts").mockImplementation(id => {
+    const row = snapshot.conversations[id];
+    return row ? { id: row.id, superseded: Boolean(row.supersededBy), hasGeneration: row.generations.length > 0,
+      project: row.projectOwnership?.project ?? null, directories: [] } : null;
+  });
+}
+
 function designateCaller(workspace?: { memberId: string; workspaceId: string }) {
   beginOrchestratorSeatIntent({ project: own, mandate: "Run project work", clientRequestId: "regression-seat", mode: "existing",
     conversationId: "conversation_member", workspace, now: AT });
@@ -278,6 +286,7 @@ test("#3818: HTTP form routes resolve taskless targets from the authenticated se
   const registry = new AgentRegistry(path.join(root, "forms-registry.json"));
   snapshot.conversations.conversation_worker = conversation("conversation_worker", own) as never;
   const lookup = spyOn(registry, "conversation").mockImplementation(id => snapshot.conversations[id] ?? null);
+  const facts = fixtureAuthority(registry);
   setAgentRegistryForTests(registry);
   installSpawnCapabilityResolver(() => "conversation_member");
   setCallerConversationResolverForTests(() => "conversation_member");
@@ -300,7 +309,7 @@ test("#3818: HTTP form routes resolve taskless targets from the authenticated se
     }
     expect(effects).toBe(3);
   } finally {
-    lookup.mockRestore(); installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null);
+    lookup.mockRestore(); facts.mockRestore(); installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null);
     setAgentRegistryForTests(null); registry.close();
   }
 });
@@ -1420,3 +1429,98 @@ for (const mode of ["read", "publish"] as const) for (const changed of [false, t
     installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null);
   }
 });
+
+
+for (const identity of ["valid", "superseded", "revoked", "conflicting-project", "missing-generation", "wrong-project"] as const)
+  test(`taskless HTTP forms validate current seat authority: ${identity}`, async () => {
+    const { authorizedManagerSeats } = await import("@/lib/orchestrator/authority");
+    const { productionManagerAuthoritySources } = await import("@/lib/orchestrator/managerAuthoritySources");
+    const { POST: publishPOST } = await import("@/app/api/prototype-reviews/route");
+    const { POST: readPOST } = await import("@/app/api/prototype-reviews/read/route");
+    const { POST: scopePOST } = await import("@/app/api/prototype-reviews/scope/route");
+    const handlers = await import("@/lib/prototypeReview/http");
+    const { publishPrototype } = await import("@/lib/prototypeReview/store");
+    const { loadSeatRounds } = await import("@/lib/prototypeReview/seatRounds");
+    designateCaller({ memberId: member.id, workspaceId: W1 });
+    await publishPrototype({ clientRequestId: "private-round", title: "Private seat decision", questions: formQuestions },
+      null, { conversationId: "conversation_member" }, own);
+    if (identity === "superseded") snapshot.conversations.conversation_member!.supersededBy = {
+      conversationId: "conversation_foreign", at: AT, reason: "replaced",
+    } as never;
+    if (identity === "missing-generation") snapshot.conversations.conversation_member!.generations = [];
+    if (identity === "wrong-project") snapshot.conversations.conversation_member!.projectOwnership!.project = other;
+    if (identity === "revoked" || identity === "conflicting-project") {
+      const file = readOrchestratorSeatFile();
+      const seat = file.seats[own]!;
+      if (identity === "revoked") file.revocations.push({ project: own, conversationId: "conversation_member", seatEpoch: seat.seatEpoch, revokedAt: AT });
+      else file.seats[other] = { ...seat, project: other, seatEpoch: seat.seatEpoch + 1 };
+      writeStoredSeatRecord(file);
+    }
+    const registry = new AgentRegistry(path.join(root, "taskless-authority-registry.json"));
+    const lookup = spyOn(registry, "conversation").mockImplementation(id => snapshot.conversations[id] ?? null);
+    const read = spyOn(registry, "readOnlySnapshot").mockImplementation(() => snapshot);
+    const facts = fixtureAuthority(registry);
+    setAgentRegistryForTests(registry);
+    installSpawnCapabilityResolver(() => "conversation_member");
+    setCallerConversationResolverForTests(() => "conversation_member");
+    const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
+    const valid = identity === "valid";
+    const seats = () => authorizedManagerSeats(productionManagerAuthoritySources(registry));
+    const routes = [
+      { path: "/api/prototype-reviews", body: { title: "New seat question", questions: formQuestions }, route: publishPOST, handler: handlers.publishPOST },
+      { path: "/api/prototype-reviews/scope", body: { mode: "publish" }, route: scopePOST, handler: handlers.reviewScopePOST },
+      { path: "/api/prototype-reviews/scope", body: { mode: "read" }, route: scopePOST, handler: handlers.reviewScopePOST },
+      { path: "/api/prototype-reviews/read", body: {}, route: readPOST, handler: handlers.reviewReadPOST },
+    ];
+    const request = (route: typeof routes[number], clientRequestId: string) => new NextRequest(`http://localhost${route.path}`, {
+      method: "POST", headers: { host: "localhost", "content-type": "application/json", "x-llv-spawn-capability": "a".repeat(43) },
+      body: JSON.stringify({ ...route.body, clientRequestId }),
+    });
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: incoming => {
+      const route = routes.find(route => route.path === new URL(incoming.url).pathname);
+      return route ? route.route(new NextRequest(incoming)) : new Response(null, { status: 404 });
+    } });
+    process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
+    try {
+      expect(seats()).toHaveLength(valid ? 1 : 0);
+      const before = loadSeatRounds();
+      for (const [index, route] of routes.entries()) {
+        const response = await route.route(request(route, `direct-${index}`));
+        const body = await response.json();
+        expect(response.status).toBe(valid ? 200 : 403);
+        if (!valid) {
+          expect(body).toMatchObject({ code: "workspace_forbidden", check: "route-target" });
+          expect(JSON.stringify(body)).not.toContain("Private seat decision");
+          // The handler also fences solo/owner fast paths without a workspace gate.
+          const target = await route.handler(request(route, `handler-${index}`));
+          expect(target.status).toBe(403);
+          expect(await target.json()).toMatchObject({ code: "workspace_forbidden", check: "prototype-seat-authority" });
+        } else if (route.path.endsWith("/read")) expect(JSON.stringify(body)).toContain("Private seat decision");
+      }
+      const domains = { ...dependencies, authorizedSeats: seats };
+      const receipts = new MemoryMcpReceiptStore();
+      const reopen = () => withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined,
+        productionViewerControlDependencies(), domains), receipts), domains);
+      for (const tool of ["publish_prototype_review", "read_prototype_review"] as const) {
+        const args = { clientRequestId: `mcp-${tool}`, ...(tool === "publish_prototype_review" ? { title: "MCP seat question", questions: formQuestions } : {}) };
+        const answer = await runAsMcpHttpCaller({ capability: "a".repeat(43) }, () => reopen().callTool(tool, args));
+        expect(answer.ok).toBe(valid);
+        if (!valid) {
+          expect(answer).toMatchObject({ ...REFUSED, details: { check: identity === "wrong-project" ? "caller-project" : "route-target" } });
+          expect(JSON.stringify(answer)).not.toContain("Private seat decision");
+        } else {
+          if (tool === "read_prototype_review") expect(JSON.stringify(answer)).toContain("Private seat decision");
+          store.removeWorkspaceMember(W1, member.id);
+          const replay = await runAsMcpHttpCaller({ capability: "a".repeat(43) }, () => reopen().callTool(tool, args));
+          expect(replay).toMatchObject({ ok: true, replayed: true });
+          store.putWorkspaceMember(W1, member.id, "member", owner.id, AT);
+        }
+      }
+      if (!valid) expect(loadSeatRounds()).toEqual(before);
+    } finally {
+      await server.stop(true);
+      if (previousControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previousControl;
+      lookup.mockRestore(); read.mockRestore(); facts.mockRestore();
+      installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null); setAgentRegistryForTests(null); registry.close();
+    }
+  });

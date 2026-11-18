@@ -87,8 +87,8 @@ test("a Telegram owner reservation answers the asking seat's taskless round", as
 test("only the project's designated seat may ask without a task, and only with questions", async () => {
   const notSeat = { ...seat, orchestrator: () => "conversation_other" };
   const refused = await publishAs(notSeat, { clientRequestId: "worker", title: "Deploy now?", questions: one });
-  expect(refused.status).toBe(400);
-  expect((await refused.json()).error).toContain("only a project's orchestrator may ask without one");
+  expect(refused.status).toBe(403);
+  expect(await refused.json()).toMatchObject({ code: "workspace_forbidden", check: "prototype-seat-authority" });
   const operatorCall = await publishAs(operator, { clientRequestId: "operator", title: "Deploy now?", questions: one });
   expect(operatorCall.status).toBe(400);
   const root = await fs.mkdtemp(path.join(process.env.HOME!, "seat-source-")); roots.push(root);
