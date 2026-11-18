@@ -606,7 +606,7 @@ test("get_orchestrator ignores a peer seat timestamp outside the JavaScript date
 });
 
 test("get_orchestrator distinguishes seats on linked installs with the same machine label", async () => {
-  const second = ["22334455", "6677", "4888", "99aa", "bbccddeeff00"].join("-");
+  const second = "22222222-2222-2222-2222-222222222222";
   atomicWrite(linkFile("peers"), { v: 1, peers: [install, second].map(id => ({ id, install: id, grantId: randomUUID(), token: "fixture", label: "Other", url: "http://127.0.0.1:1", store: randomUUID(), state: "active", lastCall: Date.now(), error: null })) });
   updateRemoteProjects(second, [{ key: project.project, name: "widget" }], randomUUID());
   for (const [id, engine] of [[install, "codex"], [second, "claude"]] as const) {

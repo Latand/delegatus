@@ -66,7 +66,7 @@ test("a peer called Here advertises its install id while here remains local", ()
 
 test("a revoked full install ID cannot fall through to a local or linked label", () => {
   const prior = readPeers();
-  const secondId = ["22334455", "6677", "4888", "99aa", "bbccddeeff00"].join("-");
+  const secondId = "22222222-2222-2222-2222-222222222222";
   const original = prior.peers[0]!;
   writePeers({ v: 1, peers: [
     { ...original, state: "revoked" },
