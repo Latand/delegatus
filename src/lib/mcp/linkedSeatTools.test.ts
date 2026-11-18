@@ -32,8 +32,11 @@ afterAll(async () => {
 const project = projectIdentityFromRemote("https://code.example.test/acme/widget", root)!;
 recordProjectRemote(project);
 setShared({ v: 1, all: false, projects: [project.project] });
-const selfId = randomUUID(), install = randomUUID();
-atomicWrite(path.join(process.env.LLV_STATE_DIR!, "links/self.json"), { v: 1, installId: selfId, label: "Here", publicUrl: null });
+const selfId = ["11223344", "5566", "4777", "8899", "aabbccddeeff"].join("-");
+const install = ["00112233", "4455", "4677", "8899", "aabbccddeeff"].join("-");
+const selfFile = path.join(process.env.LLV_STATE_DIR!, "links/self.json");
+const self = { v: 1, installId: selfId, label: "Here", publicUrl: null };
+atomicWrite(selfFile, self);
 atomicWrite(linkFile("peers"), { v: 1, peers: [{ id: install, install, grantId: randomUUID(), token: "fixture", label: "Other", url: "http://127.0.0.1:1", store: randomUUID(), state: "active", lastCall: Date.now(), error: null }] });
 updateRemoteProjects(install, [{ key: project.project, name: "widget" }], randomUUID());
 recordSeatMessages(`peer:${install}`, true);
@@ -45,6 +48,31 @@ const domain = {
   authorizedSeats: () => [{ project: project.project, conversationId: caller, path: null }],
   recoveryPredecessors: () => [],
 } as unknown as ViewerMcpDomainDependencies;
+
+test("an ambiguous machine label is refused before MCP claims or dispatches the message", async () => {
+  atomicWrite(selfFile, { ...self, label: "Other" });
+  const posts: string[] = [];
+  const control = { post: async (path: string) => {
+    posts.push(path);
+    throw new Error("Unexpected dispatch");
+  } };
+  const receipts = new MemoryMcpReceiptStore();
+  const service = createMcpToolService(viewerMcpBindings(undefined, control, domain), receipts, undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const clientRequestId = "ambiguous-machine-label";
+  try {
+    const result = await service.callTool("send_message_to_orchestrator", {
+      project: project.project, machine: "Other", text: "Please hold the lock.", clientRequestId,
+    });
+    expect(result).toMatchObject({ ok: false, code: "machine_ambiguous", details: { outcome: "not-executed" } });
+    if (result.ok) throw new Error("Expected a refusal");
+    expect(result.error).toContain(selfId);
+    expect(result.error).toContain(install);
+    expect(posts).toEqual([]);
+    expect(receipts.lookup(`send_message_to_orchestrator:${clientRequestId}`)).toBeNull();
+  } finally {
+    atomicWrite(selfFile, self);
+  }
+});
 
 test("remote orchestrator recovery reads the queued outbound row after a lost reply and never dispatches twice", async () => {
   const posts: Record<string, unknown>[] = [];
