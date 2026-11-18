@@ -6,7 +6,7 @@ import type { FileEntry } from "../types";
 import { ctxFor } from "./context";
 import { lastAgentWorkAtFor, lastAssistantMessageAtFor, lastTurnFor } from "./turnDuration";
 import { discoverFiles } from "./discover";
-import { durableServiceTierIndexForPaths, entryEffort, entryEffortResult, entryServiceTier } from "./effort";
+import { durableServiceTierIndex, entryEffort, entryEffortResult, entryServiceTier } from "./effort";
 import { linkEntries } from "./links";
 import { entryModelsResult } from "./model";
 import { outputHolders } from "./process";
@@ -94,7 +94,7 @@ async function runObservation(signal?: AbortSignal): Promise<FileEntry[]> {
   }, signal);
   assignTranscriptPids(entries);
   const activityProcesses = activityProcessReader();
-  const durableTiers = await durableServiceTierIndexForPaths(entries.map(entry => entry.path));
+  const durableTiers = await durableServiceTierIndex(entries.filter(entry => entry.engine === "codex").map(entry => entry.path));
   await each(entries, (entry) => {
     entry.effort = entryEffort(entry);
     entry.serviceTier = entryServiceTier(entry, durableTiers);

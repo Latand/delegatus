@@ -1,14 +1,18 @@
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import type { FileEntry } from "../types";
+import type { RegistryFile } from "../agent/registry";
+import * as scannerProcess from "./process";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-effort-test-"));
 let argvByPid = new Map<number, string[]>();
 
 mock.module("./process", () => ({
+  ...scannerProcess,
   agentProcesses: () => [],
   argvEngine: () => null,
   isHelperArgv: () => false,
@@ -193,58 +197,135 @@ test("a scrolled-out tier uses the durable profile for the pill without reviving
   expect(entryServiceTier(entry(file, { mtime: 2 }))).toBe("priority");
 });
 
-test("a scan indexes durable tiers once for registered and missing paths, then refreshes on the next scan", async () => {
-  const { agentRegistry } = await import("../agent/registry");
-  const { durableServiceTierIndex, entryServiceTier } = await import("./effort");
-  const registry = agentRegistry();
-  const file = writeJsonl(".codex/indexed-tier.jsonl", []);
-  const alias = writeJsonl(".codex/indexed-alias.jsonl", []);
-  const missing = writeJsonl(".codex/indexed-missing.jsonl", []);
-  const conversation = registry.ensureConversation("codex", file, null);
-  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" });
-  const snapshot = structuredClone(registry.readOnlySnapshot());
-  const original = snapshot.conversations[conversation.id]!;
-  const synthetic = { ...snapshot, conversations: { [original.id]: { ...original, continuityPaths: [alias] } }, receipts: {} };
-  for (let i = 0; i < 2000; i += 1) {
-    synthetic.conversations[`conversation_synthetic-${i}`] = { ...original, id: `conversation_synthetic-${i}`, generations: [{ ...original.generations[0]!, path: `synthetic/${i}.jsonl` }], continuityPaths: [] };
+function fullTierWalk(snapshot: RegistryFile): Map<string, string | null> {
+  const tiers = new Map<string, string | null>();
+  const put = (pathname: string, { serviceTier, fast }: { serviceTier?: string | null; fast?: boolean | null }) => {
+    if (tiers.has(pathname)) return;
+    const tier = serviceTier && /^[a-z][a-z0-9_-]{0,31}$/.test(serviceTier) ? serviceTier : null;
+    tiers.set(pathname, tier === "standard" ? "default" : tier ?? (fast === true ? "priority" : fast === false ? "default" : null));
+  };
+  for (const row of Object.values(snapshot.conversations)) {
+    for (const generation of row.generations) put(generation.path, generation.launchProfile);
+    const current = row.generations.at(-1);
+    if (current) for (const alias of row.continuityPaths) put(alias, current.launchProfile);
   }
-  const receipt = { artifactPath: file, launchProfile: { serviceTier: "priority" } };
-  synthetic.receipts = Object.fromEntries(Array.from({ length: 4000 }, (_, i) => [`receipt-${i}`, { ...receipt, artifactPath: i === 0 ? file : `receipt/${i}.jsonl` }])) as typeof snapshot.receipts;
-  const reads = spyOn(registry, "readOnlySnapshot").mockReturnValue(synthetic);
-  const lookup = spyOn(registry, "launchProfileForPath").mockImplementation(() => { throw new Error("scan performed a linear lookup"); });
-  try {
-    const tiers = durableServiceTierIndex(registry);
-    const registeredEntry = entry(file), missingEntry = entry(missing);
-    for (let i = 0; i < 2000; i += 1) {
-      expect(entryServiceTier(i % 2 ? missingEntry : registeredEntry, tiers)).toBe(i % 2 ? null : "ultrafast");
+  for (const receipt of Object.values(snapshot.receipts)) {
+    if (receipt.artifactPath) put(receipt.artifactPath, receipt.launchProfile);
+  }
+  return tiers;
+}
+
+test.each(["sqlite", "off"] as const)("scanner tiers agree with the full walk across registry changes (%s)", async sqliteMode => {
+  const { AgentRegistry, normalizeRegistry, RegistryReadError } = await import("../agent/registry");
+  const { SqliteAgentRegistryStore } = await import("../agent/sqliteRegistryStore");
+  const { durableServiceTierIndex } = await import("./effort");
+  const dir = fs.mkdtempSync(path.join(SANDBOX, "tier-registry-"));
+  const json = path.join(dir, "registry.json");
+  const sqlite = path.join(dir, "registry.sqlite");
+  const at = "2026-01-01T00:00:00.000Z";
+  const generation = (name: string, serviceTier: string | null, fast: boolean | null = null) => ({
+    id: name, path: `/fixture/${name}.jsonl`, createdAt: at, launchProfile: { serviceTier, fast },
+  });
+  const conversation = (id: string, generations: ReturnType<typeof generation>[], continuityPaths: string[] = []) => ({
+    id, engine: "codex", createdAt: at, updatedAt: at, generations, continuityPaths,
+  });
+  const older = generation("older", "standard");
+  const current = generation("current", "invalid tier", true);
+  const collision = generation("collision", "default");
+  const alias = "/fixture/continuity.jsonl";
+  const receiptPath = "/fixture/receipt.jsonl";
+  const receipt = (launchId: string, artifactPath: string | null, serviceTier: string) => ({
+    launchId, conversationId: "conversation_receipt", engine: "codex", createdAt: at, state: "completed",
+    artifactPath, launchProfile: { serviceTier },
+  });
+  const initial = normalizeRegistry({ version: 2, entries: {}, conversations: {
+    conversation_primary: conversation("conversation_primary", [older, current], [alias, collision.path, older.path]),
+    conversation_later: conversation("conversation_later", [collision]),
+    conversation_empty: conversation("conversation_empty", [], [receiptPath]),
+    conversation_unknown: conversation("conversation_unknown", [generation("unknown", null)]),
+    ...Object.fromEntries(Array.from({ length: 256 }, (_, n) => {
+      const id = `conversation_history_${n}`;
+      return [id, conversation(id, [generation(`history-${n}`, "default")])];
+    })),
+  }, receipts: {
+    first: receipt("first", older.path, "ultrafast"),
+    later: receipt("later", older.path, "default"),
+    archived: receipt("archived", receiptPath, "ultrafast"),
+    unknown: receipt("unknown", "/fixture/unknown.jsonl", "priority"),
+    noPath: receipt("noPath", null, "priority"),
+    ...Object.fromEntries(Array.from({ length: 256 }, (_, n) => {
+      const id = `receipt-history-${n}`;
+      return [id, receipt(id, `/fixture/${id}.jsonl`, "default")];
+    })),
+  } });
+  const paths = [
+    older.path, current.path, alias, collision.path, receiptPath, "/fixture/unknown.jsonl",
+    ...Array.from({ length: 30 }, (_, n) => `/fixture/missing-${n}.jsonl`),
+  ];
+  const peer = sqliteMode === "sqlite" ? new SqliteAgentRegistryStore(sqlite, { initialSnapshot: initial, normalize: normalizeRegistry }) : null;
+  const saveJson = () => {
+    fs.writeFileSync(`${json}.next`, JSON.stringify(initial));
+    fs.renameSync(`${json}.next`, json);
+  };
+  if (peer) {
+    while (peer.archiveInactive(250)) { /* Populate real cold mappings. */ }
+    const db = new Database(sqlite, { readonly: true });
+    try {
+      expect(db.query("SELECT collection, count(*) AS count FROM registry_cold GROUP BY collection ORDER BY collection").all())
+        .toEqual([{ collection: "conversations", count: 260 }, { collection: "receipts", count: 261 }]);
+    } finally { db.close(); }
+  } else saveJson();
+  let loads = 0, conversationReads = 0, receiptReads = 0;
+  const open = () => new AgentRegistry(json, undefined, undefined, {
+    sqliteMode, sqliteFilename: sqlite, deferColdKeyInitialization: true, now: () => Date.parse(at),
+    onSqliteSnapshotLoad: () => { loads++; },
+    onSqliteRowPayloadRead: (collection, count) => {
+      if (collection === "conversations") conversationReads += count;
+      if (collection === "receipts") receiptReads += count;
+    },
+  });
+  let registry = open();
+  const edit = (change: (file: RegistryFile) => void) => {
+    if (peer) peer.mutate(change, false);
+    else { change(initial); saveJson(); }
+  };
+  const compare = async (expected: (string | null)[]) => {
+    const full = fullTierWalk(peer ? peer.readOnlySnapshot().file : registry.readOnlySnapshot());
+    for (let scan = 0; scan < 2; scan++) {
+      loads = conversationReads = receiptReads = 0;
+      const actual = await durableServiceTierIndex(paths, registry);
+      expect(actual).toEqual(new Map(paths.map(pathname => [pathname, full.get(pathname) ?? null])));
+      expect(paths.slice(0, expected.length).map(pathname => actual.get(pathname))).toEqual(expected);
+      expect(loads).toBe(0);
+      expect(conversationReads).toBeLessThanOrEqual(6);
+      expect(receiptReads).toBeLessThanOrEqual(2);
     }
-    expect(entryServiceTier(entry(alias), tiers)).toBe("ultrafast");
-    expect(tiers.get("receipt/1.jsonl")).toBe("priority");
-    expect(reads).toHaveBeenCalledTimes(1);
-    expect(lookup).not.toHaveBeenCalled();
-    synthetic.conversations[original.id]!.generations[0]!.launchProfile = { ...original.generations[0]!.launchProfile, serviceTier: "default" };
-    const refreshed = durableServiceTierIndex(registry);
-    expect(entryServiceTier(entry(file), refreshed)).toBe("default");
-  } finally {
-    reads.mockRestore(); lookup.mockRestore();
-  }
-});
-
-
-test("the scanner resolves current paths in bounded slices and observes a later profile", async () => {
-  const { AgentRegistry } = await import("@/lib/agent/registry");
-  const { durableServiceTierIndexForPaths } = await import("./effort");
-  const registry = new AgentRegistry(path.join(SANDBOX, "keyed-tiers.json"), undefined, undefined, { sqliteMode: "sqlite" });
-  const pathname = writeJsonl(".codex/current-tier.jsonl", []);
+  };
   try {
-    const conversation = registry.ensureConversation("codex", pathname, null);
-    registry.updateConversationLaunchProfile(conversation.id, { model: null, effort: null, fast: false, serviceTier: "priority" });
-    const paths = Array.from({ length: 33 }, (_, n) => n ? `/fixture/missing-${n}.jsonl` : pathname);
-    const tiers = await durableServiceTierIndexForPaths(paths, registry);
-    expect(tiers.size).toBe(33);
-    expect(tiers.get(pathname)).toBe("priority");
-    expect(tiers.get(paths[32]!)).toBeNull();
-    registry.updateConversationLaunchProfile(conversation.id, { model: null, effort: null, fast: false, serviceTier: "default" });
-    expect((await durableServiceTierIndexForPaths([pathname], registry)).get(pathname)).toBe("default");
-  } finally { registry.close(); }
+    await compare(["default", "priority", "priority", "priority", "ultrafast", null]);
+    edit(file => {
+      file.conversations.conversation_primary!.generations.at(-1)!.launchProfile = {
+        ...file.conversations.conversation_primary!.generations.at(-1)!.launchProfile, serviceTier: null, fast: false,
+      };
+    });
+    await compare(["default", "default", "default", "default", "ultrafast", null]);
+    edit(file => {
+      delete file.conversations.conversation_primary;
+      delete file.receipts.archived;
+    });
+    await compare(["ultrafast", null, null, "default", null, null]);
+    edit(file => { delete file.receipts.first; });
+    await compare(["default", null, null, "default", null, null]);
+    registry.close();
+    registry = open();
+    await compare(["default", null, null, "default", null, null]);
+    const unreadable = spyOn(registry, "launchTierProfilesForPaths").mockImplementation(() => { throw new RegistryReadError("unreadable fixture"); });
+    expect((await durableServiceTierIndex(paths, registry)).size).toBe(0);
+    unreadable.mockImplementation(() => { throw new Error("unexpected fixture error"); });
+    await expect(durableServiceTierIndex(paths, registry)).rejects.toThrow("unexpected fixture error");
+    unreadable.mockRestore();
+  } finally {
+    registry.close();
+    peer?.close();
+  }
 });

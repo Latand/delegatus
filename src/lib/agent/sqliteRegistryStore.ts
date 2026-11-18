@@ -1,4 +1,4 @@
-import { compareDeliveryAdmission, seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
+import { compareDeliveryAdmission, conversationLaunchProfileForPath, launchTierProfile, seatViewerMcpOwner, seatViewerMcpObservation, type LaunchTierProfile, type SeatTickConversation } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -19,7 +19,7 @@ import { deepFreeze } from "@/lib/deepFreeze";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, DatabaseReplacedError, openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
-import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import type { HeldDelivery, LaunchProfile, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -4548,6 +4548,52 @@ export class SqliteAgentRegistryStore {
   terminationPathMatches(id: string, pathname: string): boolean {
     return Boolean(this.db.query<{ present: number }, [string, string]>(
       "SELECT 1 AS present FROM registry_termination_paths WHERE conversation_id=? AND path=?").get(id, pathname));
+  }
+
+  /** Only the requested paths participate in one read transaction. Normalize
+   * selected rows as usual and expose only tier fields, which are independent
+   * of the assembled MCP grant decision. */
+  launchTierProfilesForPaths(paths: readonly string[]): Map<string, LaunchTierProfile | null> {
+    const result = new Map<string, LaunchTierProfile | null>();
+    if (!paths.length) return result;
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) this.db.exec("BEGIN");
+    try {
+      const owners = this.db.query<{ conversation_id: string }, [string]>(conversationPathSql(this.recordsSource));
+      const row = this.db.query<{ value_json: string }, [string, string]>(
+        `SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`,
+      );
+      const read = <C extends "conversations" | "receipts">(collection: C, key: string): RegistryFile[C][string] | undefined => {
+        const stored = row.get(collection, key);
+        if (!stored) return undefined;
+        this.onRowPayloadRead?.(collection, 1);
+        this.onRowPayloadParse?.(collection, 1);
+        return this.normalizePartial({
+          version: 2, entries: {}, receipts: {}, [collection]: { [key]: parseSqliteJson(stored.value_json, this.db) },
+        })[collection][key];
+      };
+      for (const pathname of paths) {
+        if (result.has(pathname)) continue;
+        let profile: LaunchProfile | null = null;
+        for (const { conversation_id } of owners.all(pathname)) {
+          const conversation = read("conversations", conversation_id);
+          profile = conversation ? conversationLaunchProfileForPath(conversation, pathname) : null;
+          if (profile) break;
+        }
+        if (!profile) {
+          const [key] = this.matchingRowKeys("receipts", "artifactPath", [pathname]);
+          if (key !== undefined) profile = read("receipts", key)?.launchProfile ?? null;
+        }
+        result.set(pathname, profile ? launchTierProfile(profile) : null);
+      }
+      if (ownsTransaction) this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      if (ownsTransaction) {
+        try { this.db.exec("ROLLBACK"); } catch { /* preserve the read failure */ }
+      }
+      throw error;
+    }
   }
 
   read<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {

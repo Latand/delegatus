@@ -5492,6 +5492,19 @@ export class RegistryWriterBusyError extends Error {
   }
 }
 
+export type LaunchTierProfile = Readonly<Pick<LaunchProfile, "serviceTier" | "fast">>;
+
+export function launchTierProfile({ serviceTier, fast }: LaunchProfile): LaunchTierProfile {
+  return { serviceTier, fast };
+}
+
+export function conversationLaunchProfileForPath(conversation: RegistryConversation, pathname: string): LaunchProfile | null {
+  const generation = conversation.generations.find(item => item.path === pathname);
+  if (generation) return generation.launchProfile;
+  return conversation.continuityPaths.includes(pathname)
+    ? conversation.generations.at(-1)?.launchProfile ?? null : null;
+}
+
 export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
   private readonly writerDeadlineMs: number | undefined;
@@ -5511,6 +5524,7 @@ export class AgentRegistry {
   private readOnlyCache: { signature: string; snapshot: RegistryFile; termination: {
     versions: Map<string, string>; owners: Map<string, AgentRegistryEntry[]>; conversationsByPath: Map<string, Set<string>>;
   } } | null = null;
+  private readonly jsonLaunchTiers = new WeakMap<RegistryFile, Map<string, LaunchTierProfile>>();
   private readonly mirrorCheckpointMs: number;
   private readonly now: () => number;
   private readonly scheduleMirrorCheckpoint: (callback: () => void, delayMs: number) => { unref?(): unknown };
@@ -10678,16 +10692,41 @@ export class AgentRegistry {
   launchProfileForPath(artifactPath: string): LaunchProfile | null {
     return this.readKeyed(snapshot => {
       for (const conversation of registryConversationsForPath(snapshot, artifactPath)) {
-        const generation = conversation.generations.find((item) => item.path === artifactPath);
-        if (generation) return clone(generation.launchProfile);
-        if (conversation.continuityPaths.includes(artifactPath)) {
-          const current = conversation.generations.at(-1);
-          if (current) return clone(current.launchProfile);
-        }
+        const profile = conversationLaunchProfileForPath(conversation, artifactPath);
+        if (profile) return clone(profile);
       }
       const receipt = registryRowsMatching(snapshot, "receipts", "artifactPath", artifactPath)[0];
       return receipt ? clone(receipt.launchProfile) : null;
     });
+  }
+
+  /** Scanner projection. The SQLite indexes already track path changes at
+   * commit, including archived rows. Legacy JSON shares one index per view. */
+  launchTierProfilesForPaths(paths: readonly string[]): Map<string, LaunchTierProfile | null> {
+    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.launch-tiers", () => {
+      if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+        return this.sqliteStore.launchTierProfilesForPaths(paths);
+      }
+      const snapshot = this.readOnlySnapshot();
+      let index = this.jsonLaunchTiers.get(snapshot);
+      if (!index) {
+        const tiers = new Map<string, LaunchTierProfile>();
+        const put = (pathname: string, profile: LaunchProfile) => {
+          if (!tiers.has(pathname)) tiers.set(pathname, Object.freeze(launchTierProfile(profile)));
+        };
+        for (const conversation of Object.values(snapshot.conversations)) {
+          for (const generation of conversation.generations) put(generation.path, generation.launchProfile);
+          const current = conversation.generations.at(-1);
+          if (current) for (const pathname of conversation.continuityPaths) put(pathname, current.launchProfile);
+        }
+        for (const receipt of Object.values(snapshot.receipts)) {
+          if (receipt.artifactPath) put(receipt.artifactPath, receipt.launchProfile);
+        }
+        this.jsonLaunchTiers.set(snapshot, tiers);
+        index = tiers;
+      }
+      return new Map(paths.map(pathname => [pathname, index.get(pathname) ?? null]));
+    }));
   }
 
   /** Durable account ownership for a transcript path (issue #891, phase 0).

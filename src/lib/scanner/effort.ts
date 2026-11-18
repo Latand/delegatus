@@ -1,6 +1,6 @@
 import { yieldToRuntime } from "@/lib/cooperative";
 import type { FileEntry } from "../types";
-import { agentRegistry, RegistryReadError } from "../agent/registry";
+import { agentRegistry, RegistryReadError, type LaunchTierProfile } from "../agent/registry";
 import { headRecordsResult, tailRecordsResult } from "./activity";
 import { globalCache } from "./caches";
 import { recordValue, recordsValue, stringValue } from "./json";
@@ -142,43 +142,22 @@ export function entryServiceTierResult(entry: Pick<FileEntry, "engine" | "pid" |
   return tier ? { value: tier, source: "native" } : profile();
 }
 
-/** Resolve only the scanner's current paths, with bounded synchronous slices.
- * No archived receipt census is needed to answer a missing tier. */
-export async function durableServiceTierIndexForPaths(paths: readonly string[], registry = agentRegistry()): Promise<ReadonlyMap<string, string | null>> {
-  const tiers = new Map<string, string | null>();
-  for (let offset = 0; offset < paths.length; offset += 16) {
-    for (const pathname of paths.slice(offset, offset + 16)) {
-      try {
-        const profile = registry.launchProfileForPath(pathname);
-        tiers.set(pathname, profile ? normalizeServiceTier(profile.serviceTier)
-          ?? (profile.fast === true ? "priority" : profile.fast === false ? "default" : null) : null);
-      } catch (error) { if (!(error instanceof RegistryReadError)) throw error; }
-    }
-    if (offset + 16 < paths.length) await yieldToRuntime();
-  }
-  return tiers;
+function profileServiceTier(profile: LaunchTierProfile | null | undefined): string | null {
+  return normalizeServiceTier(profile?.serviceTier)
+    ?? (profile?.fast === true ? "priority" : profile?.fast === false ? "default" : null);
 }
 
-/** One registry walk per scan, including misses. Conversation generations win
-    over continuity aliases and receipts in the same order as registry lookup. */
-export function durableServiceTierIndex(registry = agentRegistry()): ReadonlyMap<string, string | null> {
+/** Resolve the current paths in bounded synchronous slices. */
+export async function durableServiceTierIndex(paths: readonly string[], registry?: ReturnType<typeof agentRegistry>): Promise<ReadonlyMap<string, string | null>> {
   const tiers = new Map<string, string | null>();
-  try {
-    const snapshot = registry.readOnlySnapshot();
-    const put = (pathname: string, profile: { serviceTier?: string | null; fast?: boolean | null }) => {
-      if (!tiers.has(pathname)) tiers.set(pathname, normalizeServiceTier(profile.serviceTier)
-        ?? (profile.fast === true ? "priority" : profile.fast === false ? "default" : null));
-    };
-    for (const conversation of Object.values(snapshot.conversations)) {
-      for (const generation of conversation.generations) put(generation.path, generation.launchProfile);
-      const current = conversation.generations.at(-1);
-      if (current) for (const pathname of conversation.continuityPaths) put(pathname, current.launchProfile);
-    }
-    for (const receipt of Object.values(snapshot.receipts)) {
-      if (receipt.artifactPath) put(receipt.artifactPath, receipt.launchProfile);
-    }
-  } catch (error) {
-    if (!(error instanceof RegistryReadError)) throw error;
+  for (let offset = 0; offset < paths.length; offset += 16) {
+    try {
+      registry ??= agentRegistry();
+      for (const [pathname, profile] of registry.launchTierProfilesForPaths(paths.slice(offset, offset + 16))) {
+        tiers.set(pathname, profileServiceTier(profile));
+      }
+    } catch (error) { if (!(error instanceof RegistryReadError)) throw error; }
+    if (offset + 16 < paths.length) await yieldToRuntime();
   }
   return tiers;
 }
@@ -186,9 +165,7 @@ export function durableServiceTierIndex(registry = agentRegistry()): ReadonlyMap
 function durableServiceTier(entry: Pick<FileEntry, "path">, tiers?: ReadonlyMap<string, string | null>): string | null {
   if (tiers) return tiers.get(entry.path) ?? null;
   try {
-    const profile = agentRegistry().launchProfileForPath(entry.path);
-    return normalizeServiceTier(profile?.serviceTier)
-      ?? (profile?.fast === true ? "priority" : profile?.fast === false ? "default" : null);
+    return profileServiceTier(agentRegistry().launchTierProfilesForPaths([entry.path]).get(entry.path));
   } catch (error) {
     if (error instanceof RegistryReadError) return null;
     throw error;
