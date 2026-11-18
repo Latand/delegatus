@@ -200,6 +200,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
     ["scripts/export-human-input.ts", [], "--host is required"],
     ["scripts/rebuild-http.ts", [], "Deployment HTTP request failed"],
     ["scripts/codex-update.ts", [], "Usage: codex-update.ts rollback"],
+    ["scripts/attempt-temp-approved.ts", [], "usage: bun scripts/attempt-temp-approved.ts"],
   ] as const) {
     test(`${script} reaches its own body`, () => {
       const result = runEntryPoint([script, ...argv]);
