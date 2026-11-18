@@ -5,12 +5,16 @@ import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { pipelineIdentity, savePipelines } from "../pipelines/store";
 import { AttemptTempStore } from "./attemptTempRetention";
-import { attemptTempAuthority, attemptScratchAuthority } from "./attemptTempProduction";
+import * as production from "./attemptTempProduction";
 import { finishedLane, holdFinishedRoot } from "./attemptTempRetention.testSupport";
 import { plantKeepMarker } from "./keepMarker.testSupport";
 import { cleanupPressureFixtures, NOW, roots, realParentPass, restoreEnvironment } from "./attemptTempPressure.testSupport";
 
 afterEach(cleanupPressureFixtures);
+const { attemptTempAuthority } = production;
+// The pinned-base control keeps its actual old policy when the new entry is
+// absent, so failures compare behavior rather than module export availability.
+const attemptScratchAuthority = production.attemptScratchAuthority ?? production.attemptTempAuthority;
 
 test.skipIf(process.platform !== "linux")("the ordinary automatic owner retires expired scratch and preserves live, protected and unknown work", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "automatic-attempt-")); roots.push(root);

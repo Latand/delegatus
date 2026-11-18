@@ -26,7 +26,7 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
     const directories: { directory: string; identity: string }[] = [];
     const count = timeoutPrefix + 32;
     try {
-      savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+      savePipelines([finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString())]);
       for (let n = 0; n <= count; n++) {
         const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`);
         fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
