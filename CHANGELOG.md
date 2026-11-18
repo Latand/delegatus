@@ -8,7 +8,7 @@ compatibility raises the major version.
 
 ## [Unreleased]
 
-## [2.2.0] — 2026-11-17
+## [2.2.0] — 2026-11-18
 
 ### Added
 - **The relay can read a public web page.** A new local `read_page` tool
@@ -48,6 +48,27 @@ compatibility raises the major version.
 - **Mac launcher reattaches to its own Delegatus.** When the app was closed and
   its Delegatus kept running, the launcher recognises it and offers an
   **Open existing** button ([#4048]).
+- **Codex 0.168.0 and 0.169.0 are supported, and GPT-6.2 Sol and Astra can
+  be chosen.** Codex 0.169.0 changed two protocol shapes and was refused at
+  admission, so Codex launches stopped once the CLI updated. Both versions now
+  ship with their reviewed protocols ([#4065]). GPT-6.2 Sol and GPT-6.2 Astra
+  appear among the Codex model choices, with their effort levels and cost
+  hints ([#4149]).
+- **The relay answers more kinds of requests.** It answers a clone owner's
+  guest-mode calls with one final text reply or a hand-off ([#4064]). It shows
+  images that an owner tool returns and can reuse them as references in image
+  tools and replies ([#4051]). It accepts generic or truncated action
+  summaries, rereads an unknown action receipt within a bounded budget, and
+  says plainly when a confirmation's final outcome is unavailable ([#4062]).
+- **Relay settings show where each clone is answered.** Pairing never takes a
+  clone that another install answers: such a clone stays switched off here, the
+  settings name the install that answers it in English and Ukrainian, and
+  moving it asks for confirmation first ([#4150]).
+- **Codex Cloud environments install the repository's pinned toolchain.** An
+  automatically created environment reads the exact Bun, Node and package
+  manager versions from the bound repository, installs them, checks the
+  versions and runs frozen dependency installs. Missing or conflicting pins
+  keep a stated readiness reason ([#4110]).
 
 ### Changed
 - **The merge queue blocks only on required checks.** An optional failing
@@ -78,6 +99,28 @@ compatibility raises the major version.
 - **Structured-host stops explain themselves.** An orphan stop records who
   decided it and the ownership evidence behind it, without message text or
   paths ([#4099]).
+- **Cloud checks reuse the environment's installed dependencies** and report a
+  session timeout as a timeout instead of a generic failure ([#4116]).
+- **GitHub text uses the publication language.** Pull request titles and
+  bodies, issue comments, batch merge text and automatic revert pull requests
+  are written in English whatever the board language. Board titles, chat and
+  task summaries keep your language, and a hint tells the seat when a title or
+  body line looks foreign ([#4118]).
+- **Stage checks never run more test and typecheck processes than the machine
+  can carry.** Workers started through package scripts, nested runs and
+  compiler entry points all count against one limit ([#3978]). Free check slots
+  are filled at once in arrival order, and a healthy nested check is suspended
+  only when every slot is taken ([#4164]).
+- **A closed lane's temporary data expires after seven days.** Release records
+  the deadline at once, and a rotating pass covers lanes closed after release
+  ([#4093]).
+- **Large installs do less work.** A runtime snapshot rebuild re-reads only
+  sessions that changed ([#4075]). A released host's event window refills by
+  streaming the journal: in the maintainers' benchmark on a 163 MB journal,
+  peak memory fell from about 820–840 MiB to about 160–170 MiB and the longest
+  event-loop stall from 560–780 ms to 4–6 ms, with identical retained events
+  ([#4165]). The seat tick reads fewer registry rows and alias records
+  ([#4170], [#4161]).
 
 ### Fixed
 - **A stage resumed after a pause runs on its configured engine and account**
@@ -120,6 +163,43 @@ compatibility raises the major version.
 - **Mac launcher first run.** A first run that meets `HEAD 404` on its port
   reuses a verified older Delegatus or explains the problem in English and
   Ukrainian ([#4016]).
+- **Orphaned and finished hosts retire.** A host whose server process is gone
+  is reported as orphaned instead of deliverable and is recovered
+  ([#4123]). Hosts left behind by a restart or an abandoned turn retire after
+  checks that the owner is dead and the work is idle ([#4095]). Claude turn
+  completion is recognised across native attachments ([#4096]). An oversized
+  Codex transcript turn is decided from its tail ([#4130]). A host whose dead
+  owner left its event cursor behind can retire ([#4127]), and a replacement
+  claim is recorded as changed instead of a failed cleanup ([#4132]).
+- **A stage whose host died settles within a bound and can be retried**
+  ([#4067]). A message to a stage attempt that already passed, failed or
+  waits for a decision is refused at once with a 409 that names `retry-stage`,
+  instead of waiting ten minutes ([#4122]).
+- **Seats and deliveries recover on their own.** A designated seat whose host a
+  release handover cut off starts again without waiting for a message
+  ([#4124]). An adopted Claude host no longer counts its previous writer's
+  inputs against its own input window, so an idle host accepts delivery again,
+  and a seat starts recovery after two proven failed deliveries ([#4049]). A
+  confirmed Claude send no longer coexists with a refused follow-up ([#4032]).
+  Controller passes keep their deadline under host load, and a failed
+  delivery-progress write never loses a delivery ([#4139]).
+- **A started check keeps its verdict.** `wait_for_check` reads the log named
+  by the run record ([#4104]), and the verdict reaches the waiting stage across
+  a release handover ([#4120]).
+- **A one-time publication repair ends in a commit or an explicit refusal**,
+  never in a dirty worktree and a parked lane ([#4039]).
+- **Relay requests fail less often.** A busy delivery-record lock at launch and
+  a lost continuation no longer end in a generic failure ([#4100]). When an
+  attached or replied-to picture cannot be read, the text is still answered
+  and a media-only request gets a plain explanation ([#4129]).
+- **Packaging and updates.** The packed package's MCP entry resolves every
+  module it imports ([#4148]). Re-deploying a revision after its rollback
+  reuses or rebuilds its own release directory ([#4146]). A checkout deploy
+  recognises the wait-owner helpers of live agent hosts instead of refusing
+  over them ([#4169]). The launcher reaps child processes it inherits when it
+  relaunches itself ([#4132]).
+- **The loop profiler keeps a collected profile** when saving its settlement
+  fails, and reports a fixed failure phase and code ([#4162]).
 
 ### Security
 - **Hidden project files are not served.** File previews refuse files below
@@ -130,6 +210,13 @@ compatibility raises the major version.
   tools, so third-party private context never lands in an owner's session and
   malformed Cloud output does not reach general logs ([#4070]).
 - **Page reads keep to public addresses** (see `read_page` above) ([#4085]).
+- **Tool home folders under your home directory are not served.** The artifact
+  route refuses private tool homes and application configuration and state,
+  while stage scratch and retained evidence stay readable ([#4103]).
+- **Seat sign-in failures stay off the project report chat.** Notices go to the
+  board and the verified private operator chat, and old report-chat retries are
+  discarded. Claude provider launches no longer read a project's `.env`
+  files, so agents inherit none of their secrets ([#4157]).
 
 ### Maintainer notes
 - **Hosted privacy checks start again.** The privacy workflows moved from
@@ -148,6 +235,16 @@ compatibility raises the major version.
   observation test.
 - **Benchmark protocol.** A bounded pilot protocol for cumulative autonomy and
   task routing is documented under `docs/design` ([#3706]).
+- **More documented designs.** A full hands-free mode for voice Delegatus on
+  Codex Cloud ([#4119]).
+- **Merge and test tooling.** The batch gate names the member that adds a
+  failing test instead of refusing the whole batch ([#4069]). Main's own
+  failing tests were classified and the deterministic ones repaired ([#4027]),
+  and [#4061], [#4097] and [#4145] make a Claude broker test, a retirement
+  reader test and the README geometry controls deterministic.
+- **Release preparation.** The release changelog, version and README pictures
+  were first prepared in [#4133] and the release branch was joined to main in
+  [#4147].
 
 ## [2.1.0] — 2026-11-14
 
@@ -6795,3 +6892,50 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4108]: https://github.com/Latand/delegatus/pull/4108
 [#4109]: https://github.com/Latand/delegatus/pull/4109
 [#4117]: https://github.com/Latand/delegatus/pull/4117
+[#3978]: https://github.com/Latand/delegatus/pull/3978
+[#4027]: https://github.com/Latand/delegatus/pull/4027
+[#4032]: https://github.com/Latand/delegatus/pull/4032
+[#4039]: https://github.com/Latand/delegatus/pull/4039
+[#4049]: https://github.com/Latand/delegatus/pull/4049
+[#4051]: https://github.com/Latand/delegatus/pull/4051
+[#4061]: https://github.com/Latand/delegatus/pull/4061
+[#4062]: https://github.com/Latand/delegatus/pull/4062
+[#4064]: https://github.com/Latand/delegatus/pull/4064
+[#4065]: https://github.com/Latand/delegatus/pull/4065
+[#4067]: https://github.com/Latand/delegatus/pull/4067
+[#4069]: https://github.com/Latand/delegatus/pull/4069
+[#4075]: https://github.com/Latand/delegatus/pull/4075
+[#4093]: https://github.com/Latand/delegatus/pull/4093
+[#4095]: https://github.com/Latand/delegatus/pull/4095
+[#4096]: https://github.com/Latand/delegatus/pull/4096
+[#4097]: https://github.com/Latand/delegatus/pull/4097
+[#4100]: https://github.com/Latand/delegatus/pull/4100
+[#4103]: https://github.com/Latand/delegatus/pull/4103
+[#4104]: https://github.com/Latand/delegatus/pull/4104
+[#4110]: https://github.com/Latand/delegatus/pull/4110
+[#4116]: https://github.com/Latand/delegatus/pull/4116
+[#4118]: https://github.com/Latand/delegatus/pull/4118
+[#4119]: https://github.com/Latand/delegatus/pull/4119
+[#4120]: https://github.com/Latand/delegatus/pull/4120
+[#4122]: https://github.com/Latand/delegatus/pull/4122
+[#4123]: https://github.com/Latand/delegatus/pull/4123
+[#4124]: https://github.com/Latand/delegatus/pull/4124
+[#4127]: https://github.com/Latand/delegatus/pull/4127
+[#4129]: https://github.com/Latand/delegatus/pull/4129
+[#4130]: https://github.com/Latand/delegatus/pull/4130
+[#4132]: https://github.com/Latand/delegatus/pull/4132
+[#4133]: https://github.com/Latand/delegatus/pull/4133
+[#4139]: https://github.com/Latand/delegatus/pull/4139
+[#4145]: https://github.com/Latand/delegatus/pull/4145
+[#4146]: https://github.com/Latand/delegatus/pull/4146
+[#4147]: https://github.com/Latand/delegatus/pull/4147
+[#4148]: https://github.com/Latand/delegatus/pull/4148
+[#4149]: https://github.com/Latand/delegatus/pull/4149
+[#4150]: https://github.com/Latand/delegatus/pull/4150
+[#4157]: https://github.com/Latand/delegatus/pull/4157
+[#4161]: https://github.com/Latand/delegatus/pull/4161
+[#4162]: https://github.com/Latand/delegatus/pull/4162
+[#4164]: https://github.com/Latand/delegatus/pull/4164
+[#4165]: https://github.com/Latand/delegatus/pull/4165
+[#4169]: https://github.com/Latand/delegatus/pull/4169
+[#4170]: https://github.com/Latand/delegatus/pull/4170
