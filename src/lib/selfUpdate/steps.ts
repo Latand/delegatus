@@ -562,7 +562,7 @@ export class UpdateRunner {
     this runner started and nothing else. */
 export interface RealPorts extends StepPorts { abort(): Promise<void> }
 
-export function realPorts(publish: (release: Release) => void | Promise<void>,
+export function realPorts(publish: (release: Release, assertReady?: () => void | Promise<void>) => void | Promise<void>,
   cpu: { pressure?: () => Pick<CpuPressureGate, "check"> | null; pollMs?: number } = {}): RealPorts {
   let current: RecordedPid | null = null;
   let completion: { ended: boolean; code: number | null } | null = null;
