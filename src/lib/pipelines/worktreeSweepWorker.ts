@@ -130,13 +130,13 @@ export class WorktreeSweepWorker {
   private request(request: SweepRequest): Promise<SweepResult> {
     const existing = this.jobs.get(request.kind);
     if (existing) return request.kind === "worktrees" || request.kind === "attempt-temp-approved"
-      ? Promise.reject(new Error("worktree sweep is already running")) : existing;
+      ? Promise.reject(new Error(`${request.kind} sweep is already running`)) : existing;
     const generation = this.generation;
     const timeoutMs = request.kind === "disk-pressure" ? Math.min(this.timeoutMs, DISK_PRESSURE_REQUEST_TIMEOUT_MS)
       : request.kind === "attempt-temp" || request.kind === "attempt-temp-approved" || request.kind === "maintenance" ? Math.min(this.timeoutMs, ATTEMPT_TEMP_REQUEST_TIMEOUT_MS) : this.timeoutMs;
     const deadline = this.clock.now() + timeoutMs;
     const operation = request.kind === "attempt-temp" || request.kind === "attempt-temp-approved" || request.kind === "temp" || request.kind === "maintenance" ? "temp.sweep" : request.kind === "disk-pressure" ? "resources.read" : "worktrees.sweep";
-    const deadlineLabel = request.kind === "attempt-temp" ? "attempt temp tick" : request.kind === "worktrees" ? "worktree sweep" : request.kind === "temp" ? "temp sweep" : "disk pressure refresh";
+    const deadlineLabel = request.kind === "attempt-temp" || request.kind === "attempt-temp-approved" ? "attempt temp tick" : request.kind === "worktrees" ? "worktree sweep" : request.kind === "temp" ? "temp sweep" : "disk pressure refresh";
     // At most one job per kind; polls join rather than retaining an unbounded
     // queue. The same deadline includes time behind another sweep.
     const execution = withViewerOperation(operation, () => this.tail.then(() => {

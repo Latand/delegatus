@@ -75,7 +75,9 @@ test.skipIf(process.platform !== "linux")("exact-list execution preserves every 
     const entry = path.join(f.root, "worker.ts");
     fs.writeFileSync(entry, `import ${JSON.stringify(path.resolve("src/lib/runtime/attemptTempPressure.preload.ts"))};\nawait import(${JSON.stringify(launch.entry)});\n`);
     worker = new WorktreeSweepWorker({ ...launch, entry }, 60000);
-    const first = await worker.approvedAttemptTemp(f.request);
+    const running = worker.approvedAttemptTemp(f.request);
+    await expect(worker.approvedAttemptTemp({ ...f.request, reviewId: "pr_" + "c".repeat(32) })).rejects.toThrow("already running");
+    const first = await running;
     expect(first).toMatchObject({ complete: true, removed: 2, skipped: 0 });
     expect(first.removedBytes).toBeGreaterThan(0);
     expect(fs.readFileSync(path.join(f.directories[2]!, "data"), "utf8")).toBe("fixture payload");
@@ -130,10 +132,13 @@ test.skipIf(process.platform !== "linux")("fresh inode, registry, keep, shared r
     f.contents.candidates[1]!.launchId = "different-launch"; f.writeManifest();
     plantKeepMarker(path.join(f.directories[2]!, ".delegatus-keep"));
     await holdFinishedRoot(f.directories[3]!, f.lane.id, "approved-shared", [f.directories[5]!]);
+    // Even an expired check has another root outside the approved selection.
+    f.lane.closedAt = "2020-01-01T00:00:00Z"; savePipelines([f.lane]);
     f.references.mockImplementation(async original => original !== f.directories[4]);
     const result = await f.run();
     expect(result.removed).toBe(0); expect(result.skipped).toBe(5);
     for (const directory of f.directories.slice(1)) expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("fixture payload");
+    expect(fs.readFileSync(path.join(f.directories[0]! + "-saved", "data"), "utf8")).toBe("fixture payload");
     const { recordedRootHeld } = await import("../recordedChecks/store");
     expect(recordedRootHeld(f.directories[5]!)).toBeTrue();
   } finally { f.close(); }
