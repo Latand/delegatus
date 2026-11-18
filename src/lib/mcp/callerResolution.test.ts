@@ -258,7 +258,7 @@ test("ancestry attributes a retained scope's exit identity without crossing engi
     const sources = () => attentionCallerSources(f.registry, probes, () => [pid]);
     runAsMcpHttpCaller({}, () => {
       const old = { ...sources(), hosted: () => hostedConversationsFromSnapshot(f.registry.readOnlySnapshot(), probes) };
-      const expected = { kind: "worker", conversationId, role };
+      const expected = { kind: "worker", conversationId, role } as const;
       expect(attentionCallerAuthority(old)).toEqual(expected);
       expect(attentionCallerAuthority(sources())).toEqual(expected);
     });
