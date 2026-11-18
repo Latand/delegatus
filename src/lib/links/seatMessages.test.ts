@@ -6,7 +6,7 @@ import { afterAll, beforeEach, expect, test } from "bun:test";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-message-bounds-"));
 const previous = { ...process.env };
 process.env.HOME = path.join(root, "home"); process.env.TMPDIR = root; process.env.LLV_STATE_DIR = path.join(root, "state"); process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
-const { queueSeatMessage, seatMessagesPart, acceptSeatMessages, validSeatMessagePart, seatMessageReceipt, messagesPending, resolveSeatMessageMachine } = await import("./seatMessages");
+const { queueSeatMessage, seatMessagesPart, acceptSeatMessages, validSeatMessagePart, seatMessageReceipt, messagesPending, resolveSeatMessageMachine, SeatMessageRefusal } = await import("./seatMessages");
 const { recordSeatMessages, updateRemoteProjects } = await import("./boardLinks");
 const { atomicWrite, linkFile, setShared, readPeers, writePeers } = await import("./state");
 const { projectIdentityFromRemote } = await import("@/lib/projects/identity");
@@ -14,15 +14,53 @@ const { recordProjectRemote } = await import("@/lib/projects/aliases");
 import type { LinkedPeer } from "./linked";
 let sequence = 0;
 const project = projectIdentityFromRemote("https://code.example.test/acme/widget", root)!;
-const link: LinkedPeer = { key: "peer:fixture", side: "peer", id: "fixture", install: randomUUID(), prefix: "00112233", label: "Other", projects: new Set([project.project]) };
+const selfId = ["11223344", "5566", "4777", "8899", "aabbccddeeff"].join("-");
+const peerId = ["00112233", "4455", "4677", "8899", "aabbccddeeff"].join("-");
+const link: LinkedPeer = { key: "peer:fixture", side: "peer", id: "fixture", install: peerId, prefix: "00112233", label: "Other", projects: new Set([project.project]) };
+function labelSelf(label: string) {
+  atomicWrite(path.join(process.env.LLV_STATE_DIR!, "links/self.json"), { v: 1, installId: selfId, label, publicUrl: null });
+}
 beforeEach(() => {
   process.env.LLV_STATE_DIR = path.join(root, `state-${++sequence}`);
   recordProjectRemote(project); setShared({ v: 1, all: false, projects: [project.project] });
-  atomicWrite(path.join(process.env.LLV_STATE_DIR, "links/self.json"), { v: 1, installId: randomUUID(), label: "Here", publicUrl: null });
+  labelSelf("Local");
   atomicWrite(linkFile("peers"), { v: 1, peers: [{ id: link.id, install: link.install, label: link.label, grantId: randomUUID(), token: "fixture", state: "active", lastCall: Date.now(), error: null, url: "http://127.0.0.1:1", store: randomUUID() }] });
   updateRemoteProjects(link.id, [{ key: project.project, name: "widget" }], randomUUID()); recordSeatMessages(link.key, true);
 });
 afterAll(() => { for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key]; Object.assign(process.env, previous); fs.rmSync(root, { recursive: true, force: true }); });
+
+test("a label shared by the local install and a peer is refused with both install ids", () => {
+  labelSelf(link.label);
+  try {
+    resolveSeatMessageMachine(" oThEr ", project.project);
+  } catch (error) {
+    expect(error).toBeInstanceOf(SeatMessageRefusal);
+    expect(error).toMatchObject({ code: "machine_ambiguous" });
+    expect((error as Error).message).toContain(selfId);
+    expect((error as Error).message).toContain(peerId);
+    return;
+  }
+  throw new Error("Expected machine_ambiguous for the shared label");
+});
+
+test("an unambiguous label or install prefix resolves to the linked peer", () => {
+  for (const machine of [link.label, link.prefix]) {
+    expect(resolveSeatMessageMachine(machine, project.project)).toMatchObject({ install: peerId });
+  }
+});
+
+test("here, the local install id and an unambiguous local label resolve locally", () => {
+  for (const machine of ["here", selfId, "Local", "this machine"]) {
+    expect(resolveSeatMessageMachine(machine, project.project)).toBeNull();
+  }
+});
+
+test("the full peer install id still resolves remotely when labels coincide", () => {
+  for (const label of [link.label, peerId]) {
+    labelSelf(label);
+    expect(resolveSeatMessageMachine(peerId, project.project)).toMatchObject({ install: peerId });
+  }
+});
 
 test("escaped text pages stay within the wire byte bound while all queued words remain recoverable", () => {
   for (let n = 0; n < 10; n++) queueSeatMessage(link, project.project, "\u0001".repeat(7999) + "x", "fixture-seat", `escaped-${n}`);

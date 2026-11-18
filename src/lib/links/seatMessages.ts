@@ -61,13 +61,21 @@ export function seatMessageTextValid(text: string): boolean { return text.length
 export function resolveSeatMessageMachine(machine: string, project: string): LinkedPeer | null {
   const context = linkedContext();
   const wanted = machine.trim().toLowerCase();
-  if (wanted === "here" || wanted === "this machine" || wanted === context.self?.id || wanted === readSelf()?.label.toLowerCase()) return null;
-  const matches = context.links.filter(link => wanted === link.label.toLowerCase() || wanted === link.install || wanted === link.prefix);
-  if (matches.length > 1) refuse("machine_ambiguous", `The machine matches several links: ${matches.map(link => link.label).join(", ")}.`);
+  if (wanted === "here" || wanted === context.self?.id) return null;
+  // Full install IDs disambiguate labels and prefixes.
+  const exact = context.links.filter(link => wanted === link.install);
+  const matches = exact.length ? exact : context.links.filter(link => wanted === link.label.toLowerCase() || wanted === link.prefix);
+  const local = !exact.length && (wanted === "this machine" || wanted === readSelf()?.label.toLowerCase());
   if (!matches.length) {
+    if (local) return null;
     const revoked = peerRows().some(peer => peer.state === "revoked" && [peer.id, peer.install, peer.install.slice(0, 8), peer.label.toLowerCase()].includes(wanted));
     const previous = wasSeatLinkRevoked(wanted) || rows().some(row => row.link === wanted || row.link.slice(0, 8) === wanted);
     refuse(revoked || previous ? "link_revoked" : "machine_unknown", `${machine} is ${revoked || previous ? "no longer linked" : "not linked"} to this machine.`);
+  }
+  if (local || matches.length > 1) {
+    const installs = matches.map(link => `${link.label} (${link.install})`);
+    if (local && context.self) installs.unshift(`this machine (${context.self.id})`);
+    refuse("machine_ambiguous", `The machine name is ambiguous. Choose an installation by its full ID (${installs.join(", ")}).`);
   }
   const link = matches[0]!;
   if (!link.projects.has(canonicalProject(project))) refuse("project_not_linked", `The project is not shared with ${link.label}; both machines must share it.`);
