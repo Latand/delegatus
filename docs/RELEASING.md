@@ -199,8 +199,8 @@ revision production has served for six hours without a rollback. Every release
 retakes the README pictures. Asking before publication is on until the operator
 chooses «Випустити й більше не питати» or turns the checkbox off.
 
-1. Start the release branch at the verified cut, then fetch and merge current
-   `origin/main` with a merge commit. Run `bun scripts/bootstrap-release-tools.ts`.
+1. Start the release branch at the verified cut. Keep it there; do not merge
+   or rebase newer product changes into it. Run `bun scripts/bootstrap-release-tools.ts`.
    Limit the release PR's own changes to `CHANGELOG.md`, `package.json`,
    `bun.lock`, `patches/**`, `README.md`, `docs/media/readme/**` and `scripts/**`.
 2. Write the changelog from `git log --first-parent <last-tag>..<cut>`, including
@@ -216,8 +216,11 @@ chooses «Випустити й більше не питати» or turns the ch
    `bun scripts/release-verify.ts --preflight --cut <full-cut-sha> --tag vX.Y.Z --pr <number>`
    with the version from that commit's `package.json`. Preflight verifies the
    merged PR, current `origin/main`, ancestry from the cut and README provenance.
-   It checks release paths against the integrated commit's first parent.
-   The resulting tag includes the main changes inherited after the cut.
+   It checks release paths against the integrated commit's first parent and
+   checks the first-parent tree against the cut for newer product paths. If
+   main advanced with product changes, preflight blocks; the seat must start a
+   fresh release from a newer verified cut and regenerate the changelog. This
+   keeps those changes eligible for that next changelog.
 5. Obtain the operator's go when the release setting requires it. Recheck
    release blockers and rerun the same preflight immediately before any push.
    Follow its action:

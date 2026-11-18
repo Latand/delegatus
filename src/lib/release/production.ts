@@ -22,13 +22,24 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 async function command(file: string, args: string[], cwd?: string): Promise<string> {
   return (await promisify(execFile)(file, args, { cwd, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
 }
+function compareReleaseVersions(a: string, b: string): number {
+  const left = a.slice(1).split(".").map(BigInt), right = b.slice(1).split(".").map(BigInt);
+  for (let index = 0; index < 3; index++) if (left[index] !== right[index]) return left[index]! > right[index]! ? -1 : 1;
+  return 0;
+}
 /** Fetch before selecting: version order is independent of tagger clocks and backfills. */
 export async function latestReleaseTag(repoDir: string, run: typeof command = command) {
   await run("git", ["fetch", "origin", "main", "--tags"], repoDir);
-  const lines = (await run("git", ["for-each-ref", "--sort=-version:refname", "--format=%(refname:short) %(creatordate:unix)", "refs/tags/v*"], repoDir)).split("\n");
-  const line = lines.find(line => /^v\d+\.\d+\.\d+ \d+$/.test(line));
-  if (!line) throw new Error("release waits for an existing version tag");
-  const [name, timestamp] = line.split(" ");
+  const refs = (await run("git", ["ls-remote", "--tags", "--refs", "origin"], repoDir)).split("\n")
+    .map(line => line.trim().split(/\s+/)).filter(parts => parts.length === 2 && /^refs\/tags\/v\d+\.\d+\.\d+$/.test(parts[1]!));
+  refs.sort((a, b) => compareReleaseVersions(a[1]!.slice("refs/tags/".length), b[1]!.slice("refs/tags/".length)));
+  const [object, ref] = refs[0] ?? [];
+  if (!object || !ref) throw new Error("release waits for an existing version tag");
+  const name = ref.slice("refs/tags/".length);
+  const local = await run("git", ["rev-parse", ref], repoDir);
+  if (local !== object) throw new Error("latest remote release tag is missing or differs locally");
+  const timestamp = await run("git", ["for-each-ref", "--format=%(creatordate:unix)", ref], repoDir);
+  if (!/^\d+$/.test(timestamp)) throw new Error("latest remote release tag date is unreadable");
   return { name, version: name.slice(1), at: Number(timestamp) * 1000 };
 }
 async function registryHasRelease(packageName: string, version: string): Promise<boolean> {
@@ -41,8 +52,11 @@ export async function supersedingReleaseTag(repoDir: string, saved: { cut: strin
   published: typeof registryHasRelease = registryHasRelease): Promise<string | null> {
   const old = saved.lastTag.slice(1).split(".").map(BigInt);
   await run("git", ["fetch", "origin", "main", "--tags"], repoDir);
-  const lines = (await run("git", ["for-each-ref", "--sort=-version:refname", "--format=%(refname:short)", "refs/tags/v*"], repoDir)).split("\n");
-  const candidates = lines.filter(name => /^v\d+\.\d+\.\d+$/.test(name)).filter(name => {
+  const lines = (await run("git", ["ls-remote", "--tags", "--refs", "origin"], repoDir)).split("\n")
+    .map(line => line.trim().split(/\s+/)).filter(parts => parts.length === 2 && /^refs\/tags\/v\d+\.\d+\.\d+$/.test(parts[1]!))
+    .map(([object, ref]) => ({ object: object!, name: ref!.slice("refs/tags/".length) }))
+    .sort((a, b) => compareReleaseVersions(a.name, b.name));
+  const candidates = lines.filter(({ name }) => {
     const next = name.slice(1).split(".").map(BigInt);
     for (let index = 0; index < old.length; index++) {
       if (next[index] !== old[index]) return next[index] > old[index];
@@ -51,8 +65,9 @@ export async function supersedingReleaseTag(repoDir: string, saved: { cut: strin
   });
   if (candidates.length === 0) return null;
   const pkg = JSON.parse(await run("git", ["show", "origin/main:package.json"], repoDir));
-  for (const name of candidates) {
+  for (const { name, object } of candidates) {
     const version = name.slice(1);
+    if (await run("git", ["rev-parse", `refs/tags/${name}`], repoDir) !== object) continue;
     const revision = await run("git", ["rev-parse", `${name}^{commit}`], repoDir);
     try { await run("git", ["merge-base", "--is-ancestor", saved.cut, revision], repoDir); }
     catch (error) { if ((error as { code?: number }).code === 1) continue; throw error; }

@@ -16,6 +16,14 @@ test("preflight refuses product changes, existing tags or packages, stale frames
   expect(releasePreflight({ ...valid(), remoteTag: "matching" })).toContain("release tag conflicts with the reviewed local or remote object");
 });
 
+test("preflight preserves the cut boundary when the integration parent contains newer product paths", () => {
+  const base: ReleasePreflight = { tag: "v1.2.0", version: "1.2.0", localTag: "absent", remoteTag: "absent",
+    npmVersion: false, files: ["CHANGELOG.md", "package.json"], provenance: true, clean: true };
+  expect(releasePreflight({ ...base, postCutFiles: ["scripts/release-verify.ts"] })).toEqual([]);
+  expect(releasePreflight({ ...base, postCutFiles: ["src/feature.ts"] })).toContain(
+    "main contains product changes after the release cut; restart from a fresh cut and regenerate the changelog");
+});
+
 test("real verifier consumes recorded read-only git, workflow, npm and image responses", async () => {
   const calls: string[] = [];
   const sha = "b".repeat(40);
@@ -277,7 +285,7 @@ test("buildx imagetools stays the first choice and manifest inspect is not calle
 });
 
 // Exercise native Git ancestry and tag objects; only the forge and registry are stubbed.
-test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "renamed product path", "off main", "unreadable main"] as const)("release main admission: %s", async scenario => {
+test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "renamed product path", "off main", "unreadable main", "main advanced before preparation", "main advanced before squash"] as const)("release main admission: %s", async scenario => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-main-"));
   const lane = path.join(root, "lane"), remote = path.join(root, "origin.git");
   fs.mkdirSync(lane);
@@ -288,12 +296,17 @@ test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "
   let registryReads = 0;
   try {
     git("init", "--bare", "--initial-branch=main", remote);
-    git("init", "--initial-branch=release");
+    git("init", "--initial-branch=main");
     fs.writeFileSync(path.join(lane, "package.json"), JSON.stringify({ name: "package-example", version: "1.1.0" }));
     fs.writeFileSync(path.join(lane, "feature.ts"), "export const feature = true;\n");
     git("add", "."); git("commit", "-m", "base");
     const cut = git("rev-parse", "HEAD");
     git("remote", "add", "origin", remote); git("push", "origin", "HEAD:refs/heads/main");
+    git("checkout", "-b", "release", cut);
+    if (scenario === "main advanced before preparation") {
+      git("checkout", "main"); fs.writeFileSync(path.join(lane, "src-feature.ts"), "export const newer = true;\n");
+      git("add", "."); git("commit", "-m", "New product after cut (#8)"); git("push", "origin", "main"); git("checkout", "release");
+    }
     fs.writeFileSync(path.join(lane, "package.json"), JSON.stringify({ name: "package-example", version: "1.2.0" }));
     if (scenario === "renamed product path") {
       fs.mkdirSync(path.join(lane, "scripts"));
@@ -301,8 +314,16 @@ test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "
     }
     git("add", "."); git("commit", "-m", "release");
     const reviewed = git("rev-parse", "HEAD");
-    const merged = git("commit-tree", git("rev-parse", "HEAD^{tree}"), "-p", cut, "-m", "squash release");
-    if (scenario !== "off main") git("push", "origin", `${merged}:refs/heads/main`);
+    let merged: string;
+    if (scenario === "main advanced before squash") {
+      git("checkout", "main"); fs.writeFileSync(path.join(lane, "src-feature.ts"), "export const newer = true;\n");
+      git("add", "."); git("commit", "-m", "New product after cut (#8)"); git("push", "origin", "main");
+      git("merge", "--squash", "release"); git("commit", "-m", "squash release"); merged = git("rev-parse", "HEAD");
+    } else if (scenario === "main advanced before preparation") {
+      git("checkout", "main"); git("merge", "--squash", "release"); git("commit", "-m", "squash release"); merged = git("rev-parse", "HEAD");
+    } else merged = git("commit-tree", git("rev-parse", "HEAD^{tree}"), "-p", cut, "-m", "squash release");
+    if (!(["off main", "main advanced before squash", "main advanced before preparation"] as string[]).includes(scenario)) git("push", "origin", `${merged}:refs/heads/main`);
+    if (["main advanced before squash", "main advanced before preparation"].includes(scenario)) git("push", "origin", "main");
     if (scenario !== "branch head") git("checkout", "--detach", merged);
     if (scenario === "unreadable main") git("remote", "set-url", "origin", path.join(root, "missing.git"));
     const ports: VerifyPorts = { now: () => 0, wait: async () => {}, provenance: () => true,
@@ -333,10 +354,12 @@ test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "
         "renamed product path": "diff includes product paths",
         "off main": "release tag commit is not on origin/main",
         "unreadable main": "cannot refresh origin/main",
+        "main advanced before preparation": "main contains product changes after the release cut",
+        "main advanced before squash": "main contains product changes after the release cut",
       };
       expect(result.errors.join("\n")).toContain(reasons[scenario]);
       expect(result.nextStep).toBeUndefined();
-      expect(registryReads).toBe(["checkout moved", "renamed product path"].includes(scenario) ? 1 : 0);
+      expect(registryReads).toBe(["checkout moved", "renamed product path", "main advanced before preparation", "main advanced before squash"].includes(scenario) ? 1 : 0);
       expect(git("tag", "--list")).toBe("");
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

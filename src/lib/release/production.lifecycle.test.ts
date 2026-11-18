@@ -109,12 +109,12 @@ test.each(["open", "different-pr", "different-target", "different-project", "com
   });
 
 // Retain the reviewer's real adapter observation, with local CLI/registry fixtures.
-async function observe(rows: Pipeline[], archived: Pipeline[] = []) {
+async function observe(rows: Pipeline[], archived: Pipeline[] = [], versionAhead = false) {
   const bin = path.join(directory, "bin"); fs.mkdirSync(bin, { recursive: true });
   const priorPath = process.env.PATH, priorFetch = globalThis.fetch;
   let archiveReads = 0;
   const script = `#!${process.execPath}\nconst tool=process.argv[1].split('/').at(-1),a=process.argv.slice(2);let out='';
-if(tool==='git'){if(a[0]==='for-each-ref')out='v1.0.0 1793318400';else if(a[0]==='rev-parse')out='${head}';else if(a[0]==='show')out=JSON.stringify({name:'package-example',version:'1.0.0'});}
+if(tool==='git'){if(a[0]==='ls-remote')out='${"a".repeat(40)}\\trefs/tags/v1.0.0';else if(a[0]==='for-each-ref')out='1793318400';else if(a[0]==='rev-parse'&&a[1]==='refs/tags/v1.0.0')out='${"a".repeat(40)}';else if(a[0]==='rev-parse')out='${head}';else if(a[0]==='show')out=JSON.stringify({name:'package-example',version:'${versionAhead ? "1.1.0" : "1.0.0"}'});}
 if(tool==='gh'){if(a[0]==='repo')out='example/release';else if(a[1]?.includes('/branches/'))out=JSON.stringify({protection:{required_status_checks:{contexts:[]}}});else if(a[1]?.includes('/check-runs'))out=JSON.stringify({check_runs:[]});else out=JSON.stringify({statuses:[]});}
 if(tool==='bun')out=JSON.stringify({missing:[],chrome:'/fixture/chrome'});console.log(out);`;
   try {
@@ -133,6 +133,12 @@ test("a successful publish lane ceases to block future releases", async () => {
   expect(policy.live).toBe(false);
   expect(archiveReads).toBe(0);
   expect(await releaseState({ ...ready(), live: policy.live })).toMatchObject({ state: "due" });
+});
+test("production observation ignores an unpublished local-only tag and reports the version mismatch", async () => {
+  const { policy } = await observe([lane("publisher-observation", true)], [], true);
+  expect(policy).toMatchObject({ lastTag: { name: "v1.0.0", version: "1.0.0" }, mainVersion: "1.1.0" });
+  expect(await releaseState({ ...ready(), mainVersion: policy.mainVersion, lastTag: policy.lastTag,
+    registryHasTag: policy.registryHasTag })).toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
 });
 test("a completed merged preparation needs no archived successor lookup", async () => {
   const preparation = lane("completed-merged-preparation");

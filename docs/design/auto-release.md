@@ -53,10 +53,11 @@ options.
   the gap and keeps every blocker. Replayed over 2026-10-01 to 2026-10-12 the
   rule gives eight releases of 30 or 31 user-visible PRs each, 14 to 63 hours
   apart.
-- **The cut.** The six-hour production cut fixes the changelog range and
-  release eligibility. Preparation starts there and merges current main. The
-  queue merges the reviewed release PR before the publisher tags its
-  integrated main commit.
+- **The cut.** The six-hour production cut fixes the changelog range,
+  eligibility and product boundary. Preparation stays at that cut and does
+  not merge newer product work. The queue may refresh the release PR, but
+  preflight refuses a first parent containing product changes after the cut;
+  the seat then starts a fresh release from a newer verified cut.
 - **Classification.** Paths decide the trigger: a PR that touches only docs,
   tests, scripts, CI or the landing site is internal. Against the changelog
   headings of the last three releases (225 PRs) this marks user-visible PRs
@@ -286,17 +287,16 @@ wait for the next deployment. A project with no deployment ledger has
 no cut, and the release setting is not offered there (Deferred).
 
 **Where the tag goes.** The controller starts the preparation branch at the
-cut. Preparation fetches and merges current `origin/main` before review and
-refreshes the verifier and hook with `scripts/bootstrap-release-tools.ts`.
-The changelog stays bounded by the cut. The ordinary queue can refresh the PR
-again before it squash merges the release into main. The recorded integrated
-commit is the sole target of the publication lane and its tag.
-
-Preflight requires the merged PR number. It uses the first parent of the
-integrated commit as the diff base so the path check sees only the changes
-introduced by the PR. The cut must be an ancestor of the integrated commit.
-The tag ships that integrated tree, including any main changes after the
-cut. The next changelog still uses the last tag and the next eligible cut.
+cut. Preparation refreshes the verifier and hook with
+`scripts/bootstrap-release-tools.ts` without merging or rebasing newer product
+work into the branch. The ordinary queue can refresh the PR before merging it
+into main. Preflight requires the merged PR number, verifies that the tag
+commit is on current `origin/main`, and checks both the release PR's first
+parent delta and the range from the cut to that parent. Product paths in that
+range mean main advanced beyond the verified boundary: preflight blocks with
+instructions to restart from a fresh cut and regenerate the changelog. This
+keeps later product PRs eligible for the next release's changelog. The tag is
+created only after the boundary check passes.
 
 ## 4. Blockers
 
@@ -372,7 +372,7 @@ Stages, from a template in code; engines and models come from the role table:
 
 | Stage | Role | Does |
 | --- | --- | --- |
-| `prepare` | builder, `docs` domain | merges main, writes the section, picks the version, bumps `package.json`, updates README text, clears the audit, runs the checks, pushes; the engine opens the PR «Release X.Y.Z» |
+| `prepare` | builder, `docs` domain | stays at the verified cut, writes the section, picks the version, bumps `package.json`, updates README text, clears the audit, runs the checks, pushes; the engine opens the PR «Release X.Y.Z» |
 | `capture` | builder, `frontend` domain | builds the release branch and retakes the eight README frames with the existing driver, reads them, commits the vectors and their provenance |
 | `shots` | visual critic, read-only, `maxRounds: 1`, on fail → `shots-fix`, exhausted → park | judges the README as a reader sees it: every frame and its caption |
 | `shots-fix` | builder, `apply-fixes` mode, `frontend` domain | fixes every visual finding by changing how the picture is taken or what the README says, and retakes |
@@ -442,8 +442,8 @@ Chrome renders it back to what its PNG shows. It writes `provenance.json` with
 each file's hash and the hashes of the driver and the seed. Nothing new is
 needed to take the pictures.
 
-The driver builds the preparation checkout after it has merged main. The
-publication reviewer checks the evidence against the final integrated checkout.
+The driver builds the preparation checkout at the verified cut. The publication
+reviewer checks the evidence against the final integrated checkout.
 
 **`capture`** (builder). Its brief:
 
@@ -722,11 +722,11 @@ its monitor note.
 
 **Slice 2: release mechanics in the repository.**
 
-- `scripts/release-verify.ts` refreshes main in preflight and inspects the
-  merged PR, exact commit, version, tag refs, npm and README provenance. The
-  verifier waits for the three workflows after tagging. Tests cover a missing
-  PR, a product-path change and the queue's refresh of a release branch that
-  already inherited product changes from main.
+- `scripts/release-verify.ts` checks the merged PR, exact commit, version, tag
+  refs, npm and README provenance. It checks the release PR delta and rejects
+  product paths between the frozen cut and the integrated first parent. Tests
+  cover a missing PR, a product-path change and main advancing before
+  preparation or squash integration.
 - `macos-newcomer.yml` runs for a release after `publish.yml` succeeds
   (`workflow_run` on «Publish to npm», `completed`, success only) and keeps its
   PR and dispatch triggers; `scripts/publish-workflow.test.ts` follows.
@@ -803,8 +803,9 @@ turns it off and on (§5.4, §7).
 - B: main's tip at the moment of the release, as 1.11.0 did, held back only by
   the blockers.
 
-**Answer: A.** The options above describe the October 2026 design discussion.
-The current cut and tag contract is in §3.2.
+**Answer: A.** The six-hour production cut remains the release boundary; newer
+product changes must wait for a fresh cut and changelog. The current contract
+is in §3.2.
 
 **Q4. Should automatic releases recapture the README screenshots?**
 - A (recommended): no. The README text is updated with each release;

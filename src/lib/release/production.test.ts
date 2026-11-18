@@ -63,6 +63,15 @@ test("the newest stable real tag supplies both lastTag and the visible change ra
   expect(await releaseState(policy)).toMatchObject({ state: "due", count: 2 });
 });
 
+test("a local-only failed-push version cannot replace the last remote release tag", async () => {
+  const h = await repository();
+  await h.git("tag", "-a", "v9.9.9", h.next, "-m", "Delegatus 9.9.9");
+  const remoteRelease = await latestReleaseTag(h.repo);
+  expect(remoteRelease).toMatchObject({ name: "v1.15.0", version: "1.15.0" });
+  expect((await changesSinceRelease(h.repo, remoteRelease.name, h.next)).map(change => change.subject))
+    .toEqual(["Next fix (#5)", "Next feature (#4)"]);
+});
+
 test("a manually pushed and published tag covers an older frozen cut", async () => {
   const h = await repository();
   expect(await supersedingReleaseTag(h.repo, { cut: h.cut, lastTag: "v1.13.0" }, undefined,
@@ -75,7 +84,7 @@ test("review: an unpublished higher tag does not hide a published covering relea
   const checked: string[] = [];
   expect(await supersedingReleaseTag(h.repo, { cut: h.cut, lastTag: "v1.13.0" }, undefined,
     async (_name, version) => { checked.push(version); return version === "1.15.0"; })).toBe("v1.15.0");
-  expect(checked).toEqual(["1.16.0", "1.15.0"]);
+  expect(checked).toEqual(["1.15.0"]);
 });
 
 test("a tag before the cut and an unpublished tag cannot supersede a release", async () => {
@@ -101,8 +110,8 @@ test("an unrelated cut is retained and unreadable ancestry or publication is rep
 test.each(["fetch", "tags", "empty"])("%s tag evidence is never treated as a superseding release", async failure => {
   await expect(latestReleaseTag("repo", async (_file, args) => {
     if (args[0] === "fetch") { if (failure === "fetch") throw new Error("fetch unreadable"); return ""; }
-    if (failure === "tags") throw new Error("tags unreadable");
-    return "v2.0.0-rc.1 1\nv-invalid 2";
+    if (args[0] === "ls-remote") { if (failure === "tags") throw new Error("tags unreadable"); return ""; }
+    return "";
   })).rejects.toThrow(failure === "empty" ? "existing version tag" : `${failure} unreadable`);
 });
 

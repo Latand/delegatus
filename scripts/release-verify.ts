@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 export interface ReleasePreflight {
   tag: string; version: string; localTag: "absent" | "matching" | "conflict"; remoteTag: "absent" | "matching" | "conflict"; npmVersion: boolean;
-  files: string[]; provenance: boolean; clean: boolean;
+  files: string[]; postCutFiles?: string[]; provenance: boolean; clean: boolean;
 }
 export type PreflightAction = "create-and-push" | "push-existing" | "verify-remote";
 export function releasePreflight(input: ReleasePreflight): string[] {
@@ -18,6 +18,7 @@ export function releasePreflight(input: ReleasePreflight): string[] {
   if (!input.clean) errors.push("release head is dirty");
   if (!input.provenance) errors.push("README provenance does not match");
   if (input.files.some(f => !/^(CHANGELOG\.md|package\.json|bun\.lock|README\.md)$/.test(f) && !/^(patches|scripts|docs\/media\/readme)\//.test(f))) errors.push("diff includes product paths");
+  if (input.postCutFiles?.some(f => !/^(CHANGELOG\.md|package\.json|bun\.lock|README\.md)$/.test(f) && !/^(patches|scripts|docs\/media\/readme)\//.test(f))) errors.push("main contains product changes after the release cut; restart from a fresh cut and regenerate the changelog");
   return errors;
 }
 export interface PublishedRelease {
@@ -159,8 +160,11 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
       : localTag === "matching" && remoteObject === localObject && remoteCommit === tagCommit ? "matching" : "conflict";
     const errors = releasePreflight({ tag, version: pkg.version, localTag, remoteTag,
       npmVersion: !!await ports.registry(`${registryURL}/${version}`),
-      // The first parent already contains the product changes inherited from main.
+      // Compare the release PR's own files with its integrated first parent.
       files: (await git("--no-replace-objects", "diff", "--no-renames", "--name-only", `${tagCommit}^1`, tagCommit)).split("\n").filter(Boolean),
+      // The release notes are frozen at the production cut. A queue refresh may
+      // advance main after review; never tag that newer product tree unnoticed.
+      postCutFiles: (await git("--no-replace-objects", "diff", "--no-renames", "--name-only", cut, `${tagCommit}^1`)).split("\n").filter(Boolean),
       clean: !(await git("status", "--porcelain")), provenance: ports.provenance() });
     if (await git("rev-parse", "HEAD") !== head) return { errors: ["release checkout head moved during preflight; review the new head before tagging"] };
     const nextStep: PreflightAction | undefined = errors.length ? undefined : remoteTag === "matching" ? "verify-remote"

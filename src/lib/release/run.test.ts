@@ -663,13 +663,14 @@ test("a lost publish creation receipt replays the saved payload through a new co
 });
 
 
-test("a release that merges main before review passes preflight after the queue refreshes and squash merges it", async () => {
+test("a refreshed release is blocked when product changes arrive after its cut and those changes remain changelog-eligible", async () => {
   const { normalizeStages } = await import("@/lib/pipelines/engine");
   const { pipelineRoleLookup } = await import("@/lib/pipelines/roles");
   const { buildPipeline, assignPipelineDelivery } = await import("@/lib/pipelines/store");
   const { sweepAutoMerge, resetAutoMergeForTests } = await import("@/lib/forge/autoMerge");
   const { planBaseUpdate, pushBaseUpdate } = await import("@/lib/forge/baseUpdate");
   const { realExec } = await import("@/lib/workflows/provision");
+  const { changesSinceRelease } = await import("./production");
   const { verifyRelease } = await import("../../../scripts/release-verify");
   resetAutoMergeForTests();
   const root = path.join(directory, "native-flow"); fs.mkdirSync(root);
@@ -686,19 +687,19 @@ test("a release that merges main before review passes preflight after the queue 
   git("add", "package.json"); git("commit", "-m", "production cut");
   const cut = git("rev-parse", "HEAD");
   git("remote", "add", "origin", remote); git("push", "origin", "main");
+  git("tag", "-a", "v1.0.0", cut, "-m", "Delegatus 1.0.0"); git("push", "origin", "refs/tags/v1.0.0");
   fs.writeFileSync(path.join(root, "existing.ts"), "export const existing = true;\n");
-  git("add", "existing.ts"); git("commit", "-m", "main advances after cut");
+  git("add", "existing.ts"); git("commit", "-m", "main advances after cut (#81)");
   git("push", "origin", "main");
   git("checkout", "--detach", cut);
   git("checkout", "-b", "release");
-  git("merge", "--no-ff", "refs/remotes/origin/main", "-m", "merge main before review");
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "package-example", version: "1.1.0" }));
   git("add", "package.json"); git("commit", "-m", "release version");
   const reviewed = git("rev-parse", "HEAD");
   git("push", "origin", "release");
   const treeFile = path.join(root, "feature.ts");
   git("checkout", "main"); fs.writeFileSync(treeFile, "export const feature = true;\n");
-  git("add", "feature.ts"); git("commit", "-m", "main advances after review");
+  git("add", "feature.ts"); git("commit", "-m", "main advances after review (#82)");
   const main = git("rev-parse", "HEAD"); git("push", "origin", "main"); git("checkout", "release");
   const now = Date.parse("2026-10-22T00:00:00Z"); let clock = now;
   const normalized = normalizeStages(releaseStages({ cut, lastTag: "v1.0.0", changes: [], askBeforePublish: true }), pipelineRoleLookup);
@@ -764,8 +765,10 @@ test("a release that merges main before review passes preflight after the queue 
     } };
   expect(await verifyRelease("v1.1.0", cut, ports)).toEqual({ errors: ["release preflight requires --pr with the merged release PR number"] });
   const result = await verifyRelease("v1.1.0", cut, ports, String(lane.merge?.prNumber));
-  expect(result).toEqual({ errors: [], nextStep: "create-and-push", tagCommit: merged! });
-  git("tag", "-a", "v1.1.0", result.tagCommit!, "-m", "Delegatus 1.1.0");
-  expect(git("rev-parse", "v1.1.0^{commit}")).toBe(merged!);
-  expect(git("merge-base", "v1.1.0^{commit}", "refs/remotes/origin/main")).toBe(merged!);
+  expect(result).toEqual({ errors: ["main contains product changes after the release cut; restart from a fresh cut and regenerate the changelog"] });
+  expect(git("tag", "--list", "v1.1.0")).toBe("");
+  expect((await changesSinceRelease(root, "v1.0.0", merged!)).map(change => change.subject))
+    .toContain("main advances after cut (#81)");
+  expect((await changesSinceRelease(root, "v1.0.0", merged!)).map(change => change.subject))
+    .toContain("main advances after review (#82)");
 });
