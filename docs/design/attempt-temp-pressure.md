@@ -322,7 +322,9 @@ scratch children; its exact bytes, count and basename must match the binding.
 Each row uses the retained inventory's `path`, `laneId`, `launchId` and
 `evidence.registry` fields `devInode`, `createdAt`, `released`,
 `retainUntilClose` and `uid`. Fresh directory identity and registry ownership
-must agree. An approved selection uses the existing closed-root pressure policy;
+must agree. Standalone roots are reported as held because this executor cannot
+take a lane retirement claim for them; their lifecycle owner retains custody.
+An approved selection uses the existing closed-root pressure policy;
 it grants no evidence or live-owner exemption. Shared recorded-check holds are
 kept because releasing them could affect another root.
 

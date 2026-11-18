@@ -163,3 +163,13 @@ test("disabled and preview modes preserve bytes and allow later authorized execu
     expect(fs.readFileSync(path.join(f.directories[1]!, "data"), "utf8")).toBe("fixture payload");
   } finally { f.close(); }
 }, 60000);
+
+test("a standalone row without a lane retirement claim is retained with an explicit receipt", async () => {
+  const f = fixture();
+  try {
+    f.contents.candidates[0]!.laneId = null; f.writeManifest();
+    const result = await f.run(); expect(result.removed).toBe(0);
+    expect(result.rows[0]!.reason).toContain("no lane retirement claim");
+    expect(fs.readFileSync(path.join(f.directories[0]!, "data"), "utf8")).toBe("fixture payload");
+  } finally { f.close(); }
+});

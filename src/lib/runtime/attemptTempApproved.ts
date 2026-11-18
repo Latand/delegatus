@@ -145,6 +145,10 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
         if (++visited > 32 || Math.min(attemptTempRemaining(40_000), deadline - performance.now()) <= 1000) break;
         if (!proof.current()) throw new Error("operator decision or approval binding changed");
         record({ directory: row.directory, identity: row.identity, disposition: "pending", bytes: 0, reason: "admitted; reconcile native retirement journal after interruption", at: new Date().toISOString() });
+        if (!row.pipelineId) {
+          record({ directory: row.directory, identity: row.identity, disposition: "held", bytes: 0,
+            reason: "standalone root has no lane retirement claim; retained for its lifecycle owner", at: new Date().toISOString() }); continue;
+        }
         const stat = fs.lstatSync(row.directory, { throwIfNoEntry: false });
         if (!stat || !stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== row.identity || stat.uid !== row.uid) {
           record({ directory: row.directory, identity: row.identity, disposition: "held", bytes: 0,
