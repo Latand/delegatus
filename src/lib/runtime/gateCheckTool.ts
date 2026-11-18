@@ -106,12 +106,13 @@ export function prepareGateCheckTool(args: unknown, binding: GateCheckRoot | nul
 }
 
 export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | null, signal: AbortSignal, expectedRunId?: string) {
-  let runId = expectedRunId;
+  let reportedRunId: string | undefined;
   try {
     const prepared = prepareGateCheckTool(args, binding);
-    runId ??= prepared.runId;
     const { record } = prepared;
-    const result = await waitForGateCompletion(prepared.log, signal, runId);
+    const completionId = expectedRunId ?? prepared.runId;
+    reportedRunId = record?.runId ?? completionId;
+    const result = await waitForGateCompletion(prepared.log, signal, completionId);
     validateGateCheckRoot(binding!);
     if (record && JSON.stringify(resolveGateRun(binding!.physicalRoot, record.runId)) !== JSON.stringify(record))
       throw new Error("gate run record changed during the wait");
@@ -121,6 +122,6 @@ export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | n
       ...(!result.state.startsWith("finished") ? { outcome: "unknown", instruction: "No terminal result. Preserve this run and its evidence; do not poll or restart it." } : {}),
     }) }] };
   } catch (error) {
-    return { success: false, contentItems: [{ type: "inputText" as const, text: `Check result unknown${runId ? ` (runId=${runId})` : ""}: ${(error instanceof Error ? error.message : String(error)).slice(0, 8192)}. Preserve the original run and evidence.` }] };
+    return { success: false, contentItems: [{ type: "inputText" as const, text: `Check result unknown${reportedRunId ? ` (runId=${reportedRunId})` : ""}: ${(error instanceof Error ? error.message : String(error)).slice(0, 8192)}. Preserve the original run and evidence.` }] };
   }
 }
