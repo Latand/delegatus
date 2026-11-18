@@ -22,7 +22,7 @@ export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 /** How long a head may stay past its bound, with nothing admitted, before the wait reads as stalled. */
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
 const BOUNDED_GATE_PREFIX = "command:bounded:";
-const ACTIVE_GATE_PREFIX = "command:gate-active:";
+export const ACTIVE_GATE_PREFIX = "command:gate-active:";
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; waitedMs: number; heldBy: "queue" | "pressure"; priority?: TaskPriority; stalledMs?: number };
 type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null; low_pressure: number };
