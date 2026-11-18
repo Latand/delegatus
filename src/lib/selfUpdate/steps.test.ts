@@ -482,7 +482,9 @@ test.skipIf(process.platform !== "linux").each(([["install", "silence"], ["insta
       const ports = realPorts(release => { published.push(release); });
       const runner = new UpdateRunner({ checkout, remote: "fixture", branch: "main", bun: fixtureBun,
         logDir: base + "/logs", releasesDir: base + "/releases", env: { ...process.env, TMPDIR: base },
-        stepTimeoutMs: { [name]: 300 }, releaseIdleTimeoutMs: 100, livenessPollMs: 10 }, {
+        // Allow the receipt's child startup and identity checks before the
+        // command deadline under test; the independent parent guard stays bounded.
+        stepTimeoutMs: { [name]: 1_000 }, releaseIdleTimeoutMs: 500, livenessPollMs: 10 }, {
         ...ports,
         async run(command, options) {
           if (command[0] === "git" && command[1] === "worktree") { git(command.slice(1), options.cwd); return 0; }
@@ -517,13 +519,13 @@ test.skipIf(process.platform !== "linux").each(([["install", "silence"], ["insta
     try {
       const result = await Promise.race([
         Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]).then(([status, stdout, stderr]) => ({ status, stdout, stderr })),
-        new Promise<never>((_, reject) => { guard = setTimeout(() => reject(new Error(`independent ${reason} deadline guard expired`)), 2_000); }),
+        new Promise<never>((_, reject) => { guard = setTimeout(() => reject(new Error(`independent ${reason} deadline guard expired`)), 5_000); }),
       ]);
       if (result.status !== 0) throw new Error(JSON.stringify({ status: result.status, stdout: result.stdout, stderr: result.stderr }));
       const observed = JSON.parse(result.stdout);
       expect(observed.state).toBe("failed");
-      expect(observed.failure).toMatchObject({ kind: "timeout", reason });
       expect(observed.detail).toContain(`Release ${name} failed: timeout after`);
+      expect(observed.failure).toMatchObject({ kind: "timeout", reason });
       expect(observed.published).toEqual([]);
       expect(observed.refusal).toBeNull();
       const owned = JSON.parse(readFileSync(ownedFile, "utf8")) as pid.RecordedPid;

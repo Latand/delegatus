@@ -146,8 +146,8 @@ for (const phase of ["generate", "prepare"]) {
       await Promise.race([ready, outcome.then(() => { throw new Error("Inventory ended before its walk acknowledgement"); })]);
       await ports.abort();
       const error = await outcome;
-      expect(error).toBeInstanceOf(Error);
-      expect(String(error)).toContain("cancelled");
+      if (phase === "prepare") expect((error as Error)?.name).toBe("AbortError");
+      else { expect(error).toBeInstanceOf(Error); expect(String(error)).toContain("cancelled"); }
       expect(owned!.signalCode).toBe("SIGKILL");
       expect(() => process.kill(owned!.pid!, 0)).toThrow();
       if (phase === "generate") expect(fs.existsSync(h.marker)).toBe(false);

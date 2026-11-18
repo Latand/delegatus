@@ -122,8 +122,8 @@ test("an abort during child setup also waits for its exit", async () => {
 test("cancellation during a real walk rejects after the child exits, then permits reopening", async () => {
   const root = fixture(), controller = new AbortController();
   let child: ChildProcess | undefined;
-  const start = worker(source => source.replace('const stat = await fs.promises.lstat(file, { bigint: true });', `
-    const stat = await fs.promises.lstat(file, { bigint: true });
+  const start = worker(source => source.replace('const stat = fs.lstatSync(file, { bigint: true });', `
+    const stat = fs.lstatSync(file, { bigint: true });
     if (visited === 2) { process.stderr.write("walking"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); }`), c => {
     child = c; c.stderr!.once("data", () => controller.abort());
   });
