@@ -18587,6 +18587,10 @@ async function applyPipelinePatch(
           ...(inPlace ? { inPlace: true as const, cut: req.applyNowCut ?? "boundary" } : {}),
           ...(typeof req.turbo === "string" && req.turbo ? { turbo: req.turbo.slice(0, 80) } : {}),
           from: { ...(nativeGeneration ?? currentRuntimeSeat(live)), conversationId: live.conversationId, launchId: live.launchId, sessionId: nativeGeneration?.sessionId ?? live.sessionId, agentPath: nativeGeneration?.agentPath ?? live.agentPath }, to };
+        if (live.runtimeEvidenceSince && (live.runtimeSwitches?.length ?? 0) >= 8) {
+          // Reconcile a legacy uncut tier marker while its switch is still available.
+          live.runtimeEvidenceSince = attemptEvidenceFloor(live) ?? undefined;
+        }
         live.runtimeSwitches = [...(live.runtimeSwitches ?? []).slice(-7), runtimeSwitch];
       }
       // All target validation and switch replay/conflict checks precede the

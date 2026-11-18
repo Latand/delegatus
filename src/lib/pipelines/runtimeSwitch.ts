@@ -83,10 +83,31 @@ export function runtimeTargetsEqual(a: PipelineRuntimeSeat, b: PipelineRuntimeSe
   return a.engine === b.engine && a.model === b.model && a.effort === b.effort && a.accountId === b.accountId
     && tier(a.serviceTier) === tier(b.serviceTier);
 }
+function legacyUncutEvidenceMarker(item: PipelineRuntimeSwitch): string | undefined {
+  if (item.inPlace && item.phase === "committed" && !item.cutAt && !item.continuationDispatch
+    && !item.continuationKey && item.continuedAt === item.settledAt
+    && (item.tierCut === "turn-ended" || item.tierCut === "cancelled" || item.tierCut === "none")) return item.continuedAt;
+}
 export function attemptEvidenceFloor(attempt: PipelineStageAttempt): string | null {
-  let floor = attempt.runtimeEvidenceSince ?? attempt.startedAt;
-  if (attempt.startedAt && (!floor || Date.parse(attempt.startedAt) > Date.parse(floor))) floor = attempt.startedAt;
-  return attempt.runtimeSwitches?.reduce((floor, item) => item.continuedAt && (!floor || Date.parse(item.continuedAt) > Date.parse(floor)) ? item.continuedAt : floor, floor) ?? floor;
+  const switches = attempt.runtimeSwitches ?? [];
+  let floor = attempt.startedAt;
+  const raiseFloor = (at?: string) => {
+    if (at && (!floor || Date.parse(at) > Date.parse(floor))) floor = at;
+  };
+  // Older releases recorded the tier settlement as a continuation even when
+  // the original turn kept running. The matching cached floor came from it.
+  const cachedFloor = attempt.runtimeEvidenceSince;
+  if (cachedFloor && switches.some(item => legacyUncutEvidenceMarker(item) === cachedFloor)) {
+    const first = switches[0];
+    // An evicted continuation must have settled before the first retained switch.
+    if (first && first.seq > 1) raiseFloor(first.requestedAt);
+  } else {
+    raiseFloor(cachedFloor);
+  }
+  for (const item of switches) {
+    if (!legacyUncutEvidenceMarker(item)) raiseFloor(item.continuedAt);
+  }
+  return floor;
 }
 export function attemptAccountPin(stage: PipelineStage, attempt: PipelineStageAttempt): string | null {
   if (attempt.runtimeAccountPin !== undefined) return attempt.runtimeAccountPin;

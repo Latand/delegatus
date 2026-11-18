@@ -2676,6 +2676,47 @@ test("#3976: a turn ending before its tier cut settles from its original complet
   expect(h.continuations).toHaveLength(0);
 });
 
+test.each(["fresh", "legacy", "legacy with a later cut"] as const)("#3976: retained uncut tier settlement (%s)", async shape => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  const completedAt = h.wallClock() + 1000;
+  h.advance(2000);
+  h.cutState("turn-ended");
+  await tickPipelines([], h.ports);
+
+  const persisted = loadPipelines()[0]!;
+  const attempt = persisted.runs[0]!.attempts[0]!;
+  const record = attempt.runtimeSwitches![0]!;
+  expect(record).toMatchObject({ phase: "committed", tierCut: "turn-ended" });
+  expect(record.cutAt).toBeUndefined();
+  if (shape !== "fresh") {
+    record.continuedAt = record.settledAt!;
+    attempt.runtimeEvidenceSince = record.continuedAt;
+  }
+  savePipelines([persisted]);
+  const laterCut = shape === "legacy with a later cut";
+  if (laterCut) {
+    h.advance(1000);
+    h.answer("cut");
+    expect((await h.request({ serviceTier: "priority" })).error).toBeUndefined();
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches!.at(-1)).toMatchObject({
+      phase: "committed", tierCut: "cut", continuedAt: expect.any(String),
+    });
+  }
+  h.setTurn({ turn: "terminal", message: { text: 'Finished\n```json\n{"status":"pass"}\n```', ts: completedAt }, lastRecordAt: completedAt });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const final = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(final.state).toBe(laterCut ? "running" : "passed");
+  expect(final.verdict?.status).toBe(laterCut ? undefined : "pass");
+  expect(h.continuations).toHaveLength(laterCut ? 1 : 0);
+  expect(h.spawnCount()).toBe(1);
+});
+
 test("#3976: an unconfirmed expired tier cut becomes a visible decision", async () => {
   const h = await inPlaceHarness();
   h.answer("armed");
