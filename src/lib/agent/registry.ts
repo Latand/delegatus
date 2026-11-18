@@ -10703,7 +10703,8 @@ export class AgentRegistry {
   /** Scanner projection. The SQLite indexes already track path changes at
    * commit, including archived rows. Legacy JSON shares one index per view. */
   launchTierProfilesForPaths(paths: readonly string[]): Map<string, LaunchTierProfile | null> {
-    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.launch-tiers", () => {
+    if (!paths.length) return new Map();
+    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.keyed", () => {
       if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
         return this.sqliteStore.launchTierProfilesForPaths(paths);
       }

@@ -4568,9 +4568,10 @@ export class SqliteAgentRegistryStore {
         if (!stored) return undefined;
         this.onRowPayloadRead?.(collection, 1);
         this.onRowPayloadParse?.(collection, 1);
-        return this.normalizePartial({
+        const normalized = this.normalizePartial({
           version: 2, entries: {}, receipts: {}, [collection]: { [key]: parseSqliteJson(stored.value_json, this.db) },
-        })[collection][key];
+        });
+        return (normalized[collection] as Record<string, RegistryFile[C][string]>)[key];
       };
       for (const pathname of paths) {
         if (result.has(pathname)) continue;
