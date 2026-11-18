@@ -509,8 +509,12 @@ esac
       const deadline = setTimeout(() => abort.abort(), 5_000);
       try {
         const answer = await waiting;
+        const late = await readFresh("read");
         expect(answer.success).toBe(false);
-        expect(answer.contentItems[0]!.text).toContain("ownership unavailable; no exit result recorded");
+        expect(answer.contentItems[0]!.text).toContain(`(runId=${runId}): gate recorder ownership unavailable; no exit result recorded`);
+        expect(late).toEqual(answer);
+        expect((await stdout).match(/runId=[a-f0-9]{64}/g)).toEqual([`runId=${runId}`]);
+        expect(resolveGateRun(launch, runId)).toEqual(record);
         expect(existsSync(`${record.log}.gate/exit`)).toBe(false);
         expect(existsSync(lock)).toBe(true);
       } finally { clearTimeout(deadline); }

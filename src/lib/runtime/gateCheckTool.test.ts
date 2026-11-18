@@ -84,6 +84,24 @@ test("a run index changed across the wait refuses its result", async () => {
   } finally { abort.abort(); }
 });
 
+test("an interrupted indexed wait reports the published ID and preserves the callback identity guard", async () => {
+  const f = registeredFixture(), abort = new AbortController();
+  const args = { runId: f.runId, reason: "registered check" };
+  const completionId = gateWait.gateCompletionIdentity(f.log).runId;
+  const held = runGateCheckTool(args, f.binding, abort.signal, completionId);
+  abort.abort();
+  const answer = await held;
+  expect(answer.success).toBe(false);
+  expect(answer.contentItems[0].text).toContain(`(runId=${f.runId}): gate completion wait cancelled`);
+  finish(f.dir, 0);
+  const wrongIdentity = await runGateCheckTool(args, f.binding, new AbortController().signal, f.runId);
+  expect(wrongIdentity.success).toBe(false);
+  expect(wrongIdentity.contentItems[0].text).toContain(`(runId=${f.runId}): gate completion run identity changed`);
+  const late = await runGateCheckTool(args, f.binding, new AbortController().signal, completionId);
+  expect(late.success).toBe(true);
+  expect(JSON.parse(late.contentItems[0].text)).toMatchObject({ terminal: true, code: 0, runId: f.runId });
+});
+
 test("recorder pins the launch root across a nested TMPDIR and refuses altered proof", () => {
   const f = fixture(), nested = path.join(f.root, "nested"); fs.mkdirSync(nested);
   const env = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
