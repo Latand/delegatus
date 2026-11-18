@@ -37,7 +37,7 @@ export function runtimeSwitchControlAcknowledgement(result: StructuredControlRes
 }
 
 const OPEN = new Set(["requested", "cutting", "switching", "continuing"]);
-const BUDGET = 10 * 60_000;
+export const RUNTIME_SWITCH_BUDGET_MS = 10 * 60_000;
 export const openRuntimeSwitch = (attempt: PipelineStageAttempt) => attempt.runtimeSwitches?.find(item => OPEN.has(item.phase));
 export const pendingRuntimeSwitchRetry = (attempt: PipelineStageAttempt) => attempt.runtimeSwitches?.find(item => item.retry && !item.retry.completedAt);
 
@@ -52,7 +52,9 @@ export function recoverableRuntimeSwitch(attempt: PipelineStageAttempt) {
 /** Mechanical settlement does not impersonate an agent report or follow a failure edge. */
 export function parkRuntimeSwitch(pipeline: Pipeline, attempt: PipelineStageAttempt, record: PipelineRuntimeSwitch, reason: string, now: string): void {
   reason = hardenedRedact(reason).slice(0, 2000);
-  pipeline.state = "needs_decision"; pipeline.stateDetail = reason;
+  if (pipeline.state === "paused") pipeline.pausedState = "needs_decision";
+  else pipeline.state = "needs_decision";
+  pipeline.stateDetail = reason;
   attempt.state = "needs_decision"; attempt.error = reason; attempt.completedAt ??= now;
   attempt.verdict ??= { status: "needs_decision", findings: [] };
   record.outcome = reason;
@@ -98,7 +100,7 @@ export { switchOperationKey };
 export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effectBatch" | "operationStatus">, conversationId: string, since: string, ignoredOperationIds: readonly string[] = [], operatorOnly = false): Promise<boolean> {
   let cursor = 0;
   while (true) {
-    const page = await client.effectBatch(operatorOnly ? ["runtime.kill-boundary", "runtime.interrupt-boundary", "runtime.stop-boundary"] : ["runtime.kill-boundary"], cursor);
+    const page = await client.effectBatch(operatorOnly ? ["runtime.kill-boundary", "runtime.interrupt-boundary", "runtime.stop-boundary"] : ["runtime.kill-boundary"], cursor, { conversationId });
     for (const effect of page) {
       if (effect.payload.conversationId !== conversationId || typeof effect.payload.operationId !== "string" || ignoredOperationIds.includes(effect.payload.operationId)) continue;
       // Admission time survives receipt compaction in both modes. Ordinary
@@ -173,13 +175,17 @@ export async function driveRuntimeSwitch(
   const record = openRuntimeSwitch(attempt);
   if (!record) return;
   const now = ports.now();
-  const expired = Date.parse(now) - Date.parse(record.requestedAt) >= BUDGET;
+  const expired = Date.parse(now) - Date.parse(record.requestedAt) >= RUNTIME_SWITCH_BUDGET_MS;
   const settle = async (phase: PipelineRuntimeSwitch["phase"], reason: string) => {
     record.phase = phase; record.settledAt = now; record.outcome = reason;
     if (record.continuedAt) attempt.runtimeEvidenceSince = attemptEvidenceFloor(attempt) ?? record.continuedAt;
     pipeline.stateDetail = reason; await persist();
   };
   const park = async (reason: string) => { parkRuntimeSwitch(pipeline, attempt, record, reason, now); await persist(); };
+  const fail = async (reason: string) => {
+    record.phase = "failed"; record.settledAt = now;
+    await park(reason);
+  };
   const rollbackAccountAllowed = async (): Promise<boolean> => {
     let pool: string[] | null | undefined;
     try { pool = ports.allowedAccountIds?.(pipeline.project, record.from.engine); }
@@ -253,8 +259,7 @@ export async function driveRuntimeSwitch(
   try {
     if (await ports.runtimeSwitchKilled?.(attempt.conversationId ?? record.from.conversationId, record.requestedAt,
       record.mode === "handoff" ? [switchOperationKey(record, "stop"), switchOperationKey(record, "stop-launch")] : [])) {
-      await settle("failed", "stage stopped by kill during runtime switch");
-      await park("stage stopped by kill during runtime switch"); return;
+      await fail("stage stopped by kill during runtime switch"); return;
     }
     const pool = ports.allowedAccountIds?.(pipeline.project, record.to.engine);
     if (record.phase === "requested" && pool && !pool.includes(record.to.accountId!)) { await settle("failed", "target account is no longer allowed; stage stays on its runtime"); return; }

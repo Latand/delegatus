@@ -44,14 +44,14 @@ import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts } from "./controllerSnapshot";
 import { pipelineStageHostTerminationSourceCurrent, probePipelineStageHostTermination, type HostTerminationInput, type HostTerminationProbe } from "./hostTermination";
 import { guardHostTerminationCheckpoint, hostTerminationKey } from "./hostTerminationProof";
-import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, recoverableRuntimeSwitch, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
+import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, recoverableRuntimeSwitch, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome, RUNTIME_SWITCH_BUDGET_MS } from "./runtimeSwitch";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { resolveSendReceipt, SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
 import { FENCED_MESSAGE_RETRY_DELAYS_MS, fencedFirstMessageRetrySafe } from "./fencedFirstMessage";
 import { stageRepairDelivery } from "./repairDelivery";
 import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
-import type { PipelineAccountHold, PipelineRuntimeSwitch } from "./types";
+import type { PipelineAccountHold, PipelineRuntimeSwitch, PipelineRuntimeSwitchTarget } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
@@ -78,7 +78,7 @@ import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot
 import { sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { AccountContext, ProjectSpawnResolution } from "@/lib/accounts/contracts";
 import { accountQuotaVerdict, selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
-import { AccountProjectBindingsUnreadableError, accountsHiddenFromMember, allowedAccountIdsForProject, memberAccountChoice, MemberAccountRefusedError } from "@/lib/accounts/projectBindings";
+import { AccountProjectBindingsUnreadableError, accountsHiddenFromMember, allowedAccountIdsForProject, fallbackAccountIdsForProject, memberAccountChoice, MemberAccountRefusedError } from "@/lib/accounts/projectBindings";
 import {
   ENGINE_NOT_CONNECTED,
   engineNotConnectedDetails,
@@ -597,6 +597,7 @@ export interface PipelinePorts {
   /** Accounts `project` allows for `engine`, or null when the project has no
       binding for it — which means every account, as it always did (#1279). */
   allowedAccountIds?(project: string, engine: FlowEngine): string[] | null;
+  fallbackAccountIds?(project: string, engine: FlowEngine): string[];
   /** Whether `engine`'s command resolves and it has a signed-in account
       `project` may use (#1876). Absent means no check, which is what a port
       set built for a test gets. */
@@ -1943,6 +1944,7 @@ export function defaultPipelinePorts(
     preflightRepo: preparePipelineRepository,
     roleLookup: pipelineRoleLookup,
     allowedAccountIds: (project, engine) => allowedAccountIdsForProject(project, engine),
+    fallbackAccountIds: (project, engine) => fallbackAccountIdsForProject(project, engine),
     engineReadiness: (engine, project) => engineReadiness(engine, project),
     resolveProjectSpawn: (engine, request) => accountManager.resolveProjectSpawn(engine, request),
     accountExhausted: (engine, accountId, model) => selectHeadlessAccount([{ id: accountId, authPresent: true }],
@@ -8976,16 +8978,91 @@ function heldForCpuPressure(pipeline: Pipeline): boolean {
 /** Runtime controls and handoff setup run without the shared collection lease.
  * A kernel lock owns one switch executor; each dispatch and checkpoint checks
  * the live attempt and control fence, so pause/close can withdraw its permit. */
+function selectRuntimeSwitchTarget(
+  pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts,
+  runtime: Pick<PipelineRuntimeSwitchTarget, "engine" | "model" | "effort" | "serviceTier">,
+  pin: string | null, preferredId: string | null,
+  tierOnly?: "keep-account" | "clear-without-cut",
+) {
+  const { engine, model, serviceTier } = runtime;
+  const read = stageAccountPool(ports, pipeline.project, engine);
+  if ("refusal" in read) return { refusal: read.refusal };
+  const allowed = (id: string | null) => !!id && (read.pool === null || read.pool.includes(id));
+  if (pin && !tierOnly && !allowed(pin)) return { refusal: { error: "selected target account is no longer allowed", status: 409 } };
+  const tierAccounts = engine === "codex" && serviceTier ? listCodexAccounts() : [];
+  const offers = engine === "codex" && model && serviceTier ? tierOffers(tierAccounts, model, serviceTier) : null;
+  const limited = { ...attempt, effectiveRole: { ...attempt.effectiveRole, engine, model } };
+  const unavailableIds = [
+    ...usageLimitsOn(attempt, engine).filter(item => !providerAccountRecovered(pipeline, limited, item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId),
+    ...(offers?.lacking ?? []),
+  ];
+  const unavailable = { refusal: { error: "no allowed target account is available", status: 409 } };
+  let migrationTarget: AccountContext | undefined;
+  let accountId = tierOnly === "clear-without-cut" ? preferredId : pin ?? (allowed(preferredId) ? preferredId : null);
+  /* A tier revert with no cut sends no turn and keeps the current account. */
+  if (ports.resolveProjectSpawn && tierOnly !== "clear-without-cut") {
+    const requestedId = tierOnly ? preferredId : pin;
+    const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId, preferredId, unavailableIds });
+    if (resolution.kind !== "available" || !allowed(resolution.account.accountId)
+      || (requestedId && resolution.account.accountId !== requestedId)) {
+      if (resolution.kind === "unavailable" && offers && model && serviceTier) {
+        const evaluated = tierAccounts.filter(account => allowed(account.id)
+          && resolution.allowedAccountIds.includes(account.id) && (!requestedId || account.id === requestedId));
+        if (evaluated.length && evaluated.every(account => offers.lacking.includes(account.id))) return {
+          refusal: { error: codexServiceTierRefusal(evaluated, model, serviceTier, requestedId), status: 409 },
+        };
+      }
+      return unavailable;
+    }
+    accountId = resolution.account.accountId;
+    migrationTarget = resolution.account;
+  }
+  if (accountId && allowed(accountId) && offers?.lacking.includes(accountId) && model && serviceTier) return {
+    refusal: { error: codexServiceTierRefusal(tierAccounts.filter(account => account.id === accountId), model, serviceTier, accountId, "selected"), status: 409 },
+  };
+  if (!accountId || !allowed(accountId) || unavailableIds.includes(accountId) || (offers && !offers.offering.includes(accountId))) return unavailable;
+  const fallbackReason = ports.fallbackAccountIds?.(pipeline.project, engine).includes(accountId)
+    ? pin ? "the stage pins this fallback account"
+      : tierOnly ? "the tier change keeps the current fallback account"
+        : "selected a project fallback account because no allowed primary account was eligible"
+    : undefined;
+  const target: PipelineRuntimeSwitchTarget = { ...runtime, accountId, accountPinned: !!pin, ...(fallbackReason ? { fallbackReason } : {}) };
+  return { target, migrationTarget };
+}
+
+function selectConfiguredSwitchTarget(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, record: PipelineRuntimeSwitch, ports: PipelinePorts) {
+  const { engine, model, effort, serviceTier } = stage.effectiveRole;
+  const sameEngine = engine === record.to.engine;
+  return selectRuntimeSwitchTarget(pipeline, attempt, ports, {
+    engine, model: model ?? (sameEngine ? record.to.model : null),
+    effort: effort ?? (sameEngine ? record.to.effort : null), serviceTier: serviceTier ?? null,
+  }, stage.account?.trim() || null, record.from.engine === engine ? record.from.accountId
+    : ports.resolveProjectSpawn ? null : record.to.accountId);
+}
+
+function refreshPendingSwitchTarget(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, record: PipelineRuntimeSwitch, ports: PipelinePorts) {
+  if (attempt.report || record.inPlace || record.turbo || record.rollback || openRuntimeSwitch(attempt) !== record) return;
+  const pin = stage.effectiveRole.engine === record.to.engine ? stage.account?.trim() || null
+    : record.to.accountPinned ? record.to.accountId : null;
+  if (pin && record.to.accountPinned && pin === record.to.accountId) return;
+  const { engine, model, effort, serviceTier } = record.to;
+  const preferredId = record.from.engine === engine ? record.from.accountId : ports.resolveProjectSpawn ? null : record.to.accountId;
+  return selectRuntimeSwitchTarget(pipeline, attempt, ports, { engine, model, effort, serviceTier }, pin, preferredId);
+}
+
 export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolean> {
   let changed = false;
   for (const snapshot of await selectControllerPipelines("hosts")) {
     const parked = snapshot.state === "needs_decision";
-    if ((!parked && snapshot.state !== "running") || (ports.structuredDeliveryPublication?.() ?? "ready") !== "ready" || ports.drainHold?.()) continue;
+    if (!parked && snapshot.state !== "running") continue;
     const originalStage = currentStage(snapshot);
     const originalAttempt = originalStage && currentAttempt(snapshot, originalStage.id);
     const recoveryRecord = recoverableRuntimeSwitch;
     const original = originalAttempt && recoveryRecord(originalAttempt);
-    if (!original || !originalStage || original.retry?.completedAt) continue;
+    if (!original || !originalStage || original.retry?.completedAt || original.retry?.blockedAt) continue;
+    const deliveryUnavailable = (ports.structuredDeliveryPublication?.() ?? "ready") !== "ready" || !!ports.drainHold?.();
+    if (deliveryUnavailable && !original.retry
+      && (!openRuntimeSwitch(originalAttempt) || unixMs(ports.now()) - unixMs(original.requestedAt) < RUNTIME_SWITCH_BUDGET_MS)) continue;
     const lock = path.join(pipelineArtifactsDir(snapshot.id), `runtime-switch-${crypto.createHash("sha256").update(original.id).digest("hex")}.lock`);
     fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
     const descriptor = await acquirePublicationFileLock(lock);
@@ -8997,7 +9074,8 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
       const stage = pipeline && currentStage(pipeline);
       const attempt = stage && pipeline && currentAttempt(pipeline, stage.id);
       const record = attempt && recoveryRecord(attempt);
-      if (!pipeline || (parked ? pipeline.state !== "needs_decision" : pipeline.state !== "running") || !stage || !attempt || record?.id !== original.id) continue;
+      if (!pipeline || (parked ? pipeline.state !== "needs_decision" : pipeline.state !== "running") || !stage || !attempt
+        || record?.id !== original.id || record.retry?.completedAt || record.retry?.blockedAt) continue;
       expectedAttempt = JSON.stringify(attempt);
       fence = activationFence(pipeline);
       const checkpoint = async () => {
@@ -9019,6 +9097,15 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         record.phase = "superseded"; record.settledAt = ports.now(); record.outcome = "stage reported before the cut";
         await checkpoint(); continue;
       }
+      if (deliveryUnavailable && !record.retry) {
+        const now = ports.now();
+        const reason = "runtime switch could not proceed while structured delivery was unavailable";
+        requestRuntimeSwitchRetry(pipeline, attempt, record, reason, now);
+        record.retry!.blockedAt = now;
+        record.retry!.pendingReason = reason;
+        pipeline.stateDetail = `${reason}; retry-stage to try again`;
+        await checkpoint(); continue;
+      }
       if (!record.retry && !attempt.report) {
         const limited = attempt.providerWait?.condition.kind === "usage_limit";
         const sourceStoppedForHandoff = !parked && record.mode === "handoff"
@@ -9034,21 +9121,35 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           }
           requestRuntimeSwitchRetry(pipeline, attempt, record, limited ? "source is waiting for provider capacity" : "source host is gone", ports.now());
           await checkpoint();
+        } else if (attempt.suspension?.reason === "pause" && openRuntimeSwitch(attempt)) {
+          const now = ports.now();
+          const reason = "runtime switch stopped by pause";
+          requestRuntimeSwitchRetry(pipeline, attempt, record, reason, now);
+          record.retry!.blockedAt = now;
+          record.retry!.pendingReason = reason;
+          pipeline.stateDetail = `${reason}; retry-stage to start on the configured runtime`;
+          await checkpoint(); continue;
         } else if (parked && !attempt.verdict) {
           parkRuntimeSwitch(pipeline, attempt, record, record.outcome ?? pipeline.stateDetail ?? "runtime switch failed", ports.now());
           await checkpoint();
         }
       }
       if (record.retry) {
+        const retry = record.retry;
+        const retryExpired = () => unixMs(ports.now()) - unixMs(retry.requestedAt) >= RUNTIME_SWITCH_BUDGET_MS;
+        let cleanupProven = false;
         try {
+          if (retryExpired()) throw new Error(retry.pendingReason ?? "termination and retirement could not be verified");
+          if (deliveryUnavailable) throw new Error("structured delivery is unavailable");
           // Cleanup does not require the old account to remain authorized.
           // It must still respect a later operator control and the current attempt.
           const checkRetry = async () => {
             await checkpoint();
+            if (retryExpired()) throw new Error("termination and retirement could not be verified");
             const ignored = ["interrupt", "stop", "stop-launch", "retry-stop-0", "retry-stop-1"].map(action => switchOperationKey(record, action));
             for (const id of new Set([record.from.conversationId, record.launch?.conversationId].filter((id): id is string => !!id))) {
-              if (await ports.conversationOperatorStopped?.(id, record.retry!.requestedAt, ignored)) {
-                record.retry!.operatorStoppedAt ??= ports.now();
+              if (await ports.conversationOperatorStopped?.(id, retry.requestedAt, ignored)) {
+                retry.operatorStoppedAt ??= ports.now();
                 throw new Error("operator kill after retry request; request retry again to authorize a replacement");
               }
             }
@@ -9078,40 +9179,91 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
           if (lateProducer) throw new Error(lateProducer);
           const writer = ports.stageHostTreeStillRunning?.(targets.flatMap(target => target.conversationId ? [target.conversationId] : []));
           if (writer) throw new Error(writer);
-          const checkTarget = () => {
-            const pool = ports.allowedAccountIds?.(pipeline.project, record.to.engine);
-            if (pool && (!record.to.accountId || !pool.includes(record.to.accountId))) throw new Error("selected target account is no longer allowed");
-            if ((ports.engineReadiness?.(record.to.engine, pipeline.project) ?? "connected") !== "connected") throw new Error("selected target engine is unavailable");
-          };
-          checkTarget();
+          cleanupProven = true;
           // Allocation and cleanup completion commit together. A crash before
           // this write repeats the same stop keys; after it activation owns n+1.
           await withPipelineMutation(async (pipelines, persist) => {
             const live = pipelines.find(item => item.id === pipeline.id);
             const current = live && currentAttempt(live, stage.id);
             if (!live || !current || activationFence(live) !== fence || JSON.stringify(current) !== expectedAttempt) throw new RuntimeSwitchSuperseded();
-            checkTarget();
-            const retry = current.runtimeSwitches!.find(item => item.id === record.id)!.retry!;
-            retry.completedAt = ports.now(); delete retry.pendingReason;
-            resetStageForRetry(live, stage);
-            const next = (await newAttempt(live, stage, ports.now(), "operator-revision"))!;
+            const configured = currentStage(live)!;
+            const engine = configured.effectiveRole.engine;
+            if ((ports.engineReadiness?.(engine, live.project) ?? "connected") !== "connected") throw new Error("target engine is unavailable");
+            const selected = selectConfiguredSwitchTarget(live, configured, current, record, ports);
+            if (!selected.target) throw new Error(selected.refusal.error);
+            const settled = current.runtimeSwitches!.find(item => item.id === record.id)!.retry!;
+            settled.completedAt = ports.now(); delete settled.pendingReason;
+            settled.target = selected.target;
+            resetStageForRetry(live, configured);
+            const next = (await newAttempt(live, configured, ports.now(), "operator-revision"))!;
             next.input = current.input;
             next.activatedBy = current.activatedBy ? { ...current.activatedBy } : null;
             next.restartContext = { previousAttempt: current.n, transcriptPath: record.from.agentPath };
-            const selected = { ...stage, account: record.to.accountId!, effectiveRole: { ...stage.effectiveRole,
-              engine: record.to.engine, model: record.to.model, effort: record.to.effort, serviceTier: record.to.serviceTier ?? undefined } };
-            delete selected.effectiveRole.preferredServiceTier; delete selected.effectiveRole.serviceTierSource;
-            bindAttemptDefinition(selected, next, ports);
-            persist([live]); changed = true;
+            next.runtimeAccountPin = configured.account?.trim() || null;
+            next.usageLimitedAccounts = (current.usageLimitedAccounts ?? []).map(limit => ({
+              ...limit, engine: limit.engine ?? current.effectiveRole.engine,
+            }));
+            bindAttemptDefinition(configured, next, ports);
+            await persist([live]); changed = true;
           });
           ports.scheduleTick?.(0);
         } catch (error) {
           if (error instanceof RuntimeSwitchSuperseded) throw error;
-          record.retry.pendingReason = hardenedRedact(String(error)).slice(0, 2000);
-          pipeline.stateDetail = `runtime switch retry accepted; cleanup pending: ${record.retry.pendingReason}`;
-          await checkpoint(); ports.scheduleTick?.(1000);
+          retry.pendingReason = hardenedRedact(error instanceof Error ? error.message : String(error)).slice(0, 1800);
+          const now = ports.now();
+          const timedOut = retryExpired();
+          if (timedOut || retry.operatorStoppedAt) {
+            retry.blockedAt = now;
+            const status = retry.operatorStoppedAt ? "cleanup stopped" : "cleanup timed out";
+            pipeline.stateDetail = `runtime switch retry ${status}: ${retry.pendingReason}; retry-stage to try again`;
+          } else if (cleanupProven) {
+            pipeline.stateDetail = `runtime switch retry cleanup complete; waiting to start: ${retry.pendingReason}`;
+            ports.scheduleTick?.(5000);
+          } else {
+            pipeline.stateDetail = `runtime switch retry accepted; cleanup pending: ${retry.pendingReason}`;
+            ports.scheduleTick?.(1000);
+          }
+          await checkpoint();
         }
         continue;
+      }
+      const retarget = refreshPendingSwitchTarget(pipeline, stage, attempt, record, ports);
+      if (retarget?.target && (retarget.target.accountId !== record.to.accountId || retarget.target.accountPinned !== record.to.accountPinned
+        || retarget.target.fallbackReason !== record.to.fallbackReason)) {
+        const beforeDispatch = record.phase === "requested"
+          || (record.mode === "handoff" && !record.handoff && ["cutting", "switching"].includes(record.phase));
+        if (beforeDispatch) {
+          if (record.mode === "fork" && retarget.target.accountId !== record.from.accountId) {
+            try { await validateMigrationTargetRoot(retarget.migrationTarget ?? accountManager.resolveSpawn(record.to.engine, retarget.target.accountId!)); }
+            catch (error) {
+              const reason = sanitizeProviderError(error).message;
+              record.phase = "failed"; record.settledAt = ports.now();
+              parkRuntimeSwitch(pipeline, attempt, record, reason, ports.now());
+              await checkpoint(); continue;
+            }
+          }
+          record.to = retarget.target;
+          await checkpoint();
+        } else if (retarget.target.accountId !== record.to.accountId || retarget.target.accountPinned !== record.to.accountPinned) {
+          requestRuntimeSwitchRetry(pipeline, attempt, record, "runtime switch target changed after dispatch", ports.now());
+          record.retry!.target = retarget.target;
+          await checkpoint(); ports.scheduleTick?.(0); continue;
+        }
+      } else if (retarget && !retarget.target && record.phase === "requested") {
+        const now = ports.now();
+        const reason = retarget.refusal.error;
+        const binding = stageAccountPool(ports, pipeline.project, record.to.engine);
+        if ("pool" in binding && binding.pool && !binding.pool.includes(record.to.accountId!)) {
+          record.phase = "failed"; record.settledAt = now;
+          record.outcome = pipeline.stateDetail = "target account is no longer allowed; stage stays on its runtime";
+        } else if (unixMs(now) - unixMs(record.requestedAt) >= RUNTIME_SWITCH_BUDGET_MS) {
+          record.phase = "failed"; record.settledAt = now;
+          parkRuntimeSwitch(pipeline, attempt, record, reason, now);
+        } else {
+          pipeline.stateDetail = `runtime switch waiting: ${reason}`;
+          ports.scheduleTick?.(1000);
+        }
+        await checkpoint(); continue;
       }
       const dispatchCheckpoint = async (account = record.rollback ? record.from : record.to) => {
         assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline);
@@ -9146,6 +9298,12 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         }
         await checkpoint();
         assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline);
+        if (account === record.to && !record.rollback) {
+          const selection = refreshPendingSwitchTarget(pipeline, stage, attempt, record, ports);
+          if (selection?.target && (selection.target.accountId !== account.accountId || selection.target.accountPinned !== record.to.accountPinned)) {
+            throw new RuntimeSwitchSuperseded();
+          }
+        }
       };
       const outside: PipelinePorts = { ...ports,
         exec: async (...args) => { await dispatchCheckpoint(); return await ports.exec(...args); },
@@ -9234,7 +9392,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         const composed = await composeStageInput(pipeline, bound, role, attempt.input ?? "", pipeline.worktreeDir, outside.exec);
         return { role, runtimeProfile: pipelineStageRuntimeProfile(bound), cwd: pipeline.worktreeDir!, project: pipeline.project,
           ...(memory.learnedRules ? { learnedRules: memory.learnedRules } : {}), ...(memory.cleanMemory ? { cleanMemory: true } : {}),
-          requestedAccountId: record.to.accountId, ...(record.to.accountPinned ? {} : { accountChosenAutomatically: true }),
+          requestedAccountId: record.to.accountId, ...(record.to.accountPinned ? {} : { accountChosenAutomatically: true, requireAccountCapacity: true }),
           title: pipelineStageTitle(pipeline.task, stage.id), prompt: composed,
           parentPath: record.from.agentPath, clientAttemptId: `switch_${record.seq}_${clientAttemptId(pipeline, stage, attempt)}`.slice(0,128),
           creatorConversationId: pipeline.srcConversationId, workspace: pipeline.workspace, supersedes: record.from.conversationId,
@@ -17688,9 +17846,14 @@ async function applyPipelinePatch(
         delete attempt.suspension.operatorStoppedAt;
       }
       /* #1938: a resumed needs_review lane still names its unreviewed head. */
-      pipeline.stateDetail = (pipeline.state === "needs_review" || pipeline.state === "needs_decision" && currentTerminalReviewPending(pipeline)) && pipeline.reviewPending
-        ? reviewPendingDetail(pipeline.reviewPending)
-        : pauseResumeDetail("resumed", actor);
+      const switchRetry = attempt && pendingRuntimeSwitchRetry(attempt)?.retry;
+      if (pipeline.state === "needs_decision" && switchRetry?.blockedAt) {
+        pipeline.stateDetail = `runtime switch retry blocked: ${switchRetry.pendingReason ?? switchRetry.reason}; retry-stage to try again`;
+      } else {
+        pipeline.stateDetail = (pipeline.state === "needs_review" || pipeline.state === "needs_decision" && currentTerminalReviewPending(pipeline)) && pipeline.reviewPending
+          ? reviewPendingDetail(pipeline.reviewPending)
+          : pauseResumeDetail("resumed", actor);
+      }
       if (flow?.state === "paused") ports.patchFlow(flow.id, "resume", undefined, actor);
     } else if (req.action === "retry-stage") {
       const budgetRefusal = terminalBudgetDecisionRefusal(attempt, true);
@@ -17724,11 +17887,12 @@ async function applyPipelinePatch(
       const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasksForList());
       if (elsewhere) return elsewhere;
       const switchRetry = attempt && recoverableRuntimeSwitch(attempt);
-      if (stage && attempt && switchRetry && ["running", "needs_decision"].includes(pipeline.state)) {
+      if (stage && attempt && switchRetry && ["running", "needs_decision", "paused"].includes(pipeline.state)) {
         if (attempt.report) return { error: "stage already reported", status: 409 };
-        const replayed = !!switchRetry.retry;
-        if (switchRetry.retry?.operatorStoppedAt) {
+        const replayed = !!switchRetry.retry && !switchRetry.retry.blockedAt;
+        if (switchRetry.retry && (switchRetry.retry.blockedAt || switchRetry.retry.operatorStoppedAt)) {
           switchRetry.retry.requestedAt = ports.now();
+          delete switchRetry.retry.blockedAt;
           delete switchRetry.retry.operatorStoppedAt;
           delete switchRetry.retry.pendingReason;
         }
@@ -18325,6 +18489,9 @@ async function applyPipelinePatch(
       const unbound = unboundLiveAttemptRefusal(pipeline, target.id);
       if (unbound) return unbound;
       const live = currentAttempt(pipeline, target.id);
+      const heldSwitch = live && pipeline.cursor?.stageId === target.id && recoverableRuntimeSwitch(live);
+      const retargetHeld = heldSwitch && typeof req.turbo !== "string"
+        && (pipeline.state === "paused" || !!live?.suspension || !!heldSwitch.retry?.blockedAt || (heldSwitch.phase === "failed" && !heldSwitch.retry));
       if (req.applyNow !== undefined && typeof req.applyNow !== "boolean") return { error: "applyNow must be boolean", status: 400 };
       if (req.applyNow) {
         if (!mayAnswerPipelineDecision(pipeline, actor, "control")) return { error: "only the operator or project seat may move a running stage", status: 403 };
@@ -18333,16 +18500,17 @@ async function applyPipelinePatch(
            a switch still open keeps answering the conversation it started on. */
         const seenAttempt = req.expectedAttempt === undefined || live?.n === req.expectedAttempt;
         const seenConversation = req.expectedConversationId === undefined || (!!live
-          && (live.conversationId === req.expectedConversationId || openRuntimeSwitch(live)?.from.conversationId === req.expectedConversationId));
+          && (live.conversationId === req.expectedConversationId || (heldSwitch || undefined)?.from.conversationId === req.expectedConversationId));
         if (!seenAttempt || !seenConversation) {
           return { error: "the stage's running attempt changed since this runtime was chosen; read the stage again before choosing", status: 409, code: "STAGE_CHANGED", field: seenAttempt ? "expectedConversationId" : "expectedAttempt" };
         }
         if (req.runtime !== undefined || req.role !== undefined || req.prompt !== undefined || req.access !== undefined || req.agentMemoryMaxBytes !== undefined) return { error: "role, prompt, access and memory cap apply from the next attempt; send a separate override-stage", status: 400 };
         if (req.applyNowCut !== undefined && req.applyNowCut !== "boundary" && req.applyNowCut !== "none") return { error: "applyNowCut must be boundary or none", status: 400 };
         const parkedSource = pipeline.state === "needs_decision" && live?.state === "needs_decision" && !live.report
-          && (pendingRuntimeSwitchRetry(live) || live.providerWait?.condition.kind === "usage_limit" || !!live.conversationId && (ports.runtimeSwitchSourceUnavailable?.(live.conversationId)
+          && (retargetHeld || pendingRuntimeSwitchRetry(live) || live.providerWait?.condition.kind === "usage_limit" || !!live.conversationId && (ports.runtimeSwitchSourceUnavailable?.(live.conversationId)
             || await ports.conversationTurnInterrupted?.(live.conversationId) === "dead"));
-        if ((!parkedSource && (pipeline.state !== "running" || live?.state !== "running")) || target.kind !== "run" || !live || live.paneId || live.historical || !live.conversationId || !live.agentPath || !live.sessionId) return { error: "apply now requires a running structured run stage", status: 409, code: live?.state === "spawning" ? "ATTEMPT_STARTING" : "RUNTIME_SWITCH_UNAVAILABLE" };
+        if ((!parkedSource && !retargetHeld && (pipeline.state !== "running" || live?.state !== "running")) || target.kind !== "run" || !live || live.paneId || live.historical
+          || (!retargetHeld && (!live.conversationId || !live.agentPath || !live.sessionId))) return { error: "apply now requires a running structured run stage", status: 409, code: live?.state === "spawning" ? "ATTEMPT_STARTING" : "RUNTIME_SWITCH_UNAVAILABLE" };
         if (live.report) return { error: "stage already reported", status: 409, code: "STAGE_ALREADY_REPORTED" };
       }
       const reach = stageEditReach(pipeline, target.id);
@@ -18474,100 +18642,84 @@ async function applyPipelinePatch(
         if (tierRefusal) return tierRefusal;
       }
       let runtimeSwitch: PipelineRuntimeSwitch | null = null;
-      if (req.applyNow && live?.conversationId) {
-        if (live.suspension) return { error: "the attempt is suspended for recovery; retry-stage before changing its running runtime", status: 409 };
+      if (req.applyNow && live) {
+        if (live.suspension && !retargetHeld) return { error: "the attempt is suspended for recovery; retry-stage before changing its running runtime", status: 409 };
         const engine = target.effectiveRole.engine;
         const readiness = ports.engineReadiness?.(engine, pipeline.project) ?? "connected";
-        if (readiness !== "connected") return { error: `target engine ${readiness}`, status: 409 };
-        const read = stageAccountPool(ports, pipeline.project, engine);
-        if ("refusal" in read) return read.refusal;
-        const allowed = (id: string | null) => !!id && (read.pool === null || read.pool.includes(id));
-        const nativeGeneration = ports.conversationGeneration?.(live.conversationId) ?? null;
+        if (!retargetHeld && readiness !== "connected") return { error: `target engine ${readiness}`, status: 409 };
+        const nativeGeneration = live.conversationId ? ports.conversationGeneration?.(live.conversationId) ?? null : null;
         const generation = nativeGeneration?.engine === engine ? nativeGeneration : engine === live.effectiveRole.engine ? currentRuntimeSeat(live) : null;
         const turboTierOnly = typeof req.turbo === "string" && req.applyNowCut !== undefined && req.model === undefined && req.effort === undefined && req.engine === undefined && req.account === undefined;
         const model = turboTierOnly ? generation?.model ?? target.effectiveRole.model : target.effectiveRole.model ?? generation?.model;
         const effort = turboTierOnly ? generation?.effort ?? target.effectiveRole.effort : target.effectiveRole.effort ?? generation?.effort;
         if (!model || !effort) return { error: "apply now requires a resolved model and effort; select them explicitly", status: 400 };
-        const preferredId = generation?.accountId ?? null;
         const serviceTier = turboTierOnly && req.serviceTier === null ? null : target.effectiveRole.serviceTier ?? null;
-        const tierAccounts = engine === "codex" && serviceTier ? listCodexAccounts() : [];
-        const offers = engine === "codex" && serviceTier ? tierOffers(tierAccounts, model, serviceTier) : null;
-        // A pool offering the tier does not prove the preferred account offers it.
-        const unavailableIds = [
-          ...usageLimitsOn(live, engine).filter(item => !providerAccountRecovered(pipeline, { ...live, effectiveRole: { ...live.effectiveRole, engine, model } }, item.accountId, item.limitedAt ?? null, item.resetsAt, ports)).map(item => item.accountId),
-          ...(offers?.lacking ?? []),
-        ];
-        let migrationTarget: AccountContext | undefined;
-        let accountId = turboTierOnly && req.applyNowCut === "none"
-          ? preferredId
-          : target.account ?? (allowed(preferredId) ? preferredId : null);
-        /* Returning a tier changes no account and dispatches no turn. Capacity
-           admission must not prevent undo after the paid approval ends. */
-        if (ports.resolveProjectSpawn && !(turboTierOnly && req.applyNowCut === "none")) {
-          const requestedId = turboTierOnly ? preferredId : target.account;
-          const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId, preferredId, unavailableIds });
-          if (resolution.kind !== "available" || !allowed(resolution.account.accountId)) {
-            if (resolution.kind === "unavailable" && offers) {
-              const evaluated = tierAccounts.filter(account => allowed(account.id)
-                && resolution.allowedAccountIds.includes(account.id) && (!requestedId || account.id === requestedId));
-              if (evaluated.length && evaluated.every(account => offers.lacking.includes(account.id))) return {
-                error: codexServiceTierRefusal(evaluated, model, serviceTier!, requestedId), status: 409,
-              };
-            }
-            return { error: "no allowed target account is available", status: 409 };
-          }
-          accountId = resolution.account.accountId;
-          migrationTarget = resolution.account;
-        }
-        if (allowed(accountId) && offers?.lacking.includes(accountId!)) return {
-          error: codexServiceTierRefusal(tierAccounts.filter(account => account.id === accountId), model, serviceTier!, accountId, "selected"), status: 409,
-        };
-        if (!allowed(accountId) || unavailableIds.includes(accountId!) || (offers && !offers.offering.includes(accountId!))) return { error: "no allowed target account is available", status: 409 };
-        const to = { engine, model, effort,
-          serviceTier, accountId, accountPinned: !!target.account };
+        const selection = selectRuntimeSwitchTarget(pipeline, live, ports, { engine, model, effort, serviceTier },
+          target.account ?? null, generation?.accountId ?? null, turboTierOnly
+            ? req.applyNowCut === "none" ? "clear-without-cut" : "keep-account" : undefined);
+        if (!selection.target) return selection.refusal;
+        const to = selection.target;
+        const accountId = to.accountId;
         const open = pendingRuntimeSwitchRetry(live) ?? openRuntimeSwitch(live);
+        const previousTarget = open?.retry?.target ?? open?.to;
         if (open && typeof req.turbo === "string" && open.turbo !== req.turbo) return { error: "another runtime switch is in progress", status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" };
-        if (open) return runtimeTargetsEqual(open.to, to) && open.to.accountPinned === to.accountPinned ? { pipeline, runtimeSwitch: open, replayed: true }
-          : { error: "another runtime switch is in progress", status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" };
-        if (runtimeTargetsEqual(nativeGeneration ?? currentRuntimeSeat(live), to)) {
-          if (nativeGeneration) {
-            Object.assign(live.effectiveRole, { engine: nativeGeneration.engine, model: nativeGeneration.model, effort: nativeGeneration.effort, serviceTier: nativeGeneration.serviceTier ?? undefined });
-            delete live.effectiveRole.preferredServiceTier; delete live.effectiveRole.serviceTierSource;
-            Object.assign(live, { accountId: nativeGeneration.accountId, sessionId: nativeGeneration.sessionId, agentPath: nativeGeneration.agentPath });
+        if (open && previousTarget && runtimeTargetsEqual(previousTarget, to) && previousTarget.accountPinned === to.accountPinned
+          && previousTarget.fallbackReason === to.fallbackReason) return { pipeline, runtimeSwitch: open, replayed: true };
+        if (retargetHeld && heldSwitch) {
+          if (req.applyNowCut !== undefined) return { error: "applyNowCut applies only to a tier-only change of a running Codex stage", status: 400 };
+          const needsExplicitRetry = pipeline.state === "paused" || !heldSwitch.retry || !!heldSwitch.retry.blockedAt;
+          const now = ports.now();
+          const reason = "runtime switch target updated";
+          requestRuntimeSwitchRetry(pipeline, live, heldSwitch, reason, now);
+          heldSwitch.retry!.target = to;
+          if (needsExplicitRetry) {
+            heldSwitch.retry!.blockedAt ??= now;
+            heldSwitch.retry!.pendingReason = reason;
+            pipeline.stateDetail = `${reason}; retry-stage to start on the configured runtime`;
           }
-          live.runtimeAccountPin = target.account ?? null;
-          if (!transientTurboTier && JSON.stringify(storedTarget) !== JSON.stringify(target)) {
-            Object.assign(storedTarget!, target);
-            if (!target.account) delete storedTarget!.account;
-            graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "override-stage", stageId: target.id, ...reach,
-              ...(req.account !== undefined ? { accountOverride: target.account?.trim() || null } : {}),
-              summary: `updated the future runtime of stage ${target.id}; running attempt already uses the selected runtime${droppedTierNote(droppedCodexTier)}` });
+          runtimeSwitch = heldSwitch;
+        } else {
+          if (open) return { error: "another runtime switch is in progress", status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" };
+          if (runtimeTargetsEqual(nativeGeneration ?? currentRuntimeSeat(live), to)) {
+            if (nativeGeneration) {
+              Object.assign(live.effectiveRole, { engine: nativeGeneration.engine, model: nativeGeneration.model, effort: nativeGeneration.effort, serviceTier: nativeGeneration.serviceTier ?? undefined });
+              delete live.effectiveRole.preferredServiceTier; delete live.effectiveRole.serviceTierSource;
+              Object.assign(live, { accountId: nativeGeneration.accountId, sessionId: nativeGeneration.sessionId, agentPath: nativeGeneration.agentPath });
+            }
+            live.runtimeAccountPin = target.account ?? null;
+            if (!transientTurboTier && JSON.stringify(storedTarget) !== JSON.stringify(target)) {
+              Object.assign(storedTarget!, target);
+              if (!target.account) delete storedTarget!.account;
+              graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "override-stage", stageId: target.id, ...reach,
+                ...(req.account !== undefined ? { accountOverride: target.account?.trim() || null } : {}),
+                summary: `updated the future runtime of stage ${target.id}; running attempt already uses the selected runtime${droppedTierNote(droppedCodexTier)}${to.fallbackReason ? `; ${to.fallbackReason}` : ""}` });
+            }
+            await persist();
+            return { pipeline, ...(graphEdit ? { graphEdit } : {}), runtimeSwitch: null, appliedNow: "already-current" };
           }
-          await persist();
-          return { pipeline, ...(graphEdit ? { graphEdit } : {}), runtimeSwitch: null, appliedNow: "already-current" };
+          // A same-engine account move uses the migration provider. Refuse its
+          // known directory hazards before recording a switch or cutting the turn.
+          if (engine === live.effectiveRole.engine && accountId !== (nativeGeneration ?? currentRuntimeSeat(live)).accountId) {
+            try { await validateMigrationTargetRoot(selection.migrationTarget ?? accountManager.resolveSpawn(engine, accountId!)); }
+            catch (error) {
+              const refusal = sanitizeProviderError(error);
+              return { error: refusal.message, code: "RUNTIME_SWITCH_UNAVAILABLE" as const, status: 409 };
+            }
+          }
+          const seq = (live.runtimeSwitches?.at(-1)?.seq ?? 0) + 1;
+          const source = nativeGeneration ?? currentRuntimeSeat(live);
+          /* Only the Codex tier changes and the live host can take it: no restart (Turbo, §2.6). */
+          const inPlace = engine === "codex" && engine === live.effectiveRole.engine && source.engine === engine
+            && source.model === to.model && source.effort === to.effort && source.accountId === to.accountId
+            && !!ports.runtimeSwitchTier;
+          if (req.applyNowCut !== undefined && !inPlace) return { error: "applyNowCut applies only to a tier-only change of a running Codex stage", status: 400 };
+          runtimeSwitch = { id: `${pipeline.id}:${target.id}:${live.n}:${seq}`, seq, requestedAt: ports.now(), actor: actor!,
+            mode: engine === live.effectiveRole.engine ? "fork" : "handoff", phase: "requested",
+            ...(inPlace ? { inPlace: true as const, cut: req.applyNowCut ?? "boundary" } : {}),
+            ...(typeof req.turbo === "string" && req.turbo ? { turbo: req.turbo.slice(0, 80) } : {}),
+            from: { ...(nativeGeneration ?? currentRuntimeSeat(live)), conversationId: live.conversationId!, launchId: live.launchId, sessionId: nativeGeneration?.sessionId ?? live.sessionId, agentPath: nativeGeneration?.agentPath ?? live.agentPath }, to };
+          live.runtimeSwitches = [...(live.runtimeSwitches ?? []).slice(-7), runtimeSwitch];
         }
-        // A same-engine account move uses the migration provider. Refuse its
-        // known directory hazards before recording a switch or cutting the turn.
-        if (engine === live.effectiveRole.engine && accountId !== (nativeGeneration ?? currentRuntimeSeat(live)).accountId) {
-          try { await validateMigrationTargetRoot(migrationTarget ?? accountManager.resolveSpawn(engine, accountId!)); }
-          catch (error) {
-            const refusal = sanitizeProviderError(error);
-            return { error: refusal.message, code: "RUNTIME_SWITCH_UNAVAILABLE" as const, status: 409 };
-          }
-        }
-        const seq = (live.runtimeSwitches?.at(-1)?.seq ?? 0) + 1;
-        const source = nativeGeneration ?? currentRuntimeSeat(live);
-        /* Only the Codex tier changes and the live host can take it: no restart (Turbo, §2.6). */
-        const inPlace = engine === "codex" && engine === live.effectiveRole.engine && source.engine === engine
-          && source.model === to.model && source.effort === to.effort && source.accountId === to.accountId
-          && !!ports.runtimeSwitchTier;
-        if (req.applyNowCut !== undefined && !inPlace) return { error: "applyNowCut applies only to a tier-only change of a running Codex stage", status: 400 };
-        runtimeSwitch = { id: `${pipeline.id}:${target.id}:${live.n}:${seq}`, seq, requestedAt: ports.now(), actor: actor!,
-          mode: engine === live.effectiveRole.engine ? "fork" : "handoff", phase: "requested",
-          ...(inPlace ? { inPlace: true as const, cut: req.applyNowCut ?? "boundary" } : {}),
-          ...(typeof req.turbo === "string" && req.turbo ? { turbo: req.turbo.slice(0, 80) } : {}),
-          from: { ...(nativeGeneration ?? currentRuntimeSeat(live)), conversationId: live.conversationId, launchId: live.launchId, sessionId: nativeGeneration?.sessionId ?? live.sessionId, agentPath: nativeGeneration?.agentPath ?? live.agentPath }, to };
-        live.runtimeSwitches = [...(live.runtimeSwitches ?? []).slice(-7), runtimeSwitch];
       }
       // All target validation and switch replay/conflict checks precede the
       // definition write, so a refused request cannot alter future attempts.
@@ -18598,8 +18750,12 @@ async function applyPipelinePatch(
           : `changed ${changed.join(", ")} of stage ${target.id}${droppedTierNote(droppedCodexTier)}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}${typeof req.turbo === "string" && req.turbo ? ` (Turbo ${req.turbo.slice(0, 80)})` : ""}`,
       });
       if (runtimeSwitch && live) {
-        graphEdit.runtimeSwitch = { attempt: live.n, id: runtimeSwitch.id };
-        graphEdit.summary += `; attempt ${live.n} continues on the runtime now`;
+        if (!retargetHeld) graphEdit.runtimeSwitch = { attempt: live.n, id: runtimeSwitch.id };
+        graphEdit.summary += retargetHeld
+          ? `; updated the runtime target for retry of attempt ${live.n}`
+          : `; attempt ${live.n} continues on the runtime now`;
+        const fallback = (runtimeSwitch.retry?.target ?? runtimeSwitch.to).fallbackReason;
+        if (fallback) graphEdit.summary += `; ${fallback}`;
         await persist(); requestPipelineTick();
         return { pipeline, graphEdit, runtimeSwitch };
       }

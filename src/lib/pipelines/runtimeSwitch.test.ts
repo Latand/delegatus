@@ -38,12 +38,12 @@ function tierSessionId(label: string): string {
  * tool call the deploy cut, while the runtime ledger still projects a running
  * turn — the reading that kept the attempt `running` and the card working.
  */
-function harness() {
+function harness(startAt = "2026-09-18T16:02:32.000Z") {
   const continuations: Array<{ conversationId: string; transcriptPath: string; clientMessageId: string; text: string }> = [];
   /* The production clock of the third deploy: the lane's last transcript
      record at 15:59:11, the succession that cut it at 16:02:32 — silent for
      three minutes and twenty-one seconds before its host was replaced. */
-  let wall = Date.parse("2026-09-18T16:02:32.000Z");
+  let wall = Date.parse(startAt);
   let hostEpoch = 1_015;
   let turn: StageTurnEvidence = { turn: "busy", message: null, lastRecordAt: Date.parse("2026-09-18T15:59:11.000Z") };
   let deliveryOutstanding = false;
@@ -173,8 +173,8 @@ function switchAccount(engine: "claude" | "codex", accountId: string): import("@
   return { engine, accountId, kind: "managed", home, transcriptRoot, env: { NODE_ENV: "test" } };
 }
 
-function switchHarness() {
-  const h = harness();
+function switchHarness(startAt?: string) {
+  const h = harness(startAt);
   h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available",
     account: switchAccount(engine as "claude" | "codex", request.requestedId ?? request.preferredId ?? "default") });
   const operations = new Map<string, string>();
@@ -218,6 +218,176 @@ function dirtyCheckout(directory: string, branch: string) {
     untracked: fs.readFileSync(path.join(directory, "untracked")), status: git("status", "--porcelain") });
   return { before: snapshot(), snapshot };
 }
+
+test("November 17: pause in a Claude-to-Codex cut, retarget, resume and retry after a kill", async () => {
+  const h = switchHarness("2026-11-17T06:10:50Z");
+  const lane = await runningStage(h);
+  const checkout = dirtyCheckout(lane.worktreeDir, lane.branch);
+  const rows = loadPipelines();
+  rows[0]!.baseRef = rows[0]!.lastPassedCommit = checkout.before.head.trim();
+  savePipelines(rows);
+  h.ports.exec = (await import("@/lib/workflows/provision")).realExec;
+  h.ports.allowedAccountIds = (_project, engine) => engine === "codex" ? ["fallback", "primary", "replacement"] : ["default"];
+  h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available",
+    account: switchAccount(engine as "claude" | "codex", request.requestedId ?? "fallback") });
+  h.ports.stopStageAgent = async () => ({ outcome: "unconfirmed", operationId: "pending-stop", detail: "waiting for stop" });
+  const select = { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.1-sol", effort: "high", applyNow: true } as const;
+  const operator = { kind: "operator" } as const;
+  expect((await patchPipeline(lane.id, { ...select, account: null }, h.ports, operator)).runtimeSwitch?.to.accountId).toBe("fallback");
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("cutting");
+  await patchPipeline(lane.id, { action: "pause" }, h.ports, operator);
+  const updated = await patchPipeline(lane.id, { ...select, account: "primary" }, h.ports, operator);
+  expect(updated.error).toBeUndefined();
+  expect(updated.pipeline?.state).toBe("paused");
+  expect(updated.pipeline?.stages[0]?.account).toBe("primary");
+  expect(updated.graphEdit?.effect).toBe("pending-next-attempt");
+  expect(updated.runtimeSwitch).toMatchObject({ to: { accountId: "fallback" }, retry: { target: { accountId: "primary", accountPinned: true } } });
+  const { tickPipelinesController } = await import("./controllerPass");
+  await tickPipelinesController([], h.ports);
+  expect(h.spawnCount()).toBe(1);
+  h.advance(24 * 60_000);
+  await patchPipeline(lane.id, { action: "resume" }, h.ports, operator);
+  expect(loadPipelines()[0]!.stateDetail).toContain("retry-stage");
+  expect((await patchPipeline(lane.id, { ...select, account: "replacement" }, h.ports, operator)).error).toBeUndefined();
+  h.ports.runtimeSwitchKilled = async () => true;
+  h.ports.stopStageAgent = async () => ({ outcome: "not-running" });
+  await tickPipelines([], h.ports);
+  const retry = await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 }, h.ports, operator);
+  expect(retry.error).toBeUndefined();
+  await tickPipelinesController([], h.ports); await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toMatchObject([
+    { n: 1, runtimeSwitches: [{ phase: "failed" }] },
+    { n: 2, effectiveRole: { engine: "codex" }, definition: { account: "replacement" } },
+  ]);
+  expect(h.spawnCount()).toBe(2);
+  expect(loadPipelines()[0]).toMatchObject({ worktreeDir: lane.worktreeDir, branch: lane.branch, lastPassedCommit: checkout.before.head.trim() });
+  expect(h.spawnInputs[1]).toMatchObject({ cwd: lane.worktreeDir, requestedAccountId: "replacement" });
+  expect(checkout.snapshot()).toEqual(checkout.before);
+});
+
+test("November 17: killed Codex-to-Claude switch bounds cleanup and retry uses the current definition", async () => {
+  const h = switchHarness("2026-11-17T02:10:00Z");
+  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-only", promptScaffold: "Plan" });
+  h.ports.conversationGeneration = undefined;
+  const lane = await runningStage(h);
+  const rows = loadPipelines();
+  rows[0]!.runs[0]!.attempts[0]!.usageLimitedAccounts = [{ accountId: "replacement", resetsAt: h.wallClock() / 1000 + 3_600 }];
+  savePipelines(rows);
+  h.ports.allowedAccountIds = (_project, engine) => engine === "codex" ? ["default"] : ["old", "replacement"];
+  const operator = { kind: "operator" } as const;
+  const request = { action: "override-stage", stageId: "plan", engine: "claude", model: "opus", effort: "high" } as const;
+  expect((await patchPipeline(lane.id, { ...request, account: "old", applyNow: true }, h.ports, operator)).error).toBeUndefined();
+  h.ports.runtimeSwitchKilled = async () => true;
+  const { drainRuntimeSwitches } = await import("./engine");
+  await drainRuntimeSwitches(h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain("stopped by kill");
+  const retry = { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 } as const;
+  expect((await patchPipeline(lane.id, retry, h.ports, operator)).error).toBeUndefined();
+  let retirementReads = 0;
+  h.ports.retireRuntimeSwitch = async () => { retirementReads++; return "old host recovery reservation is still accepted"; };
+  await drainRuntimeSwitches(h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain("cleanup pending");
+  h.advance(10 * 60_000);
+  h.ports.structuredDeliveryPublication = () => "rebinding";
+  const restarted = await import(`./engine?nov17-cleanup-deadline=${h.wallClock()}`) as typeof import("./engine");
+  await restarted.drainRuntimeSwitches(h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("cleanup timed out") });
+  const readsAtDeadline = retirementReads;
+  await restarted.drainRuntimeSwitches(h.ports);
+  expect(retirementReads).toBe(readsAtDeadline);
+  expect(h.spawnCount()).toBe(1);
+
+  h.ports.structuredDeliveryPublication = () => "ready";
+  h.ports.retireRuntimeSwitch = async () => null;
+  h.ports.allowedAccountIds = (_project, engine) => engine === "codex" ? ["default"] : ["replacement"];
+  expect((await restarted.patchPipeline(lane.id, { ...request, model: "sonnet", account: "replacement" }, h.ports, operator)).error).toBeUndefined();
+  expect((await restarted.patchPipeline(lane.id, retry, h.ports, operator)).error).toBeUndefined();
+  await restarted.tickPipelines([], h.ports); await restarted.tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(2);
+  expect(h.spawnInputs[1]).toMatchObject({ cwd: lane.worktreeDir, requestedAccountId: "replacement", role: { engine: "claude", model: "sonnet" }, unavailableAccountIds: [] });
+});
+
+for (const edit of ["binding before cut", "binding during cut", "pin"] as const) test(`November 17: a pending handoff reports its fallback and reselects after a change to the ${edit}`, async () => {
+  const { selectProjectAccount } = await import("@/lib/accounts/projectSelection");
+  const h = switchHarness("2026-11-17T06:10:50Z");
+  const lane = await runningStage(h);
+  let primary = "old-primary";
+  let primaryUsage = 100;
+  h.ports.allowedAccountIds = (_project, engine) => engine === "codex" ? [primary, "fallback"] : ["default"];
+  h.ports.fallbackAccountIds = (_project, engine) => engine === "codex" ? ["fallback"] : [];
+  h.ports.resolveProjectSpawn = (engine, request) => {
+    const bindings = [primary, "fallback"].map(accountId => ({ engine: "codex" as const, project: "viewer", accountId,
+      createdAt: h.ports.now(), fallback: accountId === "fallback" }));
+    const selection = selectProjectAccount({ ...request, engine: "codex", bindings,
+      now: h.wallClock(),
+      observations: [{ engine: "codex", accountId: primary, authenticated: true, authCheckedAt: h.ports.now(),
+        observedAt: h.ports.now(), bootId: "fixture",
+        provenance: { source: "live", reason: null, staleSince: null },
+        limits: { session: { usedPercent: primaryUsage, resetsAt: h.wallClock() / 1000 + 3_600 },
+          weekly: null, plan: "pro", capturedAt: h.wallClock() / 1000 } }],
+      accounts: [{ id: primary, authPresent: true }, { id: "fallback", authPresent: true }] });
+    return selection.kind === "available"
+      ? { ...selection, account: switchAccount(engine as "claude" | "codex", selection.accountId!) } : selection;
+  };
+  const select = { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.1-sol", effort: "high", account: null, applyNow: true } as const;
+  const result = await patchPipeline(lane.id, select, h.ports, { kind: "operator" });
+  expect(result.runtimeSwitch?.to.accountId).toBe("fallback");
+  expect(result.graphEdit?.summary).toMatch(/fallback.*primary/i);
+  expect(result.runtimeSwitch?.to.fallbackReason).toContain("no allowed primary");
+  if (edit === "pin") {
+    const pinned = await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", account: primary }, h.ports, { kind: "operator" });
+    expect(pinned.error).toBeUndefined();
+  } else if (edit === "binding during cut") {
+    const cutEntered = Promise.withResolvers<void>();
+    const cutReleased = Promise.withResolvers<void>();
+    h.ports.stopStageAgent = async () => {
+      cutEntered.resolve();
+      await cutReleased.promise;
+      return { outcome: "not-running" };
+    };
+    const cutting = tickPipelines([], h.ports);
+    await cutEntered.promise;
+    primary = "new-primary"; primaryUsage = 0;
+    cutReleased.resolve();
+    await cutting;
+    expect(h.spawnCount()).toBe(1);
+  } else {
+    primary = "new-primary"; primaryUsage = 0;
+  }
+  if (edit === "pin") primaryUsage = 0;
+  await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(2);
+  expect(h.spawnInputs[1]?.requestedAccountId).toBe(primary);
+  const records = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches;
+  expect(records).toMatchObject([{ phase: "committed", to: { accountId: primary, accountPinned: edit === "pin" } }]);
+  expect(records?.[0]?.to.fallbackReason).toBeUndefined();
+});
+
+test("November 17: an unavailable target after a cut settles cleanup and can be retried after recovery", async () => {
+  const h = switchHarness();
+  const chosen = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high", account: "target" });
+  expect(chosen.error).toBeUndefined();
+  h.ports.stopStageAgent = async () => ({ outcome: "unconfirmed", operationId: "pending-stop", detail: "waiting for stop" });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches?.[0]?.phase).toBe("cutting");
+  const { drainRuntimeSwitches } = await import("./engine");
+  h.advance(10 * 60_000);
+  await drainRuntimeSwitches(h.ports);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  h.ports.stopStageAgent = async () => ({ outcome: "not-running" });
+  h.ports.engineReadiness = engine => engine === "codex" ? "signed-out" : "connected";
+  const retry = { action: "retry-stage", expectedStageId: "plan", expectedAttempt: 1 } as const;
+  expect((await patchPipeline(chosen.pipeline!.id, retry, h.ports)).error).toBeUndefined();
+  await drainRuntimeSwitches(h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toMatch(/cleanup complete.*target engine/i);
+  expect(h.spawnCount()).toBe(1);
+  h.ports.engineReadiness = () => "connected";
+  expect((await patchPipeline(chosen.pipeline!.id, retry, h.ports)).error).toBeUndefined();
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(h.spawnCount()).toBe(2);
+  expect(h.spawnInputs[1]).toMatchObject({ requestedAccountId: "target", cwd: chosen.pipeline!.worktreeDir });
+});
 
 for (const engine of ["claude", "codex"] as const) for (const source of ["dead", "absent", "limited-idle", "limited-dead", "limited-unknown-reset"] as const) {
   for (const parked of [false, true]) test(`fresh runtime attempt preserves the dirty checkout: ${engine}, ${source}, parked=${parked}`, async () => {
@@ -366,7 +536,10 @@ for (const operatorKill of [false, true]) test(`automatic terminal reap preserve
   const pipeline = await runningStage(h);
   const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, `retry-reap-${operatorKill}.sqlite`), { structuredHosts: true, now: h.wallClock });
   const sessionKey = { engine: "claude" as const, sessionId: "retry-reap-session" };
-  const client = { effectBatch: async (kinds, cursor) => journal.effectBatch(100, kinds, cursor), operationStatus: async id => journal.operationResult(id) } as import("@/lib/runtime/client").RuntimeHostClient;
+  const client = { effectBatch: async (kinds, cursor, options) => {
+    expect(options?.conversationId).toBe(STAGE_CONVERSATION);
+    return journal.effectBatch(100, kinds, cursor, options?.conversationId);
+  }, operationStatus: async id => journal.operationResult(id) } as import("@/lib/runtime/client").RuntimeHostClient;
   let resident = true;
   let cleanupPending = true;
   let reaps = 0;

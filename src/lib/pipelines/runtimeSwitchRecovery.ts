@@ -1,4 +1,4 @@
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryKeysMatchingBounded, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import type { AgentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { structuredRecoveryPending } from "@/lib/runtime/structuredRecovery";
@@ -13,7 +13,7 @@ export async function retireRuntimeSwitchProducers(record: PipelineRuntimeSwitch
   const id = record.from.conversationId as ViewerConversationId;
   if (structuredRecoveryPending(id)) return "old conversation host recovery is still settling";
   const conversation = registry.conversation(id);
-  if (conversation) {
+  if (conversation && record.mode === "fork" && !record.inPlace) {
     const key = switchOperationKey(record, "reconfigure");
     const result = await registry.deliveryWrite({ label: "delivery.reconfigure", operationId: key },
       () => registry.withdrawConversationReconfigure(id, key));
@@ -26,18 +26,19 @@ export async function retireRuntimeSwitchProducers(record: PipelineRuntimeSwitch
         if (!cancelled.acquired) return "old migration cancellation awaits the registry writer";
       } else return "old reconfigure executor is still settling";
     }
-    const migration = registry.conversation(id)?.migration;
-    if (migration && !["committed", "rolled-back", "failed-recoverable", "failed-terminal"].includes(migration.phase)) {
-      return `old migration is still ${migration.phase}`;
-    }
+  }
+  const migration = registry.conversation(id)?.migration;
+  if (migration && !["committed", "rolled-back", "failed-recoverable", "failed-terminal"].includes(migration.phase)) {
+    return `old migration is still ${migration.phase}`;
   }
   const snapshot = registry.readOnlySnapshot();
-  const cleanup = Object.values(snapshot.pendingSuccessorCleanups).find(item => item.conversationId === id);
+  const ids = [id, ...(record.launch?.conversationId ? [record.launch.conversationId] : [])];
+  const [cleanupKey] = registryKeysMatchingBounded(snapshot, "pendingSuccessorCleanups", [{ field: "conversationId", value: ids }], 1);
+  const cleanup = cleanupKey ? snapshot.pendingSuccessorCleanups[cleanupKey] : null;
   if (cleanup) return `old migration successor cleanup is pending${cleanup.lastError ? `: ${cleanup.lastError}` : ""}`;
   if (record.launch?.conversationId && structuredRecoveryPending(record.launch.conversationId)) return "old successor recovery is still settling";
-  const pending = registryRowsMatching(snapshot, "receipts", "conversationId", [id, ...(record.launch?.conversationId ? [record.launch.conversationId] : [])]).find(receipt =>
-    [id, record.launch?.conversationId].includes(receipt.conversationId)
-    && receipt.purpose === "resume-successor" && !["completed", "failed", "conflicted"].includes(receipt.state));
+  const pending = registryRowsMatching(snapshot, "receipts", "conversationId", ids).find(receipt =>
+    receipt.purpose === "resume-successor" && !["completed", "failed", "conflicted"].includes(receipt.state));
   if (pending) return `old host recovery reservation is still ${pending.state}`;
   return null;
 }

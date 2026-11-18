@@ -382,6 +382,8 @@ export type PipelineRuntimeSeat = {
   engine: FlowEngine; model: string | null; effort: string | null;
   serviceTier: string | null; accountId: string | null;
 };
+export type PipelineRuntimeSwitchTarget = PipelineRuntimeSeat & { accountPinned: boolean; fallbackReason?: string };
+
 export type PipelineRuntimeSwitch = {
   id: string; seq: number; requestedAt: string; actor: PauseResumeActor;
   mode: "fork" | "handoff";
@@ -399,7 +401,7 @@ export type PipelineRuntimeSwitch = {
   /** The Turbo episode that asked for this switch, when it did. */
   turbo?: string;
   from: PipelineRuntimeSeat & { conversationId: string; launchId: string | null; sessionId: string | null; agentPath: string | null };
-  to: PipelineRuntimeSeat & { accountPinned: boolean };
+  to: PipelineRuntimeSwitchTarget;
   phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
   cutAt?: string; continuedAt?: string; settledAt?: string; outcome?: string;
   /** handoff only: written before the switch asks the runtime to stop its
@@ -408,7 +410,13 @@ export type PipelineRuntimeSwitch = {
   rollback?: boolean;
   reconfigureNoop?: boolean;
   /** Withdraws this attempt's execution authority before any teardown. */
-  retry?: { requestedAt: string; reason: string; completedAt?: string; pendingReason?: string; operatorStoppedAt?: string };
+  retry?: {
+    requestedAt: string; reason: string; completedAt?: string; pendingReason?: string; operatorStoppedAt?: string;
+    /** The old attempt stays fenced. Only an explicit retry opens another cleanup window. */
+    blockedAt?: string;
+    /** A replacement selection never rewrites the seat bound to an issued operation key. */
+    target?: PipelineRuntimeSwitchTarget;
+  };
   continuationKey?: string;
   continuationDispatch?: { key: string; at: string };
   launch?: { clientAttemptId: string; launchId: string | null; conversationId: string | null };
