@@ -123,6 +123,30 @@ test("a mutation at the second worker close is caught by the final inventory", a
   expect(changed).toBe(true);
 });
 
+test("every last-child-close mutation rejects without returning a digest", async () => {
+  const outcomes: boolean[] = [];
+  for (let trial = 0; trial < 40; trial++) {
+    const root = fixture();
+    let workers = 0, changed = false;
+    const start = (command: string, args: string[], options: SpawnOptions) => {
+      const child = spawn(command, args, options);
+      if (++workers === 2) child.once("close", () => {
+        changed = true;
+        fs.writeFileSync(join(root, "node_modules/a"), "foreign after last close");
+      });
+      return child;
+    };
+    let rejected = false;
+    try { await outputFingerprint(root, "node_modules/", undefined, start); }
+    catch { rejected = true; }
+    expect(workers).toBe(2);
+    expect(changed).toBe(true);
+    outcomes.push(rejected);
+  }
+  console.log(`last-child-close: ${outcomes.filter(Boolean).length}/${outcomes.length} rejected under Bun ${Bun.version}`);
+  expect(outcomes).toEqual(Array(40).fill(true));
+}, 120_000);
+
 test.skipIf(process.platform === "win32")("refuses an unsupported FIFO without opening it", async () => {
   const root = fixture();
   expect(spawnSync("mkfifo", [join(root, "node_modules/fifo")]).status).toBe(0);

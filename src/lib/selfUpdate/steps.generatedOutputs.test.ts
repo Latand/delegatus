@@ -4,7 +4,7 @@ import * as fsPromises from "node:fs/promises";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { prepareExistingRelease, realPorts } from "./steps";
+import { prepareExistingRelease, realPorts, UpdateRunner } from "./steps";
 import { runGit } from "./git";
 import { ReleasePointer } from "./release";
 
@@ -21,7 +21,7 @@ function fixture() {
   git(["init", "-q", "-b", "main"]);
   fs.writeFileSync(join(root, ".gitignore"), "node_modules/\n.next/\n");
   git(["add", ".gitignore"]); git(["commit", "-qm", "fixture"]);
-  const sha = git(["rev-parse", "HEAD"]), release = join(root, "release");
+  const sha = git(["rev-parse", "HEAD"]), release = join(root, sha.slice(0, 12));
   git(["worktree", "add", "--detach", release, sha]);
   const admin = git(["rev-parse", "--absolute-git-dir"], release);
   const marker = join(admin, "delegatus-release-outputs.json");
@@ -43,6 +43,64 @@ function afterInventory(effect: () => void) {
     return child;
   }) as typeof childProcess.spawn);
 }
+
+test("failed real markBuilt preserves the serving pointer and never enters publication", async () => {
+  const h = fixture(), pointerFile = join(h.root, "pointer.json");
+  fs.writeFileSync(pointerFile, "previous pointer\n");
+  const pointer = new ReleasePointer(pointerFile, h.root);
+  let publications = 0;
+  const ports = realPorts(async (release, guard) => { publications++; await pointer.publish(release, guard); });
+  await ports.withGeneratedOutputs!(h.release, h.sha, async () => {
+    fs.mkdirSync(join(h.release, ".next/DELEGATUS_RELEASE_READY"), { recursive: true });
+    fs.writeFileSync(join(h.release, ".next/BUILD_ID"), "fixture");
+    return 0;
+  }, h.root);
+  const runner = new UpdateRunner({ checkout: h.root, remote: "fixture", branch: "main", bun: process.execPath,
+    logDir: join(h.root, "logs"), releasesDir: h.root, env: {} },
+  { ...ports, run: async () => 0, revParse: async () => h.sha, builtRevision: () => h.sha }, () => {});
+  await runner.start(h.sha);
+  expect(runner.state.state).toBe("failed");
+  expect(runner.state.steps.find(step => step.name === "ready")?.failure).toMatchObject({ kind: "error", text: expect.stringContaining("EISDIR") });
+  expect(publications).toBe(0);
+  expect(fs.readFileSync(pointerFile, "utf8")).toBe("previous pointer\n");
+});
+
+test("work rejection records partial outputs without entering the success consumer", async () => {
+  const h = fixture();
+  let consumed = false;
+  await expect(realPorts(() => {}).withGeneratedOutputs!(h.release, h.sha, async () => {
+    await h.generate(); throw new Error("work failed");
+  }, h.root, async () => { consumed = true; })).rejects.toThrow("work failed");
+  expect(consumed).toBe(false);
+  expect(fs.existsSync(h.marker)).toBe(true);
+  expect(await prepareExistingRelease(h.release, h.root)).toBeNull();
+});
+
+test("final cross-root mutation withdraws the receipt without a publication callback", async () => {
+  const h = fixture(), original = childProcess.spawn;
+  let nodeWorkers = 0, changed = false;
+  const intercept = spyOn(childProcess, "spawn").mockImplementation(((command: string, args: readonly string[] = [], options: childProcess.SpawnOptions = {}) => {
+    const child = original(command, args, options);
+    if (args.includes("--eval") && args.at(-1) === "node_modules/" && fs.existsSync(h.marker) && ++nodeWorkers === 4) {
+      child.once("close", () => {
+        changed = true;
+        fs.writeFileSync(join(h.release, ".next/asset.png"), "foreign after last validation");
+      });
+    }
+    return child;
+  }) as typeof childProcess.spawn);
+  try {
+    await expect(realPorts(() => {}).withGeneratedOutputs!(h.release, h.sha, async () => {
+      await h.generate();
+      fs.mkdirSync(join(h.release, ".next"));
+      fs.writeFileSync(join(h.release, ".next/asset.png"), "generated");
+      return 0;
+    }, h.root)).rejects.toThrow("changed");
+    expect(changed).toBe(true);
+    expect(nodeWorkers).toBe(4);
+    expect(fs.existsSync(h.marker)).toBe(false);
+  } finally { intercept.mockRestore(); }
+});
 
 test("the receipt writer's real output is accepted by a fresh process and checked again after a later edit", async () => {
   const h = fixture();
