@@ -3462,7 +3462,7 @@ async function gatherSeatTickInputWork(
   try {
     const release = readReleaseProject(canonical);
     for (const run of release.history) if (now - run.at <= policy.backlogAfterMs) releaseAlerts.push({ kind: "release-settled", id: `release-settled:${run.key}:${run.at}`, label: `Release ${run.outcome}; task ${run.taskId}, lane ${run.pipelineId}. Read its stage summaries for any product defect seen in the README pictures.` });
-    if (release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
+    if (release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A release blocker has persisted for 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
   } catch { /* The release controller journals store failures; other seat work still wakes. */ }
 
 

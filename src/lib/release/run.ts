@@ -186,9 +186,12 @@ export function productionReleaseController(ports: ReleasePorts): ReleaseControl
       const decision = await releaseState({ ...observed.policy, hold: row.hold?.reason ?? null, requested: !!row.request,
         settled: row.history.at(-1) ?? null });
       const now = ports.now();
+      // A version mismatch needs seat attention even below the next release's amount/gap thresholds.
+      const trackBlocker = decision.reason === "release-version-mismatch" || !!row.request
+        || decision.count >= observed.policy.minChanges && now - observed.policy.lastTag.at >= observed.policy.minGapHours * 3_600_000;
       mutateReleaseProject(project, current => ({ ...current, observation: { ...decision, at: now, lastTag: observed.policy.lastTag.name,
         nextEligibleAt: releaseGapStart(observed.policy.lastTag.at, row.history.at(-1)) + observed.policy.minGapHours * 3_600_000 },
-        blocked: decision.blocker && (!!row.request || decision.count >= observed.policy.minChanges && now - observed.policy.lastTag.at >= observed.policy.minGapHours * 3_600_000)
+        blocked: decision.blocker && trackBlocker
           ? current.blocked?.kind === decision.blocker ? current.blocked : { kind: decision.blocker, since: now, episode: `${decision.blocker}:${now}` } : null }));
       if (decision.state !== "due" || !decision.cut) return `release: ${decision.reason}`;
       const cut = decision.cut.revision;

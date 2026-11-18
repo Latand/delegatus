@@ -50,7 +50,7 @@ test("a frozen release cut replaces existing verifier and hook with current main
       : JSON.stringify({ state: "OPEN", headRefOid: cutSha, baseRefName: "main", mergeCommit: null }),
       registry: async () => null, now: () => 0, wait: async () => {}, provenance: () => true };
     expect((await verifyRelease("v1.1.0", cutSha, ports, "7")).errors.join("\n")).toContain("release PR is unmerged");
-    expect((await verifyRelease("v1.1.0", cutSha, ports)).errors.join("\n")).toContain("not on origin/main");
+    expect((await verifyRelease("v1.1.0", cutSha, ports)).errors).toEqual(["release preflight requires --pr with the merged release PR number"]);
 
     for (const relative of tools) expect(fs.readFileSync(path.join(cut, relative), "utf8")).toBe(current.get(relative)!);
     expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: cut, env, encoding: "utf8" }).trim())

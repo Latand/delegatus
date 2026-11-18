@@ -29,7 +29,7 @@ test("documentation, fixtures, tooling and release PRs do not trigger", async ()
 
 test.each([
   [1, { enabled: false }], [2, { tickEnabled: false }], [3, { mergeEnabled: false }],
-  [4, { live: true }], [4, { mainVersion: "1.1.0" }], [4, { registryHasTag: false }],
+  [4, { live: true }], [4, { registryHasTag: false }],
   [5, { checks: "red" }], [5, { checks: "pending" }],
   [6, { deployments: [{ revision: "bad", at: hour }, { revision: "one", at: 2 * hour }] }],
   [7, { hold: "incident" }], [8, { deployments: [] }],
@@ -37,6 +37,13 @@ test.each([
   [10, { tools: ["pdftocairo"] }], [10, { tools: ["Chrome"] }],
 ] as [number, Partial<ReleaseInput>][]) ("blocker %s refuses a launch", async (blocker, patch) => {
   expect((await releaseState({ ...ready(), ...patch })).blocker).toBe(blocker);
+});
+
+test.each([false, true])("an unowned version bump reports a version mismatch (previous tag published: %s)", async registryHasTag => {
+  const input = { ...ready(), mainVersion: "1.1.0", registryHasTag, requested: true };
+  expect(await releaseState(input)).toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
+  expect(await releaseState({ ...input, live: true })).toMatchObject({ state: "in-flight", reason: "release-in-flight" });
+  expect(await releaseState({ ...input, publishing: true })).toMatchObject({ state: registryHasTag ? "due" : "in-flight" });
 });
 
 test.each([
