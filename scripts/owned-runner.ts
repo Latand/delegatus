@@ -1,5 +1,5 @@
 import { ownGateSandboxes } from "./gateSandboxRecords";
-import { checkAttemptTmpBudget } from "./attempt-tmp-budget";
+import { checkAttemptTmpBudget, recordAttemptTmpAllocation } from "./attempt-tmp-budget";
 import { timedCommand, observeCommandExecution } from "../src/lib/recordedChecks/commandTiming";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -94,7 +94,7 @@ if (args[0] === "--namespace-guardian") {
     ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
   const parentAlive = () => !parent || (processIdentityStatus(parent) === "alive" && !procBackend.processExited(parent.pid));
   if (!parentAlive()) process.exit(137);
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));
+  const directory = recordAttemptTmpAllocation(fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-")));
   fs.chmodSync(directory, 0o700);
   const ledger = path.join(directory, "children.jsonl");
   fs.writeFileSync(ledger, "", { mode: 0o600 });
@@ -326,7 +326,7 @@ if (args[0] === "--namespace-guardian") {
   // The service checks both identities from the host PID namespace.
   const owner = sandbox ? cpuOwnerIdentity(process.pid) : captureProcessIdentity(process.pid);
   if (!owner.startIdentity || !owner.bootEpoch) throw new Error("owned runner has no verifiable start identity");
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));
+  const directory = recordAttemptTmpAllocation(fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-")));
   fs.chmodSync(directory, 0o700);
   const file = path.join(directory, "launch.json");
   let parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;

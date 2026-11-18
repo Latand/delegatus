@@ -11,7 +11,7 @@ import path from "node:path";
 import { machineHome } from "../../src/lib/runtime/cpuAdmission";
 import { envClass } from "./env-classes";
 import { LOAD_PROBE, localAdmission, parseLoad, saturationReason } from "./load";
-import { checkAttemptTmpBudget } from "../attempt-tmp-budget";
+import { checkAttemptTmpBudget, recordAttemptTmpAllocation } from "../attempt-tmp-budget";
 
 /** Any environment, process.env included; the project's ProcessEnv type requires NODE_ENV. */
 export type Env = Record<string, string | undefined>;
@@ -809,7 +809,7 @@ async function main(argv: string[]): Promise<number> {
   const saturated = saturationReason(parseLoad(String(load.stdout ?? "")), () => localAdmission(env));
   if (saturated) return here(saturated, "here");
 
-  const scratch = fs.mkdtempSync(path.join(env.TMPDIR && fs.existsSync(env.TMPDIR) ? env.TMPDIR : "/tmp", "gate-runner-"));
+  const scratch = recordAttemptTmpAllocation(fs.mkdtempSync(path.join(env.TMPDIR && fs.existsSync(env.TMPDIR) ? env.TMPDIR : "/tmp", "gate-runner-")), env);
   const id = randomBytes(6).toString("hex");
   let session: ChildProcess | null = null, uploaded = false, cancelled: NodeJS.Signals | null = null, phase: "prepare" | "run" | "outputs" = "prepare";
   let settle: ((code: number) => void) | null = null;

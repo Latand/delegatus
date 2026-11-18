@@ -10,6 +10,7 @@ import { recordWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenanc
 import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
 import { parseReport, testNameFilter, type TestRun, type TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
+import { recordAttemptTmpAllocation } from "./attempt-tmp-budget";
 import { isDeclaredRepository } from "../bin/forge-app-token.mjs";
 
 // A between-test error, a runner disagreement and a file that produced no
@@ -638,7 +639,7 @@ export class MergeBatch {
     this.identity(this.repo);
     git(this.repo, ["fetch", "origin", "main"]);
     const base = git(this.repo, ["rev-parse", "origin/main"]);
-    const root = mkdtempSync(join(dirname(this.stateFile), "merge-batch-"));
+    const root = recordAttemptTmpAllocation(mkdtempSync(join(dirname(this.stateFile), "merge-batch-")));
     const branch = `${MERGE_BATCH_BRANCH_PREFIX}${randomUUID()}`;
     const work = join(root, "checkout");
     git(this.repo, ["worktree", "add", "-b", branch, work, base]);
@@ -741,7 +742,7 @@ export class MergeBatch {
         : { code: 0, output: "" };
       args = [...args.slice(0, prefix), ...files];
     }
-    const stateDir = mkdtempSync(join("/var/tmp", "merge-gate-state-"));
+    const stateDir = recordAttemptTmpAllocation(mkdtempSync(join("/var/tmp", "merge-gate-state-")));
     const backups = new Map<string, Buffer | null>();
     const createdDirectories: string[] = [];
     try {
@@ -909,6 +910,7 @@ export class MergeBatch {
     git(state.work, ["worktree", "add", "--detach", work, state.base]);
     recordWorktreeProvenance(work, { creator: "merge-batch", id: state.branch });
     try {
+      recordAttemptTmpAllocation(work);
       if (removed) for (const row of state.rows) {
         if (row.status !== "clean" || removed.includes(row.number)) continue;
         try { git(work, ["cherry-pick", row.commit], undefined, { ...process.env, LLV_SKIP_HOOKS: "1" }); }
@@ -1004,7 +1006,7 @@ export class MergeBatch {
    * patch changes retain the original detector and its existing stop rules. */
   private mainContractDetector(state: RunState, base: string, reviewed: string, main: string | undefined): string | undefined {
     if (main === undefined || main === base) return undefined;
-    const root = mkdtempSync(join(dirname(this.stateFile), "contract-detector-"));
+    const root = recordAttemptTmpAllocation(mkdtempSync(join(dirname(this.stateFile), "contract-detector-")));
     const current = join(root, "current"), next = join(root, "next"), ancestor = join(root, "base");
     const patch = (before: string, after: string) => {
       writeFileSync(current, Buffer.from(before, "base64"));
@@ -1212,11 +1214,12 @@ export class MergeBatch {
 
   private async trustedPrivacy(state: RunState, args: string[], candidate = state.work, base = state.base): Promise<CommandResult> {
     const trustedWork = join(dirname(this.stateFile), `privacy-main-${randomUUID()}`);
-    const stateDir = mkdtempSync(join("/var/tmp", "merge-privacy-state-"));
+    const stateDir = recordAttemptTmpAllocation(mkdtempSync(join("/var/tmp", "merge-privacy-state-")));
     let worktreeAdded = false;
     try {
       git(state.work, ["worktree", "add", "--detach", trustedWork, base]);
       worktreeAdded = true;
+      recordAttemptTmpAllocation(trustedWork);
       recordWorktreeProvenance(trustedWork, { creator: "merge-batch", id: state.branch });
       const modules = join(this.repo, "node_modules");
       if (existsSync(modules)) symlinkSync(modules, join(trustedWork, "node_modules"), "dir");
@@ -1479,7 +1482,7 @@ export class MergeBatch {
     if (!state.resolving) {
       git(state.work, ["fetch", "origin", "main"]);
       const main = git(state.work, ["rev-parse", "origin/main"]);
-      const root = mkdtempSync(join(dirname(this.stateFile), "merge-resolution-"));
+      const root = recordAttemptTmpAllocation(mkdtempSync(join(dirname(this.stateFile), "merge-resolution-")));
       const work = join(root, "checkout");
       git(this.repo, ["worktree", "add", "--detach", work, row.head]);
       recordWorktreeProvenance(work, { creator: "merge-batch", id: state.branch });

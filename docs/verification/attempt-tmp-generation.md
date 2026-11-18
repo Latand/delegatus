@@ -105,6 +105,12 @@ installation twice, chmods a file in one copy, removes that copy without chmod,
 writes into and removes the other, and checks the source's bytes and modes.
 Hardlinked writable dependency trees are never created by these helpers.
 
+The unmanaged stage-dependency fallback installs with `--backend=copyfile`.
+Its regression installs one loopback-registry package into two subjects with
+separate HOME directories and a shared artifact cache. The second install
+needs no registry requests. Payloads have independent inodes; changing the
+first payload's bytes and mode preserves the second install and cached files.
+
 Borrowed dependency symlinks retain the existing read-only consumer contract.
 They do not create an operating-system isolation boundary: a process with the
 same Unix owner and full host access can explicitly chmod or write through the
@@ -113,6 +119,27 @@ that owner. Enforcing that stronger property needs a separate mount/identity
 boundary or private dependency installations per attempt. The tests above
 prove creation and removal safety, and private-copy independence; they do not
 claim protection against an unrestricted process mutating a borrowed link.
+
+## External gate allocations
+
+The attempt budget also measures gate sandboxes that production placement
+keeps under the OS temporary roots, outside the attempt's original `tmp`.
+`recordGateSandbox`, all five merge-batch temporary-directory allocation sites
+and its standalone test/privacy worktree paths append their canonical directory,
+device and inode to an attempt-owned journal.
+Every admission rereads that journal, validates surviving directory identities,
+and measures them together with the original tmp. Parent directories subsume
+nested allocations, and one `du` invocation counts shared inodes once. Removed
+directories no longer spend the budget; changed identities and invalid journals
+refuse admission. Cleanup remains with each allocation's existing owner.
+
+The production-placement regression exercises both preferred and fallback
+allocation through the existing allocator seam, mapping actual writes into
+fixture-owned scratch. It writes 3 MiB under twice-isolated HOME/TMPDIR, checks
+the warning threshold, then starts two independent owned runners under a
+1 MiB cap. Both refuse with exit 73 before their marker command runs. A batch
+regression checks dependency, privacy and other gate environments with nested
+4 MiB payloads, including allocation retirement after normal cleanup.
 
 ## Repeated measurement on identical source
 

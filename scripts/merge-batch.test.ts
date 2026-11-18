@@ -9,6 +9,7 @@ import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIden
 import { report, attributeBatchTests, compareBatchTests, fileFault, INCOMPLETE_FILE, GATE_SLOT, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner } from "./merge-batch";
 import type { TestRun, TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
+import { checkAttemptTmpBudget } from "./attempt-tmp-budget";
 import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
 import * as merger from "./merge-batch";
 import { bindMergerContract } from "../src/lib/pipelines/mergerContract.fixture";
@@ -16,6 +17,42 @@ import { extendPr, fixture, landingFixture, reviewedDetectorsGreen, roots, site,
 
 const recorded = (failures: TestSite[] = [], passed: TestSite[] = []): TestRun => ({
   failures, passed, completed: [...new Set([...failures, ...passed].map(test => test.file))], elapsedMs: 0,
+});
+
+test("batch gates charge external state, nested HOME and TMPDIR to the attempt", async () => {
+  const f = fixture(), attempt = join(f.root, "attempt");
+  mkdirSync(join(attempt, "tmp"), { recursive: true });
+  const { statSync } = await import("node:fs");
+  const stat = statSync(attempt);
+  const keys = ["LLV_ATTEMPT_TIMING_ROOT", "LLV_ATTEMPT_TIMING_ROOT_IDENTITY", "LLV_ATTEMPT_TMP_MAX_BYTES"] as const;
+  const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  Object.assign(process.env, { LLV_ATTEMPT_TIMING_ROOT: attempt, LLV_ATTEMPT_TIMING_ROOT_IDENTITY: `${stat.dev}:${stat.ino}`, LLV_ATTEMPT_TMP_MAX_BYTES: String(1024 ** 2) });
+  const checked: string[] = [];
+  try {
+    const head = f.addPr(12, "a.txt", "healthy");
+    const run: CommandRunner = async (_cwd, args, env) => {
+      if (env?.LLV_STATE_DIR) {
+        const nested = isolatedEnvironment(join(env.TMPDIR!, "nested"), env);
+        writeFileSync(join(nested.HOME!, "payload"), Buffer.alloc(2 * 1024 ** 2, 1));
+        writeFileSync(join(nested.TMPDIR!, "payload"), Buffer.alloc(2 * 1024 ** 2, 1));
+        expect(() => checkAttemptTmpBudget(nested)).toThrow("Refusing another check/export");
+        checked.push(args.join(" "));
+      }
+      return successfulCommand(args);
+    };
+    const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), run, f.gh);
+    await batch.build(`12@${head}`);
+    await batch.gate();
+    expect(checked.some(command => command.includes("prepare-stage-dependencies.ts"))).toBeTrue();
+    expect(checked.some(command => command.includes("privacy-publication-gate.ts"))).toBeTrue();
+    // Existing cleanup removes gate state; the batch's source tree remains
+    // charged until its owner removes it.
+    expect(checkAttemptTmpBudget({ ...process.env, LLV_ATTEMPT_TMP_MAX_BYTES: String(16 * 1024 ** 2) })).toBeLessThan(4 * 1024 ** 2);
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+    }
+  }
 });
 
 test("batch comparison permits pre-existing failures and judges new tests on the candidate", () => {

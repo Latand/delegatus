@@ -113,6 +113,8 @@ Never chmod through a dependency symlink or use recursive chmod on a borrowed
 installation. Private dependency copies must have owner-writable directories
 so their owner can remove them without repairing permissions first. Hardlinks
 share permission bits and are unsuitable for writable dependency fixtures.
+Private Bun installs use `--backend=copyfile` so writes and chmod cannot
+change another installation or the shared artifact cache.
 Keep the supplied `UV_CACHE_DIR` and `BUN_INSTALL_CACHE_DIR` when isolating
 HOME/XDG directories. They hold reusable package artifacts; never copy them
 into `review-uv-cache` or another attempt directory, or edit their contents
@@ -131,6 +133,9 @@ Gates and export helpers check the attempt's allocated tmp bytes against an
 warn; above the limit they refuse further checks/exports with measured bytes.
 Source checks also measure after creation and command completion. This is an
 admission guard: a running command can exceed it before the next measurement.
+Gate sandboxes outside the attempt's tmp are recorded with their device/inode
+in the attempt's allocation journal and included after nested HOME/TMPDIR
+isolation and process restarts. Existing owners still handle their cleanup.
 It never deletes another attempt or interrupts an existing consumer.
 
 For a manual privacy check, run

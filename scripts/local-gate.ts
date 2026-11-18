@@ -223,11 +223,11 @@ export function createGateSandbox(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   try {
-    return recordGateSandbox(create(path.join(gateTemporaryRoot(platform, env), "delegatus-local-gate-")));
+    return recordGateSandbox(create(path.join(gateTemporaryRoot(platform, env), "delegatus-local-gate-")), env);
   } catch (error) {
     if (env.NODE_ENV === "test" && env.TMPDIR) throw error;
     if (platform === "win32" || !["EROFS", "EACCES", "ENOENT"].includes((error as NodeJS.ErrnoException)?.code ?? "")) throw error;
-    return recordGateSandbox(create(path.join("/tmp", "delegatus-local-gate-")));
+    return recordGateSandbox(create(path.join("/tmp", "delegatus-local-gate-")), env);
   }
 }
 
