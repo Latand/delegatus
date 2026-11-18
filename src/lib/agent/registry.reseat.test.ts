@@ -736,6 +736,28 @@ test("repeat reseat clicks never mint a second successor operation", () => {
   });
 });
 
+test("a terminal turn observation re-arms a stopped credit-guard reseat without timestamp noise", () => {
+  const { store, id } = seededRegistry("off", registryFile());
+  const initial = store.conversation(id)!;
+  const source = initial.generations.at(-1)!;
+  store.upsert({ key: { engine: "codex", sessionId: source.id }, artifactPath: source.path,
+    cwd: source.launchProfile.cwd, accountId: source.accountId!, launchProfile: source.launchProfile,
+    status: "dead", host: null, structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null });
+  const first = store.requestConversationReseat(id, "healthy", undefined, undefined, true, "cut-id");
+  const intent = store.snapshot().migrationIntents[first.migration!.intentId]!;
+  store.setMigrationIntentState(intent.id, "stopped", intent.revision);
+  store.clearRolledBackConversationMigration(id, intent.id);
+  const repeated = store.requestConversationReseat(id, "healthy", undefined, undefined, true, "cut-id");
+  expect(repeated.migration).toBeNull();
+
+  store.reconcileConversations([{ ...observation(source.path, source.accountId!),
+    turn: { state: "idle", source: "lifecycle", terminalAt: "2026-11-18T00:00:00.000Z" },
+    observedAt: "2026-11-18T00:00:01.000Z" }]);
+  const rearmed = store.requestConversationReseat(id, "healthy", undefined, undefined, true, "cut-id");
+  expect(rearmed.migration).toMatchObject({ targetId: "healthy", phase: "requested" });
+  expect(rearmed.migration!.intentId).not.toBe(intent.id);
+});
+
 test("a stale successor cannot commit through a same-revision retarget", () => {
   const { store, id } = seededRegistry("off", registryFile());
   const profile = store.conversation(id)!.generations.at(-1)!.launchProfile;

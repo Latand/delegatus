@@ -167,7 +167,14 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     const migrationSourceIndex = conversation.generations.findIndex(item => item.id === conversation.migration?.sourceGenerationId);
     // Each guard reseat starts at the latest generation. The cut and its
     // continuation identity still belong to the original interrupted turn.
-    if (moved && (!conversation.migration?.creditGuard || sourceIndex < 0 || migrationSourceIndex < sourceIndex)) {
+    const guardReseatIntent = conversation.creditGuardReseat
+      ? registry.migrationIntent(conversation.creditGuardReseat.intentId)
+      : undefined;
+    const retainedGuardLineage = guardReseatIntent?.scope === "conversation"
+      && guardReseatIntent.state === "stopped"
+      && guardReseatIntent.requestIds.some(request => request.startsWith(`reseat:${conversation.id}:`));
+    if (moved && !retainedGuardLineage
+      && (!conversation.migration?.creditGuard || sourceIndex < 0 || migrationSourceIndex < sourceIndex)) {
       await store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "another runtime selection moved the conversation" });
       continue;
     }

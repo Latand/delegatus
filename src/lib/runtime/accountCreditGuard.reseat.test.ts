@@ -165,6 +165,66 @@ test("a new generation can reseat again while the original cut remains owed", as
   } finally { select.mockRestore(); f.registry.close(); }
 });
 
+test("a failed onward guard reseat keeps the original cut owed after reaper cleanup", async () => {
+  const f = fixture(); const select = selection(f.root);
+  try {
+    await f.poll();
+    const first = f.registry.conversation(f.conversation.id)!.migration!;
+    f.registry.transitionConversationMigration(f.conversation.id, first.revision, ["waiting-turn", "requested"], { phase: "preparing" });
+    f.registry.transitionConversationMigration(f.conversation.id, first.revision, ["preparing"], { phase: "successor-starting" });
+    const pathB = path.join(f.root, "successor-b.jsonl"); fs.writeFileSync(pathB, "");
+    const receiptB = { operationId: first.operationId, nativeId: "successor-b", path: pathB, continuityPaths: [pathB],
+      historyHash: "fixture-b", host: { kind: "codex-app-server" as const, identity: "fixture-b", epoch: 1, verifiedAt: new Date().toISOString() } };
+    f.registry.persistMigrationProviderReceipt(f.conversation.id, first.revision, first.operationId, receiptB);
+    f.registry.commitSuccessor(f.conversation.id, { id: receiptB.nativeId, path: pathB, accountId: "account-b",
+      historyHash: receiptB.historyHash, host: receiptB.host }, first.revision, first.operationId, receiptB);
+
+    observe(f.registry, "account-b", 99);
+    select.mockReturnValue({ kind: "available", account: { engine: "codex", accountId: "account-c", kind: "managed",
+      home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
+    await f.poll();
+    const onward = f.registry.conversation(f.conversation.id)!.migration!;
+    expect(onward).toMatchObject({ creditGuard: true, sourceGenerationId: "successor-b", targetId: "account-c" });
+    await stopAndClean(f);
+    const before = Object.keys(f.registry.readOnlySnapshot().migrationIntents);
+    f.registry.close();
+    const reopened = new AgentRegistry(f.registry.filename, () => false, undefined, { sqliteMode: f.mode });
+    try {
+      await enforceAccountCreditGuard(reopened, [], async () => { throw new Error("unexpected host stop"); },
+        async () => false, async () => null);
+      expect(reopened.conversation(f.conversation.id)?.migration).toBeNull();
+      expect(Object.keys(reopened.readOnlySnapshot().migrationIntents)).toEqual(before);
+      expect(interruptionObligationStore(interruptionObligationDirectory(reopened.filename)).list())
+        .toMatchObject([{ id: f.cut.id, state: "owed", attempts: 0 }]);
+      observe(reopened, "account-b", 1);
+      select.mockReturnValue({ kind: "available", account: { engine: "codex", accountId: "account-c", kind: "managed",
+        home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
+      await enforceAccountCreditGuard(reopened, [], async () => true, async () => false, async () => null);
+      let recovery = reopened.conversation(f.conversation.id)!.migration!;
+      expect(recovery).toMatchObject({ creditGuard: true, targetId: "account-c" });
+      recovery = reopened.transitionConversationMigration(f.conversation.id, recovery.revision,
+        ["waiting-turn", "requested"], { phase: "preparing" }).migration!;
+      recovery = reopened.transitionConversationMigration(f.conversation.id, recovery.revision,
+        ["preparing"], { phase: "successor-starting" }).migration!;
+      const pathC = path.join(f.root, "successor-c.jsonl"); fs.writeFileSync(pathC, "");
+      const receiptC = { operationId: recovery.operationId, nativeId: "successor-c", path: pathC, continuityPaths: [pathC],
+        historyHash: "fixture-c", host: { kind: "codex-app-server" as const, identity: "fixture-c", epoch: 1, verifiedAt: new Date().toISOString() } };
+      reopened.persistMigrationProviderReceipt(f.conversation.id, recovery.revision, recovery.operationId, receiptC);
+      reopened.commitSuccessor(f.conversation.id, { id: receiptC.nativeId, path: pathC, accountId: "account-c",
+        historyHash: receiptC.historyHash, host: receiptC.host }, recovery.revision, recovery.operationId, receiptC);
+      observe(reopened, "account-c", 1);
+      await enforceAccountCreditGuard(reopened, [], async () => true, async () => false, async () => null);
+      const queued = Object.values(reopened.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries)
+        .filter(delivery => delivery.clientMessageId === f.cut.id);
+      expect(queued).toHaveLength(1);
+      reopened.recordDeliveryOutcome(queued[0]!.id, "delivered");
+      await enforceAccountCreditGuard(reopened, [], async () => true, async () => false, async () => null);
+      expect(interruptionObligationStore(interruptionObligationDirectory(reopened.filename)).list())
+        .toMatchObject([{ id: f.cut.id, state: "delivered", attempts: 1 }]);
+    } finally { reopened.close(); }
+  } finally { select.mockRestore(); }
+});
+
 test("new work on a revived host rearms recovery even when the stop returns the same generation to dead", async () => {
   const f = fixture(); const select = selection(f.root);
   try {

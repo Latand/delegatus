@@ -1628,6 +1628,7 @@ function creditGuardReseatEvidence(file: RegistryFile, conversation: RegistryCon
   const entry = file.entries[sessionKeyId({ engine: conversation.engine, sessionId: source.id })];
   return crypto.createHash("sha256").update(JSON.stringify([conversation.id, source.id, source.path, source.accountId,
     source.launchProfile.model, source.launchProfile.effort, source.launchProfile.fast, source.launchProfile.serviceTier ?? null,
+    [conversation.turn.state, conversation.turn.source, conversation.turn.terminalAt],
     targetId, entry?.claimEpoch ?? null, entry?.structuredHost?.writerClaimEpoch ?? null,
     conversation.deliveryAdmissionSeq ?? 0, cutId ?? null, quota(source.accountId), quota(targetId)])).digest("hex");
 }
@@ -11047,6 +11048,10 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(file.engineRouting[engine]));
   }
 
+  migrationIntent(id: string): MigrationIntent | null {
+    return this.readKeyed(file => clone(file.migrationIntents[id] ?? null));
+  }
+
   /** Both compatibility routes from one read transaction. */
   engineRoutingSnapshot(): RegistryFile["engineRouting"] {
     return this.readKeyed(file => clone(file.engineRouting));
@@ -11500,6 +11505,7 @@ export class AgentRegistry {
       if (guardEvidence && previousGuard?.evidence === guardEvidence
         && (!sourceEntry || sourceEntry.status === "dead" || sourceEntry.status === "unhosted")
         && file.migrationIntents[previousGuard.intentId]?.state === "stopped") return clone(conversation);
+      if (!guardEvidence && previousGuard) delete conversation.creditGuardReseat;
       /* A pane's profile and reseat commit together. A refused writer or a
          failed reseat leaves both untouched, with no separate rollback. */
       if (profile) writeConversationLaunchProfile(file, conversation, source, profile);
@@ -11864,6 +11870,7 @@ export class AgentRegistry {
       };
       settleStopOptOuts(file, conversation);
       conversation.generations.push(generation);
+      if (!migration.creditGuard) delete conversation.creditGuardReseat;
       conversation.continuityPaths = conversation.continuityPaths.filter((pathname) => pathname !== generation.path);
       const committedContinuityPaths = new Set(migration.pendingContinuityPaths);
       conversation.abandonedContinuityPaths = conversation.abandonedContinuityPaths.filter(
