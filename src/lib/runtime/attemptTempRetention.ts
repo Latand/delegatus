@@ -653,7 +653,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const rootWatches = (directory: string) => [...(namespaceProtection ? [] : [directory]), ...attemptPathWatches([directory], false)];
       const mutationDirectories = (directory: string) => [...rootWatches(directory), ...authorityWatches(),
         ...(dispatchEvidence?.mutationDirectories ?? []), ...inventory.mutationDirectories()];
-      const processInputsClear = (directory: string) => dispatchState === undefined || !finished(dispatchState)
+      const processInputsClear = (directory: string) => !pressure && (dispatchState === undefined || !finished(dispatchState))
         || attemptProcessReferencesClear(owner.directory, directory, options.scan([owner.directory, directory]));
       const dispatchEligible = (directory: string) => attemptMutationCurrent(
         mutationDirectories(directory),
