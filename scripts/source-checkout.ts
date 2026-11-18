@@ -36,7 +36,8 @@ export function currentCheckout(source: string, target: string): void {
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined; throw error; }
   };
   for (const file of previous) {
-    if (!wanted.has(file) || !inputStat(path.join(source, file)))
+    const stat = inputStat(path.join(source, file));
+    if (!wanted.has(file) || !stat || stat.isDirectory())
       fs.rmSync(path.join(target, file), { recursive: true, force: true });
   }
   // Compare bytes instead of trusting Git's stat cache or assume-unchanged

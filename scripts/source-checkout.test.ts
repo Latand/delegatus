@@ -89,13 +89,13 @@ test("comparison refs retain upstream main when the source's local main differs"
   expect(git("rev-parse", "HEAD")).toBe(f.git("rev-parse", "HEAD"));
 });
 
-test.each([false, true])("runtime export accepts an ordinary file-to-directory transition (staged=%s)", staged => {
+test.each(["unstaged", "staged"])("runtime export accepts an ordinary file-to-directory transition (%s)", state => {
   const f = fixture();
   fs.rmSync(path.join(f.source, "input"));
   fs.mkdirSync(path.join(f.source, "input/deep"), { recursive: true });
   fs.writeFileSync(path.join(f.source, "input/new.ts"), "current bytes");
   fs.writeFileSync(path.join(f.source, "input/deep/child.ts"), "nested bytes");
-  if (staged) f.git("add", "-A");
+  if (state === "staged") f.git("add", "-A");
   const status = f.git("status", "--porcelain"), index = fs.readFileSync(path.join(f.source, ".git/index"));
   const tree = createRuntimeCheckTree(f.source, f.root);
   expect(fs.readFileSync(path.join(tree, "input/new.ts"), "utf8")).toBe("current bytes");
@@ -104,17 +104,31 @@ test.each([false, true])("runtime export accepts an ordinary file-to-directory t
   expect(fs.readFileSync(path.join(f.source, ".git/index"))).toEqual(index);
 });
 
-test.each([false, true])("runtime export accepts directory-to-file transitions (staged=%s)", staged => {
+test.each(["unstaged", "staged"])("runtime export accepts directory-to-file transitions (%s)", state => {
   const f = fixture();
   fs.mkdirSync(path.join(f.source, "folder"));
   fs.writeFileSync(path.join(f.source, "folder/child"), "old");
   f.git("add", "."); f.git("commit", "-qm", "directory fixture");
   fs.rmSync(path.join(f.source, "folder"), { recursive: true });
   fs.writeFileSync(path.join(f.source, "folder"), "replacement");
-  if (staged) f.git("add", "-A");
+  if (state === "staged") f.git("add", "-A");
   const status = f.git("status", "--porcelain"), index = fs.readFileSync(path.join(f.source, ".git/index"));
   const tree = createRuntimeCheckTree(f.source, f.root);
   expect(fs.readFileSync(path.join(tree, "folder"), "utf8")).toBe("replacement");
+  expect(f.git("status", "--porcelain")).toBe(status);
+  expect(fs.readFileSync(path.join(f.source, ".git/index"))).toEqual(index);
+});
+
+test.each(["empty", "ignored children"])("replacing a file with a directory retains no obsolete committed file (%s)", kind => {
+  const f = fixture();
+  fs.unlinkSync(path.join(f.source, "input")); fs.mkdirSync(path.join(f.source, "input"));
+  if (kind === "ignored children") {
+    fs.writeFileSync(path.join(f.source, "input/generated"), "ignored");
+    fs.appendFileSync(path.join(f.source, ".gitignore"), "input/generated\n");
+  }
+  const status = f.git("status", "--porcelain"), index = fs.readFileSync(path.join(f.source, ".git/index"));
+  const tree = createRuntimeCheckTree(f.source, f.root);
+  expect(fs.existsSync(path.join(tree, "input"))).toBeFalse();
   expect(f.git("status", "--porcelain")).toBe(status);
   expect(fs.readFileSync(path.join(f.source, ".git/index"))).toEqual(index);
 });
