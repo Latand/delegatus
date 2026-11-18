@@ -1,16 +1,42 @@
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { assertOperationLease, awaitLeasedOperation, currentOperationLease } from "@/lib/operationLease";
+import { assertOperationLease, awaitLeasedOperation, currentOperationLease, OperationLease } from "@/lib/operationLease";
 import type { FileEntry } from "@/lib/types";
 import { admitQueuedPipelineCreations } from "./creationQueue";
 import { tickPipelines, defaultPipelinePorts, type PipelinePorts } from "./engine";
 import { pipelineControllerJobLanes, reportProvisioningPhase, takePipelineControllerJobChanges } from "./controllerJobs";
 import { withControllerPipelineScope } from "./controllerScope";
+import { requestPipelineTick } from "./controllerSignal";
 import { controllerAttemptWindow, controllerPipelineVersion, deferPipelineControllerWork, acknowledgePipelineControllerWork, findControllerPipeline, recordPipelineControllerSelection, selectPipelineControllerWork, pipelineControllerReady, PipelineStoreError } from "./store";
 
 export const PIPELINE_CONTROLLER_ATTEMPTS_PER_LANE = 16;
 const owner = globalThis as typeof globalThis & { __llvPipelineControllerPass?: Promise<{ changed: boolean; pendingWork: number; readyWork: boolean }> };
+
+const OPERATOR_STOP_READ_MS = 500;
+
+function withBoundedOperatorStopRead(ports: PipelinePorts): PipelinePorts {
+  const read = ports.conversationOperatorStopped;
+  if (!read) return ports;
+  return { ...ports, async conversationOperatorStopped(...args) {
+    // A suspended lane retains its stop fence and retry. A stalled read must
+    // release the controller so other lanes can provision and launch.
+    const parent = currentOperationLease()?.abort.signal;
+    parent?.throwIfAborted();
+    const readLease = new OperationLease();
+    const cancel = () => readLease.abort.abort(parent?.reason);
+    parent?.addEventListener("abort", cancel, { once: true });
+    const timeout = setTimeout(() => readLease.abort.abort(
+      new Error(`operator stop evidence read timed out after ${OPERATOR_STOP_READ_MS} ms`),
+    ), OPERATOR_STOP_READ_MS);
+    try {
+      return await readLease.run(() => awaitLeasedOperation("pipelines.operator-stop-evidence", () => read.apply(ports, args)));
+    } finally {
+      clearTimeout(timeout);
+      parent?.removeEventListener("abort", cancel);
+    }
+  } };
+}
 
 /** One bounded phase. Durable row changes and deadlines lead; the persisted
  * fair cursor also observes host/account events without a pipeline write. */
@@ -26,7 +52,7 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
     const work = await awaitLeasedOperation("selectPipelineControllerWork", () => selectPipelineControllerWork(now, pipelineControllerJobLanes()));
     if (!work.length) return { changed: jobChanged || admitted.length > 0, pendingWork: pipelineControllerJobLanes().length, readyWork: false };
     let changed = jobChanged || admitted.length > 0;
-    const ports = suppliedPorts ?? defaultPipelinePorts();
+    const ports = withBoundedOperatorStopRead(suppliedPorts ?? defaultPipelinePorts());
     for (const item of work) {
       assertOperationLease();
       try {
@@ -49,6 +75,12 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
         changed ||= result.changed;
         if (result.retry) { await awaitLeasedOperation("deferPipelineControllerWork", () => deferPipelineControllerWork(item)); continue; }
         const fresh = await awaitLeasedOperation("findControllerPipeline", () => findControllerPipeline(item.row_key));
+        const stageId = fresh?.cursor?.stageId;
+        const attempt = fresh?.runs.find(run => run.stageId === stageId)?.attempts.at(-1);
+        // A reservation added during this pass has no entry in its selected
+        // attempt window. Give the normal activation executor a fresh pass.
+        if (attempt?.activation?.phase === "reserved"
+          && !selected.has(JSON.stringify([item.row_key, stageId, attempt.n]))) requestPipelineTick();
         const firstStart = fresh?.runs[0]?.attempts[0]?.startedAt;
         if (firstStart && !lane?.runs[0]?.attempts[0]?.startedAt) {
           reportProvisioningPhase(item.row_key, { phase: "first-attempt" }, firstStart);

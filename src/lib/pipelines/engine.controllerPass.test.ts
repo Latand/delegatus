@@ -1,5 +1,6 @@
 import { expect, test, harness, create, createPipelineFromRequest, BUILD_ONLY, loadPipelines, savePipelines, tickPipelines, pipelineIdentity, publishHarness, Database, path, fs, spawn, realWorktreeLane, stopFixtureProcess, defaultPipelinePorts, crypto, registerPipelineTick, reserveActivationOnly, engineModule } from "./engine.fixture";
 import { FlowPipelineController, type FlowPipelineControllerHeartbeat } from "./controller";
+import { requestPipelineTick } from "./controllerSignal";
 import { tickPipelinesController } from "./controllerPass";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
 import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
@@ -9,9 +10,9 @@ import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
 import { instanceCpuAdmissionFile, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import { withControllerPipelineScope } from "./controllerScope";
-import { CpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
+import { CpuAdmissionQueue, CPU_QUEUE_SPACING_MS } from "@/lib/runtime/cpuAdmission";
 import { DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
-import { OperationLeaseExpiredError } from "@/lib/operationLease";
+import { currentOperationLease, OperationLeaseExpiredError } from "@/lib/operationLease";
 
 async function committing(publication: "internal" | "remote-branch" = "internal") {
   const h = harness();
@@ -1505,6 +1506,155 @@ test.each([
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test.each([
+  ["direct", "pinned"], ["direct", "followed"], ["queued", "pinned"], ["queued", "followed"],
+] as const)("operator audit production-length deadline for cold provisioning: %s %s", async (admission, base) => {
+  const f = await realWorktreeLane("cold-provision-audit", BUILD_ONLY as never);
+  const h = f.h;
+  const old = loadPipelines()[0]!;
+  const attempt = old.runs[0]!.attempts[0]!;
+  const requestedAt = h.ports.now();
+  attempt.suspension = { reason: "account", detail: "suspended producer",
+    requestedAt, stoppedAt: requestedAt, retryRequestedAt: requestedAt };
+  savePipelines([old]);
+  const account = attempt.accountId!;
+  h.ports.conversationAgentActive = async id => id !== attempt.conversationId;
+  h.ports.paneAgentAlive = async pane => pane !== attempt.paneId;
+  h.ports.allowedAccountIds = () => [account];
+  h.ports.resolveProjectSpawn = engine => ({ kind: "available", account: { engine, accountId: account,
+    kind: "managed", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
+
+  const blocked = latch(), release = latch(), launched = latch();
+  let stalled = true, stopReads = 0, cancelledReads = 0, spawnedAt = 0, acceptedAt = 0;
+  h.ports.conversationOperatorStopped = async id => {
+    if (id !== attempt.conversationId) return false;
+    stopReads++;
+    if (!stalled) return false;
+    blocked.resolve();
+    const signal = currentOperationLease()?.abort.signal;
+    await new Promise<void>(resolve => {
+      const cancel = () => { cancelledReads++; resolve(); };
+      if (signal?.aborted) cancel();
+      else signal?.addEventListener("abort", cancel, { once: true });
+      void release.promise.then(() => {
+        signal?.removeEventListener("abort", cancel);
+        resolve();
+      });
+    });
+    return false;
+  };
+  const logs: string[] = [];
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const controller = new FlowPipelineController({
+    tickPipelines: entries => tickPipelinesController(entries, h.ports),
+    scan: async () => ({ files: [], complete: false }),
+    publishHeartbeat: () => {},
+    scheduleTimeout: (callback, delay) => {
+      const timer = setTimeout(() => { timers.delete(timer); callback(); }, delay);
+      timers.add(timer);
+      return timer;
+    },
+    clearTimeout: handle => {
+      const timer = handle as ReturnType<typeof setTimeout>;
+      clearTimeout(timer);
+      timers.delete(timer);
+    },
+    log: message => { logs.push(message); },
+  }, { phaseDeadlineMs: 15_000, maxPasses: 1 });
+  let wake: Promise<void> | undefined;
+  const unregister = registerPipelineTick(() => (wake = controller.tick()));
+  h.ports.scheduleTick = delay => { if (delay === 0) requestPipelineTick(); };
+  let cpuNow = Date.parse(requestedAt);
+  const queue = new CpuAdmissionQueue(path.join(f.root, "cold-cpu.sqlite"), () => cpuNow);
+  const cpuKeys = new Set<string>();
+  h.ports.cpuPressureHold = (key, priority) => {
+    if (key === undefined) throw new Error("missing stage CPU admission key");
+    cpuKeys.add(key);
+    const wait = queue.check(key, true, undefined, true, priority);
+    return wait ? { since: wait.since, avg10: 90, deferred: false, policy: DEFAULT_CPU_PRESSURE_POLICY, queue: wait } : null;
+  };
+  let child: ReturnType<typeof Bun.spawn<"ignore", "pipe", "pipe">> | undefined;
+  let tick: Promise<void> | undefined;
+  try {
+    const store = await import("./store");
+    const { StoreBusyBeforeAdmissionError } = await import("@/lib/state/fileTransaction");
+    const busy = admission === "queued" ? spyOn(store, "createPipelineWithDelivery").mockRejectedValueOnce(
+      new StoreBusyBeforeAdmissionError("fixture store busy before admission"),
+    ) : undefined;
+    const created = await createPipelineFromRequest({
+      task: "Cold lane beside a suspended stage", repoDir: f.repo, publication: "internal",
+      stages: BUILD_ONLY as never, ...(base === "pinned" ? { baseRef: f.base } : {}),
+    }, h.ports, { queueWhenBusy: true, creationRequest: { key: "cold-provision-audit", digest: base } })
+      .finally(() => busy?.mockRestore());
+    acceptedAt = performance.now();
+    const cold = created.pipeline!;
+    expect(cold.state).toBe("provisioning");
+    expect(Boolean(created.queued)).toBe(admission === "queued");
+    expect(fs.existsSync(cold.worktreeDir)).toBe(false);
+    const spawnAgent = h.ports.spawnAgent;
+    h.ports.spawnAgent = async (input, reserve) => {
+      const result = await spawnAgent(input, reserve);
+      if (input.cwd !== cold.worktreeDir) return result;
+      // The reservation must already be durable before the child can execute.
+      expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, launchId: result.launchId }]);
+      child = Bun.spawn([process.execPath, "-e", "console.log('fixture first launch')"],
+        { cwd: input.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [exit, output] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+      expect({ exit, output: output.trim() }).toEqual({ exit: 0, output: "fixture first launch" });
+      spawnedAt = performance.now();
+      launched.resolve();
+      return result;
+    };
+    tick = controller.tick();
+    await until(blocked.promise);
+    // The production wake chain must carry Git settlement through attempt
+    // persistence and launch while the peer still refuses every stop read.
+    await until(launched.promise, 8_000);
+    expect(spawnedAt - acceptedAt).toBeLessThan(8_000);
+    expect(logs.filter(line => line.includes("pending at deadline"))).toEqual([]);
+    expect(cancelledReads).toBeGreaterThan(0);
+    const retained = (await findControllerPipeline(old.id))!;
+    expect(retained.stateDetail).toContain("operator stop evidence read timed out");
+    expect(retained.runs[0]?.attempts).toMatchObject([{ n: 1, suspension: { retryRequestedAt: requestedAt } }]);
+    expect(cpuKeys.size).toBeGreaterThan(0);
+    expect(await f.git(cold.worktreeDir, "rev-parse", "HEAD")).toBe(f.base);
+    const worktrees = (await f.git(f.repo, "worktree", "list", "--porcelain")).split("\n");
+    expect(worktrees.filter(line => line === `worktree ${cold.worktreeDir}`)).toHaveLength(1);
+
+    const beforeRecovery = stopReads;
+    stalled = false;
+    release.resolve();
+    for (let pass = 0; pass < 4; pass++) await controller.tick();
+    expect(stopReads).toBeGreaterThan(beforeRecovery);
+    const waitingForCpu = await findControllerPipeline(old.id);
+    expect(waitingForCpu?.stateDetail).toContain("CPU queue");
+    expect(waitingForCpu?.runs[0]?.attempts.at(-1)).toMatchObject({ n: 2, state: "pending" });
+    cpuNow += CPU_QUEUE_SPACING_MS;
+    for (let pass = 0; pass < 4; pass++) await controller.tick();
+    const recovered = await findControllerPipeline(old.id);
+    expect(recovered?.runs[0]?.attempts.map(({ n, state, accountId }) => ({ n, state, accountId })), recovered?.stateDetail ?? "").toEqual([
+      { n: 1, state: "failed", accountId: account }, { n: 2, state: "running", accountId: account },
+    ]);
+    expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, state: "running" }]);
+    expect(h.spawnInputs.filter(input => input.cwd === cold.worktreeDir)).toHaveLength(1);
+    if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
+      console.log("cold-controller-audit", JSON.stringify({ admission, base, firstMs: Math.round(spawnedAt - acceptedAt), stopReads, cancelledReads }));
+    }
+  } finally {
+    stalled = false;
+    release.resolve();
+    unregister();
+    if (child?.exitCode === null) child.kill();
+    await child?.exited;
+    await tick;
+    await wake;
+    for (const timer of timers) clearTimeout(timer);
+    await settlePipelineControllerJobs();
+    queue.close();
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+}, 25_000);
 
 test.each(["recovers", "exhausts"] as const)("a classified provisioning lock retry %s across controller processes", async outcome => {
   const f = await realWorktreeLane("provision-lock-restart", BUILD_ONLY as never);

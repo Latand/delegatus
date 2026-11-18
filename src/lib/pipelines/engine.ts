@@ -2726,7 +2726,8 @@ export function defaultPipelinePorts(
     conversationOperatorStopped: async (conversationId, since, ignored) => {
       const client = runtimeHostClient();
       if (!client) throw new Error("runtime host unreachable");
-      return hasRuntimeSwitchKill(client, conversationId, since, ignored, true);
+      const signal = currentOperationLease()?.abort.signal;
+      return hasRuntimeSwitchKill(signal ? withRuntimeRecoveryReads(client, signal) : client, conversationId, since, ignored, true);
     },
     runtimeSwitchDelivery: async (conversationId, key) => {
       const admission = registry.deliveryAdmissionForKey(conversationId, key);
