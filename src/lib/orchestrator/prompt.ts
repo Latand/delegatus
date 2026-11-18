@@ -120,7 +120,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
 // v69 checks acceptance against justified restrictions before launching work.
 // v70 aligns the seat with scheduled maintainer writes and independent seating reports.
 // v71 aligns the merge bar with branch protection's required checks.
-export const ORCHESTRATOR_PROMPT_VERSION = 71;
+// v72 routes bounded operations directly and gives urgent work a supported speed.
+export const ORCHESTRATOR_PROMPT_VERSION = 72;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -607,14 +608,16 @@ const SHIPPED_RED_CHECK_STOP = "Red checks hold merging; unverified, assumed or 
 const ORCHESTRATOR_RED_CHECK_STOP = "Required reds block; note optional reds. Unknown required set: all reds block. Unverified premises need the operator.";
 const SHIPPED_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix stage id>",maxRounds}; fix next returns to review. advance (default) runs exactly N reviews and the fix of the N-th review, then completes next:null; checks and merge setting govern merging. It creates no terminal re-check and no budget follow-up task. continue-review cannot add rounds; traversed budgets cannot grow. Nonterminal gates follow their pass edge with findings. Another gate's fail loop permits a fresh handoff; rounds stay cumulative. stop-after-fix waits in needs_review after the fix. Use stop-after-fix only when the operator asked to look before merge. park stops before the fix.`;
 
-/** v65: the seat checks a vague ask's scope itself and picks the route; a form
-    is for what stays materially ambiguous. The opening of "How work runs" (the
-    pipeline-first sentence and the "Start by default" bullet) is replaced as one
-    block by exact match in a mandate that carries the v64 text, so a stored
-    default keeps no blanket pipeline-first sentence; a bespoke mandate that
-    reworded it keeps its own wording. */
-const SHIPPED_HOW_WORK_RUNS_OPENING = "Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. Attach a useful GitHub issue with pipeline_action attach-link; no step waits for an issue.\n- Start by default. When the operator asks for work, assess complexity, compose the stages and roles, and call create_pipeline with autoStart: true, with no confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: create_pipeline with autoStart: false, report the draft id, and wait for the operator to press Start on the board. That request may come in your own conversation or through the gateway; both channels carry the same authority. Proactive means carrying accepted work to its merge bar and its owed reports unasked; new work you see is a proposal, started when the operator says so.";
-const ORCHESTRATOR_HOW_WORK_RUNS_OPENING = "Accepted work needing agents runs as a pipeline on its task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. Attach a useful GitHub issue with pipeline_action attach-link; no step waits on it.\n- Start by default. A vague ask gets a quick bounded scope check first; then choose alone: a small permitted step directly, a pipeline, or read-only research first. Routine technical choices within authority are yours; a form is only for intent, scope or trade-offs still materially ambiguous. A pipeline starts with autoStart: true, no confirmation step or draft. Draft only on an explicit request for one or to review the plan first: create_pipeline with autoStart: false, report the draft id, wait for Start on the board. Proactive means carrying accepted work to its merge bar and its owed reports unasked; work you spot waits for the operator's word.";
+/** Upgrade shipped work rules by exact match before recording a new intent.
+    An edited opening keeps its own wording. */
+const SHIPPED_HOW_WORK_RUNS_OPENINGS = [
+  "Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. Attach a useful GitHub issue with pipeline_action attach-link; no step waits for an issue.\n- Start by default. When the operator asks for work, assess complexity, compose the stages and roles, and call create_pipeline with autoStart: true, with no confirmation step or draft. Create a draft only when the operator explicitly asks for a draft or to review the plan first in that request: create_pipeline with autoStart: false, report the draft id, and wait for the operator to press Start on the board. That request may come in your own conversation or through the gateway; both channels carry the same authority. Proactive means carrying accepted work to its merge bar and its owed reports unasked; new work you see is a proposal, started when the operator says so.",
+  "Accepted work needing agents runs as a pipeline on its task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. Attach a useful GitHub issue with pipeline_action attach-link; no step waits on it.\n- Start by default. A vague ask gets a quick bounded scope check first; then choose alone: a small permitted step directly, a pipeline, or read-only research first. Routine technical choices within authority are yours; a form is only for intent, scope or trade-offs still materially ambiguous. A pipeline starts with autoStart: true, no confirmation step or draft. Draft only on an explicit request for one or to review the plan first: create_pipeline with autoStart: false, report the draft id, wait for Start on the board. Proactive means carrying accepted work to its merge bar and its owed reports unasked; work you spot waits for the operator's word.",
+];
+const ORCHESTRATOR_HOW_WORK_RUNS_OPENING = `- Scope vague asks briefly. Use a form for remaining material ambiguity.
+- For a bounded, authorized operation needing no repository edits or staged checks, keep its owner if assigned. Otherwise use one seat or one visible spawn_agent (live role, taskId, existing cwd). Skip pipelines and worktrees. If speed is requested, choose a fast tier the role's model and allowed account support (Codex serviceTier: priority or fast: true). Honor explicit operator constraints.
+- Before repeating an external effect, verify its owner and destination receipt. Recover unknown outcomes with the same key and arguments. The executor checks financial amounts against the source before sending.
+- Use an isolated pipeline and required checks for repository edits, even urgent ones. Pass taskIds and autoStart: true. For an explicit draft or plan review, use autoStart: false, report the id and wait for Start. Link useful issues when available.`;
 
 export const ORCHESTRATOR_LANE_SIZING_HEADING = "## Lane sizing";
 export const ORCHESTRATOR_LANE_SIZING_DIRECTIVE = `${ORCHESTRATOR_LANE_SIZING_HEADING}
@@ -865,7 +868,9 @@ export function orchestratorMandateUpgraded(mandate: string): string {
   if (!mandate.includes(OPERATOR_CORRECTION_RULE)) mandate = mandate.split(oldRule13).join(rule13);
   mandate = mandate.split(SHIPPED_PREPARATION_CONSENT_RULE).join(ORCHESTRATOR_BUG_REPORT_RULE);
   mandate = mandate.split(SHIPPED_WORKING_RULE_16).join(WORKING_RULE_16);
-  mandate = mandate.split(SHIPPED_HOW_WORK_RUNS_OPENING).join(ORCHESTRATOR_HOW_WORK_RUNS_OPENING);
+  for (const previous of SHIPPED_HOW_WORK_RUNS_OPENINGS) {
+    mandate = mandate.split(previous).join(ORCHESTRATOR_HOW_WORK_RUNS_OPENING);
+  }
   mandate = mandate.split(PREVIOUS_PROTOTYPE_DIRECTIVE).join(ORCHESTRATOR_PROTOTYPE_DIRECTIVE);
   mandate = mandate.split(SHIPPED_PROMOTION_OPENING).join("You are this project's orchestrator in Delegatus and own its board. Act only through its MCP tools (key `viewer`), with no direct process or runtime manipulation. Working rules govern you and every agent; this mandate adds seat duties.");
   mandate = mandate.split(SHIPPED_PROMOTION_EARLIER_ANSWERS).join("At the start of non-trivial work and on a problem, failure or unknown, run 3-5 varied search_transcripts queries (error, subsystem, symptom, file or tool), project then unscoped. Open hits with conversation_messages at their paths; read nearby turns before deciding. Cite title and date in plans or specs, or report no relevant result.");

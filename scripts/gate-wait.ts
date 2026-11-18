@@ -36,7 +36,7 @@ export function closedQueueSpans(directory: string | null): { start: number; end
   } catch { return undefined; }
 }
 
-export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
+export async function openGateRecording(log: string, command: string[], manifestFile?: string) {
   log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
   const root = recorderGateRunRoot(log, process.env.TMPDIR ?? tmpdir());
   const rootDirectoryIdentity = physical(root);
@@ -65,12 +65,6 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     descriptor = { ...input, wrapper: null, descriptorDigest: descriptorDigest(input) };
     writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
   }
-  let queueTiming: string | null = path.join(dir, "queue-timing");
-  try { if (queueTiming) fs.mkdirSync(queueTiming, { mode: 0o700 }); }
-  catch { queueTiming = null; }
-  let code = 127;
-  let wrapperSignal: string | null = null;
-  let cancellation: Terminal["cancellation"] = null;
   const deadlineUptimeMs = descriptor?.deadlineUptimeMs ?? custodyClock() + COMPLETION_WAIT_MS;
   try {
     const completion = { runId, log, rootDirectoryIdentity, recorder: identitySchema.parse(cpuOwnerIdentity(process.pid)), directoryIdentity: physical(dir), deadlineUptimeMs };
@@ -78,10 +72,23 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     publishGateRun(root, completion);
     if (physical(root) !== rootDirectoryIdentity) throw new Error("gate temporary root identity changed before dispatch");
   } catch (error) { fs.closeSync(fd); throw error; }
+  return { log, dir, fd, root, rootDirectoryIdentity, runId, deadlineUptimeMs, descriptor };
+}
+
+export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
+  const recording = await openGateRecording(log, command, manifestFile);
+  const { dir, fd, root, rootDirectoryIdentity, runId, deadlineUptimeMs, descriptor } = recording;
+  log = recording.log;
+  let queueTiming: string | null = path.join(dir, "queue-timing");
+  try { if (queueTiming) fs.mkdirSync(queueTiming, { mode: 0o700 }); }
+  catch { queueTiming = null; }
+  let code = 127;
+  let wrapperSignal: string | null = null;
+  let cancellation: Terminal["cancellation"] = null;
   const originalRemaining = Math.max(0, deadlineUptimeMs - custodyClock());
   const monotonicDeadline = performance.now() + originalRemaining;
   const inheritedAllowance = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
-  const executionAllowance = Math.min(manifest?.executionMs ?? Infinity,
+  const executionAllowance = Math.min(descriptor?.manifest.executionMs ?? Infinity,
     Number.isFinite(inheritedAllowance) && inheritedAllowance > 0 ? inheritedAllowance : 900_000);
   try {
     const dispatchRoot = recorderGateRunRoot(log, process.env.TMPDIR ?? tmpdir());
@@ -164,12 +171,16 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       dispatch: fs.existsSync(path.join(dir, "running")) || report || reports.length ? "started" : "not-started" } satisfies Terminal);
   }
   retainForegroundCheckTiming(dir, closedQueueSpans(queueTiming));
+  publishGateExit(dir, code);
+  return code;
+}
+
+export function publishGateExit(dir: string, code: number) {
   const exit = fs.openSync(path.join(dir, "exit.tmp"), "wx", 0o600);
   try { fs.writeFileSync(exit, `${code}\n`); fs.fsyncSync(exit); } finally { fs.closeSync(exit); }
   fs.renameSync(path.join(dir, "exit.tmp"), path.join(dir, "exit"));
   const finalDirectory = fs.openSync(dir, "r");
   try { fs.fsyncSync(finalDirectory); } finally { fs.closeSync(finalDirectory); }
-  return code;
 }
 
 if (import.meta.main) {

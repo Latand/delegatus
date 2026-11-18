@@ -29,7 +29,7 @@ import { isDeepStrictEqual } from "node:util";
 import { statePath } from "@/lib/configDir";
 import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation, MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import { assertStateMutationAllowed, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
@@ -5606,8 +5606,10 @@ export class AgentRegistry {
       afterRename: storage.afterMirrorRename,
     };
     this.beforeDualWriteMutationReplace = storage.beforeDualWriteMutationReplace;
-    const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
+    const probeReader = storage.resolveBackendIdentity === true && process.env[MCP_PROBE_READ_ONLY_ENV] === "1";
+    const mayRunStartupMaintenance = !probeReader && mayRunStateStartupMutation(path.dirname(this.filename));
     const openStore = () => new SqliteAgentRegistryStore(sqliteFilename, {
+      readOnly: probeReader,
       allowArchiveMigration: mayRunStartupMaintenance,
       deferColdKeyInitialization: storage.deferColdKeyInitialization,
       /* Lazy: an initialised store never reads the JSON (#1870). */
@@ -5625,6 +5627,9 @@ export class AgentRegistry {
       onRowPayloadParse: storage.onSqliteRowPayloadParse,
       onRevisionQuery: storage.onSqliteRevisionQuery,
     });
+    if (probeReader && backend.pendingJsonImport) {
+      throw new RegistryReadError("the registry is waiting for the serving Viewer to import it");
+    }
     this.sqliteStore = this.sqliteMode === "off"
       ? null
       : backend.pendingJsonImport
