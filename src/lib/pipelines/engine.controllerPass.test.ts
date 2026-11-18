@@ -331,9 +331,9 @@ test("observing an unchanged external job does not request another immediate tic
   } finally { unregister(); }
 });
 
-async function until(promise: Promise<unknown>, timeout = 3_000) {
+async function until(promise: Promise<unknown>, timeout = 3_000, message = "boundary did not settle") {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  try { await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("boundary did not settle")), timeout); })]); }
+  try { await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), timeout); })]); }
   finally { clearTimeout(timer); }
 }
 
@@ -1610,43 +1610,69 @@ test.each([
       import { defaultPipelinePorts, invalidateProviderContinuation } from "./src/lib/pipelines/engine.ts";
       import { terminalIdleStopKey } from "./src/lib/pipelines/stageControlCustody.ts";
       const { mutation, target } = JSON.parse(process.argv[1]);
+      const ports = mutation === "stop" ? defaultPipelinePorts() : null;
+      await new Promise(resolve => {
+        process.once("message", resolve);
+        process.send("ready");
+      });
       try {
         const outcome = mutation === "stop"
-          ? await defaultPipelinePorts().stopStageAgent(target, { onlyIfIdle: true, operationId: terminalIdleStopKey(target) })
+          ? await ports.stopStageAgent(target, { onlyIfIdle: true, operationId: terminalIdleStopKey(target) })
           : (await invalidateProviderContinuation(target.conversationId, undefined, { key: "fixture-restart-withdrawal", artifactPath: target.agentPath }), { outcome: "confirmed" });
         console.log("owned-control-result", JSON.stringify(outcome));
       } catch (error) {
         console.log("owned-control-result", JSON.stringify({ outcome: "unknown", reason: String(error) }));
+      } finally {
+        process.disconnect();
       }
     `;
-    const start = () => Bun.spawn([process.execPath, "-e", source, JSON.stringify({ mutation, target })], {
-      stdin: "ignore", stdout: "pipe", stderr: "pipe",
-    });
-    const incumbent = start();
-    const initialError = new Response(incumbent.stderr).text();
-    const initialOutput = new Response(incumbent.stdout).text();
+    const preparationMs = 30_000;
+    const operationMs = 15_000;
+    const start = (role: string) => {
+      const ready = Promise.withResolvers<void>();
+      const child = Bun.spawn([process.execPath, "-e", source, JSON.stringify({ mutation, target })], {
+        stdin: "ignore", stdout: "pipe", stderr: "pipe",
+        ipc(message) { if (message === "ready") ready.resolve(); },
+      });
+      const errors = new Response(child.stderr).text();
+      const output = new Response(child.stdout).text();
+      void child.exited.then(async code => ready.reject(new Error(
+        `owned ${mutation} ${role} exited before readiness (${code}): ${await errors} ${await output}`)));
+      const execute = async () => {
+        await until(ready.promise, preparationMs, `owned ${mutation} ${role} preparation exceeded ${preparationMs} ms`);
+        child.send("execute");
+      };
+      return { child, errors, output, execute };
+    };
+    const { child: incumbent, errors: initialError, output: initialOutput, execute } = start("sender");
+    const finishSender = async () => {
+      await until(incumbent.exited, operationMs, `owned ${mutation} sender operation did not exit within ${operationMs} ms`);
+      expect(await incumbent.exited).toBe(0);
+    };
     const observe = async () => {
-      const process = start();
+      const observer = start("observer");
       try {
-        const result = Promise.all([process.exited, new Response(process.stderr).text(), new Response(process.stdout).text()]);
-        await until(result, 6_000);
+        await observer.execute();
+        const result = Promise.all([observer.child.exited, observer.errors, observer.output]);
+        await until(result, operationMs, `owned ${mutation} observer operation exceeded ${operationMs} ms`);
         const [code, errors, output] = await result;
         expect(code, errors).toBe(0);
         const observed = output.split("\n").find(line => line.startsWith("owned-control-result "));
         if (!observed) throw new Error("restarted mutation observer did not report an outcome");
         return JSON.parse(observed.slice("owned-control-result ".length));
       } finally {
-        if (process.exitCode === null && process.signalCode === null) process.kill();
-        await process.exited;
+        if (observer.child.exitCode === null && observer.child.signalCode === null) observer.child.kill();
+        await observer.child.exited;
       }
     };
     try {
       const held = holdBeforeAdmission || withdrawalRefusal ? fixture.mutationEntered : fixture.mutationAccepted;
+      await execute();
       await until(Promise.race([held, incumbent.exited.then(async code => {
         throw new Error(`owned mutation sender exited before it reached the held phase (${code}): ${await initialError} ${await initialOutput}`);
-      })]), 6_000);
+      })]), operationMs, `owned ${mutation} sender operation did not reach the held phase within ${operationMs} ms`);
       if (withdrawalRefusal) {
-        expect(await incumbent.exited).toBe(0);
+        await finishSender();
         expect(await initialOutput).toContain("requires a session-status event and its observed revision");
         expect(fixture.dispatches).toEqual(["append-session-fenced"]);
         expect(fixture.withdrawals).toHaveLength(0);
@@ -1689,7 +1715,7 @@ test.each([
       if (refusal === "stale") {
         fixture.publish("running", "fixture-writer-two");
         fixture.release();
-        expect(await incumbent.exited).toBe(0);
+        await finishSender();
         expect(await initialOutput).toContain("the session row changed");
         expect(fixture.withdrawals).toHaveLength(0);
         const active = await observe();
@@ -1702,30 +1728,34 @@ test.each([
         expect(fixture.dispatches).toEqual(["append-session-fenced", "append-session-fenced"]);
         return;
       }
+      const { claimIdleStop, readIdleStop, terminalIdleStopKey } = await import("./stageControlCustody");
+      const stopBinding = mutation === "stop" ? await readIdleStop(terminalIdleStopKey(target)) : null;
+      if (mutation === "stop" && !stopBinding) throw new Error("the in-flight stop has no ownership binding");
       incumbent.kill();
       await incumbent.exited;
       const pending = await observe();
       expect(fixture.dispatches).toHaveLength(1);
+      if (stopBinding) expect(pending).toMatchObject({ outcome: "unconfirmed", operationId: stopBinding.operationId });
       if (holdBeforeAdmission) {
         expect(fixture.stops).toHaveLength(0);
         expect(fixture.withdrawals).toHaveLength(0);
         expect(pending.outcome).toBe(mutation === "stop" ? "unconfirmed" : "unknown");
         if (mutation === "withdrawal") expect(pending.reason).toContain("awaits a confirmed receipt");
         fixture.release();
-        await until(fixture.mutationAccepted);
+        await until(fixture.mutationAccepted, operationMs, `owned ${mutation} did not reach admission after release within ${operationMs} ms`);
       }
       const reconciled = holdBeforeAdmission ? await observe() : pending;
       expect(fixture.dispatches).toHaveLength(1);
-      if (mutation === "stop") {
-        expect(fixture.stops).toHaveLength(1);
-        expect(reconciled).toMatchObject({ outcome: "unconfirmed", operationId: fixture.stops[0]!.operationId });
-        const { claimIdleStop, readIdleStop, terminalIdleStopKey } = await import("./stageControlCustody");
+      if (stopBinding) {
+        expect(fixture.stops).toMatchObject([{ operationId: stopBinding.operationId,
+          receipt: { idempotencyKey: stopBinding.operationId } }]);
+        expect(reconciled).toMatchObject({ outcome: "unconfirmed", operationId: stopBinding.operationId });
         const binding = await readIdleStop(terminalIdleStopKey(target));
-        if (!binding) throw new Error("the accepted stop has no ownership binding");
+        expect(binding).toEqual(stopBinding);
         const alias = terminalIdleStopKey({ ...target, launchId: "another-attempt-for-the-same-host" });
-        const { kind: _kind, operationId: _operationId, ...identity } = binding;
-        expect(await claimIdleStop(alias, identity)).toEqual({ acquired: false, binding });
-        expect(await readIdleStop(alias)).toEqual(binding);
+        const { kind: _kind, operationId: _operationId, ...identity } = stopBinding;
+        expect(await claimIdleStop(alias, identity)).toEqual({ acquired: false, binding: stopBinding });
+        expect(await readIdleStop(alias)).toEqual(stopBinding);
       } else {
         expect(fixture.withdrawals).toHaveLength(1);
         expect(reconciled).toEqual({ outcome: "confirmed" });
@@ -1742,7 +1772,7 @@ test.each([
       await incumbent.exited;
       await fixture.dispose();
     }
-  }), 25_000);
+  }), 60_000);
 
 test.each(["stop", "withdrawal"] as const)(
   "a delayed %s cannot act on a replacement turn",
