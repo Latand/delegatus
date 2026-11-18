@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
-import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
+import { bindStructuredDeliveryQueue, type StructuredDeliveryHost } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { NativeCodexQueue, type NativeQueuedSubmission } from "./nativeCodexQueue";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
@@ -8,6 +8,8 @@ import { parseRuntimeCommand } from "./commands";
 import type { RuntimeHostClient } from "./client";
 import type { EngineHost } from "./engineHost";
 import type { NativeQueueCommand, NativeQueueProof, NativeQueueRecord } from "./nativeQueueContracts";
+import { FakeEngineHost } from "./fixtures/fakeEngineHost";
+import path from "node:path";
 
 /* The reconcile pass behind a consumed queued message, driven through the real
    delivery controller, queue, executor and journal. Only the engine's
@@ -86,6 +88,40 @@ async function until(check: () => boolean, ms = 8000): Promise<void> {
 const bind = (s: Awaited<ReturnType<typeof seeded>>, client: RuntimeHostClient, extra: Record<string, unknown> = {}) =>
   bindStructuredDeliveryQueue([{ key: s.f.key, host: s.host }], { registry: s.f.registry, client,
     watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0, ...extra });
+
+test("a 56-host controller reconciles bounded pages and reaches every host", async () => {
+  const s = await seeded([]);
+  const template = s.f.registry.hostEntry(s.f.key)!;
+  const adopted: StructuredDeliveryHost[] = [{ key: s.f.key, host: s.host }];
+  const reads: string[] = [];
+  const batchSizes: number[] = [];
+  let readsSinceBatch = 0;
+  try {
+    for (let index = 1; index < 56; index++) {
+      const conversation = s.f.registry.ensureConversation("codex", path.join(s.f.root, `host-${index}.jsonl`), "account-a");
+      const key = { engine: "codex" as const, sessionId: conversation.generations.at(-1)!.id };
+      s.f.registry.upsert({ ...template, key, artifactPath: conversation.generations.at(-1)!.path });
+      const host = Object.assign(new FakeEngineHost(), { nativeQueue: s.nativeQueue, onStateChange: () => () => {} });
+      adopted.push({ key, host });
+    }
+    await bindStructuredDeliveryQueue(adopted, { registry: s.f.registry,
+      client: { ...s.f.client, ...journalClient(s.f.journal), nativeQueueRead: async id => { reads.push(id); readsSinceBatch++; return []; },
+        effectBatch: async (kinds, after) => {
+          batchSizes.push(readsSinceBatch); readsSinceBatch = 0;
+          return s.f.journal.effectBatch(100, kinds, after);
+        } } as RuntimeHostClient,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    const seen = new Set(reads);
+    for (let pass = 0; pass < 9; pass++) {
+      reads.length = 0;
+      await kickStructuredDeliveryQueue();
+      for (const id of reads) seen.add(id);
+    }
+    expect(batchSizes.length).toBeGreaterThan(0);
+    expect(Math.max(...batchSizes)).toBeLessThanOrEqual(8);
+    expect(seen.size).toBe(56);
+  } finally { await s.f.cleanup(); }
+});
 
 test("an entry queued while busy and consumed later reaches delivered on the retry chain alone; a same-text entry stays", async () => {
   const s = await seeded(["op-consumed", "op-pending"]);

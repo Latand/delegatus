@@ -1,3 +1,5 @@
+import { LoopProfilerFailure, loopProfilerFailureReason } from "./loopProfilerFailure";
+
 /** Lifetime arming. The monitor reports a stall on its first recovered turn. */
 export const LOOP_PROFILE_STALL_MS = 5000;
 export const LOOP_PROFILE_CAPTURE_MS = 5000;
@@ -46,8 +48,9 @@ export function createLoopProfilerSupervisor(ports: Ports) {
       else await ports.complete(settlement.startedAt, settlement.admittedAt);
       settlement = undefined;
       return true;
-    } catch {
-      if (!stopped) decision("admission-unavailable");
+    } catch (error) {
+      if (!stopped) decision(loopProfilerFailureReason(error instanceof LoopProfilerFailure && error.phase === "persist"
+        ? "persistence-failed" : "admission-unavailable", error, "settle"));
       return false;
     }
   };
@@ -94,7 +97,7 @@ export function createLoopProfilerSupervisor(ports: Ports) {
         const refusal = await ports.capture(reason === "armed-manual" ? "manual" : "automatic", beginCapture, markCaptureStarted, admittedAt);
         if (!stopped) decision(refusal ?? "cooldown");
       }
-      catch { if (!stopped) decision("capture-failed"); }
+      catch (error) { if (!stopped) decision(loopProfilerFailureReason("capture-failed", error, "collect")); }
       finally {
         if (!started) {
           nextAttempt = 0;

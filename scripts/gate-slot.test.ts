@@ -177,6 +177,25 @@ test.skipIf(process.platform !== "linux")("a scope the kernel gives no CPU contr
     expect(Bun.file(f.marker).size).toBe(0);
   }
 });
+for (const leaf of ["absent", "max", "nested"] as const) test.skipIf(process.platform !== "linux")(`a gate quota inherited by an ${leaf} worker leaf admits the command`, () => {
+  const f = cpuFixture({ manager: true });
+  const service = `${WORK_GROUP}/delegatus-gate-fixture.service`;
+  const group = `${service}/${leaf === "nested" ? "workers/" : ""}entry`;
+  const env = fakeCgroup(f.root, group, { scope: leaf === "max" ? "max 20000" : undefined, slice: "360000 20000" });
+  writeFileSync(join(env.LLV_GATE_CGROUP_ROOT, service, "cpu.max"), "60000 20000\n");
+  const result = f.run(env);
+  expect(result.status, result.stderr).toBe(0);
+  expect(readFileSync(f.marker, "utf8")).toBe("run\n");
+});
+for (const quota of [undefined, "max 20000"]) test.skipIf(process.platform !== "linux")(`a gate quota inherited only from the shared work slice refuses the command: ${quota}`, () => {
+  const f = cpuFixture({ manager: true });
+  const service = `${WORK_GROUP}/delegatus-gate-fixture.service`;
+  const env = fakeCgroup(f.root, `${service}/entry`, { slice: "360000 20000" });
+  if (quota) writeFileSync(join(env.LLV_GATE_CGROUP_ROOT, service, "cpu.max"), quota + "\n");
+  const result = f.run(env);
+  expect(result.status).toBe(69);
+  expect(Bun.file(f.marker).size).toBe(0);
+});
 test.skipIf(process.platform !== "linux")("the gate reads the folded LLV_ spelling an entry point leaves behind", () => {
   const f = cpuFixture({ manager: false });
   const env: NodeJS.ProcessEnv = { ...f.env };

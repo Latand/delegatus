@@ -453,3 +453,21 @@ test.each(["claude", "codex"] as const)("a severed %s seat is re-hosted by the s
   expect(revived?.claimOwner).toBeTruthy();
   expect(revived?.structuredHost?.process?.pid).toBe(process.pid);
 });
+
+
+test("a persisted incoming delivery recovery owns a severed seat across controller replacement", async () => {
+  const first = revivalRig();
+  const at = new Date(NOW - MINUTE).toISOString();
+  const pending = { id: seatHostRecoveryKey(PROJECT, 7, CONVERSATION), conversationId: CONVERSATION,
+    seatEpoch: 7, at, state: "pending" as const, detail: "Incoming delivery recovery: cleanup", told: true,
+    incoming: { since: at, episodeId: "fixture-incoming-episode", episodeAdmissionSeq: 2,
+      phase: "cleanup" as const, attemptedAt: at, hostIdentity: "fixture-captured-host" } };
+  writeSeatTickState(PROJECT, { ...first.row(), hostRecovery: pending }, first.stateFile);
+  await runSeatTickCheck(PROJECT, first.rig.deps);
+  expect(first.revivals).toEqual([]);
+  expect(first.row().hostRecovery).toMatchObject(pending);
+  const successor = revivalRig({ stateFile: first.stateFile, now: NOW + MINUTE });
+  await runSeatTickCheck(PROJECT, successor.rig.deps);
+  expect(successor.revivals).toEqual([]);
+  expect(successor.row().hostRecovery).toMatchObject(pending);
+});

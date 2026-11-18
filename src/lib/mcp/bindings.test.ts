@@ -243,13 +243,13 @@ test("spawn_agent rejects an explicit model outside the engine catalog before co
     (error: unknown) => error as Error & { details?: { violations?: Array<{ field: string; message: string; expected: string }> } },
   );
 
-  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra";
+  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra";
   expect(refusal?.name).toBe("McpToolRefusal");
   expect(refusal?.message).toBe(message);
   expect(refusal?.details?.violations).toEqual([{
     field: "model",
     message,
-    expected: "one of: gpt-6-astra, gpt-6.1-sol, gpt-6.1-terra, gpt-6-luna, gpt-6-sol, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    expected: "one of: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6.1-sol, gpt-6.1-terra, gpt-6-luna, gpt-6-sol, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
   }]);
   expect(requests).toEqual([]);
 });
@@ -3179,7 +3179,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     "stages[0].model",
     "stages[1].model",
   ]);
-  expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
+  expect(refusal?.message).toContain("valid codex model ids: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
   expect(refusal?.message).toContain("valid claude model ids: opus, fable, claude-fable-5-2, claude-fable-5-1, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5");
 });
 
@@ -4894,3 +4894,18 @@ test("send_message immediately explains a hold behind a running Codex turn", asy
   expect(await bindings.send_message({ clientRequestId: "busy-codex-send", conversationId: "conversation_busy_codex", text: "new requirement" }))
     .toMatchObject({ outcome: "held", settled: false, notice, waitReason: "switch-after-turn", deadlineAt: "2026-11-17T12:10:00.000Z" });
 });
+
+for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+  test(`spawn_agent admits ${model} before control-plane dispatch`, async () => {
+    const requests: Record<string, unknown>[] = [];
+    const spawn = viewerMcpBindings(undefined, { post: async (pathname, body) => {
+      expect(pathname).toBe("/api/spawn");
+      requests.push(body);
+      return { ok: true, conversationId: "conversation_model", launchId: "launch_model", state: "path-pending", initialMessage: "queued", path: null, transport: "structured" };
+    } }).spawn_agent;
+    const result = await spawn({ clientRequestId: `spawn-${model}`, engine: "codex", model, effort: "max", cwd: "/repo", prompt: "Build" });
+    expect(result).toMatchObject({ state: "path-pending", initialMessage: "queued" });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ engine: "codex", model, effort: "max" });
+  });
+}
