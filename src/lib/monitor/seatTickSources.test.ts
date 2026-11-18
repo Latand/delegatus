@@ -2551,6 +2551,84 @@ test("a settled child with an unknown registry turn clears the gap and stays ack
   expect(new SeatTickAccounting(first.state.accounting!.filename, fixture.project).ready(10)).toEqual([]);
 });
 
+test("one unreadable child ledger is named once and healthy workers stay in the wake", async () => {
+  const f = replayChildren("damaged-ledger", [
+    { title: "worker with an unreadable ledger", host: "dead" },
+    { title: "worker with a finished turn", host: "dead", ledger: true },
+  ]);
+  const [damaged, healthy] = f.workers;
+  const ledgerDir = statePath("structured-host-events");
+  const damagedPath = path.join(ledgerDir, `${damaged.generation}.jsonl`);
+  fs.mkdirSync(damagedPath);
+  const first = await childGather(f);
+  expect(first.childrenUnavailable).toBeNull();
+  expect(first.state.childrenGap).toBeNull();
+  expect(first.children).toEqual(expect.arrayContaining([
+    expect.objectContaining({ conversationId: damaged.id, status: "unknown" }),
+    expect.objectContaining({ conversationId: healthy.id, status: "terminal", outcome: "finished" }),
+  ]));
+  const decision = seatTickDecision(first);
+  if (decision.verdict.kind !== "wake") throw new Error("expected a wake carrying the healthy worker and ledger warning");
+  expect(decision.verdict.gaps).toEqual([]);
+  expect(decision.verdict.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "signal", id: `child-ledger:${damaged.id}:${damaged.generation}`, label: expect.stringContaining("ledger-unreadable") }),
+    expect.objectContaining({ kind: "child", label: expect.stringContaining("worker with a finished turn") }),
+  ]));
+  const commit = seatTickWakeCommitPlan(decision.verdict, {
+    fingerprint: first.changeFingerprint, eventsThrough: 0, terminalChildren: first.children.flatMap(child => child.outcomeId ? [child.outcomeId] : []),
+  })!;
+  const accounting = new SeatTickAccounting(first.state.accounting!.filename, f.project);
+  const wake = { clientMessageId: "ledger-warning-wake", conversationId: f.seatId, seatEpoch: 7, operationId: null, commit };
+  expect(accounting.prepare(accounting.readState(), wake)).toBe(true);
+  expect(accounting.settle(wake.clientMessageId, seatTickWakeCommit(decision.state, commit, f.now), "landed")).toBe(true);
+  const now = f.now + 65 * MINUTE_MS;
+  const sameDamage = await childGather(f, { now }, accounting.readState());
+  expect(sameDamage.childrenUnavailable).toBeNull();
+  expect(seatTickDecision(sameDamage).verdict.kind).toBe("quiet");
+
+  fs.rmdirSync(damagedPath);
+  const ledger = new FileRuntimeEventStore(ledgerDir);
+  ledger.append(damaged.generation, { kind: "turn-started", turnId: "recovered-turn", seq: 1 });
+  ledger.append(damaged.generation, { kind: "turn-ended", turnId: "recovered-turn", status: "completed", seq: 2 });
+  const repaired = await childGather(f, { now }, sameDamage.state);
+  expect(repaired.signals.some(signal => signal.id.startsWith("child-ledger:"))).toBe(false);
+  expect(repaired.children).toMatchObject([{ conversationId: damaged.id, status: "terminal", outcome: "finished" }]);
+});
+
+test("a missing curator account reaches the seat once across retries and is reported again after recovery", async () => {
+  const f = replayChildren("curator-account", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass } = await import("@/lib/memory/curation/store");
+  const { CURATION_INTERVAL_MS } = await import("@/lib/memory/roleTypes");
+  const source = { origin: "operator" as const, project: f.project, roleId: null, fixRound: false as const, conversationId: f.seatId };
+  leaveOperatorLessons({ source, lessons: [{ scope: "project", rule: "Read the account settings before inspecting a launch refusal.", why: "Keep account selection traceable." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (now: number, failure: string | null) => {
+    const pass = claimPass({ project: f.project, repoDir: f.cwd, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: failure ? "failed" : "succeeded", endedAt: new Date(now).toISOString(), failure });
+    return pass;
+  };
+  const first = finish(f.now, "no-account");
+  const gathered = await childGather(f);
+  const decision = seatTickDecision(gathered);
+  if (decision.verdict.kind !== "wake") throw new Error("expected an account warning in the seat wake");
+  expect(decision.verdict.items).toEqual([expect.objectContaining({ id: "curator-no-account", label: expect.stringContaining("no account was available") })]);
+  const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: gathered.changeFingerprint, eventsThrough: 0 })!;
+  const landed = seatTickWakeCommit(decision.state, commit, f.now);
+  const next = f.now + CURATION_INTERVAL_MS;
+  expect(finish(next, "no-account").noAccountEpisode).toBe(first.id);
+  expect(seatTickDecision(await childGather(f, { now: next }, landed)).verdict.kind).toBe("quiet");
+
+  finish(next + CURATION_INTERVAL_MS, null);
+  expect((await childGather(f, { now: next + CURATION_INTERVAL_MS }, landed)).signals).toEqual([]);
+  const recurrence = next + 2 * CURATION_INTERVAL_MS;
+  finish(recurrence, "no-account");
+  expect(seatTickDecision(await childGather(f, { now: recurrence }, landed)).verdict).toMatchObject({
+    kind: "wake", items: [expect.objectContaining({ id: "curator-no-account" })],
+  });
+});
+
 test("an expired launch without a conversation is a named failure owed until its wake lands", async () => {
   const fixture = replayChildren("abandoned-launch", [{ title: "launch never materialized", unobserved: true }]);
   const worker = fixture.workers[0]!;
@@ -2585,7 +2663,8 @@ test("a gap in a completed ledger preserves the unplaced child and its owed resu
   const worker = fixture.workers[0]!;
   fs.appendFileSync(statePath("structured-host-events", `${worker.generation}.jsonl`), JSON.stringify({ kind: "unhosted", seq: 4 }) + "\n");
   const input = await childGather(fixture);
-  expect(input.childrenUnavailable).not.toBeNull();
+  expect(input.childrenUnavailable).toBeNull();
+  expect(input.signals).toContainEqual(expect.objectContaining({ id: `child-ledger:${worker.id}:${worker.generation}`, label: expect.stringContaining("sequence-gap") }));
   expect(input.children.some(child => child.conversationId === worker.id && child.status === "unknown")).toBe(true);
   const accounting = new SeatTickAccounting(input.state.accounting!.filename, fixture.project);
   expect(accounting.ready(10)).toHaveLength(1);

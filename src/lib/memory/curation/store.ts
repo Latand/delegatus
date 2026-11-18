@@ -25,6 +25,8 @@ export interface CuratorPass extends CuratorPassView {
   launchId: string | null;
   transcriptPath: string | null;
   launchedAt: string | null;
+  /** The previous refusal's episode, reused if this pass also has no account. */
+  noAccountEpisode?: string;
   /** Captured under fresh launch admission; a matching receipt proves custody. */
   admittedHost?: { conversationId: string; seatEpoch: number; designatedAt: string | null };
   launchBody?: Record<string, unknown>;
@@ -587,6 +589,7 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
     const id = `curate_${createHash("sha256").update(`${project}:${claimedAt}`).digest("hex").slice(0, 24)}`;
     if (tx.get(`r:${id}`)) return null;
     const pass: CuratorPass = { kind: "pass", id, project, repoDir: input.repoDir, scopes, clientAttemptId: id, claimedAt, state: "claimed", endedAt: null, failure: null, conversationId: null, launchId: null, transcriptPath: null, launchedAt: null,
+      ...(completed?.failure === "no-account" ? { noAccountEpisode: completed.noAccountEpisode ?? completed.id } : {}),
       ...(importBatch ? { importBatch } : {}),
       ...(sweepCandidates ? { budgetSweepCandidates: sweepCandidates } : {}),
       counts: { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } };

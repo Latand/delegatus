@@ -67,6 +67,20 @@ test("publish settlement occurs once, retaining parked lanes until publication c
   expect(readReleaseProject(project).history[0].outcome).toBe("published");
 });
 
+test("recovery of a requested release pauses repository checks while releases are off", async () => {
+  const h = publishFixture();
+  h.setting.enabled = false;
+  mutateReleaseProject(h.project, row => ({ ...row, live: { ...row.live!, trigger: "requested", taskId: null } }));
+  h.ports.observe = async () => { throw new Error("release observation ran while disabled"); };
+  h.ports.supersedingTag = async () => { throw new Error("tag check ran while disabled"); };
+  const controller = productionReleaseController(h.ports);
+  expect(await controller.reconcile(h.project)).toBeNull();
+  expect(readReleaseProject(h.project).live?.pipelineId).toBe("release");
+  mutateReleaseProject(h.project, row => ({ ...row, live: { ...row.live!, pipelineId: null } }));
+  expect(await controller.reconcile(h.project)).toBeNull();
+  expect(h.requests).toEqual([]);
+});
+
 test("a hold set while admission observes safety prevents task and pipeline creation", async () => {
   const project = "late-hold";
   let releaseObservation!: () => void; let admitted!: () => void;
