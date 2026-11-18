@@ -130,11 +130,18 @@ export class HostEventWindow {
   async refill(store: RuntimeEventStore, threadId: string, project: (event: RuntimeEvent) => RuntimeEvent = event => event): Promise<void> {
     const required = windowWatermarks.get(this.events) ?? 0;
     const candidate = new HostEventWindow(this.byteLimit);
+    const retain = (event: RuntimeEvent) => {
+      // The scan still validates every row. Overlapping live sequences join
+      // the candidate below using their original sizes, so a larger durable
+      // projection cannot evict historical rows before that merge.
+      if (event.seq > required && event.seq <= (windowWatermarks.get(this.events) ?? 0)) return;
+      candidate.append(project(event));
+    };
     let lastSeq: number;
-    if (store.scan) lastSeq = await store.scan(threadId, event => candidate.append(project(event)));
+    if (store.scan) lastSeq = await store.scan(threadId, retain);
     else {
       const stored = store.load(threadId);
-      candidate.restore(stored.map(project));
+      for (const event of stored) retain(event);
       lastSeq = stored.at(-1)?.seq ?? 0;
     }
     if (lastSeq < required) throw new RuntimeReplayGapError(0, required);
