@@ -18,6 +18,7 @@ import { publishRegistryBackendIdentity } from "../src/lib/agent/registryBackend
 import { projectInfoFromCwd } from "../src/lib/scanner/describe";
 import type { AgentRegistryEntry, RegistryFile } from "../src/lib/agent/registry";
 import type { Flow } from "../src/lib/flows/types";
+import { bindHostExitWriter } from "../src/lib/runtime/hostExit";
 
 const TARGET = "a".repeat(40);
 const NOW = "2026-10-29T12:00:00.000Z";
@@ -89,6 +90,42 @@ test("B-1: native census equals the product over every live structured, receipt 
     expect(answer.undescribedHostCount).toBe(0);
     expect(answer.selection.projected).toBe(0);
     expect(answer.selection.unreadable).toBe(0);
+  } finally { f.close(); }
+});
+
+test("custody census carries recorded identities and bounded writer evidence without writes", async () => {
+  const f = fixture();
+  const directory = temporary();
+  try {
+    const host = f.rows[0]!.entry.structuredHost!.process;
+    const writer = { pid: 8001, startIdentity: "8001:42", bootEpoch: "fixture-boot" };
+    bindHostExitWriter(directory, host, writer);
+    const exitFile = JSON.parse(fs.readFileSync(path.join(directory, "host-exit.json"), "utf8")).file as string;
+    const slot = exitFile.replace(/\.exit\.json$/, ".writer.json");
+    for (const input of [JSON.stringify(writer), "{", " ".repeat(4097), null]) {
+      if (input === null) fs.rmSync(slot, { force: true });
+      else fs.writeFileSync(slot, input);
+      const before = fs.readdirSync(path.dirname(slot)).sort().map(name => [name, sha(path.join(path.dirname(slot), name))]);
+      const answer = await censusSnapshot(f.sources, 1, TARGET, 30000);
+      const row = answer.conversations.find(row => row.host.pid === host.pid)!;
+      expect(row.host.process).toEqual(host);
+      expect(row.host.exitWriter).toEqual(input === JSON.stringify(writer) ? { process: writer, exitFile } : null);
+      expect(answer.undescribedHostCount).toBe(0);
+      expect(fs.readdirSync(path.dirname(slot)).sort().map(name => [name, sha(path.join(path.dirname(slot), name))])).toEqual(before);
+      expect(answer.conversations.find(row => row.host.pid === 4003)!.host.process).toMatchObject({ pid: 4003, startIdentity: "fixture-start" });
+      expect(answer.conversations.find(row => row.host.pid === 4006)!.host.process).toBeNull();
+    }
+  } finally { f.close(); }
+});
+
+test("custody census refuses ambiguous recorded identities for the same PID", async () => {
+  const f = fixture();
+  try {
+    f.rows[1]!.entry.structuredHost!.process = { pid: 4001, startIdentity: "other-start" };
+    const answer = await censusSnapshot({ ...f.sources, probe: { ...f.sources.probe, processIdentity: () => null } }, 1, TARGET, 30000);
+    const row = answer.conversations.find(row => row.host.pid === 4001)!;
+    expect(row.host.process).toBeNull();
+    expect(row.host.exitWriter).toBeNull();
   } finally { f.close(); }
 });
 

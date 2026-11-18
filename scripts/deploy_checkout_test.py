@@ -269,6 +269,36 @@ class AdapterContracts(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertIsNone(rows[0]["pipeline"])
 
+    def test_census_custody_fields_validate_real_child_output_and_allow_older_releases(self):
+        with tempfile.TemporaryDirectory(prefix="census-custody-") as root:
+            directory = pathlib.Path(root)
+            (directory / "scripts").mkdir()
+            script = directory / "scripts/protected-host-census.ts"
+            identity = {"pid": 104, "startIdentity": "104:42", "bootEpoch": "fixture-boot"}
+            writer = {"process": {**identity, "pid": 105}, "exitFile": str(directory / "host-exits/fixture.exit.json")}
+            host = {"state": "alive", "kind": "structured", "pid": 104, "process": identity, "exitWriter": writer}
+            row = {"conversationId": "conversation_custody", "host": host, "turnState": "idle", "evidenceSource": "transcript", "pipeline": None}
+            answer = {"targetRevision": TARGET, "registryRevision": 1, "observedAt": "2026-01-01T00:00:00Z",
+                      "conversations": [row], "unselectedCount": 0, "undescribedHostCount": 0,
+                      "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                                    "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}
+            def read(value):
+                row["host"] = value
+                script.write_text("console.log(" + json.dumps(json.dumps(answer)) + ");")
+                return deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3)["conversations"][0]["host"]
+            self.assertEqual(read(host), host)
+            legacy = {key: value for key, value in host.items() if key not in ["process", "exitWriter"]}
+            self.assertNotIn("process", read(legacy))
+            malformed = [{**host, "process": {**identity, "pid": 999}}, {**host, "process": "bad"},
+                         {**host, "process": {**identity, "startIdentity": ""}},
+                         {**host, "process": {**identity, "bootEpoch": 9}},
+                         {**host, "exitWriter": {**writer, "exitFile": "relative.exit.json"}},
+                         {**host, "exitWriter": {**writer, "process": {**identity, "pid": True}}},
+                         {**host, "exitWriter": []}]
+            for value in malformed:
+                with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, "census row malformed"):
+                    read(value)
+
     def test_census_child_rejects_selection_counts_that_exceed_its_rows(self):
         self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
         with tempfile.TemporaryDirectory(prefix="census-child-") as root:
@@ -687,6 +717,9 @@ class CheckoutIntegration(unittest.TestCase):
         self.service_group = self.slice_group + "/synthetic-viewer.service"
         self.parents = {}
         self.pgroups = {}
+        self.sessions = {}
+        self.descriptors = {}
+        self.scopes = {}
         self.cmdlines = {}
         self.groups = {}
         self.moving = set()
@@ -749,6 +782,7 @@ class CheckoutIntegration(unittest.TestCase):
                                        http=self.http, runtime=lambda record: {"ready": True},
                                        execute=self.execute, mcp_factory=Transport, cgroup_root=self.cgroup,
                                        signal_process=self.signal,
+                                       epoch=lambda: "fixture-boot",
                                        census=lambda *args: Transport().call("agent_activity", {"limit": 200}))
         self.addCleanup(self.adapter.close)
         clock = self.adapter.clock
@@ -940,8 +974,9 @@ class CheckoutIntegration(unittest.TestCase):
             identity += "-" + str(self.stat_reads)
         self.reads = getattr(self, "reads", 0) + 1
         # CPU time changes on every read of a live process; the start identity does not.
-        return {"stat": str(pid) + " (synthetic process) " + " ".join(["S", str(self.parents.get(pid, 1)), str(self.pgroups.get(pid, pid))] + ["0"] * 9 + [str(self.reads)] + ["0"] * 6 + [identity]),
+        return {"stat": str(pid) + " (synthetic process) " + " ".join(["S", str(self.parents.get(pid, 1)), str(self.pgroups.get(pid, pid)), str(self.sessions.get(pid, self.pgroups.get(pid, pid)))] + ["0"] * 8 + [str(self.reads)] + ["0"] * 6 + [identity]),
                 "cmdline": self.cmdlines.get(pid, "bun\0" + str(root / "bin/cli.mjs") + "\0").encode(), "cwd": str(root),
+                "fds": self.descriptors.get(pid, []),
                 "cgroup": "0::" + self.groups.get(pid, self.service_group) + "\n"}[field]
 
     def execute(self, args, cwd=None):
@@ -954,6 +989,9 @@ class CheckoutIntegration(unittest.TestCase):
             return ""
         state = "ActiveState=" + ("active" if self.active else "inactive")
         if "show" in args:
+            if "BindsTo" in args:
+                return "\n\n".join("\n".join(key + "=" + value for key, value in self.scopes.get(name, {}).items())
+                                   for name in args[3:args.index("-p")])
             if "MainPID" in args:
                 return "MainPID=" + str(self.main_pid) + "\nControlGroup=" + self.service_group
             if "ControlGroup" in args:
@@ -1100,6 +1138,301 @@ class CheckoutIntegration(unittest.TestCase):
         self.adapter.preflight()
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
+
+    def helper_groups(self, count=1, parent=USER_MANAGER):
+        rows, groups = [], []
+        for index in range(count):
+            waiter = 10000 + index * 10
+            host = waiter + 6
+            pids = list(range(waiter, waiter + 6))
+            leader, subshell = waiter + 1, waiter + 2
+            directory = self.root / ("wait-" + str(index))
+            directory.mkdir(mode=0o700)
+            exit_file = self.state / "host-exits" / (str(index) + ".exit.json")
+            deploy.write_json(directory / "host-exit.json", {"file": str(exit_file)})
+            self.cmdlines[waiter] = "\0".join(["bun", "--no-env-file", "-e", "fixture-source", "--", json.dumps({"command": [str(directory), "codex"]})])
+            drain = "\0".join(["sh", "-c", "fixture-drain", "sh", str(directory / "startup.fifo"), str(directory / "startup.stderr"), "16384"])
+            self.cmdlines.update({leader: drain, subshell: drain, waiter + 3: "dd\0bs=16384", waiter + 4: "tee\0-a", waiter + 5: "wc\0-c"})
+            self.parents.update({waiter: parent, host: waiter, leader: parent, subshell: leader,
+                                 waiter + 3: subshell, waiter + 4: subshell, waiter + 5: subshell})
+            for pid in pids:
+                self.pgroups[pid] = waiter if pid == waiter else leader
+                self.descriptors[pid] = [(2 if pid == waiter else 3, 9, index + 100, True)]
+            scope = "delegatus-agent-codex-" + str(index) + ".scope"
+            control = "/user.slice/delegatus-agents.slice/" + scope
+            self.groups[host] = control + "/agent"
+            self.scopes[scope] = {"Id": scope, "BindsTo": self.adapter.unit, "After": self.adapter.unit,
+                                  "ActiveState": "active", "ControlGroup": control}
+            identity = lambda pid: {"pid": pid, "startIdentity": str(pid) + ":" + str(pid), "bootEpoch": "fixture-boot"}
+            rows.append({"conversationId": "synthetic-host-" + str(index), "turnState": "busy" if index < 2 else "idle",
+                         "pipeline": None, "evidenceSource": "transcript", "host": {"state": "alive", "kind": "structured",
+                         "pid": host, "process": identity(host), "exitWriter": {"process": identity(waiter), "exitFile": str(exit_file)}}})
+            groups.append({"pids": pids, "waiter": waiter, "host": host, "leader": leader, "directory": directory, "row": rows[-1], "scope": self.scopes[scope]})
+        self.members = self.members + [pid for group in groups for pid in group["pids"]]
+        self.custody_fixture_rows = rows
+        self.adapter.census_adapter = lambda *args: {"conversations": self.custody_fixture_rows, "unselectedCount": 0,
+            "selection": {"matched": len(self.custody_fixture_rows), "selected": len(self.custody_fixture_rows),
+                          "recoveryPending": 0, "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}
+        return groups
+
+    def custody_refusal(self, expected, reason=None):
+        with self.assertRaises(deploy.LeftoverProcesses) as refusal:
+            self.adapter.preflight()
+        self.assertEqual([row["pid"] for row in refusal.exception.members], sorted(expected))
+        if reason:
+            self.assertTrue(any(row["reason"] == reason for row in refusal.exception.members), refusal.exception.members)
+        self.assert_no_switch()
+        return refusal.exception.members
+
+    def test_twenty_native_waiters_and_one_hundred_drains_pass_read_only(self):
+        groups = self.helper_groups(20)
+        # Drive the real /proc parser against an on-disk fixture, including
+        # symlinked descriptors sharing actual FIFO device/inode identities.
+        proc = self.root / "proc"
+        fifos = {}
+        for pid in [101, 102, 103, 104, USER_MANAGER, *[pid for group in groups for pid in [*group["pids"], group["host"]]]]:
+            directory = proc / str(pid)
+            (directory / "fd").mkdir(parents=True)
+            for field in ["stat", "cgroup"]:
+                (directory / field).write_text(self.process(pid, field))
+            (directory / "cmdline").write_bytes(self.process(pid, "cmdline"))
+            (directory / "cwd").symlink_to(self.process(pid, "cwd"), target_is_directory=True)
+            for fd, dev, inode, fifo in self.descriptors.get(pid, []):
+                key = (dev, inode)
+                if key not in fifos:
+                    fifos[key] = self.root / ("fifo-" + str(inode))
+                    os.mkfifo(fifos[key])
+                (directory / "fd" / str(fd)).symlink_to(fifos[key])
+        self.adapter.process_read = lambda pid, field: deploy.proc_field(pid, field, root=proc)
+        output = io.StringIO()
+        with patch.object(deploy, "Checkout", return_value=self.adapter), patch.object(sys, "argv", ["deploy-checkout.py", "--preflight", "--config", str(self.plan)]), contextlib.redirect_stdout(output):
+            self.assertEqual(deploy.main(), 0)
+        self.assertIn("20 wait owners and 100 helpers", output.getvalue())
+        self.assertEqual(self.adapter.leftovers_found, [])
+        self.assertEqual(len(self.adapter.helper_custody), 120)
+        self.assert_no_switch()
+
+    def test_mixed_current_and_orphaned_groups_count_only_new_custody(self):
+        groups = self.helper_groups(2)
+        for pid in [groups[0]["waiter"], groups[0]["leader"]]:
+            self.parents[pid] = 102
+        self.adapter.preflight()
+        self.assertEqual(len(self.adapter.helper_custody), 6)
+        self.assert_no_switch()
+
+    def test_drain_between_blocks_and_after_cap_pass(self):
+        group = self.helper_groups()[0]
+        for cat in [False, True]:
+            self.members = [101, 102, 103, group["waiter"], group["leader"]] + ([group["waiter"] + 3] if cat else [])
+            if cat:
+                self.cmdlines[group["waiter"] + 3] = "cat"
+                self.parents[group["waiter"] + 3] = group["leader"]
+            self.adapter.preflight()
+            self.assertEqual(len(self.adapter.helper_custody), 3 if cat else 2)
+
+    def test_legacy_launch_and_stdio_waiter_without_fifo_pass(self):
+        group = self.helper_groups()[0]
+        args = self.cmdlines[group["waiter"]].split("\0")
+        args[-1] = json.dumps(json.loads(args[-1])["command"])
+        self.cmdlines[group["waiter"]] = "\0".join(args)
+        self.adapter.preflight()
+        self.assertEqual(len(self.adapter.helper_custody), 6)
+        self.members = [101, 102, 103, group["waiter"]]
+        self.descriptors[group["waiter"]] = [(2, 9, 100, False)]
+        self.adapter.preflight()
+        self.assertEqual(list(self.adapter.helper_custody), [group["waiter"]])
+
+    def test_custody_switch_releases_without_signals_and_is_never_captured(self):
+        self.relocating()
+        group = self.helper_groups()[0]
+        self.adapter.preflight()
+        captured = self.adapter.generation(self.service_group)
+        self.assertTrue(set(captured).isdisjoint(self.adapter.helper_custody))
+        self.surviving = set(group["pids"])
+        self.leave_at = {pid: 10 for pid in group["pids"]}
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual((result["relocation"]["outcome"], result["relocation"]["placement"]), ("released", "placed"))
+        self.assertEqual((result["relocation"]["survivors"], self.signals), ([], []))
+
+    def test_lingering_custody_refuses_retirement_but_always_starts(self):
+        self.relocating()
+        group = self.helper_groups()[0]
+        self.surviving = {group["waiter"]}
+        # Fixture hosts end at the bound scope stop, independently of the
+        # service cgroup membership. All other process reads remain synthetic.
+        read = self.adapter.process_read
+        def process(pid, field):
+            if self.old_gone and pid == group["host"]:
+                raise FileNotFoundError()
+            return read(pid, field)
+        self.adapter.process_read = process
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        relocation = result["relocation"]
+        self.assertEqual((result["verdict"], relocation["outcome"], relocation["placement"]), ("fail", "unproven-survivors", "failed"))
+        self.assertEqual(relocation["survivors"][0]["reason"], "protected helper custody; host ended")
+        self.assertEqual(self.signals, [])
+        self.assert_back_in_service(result)
+
+    def test_waiter_identity_registry_parent_and_scope_fences(self):
+        mutations = ["missing-writer", "missing-field", "missing-host", "duplicate-row", "host-reused", "waiter-reused", "waiter-boot", "boot", "parent", "inside", "no-scope",
+                     "BindsTo", "After", "ActiveState", "ControlGroup", "scope-read"]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                group = self.helper_groups()[0]
+                host = group["row"]["host"]
+                if mutation == "missing-writer": host["exitWriter"] = None
+                elif mutation == "missing-field": del host["exitWriter"]
+                elif mutation == "missing-host": self.custody_fixture_rows.clear()
+                elif mutation == "duplicate-row": self.custody_fixture_rows.append(group["row"])
+                elif mutation == "host-reused": host["process"]["startIdentity"] += "-reused"
+                elif mutation == "waiter-reused": host["exitWriter"]["process"]["startIdentity"] += "-reused"
+                elif mutation == "waiter-boot": host["exitWriter"]["process"]["bootEpoch"] = "other-boot"
+                elif mutation == "boot": host["process"]["bootEpoch"] = "other-boot"
+                elif mutation == "parent": self.parents[group["host"]] = USER_MANAGER
+                elif mutation == "inside": self.groups[group["host"]] = self.service_group
+                elif mutation == "no-scope": self.groups[group["host"]] = "/other.slice/other.service"
+                elif mutation in ["BindsTo", "After"]: group["scope"][mutation] = "other.service"
+                elif mutation == "ActiveState": group["scope"][mutation] = "inactive"
+                elif mutation == "ControlGroup": group["scope"][mutation] += "-other"
+                elif mutation == "scope-read":
+                    execute = self.adapter.command
+                    def unavailable(args, cwd=None):
+                        if "BindsTo" in args:
+                            raise RuntimeError("scope unavailable")
+                        return execute(args, cwd)
+                    self.adapter.command = unavailable
+                reason = ("no registry writer record names it" if mutation in ["missing-writer", "missing-field", "missing-host", "duplicate-row", "waiter-reused", "waiter-boot"]
+                          else "host identity differs from registry" if mutation in ["host-reused", "boot"]
+                          else "host is not its child" if mutation == "parent"
+                          else "host not in an agent scope outside the service" if mutation in ["inside", "no-scope"]
+                          else "host scope not bound to the unit")
+                self.custody_refusal(group["pids"], "wait owner: " + reason)
+
+    def test_drain_fifo_group_parent_program_and_ambiguity_fences(self):
+        for mutation in ["unbound", "fifo", "pgid", "sid", "parent", "program", "two-leaders", "two-subshells", "ambiguous", "shared-fifo"]:
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                groups = self.helper_groups(2 if mutation in ["ambiguous", "shared-fifo"] else 1)
+                group = groups[0]
+                waiter, leader = group["waiter"], group["leader"]
+                expected = [waiter + 3]
+                if mutation == "unbound": self.descriptors[waiter + 3] = [(3, 9, 999, True)]
+                elif mutation == "fifo":
+                    self.descriptors[leader] = [(3, 9, 999, True)]
+                    expected = group["pids"][1:]
+                elif mutation == "pgid": self.pgroups[waiter + 3] = 888
+                elif mutation == "sid": self.sessions[waiter + 3] = 888
+                elif mutation == "parent": self.parents[waiter + 3] = USER_MANAGER
+                elif mutation == "program": self.cmdlines[waiter + 3] = "unexpected"
+                elif mutation == "two-leaders":
+                    self.cmdlines[waiter + 3] = self.cmdlines[leader]
+                    self.pgroups[waiter + 3] = waiter + 3
+                    expected = group["pids"][1:]
+                elif mutation == "two-subshells":
+                    self.cmdlines[waiter + 3] = self.cmdlines[leader]
+                    self.parents[waiter + 3] = leader
+                    expected = group["pids"][2:]
+                elif mutation == "ambiguous":
+                    self.descriptors[waiter + 3].append((4, 9, 101, True))
+                elif mutation == "shared-fifo":
+                    for pid in groups[1]["pids"]:
+                        self.descriptors[pid] = [(2 if pid == groups[1]["waiter"] else 3, 9, 100, True)]
+                    expected = group["pids"][1:] + groups[1]["pids"][1:]
+                reason = ("no current serving or agent owner" if mutation == "unbound"
+                          else "stderr drain: no single leader for the owner's FIFO" if mutation in ["fifo", "two-leaders"]
+                          else "stderr drain: process group differs from its leader" if mutation in ["pgid", "sid"]
+                          else "stderr drain: parent link outside the group" if mutation in ["parent", "two-subshells"]
+                          else "stderr drain: unexpected program" if mutation == "program"
+                          else "stderr drain: ambiguous FIFO")
+                self.custody_refusal(expected, reason)
+
+    def test_launch_directory_and_exit_slot_fences(self):
+        for mutation in ["missing", "discard", "wrong-slot", "symlink-file", "fifo-file", "oversized", "symlink-directory", "public-directory", "fifo-outside"]:
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                group = self.helper_groups()[0]
+                directory = group["directory"]
+                binding = directory / "host-exit.json"
+                expected = group["pids"]
+                if mutation == "missing": binding.unlink()
+                elif mutation == "discard": deploy.write_json(binding, {"discard": True})
+                elif mutation == "wrong-slot": deploy.write_json(binding, {"file": str(self.state / "host-exits/other.exit.json")})
+                elif mutation == "symlink-file":
+                    other = directory / "other.json"
+                    binding.rename(other)
+                    binding.symlink_to(other)
+                elif mutation == "fifo-file":
+                    binding.unlink()
+                    os.mkfifo(binding)
+                elif mutation == "oversized": binding.write_text(" " * 4097)
+                elif mutation == "symlink-directory":
+                    other = directory.with_name("other-directory")
+                    directory.rename(other)
+                    directory.symlink_to(other, target_is_directory=True)
+                elif mutation == "public-directory": directory.chmod(0o755)
+                elif mutation == "fifo-outside":
+                    args = self.cmdlines[group["leader"]].split("\0")
+                    args[4] = str(self.root / "startup.fifo")
+                    self.cmdlines[group["leader"]] = "\0".join(args)
+                    expected = group["pids"][1:]
+                self.custody_refusal(expected, "stderr drain: no single leader for the owner's FIFO" if mutation == "fifo-outside"
+                                     else "wait owner: launch directory does not name the host's exit record")
+
+    def test_identity_change_during_custody_uses_moving_member_refusal(self):
+        group = self.helper_groups()[0]
+        execute = self.adapter.command
+        def changed(args, cwd=None):
+            result = execute(args, cwd)
+            if "BindsTo" in args:
+                self.moving.add(group["waiter"])
+            return result
+        self.adapter.command = changed
+        with self.assertRaisesRegex(RuntimeError, "service cgroup member changed while it was read"):
+            self.adapter.preflight()
+        self.assert_no_switch()
+
+    def test_host_and_drain_changes_during_descriptor_reads_refuse(self):
+        for changed in ["host", "drain", "host-parent"]:
+            with self.subTest(changed=changed):
+                self.setUp()
+                group = self.helper_groups()[0]
+                read = self.adapter.process_read
+                def process(pid, field):
+                    value = read(pid, field)
+                    if field == "fds":
+                        if changed == "host-parent": self.parents[group["host"]] = USER_MANAGER
+                        else: self.moving.add(group["host"] if changed == "host" else group["leader"])
+                    return value
+                self.adapter.process_read = process
+                with self.assertRaises(RuntimeError) if changed == "host-parent" else self.assertRaisesRegex(RuntimeError, "service cgroup member changed while it was read"):
+                    self.adapter.preflight()
+                self.assert_no_switch()
+
+    def test_older_release_refusal_never_enters_custody(self):
+        group = self.helper_groups(parent=102)[0]
+        read = self.adapter.process_read
+        self.adapter.process_read = lambda pid, field: str(self.releases / ("d" * 12)) if pid in group["pids"] and field == "cwd" else read(pid, field)
+        refused = self.custody_refusal(group["pids"], "older release in service cgroup")
+        self.assertTrue(all(row["reason"] == "older release in service cgroup" for row in refused))
+
+    def test_proc_fifo_descriptor_identity_and_table_bound(self):
+        fifo = self.root / "descriptor.fifo"
+        os.mkfifo(fifo)
+        fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            self.assertIn((fd, info.st_dev, info.st_ino, True), deploy.proc_field(os.getpid(), "fds"))
+            # Supply numeric descriptor names while keeping the stat real.
+            class Descriptor:
+                name = "9"
+                stat = staticmethod(lambda: info)
+            with patch.object(pathlib.Path, "iterdir", return_value=iter([Descriptor()] * 65)):
+                with self.assertRaisesRegex(RuntimeError, "exceeds its bound"):
+                    deploy.proc_field(os.getpid(), "fds")
+        finally:
+            os.close(fd)
 
     def bootstrap_chain(self, intermediate=False):
         self.main_pid = 90
