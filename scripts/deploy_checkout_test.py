@@ -1415,6 +1415,35 @@ class CheckoutIntegration(unittest.TestCase):
                     self.assertEqual(str(refusal.exception), "service cgroup member changed while it was read")
                 self.assert_no_switch()
 
+    def test_mutable_fifo_scope_and_exit_binding_must_survive_final_admission(self):
+        for changed in ["fifo", "scope", "exit-binding"]:
+            with self.subTest(changed=changed):
+                self.setUp()
+                group = self.helper_groups()[0]
+                read = self.adapter.process_read
+                mutated = False
+
+                def process(pid, field):
+                    nonlocal mutated
+                    value = read(pid, field)
+                    if field == "fds" and not mutated:
+                        mutated = True
+                        if changed == "fifo":
+                            # Replace the source table after this read returned
+                            # its earlier snapshot; the final proof sees inode drift.
+                            self.descriptors[group["waiter"]] = [(2, 9, 9999, True)]
+                        elif changed == "scope":
+                            self.groups[group["host"]] = self.service_group + "/unbound"
+                        else:
+                            deploy.write_json(group["directory"] / "host-exit.json", {"discard": True})
+                    return value
+
+                self.adapter.process_read = process
+                refused = self.custody_refusal(group["pids"],
+                    "custody evidence changed before final admission")
+                self.assertTrue(mutated)
+                self.assert_no_switch()
+
     def test_older_release_refusal_never_enters_custody(self):
         group = self.helper_groups(parent=102)[0]
         read = self.adapter.process_read

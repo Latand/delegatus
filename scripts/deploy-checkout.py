@@ -1092,6 +1092,31 @@ class Checkout:
         return False
 
     def custody(self, group, candidates):
+        """Require custody links to survive a fresh proof before admission.
+
+        Process identities alone do not preserve the FIFO, host scope, or
+        private exit binding used by the first proof. Keep only members whose
+        complete proof is identical on two consecutive reads. If the second
+        read loses any link, that member remains in ``found`` and the normal
+        LeftoverProcesses fence refuses preflight.
+        """
+        first = self._custody_once(group, candidates)
+        if not first:
+            return first
+        try:
+            second = self._custody_once(group, candidates)
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
+            second = {}
+        stable = {pid: evidence for pid, evidence in first.items()
+                  if second.get(pid) == evidence}
+        changed = set(first) - set(stable)
+        for member in candidates:
+            if member["pid"] in changed:
+                member["reason"] = "custody evidence changed before final admission"
+        return {pid: {key: value for key, value in evidence.items() if key != "proof"}
+                for pid, evidence in stable.items()}
+
+    def _custody_once(self, group, candidates):
         """Read-only, bidirectional proof for otherwise unowned members.
         Fixed diagnostics deliberately contain neither argv nor private paths.
         No custody member can become a retirement root.
@@ -1115,10 +1140,13 @@ class Checkout:
                     != (parent_pid(before), process_group(before), process_session(before))):
                 raise RuntimeError("service cgroup member changed while it was read")
 
-        def admit(pid, role, host):
+        def admit(pid, role, host, proof=None):
             unchanged(pid, processes[pid]["member"]["startIdentity"])
             admitted[pid] = {"pid": pid, "startIdentity": processes[pid]["member"]["startIdentity"],
-                             "role": role, "hostPid": host["pid"], "hostStartIdentity": host["startIdentity"]}
+                             "role": role, "hostPid": host["pid"], "hostStartIdentity": host["startIdentity"],
+                             "proof": {"parentPid": parent_pid(processes[pid]["stat"]),
+                                       "processGroup": process_group(processes[pid]["stat"]),
+                                       "session": process_session(processes[pid]["stat"]), **(proof or {})}}
 
         # Scope properties are read together, once per inventory. Missing or
         # contradictory blocks grant nothing.
@@ -1229,8 +1257,13 @@ class Checkout:
             except (OSError, ValueError, TypeError, KeyError):
                 continue
             unchanged(host["pid"], start_identity(host_stat))
-            admit(pid, "wait-owner", {"pid": host["pid"], "startIdentity": start_identity(host_stat)})
-            waiters[pid] = {"directory": directory, "host": {"pid": host["pid"], "startIdentity": start_identity(host_stat)}}
+            host_identity = {"pid": host["pid"], "startIdentity": start_identity(host_stat)}
+            wait_proof = {"hostCgroup": host_group, "scope": dict(scope),
+                          "directory": [launch_info.st_dev, launch_info.st_ino, launch_info.st_mode, launch_info.st_uid],
+                          "exitBindingFile": [info.st_dev, info.st_ino, info.st_mode, info.st_uid],
+                          "exitBinding": binding}
+            admit(pid, "wait-owner", host_identity, wait_proof)
+            waiters[pid] = {"directory": directory, "host": host_identity, "proof": wait_proof}
 
         # The fd table is bounded, and a failed read grants no drain custody.
         if not waiters:
@@ -1246,6 +1279,8 @@ class Checkout:
             for fd, dev, inode, fifo in fds[pid]:
                 if fd == 2 and fifo:
                     fifo_owners.setdefault((dev, inode), []).append(pid)
+                    waiters[pid]["proof"]["fifo"] = [fd, dev, inode, fifo]
+                    admitted[pid]["proof"]["fifo"] = [fd, dev, inode, fifo]
         holders = {pid: {(dev, inode) for _, dev, inode, fifo in descriptors if fifo and (dev, inode) in fifo_owners}
                    for pid, descriptors in fds.items() if pid not in admitted}
         for fifo, owners in fifo_owners.items():
@@ -1284,7 +1319,8 @@ class Checkout:
                 elif pid != leader and pid not in subshells and (not args or os.path.basename(args[0]) not in ["dd", "tee", "wc", "cat"]):
                     member["reason"] = "stderr drain: unexpected program"
                 else:
-                    admit(pid, "stderr-drain", waiter["host"])
+                    admit(pid, "stderr-drain", waiter["host"],
+                          {"fifo": list(fifo), "waiterProof": waiter["proof"]})
         # Recheck every admitted identity after the final filesystem/systemd
         # read, so an earlier member cannot change while later proof runs.
         for pid, evidence in admitted.items():
