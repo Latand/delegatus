@@ -879,7 +879,7 @@ function openRawDatabase(filename: string): Database {
         }
         if ([...stateSchemaNames,
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
-          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
+          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete", "pipeline_tick_priority_cursor"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
           && (names.has("pipeline_tick_obligations_v2") || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineControllerReferencesReady(db, names)
@@ -2378,6 +2378,16 @@ export class SqliteStateCollection<T> {
       .get(now, JSON.stringify(excluded)));
   }
 
+  async recordPipelineTickSelection(work: PipelineTickWork, now: number): Promise<void> {
+    await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
+      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
+      if (work.dirty === 1 || work.due_at <= now) {
+        db.query("UPDATE pipeline_tick_priority_cursor SET due_at=?,row_order=?,row_key=? WHERE kind=?")
+          .run(work.due_at, work.row_order, work.row_key, work.dirty === 1 ? "dirty" : "due");
+      }
+    });
+  }
+
   async acknowledgePipelineTick(work: PipelineTickWork, cursor: number, dueAt: number): Promise<void> {
     await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
       db.query("UPDATE pipeline_tick_work SET attempt_cursor=? WHERE row_key=?").run(cursor, work.row_key);
@@ -2389,7 +2399,6 @@ export class SqliteStateCollection<T> {
       db.query(`DELETE FROM pipeline_tick_work WHERE row_key=? AND generation=? AND NOT EXISTS
         (SELECT 1 FROM state_rows WHERE collection='pipelines' AND row_key=?)`)
         .run(work.row_key, work.generation, work.row_key);
-      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
     });
   }
 
@@ -2397,7 +2406,6 @@ export class SqliteStateCollection<T> {
     await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
       db.query("UPDATE pipeline_tick_work SET dirty=1,due_at=0 WHERE row_key=? AND generation=?")
         .run(work.row_key, work.generation);
-      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
     });
   }
 

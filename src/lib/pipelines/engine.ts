@@ -36,7 +36,7 @@ import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptP
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { buildReleaseTagPolicy } from "./releaseTagPolicy";
 import { controllerClosedHosts, controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
-import { startPipelineControllerJob, pipelineControllerJobLanes, waitForPipelineControllerJob } from "./controllerJobs";
+import { startPipelineControllerJob, pipelineControllerJobLanes, reportProvisioningPhase, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leasedOperationPorts, OperationLeaseExpiredError, operationPortIdentity, withoutOperationLease } from "@/lib/operationLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -2878,7 +2878,8 @@ export function defaultPipelinePorts(
     conversationOperatorStopped: async (conversationId, since, ignored) => {
       const client = runtimeHostClient();
       if (!client) throw new Error("runtime host unreachable");
-      return hasRuntimeSwitchKill(client, conversationId, since, ignored, true);
+      const signal = currentOperationLease()?.abort.signal;
+      return hasRuntimeSwitchKill(signal ? withRuntimeRecoveryReads(client, signal) : client, conversationId, since, ignored, true);
     },
     runtimeSwitchDelivery: async (conversationId, key) => {
       const admission = registry.deliveryAdmissionForKey(conversationId, key);
@@ -11492,8 +11493,22 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           if (wait) return { code: 1, stdout: "", stderr: wait };
         }
         if (signal?.aborted) return { code: null, stdout: "", stderr: "pipeline provisioning cancelled" };
-        try { return await exec(command, args, cwd, signal, options); }
-        catch (error) { return { code: null, stdout: "", stderr: String(error) }; }
+        const step = command !== "git" ? null : args.includes("--git-common-dir") ? "common-directory"
+          : args[0] === "fetch" ? "fetch" : args[0] === "worktree" && args[1] === "add" ? "worktree-add" : null;
+        if (step === "common-directory") reportProvisioningPhase(job.pipeline.id, { phase: "state-validated" });
+        if (step) reportProvisioningPhase(job.pipeline.id, { phase: "git-started", step });
+        let succeeded = false;
+        try {
+          const result = await exec(command, args, cwd, signal, options);
+          succeeded = result.code === 0;
+          return result;
+        } catch (error) {
+          return { code: null, stdout: "", stderr: String(error) };
+        } finally {
+          if (step) reportProvisioningPhase(job.pipeline.id, {
+            phase: "git-finished", step, status: signal?.aborted ? "cancelled" : succeeded ? "ok" : "failed",
+          });
+        }
       };
       let releaseRepository: (() => void) | undefined;
       let repository: string | undefined, tail: Promise<void> | undefined;
@@ -11647,7 +11662,7 @@ async function tickPipeline(
   return performanceSpans.sync("controller.lane", () => controllerTickFingerprint(pipeline) !== before);
 }
 
-const tickStore = globalThis as unknown as { __llvPipelineTick?: boolean | symbol; __llvCpuIngressReads?: Map<string, number> };
+const tickStore = globalThis as unknown as { __llvPipelineTick?: symbol; __llvScopedPipelineTicks?: Map<string, symbol>; __llvCpuIngressReads?: Map<string, number> };
 
 const APPROVED_REMOTE_HEAD_UNVERIFIED = "approved review flow could not verify the remote pipeline head";
 const APPROVED_REMOTE_HEAD_WAIT_PREFIX = "approved review flow waiting for the remote pipeline head: ";
@@ -14423,7 +14438,10 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
   assertOperationLease();
   ports = leasedOperationPorts(ports);
-  const scoped = Boolean(controllerPipelineKeys());
+  const keys = controllerPipelineKeys();
+  const scoped = Boolean(keys);
+  const lane = keys?.length === 1 ? JSON.stringify([stateDir(), keys[0]]) : null;
+  const scopedTicks = tickStore.__llvScopedPipelineTicks ??= new Map<string, symbol>();
   if (!hasLocalPipelineController() && ports.structuredDeliveryPublication?.() === "unbound") {
     // An inventory sidecar owns no delivery publisher. Hand off before Git,
     // registry reconciliation or another lane can delay the controller wake.
@@ -14436,13 +14454,20 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     await phaseDone;
     return run(waitOutsideCapacity);
   }, () => controllerPipelineVersion(id), kind);
-  if (tickStore.__llvPipelineTick) {
+  if (tickStore.__llvPipelineTick || (lane === null ? scopedTicks.size > 0 : scopedTicks.has(lane))) {
     await ports.cpuAdmissionReconcile?.(ports);
-    return { pipelines: [], changed: false };
+    return { pipelines: [], changed: false, ...(scoped ? { retry: true } : {}) };
   }
   const tickOwner = Symbol("pipeline tick");
-  tickStore.__llvPipelineTick = tickOwner;
+  if (lane === null) tickStore.__llvPipelineTick = tickOwner;
+  else scopedTicks.set(lane, tickOwner);
   const previousStageBranchProtections = ports.stageBranchProtections;
+  const releaseTick = () => {
+    if ((lane === null ? tickStore.__llvPipelineTick : scopedTicks.get(lane)) !== tickOwner) return;
+    ports.stageBranchProtections = previousStageBranchProtections;
+    if (lane === null) delete tickStore.__llvPipelineTick;
+    else scopedTicks.delete(lane);
+  };
   let followUp = false;
   let admissionWork: Promise<void> | null = null, activationWork: Promise<void> | null = null, admissionChanged = false;
   const ingressHeads: Awaited<ReturnType<typeof collectReviewIngressHeads>> = new Map();
@@ -14527,10 +14552,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   const signal = currentOperationLease()?.abort.signal;
   const abandon = () => withoutOperationLease(() => {
     if (admissionWatch) clearInterval(admissionWatch);
-    if (tickStore.__llvPipelineTick === tickOwner) {
-      ports.stageBranchProtections = previousStageBranchProtections;
-      tickStore.__llvPipelineTick = false;
-    }
+    releaseTick();
     completePhase();
   });
   signal?.addEventListener("abort", abandon, { once: true });
@@ -14854,10 +14876,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     if (!scoped && pending.length && publicationPass < 3) {
       await stopAdmissionPolling();
-      if (tickStore.__llvPipelineTick === tickOwner) {
-        ports.stageBranchProtections = previousStageBranchProtections;
-        tickStore.__llvPipelineTick = false;
-      }
+      releaseTick();
       const settled = await tickPipelines(entries, ports, publicationPass + 1);
       return { ...settled, changed: true };
     }
@@ -14885,10 +14904,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   } finally {
     await stopAdmissionPolling();
     signal?.removeEventListener("abort", abandon);
-    if (tickStore.__llvPipelineTick === tickOwner) {
-      ports.stageBranchProtections = previousStageBranchProtections;
-      tickStore.__llvPipelineTick = false;
-    }
+    releaseTick();
     completePhase();
     /* Scheduled after the re-entry guard clears so the microtask tick cannot
        be swallowed by it. */
@@ -16062,8 +16078,10 @@ async function admitPipelineFromRequest(
       if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
       const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
+      if (pipeline.state === "provisioning") reportProvisioningPhase(pipeline.id, { phase: "accepted", admission: "queued" }, entry.queuedAt);
       return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
     }
+    if (!replayed && created.state === "provisioning") reportProvisioningPhase(created.id, { phase: "accepted", admission: "direct" });
     return { pipeline: created, ...(replayed && options.conversationSource ? { replayed: true } : {}), ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   }
   return withPipelineMutation(async (pipelines, persist) => {
@@ -16093,6 +16111,7 @@ async function admitPipelineFromRequest(
     assignPipelineDelivery(pipeline, target, targetInput?.comparison);
     pipelines.push(pipeline);
     await persist();
+    if (pipeline.state === "provisioning") reportProvisioningPhase(pipeline.id, { phase: "accepted", admission: "direct" });
     return { pipeline, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer, ...initializationAnswer };
   });
 }
