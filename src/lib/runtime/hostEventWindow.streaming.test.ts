@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { expect, test } from "bun:test";
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import { RuntimeReplayGapError, type RuntimeEvent } from "./engineHost";
+import { createEngineHostLedgerProjection } from "./engineHostEvents";
 import { attachRuntimeEvents, HostEventWindow, runtimeEventsAfter, type RuntimeEventSubscriber } from "./hostEventWindow";
 
 const event = (seq: number, text = `part ${seq}`): Extract<RuntimeEvent, { kind: "delta" }> => ({ kind: "delta", turnId: "turn", text, seq });
@@ -197,6 +198,49 @@ test.each([240, 6 * 1024 * 1024])("a retained live original survives candidate e
   await pending;
   expect(window.events).toEqual(live);
   expect(window.heapAttribution().windowBytes).toBe(byteLimit);
+});
+
+test.each([240, 6 * 1024 * 1024])("overlapping durable projections preserve historical rows at the %s byte limit", async byteLimit => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "window-overlap-"));
+  const store = new FileRuntimeEventStore(directory);
+  const project = createEngineHostLedgerProjection();
+  // The projector holds eight characters for the next delta in this turn.
+  const first = project(event(1, "h".repeat(14) + "[1234567"));
+  const liveTwo = event(2, "]" + "x".repeat(7));
+  const durableTwo = project(liveTwo);
+  const size = (value: RuntimeEvent) => Buffer.byteLength(JSON.stringify(value));
+  expect(size(first)).toBe(64);
+  expect(size(liveTwo)).toBe(58);
+  expect(size(durableTwo)).toBe(66);
+  const liveThree = event(3, "a".repeat(byteLimit - size(first) - size(liveTwo) - size(event(3, ""))));
+  store.append("thread", first);
+  const expected = new HostEventWindow(byteLimit);
+  expected.restore([first, liveTwo, liveThree]);
+  const window = new HostEventWindow(byteLimit);
+  window.append(first);
+  window.release();
+  let resume!: () => void;
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  let scans = 0;
+  let loads = 0;
+  const pending = window.refill({
+    append: (id, value) => store.append(id, value),
+    load: () => { loads++; throw new Error("unexpected ledger load"); },
+    scan: async (id, visit) => { scans++; await gate; return store.scan(id, visit); },
+  }, "thread");
+  store.append("thread", durableTwo);
+  window.append(liveTwo);
+  store.append("thread", project(liveThree));
+  window.append(liveThree);
+  resume();
+  await pending;
+  expect(scans).toBe(1);
+  expect(loads).toBe(0);
+  expect(window.events.map(value => value.seq)).toEqual([1, 2, 3]);
+  expect(hash(window.events)).toBe(hash(expected.events));
+  expect(window.heapAttribution()).toEqual(expected.heapAttribution());
+  expect(window.heapAttribution().windowBytes).toBe(byteLimit);
+  expect(runtimeEventsAfter(window.events, 0, () => { throw new Error("unexpected replay read"); })).toEqual(expected.events);
 });
 
 test("invalid attach cursors cannot start an unobserved refill", () => {
