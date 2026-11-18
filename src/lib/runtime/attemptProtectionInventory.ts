@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import { statePath } from "../configDir";
 
 export type ProtectionMarker = { version: string; content?: Buffer };
 const inventoryRoot = (original: string) => statePath("attempt-protection", createHash("sha256").update(original).digest("hex"));
 const filename = (directory: string, original = directory) => path.join(inventoryRoot(original), directory === original ? "root.sqlite" : "quarantine.sqlite");
+const openInventory = (file: string, readonly = false): Database => {
+  const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+  if (!sqlite) throw new Error("Attempt protection inventory requires Bun");
+  return new sqlite.Database(file, readonly ? { readonly: true } : { create: true });
+};
 export function forgetAttemptProtection(directory: string, original = directory) {
   if (directory === original) fs.rmSync(inventoryRoot(original), { recursive: true, force: true });
   else fs.rmSync(filename(directory, original), { force: true });
@@ -23,7 +28,7 @@ export class AttemptProtectionInventory {
     this.admitted(directory);
     const file = filename(directory, original), binding = JSON.stringify([directory, version]);
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    this.db = new Database(file, { create: true });
+    this.db = openInventory(file);
     fs.chmodSync(file, 0o600);
     this.db.exec("PRAGMA busy_timeout=0; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-2048; CREATE TABLE IF NOT EXISTS binding(version TEXT); CREATE TABLE IF NOT EXISTS directories(file TEXT PRIMARY KEY, version TEXT, readable INTEGER); CREATE TABLE IF NOT EXISTS markers(file TEXT PRIMARY KEY, version TEXT NOT NULL, content BLOB); CREATE INDEX IF NOT EXISTS pending ON directories(file) WHERE version IS NULL");
     const old = this.db.query<{ version: string }, []>("SELECT version FROM binding").get();
@@ -42,7 +47,7 @@ export class AttemptProtectionInventory {
    * Traversal never restarts merely because the quarantine has a fresh name. */
   private rebase(original: string, version: string, checkBudget: () => void) {
     if (!AttemptProtectionInventory.exists(original)) return;
-    const source = new Database(filename(original), { readonly: true });
+    const source = openInventory(filename(original), true);
     try {
       if (source.query("SELECT 1 FROM directories WHERE version IS NULL LIMIT 1").get()) return;
       const root = source.query<{ version: string }, [string]>("SELECT version FROM directories WHERE file=?").get(original);
