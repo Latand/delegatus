@@ -1585,6 +1585,35 @@ test.each(["queued", "checking", "waiting-checks", "updating", "merging", "refre
   });
 
 describe("refresh retry recovery", () => {
+  test("retry-merge cannot bypass a different lane's active PR delivery", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const legacy = completedLane("legacy-merge");
+    legacy.workLinks = [{ kind: "pr", repository: REPO, number: 7, addedAt: iso(T0), addedBy: "operator" }];
+    savePipelines([legacy]);
+    const owner = claimedLane("open-pr-owner", { repository: PROJECT, remote: `https://github.com/${REPO}.git`, branch: "refs/heads/delivery", pr: 7 });
+    owner.state = "running";
+    owner.closedAt = null;
+    owner.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+    savePipelines([legacy, owner]);
+    const writes: string[][] = [];
+    const ports = productionAutoMergePorts({ loadPipelines, now: () => T0, cachedState: () => null,
+      write: async args => { writes.push(args); return ""; }, log: () => undefined,
+      run: async () => { throw new Error("the known delivery owner holds this merge before the forge read"); } });
+    await sweepAutoMerge(ports);
+    const retryable = loadPipelines();
+    Object.assign(retryable.find(row => row.id === legacy.id)!.merge!, { state: "blocked", reason: MERGE_REASONS.conflict });
+    savePipelines(retryable);
+
+    const retried = await patchPipeline(legacy.id, { action: "retry-merge" }, { now: () => iso(T0) } as never);
+    expect(retried.pipeline?.merge).toMatchObject({ state: "queued", attempts: 1 });
+    await sweepAutoMerge(ports);
+    expect(loadPipelines().find(row => row.id === legacy.id)?.merge).toMatchObject({
+      state: "queued", reason: `Waiting for delivery lane ${owner.id} to finish`,
+    });
+    expect(writes).toEqual([]);
+  });
+
   async function waitingRefresh(state: Pipeline["state"]) {
     resetAutoMergeForTests();
     setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
