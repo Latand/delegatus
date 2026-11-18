@@ -59,6 +59,8 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
         expect(report.removed).toBeGreaterThan(0);
         expect(fs.existsSync(directories[count - 1]!)).toBeFalse();
         expect(report.outcomes.some((row: { reason: string }) => row.reason.includes("real helper measurement deadline"))).toBeTrue();
+        const exhaustedWindow = JSON.parse(fs.readFileSync(config, "utf8")).exhaustedWindowMs;
+        expect(exhaustedWindow).toBeGreaterThan(0); expect(exhaustedWindow).toBeLessThanOrEqual(deadlineMs);
         expect(report.pass).not.toBeNull();
         expect(report.pass!.position).toBeLessThan(count);
       }

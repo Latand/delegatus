@@ -98,8 +98,7 @@ test.skipIf(process.platform !== "linux")("a finished lane cannot reopen while i
         effectiveRole: f.lane.stages[0]!.effectiveRole, conversationId: "fixture", sessionId: null, agentPath: null,
         paneId: null, flowId: null, startedAt: new Date(NOW - 7200_000).toISOString(),
         completedAt: new Date(NOW - 3600_000).toISOString(), input: null, activatedBy: null,
-        output: null, verdict: "pass", error: null }] }];
-    savePipelines([f.lane]);
+        output: null, verdict: { status: "pass", findings: [] }, error: null }] }];
     const native = removal.removeTreeWithinAttemptBudget;
     let reopened = false, refused = false, removerStarted = false;
     const hook = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (directory, started) => {
@@ -147,6 +146,7 @@ test.skipIf(process.platform !== "linux")("a finished lane cannot reopen while i
         }) as never);
     });
     try {
+        savePipelines([f.lane]);
         const report = await sweepAttemptTemps(f.store, f.options);
         expect(removerStarted).toBeTrue();
         expect(report.errors).toBe(0);
