@@ -84,7 +84,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
     // Install the candidate graph before any later checks execute against
     // node_modules. The supply-chain script repeats a lockfile-only frozen
     // check before it audits.
-    steps.splice(1, 0, { name: "frozen install", command: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"], capped: true });
+    steps.splice(1, 0, { name: "frozen install", command: ["bun", "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"], capped: true });
   }
   const lintFiles = files.filter(lintable).map(file => `./${file}`);
   if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: mode === "pre-push" || lintFiles.length > 40 });

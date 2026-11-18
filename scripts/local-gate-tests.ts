@@ -571,7 +571,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       const sameGraph = graph.shareable && baseGraph.shareable && JSON.stringify(baseGraph.fingerprint) === JSON.stringify(graph.fingerprint);
       const sharedDependencies = sameGraph && existsSync(path.join(root, "node_modules"));
       if (sharedDependencies) symlinkSync(path.join(root, "node_modules"), path.join(target, "node_modules"), "dir");
-      else if (existsSync(path.join(target, "bun.lock"))) execute([process.execPath, "install", "--frozen-lockfile", "--ignore-scripts"], target);
+      else if (existsSync(path.join(target, "bun.lock"))) execute([process.execPath, "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"], target);
       checkout = target;
       log(`touched-tests: baseline setup ${(performance.now() - setupStarted).toFixed(0)}ms (${sharedDependencies ? "shared dependencies" : "separate dependencies"})`);
       return target;

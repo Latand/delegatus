@@ -106,6 +106,8 @@ writes into and removes the other, and checks the source's bytes and modes.
 Hardlinked writable dependency trees are never created by these helpers.
 
 The unmanaged stage-dependency fallback installs with `--backend=copyfile`.
+Comparator baseline installs, publication frozen installs and remote runner
+installs select the same independent-inode backend.
 Its regression installs one loopback-registry package into two subjects with
 separate HOME directories and a shared artifact cache. The second install
 needs no registry requests. Payloads have independent inodes; changing the

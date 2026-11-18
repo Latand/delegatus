@@ -768,7 +768,7 @@ test("dependency candidate installs the frozen graph before later verification",
   const steps = plan("pre-push", ["package.json"], context());
   expect(steps[0]?.name).toBe("privacy");
   expect(steps[1]?.name).toBe("frozen install");
-  expect(steps[1]?.command).toEqual(["bun", "install", "--frozen-lockfile", "--ignore-scripts"]);
+  expect(steps[1]?.command).toEqual(["bun", "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"]);
 });
 test("media deferral preserves the commit selection when the whole diff is media", () => {
   const steps = plan("pre-push", ["image.png"], context({ skippedMedia: ["image.png"] }));
