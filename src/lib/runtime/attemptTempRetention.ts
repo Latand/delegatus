@@ -807,9 +807,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); return; }
-      // The first observation lets an in-flight activation settle. The claim
-      // then fences quarantine and deletion, where eligibility is rechecked.
-      if (stat && dispatchState !== undefined && disposableClosed(dispatchState)) await claim();
       if (options.mode !== "dry-run") await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory),
         stat ? "admitted" : "missing-unexplained", stat ? "acknowledged owned-root retirement admitted" : "missing-unexplained; no removal outcome observed", remaining);
       const result = await sweepStaleTempDirs({

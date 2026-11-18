@@ -26,8 +26,8 @@ metadata and proofs aged 30 seconds require a fresh observation. The
 snapshot covers up to 65,536 directories. At dispatch, native mutation watches
 cover that proof while the sweep checks ownership, checkout links and process
 inputs again. Explicit keep and Git markers, recorded custody, linked report
-evidence, sockets and mounts remain removal guards. A finished lane also
-holds a retirement claim while it is being reclaimed under pressure.
+evidence, sockets and mounts remain removal guards. Expired lanes also hold
+the existing retirement claim while the sweep reclaims them.
 
 Disposable finished-lane roots with a recorded measurement reuse it before
 deletion. These outcomes carry `allocation: "recorded"`.
