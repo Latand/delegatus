@@ -7,6 +7,7 @@ import os
 import pathlib
 import re
 import select
+import selectors
 import shlex
 import signal
 import socket
@@ -23,6 +24,9 @@ import uuid
 
 CPU_SLICE = "delegatus.slice"
 CPU_WEIGHT = "1000"
+SAMPLE_TIMEOUT = 180
+PROTECTED_READERS = 4
+SAMPLE_RETRY_INTERVAL = 10
 
 
 def census_identity(value):
@@ -165,13 +169,14 @@ def process_or_gone(adapter, entry):
 def ready(serving, target, placement=True):
     """The baseline is read with placement=False: putting the service into its
     configured slice is what a restart does, so only the replacement owes it."""
+    checks = ["http", "runtimeSocket", "mcp", "service"] + (["placement"] if placement else [])
     return all(serving.get(role, {}).get("sha") == target
                and serving.get(role, {}).get("healthy") is True
                for role in ["launcher", "viewer", "runtimeHost"]) and all(
-                   passed for name, passed in serving.get("checks", {}).items() if placement or name != "placement")
+                   serving.get("checks", {}).get(name) is True for name in checks)
 
 
-def run_switch(adapter, target, samples=21, interval=15, timeout=180):
+def run_switch(adapter, target, samples=21, interval=15, timeout=SAMPLE_TIMEOUT):
     # Keep termination deferred through recovery and the final cleanup, too.
     with deferred_termination():
         result = None
@@ -208,10 +213,11 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
                     if result is not None:
                         result["recovery"] = completed
                     else:
+                        adapter.last_result = {"verdict": "fail", "target": target, "serving": {},
+                                               "diagnostics": ["exit-recovery:health-unverified"],
+                                               "relocation": relocation, "recovery": completed}
                         with contextlib.suppress(Exception):
-                            adapter.emit({"verdict": "fail", "target": target, "serving": {},
-                                          "diagnostics": ["exit-recovery:health-unverified"],
-                                          "relocation": relocation, "recovery": completed})
+                            adapter.emit(adapter.last_result)
                 if result is not None and (pending or relocation["startAttempts"] != attempts):
                     # The last health sample predates this recovery operation.
                     result["verdict"] = "fail"
@@ -226,7 +232,9 @@ def observe_switch(adapter, target, samples, interval, timeout):
     diagnostics = []
     serving = {}
     protected = []
+    interrupted, unreadable = None, ["interrupted:not-observed"]
     relocation = None
+    adapter.switch_attempted = True
     # Even a publication call which raises after its atomic rename owes samples.
     try:
         adapter.publish()
@@ -239,53 +247,27 @@ def observe_switch(adapter, target, samples, interval, timeout):
         for index in range(samples):
             if index:
                 adapter.clock.sleep(interval)
-            try:
-                for entry in old:
-                    process_or_gone(adapter, entry)
-            except Exception as error:
-                diagnostics.append(type(error).__name__)
-            protected = []
-            for host in hosts:
+            # Only the lock owner can recover a start. Recovery has its own
+            # job-settlement bounds and is outside the read-only sample.
+            if (relocation and relocation["stopSubmitted"]
+                    and (not relocation["started"] or index and serving.get("checks", {}).get("service") is False)):
                 try:
-                    if host.get("startIdentity") and process_or_gone(adapter, host) is not None:
-                        outcome = {"outcome": "preserved", "pipelineId": host.get("pipelineId"),
-                                   "stageId": host.get("stageId"), "attempt": host.get("attempt")}
-                    else:
-                        outcome = retry(lambda: adapter.stage(host), adapter.clock, timeout)
-                    protected.append(outcome)
-                except Exception as error:
-                    protected.append({"outcome": "unknown", "pipelineId": host.get("pipelineId"),
-                                      "stageId": host.get("stageId"), "attempt": host.get("attempt")})
-                    diagnostics.append(type(error).__name__)
-            # Serving is sampled after potentially slow recovery reads, so the
-            # final verdict cannot quote a serving observation from before them.
-            serving = {}
-            def read_serving():
-                nonlocal serving
-                if relocation and relocation["stopSubmitted"]:
                     adapter.recover_start()
-                serving = adapter.serving()
-                if not ready(serving, target):
-                    raise RuntimeError("replacement not ready")
-                return serving
+                except Exception as error:
+                    diagnostics.append("sample-recovery:" + type(error).__name__)
+            sample_started = adapter.clock.now()
+            sample = adapter.sample(old, hosts, target, started if index == samples - 1 else None, index, timeout)
+            serving, protected = sample.serving, sample.protected
+            interrupted, unreadable = sample.interrupted, sample.unreadable
+            for note in sample.diagnostics:
+                if note not in diagnostics:
+                    diagnostics.append(note)
             try:
-                retry(read_serving, adapter.clock, timeout)
-            except Exception as error:
-                diagnostics.append(type(error).__name__)
-            try:
-                adapter.emit({"sample": index + 1, "serving": serving, "protected": protected})
+                adapter.emit({"sample": index + 1, "serving": serving, "protected": protected,
+                              "elapsedMs": round((adapter.clock.now() - sample_started) * 1000),
+                              "budgetMs": round(timeout * 1000), "diagnostics": sample.diagnostics})
             except Exception as error:
                 diagnostics.append("sample-log:" + type(error).__name__)
-    # Read once the samples are over: the booting Viewer records its cuts
-    # before it re-hosts anything, long before the last sample. A list read
-    # with gaps names them in `interruptedUnreadable`; a list that could not be
-    # read at all is null. Either leaves the inventory unknown, which the seat
-    # has to look at, so the switch cannot pass on it.
-    try:
-        interrupted, unreadable = adapter.interrupted(started, hosts)
-    except Exception as error:
-        interrupted, unreadable = None, ["interrupted:" + type(error).__name__]
-        diagnostics.append(unreadable[0])
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
     unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
@@ -297,6 +279,233 @@ def observe_switch(adapter, target, samples, interval, timeout):
               "interruptedUnreadable": unreadable, "relocation": relocation, "diagnostics": diagnostics}
     adapter.last_result = result
     return result
+
+
+class EvidenceSample:
+    def __init__(self, hosts):
+        self.serving = {}
+        self.protected = [{"pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"),
+                           "attempt": host.get("attempt"), "captured": host,
+                           "outcome": "unknown", "reason": "not-observed"} for host in hosts]
+        self.interrupted, self.unreadable = None, ["interrupted:not-observed"]
+        self.diagnostics = []
+
+    def accept(self, frame):
+        kind, value = frame
+        if kind == "protected":
+            index, outcome = value
+            row = self.protected[index]
+            if "stageState" in outcome or outcome["outcome"] != "unknown":
+                for field in ("stageState", "observedConversationId", "hostState", "lifecycle"):
+                    row.pop(field, None)
+            row.update(outcome)
+            if row["outcome"] != "unknown":
+                row.pop("reason", None)
+        elif kind == "reading":
+            if self.protected[value].get("reason") == "not-observed":
+                self.protected[value]["reason"] = "read-incomplete"
+        elif kind == "serving":
+            self.serving = value
+        elif kind == "interrupted":
+            self.interrupted, self.unreadable = value
+        elif kind == "diagnostic":
+            if value not in self.diagnostics:
+                self.diagnostics.append(value)
+
+    def unavailable(self, lane, reason):
+        kind, inputs = lane
+        self.accept(("diagnostic", kind + ":" + reason))
+        if kind == "protected":
+            for index, _ in inputs:
+                row = self.protected[index]
+                if row.get("reason") in ["not-observed", "read-incomplete"]:
+                    row["reason"] = reason
+        elif kind == "interrupted" and self.unreadable == ["interrupted:not-observed"]:
+            self.unreadable = ["interrupted:" + reason]
+
+
+def evidence_frames(adapter, kind, inputs, deadline):
+    """Read-only work in one lane. Each host gets a first read before retries."""
+    clock = adapter.clock
+    if clock.now() >= deadline:
+        return
+    if kind == "protected":
+        pending = inputs
+        while pending and clock.now() < deadline:
+            remaining = []
+            for index, host in pending:
+                if clock.now() >= deadline:
+                    return
+                yield "reading", index
+                if clock.now() >= deadline:
+                    return
+                try:
+                    if host.get("startIdentity") and process_or_gone(adapter, host) is not None:
+                        outcome = {"outcome": "preserved", "attempt": host["attempt"]}
+                    else:
+                        outcome = adapter.stage(host)
+                except Exception as error:
+                    outcome = {"outcome": "unknown", "reason": "protected-read:" + type(error).__name__}
+                if clock.now() >= deadline:
+                    return
+                yield "protected", [index, outcome]
+                if outcome["outcome"] == "unknown":
+                    remaining.append((index, host))
+            pending = remaining
+            if pending and clock.now() + SAMPLE_RETRY_INTERVAL < deadline:
+                clock.sleep(SAMPLE_RETRY_INTERVAL)
+            else:
+                return
+    elif kind == "interrupted":
+        try:
+            answer = adapter.interrupted(*inputs)
+        except Exception as error:
+            reason = "interrupted:" + type(error).__name__
+            yield "diagnostic", reason
+            answer = None, [reason]
+        if clock.now() < deadline:
+            yield "interrupted", answer
+    elif kind == "serving":
+        old, target = inputs
+        try:
+            for entry in old:
+                if clock.now() >= deadline:
+                    return
+                process_or_gone(adapter, entry)
+        except Exception as error:
+            yield "diagnostic", type(error).__name__
+        while clock.now() < deadline:
+            try:
+                serving = adapter.serving()
+                if clock.now() >= deadline:
+                    return
+                yield "serving", serving
+                if ready(serving, target):
+                    return
+                yield "diagnostic", "serving:not-ready"
+            except Exception as error:
+                yield "diagnostic", "serving:" + type(error).__name__
+            clock.sleep(max(0, min(1, deadline - clock.now())))
+
+
+def run_evidence_workers(adapter, lanes, sample, cutoff):
+    # Leave part of this phase's allowance for group teardown and reaping. The
+    # cutoff uses the same monotonic clock in the worker and its children.
+    limit = cutoff - min(1, max(0, cutoff - time.monotonic()) / 10)
+    children = []
+    with selectors.DefaultSelector() as incoming:
+        try:
+            for lane in lanes:
+                try:
+                    with tempfile.TemporaryFile() as request:
+                        request.write(json.dumps([*lane, limit, adapter.plan]).encode())
+                        request.seek(0)
+                        if time.monotonic() >= limit:
+                            sample.unavailable(lane, "sample-deadline")
+                            continue
+                        child = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).resolve()),
+                                                  "--evidence-worker", str(adapter.config_file)], stdin=request,
+                                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                                 start_new_session=True)
+                        children.append(child)
+                        incoming.register(child.stdout, selectors.EVENT_READ, (lane, bytearray()))
+                except OSError as error:
+                    sample.unavailable(lane, "worker-start:" + type(error).__name__)
+            while incoming.get_map() and time.monotonic() < limit:
+                for key, _ in incoming.select(max(0, limit - time.monotonic())):
+                    if time.monotonic() >= limit:
+                        break
+                    lane, buffer = key.data
+                    chunk = os.read(key.fd, 65536)
+                    if not chunk:
+                        incoming.unregister(key.fileobj)
+                        if buffer:
+                            sample.unavailable(lane, "worker-output-incomplete")
+                        continue
+                    buffer.extend(chunk)
+                    try:
+                        while (newline := buffer.find(b"\n")) >= 0 and time.monotonic() < limit:
+                            if newline > 4 * 1024 * 1024:
+                                raise ValueError("oversized frame")
+                            frame = json.loads(buffer[:newline])
+                            del buffer[:newline + 1]
+                            if time.monotonic() >= limit:
+                                break
+                            if frame[0] == "worker-error":
+                                sample.unavailable(lane, "worker:" + frame[1])
+                            else:
+                                sample.accept(frame)
+                        if len(buffer) > 4 * 1024 * 1024:
+                            raise ValueError("oversized buffer")
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        sample.unavailable(lane, "worker-output-invalid")
+                        incoming.unregister(key.fileobj)
+            for key in incoming.get_map().values():
+                lane, _ = key.data
+                sample.unavailable(lane, "sample-deadline")
+        finally:
+            # Signal before reaping the leader, while its process-group id is
+            # still reserved. This also stops MCP or command descendants that
+            # held a read open. No worker inherits the installation lock.
+            for child in children:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(child.pid, signal.SIGKILL)
+            cleanup_failure = None
+            for child in children:
+                child.stdout.close()
+                try:
+                    child.wait(timeout=max(0, cutoff - time.monotonic()))
+                except subprocess.TimeoutExpired as error:
+                    cleanup_failure = error
+            if cleanup_failure is not None:
+                # SIGKILL can remain pending in an uninterruptible kernel
+                # wait. Keep custody in that exceptional case and abort the
+                # observation even if all previously read evidence was good.
+                for child in children:
+                    child.wait()
+                raise cleanup_failure
+
+
+def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collect=run_evidence_workers):
+    deadline = adapter.clock.now() + timeout
+    sample = EvidenceSample(hosts)
+    if hosts:
+        # Reserve a serving read after stage reconciliation. A slow stage
+        # cannot use that time, and an early finish leaves it for serving.
+        numbered = list(enumerate(hosts))
+        offset = index % len(numbered)
+        numbered = numbered[offset:] + numbered[:offset]
+        lanes = [("protected", numbered[i::PROTECTED_READERS])
+                 for i in range(min(len(hosts), PROTECTED_READERS))]
+        collect(adapter, lanes, sample, deadline - timeout / 3)
+    # Read the cut inventory after the final serving observation. Boot can
+    # still record cuts while the serving checks are waiting for readiness.
+    inventory_reserve = min(5, timeout / 10) if since else 0
+    collect(adapter, [("serving", [old, target])], sample, deadline - inventory_reserve)
+    if since:
+        collect(adapter, [("interrupted", [since, hosts])], sample, deadline)
+    return sample
+
+
+def evidence_worker(config):
+    kind, inputs, deadline, plan = json.load(sys.stdin)
+    if time.monotonic() >= deadline:
+        return 0
+    try:
+        adapter = Checkout(config)
+        try:
+            if adapter.plan != plan:
+                raise RuntimeError("sample worker plan changed")
+            for frame in evidence_frames(adapter, kind, inputs, deadline):
+                if time.monotonic() >= deadline:
+                    break
+                print(json.dumps(frame), flush=True)
+        finally:
+            adapter.close()
+    except Exception as error:
+        if time.monotonic() < deadline:
+            print(json.dumps(["worker-error", type(error).__name__]), flush=True)
+    return 0
 
 
 def utc():
@@ -711,7 +920,7 @@ def stage_outcome(host, attempts, activity):
         result["outcome"] = "lost" if lost else "completed"
     elif (current["state"] in ["running", "reviewing", "committing"]
           and activity.get("host", {}).get("state") == "alive"
-          and activity.get("lifecycle") not in ["failed", "interrupted", "stalled"]):
+          and activity.get("lifecycle") in ["running", "waiting", "blocked"]):
         result["outcome"] = "fresh attempt started" if current["n"] > host["attempt"] else "recovered"
     return result
 
@@ -937,6 +1146,8 @@ class Checkout:
     def interrupted(self, since, hosts):
         return interrupted_conversations(self.state, since, hosts)
 
+    sample = collect_sample
+
     def head(self, directory):
         sha = self.command(["git", "rev-parse", "HEAD"], cwd=directory)
         if not re.fullmatch(r"[0-9a-f]{40}", sha):
@@ -971,7 +1182,10 @@ class Checkout:
             serving = self.serving()
             if not ready(serving, self.baseline["sha"], placement=False):
                 raise BaselineReadinessError(serving, self.baseline["sha"])
-        retry(baseline_ready, self.clock, 30)
+        try:
+            retry(baseline_ready, self.clock, 30)
+        finally:
+            self.mcp.close()
         capture_deadline = self.clock.now() + 30
         def capture():
             answer = self.census(max(0, capture_deadline - self.clock.now()))
@@ -1767,24 +1981,49 @@ class Checkout:
         return relocation
 
     def stage(self, host):
-        answer = self.mcp.call("get_pipeline", {"pipelineId": host["pipelineId"], "full": True})
-        pipeline = answer["pipeline"]
-        run = next((r for r in pipeline["runs"] if r["stageId"] == host["stageId"]), None)
-        attempts = run["attempts"] if run else []
-        current = max((a for a in attempts if not a.get("historical")), key=lambda a: a["n"], default={})
+        outcome = {"outcome": "unknown"}
+        try:
+            answer = self.mcp.call("get_pipeline", {"pipelineId": host["pipelineId"], "full": True})
+            run = next((r for r in answer["pipeline"]["runs"] if r["stageId"] == host["stageId"]), None)
+            attempts = run["attempts"] if run else []
+            current = max((a for a in attempts if not a.get("historical")), key=lambda a: a["n"], default={})
+        except Exception as error:
+            return {**outcome, "reason": "pipeline-unavailable:" + type(error).__name__}
+        if not current:
+            return {**outcome, "reason": "stage-attempt-missing"}
+        state = current["state"]
+        outcome.update(attempt=current["n"], stageState=state)
+        if current["n"] < host["attempt"]:
+            return {**outcome, "reason": "stage-attempt-older-than-capture"}
         activity = {}
-        if current.get("conversationId") and current.get("state") in ["running", "reviewing", "committing"]:
-            result = self.mcp.call("agent_activity", {"conversationId": current["conversationId"], "compact": False, "includeGone": True})
-            rows = complete_activity(result)
-            if len(rows) == 1 and rows[0].get("conversationId") == current["conversationId"]:
-                activity = rows[0]
-                live = activity.get("host") or {}
-                if live.get("state") == "alive" and self.process({"pid": live.get("pid")}) is None:
-                    activity = {**activity, "host": {"state": "gone"}}
-        outcome = stage_outcome(host, attempts, activity)
-        if outcome["outcome"] == "unknown":
-            raise RuntimeError("protected stage recovery pending")
-        return {"pipelineId": host["pipelineId"], **outcome}
+        if state in ["running", "reviewing", "committing"]:
+            conversation = current.get("conversationId")
+            if not conversation:
+                return {**outcome, "reason": "stage-conversation-pending"}
+            outcome["observedConversationId"] = conversation
+            try:
+                result = self.mcp.call("agent_activity", {"conversationId": conversation, "compact": False, "includeGone": True})
+            except Exception as error:
+                return {**outcome, "reason": "activity-unavailable:" + type(error).__name__}
+            try:
+                rows = complete_activity(result)
+            except Exception:
+                return {**outcome, "reason": "activity-incomplete"}
+            if len(rows) != 1 or rows[0].get("conversationId") != conversation:
+                return {**outcome, "reason": "activity-unmatched"}
+            activity = rows[0]
+            live = activity.get("host") or {}
+            outcome.update(hostState=live.get("state"), lifecycle=activity.get("lifecycle"))
+            if live.get("state") != "alive":
+                return {**outcome, "reason": "replacement-host-unconfirmed"}
+            try:
+                if self.process({"pid": live.get("pid")}) is None:
+                    return {**outcome, "reason": "replacement-process-gone"}
+            except Exception as error:
+                return {**outcome, "reason": "replacement-process-unavailable:" + type(error).__name__}
+        outcome.update(stage_outcome(host, attempts, activity))
+        return ({**outcome, "reason": "replacement-lifecycle-unconfirmed" if activity else "stage-pending"}
+                if outcome["outcome"] == "unknown" else outcome)
 
     def serving(self):
         record = json.loads(self.record_file.read_text())
@@ -1900,6 +2139,40 @@ class Checkout:
                         **({"recovery": recovery} if recovery else {})})
 
 
+def run_worker(adapter):
+    import fcntl
+    lock_file = adapter.run_dir.parent / ("lock-" + adapter.install)
+    status_file = adapter.run_dir / "status.json"
+    with open(lock_file, "a") as lock:
+        # A contender must not replace the incumbent's latest verdict, even
+        # with a refusal. Only the worker that owns the lock calls emit().
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            write_json(status_file, {"phase": "finished", "at": utc(), "verdict": "needs_decision",
+                                     "reason": "install-lock-held"})
+            raise
+        try:
+            write_json(status_file, {"phase": "running", "at": utc(), "pid": os.getpid()})
+            result = run_switch(adapter, adapter.target)
+            write_json(status_file, {"phase": "finished", "at": utc(), "verdict": result["verdict"]})
+            return {"pass": 0, "fail": 1, "needs_decision": 2}[result["verdict"]]
+        except Exception as error:
+            attempted = getattr(adapter, "switch_attempted", False)
+            verdict = "fail" if attempted else "needs_decision"
+            if getattr(adapter, "last_result", None) is None:
+                leftovers = error.members if isinstance(error, LeftoverProcesses) else None
+                adapter.emit({"verdict": verdict, "serving": {},
+                              "diagnostics": [type(error).__name__],
+                              "phase": "observation" if attempted else "before-switch",
+                              **({"leftovers": leftovers} if leftovers else {})})
+            write_json(status_file, {"phase": "finished", "at": utc(), "verdict": verdict,
+                                     "reason": type(error).__name__})
+            raise
+        finally:
+            adapter.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="private, explicit checkout deploy plan")
@@ -1914,7 +2187,6 @@ def main():
     if args.worker and not re.fullmatch(r"[0-9a-f]{32}", args.worker):
         parser.error("invalid worker id")
     adapter = None
-    result = None
     try:
         adapter = Checkout(args.config, args.worker)
         if args.preflight:
@@ -1940,21 +2212,10 @@ def main():
         expected = command(["systemctl", "--user", "show", "delegatus-deploy-" + args.worker + ".service", "-p", "MainPID", "--value"])
         if expected != str(os.getpid()):
             raise RuntimeError("worker must run in its own detached unit")
-        import fcntl
-        with open(adapter.run_dir.parent / ("lock-" + adapter.install), "a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            write_json(adapter.run_dir / "status.json", {"phase": "running", "at": utc(), "pid": os.getpid()})
-            result = run_switch(adapter, adapter.target)
-            write_json(adapter.run_dir / "status.json", {"phase": "finished", "at": utc(), "verdict": result["verdict"]})
-            return {"pass": 0, "fail": 1, "needs_decision": 2}[result["verdict"]]
+        return run_worker(adapter)
     except Exception as error:
         # Public console output never carries arbitrary exception text.
         leftovers = error.members if isinstance(error, LeftoverProcesses) else None
-        if adapter and adapter.run_dir:
-            observed = result or getattr(adapter, "last_result", None)
-            if observed is None:
-                adapter.emit({"verdict": "needs_decision", "serving": {}, "diagnostics": [type(error).__name__],
-                              "phase": "before-switch", **({"leftovers": leftovers} if leftovers else {})})
         for line in leftover_lines(leftovers or []):
             print(line, file=sys.stderr)
         if isinstance(error, BaselineReadinessError):
@@ -1968,4 +2229,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--evidence-worker":
+        sys.exit(evidence_worker(sys.argv[2]))
     sys.exit(main())
