@@ -116,36 +116,27 @@ interface WorkflowRun { databaseId: number; headSha: string; displayTitle: strin
 export async function verifyRelease(tag: string, cut: string | null, ports: VerifyPorts = productionPorts, pullRequest?: string): Promise<VerifyResult> {
   if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error("expected a v-prefixed release version");
   const git = (...args: string[]) => ports.command("git", args);
-  const pkg = JSON.parse(await git("show", "HEAD:package.json"));
-  let registryURL = `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}`;
   const version = tag.slice(1);
   if (cut !== null) {
+    if (!pullRequest) return { errors: ["release preflight requires --pr with the merged release PR number"] };
+    if (!/^[1-9]\d*$/.test(pullRequest)) throw new Error("release PR must be a pull request number");
     if (!/^[a-f0-9]{40}$/i.test(cut)) throw new Error("cut must be an exact commit SHA");
-    await git("merge-base", "--is-ancestor", cut, "HEAD");
     const head = await git("rev-parse", "HEAD");
-    let tagCommit = head;
-    let releaseBase = cut;
-    if (pullRequest !== undefined) {
-      if (!/^[1-9]\d*$/.test(pullRequest)) throw new Error("release PR must be a pull request number");
-      const pr = JSON.parse(await ports.command("gh", ["pr", "view", pullRequest, "--json", "state,headRefOid,baseRefName,mergeCommit"]));
-      if (pr.state !== "MERGED" || pr.baseRefName !== "main" || !/^[a-f0-9]{40}$/.test(pr.mergeCommit?.oid ?? "")) {
-        return { errors: ["release PR is unmerged; merge the reviewed release PR into main before tagging, then rerun preflight"] };
-      }
-      if (pr.headRefOid !== head && pr.mergeCommit.oid !== head) return { errors: ["release PR head moved; review the new head before merging or tagging"] };
-      tagCommit = pr.mergeCommit.oid;
-      // The queue may have integrated newer main changes. Inspect only the
-      // release delta against main, while ancestry and tree checks bind HEAD.
-      releaseBase = `${tagCommit}^`;
+    const pr = JSON.parse(await ports.command("gh", ["pr", "view", pullRequest, "--json", "state,baseRefName,mergeCommit"]));
+    if (pr.state !== "MERGED" || pr.baseRefName !== "main" || !/^[a-f0-9]{40}$/.test(pr.mergeCommit?.oid ?? "")) {
+      return { errors: ["release PR is unmerged; merge the reviewed release PR into main before tagging, then rerun preflight"] };
     }
+    const tagCommit = pr.mergeCommit.oid;
+    if (head !== tagCommit) return { errors: ["release checkout differs from the PR's integrated main commit; review and check out that commit before tagging"] };
     try {
       await git("fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main");
     } catch { return { errors: ["cannot refresh origin/main; restore access and rerun release preflight before tagging"] }; }
     try {
       await git("--no-replace-objects", "merge-base", "--is-ancestor", tagCommit, "refs/remotes/origin/main");
     } catch { return { errors: ["release tag commit is not on origin/main; merge the reviewed release PR first, then rerun preflight on its merged commit"] }; }
-    if (await git("--no-replace-objects", "rev-parse", `${tagCommit}^{tree}`) !== await git("--no-replace-objects", "rev-parse", `${head}^{tree}`)) {
-      return { errors: ["merged release tree differs from the reviewed head; review the integrated tree before tagging"] };
-    }
+    await git("--no-replace-objects", "merge-base", "--is-ancestor", cut, tagCommit);
+    const pkg = JSON.parse(await git("--no-replace-objects", "show", `${tagCommit}:package.json`));
+    const registryURL = `https://registry.npmjs.org/${encodeURIComponent(pkg.name)}`;
     const local = await git("for-each-ref", "--format=%(refname)", `refs/tags/${tag}`);
     let localTag: ReleasePreflight["localTag"] = "absent";
     let localObject = "";
@@ -168,7 +159,8 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
       : localTag === "matching" && remoteObject === localObject && remoteCommit === tagCommit ? "matching" : "conflict";
     const errors = releasePreflight({ tag, version: pkg.version, localTag, remoteTag,
       npmVersion: !!await ports.registry(`${registryURL}/${version}`),
-      files: (await git("diff", "--name-only", releaseBase, "HEAD")).split("\n").filter(Boolean),
+      // The first parent already contains the product changes inherited from main.
+      files: (await git("--no-replace-objects", "diff", "--no-renames", "--name-only", `${tagCommit}^1`, tagCommit)).split("\n").filter(Boolean),
       clean: !(await git("status", "--porcelain")), provenance: ports.provenance() });
     if (await git("rev-parse", "HEAD") !== head) return { errors: ["release checkout head moved during preflight; review the new head before tagging"] };
     const nextStep: PreflightAction | undefined = errors.length ? undefined : remoteTag === "matching" ? "verify-remote"
@@ -185,7 +177,7 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
     || !isReleaseTagObject(content, tag, sha, version)) return { errors: ["remote annotated tag differs from the local release"] };
   const tagged = JSON.parse(await git("show", `${tag}:package.json`));
   if (tagged.version !== version) return { errors: ["tag/version mismatch"] };
-  registryURL = `https://registry.npmjs.org/${encodeURIComponent(tagged.name)}`;
+  const registryURL = `https://registry.npmjs.org/${encodeURIComponent(tagged.name)}`;
   const repo = await ports.command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
   const deadline = ports.now() + 90 * 60_000;
   let errors = ["publication not observed"];
@@ -237,8 +229,8 @@ if (import.meta.main) {
     const result = await verifyRelease(tag, cut, productionPorts, args.includes("--pr") ? args[args.indexOf("--pr") + 1] : undefined);
     if (result.errors.length) { console.error(result.errors.join("\n")); process.exitCode = 1; }
     else if (result.nextStep === "create-and-push") console.log(`release preflight passed; create the approved annotated tag on verified main commit ${result.tagCommit}, then push it`);
-    else if (result.nextStep === "push-existing") console.log("release preflight passed; push the existing matching annotated tag object without retagging");
-    else if (result.nextStep === "verify-remote") console.log("remote release tag matches; perform read-only publication verification and do not push");
+    else if (result.nextStep === "push-existing") console.log(`release preflight passed for ${result.tagCommit}; push the existing matching annotated tag object without retagging`);
+    else if (result.nextStep === "verify-remote") console.log(`remote release tag matches ${result.tagCommit}; perform read-only publication verification and do not push`);
     else console.log("npm, Docker and macOS installation verified");
   } catch (error) { console.error(error instanceof Error ? error.message : "release verification failed"); process.exitCode = 1; }
 }

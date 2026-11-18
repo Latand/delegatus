@@ -40,9 +40,9 @@ operator's answers):
 Decided. The operator answered the four questions of §10 on 2026-10-12 (about
 09:00Z, through the questionnaire on this task), and this document carries those
 answers: a release at 30 user-visible changes and at most two a day, a «go»
-asked every time until the operator switches it off, only what production has
-run for 6 hours, and the README screenshots retaken in every release. The
-options that were not chosen are kept under Deferred.
+asked every time until the operator switches it off, a six-hour production cut,
+and the README screenshots retaken in every release. Deferred records the other
+options.
 
 ## Summary
 
@@ -53,11 +53,10 @@ options that were not chosen are kept under Deferred.
   the gap and keeps every blocker. Replayed over 2026-10-01 to 2026-10-12 the
   rule gives eight releases of 30 or 31 user-visible PRs each, 14 to 63 hours
   apart.
-- **The cut.** A release carries what production on this machine has served for
-  6 hours with no rollback past it. The tag goes on the reviewed head of a
-  release branch (changelog, version, README text and pictures) that starts at
-  that verified revision; the release PR then merges into main as any other PR
-  does.
+- **The cut.** The six-hour production cut fixes the changelog range and
+  release eligibility. Preparation starts there and merges current main. The
+  queue merges the reviewed release PR before the publisher tags its
+  integrated main commit.
 - **Classification.** Paths decide the trigger: a PR that touches only docs,
   tests, scripts, CI or the landing site is internal. Against the changelog
   headings of the last three releases (225 PRs) this marks user-visible PRs
@@ -70,10 +69,9 @@ options that were not chosen are kept under Deferred.
   the cut, the npm registry for the last tag, the controller's own record, an
   explicit hold, the self-update drain, and the tools the screenshot capture
   needs.
-- **The agent.** One pipeline on a release task: `prepare` (builder) →
-  `capture` (builder) → `shots` (visual critic, one round) → `shots-fix`
-  (builder) → `review` (reviewer, one round) → `fix` (builder) → `publish`
-  (deployer). The merge setting lands the PR when the lane completes.
+- **The agent.** One task spans two pipelines. Preparation runs the changelog,
+  capture, visual check and release review. The ordinary queue merges the
+  release PR. The successor lane reviews the integrated commit and publishes.
 - **The pictures.** Every release retakes the eight README frames with the
   existing driver from the release's own build, a visual critic judges them,
   and one fix round follows. A release branch never changes product source.
@@ -86,7 +84,7 @@ options that were not chosen are kept under Deferred.
   changed in the tick panel or through `seat_tick_settings` (agents give a
   reason). Off for every project until turned on.
 
-## 1. How releases happen today
+## 1. Release history before automation
 
 ### 1.1 The procedure
 
@@ -263,29 +261,21 @@ Rules considered:
 | security PR, automatic | never (0 of 474) | nothing to detect; the request covers it |
 | weekly | one release, on 10-08, carrying 154 PRs | a section larger than 1.10.0's 121 PRs, which already needed a later audit (Q1, option C) |
 
-### 3.2 The cut: what a release contains
+### 3.2 The production cut and the tag target
 
-A release carries the newest main revision that production on this machine
+The cut is the newest main revision that production on this machine
 has served for at least 6 hours and that every later successful deployment
 still contains. In the ledger's terms: walk successful deployments of main
 commits newest first; the cut is the revision of the newest one that finished
 at least 6 hours ago and is an ancestor of every successful deployment after
 it, the serving one included.
 
-Why:
+The soak gives regressions time to surface before a revision qualifies for the
+changelog range. For example, #2714 broke production about two hours after it
+deployed and was rolled back within the six-hour window.
 
-- **It catches the regression nobody has named yet.** #2714 broke production
-  about two hours after its deploy (deployed 16:28Z, issue opened 18:31Z,
-  rolled back 18:35Z). A 6-hour soak would have kept it out of any release,
-  with or without anyone setting a hold.
-- **It ends the chase.** The release branch starts at the cut and never merges
-  main before review, so a release lane is as short as #2393 and #2547 were,
-  however fast main moves.
-- **It tags what was run.** 1.11.0 was tagged on two commits production had not
-  served.
-
-Today the cut is `0ef6ec49` (served since 2026-10-11 18:35Z): 53 PRs past
-`v1.11.0`, 45 of them user-visible candidates, with #2714 and the PRs after it
+In the October 2026 replay, the cut was `0ef6ec49` (served since 2026-10-11
+18:35Z), 53 PRs past `v1.11.0`, 45 of them user-visible candidates, with #2714 and the PRs after it
 left for the next release. Under §3.1 a release is due: the count is 45 of 30
 and the last tag is more than a day old. The rollback blocker (§4) holds it
 until a deployment containing #2714 and its fix has served.
@@ -295,42 +285,37 @@ hours apart during the day, so the cut trails main by the 6-hour soak plus the
 wait for the next deployment. A project with no deployment ledger has
 no cut, and the release setting is not offered there (Deferred).
 
-**Where the tag goes.** The release branch is created from the cut (`baseRef` in
-`CreatePipelineRequest`, `src/lib/pipelines/types.ts:1190`), so its commits sit
-directly on the cut and the PR diff is exactly what the release adds: the
-changelog, the version, the README text and the retaken pictures. R is the
-branch's reviewed head, and the annotated tag goes on R. The diff from the cut
-to R stays inside the release paths of §5.4, so the product source the tag
-ships is the source production served; a dependency moved for the audit (§5.2)
-is the one exception, and the changelog names it. Merges here are squash
-(`mergeMethod`, `src/lib/forge/autoMerge.ts:181`), so R itself never becomes an
-ancestor of main; the squash commit brings the changelog and version to main.
-Nothing
-depends on a tag being reachable from main: `publish.yml` checks out the tag;
-checkout installs follow `refs/heads/main` (`src/lib/selfUpdate/git.ts:69`);
-packaged installs follow the npm `latest` version
-(`src/lib/selfUpdate/package.ts:35`); no code runs `git describe`. The next
-release's range `git log <last tag>..<next cut>` lists exactly the commits after
-the previous cut.
+**Where the tag goes.** The controller starts the preparation branch at the
+cut. Preparation fetches and merges current `origin/main` before review and
+refreshes the verifier and hook with `scripts/bootstrap-release-tools.ts`.
+The changelog stays bounded by the cut. The ordinary queue can refresh the PR
+again before it squash merges the release into main. The recorded integrated
+commit is the sole target of the publication lane and its tag.
+
+Preflight requires the merged PR number. It uses the first parent of the
+integrated commit as the diff base so the path check sees only the changes
+introduced by the PR. The cut must be an ancestor of the integrated commit.
+The tag ships that integrated tree, including any main changes after the
+cut. The next changelog still uses the last tag and the next eligible cut.
 
 ## 4. Blockers
 
-Each blocker is read when the cheaper checks before it pass, in this order. A
-blocker makes the controller wait and say why; it never closes anything.
+The release policy returns the first applicable blocker in table order.
 
-| # | Blocker | How it is detected | Today |
+| # | Blocker | How it is detected | October 2026 example |
 | --- | --- | --- | --- |
 | 1 | Releases are off | the project's `release.enabled` is false and no request is pending (§7) | off: nothing is configured |
 | 2 | The seat tick is off for the project | `effectiveSeatTickSettings(...).enabled` false, as board maintenance checks (`src/lib/boardMaintenance/run.ts:216`) | on |
 | 3 | The merge setting is off | `mergeOnReviewEnabled(project)` false (`src/lib/projects/settings.ts:173`): a release PR could not land | on |
-| 4 | A release is in flight | (a) the controller's record holds a live release pipeline, or its PR is not merged yet; (b) main's `package.json` version is above the newest `v*` tag (merged, untagged); (c) the newest tag's version is absent from npm (`registryRevision`, `src/lib/selfUpdate/package.ts:35`) | clear |
+| 4 | A release is in flight | a live release run or PR still owns the release | clear |
+| 11 | Release version mismatch | no live run owns a version on main that differs from the latest stable tag. See the [recovery procedure](../RELEASING.md#recover-a-merged-release-without-a-tag). | `release-version-mismatch` |
+| 4 | Publication is pending | the latest tag's version is absent from npm | clear |
 | 5 | Main's required checks are red | the branch protection's required contexts (`requiredContexts`, `src/lib/forge/autoMerge.ts:193`; today `privacy-publication` and `privacy-tracker-audit`) read on main's head and on the cut; any failure blocks, pending waits | green on `aaf82e17` |
 | 6 | A production incident is open: a rollback is outstanding | a successful deployment of a main commit since the last tag whose revision the serving revision does not contain. It clears when a later successful deployment contains that revision | **blocked**: `05d66b73` (#2714) is not in the serving `0ef6ec49` |
 | 7 | A known regression or incident without a rollback | an explicit `release.hold` with a reason, set and cleared through the tool by the seat, the operator or an agent; the record names who and when | none |
 | 8 | No verified cut | no deployment qualifies under §3.2 (production changed within the soak, or the project has no ledger) | the cut exists |
 | 9 | A deployment is running, or an automatic update drains | a non-terminal latest deployment; `activeDrain()`; both as board maintenance (`run.ts:221`, `run.ts:224`) | clear |
 | 10 | The screenshot capture cannot run on this machine | the lookups the capture driver and the publication gate make themselves: `tesseract` and `pdftocairo` on the Viewer's PATH, and a Chrome (`CHROME_BIN`, the system Chrome, or the Playwright browser the repository's drivers use) | **blocked**: `tesseract` is not on PATH; `pdftocairo` and a Playwright Chrome are present |
-| 11 | The publisher at the release cut cannot satisfy the macOS workflow's receipt contract | inspect the publisher workflow from the immutable release ref and the current default-branch macOS consumer; require the publisher to upload the `release-receipt` artifact with the exact tag and commit revision the consumer reads | **blocked for the recorded cut in §3.2**: its `publish.yml` has no receipt producer, while the current `macos-newcomer.yml` requires that artifact |
 
 Why these signals:
 
@@ -346,9 +331,8 @@ Why these signals:
   mandate, because the mandate sits a few bytes under its budget.
 - **Open GitHub issues** are left out: #2760 and #2761 carry no label, and
   open issues are many and mixed (Deferred).
-- **The soak (8)** is the safety net for both: an unnoticed regression either
-  surfaces inside six hours and turns into 6 or 7, or the release ships what
-  ran six hours cleanly.
+- **The soak (8)** makes the trigger and changelog depend on a revision that
+  served for six hours and survived subsequent deployments.
 - **The capture tools (10)** are checked before the lane starts because the
   capture is the third stage: without the check a release would write its
   changelog for an hour, fail at the first screenshot, and try again 12 hours
@@ -356,23 +340,14 @@ Why these signals:
   (`tool_unavailable`, `scripts/privacy-publication-gate.ts:1732`), so a missing
   OCR tool can never be skipped. The 1.11.0 capture ran with a private copy of
   `tesseract` outside PATH.
-- **The workflow receipt (11)** is checked before the operator is asked to
-  approve a tag. A tag push runs the `publish.yml` carried by that tag; the
-  `workflow_run` macOS consumer comes from the default branch and downloads
-  the publisher run's `release-receipt` artifact. Checking only the current
-  default branch misses an older release cut. The recorded cut proves the
-  failure case: its `.github/workflows/publish.yml` has no
-  receipt producer, and the current `.github/workflows/macos-newcomer.yml`
-  downloads `release-receipt` and reads its `tag` and `revision` files. The
-  controller checks this before creating the lane and repeats the check in
-  preflight immediately before approval. It holds such a cut before any tag or
-  publish action. It waits for a production-soaked cut whose publisher
-  satisfies the consumer contract; it never bypasses the six-hour soak or
-  dispatches a recovery workflow to compensate for an incompatible cut.
+- **The version mismatch (11)** needs seat action even below the count or gap
+  thresholds. The controller records it on the first eligible tick without a
+  live owner. It uses the existing 24-hour seat wake and clears the blocker
+  when the version and tag agree. An owned publication handoff can proceed
+  with its expected version bump subject to all other blockers.
 
-A blocker that keeps a due release waiting for 24 hours wakes the seat once per
-blocker episode (§6.3), so a forgotten hold or a red main does not stall
-releases silently.
+A tracked blocker that persists for 24 hours wakes the seat once per episode
+(§6.3).
 
 ## 5. The release pipeline
 
@@ -387,7 +362,7 @@ When a release is due the controller:
 2. Creates the pipeline with `createPipelineFromRequest`
    (`src/lib/pipelines/engine.ts:10398`), the way the onboarding health check
    creates one from Viewer code (`src/lib/onboarding/healthCheck.ts:515`):
-   `taskIds` and `finishesTask` set to that task, `baseBranch: "main"`,
+   `taskIds` set to that task, `finishesTask: false`, `baseBranch: "main"`,
    `baseRef: <cut>`, `autoStart: true`, and a creation key
    `release:<project>:<cut>` so a restart or a second tick replays the same
    lane.
@@ -397,30 +372,23 @@ Stages, from a template in code; engines and models come from the role table:
 
 | Stage | Role | Does |
 | --- | --- | --- |
-| `prepare` | builder, `docs` domain | writes the section, picks the version, bumps `package.json`, updates README text, clears the audit, runs the checks, pushes; the engine opens the PR «Release X.Y.Z» |
+| `prepare` | builder, `docs` domain | merges main, writes the section, picks the version, bumps `package.json`, updates README text, clears the audit, runs the checks, pushes; the engine opens the PR «Release X.Y.Z» |
 | `capture` | builder, `frontend` domain | builds the release branch and retakes the eight README frames with the existing driver, reads them, commits the vectors and their provenance |
-| `shots` | visual critic, read-only, `maxRounds: 1`, on fail → `shots-fix`, exhausted → advance | judges the README as a reader sees it: every frame and its caption |
+| `shots` | visual critic, read-only, `maxRounds: 1`, on fail → `shots-fix`, exhausted → park | judges the README as a reader sees it: every frame and its caption |
 | `shots-fix` | builder, `apply-fixes` mode, `frontend` domain | fixes every visual finding by changing how the picture is taken or what the README says, and retakes |
-| `review` | reviewer, `maxRounds: 1`, on fail → `fix`, exhausted → advance | checks coverage, accuracy against the code at the cut, public safety, version kind, README consistency, and that the diff stays inside the release paths |
+| `review` | reviewer, `maxRounds: 1`, on fail → `fix`, exhausted → park | checks coverage, accuracy against the code at the cut, public safety, version kind, README consistency, and that the diff stays inside the release paths |
 | `fix` | builder, `apply-fixes` mode, `docs` domain | fixes every finding; its verdict is pass unless it is blocked |
-| `publish` | deployer | validates, asks for the go, tags R, watches the three workflows, verifies, reports |
 
-The pass edges run `prepare` → `capture` → `shots` → `review` → `publish`. Each
-of the two checks has a fail edge to its own fix stage with one round and
-`onExhausted: "advance"` (`PipelineFailEdge`, `src/lib/pipelines/types.ts:91`):
-the findings go to the fix stage once, and when that fix passes the lane follows
-the check's own pass edge without running the check again. That is the
-operator's standing review budget: one review, one fix, no re-check. Each fix
-stage's pass edge names its check, as the fix stages of today's lanes do.
+The preparation pass edges run `prepare` → `capture` → `shots` → `review`.
+The visual and release reviews each allow one fix round before an exhausted
+failure parks the lane. Each fix stage returns to its review.
 
-The pictures come before the review so that the reviewer reads the release as
-it will be tagged, the driver and seed changes of the screenshot stages
-included, and so that a capture the driver refuses stops the lane before a
-reviewer is spent on it.
-
-When the lane completes, the merge setting lands the PR (required checks only,
-squash), and the task moves to Done on the merge. A conflict or a refused
-merge takes the existing path: the lane's unmerged-PR wake to the seat.
+When preparation passes, the ordinary queue refreshes and squash merges the
+PR. A conflict or a refused merge wakes the seat through the unmerged-PR
+path. The controller takes the PR number and integrated commit from the
+merge receipt and launches a successor lane on the same task. Its reviewer
+runs preflight on the integrated commit and passes to the deployer
+(`publish`). Publication verification completes the task.
 
 ### 5.2 `prepare`: what the builder is told
 
@@ -474,8 +442,8 @@ Chrome renders it back to what its PNG shows. It writes `provenance.json` with
 each file's hash and the hashes of the driver and the seed. Nothing new is
 needed to take the pictures.
 
-The release branch starts at the cut, so the build the driver serves is the
-release's own code, and the pictures show the product as it is released.
+The driver builds the preparation checkout after it has merged main. The
+publication reviewer checks the evidence against the final integrated checkout.
 
 **`capture`** (builder). Its brief:
 
@@ -518,7 +486,7 @@ again before pushing.
 
 **A release branch never changes product source.** In 1.11.0 the fix round for
 the pictures also changed `src/components/LogFeed.tsx`. Under §3.2 that would
-put code into the tag that production never served. So when a frame shows a
+put product edits into the release PR. So when a frame shows a
 defect of the product itself:
 
 - *Cosmetic* (the screen is readable and true): the frame stays as taken, and
@@ -535,32 +503,17 @@ The deployer role (`src/lib/roles/defaults.ts:272`) already has the semantics th
 step needs: it validates without mutating, lists each mutating step, and stops
 with `needs_decision` until a quoted operator go names them. Its brief:
 
-- R (the reviewed head of the release branch), the version, the PR, and the
-  steps it may take: push the annotated tag `vX.Y.Z` (message «Delegatus X.Y.Z»)
-  on R, then wait and verify.
-- Validation first, by one read-only command, `scripts/release-verify.ts
-  --preflight --cut <cut> --tag vX.Y.Z`: the tag is absent locally and on the
-  remote; `package.json` at R says X.Y.Z; npm has no X.Y.Z; the frames match
-  `provenance.json` (each file's hash, the driver's and the seed's); and the
-  diff from the cut to R touches only the **release paths**: `CHANGELOG.md`,
-  `package.json`, `bun.lock`, `patches/**`, `README.md`, `docs/media/readme/**`
-  and `scripts/**`. Those are what the last three release PRs changed, less the
-  product file of 1.11.0. A file outside them ends the stage with `fail`.
-- The same read-only preflight inspects `.github/workflows/publish.yml` at the
-  immutable release ref and `.github/workflows/macos-newcomer.yml` on the
-  current default branch. It must prove that the tag's publisher uploads the
-  `release-receipt` artifact containing the exact tag and checked-out commit,
-  and that the macOS workflow triggered by that publisher run downloads and
-  validates those fields before installing the exact npm version. A missing,
-  malformed or mismatched producer/consumer contract blocks the release
-  before the go prompt and before any mutating step. Run this check when
-  deciding whether to create the release lane, then repeat it immediately
-  before asking for the go so a changed default-branch consumer cannot race
-  the approval. The recorded cut in §3.2 must fail preflight because its
-  publisher cannot create the artifact required by the current macOS
-  consumer. Do not copy the default-branch workflow into a frozen cut or rely
-  on a manual dispatch: GitHub runs a pushed-tag workflow from the pushed ref,
-  while `workflow_run` uses the default-branch workflow definition.
+- The merged release PR, its integrated main commit and the version name the
+  tag action. Review and publish both run
+  `bun scripts/release-verify.ts --preflight --cut <cut> --tag vX.Y.Z --pr <number>`
+  at that exact commit. Preflight rejects a moved checkout, a commit off
+  main, invalid provenance, conflicting release tags or a product path in
+  the diff from the commit's first parent. It reports the verified commit and
+  whether to create a tag, push a matching local tag or verify an existing
+  remote tag. See the [package release procedure](../RELEASING.md#package-release).
+- A pushed tag runs the publisher workflow carried by the tagged commit.
+  The macOS consumer on the default branch verifies the publisher's release
+  receipt and installs the exact version.
 - **The go.** The setting asks before publishing by default, every time. The
   stage stops with `needs_decision` and the version, the PR and the step list.
   The seat wakes on the decision as for any lane, asks the operator in chat with
@@ -572,8 +525,9 @@ with `needs_decision` until a quoted operator go names them. Its brief:
   the standing go, until someone switches the question back on (§7). The role's
   safety fence names only a go quoted by the spawning seat, so its wording gains
   this second source.
-- After the push, the same command waits and verifies: `scripts/release-verify.ts
-  --tag vX.Y.Z` finds the three runs for the tag's commit, waits up to 90
+- Immediately before a push, rerun preflight and recheck approval and the
+  launch blockers. After the push, run `bun scripts/release-verify.ts --tag vX.Y.Z`.
+  It finds the three runs for the tag's commit, waits up to 90
   minutes, and prints one verdict: npm shows X.Y.Z as `latest`; the GHCR image
   index for `X.Y.Z`, `X.Y` and `latest` holds `linux/amd64` and `linux/arm64`
   and the three tags resolve to one digest; the macOS install run succeeded. It
@@ -599,8 +553,8 @@ leaves dispatches to the seat.
 | Outcome | What happens next |
 | --- | --- |
 | Published, PR merged | the record settles `published`; the seat gets one wake and reports one line, with any product defect the pictures showed |
-| Declined at the go | the lane closes without merging; the cut is not offered again; the next attempt waits `minGapHours` from the decline |
-| A stage failed or ended blocked (the capture refused, a broken frame, a file outside the release paths, a failed workflow) | the lane parks as any lane does and its own wake reaches the seat, which retries the stage or closes the lane; a closed lane settles `failed` with the stage and reason, and the next attempt waits `minGapHours` unless asked |
+| Declined at the go | the publication lane closes without creating a tag. The release PR has already merged. The version-mismatch blocker directs the seat to reconcile main with the latest tag. |
+| A stage failed or ended blocked (the capture refused, a broken frame, a file outside the release paths, a failed workflow) | the lane parks as any lane does and its own wake reaches the seat, which retries the stage or closes the lane; a closed lane settles `failed` with the stage and reason, and the next attempt waits `minGapHours` unless asked. If main already carries the untagged bump, the version mismatch needs seat action first. |
 | Waiting on the go | the release stays in flight (blocker 4); its decision shows in Needs you |
 
 Expected duration, from start to published, two to four hours:
@@ -654,16 +608,16 @@ time it settled drive the next eligibility. Board maintenance's own store
 archive code around it is not needed, because a pipeline already carries all of
 that.
 
-`reconcile` reads the live run's pipeline: `completed` with the PR merged →
+`reconcile` reads the live run's pipeline: completed preparation with the PR
+merged starts the publication lane. A completed publication settles as
 `published`; `completed` with the merge blocked → stays live (the lane's
 unmerged-PR wake owns it); parked on a failed or blocked stage → stays live
 (the lane's own wake reaches the seat); `closed` → `declined` when the go was
 refused, `failed` otherwise, with the last stage and its reason.
-A done bound task settles an otherwise live record as `completed` with reason
-`task-done`, including a record that never obtained a pipeline id. A newer stable
-`v*` tag containing the frozen cut and present on npm settles it as `superseded`,
-recording the tag as its reason. Both paths clear only that run's pending request;
-a later request survives. They free the slot without starting a failure cooldown.
+A done task can settle an unbound preparation claim as `completed` with reason
+`task-done`. A newer stable `v*` tag containing the frozen cut and present on
+npm settles an unbound claim as `superseded` and records the tag as its reason.
+Both paths free the slot, preserve later requests and skip the failure cooldown.
 The next evaluation fetches tags and uses the highest stable version for the
 change range and tag gap; holds, the six-hour soak and publication approval still
 apply.
@@ -674,8 +628,9 @@ apply.
   way `maintenance-settled` works (`src/lib/monitor/seatTick.ts:1297`). A
   published run's item also carries any product defect the screenshot stages
   named (§5.3).
-- `release-blocked`: a release has been due for 24 hours and a blocker still
-  holds it; one per blocker kind and episode, naming the blocker.
+- `release-blocked`: a tracked blocker persisted for 24 hours. The release
+  must be due for ordinary blockers. A version mismatch is tracked regardless
+  of count or gap. The wake names the blocker once per episode.
 
 ## 7. The setting
 
@@ -748,8 +703,7 @@ its monitor note.
   `due | not-due | blocked | in-flight` with reason, cut, counts and blockers.
 - `src/lib/release/store.ts` (§6.2) and `src/lib/release/run.ts`
   (`productionReleaseController(sources)` with `reconcile` and `launchIfDue`),
-  `src/lib/release/stages.ts` (the seven stages of §5.1 with their briefs and
-  edges).
+  `src/lib/release/stages.ts` (the preparation and publication stages of §5.1).
 - The `release` setting and answer in `seatTickSettings.ts` and
   `seatTickSettingsAnswer.ts`; the tool field in the MCP schema and binding.
 - Wiring in `seatTickController.ts`; the two wake items in `seatTick.ts`.
@@ -760,26 +714,19 @@ its monitor note.
   due, a request skips both); an internal-only range; red and pending required
   contexts; a merged untagged version and a tag missing from npm; the hold; the
   drain; a missing capture tool; the merge setting and the tick switch off.
-  `stages.test.ts`: the template validates as a pipeline, both checks carry a
-  one-round `advance` fail edge to their own fix stage, and the pass path ends
-  at `publish`. `run.test.ts`: two ticks create one lane, a restart replays the
-  creation key, each outcome settles once, the cool-down after decline and
-  failure, «більше не питати» turns the question off and the setting turns it
-  back on. The settings persistence test, the MCP schema parity test,
-  `prompt.test.ts` and `handoffDigest.test.ts`.
+  `stages.test.ts`: both templates validate and preparation reviews each have
+  one fix round. `run.test.ts`: a merged preparation starts one publisher, a
+  closed publisher with an untagged version leaves a named blocker, a restart
+  replays the creation key, and each outcome settles once. The settings tests
+  cover persistence and changes to publication approval.
 
 **Slice 2: release mechanics in the repository.**
 
-- `scripts/release-verify.ts`, read-only, in two modes: `--preflight` (tag,
-  version, npm, provenance of the frames, release paths) and the wait for the
-  three workflows; tests over recorded `gh`, npm and registry answers. A
-  workflow-compatibility regression reads the actual publisher at the
-  historical cut in §3.2 and the current default-branch macOS consumer, proves
-  that the producer is missing the required receipt, and asserts preflight
-  refuses before a tag or publish action. A matching producer/consumer pair
-  must pass this compatibility check. Keep this regression read-only: it never
-  creates or pushes tags, dispatches workflows, or publishes packages. Retain
-  the preflight case that a product file in the diff turns red.
+- `scripts/release-verify.ts` refreshes main in preflight and inspects the
+  merged PR, exact commit, version, tag refs, npm and README provenance. The
+  verifier waits for the three workflows after tagging. Tests cover a missing
+  PR, a product-path change and the queue's refresh of a release branch that
+  already inherited product changes from main.
 - `macos-newcomer.yml` runs for a release after `publish.yml` succeeds
   (`workflow_run` on «Publish to npm», `completed`, success only) and keeps its
   PR and dispatch triggers; `scripts/publish-workflow.test.ts` follows.
@@ -817,10 +764,8 @@ The operator's answers of 2026-10-12 are each in the design: 30 changes and a
 §7), the verified cut (§3.2), and the retake of the README pictures in every
 release (§5.3).
 
-With the verified cut, the brief's last steps change order: the tag goes on the
-reviewed head of the release branch, publication follows, and the PR merges
-when the lane completes. The brief's order (merge, then tag the merge commit)
-belongs to releasing main's tip, which the operator did not choose.
+The current flow uses the verified cut for the trigger and changelog. The
+ordinary queue merges the PR before tagging, as described in §3.2.
 
 ## 10. Operator decisions
 
@@ -858,7 +803,8 @@ turns it off and on (§5.4, §7).
 - B: main's tip at the moment of the release, as 1.11.0 did, held back only by
   the blockers.
 
-**Answer: A.** In the design: the cut of §3.2.
+**Answer: A.** The options above describe the October 2026 design discussion.
+The current cut and tag contract is in §3.2.
 
 **Q4. Should automatic releases recapture the README screenshots?**
 - A (recommended): no. The README text is updated with each release;
@@ -880,10 +826,9 @@ Options the operator did not choose (2026-10-12):
 - **Asking for the first two releases only (Q2, option B), and never asking
   (Q2, option C).** The operator turns the question off with one answer when
   they choose to.
-- **Releasing main's tip (Q3, option B).** It keeps 1.11.0's way and relies on
-  the blockers alone. The tag would belong on the squash commit, which exists
-  only after the lane completes, so the controller would have to start the
-  publish step itself once the PR merged.
+- **Dropping the production cut from release eligibility (Q3, option B).**
+  The current workflow requires the production cut and tags the integrated
+  release PR commit.
 - **Text-only README updates, with screenshots as their own task (Q4, option
   A).**
 
@@ -904,7 +849,7 @@ Scope cut by this design:
   retakes the set the README has. In 1.11.0 a builder added the eighth frame
   inside the release; here that is the seat's task.
 - **Fixing a product defect inside the release.** The pictures can show one
-  (§5.3). The fix is an ordinary lane, so the tag keeps to what production ran.
+  (§5.3). The fix goes through an ordinary lane.
 - **A `skipped` outcome for a range with nothing user-visible.** The first
   draft had one for a threshold of one change. At 30 candidates the amount rule
   cannot reach it, and a requested release that finds nothing is closed by the

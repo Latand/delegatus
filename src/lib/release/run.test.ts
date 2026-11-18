@@ -583,6 +583,34 @@ test("a merged release hands off once, keeps its task and settles only after pub
   expect(h.requests).toHaveLength(1);
 });
 
+test("a closed publisher with an untagged version leaves an actionable blocker on the next tick", async () => {
+  const h = publishFixture();
+  await productionReleaseController(h.ports).reconcile(h.project);
+  const input = { project: h.project, seat: { conversationId: "seat", seatEpoch: 1 },
+    settings: effectiveSeatTickSettings(defaultSeatTickSettings(h.project), 0, 60_000) } as SeatTickCheckInput;
+  h.lanes.publish!.state = "closed";
+  h.policy.changes = [];
+  const controller = productionReleaseController(h.ports);
+  const blockedAt = h.policy.now;
+  expect(await controller.launchIfDue(input)).toBe("release: release-version-mismatch");
+  h.policy.now += 3_600_000;
+  expect(await controller.launchIfDue(input)).toBe("release: release-version-mismatch");
+  expect(readReleaseProject(h.project)).toMatchObject({
+    live: null,
+    history: [{ phase: "publish", outcome: "failed" }],
+    observation: { state: "blocked", reason: "release-version-mismatch" },
+    blocked: { kind: 11, since: blockedAt },
+  });
+  expect(h.requests).toHaveLength(1);
+
+  h.policy.lastTag = { name: "v1.1.0", version: "1.1.0", at: h.policy.now };
+  h.policy.registryHasTag = false;
+  expect(await controller.launchIfDue(input)).toBe("release: release-in-flight");
+  h.policy.registryHasTag = true;
+  expect(await controller.launchIfDue(input)).toBe("release: gap");
+  expect(readReleaseProject(h.project).blocked).toBeNull();
+});
+
 test.each(["open", "running", "incomplete", "hold", "late-hold", "ancestry-hold", "disabled", "tick", "merge", "gap", "changes", "other", "red", "pending", "drain", "deploy", "rollback"])("publish admission retains %s barrier", async barrier => {
   const h = publishFixture();
   if (barrier === "open") h.lanes.release!.merged = false;
@@ -635,7 +663,7 @@ test("a lost publish creation receipt replays the saved payload through a new co
 });
 
 
-test("an older cut passes the real merge queue refresh and reaches a tag on main", async () => {
+test("a release that merges main before review passes preflight after the queue refreshes and squash merges it", async () => {
   const { normalizeStages } = await import("@/lib/pipelines/engine");
   const { pipelineRoleLookup } = await import("@/lib/pipelines/roles");
   const { buildPipeline, assignPipelineDelivery } = await import("@/lib/pipelines/store");
@@ -658,15 +686,19 @@ test("an older cut passes the real merge queue refresh and reaches a tag on main
   git("add", "package.json"); git("commit", "-m", "production cut");
   const cut = git("rev-parse", "HEAD");
   git("remote", "add", "origin", remote); git("push", "origin", "main");
-  // The source lane starts at the cut, while main moves independently.
+  fs.writeFileSync(path.join(root, "existing.ts"), "export const existing = true;\n");
+  git("add", "existing.ts"); git("commit", "-m", "main advances after cut");
+  git("push", "origin", "main");
+  git("checkout", "--detach", cut);
   git("checkout", "-b", "release");
+  git("merge", "--no-ff", "refs/remotes/origin/main", "-m", "merge main before review");
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "package-example", version: "1.1.0" }));
   git("add", "package.json"); git("commit", "-m", "release version");
   const reviewed = git("rev-parse", "HEAD");
   git("push", "origin", "release");
   const treeFile = path.join(root, "feature.ts");
   git("checkout", "main"); fs.writeFileSync(treeFile, "export const feature = true;\n");
-  git("add", "feature.ts"); git("commit", "-m", "main advances after cut");
+  git("add", "feature.ts"); git("commit", "-m", "main advances after review");
   const main = git("rev-parse", "HEAD"); git("push", "origin", "main"); git("checkout", "release");
   const now = Date.parse("2026-10-22T00:00:00Z"); let clock = now;
   const normalized = normalizeStages(releaseStages({ cut, lastTag: "v1.0.0", changes: [], askBeforePublish: true }), pipelineRoleLookup);
@@ -723,8 +755,15 @@ test("an older cut passes the real merge queue refresh and reaches a tag on main
   expect(h.requests[0].request.baseRef).toBe(merged!);
   // The publish checkout is the integrated main commit, reviewed separately.
   git("checkout", "--detach", merged!);
-  const result = await verifyRelease("v1.1.0", cut, { now: () => 0, wait: async () => {}, registry: async () => null, provenance: () => true,
-    command: async (file, args) => file === "git" ? git(...args) : JSON.stringify({ state: "MERGED", baseRefName: "main", headRefOid: head(), mergeCommit: { oid: merged } }) }, "7");
+  expect(git("diff", "--name-only", cut, "HEAD").split("\n")).toEqual(["existing.ts", "feature.ts", "package.json"]);
+  const ports = { now: () => 0, wait: async () => {}, registry: async () => null, provenance: () => true,
+    command: async (file: string, args: string[]) => {
+      if (file === "git") return git(...args);
+      expect(args.slice(0, 3)).toEqual(["pr", "view", "7"]);
+      return JSON.stringify({ state: "MERGED", baseRefName: "main", headRefOid: head(), mergeCommit: { oid: merged } });
+    } };
+  expect(await verifyRelease("v1.1.0", cut, ports)).toEqual({ errors: ["release preflight requires --pr with the merged release PR number"] });
+  const result = await verifyRelease("v1.1.0", cut, ports, String(lane.merge?.prNumber));
   expect(result).toEqual({ errors: [], nextStep: "create-and-push", tagCommit: merged! });
   git("tag", "-a", "v1.1.0", result.tagCommit!, "-m", "Delegatus 1.1.0");
   expect(git("rev-parse", "v1.1.0^{commit}")).toBe(merged!);
