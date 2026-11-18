@@ -482,8 +482,11 @@ export async function repositoryReferencesAttemptTemp(repository: string, origin
  * which the check gives up and holds everything. */
 export function attemptProcessReferencesClear(original: string, current: string, scan: ProcessScan): boolean {
   const roots = attemptRoots(original, current);
-  return !scan.processes.some(process => process.paths.some(file =>
-    [file, resolvePhysicalPath(file)].some(referencesRoot(roots))));
+  const held = referencesRoot(roots);
+  return !scan.processes.some(process => process.paths.some(file => [file, resolvePhysicalPath(file)].some(held))
+    // An input can be a flag value or an embedded shell argument even if
+    // the command has no file open there yet.
+    || process.references?.some(value => roots.some(root => value.includes(root))));
 }
 export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan,
   containers: (roots: readonly string[]) => Promise<boolean> = containerMountsClear,
@@ -842,10 +845,8 @@ export type AttemptProtection = {
   namespace?: AttemptNamespaceProtection;
   permissionChange?: (file: string, mode: number, apply: () => void) => void;
 };
-/** A finished lane and fresh consumer observations authorize disposable
- * scratch without retaining metadata for every descendant. Pin the root and
- * only the directory currently receiving a permission repair. Marker/Git
- * inspection remains independent, and callers repeat it after their awaits. */
+/** Pin the root and the one directory undergoing owner permission repair.
+ * Recursive deletion still requires the independent descendant snapshot. */
 export function closedAttemptProtection(directory: string): AttemptProtection {
   const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.mtimeNs, stat.ctimeNs].join(":");
   let rootVersion = signature(fs.lstatSync(directory, { bigint: true }));
@@ -1140,8 +1141,6 @@ export async function removeAttemptTree(directory: string, original = directory,
       if (!await guard() || !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed after permission repair");
     }
     assertAttemptMountsClear(fs.realpathSync(directory));
-    if (settings.closedRoot && guard && !await guard()) throw new AttemptTempBudgetDeferred("closed root protection changed after mount observation");
-    if (settings.closedRoot) assertAttemptMountsClear(fs.realpathSync(directory));
     // Mount and physical-path reads may observe a changed root or protection.
     // Admit from the final synchronous snapshots immediately before native rm.
     if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before native removal");

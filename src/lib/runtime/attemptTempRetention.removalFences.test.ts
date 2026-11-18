@@ -364,6 +364,33 @@ test.skipIf(process.platform !== "linux")("closed-lane pressure retirement keeps
   expect(fs.existsSync(path.join(f.retainedRoot(), "cache", ".delegatus-keep"))).toBeTrue();
 });
 
+test.skipIf(process.platform !== "linux")("closed-lane pressure retirement keeps a nested pin added during final process validation", async () => {
+  const f = fixture();
+  fs.chmodSync(f.cache, 0o755);
+  f.store.measure(f.directory, 12288);
+  const readFile = fs.readFileSync.bind(fs);
+  let checkingMounts = false, injected = false;
+  const read = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+    const value = readFile(file, options as BufferEncoding);
+    const stack = String(new Error().stack);
+    if (file === "/proc/self/mountinfo" && stack.includes("at removeAttemptTree")
+      && !stack.includes("at attemptMutationCurrent") && !stack.includes("at repairAttemptPermissions")) checkingMounts = true;
+    return value;
+  }) as typeof fs.readFileSync);
+  cleanup.push(() => { read.mockRestore(); });
+  const report = await f.sweep(() => {
+    if (checkingMounts && !injected && String(new Error().stack).includes("at attemptMutationCurrent")) {
+      plantKeepMarker(path.join(f.journal().trash, "cache", ".delegatus-keep"));
+      injected = true;
+    }
+    return { ownNamespace: null, processes: [] };
+  }, { capBytes: 0 });
+  expect(injected).toBeTrue();
+  expect(report).toMatchObject({ removed: 0, errors: 0 });
+  expect(fs.readFileSync(path.join(f.retainedRoot(), "cache", "payload"), "utf8")).toBe("retained cache");
+  expect(fs.existsSync(path.join(f.retainedRoot(), "cache", ".delegatus-keep"))).toBeTrue();
+});
+
 test.skipIf(process.platform !== "linux").each(["owner", "pipeline", "hold"] as const)(
   "a relevant database change during the final protection read preserves permissions (%s)", mutation => {
     return (async () => {

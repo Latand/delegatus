@@ -20,7 +20,6 @@ const config = JSON.parse(fs.readFileSync(fixture, "utf8")) as { now: number; fr
   measureCost?: number;
   fixtureMutationFence?: boolean;
   fixtureRemoval?: boolean;
-  forbidTreeSnapshot?: boolean;
   forbidFullMeasurement?: boolean;
   realClock?: boolean;
   tickClock?: boolean;
@@ -89,12 +88,6 @@ spyOn(filesystem, "measureAttemptAllocation").mockImplementation(async (...args)
 });
 const protection = filesystem.snapshotAttemptProtection;
 spyOn(filesystem, "snapshotAttemptProtection").mockImplementation(async (...args) => {
-  if (config.forbidTreeSnapshot) throw new AttemptTempBudgetDeferred("fixture forbids a descendant protection snapshot");
   delay(args[0], "protection", args[1]);
   return protection(...args);
-});
-const closedProtection = filesystem.closedAttemptProtection;
-spyOn(filesystem, "closedAttemptProtection").mockImplementation(directory => {
-  delay(directory, "protection");
-  return closedProtection(directory);
 });

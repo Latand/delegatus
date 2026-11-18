@@ -54,7 +54,7 @@ export function attemptTempRootWindow(bytes: number) {
   return Math.min(ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS, ATTEMPT_TEMP_ROOT_BUDGET_MS + Math.floor(Math.max(0, bytes) / 1024 ** 3) * 1000);
 }
 /** One pressure pass: an inventory fixed when the pass starts, ordered by
- * finished lanes first, then largest and oldest, and a durable position.
+ * recorded size and age, and a durable position.
  * Order and position grant nothing; every visit repeats every proof. */
 export type PressurePass = { startedAt: number; total: number; totalBytes: number; position: number; ticks: number;
   visited: number; removed: number; removedBytes: number; resumeSeq: number; resumes: number; cutSeq: number };
@@ -211,18 +211,16 @@ export class AttemptTempStore {
   checkpointRetention(directory: string) {
     this.db.query("INSERT OR REPLACE INTO retention_cursor VALUES(1,?)").run(directory);
   }
-  /** The current pressure pass, or a new one. Its inventory is taken once,
-   * here: roots whose lane or host finished (they carry a retention date)
-   * come first, then the rest; each group largest first, then oldest. The
-   * sizes are the last recorded measurements, so no tree is walked to order
-   * the pass. A root registered later waits for the next pass. */
+  /** Take the inventory once, largest then oldest by ledger measurements.
+   * A finished lane without backfilled expiry still has its place in size
+   * order. Ownership is checked when the cursor reaches each root. */
   pressurePass(now: number): PressurePass {
     const current = this.db.query<PressurePass, []>("SELECT * FROM pressure_pass WHERE id=1").get();
     if (current) return current;
     this.db.transaction(() => {
       this.db.exec("DELETE FROM pressure_pass_roots");
-      this.db.exec(`INSERT INTO pressure_pass_roots(directory,identity) SELECT r.directory,r.identity FROM roots r LEFT JOIN root_retention t ON t.directory=r.directory
-        ORDER BY (t.expiresAt IS NOT NULL) DESC, r.bytes DESC, r.createdAt, r.directory`);
+      this.db.exec(`INSERT INTO pressure_pass_roots(directory,identity) SELECT directory,identity FROM roots
+        ORDER BY bytes DESC, createdAt, directory`);
       const totals = this.db.query<{ total: number; bytes: number | null }, []>("SELECT count(*) AS total, sum(bytes) AS bytes FROM roots").get()!;
       this.db.query("INSERT INTO pressure_pass VALUES(1,?,?,?,0,0,0,0,0,0,0,0)").run(now, totals.total, totals.bytes ?? 0);
     })();
@@ -562,12 +560,15 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       }
       if (stat) {
         const initialState = owner.pipelineId && pressure ? await options.state(owner, inventory) : null;
-        if (initialState === "live" || initialState === "unknown") {
+        // Under pressure, use the last measurement for a known hold. Roots
+        // with no recorded allocation still get their first measurement.
+        if (owner.bytes > 0 && (initialState === "live" || initialState === "unknown")
+          && !recordedRootHeld(owner.directory)) {
           recordedAllocation.add(owner.directory);
           outcome(owner.directory, initialState === "live" ? "live" : "held", bytes, `ownership ${initialState}; allocation retained`);
           return;
         }
-        const recordedOnly = initialState !== null && finished(initialState)
+        const recordedOnly = owner.bytes > 0 && initialState !== null && finished(initialState)
           && !fs.existsSync(path.join(owner.directory, ".delegatus-keep")) && !recordedRootHeld(owner.directory)
           && ledgerLinkedEvidence(owner.directory).length === 0;
         const measured = await measureAttemptAllocation(owner.directory, { budgetMs: remaining(), bytes: owner.bytes, recordedOnly });
@@ -592,8 +593,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         retentionExpiry = initialAuthority.expiresAt ?? null;
         checkBudget();
         if (initialAuthority.state === "expired") await claim();
-        const protection = stat && initialAuthority.state === "expired" ? disposableClosed(initialAuthority.state)
-          ? closedAttemptProtection(owner.directory) : await snapshotAttemptProtection(owner.directory, remaining(), true, bytes) : { current: () => true };
+        const observedAt = now();
+        const protection = stat && initialAuthority.state === "expired"
+          ? await snapshotAttemptProtection(owner.directory, remaining(), true, bytes) : { current: () => true };
         const unpinned = !stat || await inspectAttemptTree(owner.directory, owner.directory, { budgetMs: remaining(), bytes });
         checkBudget();
         store.retainRoot(owner.directory, retentionExpiry);
@@ -601,7 +603,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (unpinned && initialAuthority.state === "expired" && owner.pipelineId && initialAuthority.isCurrent() && options.mode !== "dry-run") {
           // The CAS releases the whole check, including roots outside this
           // page. Persist their prerequisites together before that await.
-          await expireRecordedRootHolds(owner.directory, owner.pipelineId, now(), () => initialAuthority.isCurrent() && protection.current(),
+          await expireRecordedRootHolds(owner.directory, owner.pipelineId, now(), () => initialAuthority.isCurrent()
+            && now() >= observedAt && now() - observedAt < ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS && protection.current(),
             row => store.requireRecordedRootExpiry(row, retentionExpiry), remaining);
           requiredExpiry = store.requiredRootExpiry(owner.directory);
         }
@@ -617,6 +620,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       let dispatchAuthority: AttemptTempAuthority | undefined;
       let dispatchState: AttemptTempState | undefined;
       let dispatchEvidence: AttemptProtection | undefined;
+      let permissionProof: AttemptProtection | undefined;
       const ownerAuthorityCurrent = () => {
         const binding = store.owner(owner.directory);
         requiredExpiry = store.requiredRootExpiry(owner.directory);
@@ -683,18 +687,18 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // this root. Repeated eligibility checks validate the same snapshot;
       // they do not enumerate the tree again. Only this root is retained,
       // and a renamed quarantine or an aged snapshot needs a fresh proof.
-      let treeProof: { directory: string; at: number; protection: AttemptProtection; unpinned: boolean; closed: boolean } | undefined;
-      const protectedTree = async (directory: string, closed: boolean) => {
+      let treeProof: { directory: string; at: number; protection: AttemptProtection; unpinned: boolean } | undefined;
+      const protectedTree = async (directory: string) => {
         if (treeProof?.directory === directory && now() >= treeProof.at
-          && treeProof.closed === closed && now() - treeProof.at < ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS
+          && now() - treeProof.at < ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS
           && treeProof.protection.current()) return treeProof;
         treeProof = undefined;
         const at = now();
-        const snapshot = closed ? closedAttemptProtection(directory) : await snapshotAttemptProtection(directory, remaining(), true, bytes);
+        const snapshot = await snapshotAttemptProtection(directory, remaining(), true, bytes);
         const protection: AttemptProtection = { ...snapshot, current: () => now() >= at
           && now() - at < ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS && snapshot.current() };
         const unpinned = await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes });
-        treeProof = { directory, at, protection, unpinned, closed };
+        treeProof = { directory, at, protection, unpinned };
         return treeProof;
       };
       const eligible = async (directory = owner.directory) => {
@@ -719,11 +723,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const settled = state === "closed" || state === "expired" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled) return false;
-        if (state === "expired") await claim();
+        if (state === "expired" || disposableClosed(state)) await claim();
         if (pressure && ledgerLinkedEvidence(owner.directory).length) {
           disposition = "evidence"; reason = "linked report evidence hold"; return false;
         }
-        const proof = pressure || state === "expired" || options.mode === "dry-run" ? await protectedTree(directory, disposableClosed(state)) : null;
+        const proof = pressure || state === "expired" || options.mode === "dry-run" ? await protectedTree(directory) : null;
         const protection: AttemptProtection = proof?.protection ?? { current: () => true };
         namespaceProtection = protection.namespace;
         const unpinned = proof?.unpinned ?? await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes });
@@ -731,10 +735,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (!unpinned) { disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
         checkBudget();
         if (!await observeReferences(directory)) return false;
-        checkBudget();
-        if (proof?.closed && !await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes })) {
-          disposition = "evidence"; reason = "tree protection changed during reference observation"; return false;
-        }
         checkBudget();
         const evidence = pressure || options.mode === "dry-run" || state === "expired" ? { current: protection.current, namespaceOnly: false, destination: undefined }
           : await preserveAttemptEvidence(directory, owner.directory, owner.identity, {
@@ -776,10 +776,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // at the last eligibility boundary before quarantine or removal.
         if (!await observeReferences(directory)) return false;
         checkBudget();
-        if (proof?.closed && !await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes })) {
-          disposition = "evidence"; reason = "tree protection changed before dispatch"; return false;
-        }
-        checkBudget();
         // All awaited authority and consumer observations are complete.
         // Decide from their synchronous snapshots so nothing can yield between
         // the final consumer-reference validation and dispatch.
@@ -817,25 +813,31 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         roots: [{ path: path.dirname(owner.directory), via: "" }], onlyDirectories: [owner.directory],
         eligible, maxAgeMs: 0, maxRemovals: 1, mode: options.mode, disposable: true, keepRefusedTrash: recoveredTrash,
         dispatchGuard: dispatchEligible,
-        remove: (directory, mutationStarted) => options.remove
-          ? options.remove(directory, () => eligible(directory), () => dispatchEligible(directory), mutationStarted)
-          : removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
+        remove: (directory, mutationStarted) => {
+          if (options.remove) return options.remove(directory, () => eligible(directory), () => dispatchEligible(directory), mutationStarted);
+          const closedRoot = dispatchState !== undefined && disposableClosed(dispatchState);
+          // Permission repair has a narrow proof over the pinned directory it
+          // changes. The independent tree proof still gates every unlink.
+          permissionProof = closedRoot && !namespaceProtection ? closedAttemptProtection(directory) : dispatchEvidence;
+          return removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
             () => dispatchEligible(directory), () => emptyRootEligible(directory), pressure || dispatchState === "expired", namespaceProtection,
             { budgetMs: remaining(), bytes,
-              closedRoot: dispatchState !== undefined && disposableClosed(dispatchState),
+              closedRoot,
               permissionAuthority: () => retirementAuthorityCurrent(directory, false),
               // Permission repair adds owner bits to pinned directory inodes.
               // Consumer/checkout observations bracket this synchronous walk;
               // every data deletion still uses the full dispatch guard above.
-              permissionDispatchGuard: dispatchState !== undefined && disposableClosed(dispatchState) ? binding => attemptMutationCurrent(
-                [...rootWatches(directory), ...authorityWatches(), ...(dispatchEvidence?.mutationDirectories ?? [])],
-                () => retirementAuthorityCurrent(directory, false) && dispatchEvidence?.current() === true && (binding?.() ?? true),
+              permissionDispatchGuard: closedRoot ? binding => attemptMutationCurrent(
+                [...rootWatches(directory), ...authorityWatches(), ...(permissionProof?.mutationDirectories ?? [])],
+                () => retirementAuthorityCurrent(directory, false) && permissionProof?.current() === true && (binding?.() ?? true),
                 remaining(), ownerAuthorityCurrent) : undefined,
               mutationStarted,
               permissionChange: (file, mode, apply) => {
-                if (!dispatchEvidence?.permissionChange) throw new AttemptTempBudgetDeferred("permission protection unavailable");
-                dispatchEvidence.permissionChange(file, mode, apply);
-              } }),
+                const proof = closedRoot ? permissionProof : dispatchEvidence;
+                if (!proof?.permissionChange) throw new AttemptTempBudgetDeferred("permission protection unavailable");
+                proof.permissionChange(file, mode, apply);
+              } });
+        },
         measure: async () => bytes,
         // Settlement owns freshness. Preserve the full mount/Git/readability
         // inspection, including the reinspection after quarantine.
@@ -985,7 +987,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   report.unexaminedBytes = Math.max(0, report.bytes - report.outcomes.filter(row => options.mode === "dry-run" || row.disposition !== "removed").reduce((sum, row) => sum + row.bytes, 0));
   report.overCapBytes = Math.max(0, report.bytes - capBytes);
   // A cleared pressure episode ends its pass; the next episode starts a new
-  // inventory, largest finished roots first.
+  // inventory, with the largest roots first.
   if (!lowSpace && report.overCapBytes === 0 && store.activePressurePass()) {
     pass ??= store.activePressurePass();
     store.endPressurePass(now(), "pressure-cleared"); passEnded = "pressure-cleared";

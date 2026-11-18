@@ -4,11 +4,12 @@
 
 The scheduler follows the worktree sweep's pass and continuation pattern
 (#4091). One SQLite inventory fixes the root identities and order for a pass:
-roots with recorded finished-owner retention first, then recorded bytes
-descending, creation time ascending and path. Legacy scratch discovery runs at
-the pass boundary. A newly registered root waits for the next pass. Each visit
-checkpoints its position before awaiting work, so helper restarts resume the
-same inventory. Missing or replaced identities do not enter that old pass.
+recorded bytes descending, creation time ascending and path. This gives large
+finished roots their place even while their expiry metadata is being backfilled.
+Legacy scratch discovery runs at the pass boundary. A newly registered root
+waits for the next pass. Each visit checkpoints its position before awaiting
+work, so helper restarts resume the same inventory. Missing or replaced
+identities do not enter that old pass.
 
 Measurement and deletion happen together for the visited root. The scheduler
 does not measure the rest of the inventory before reclaiming space. A tick has
@@ -18,26 +19,27 @@ recorded GiB, capped at 30 seconds and the remaining tick. A truncated final
 window gets one complete retry; interrupted quarantines have at most eight
 resumptions per root per pass. Fully unavailable proofs advance the cursor.
 
-For a finished lane under pressure, protection uses its current keyed authority, a fresh
-process cwd/open-file check and the root's identity. It takes no descendant
-metadata snapshot. Explicit keep/Git markers, recorded custody, linked report
-evidence, checkout links, sockets and mounts remain removal guards. Marker
-inspection repeats after awaited references, and dispatch checks process inputs
-again synchronously. Only the root and a directory receiving permission repair
-need native mutation watches for this path. A renamed root or a proof aged
-30 seconds requires a fresh proof. Other ownership classes retain their bounded
-tree snapshot, with at most 65,536 directories.
+For each visited root, the sweep builds a bounded proof of its descendant
+directories and protection markers. Repeated checks on the same path reuse
+the proof while it remains current. Quarantine renames, changed directory
+metadata and proofs aged 30 seconds require a fresh observation. The
+snapshot covers up to 65,536 directories. At dispatch, native mutation watches
+cover that proof while the sweep checks ownership, checkout links and process
+inputs again. Explicit keep and Git markers, recorded custody, linked report
+evidence, sockets and mounts remain removal guards. A finished lane also
+holds a retirement claim while it is being reclaimed under pressure.
 
-Disposable finished-lane roots use their recorded allocation instead of walking
-every file before deletion; these outcomes carry `allocation: "recorded"`.
+Disposable finished-lane roots with a recorded measurement reuse it before
+deletion. These outcomes carry `allocation: "recorded"`.
 Reclaimed bytes are attributed from that ledger measurement. A root explicitly
 held for evidence or by a top-level keep marker still gets its measurement.
 Before unlink, descriptor-pinned permission repair restores owner read, write
 and execute bits on owned directories, the directory semantics of `u+rwX`.
 Group/other bits, regular files, hardlinks and symlink targets are unchanged:
-unlink needs a writable parent directory. The disposable walk skips regular
-files before opening descriptors and retains only traversal-depth descriptors;
-additive owner-bit repairs survive a budget cut. Full ownership, process and
+unlink needs a writable parent directory. Permission repair watches the root
+and the directory undergoing repair. The disposable walk skips regular files
+before opening descriptors and retains only traversal-depth descriptors.
+Additive owner-bit repairs survive a budget cut. Full ownership, process and
 preservation checks repeat after repair before any data deletion. Permission
 dispatch rechecks pinned bindings inside its mutation fence and rejects stale
 modes that would change group or other permissions.

@@ -146,8 +146,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     console.error("[attempt temp] deferred: ledger database is locked; retry next tick"); return null;
   }
   try {
-    const backfill: Awaited<ReturnType<typeof backfillAttemptTempRetention>> = store.activePressurePass() ? { checked: 0, updated: 0 }
-      : await backfillAttemptTempRetention(store, { remaining: () => attemptTempRemaining() });
+    const continuing = store.activePressurePass() !== null;
     const options: AttemptTempSweepOptions = {
       runBudgetMs: attemptTempRemaining(40_000),
       state: recordingAttemptTempState(store), authority: attemptTempAuthority, mode, scan: ports.scan, checkoutReads,
@@ -157,6 +156,10 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
       retentionMs: FINISHED_LANE_RETENTION_MS,
     };
     const roots = await sweepAttemptTemps(store, options);
+    // Inventory uses ledger sizes. Metadata repair can use the time left
+    // after the first slice without delaying the first reclamation.
+    const backfill: Awaited<ReturnType<typeof backfillAttemptTempRetention>> = continuing ? { checked: 0, updated: 0 }
+      : await backfillAttemptTempRetention(store, { remaining: () => attemptTempRemaining() });
     const copies = await sweepEvidenceCopies(store, options, { agentCopiesManagedSeparately: true });
     const report = { ...roots, errors: roots.errors + (backfill.errors ?? 0), copies, backfill, retention: store.retention(Date.now(), options.retentionMs) };
     const file = statePath("attempt-temp-report.json");

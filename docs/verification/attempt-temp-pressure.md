@@ -24,11 +24,11 @@ a tree above the old 10,000-directory ceiling,
 one discovery per pass and retention of the last full-pass report.
 
 The updated acceptance also covers closed and completed lane roots with a
-16 GiB sparse payload and 10,001 directories. A fixture port refuses every
-descendant snapshot or full allocation walk; the real helper must remove the
-root with native deletion under a real monotonic deadline and a measured
-40-second bound, and report recorded allocation. The sparse payload exercises logical size without
-allocating 16 GiB on the test machine. A real SQLite writer lock on one root's
+16 GiB sparse payload and 10,001 directories. A fixture port refuses a full
+allocation walk. The real helper uses the native descendant protection fence
+and must remove the root under a real monotonic deadline and a measured
+40-second bound, with recorded allocation in the report. The sparse payload
+exercises logical size without allocating 16 GiB on the test machine. A real SQLite writer lock on one root's
 state defers that root while a sibling is removed, and a restarted helper
 continues at the persisted next root. Separate cases cover busy bookkeeping
 writes and the one-day grace for both absent-lane and unbound roots.

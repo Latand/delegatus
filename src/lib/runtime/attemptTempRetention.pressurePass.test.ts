@@ -116,16 +116,18 @@ test("inventory discovery runs once per pass, including after reopening the ledg
   } finally { adoption.mockRestore(); }
 });
 
-test("finished roots lead the inventory, largest first with oldest creation as the tie breaker", async () => {
+test("finished roots are removed largest first even without backfill, with oldest creation breaking ties", async () => {
   const f = fixture();
   const live = f.make("live-large", NOW - 10), small = f.make("closed-small", NOW - 9);
   const newer = f.make("closed-newer", NOW - 2), older = f.make("closed-older", NOW - 3);
-  for (const directory of [small, newer, older]) f.store.retainRoot(directory, NOW + 86400_000);
+  f.store.retainRoot(small, NOW + 86400_000);
   f.store.measure(live, 1e9); f.store.measure(small, 12288);
   f.store.measure(newer, 1e6); f.store.measure(older, 1e6);
   try {
-    const report = await sweepAttemptTemps(f.store, { ...f.options, capBytes: 0, state: async () => "live" });
-    expect(report.outcomes.map(row => row.directory)).toEqual([older, newer, small, live]);
+    const report = await sweepAttemptTemps(f.store, { ...f.options, capBytes: 0,
+      state: async owner => owner.directory === live ? "live" : "closed" });
+    expect(report.outcomes.filter(row => row.disposition === "removed").map(row => row.directory)).toEqual([older, newer, small]);
+    expect(fs.existsSync(live)).toBeTrue();
   } finally { f.store.close(); }
 });
 
@@ -214,7 +216,7 @@ test.each(["allocation", "protection"] as const)("a large recorded root can fini
   } finally { store.close(); f.store.close(); restoreEnvironment(originalEnv); }
 }, 60_000);
 
-test.each(["closed", "completed"] as const)("a large %s lane root retires in one tick without a descendant snapshot", async state => {
+test.each(["closed", "completed"] as const)("a large %s lane root retires in one tick with a bounded descendant snapshot", async state => {
   const f = fixture(), originalEnv = { ...process.env }, stateRoot = path.join(f.root, "state");
   process.env.LLV_STATE_DIR = stateRoot;
   const directory = path.join(stateRoot, "scratch", "llv-stage-000000"), config = path.join(f.root, "fixture.json");
@@ -227,8 +229,8 @@ test.each(["closed", "completed"] as const)("a large %s lane root retires in one
     try { fs.ftruncateSync(payload, 16 * 1024 ** 3); } finally { fs.closeSync(payload); }
     store.register({ directory, pipelineId: lane.id, launchId: "retention-launch", retainUntilClose: false, createdAt: NOW - 1000 });
     store.measure(directory, 16 * 1024 ** 3);
-    fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, fixtureMutationFence: true, realClock: true,
-      forbidTreeSnapshot: true, forbidFullMeasurement: true, measureCost: 1000 }));
+    fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, realClock: true,
+      forbidFullMeasurement: true, measureCost: 1000 }));
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
     const started = performance.now(), report = await realParentPass(true);
     const elapsedMs = performance.now() - started;
@@ -462,7 +464,7 @@ test.skipIf(process.platform !== "linux")("a partial native permission failure r
 });
 
 test("protected, live and newly protected roots survive a multi-tick pass; vanished roots are tolerated", async () => {
-  const f = fixture(), kinds = ["live", "process", "operator", "recorded", "linked", "marked-mid-pass", "starts-mid-pass", "vanished", "forgotten"];
+  const f = fixture(), kinds = ["live", "process", "command-input", "operator", "recorded", "linked", "marked-mid-pass", "starts-mid-pass", "vanished", "forgotten"];
   const directories = new Map<string, string>(), removable: string[] = [];
   // Kinds that a later tick changes sort last, after the first tick has run.
   kinds.forEach((kind, n) => {
@@ -479,9 +481,10 @@ test("protected, live and newly protected roots survive a multi-tick pass; vanis
     state: async owner => { clock += 100; return live().includes(owner.directory) ? "live" : "closed"; },
     authority: async owner => { const state = live().includes(owner.directory) ? "live" : "closed";
       return { state, revision: "fixture", isCurrent: () => (live().includes(owner.directory) ? "live" : "closed") === state }; },
-    references: async (original, current) => attemptReferencesClear(original, current, { ownNamespace: null,
-      processes: original === directories.get("process") ? [{ pid: process.pid, paths: [original], namespace: null, stamped: false }] : [] },
-    async () => true) };
+    references: async (original, current) => attemptReferencesClear(original, current, { ownNamespace: null, processes: [
+      { pid: process.pid, paths: [directories.get("process")!], namespace: null, stamped: false,
+        references: [`--input=${path.join(directories.get("command-input")!, "data")}`] },
+    ] }, async () => true) };
   f.store.close();
   let ticks = 0, report: Report | undefined;
   const reasons = new Map<string, string>();
@@ -508,6 +511,7 @@ test("protected, live and newly protected roots survive a multi-tick pass; vanis
     expect(fs.readFileSync(path.join(directory, "data")).length).toBe(4096);
   }
   expect(reasons.get(directories.get("process")!)).toStartWith("live:");
+  expect(reasons.get(directories.get("command-input")!)).toStartWith("live:");
   expect(fs.existsSync(directories.get("forgotten")!)).toBeTrue();
   expect(reasons.has(directories.get("forgotten")!)).toBeFalse();
   for (const directory of removable) expect(fs.existsSync(directory), reasons.get(directory)).toBeFalse();
