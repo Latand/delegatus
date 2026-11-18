@@ -1,7 +1,7 @@
 import { admissionLockWait } from "./cpu-admission-lock";
 import { cpuPriorityFromEnv } from "../src/lib/runtime/cpuPriority";
 import { spawnSync } from "node:child_process";
-import { dlopen, read } from "bun:ffi";
+import { dlopen, read, type Pointer } from "bun:ffi";
 import fs from "node:fs";
 import path from "node:path";
 import { cpuPressurePolicy } from "../src/lib/runtime/cpuPressure";
@@ -22,7 +22,8 @@ function nativeSlotLock() {
   });
   return (fd: number) => {
     if (library.symbols.flock!(fd, 2 | 4) === 0) return true; // LOCK_EX | LOCK_NB
-    const address = library.symbols[errno]!();
+    // Both platform-specific errno accessors have a pointer return ABI.
+    const address = library.symbols[errno]!() as Pointer | null;
     if (address && read.i32(address) === (process.platform === "darwin" ? 35 : 11)) return false;
     throw new Error("could not acquire a heavy command slot lock");
   };
