@@ -579,7 +579,10 @@ export function realPorts(publish: (release: Release) => void | Promise<void>,
     },
     async abort() {
       const inventory = generated;
-      inventory?.controller.abort();
+      // A stopped install/build still records its partial outputs after its
+      // command exits. Cancel preflight or an already-running inventory;
+      // command cancellation is owned by stop() below.
+      if (!currentExit) inventory?.controller.abort();
       waiting?.abort();
       const owned = current;
       const exited = currentExit;

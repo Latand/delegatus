@@ -142,12 +142,16 @@ for (const phase of ["generate", "prepare"]) {
     try {
       const done = phase === "prepare" ? ports.prepareExistingRelease!(h.release, h.root)
         : ports.withGeneratedOutputs!(h.release, h.sha, h.generate, h.root);
-      const rejected = expect(done).rejects.toThrow("cancelled");
-      await ready; await ports.abort(); await rejected;
+      const outcome = done.catch(error => error);
+      await Promise.race([ready, outcome.then(() => { throw new Error("Inventory ended before its walk acknowledgement"); })]);
+      await ports.abort();
+      const error = await outcome;
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain("cancelled");
       expect(owned!.signalCode).toBe("SIGKILL");
       expect(() => process.kill(owned!.pid!, 0)).toThrow();
       if (phase === "generate") expect(fs.existsSync(h.marker)).toBe(false);
-    } finally { intercept.mockRestore(); }
+    } finally { intercept.mockRestore(); await ports.abort(); }
   });
 }
 
