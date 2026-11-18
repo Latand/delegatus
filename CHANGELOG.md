@@ -143,8 +143,22 @@ compatibility raises the major version.
   snapshot ([#4170]). The release output fingerprint that an update proves is
   computed in a separate worker process, so a large output no longer holds
   the server loop ([#4168]).
+- **The seat can route bounded operational work directly.** The default
+  mandate keeps the assigned owner or uses the seat or one visible agent for
+  authorized operations that need no repository edits or staged checks.
+  When speed is requested, it calls for a faster tier the model and account
+  support. Repository edits still go through an isolated pipeline and its
+  required checks ([#4188]).
 
 ### Fixed
+- **Candidate health checks can read the serving Viewer's SQLite registry.**
+  The admitted MCP probe opens the existing registry read-only before
+  promotion. The Viewer retains ownership of registry imports and migrations
+  ([#4181]).
+- **New pipelines can start while another lane's stop check is stalled.** The
+  controller lets other lanes proceed when a stop lookup outlasts its inline
+  budget. Runtime stop-evidence lookups read only the pages for the
+  conversation being checked ([#4185], [#4189]).
 - **A replacement attempt after a pause honors accepted stage overrides.** It
   runs on the engine and account the stage was changed to, instead of the
   previous attempt's ([#4087]).
@@ -277,6 +291,10 @@ compatibility raises the major version.
   shell wrapper and report a missing Bun as an environment failure ([#4108],
   [#4086]). The batch gate classifies a late failure that later passes as
   intermittent ([#4077]).
+- **Batch gate and land results come through one native wait.** A Codex
+  merger can use one `wait_for_check` call to retrieve the exit status and
+  report for `gate` or `land`. If the recorder is lost before it records a
+  final result, the wait returns an explicit unknown ([#4177]).
 - **Test stability.** [#4107], [#4102], [#4078], [#4076] and [#4058] remove
   races and gaps in the succession fixture, the Windows launcher bootstrap, the
   resources cleanup test, the minimum-SQLite fixture and the OpenClaw resource
@@ -6988,3 +7006,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#4168]: https://github.com/Latand/delegatus/pull/4168
 [#4169]: https://github.com/Latand/delegatus/pull/4169
 [#4170]: https://github.com/Latand/delegatus/pull/4170
+[#4177]: https://github.com/Latand/delegatus/pull/4177
+[#4181]: https://github.com/Latand/delegatus/pull/4181
+[#4185]: https://github.com/Latand/delegatus/pull/4185
+[#4188]: https://github.com/Latand/delegatus/pull/4188
+[#4189]: https://github.com/Latand/delegatus/pull/4189
