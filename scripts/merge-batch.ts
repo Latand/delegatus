@@ -1,6 +1,8 @@
 import { publicationLanguageHints, publicationSummary, publicationTitle } from "../src/lib/forge/publicationLanguage";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, unlinkSync, lstatSync, rmdirSync, symlinkSync } from "node:fs";
+import { closeSync, fsyncSync, existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, unlinkSync, lstatSync, rmdirSync, symlinkSync } from "node:fs";
+import { openGateRecording, publishGateExit } from "./gate-wait";
+import { GATE_CHECK_ROOT_ENV } from "../src/lib/runtime/gateCheckRecord";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -1615,7 +1617,19 @@ if (import.meta.main) {
     const stateFile = join(process.env.TMPDIR ?? tmpdir(), "merge-batch.json");
     const lock = `${stateFile}.lock`;
     let held = false;
+    let recording: Awaited<ReturnType<typeof openGateRecording>> | undefined;
+    let output = "";
     try {
+      // Register before claiming the batch lock so a competing invocation can
+      // return its own refusal without waiting on or releasing the active run.
+      // The driver already admits its heavy children individually.
+      const launchRoot = process.env[GATE_CHECK_ROOT_ENV];
+      if (launchRoot && (command === "gate" || command === "land")) {
+        const log = join(launchRoot, `merge-${command}-${randomUUID()}.log`);
+        recording = await openGateRecording(log, process.argv.slice(1));
+        writeFileSync(join(recording.dir, "running"), "running\n", { flag: "wx", mode: 0o600 });
+        process.stdout.write(`merge-batch: recording started\nrunId=${recording.runId}\n`);
+      }
       mkdirSync(lock); held = true;
       const batch = new MergeBatch(process.cwd(), stateFile);
       let state: RunState;
@@ -1624,11 +1638,20 @@ if (import.meta.main) {
       else if (command === "land") state = await batch.land();
       else if (command === "resolve" && /^[1-9]\d*$/.test(argument ?? "")) state = await batch.resolve(Number(argument));
       else throw new Error("Usage: merge-batch.ts build N@sha,... | gate [--browser] | land | resolve N");
-      process.stdout.write(report(state) + "\n");
+      output = report(state) + "\n";
+      process.stdout.write(output);
     } catch (error) {
       // Child-process failures may carry secret-bearing stdout/arguments.
-      process.stderr.write(error instanceof Error && !('stdout' in error) ? `${error.message}\n` : "Batch command failed; inspect the private worktree and run state.\n");
+      output = error instanceof Error && !('stdout' in error) ? `${error.message}\n` : "Batch command failed; inspect the private worktree and run state.\n";
+      process.stderr.write(output);
       process.exitCode = 1;
-    } finally { if (held) rmSync(lock, { recursive: true }); }
+    } finally {
+      if (held) rmSync(lock, { recursive: true });
+      if (recording) {
+        try { writeFileSync(recording.fd, output); fsyncSync(recording.fd); }
+        finally { closeSync(recording.fd); }
+        publishGateExit(recording.dir, Number(process.exitCode ?? 0));
+      }
+    }
   }
 }

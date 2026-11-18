@@ -9,7 +9,7 @@ import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
-import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { assertStateStartupMutation, mayRunStateStartupMutation, MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
@@ -5448,6 +5448,9 @@ function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancel
  * Forwarded stdio calls use that same service and original request key.
  */
 export async function createProductionViewerMcpService(hostHealthProbe = false, stdio = false, taskExecutor = false): Promise<McpToolService> {
+  // The admitted probe and its file scanner share the incumbent's registry
+  // before promotion. Both must open it without running the new schema.
+  if (stdio && hostHealthProbe) process.env[MCP_PROBE_READ_ONLY_ENV] = "1";
   /* Forward before importing policy, bindings or receipts. The Viewer owns
      one service and rechecks authority before disclosing a saved result.
      Linux native clients prove their process through a per-call Unix peer
