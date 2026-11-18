@@ -12,31 +12,43 @@ compatibility raises the major version.
 
 ### Added
 - **The relay can read a public web page.** A new local `read_page` tool
-  works with Claude, Codex and Codex Cloud conversations. It accepts only
+  works with Claude, Codex and Codex Cloud conversations, except for guest
+  requests and for runs that carry the owner's tools. It accepts only
   `http`/`https` addresses without credentials, checks every redirect (at most
   five) and every DNS answer, and refuses localhost, this machine's own names
   and addresses, and private, link-local and reserved ranges. A page is capped
-  at 2 MiB and its text at 16 KiB, and no cookies are sent. When a Codex search
-  opens a page that cannot be checked, the answer of that round is discarded
-  and the next round is told to use `read_page` ([#4085]).
+  at 2 MiB and its text at 16 KiB, and no cookies are sent. Restricted Codex
+  and Codex Cloud runs now search through cached web results instead of live
+  ones. When such a run opens a page that cannot be checked, the answer of that
+  round is discarded. A fresh tool-loop request with a round left then gets
+  another round told to use `read_page`; a persistent conversation or a final
+  round fails the request instead ([#4085]).
 - **The relay sees earlier photos and accepts more image seeds.** When the
   service offers it, a conversation's history photos (JPEG or PNG) reach the
   model and can be fetched, within ten attachments in total and 20 MiB per file;
   an invalid historical item is dropped on its own. A member's avatar returned
   by a read tool can be passed as an image seed, up to ten seeds ([#4071],
   [#4040]).
-- **A stage card opens its cloud task.** A stage that ran in the cloud shows a
-  link to its task beside the button that opens a conversation, on the board and
-  on the phone, in English and Ukrainian ([#4083]).
+- **A stage card opens its cloud task.** When a stage's latest attempt ran in
+  the cloud, has a valid task link and has no conversation to open, its card
+  shows a link to that task in place of the conversation button, on the board
+  and on the phone, in English and Ukrainian ([#4083]).
 - **An interrupted Claude Cloud submission can be recovered.** Delegatus saves
   a nonce for each submission and, on restart, looks for the matching session
   within 20 seconds. When it cannot tell whether the submission happened, the
-  lane waits for `resolve-decision` from its creator, the project's seat or the
-  operator, with a reason, and then continues ([#4013]).
+  lane waits for a decision. `resolve-decision` from its creator, the project's
+  seat or the operator records, with a reason, that a possible duplicate run is
+  accepted and clears the wait. It does not continue the lane: a separate
+  `retry-stage` starts the next attempt, or `override-stage runtime=local`
+  followed by `retry-stage` runs the stage locally. The old attempt's result is
+  never accepted ([#4013]).
 - **A form answered another way can be acknowledged.** `dismiss_attention`
-  accepts `acknowledge: { evidence }` on a decision form whose answer was
-  carried out outside the form. The task can then close and the wake signal
-  stops; the original answer is kept and nothing is resent ([#4023]).
+  accepts `acknowledge: { evidence }` for a prototype-review answer whose
+  delivery settled without success and whose answer was carried out another
+  way. Only the project's seat or the operator may acknowledge. The task can
+  then close and the wake signal stops; the original answer is kept and nothing
+  is resent. An undecided round, a delivery that already succeeded and one
+  still pending are refused ([#4023]).
 - **The cleaner role gains a disk mode and a guarded launch.** The cleaner now
   offers a `disk` mode beside `checkout` and runs on Codex GPT-6.1 Sol at high
   effort. A disk-mode cleaner asks for a restricted, read-only sandbox with no
@@ -88,8 +100,10 @@ compatibility raises the major version.
 - **Lane actions repeat only new brief warnings.** An action returns the
   warnings caused by the text it changed instead of every standing one
   ([#4024]).
-- **A new Claude spawn records why its account was chosen:** the session,
-  weekly and model usage readings and when they were taken ([#4059]).
+- **A local Claude stage launch records how its account was chosen:** the
+  selection time and reason, and the session, weekly and model usage readings
+  with the times they were taken. A reading can be missing when none was
+  available ([#4059]).
 - **The phone conversation header** shows the full model and effort line as a
   tooltip when the line is cut with an ellipsis ([#4057]).
 - **Relay polling is easier to diagnose.** Status shows counters, the last
@@ -114,11 +128,13 @@ compatibility raises the major version.
   count against that limit too ([#3978]). Free check slots are filled at once
   in arrival order, and a healthy nested check is suspended only when every
   slot is taken ([#4164]).
-- **A closed lane's temporary data expires after seven days.** Release records
-  the deadline at once, and a rotating pass covers lanes closed after release
+- **A closed lane's released stage scratch is removed after seven days.** The
+  deadline is recorded when the scratch is released, and a rotating scheduled
+  pass covers lanes that closed after release. Under disk pressure removal
+  comes earlier, and data that is held or protected as evidence is kept
   ([#4093]).
-- **Large installs do less work.** A runtime snapshot rebuild re-reads only
-  sessions that changed ([#4075]). A released host's event window refills by
+- **Large installs do less work.** A runtime snapshot rebuild reuses cached
+  session data that has not changed instead of reading it again ([#4075]). A released host's event window refills by
   streaming the journal: in the maintainers' benchmark on a 163 MB journal,
   peak memory fell from about 820–840 MiB to about 160–170 MiB and the longest
   event-loop stall from 560–780 ms to 4–6 ms, with identical retained events
@@ -129,26 +145,30 @@ compatibility raises the major version.
   the server loop ([#4168]).
 
 ### Fixed
-- **A stage resumed after a pause runs on its configured engine and account**
-  instead of the previous attempt's ([#4087]).
+- **A replacement attempt after a pause honors accepted stage overrides.** It
+  runs on the engine and account the stage was changed to, instead of the
+  previous attempt's ([#4087]).
 - **Idle structured hosts retire again.** Every sweep had refused with "scope
   retirement target changed", so idle hosts, including those left by restarts,
   piled up. A host that is already gone is recorded as gone, not as a failed
   cleanup ([#4082], [#4098]).
 - **A stage start stops the settled earlier agents of its lane itself.** It
-  verifies that their processes are gone before the new stage starts, and
-  waits for conversations that have not settled. If processes survive, or
-  retries run out, the lane parks explicitly and the agents may need a manual
-  stop ([#4030]).
+  stops their recorded processes and confirms they are gone before the new
+  stage starts, and it waits while an earlier agent still has an active turn or
+  queued work. When processes remain after the stop attempts (up to three per
+  agent) are used up, the lane parks and lists the survivors, which may need a
+  manual stop ([#4030]).
 - **Recovery details from the test repair.** The MCP server's restart timer
   re-arms when it wakes before its deadline, so the child recovers without
   another client request. Abandoned-lease diagnostics go to stderr instead of
-  stdout. A resource request waits for verified worker containment before it
-  is sent ([#4027]).
+  stdout. On Linux, a resource worker that runs in a private PID
+  namespace is sent its request only after Delegatus has verified that
+  namespace's kernel identity ([#4027]).
 - **The worktree sweep finishes its pass and removes worktrees.** On a 495-worktree
   fixture the pass completes in about two seconds, with 66 discovery calls
-  instead of 10,560 ([#4091]). Stage temporary data over its cap is reclaimed on
-  every pass ([#4055]), one deadline bounds each cleanup tick ([#4033]), and trash
+  instead of 10,560 ([#4091]). When stage temporary data is over its cap or the disk
+  runs low, each pass reclaims released scratch ahead of its seven-day expiry
+  and keeps held and evidence-protected data ([#4055]), one deadline bounds each cleanup tick ([#4033]), and trash
   whose ledger row is gone is bound back to its owner before removal is decided
   ([#4034]).
 - **Silent turns end and unanswered seat wakes recover.** A wake that gets no
@@ -186,13 +206,15 @@ compatibility raises the major version.
   owner left its event cursor behind can retire ([#4127]), and a replacement
   claim is recorded as changed instead of a failed cleanup ([#4132]).
 - **A stage whose host died settles within a bound and can be retried**
-  ([#4067]). A message to a stage attempt that already passed, failed or
-  waits for a decision, and whose delivery would have to restart that attempt's
-  guarded host, is refused at once with a 409 when the message is proven
-  unsent. The reply names `retry-stage`, `resolve-decision` for an attempt
-  awaiting a decision, and a live successor where one exists, instead of
-  waiting ten minutes. A send that was already journaled stays
-  delivery-uncertain ([#4122]).
+  ([#4067]). A message to a stage attempt that already passed, failed, was
+  skipped or waits for a decision, and whose delivery would have to restart that
+  attempt's guarded host, is refused at once with a 409. The reply names
+  `retry-stage`, `resolve-decision` for an attempt awaiting a decision, and a
+  live successor where one exists, instead of waiting ten minutes. What happens
+  to the send depends on proof of dispatch: when the delivery queue can prove
+  the send never went out, it is recorded as failed and is safe to resend; a
+  held send that the runtime journal already admitted, and so may have reached
+  an earlier host, stays delivery-uncertain ([#4122]).
 - **Seats and deliveries recover on their own.** A designated seat whose host a
   release handover cut off starts again without waiting for a message
   ([#4124]). An adopted Claude host no longer counts its previous writer's
@@ -202,8 +224,9 @@ compatibility raises the major version.
   Controller passes keep their deadline under host load, and a failed
   delivery-progress write never loses a delivery ([#4139]).
 - **A started check keeps its verdict.** `wait_for_check` reads the log named
-  by the run record ([#4104]), and the verdict reaches the waiting stage across
-  a release handover ([#4120]).
+  by the run record ([#4104]), and when the Codex process waiting on a check survives a
+  release handover, the new Delegatus recovers that wait and returns its
+  verdict, or an explicit unknown at the original deadline ([#4120]).
 - **A one-time publication repair cleans up after itself.** Proven repair
   output ends in a commit or is removed automatically. When another owner holds
   custody of the checkout, the repair refuses explicitly with a decision
@@ -214,7 +237,10 @@ compatibility raises the major version.
   and a media-only request gets a plain explanation ([#4129]).
 - **Packaging and updates.** The packed package's MCP entry resolves every
   module it imports ([#4148]). Re-deploying a revision after its rollback
-  reuses or rebuilds its own release directory ([#4146]). A checkout deploy
+  reuses or rebuilds its own release directory when Delegatus can verify that
+  the directory belongs to the checkout and that its dependency and build
+  outputs came from its own deploy commands; local changes or files it cannot
+  prove generated are refused ([#4146]). A checkout deploy
   recognises the wait-owner helpers of live agent hosts instead of refusing
   over them ([#4169]). The launcher reaps child processes it inherits when it
   relaunches itself ([#4132]).
@@ -235,8 +261,10 @@ compatibility raises the major version.
   while stage scratch and retained evidence stay readable ([#4103]).
 - **Seat sign-in failures stay off the project report chat.** Notices go to the
   board and the verified private operator chat, and old report-chat retries are
-  discarded. Claude provider launches no longer read a project's `.env`
-  files, so agents inherit none of their secrets ([#4157]).
+  discarded. The Claude provider launchers now start with Bun's
+  automatic `.env` loading disabled, so a project's `.env` files are not loaded
+  into them. A variable that is already exported in the environment is not
+  covered ([#4157]).
 
 ### Maintainer notes
 - **Hosted privacy checks start again.** The privacy workflows moved from
