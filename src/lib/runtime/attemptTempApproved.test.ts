@@ -79,7 +79,7 @@ test.skipIf(process.platform !== "linux")("exact-list execution preserves every 
     const running = worker.approvedAttemptTemp(f.request);
     await expect(worker.approvedAttemptTemp({ ...f.request, reviewId: "pr_" + "c".repeat(32) })).rejects.toThrow("already running");
     const first = await running;
-    expect(first).toMatchObject({ complete: true, removed: 2, skipped: 0 });
+    expect(first).toMatchObject({ complete: true, removed: 2, removedThisRun: 2, skipped: 0 });
     expect(first.removedBytes).toBeGreaterThan(0);
     expect(fs.readFileSync(path.join(f.directories[2]!, "data"), "utf8")).toBe("fixture payload");
     expect(f.store.has(f.directories[2]!)).toBeTrue(); expect(f.store.activePressurePass()).toBeNull();
@@ -87,6 +87,7 @@ test.skipIf(process.platform !== "linux")("exact-list execution preserves every 
     fs.mkdirSync(f.directories[0]!); fs.writeFileSync(path.join(f.directories[0]!, "data"), "replacement payload");
     const replay = await worker.approvedAttemptTemp(f.request);
     expect(replay.removedBytes).toBe(first.removedBytes); expect(replay.rows).toEqual(first.rows);
+    expect(replay.removedThisRun).toBe(0); expect(replay.removedBytesThisRun).toBe(0);
     expect(fs.readFileSync(path.join(f.directories[0]!, "data"), "utf8")).toBe("replacement payload");
     expect(fs.readFileSync(path.join(f.directories[2]!, "data"), "utf8")).toBe("fixture payload");
   } finally { await worker?.close(); f.close(); }

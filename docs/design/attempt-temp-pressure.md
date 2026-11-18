@@ -331,7 +331,10 @@ kept because releasing them could affect another root.
 Each invocation visits at most 32 rows within the existing helper deadline and
 writes intent and per-row results durably to
 `$STATE/attempt-temp-approved/<full-review-id>.json`. It reports allocated bytes
-retired and free bytes before/after on the same filesystem; other disk activity
+retired and free bytes before/after on the same filesystem. `removed` and
+`removedBytes` are cumulative for the manifest; `removedThisRun` and
+`removedBytesThisRun` count only this invocation. `freeBefore` belongs to the
+first execution page and `freeBeforeThisRun` to the current one. Other disk activity
 may also affect free space. Exit 2 means pending rows remain; reconcile their
 native retirement journals with the attempt-temp owner before retrying. Exit 0
 means every row has a terminal result, including skips, and does not imply every

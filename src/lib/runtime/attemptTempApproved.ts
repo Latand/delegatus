@@ -25,7 +25,8 @@ type SelectedRoot = { directory: string; identity: string; pipelineId: string | 
 type ReceiptRow = { directory: string; identity: string; disposition: string; bytes: number; reason: string; at: string };
 export type ApprovedAttemptTempReport = { version: 1; reviewId: string; manifestSha256: string;
   mode: "on" | "dry-run"; checked: number; removed: number; removedBytes: number; skipped: number;
-  complete: boolean; freeBefore: number; freeAfter: number; filesystem: string; rows: ReceiptRow[] };
+  removedThisRun: number; removedBytesThisRun: number;
+  complete: boolean; freeBefore: number; freeBeforeThisRun: number; freeAfter: number; filesystem: string; rows: ReceiptRow[] };
 const digest = (text: string | Buffer) => createHash("sha256").update(text).digest("hex");
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024, MAX_ROOTS = 1024;
 
@@ -112,7 +113,8 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
     try {
       const space = () => { const value = fs.statfsSync(statePath("scratch")); return value.bavail * value.bsize; };
       const filesystem = String(fs.statSync(statePath("scratch")).dev);
-      let freeBefore = space();
+      const freeBeforeThisRun = space();
+      let freeBefore = freeBeforeThisRun, removedThisRun = 0, removedBytesThisRun = 0;
       let rows: ReceiptRow[] = [];
       if (fs.existsSync(journal)) {
         const prior = JSON.parse(regularFile(journal, MAX_MANIFEST_BYTES).toString()) as ApprovedAttemptTempReport;
@@ -130,8 +132,9 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
       const result = (): ApprovedAttemptTempReport => ({ version: 1, reviewId: request.reviewId, manifestSha256: proof.binding.manifestSha256,
         mode, checked: rows.length, removed: rows.filter(row => row.disposition === "removed").length,
         removedBytes: rows.filter(row => row.disposition === "removed").reduce((sum, row) => sum + row.bytes, 0),
+        removedThisRun, removedBytesThisRun,
         skipped: rows.filter(row => row.disposition !== "removed" && row.disposition !== "pending").length,
-        complete: rows.length === proof.rows.length && rows.every(row => row.disposition !== "pending"), freeBefore, freeAfter: space(), filesystem, rows });
+        complete: rows.length === proof.rows.length && rows.every(row => row.disposition !== "pending"), freeBefore, freeBeforeThisRun, freeAfter: space(), filesystem, rows });
       const record = (row: ReceiptRow) => { rows = [...rows.filter(old => old.directory !== row.directory), row]; writeJsonDurably(journal, result()); };
       let visited = 0;
       // Fresh rows go before interrupted ones so a bounded page of blocked
@@ -161,6 +164,7 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
         const report = await sweepAttemptTemps(store, { scan: ports.scan, state: recordingAttemptTempState(store), authority: attemptTempAuthority,
           mode, runBudgetMs: Math.min(attemptTempRemaining(40_000), deadline - performance.now()), selection: { ...proof.selection, directories: [row.directory] } });
         const outcome = report.outcomes.at(-1);
+        if (mode === "on" && outcome?.disposition === "removed") { removedThisRun++; removedBytesThisRun += outcome.bytes; }
         record({ directory: row.directory, identity: row.identity,
           disposition: mode === "dry-run" ? "preview" : outcome?.disposition === "deferred" ? "pending" : outcome?.disposition ?? "pending",
           bytes: mode === "dry-run" ? 0 : outcome?.bytes ?? 0, reason: outcome?.reason ?? "no final outcome; reconcile before retry", at: new Date().toISOString() });
