@@ -10,6 +10,7 @@ import { reportMediaIndex } from "@/lib/reportMedia/lookup";
 import { recordedRootHeld } from "@/lib/recordedChecks/store";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { attemptPathWatches, type AttemptMutationWatch } from "./attemptMutationFence";
+import { AttemptProtectionInventory } from "./attemptProtectionInventory";
 
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
@@ -483,10 +484,28 @@ export async function repositoryReferencesAttemptTemp(repository: string, origin
 export function attemptProcessReferencesClear(original: string, current: string, scan: ProcessScan): boolean {
   const roots = attemptRoots(original, current);
   const held = referencesRoot(roots);
-  return !scan.processes.some(process => process.paths.some(file => [file, resolvePhysicalPath(file)].some(held))
+  const referenced = (file: string) => [file, ...resolveObservedPhysicalPaths(file)].some(held);
+  return !scan.processes.some(process => process.paths.some(referenced)
     // An input can be a flag value or an embedded shell argument even if
     // the command has no file open there yet.
-    || process.references?.some(value => roots.some(root => value.includes(root))));
+    || process.references?.some(value => {
+      if (roots.some(root => value.includes(root))) return true;
+      // A cmdline token can be a whole path (including spaces), a flag value
+      // or a shell command containing quoted/embedded absolute inputs. Keep
+      // components in kernel order when expanding relative paths from cwd,
+      // which scanProcesses records first in paths.
+      const assignment = /^--?[^=\s]+=([\s\S]*)$/.exec(value)?.[1];
+      const candidates = [value, ...(assignment === undefined ? [] : [assignment]),
+        ...[...value.matchAll(/["'](\/[^"']+)["']|\/(?:[^\s\x00'"`=;|&<>])+/g)].map(match => match[1] ?? match[0])];
+      return candidates.some(candidate => {
+        if (candidate.length > 4096 || segments(candidate).some(name => Buffer.byteLength(name) > 255)) return false;
+        if (path.isAbsolute(candidate)) return referenced(candidate);
+        const cwd = process.paths[0];
+        return !!cwd && candidate.length > 0 && !candidate.startsWith("-")
+          && (!/\s/.test(candidate) || candidate === assignment)
+          && referenced(cwd + path.sep + candidate);
+      });
+    }));
 }
 export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan,
   containers: (roots: readonly string[]) => Promise<boolean> = containerMountsClear,
@@ -834,11 +853,9 @@ export async function inspectAttemptTree(directory: string, original = directory
   }
 }
 
-/** Directories one protection snapshot records. Large finished roots can
- * hold several full repository copies beyond the old 10,000-directory cap.
- * Every recorded directory is checked again before deletion and watched by
- * the dispatch fence, so this bounds that work and its transient watches. */
-export const ATTEMPT_PROTECTION_DIRECTORY_LIMIT = 65_536;
+/** Traversal slice, retained in SQLite when a root needs another helper tick.
+ * This limits preparation per visit, never the size of a removable tree. */
+export const ATTEMPT_PROTECTION_DIRECTORY_LIMIT = 16_384;
 export type AttemptProtection = {
   current: () => boolean;
   mutationDirectories?: readonly AttemptMutationWatch[];
@@ -894,35 +911,96 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
   const pending = [directory];
   const device = fs.lstatSync(directory).dev;
   let inaccessible = false;
-  while (pending.length) {
-    if (attemptTempRemaining(until - performance.now()) <= 0 || directories.size >= ATTEMPT_PROTECTION_DIRECTORY_LIMIT) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
-    const current = pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
-    directories.set(current, signature(stat));
-    if (stat.dev !== BigInt(device)) continue;
-    let entries: fs.Dir | undefined;
-    try {
-      entries = fs.opendirSync(current);
-      for (let entry; (entry = entries.readSync());) {
-        if (attemptTempRemaining(until - performance.now()) <= 0 || pending.length + directories.size >= ATTEMPT_PROTECTION_DIRECTORY_LIMIT)
-          throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
-        if (entry.isDirectory()) pending.push(path.join(current, entry.name));
-        const file = path.join(current, entry.name);
-        if (protectionMarker(file, entry.isDirectory())) {
-          if (markerFiles.size >= MARKER_LIMIT) throw new AttemptTempBudgetDeferred("attempt protection marker budget exceeded");
-          const marker = fs.lstatSync(file, { bigint: true });
-          markerFiles.set(file, { version: signature(marker),
-            content: marker.isFile() && marker.size <= BigInt(4096) ? markerContent(file) : undefined });
-        }
+  let inventory = AttemptProtectionInventory.exists(directory)
+    ? new AttemptProtectionInventory(directory, signature(fs.lstatSync(directory, { bigint: true }))) : undefined;
+  let checkpointed = inventory !== undefined;
+  const budget = () => {
+    if (attemptTempRemaining(until - performance.now()) <= 0) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
+  };
+  const checkpoint = () => {
+    if (!inventory) {
+      checkpointed = true;
+      inventory = new AttemptProtectionInventory(directory, signature(fs.lstatSync(directory, { bigint: true })));
+      inventory.seed(directories, readableDirectories, markerFiles, pending);
+    }
+  };
+  let visited = 0;
+  let active: string | undefined;
+  try {
+    while (inventory ? inventory.pending() !== undefined : pending.length > 0) {
+      if (attemptTempRemaining(until - performance.now()) <= 0 || visited >= ATTEMPT_PROTECTION_DIRECTORY_LIMIT) {
+        checkpoint(); throw new AttemptTempBudgetDeferred("attempt protection inventory checkpointed; retry next tick");
       }
-      // Some runtimes open the directory on the first read. Only a completed
-      // iteration proves this directory can also be watched from the host.
-      readableDirectories.push(current);
-    } catch (error) {
-      if (process.platform !== "linux" || !["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
-      inaccessible = true;
-    } finally { entries?.closeSync(); }
-  }
+      const current = inventory?.pending() ?? pending.pop()!, stat = fs.lstatSync(current, { bigint: true });
+      active = current;
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("attempt protection directory changed");
+      const version = signature(stat), children: string[] = [], markersHere = new Map<string, { version: string; content?: Buffer }>();
+      visited++;
+      if (stat.dev !== BigInt(device)) {
+        if (inventory) inventory.record(current, version, false, [], markersHere);
+        else directories.set(current, version);
+        active = undefined;
+        continue;
+      }
+      let entries: fs.Dir | undefined;
+      let readable = false;
+      try {
+        entries = fs.opendirSync(current);
+        for (let entry; (entry = entries.readSync());) {
+          budget();
+          if (entry.isDirectory()) children.push(path.join(current, entry.name));
+          const file = path.join(current, entry.name);
+          if (protectionMarker(file, entry.isDirectory())) {
+            if (markerFiles.size + markersHere.size >= MARKER_LIMIT) throw new AttemptTempBudgetDeferred("attempt protection marker budget exceeded");
+            const marker = fs.lstatSync(file, { bigint: true });
+            markersHere.set(file, { version: signature(marker),
+              content: marker.isFile() && marker.size <= BigInt(4096) ? markerContent(file) : undefined });
+          }
+        }
+        // Some runtimes open the directory on the first read. Only a completed
+        // iteration proves this directory can also be watched from the host.
+        readable = true;
+      } catch (error) {
+        if (process.platform !== "linux" || !["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+        inaccessible = true;
+      } finally { entries?.closeSync(); }
+      if (inventory) inventory.record(current, version, readable, children, markersHere);
+      else {
+        directories.set(current, version); for (const child of children) pending.push(child);
+        if (readable) readableDirectories.push(current);
+        for (const [file, marker] of markersHere) markerFiles.set(file, marker);
+      }
+      active = undefined;
+    }
+    inventory?.load(directories, readableDirectories, markerFiles, budget);
+    inaccessible ||= readableDirectories.length !== directories.size;
+    if (markerFiles.size > MARKER_LIMIT) throw new AttemptTempBudgetDeferred("attempt protection marker budget exceeded");
+    // Checkpointed rows are observations from older helpers. Verify every row
+    // before returning a fresh proof; late descendant pins cannot be absorbed.
+    if (inventory) {
+      let changed = false;
+      for (const [file, version] of directories) { budget(); if (signature(fs.lstatSync(file, { bigint: true })) !== version) { changed = true; break; } }
+      for (const [file, marker] of markerFiles) {
+        budget();
+        if (signature(fs.lstatSync(file, { bigint: true })) !== marker.version
+          || marker.content && !markerContent(file).equals(marker.content)) { changed = true; break; }
+      }
+      if (changed) {
+        inventory.discard(); inventory = undefined;
+        throw new AttemptTempBudgetDeferred("attempt protection inventory changed; retry from a fresh snapshot");
+      }
+    }
+  } catch (error) {
+    if (inventory && !(error instanceof AttemptTempBudgetDeferred)) {
+      inventory.discard(); inventory = undefined;
+      throw new AttemptTempBudgetDeferred(`attempt protection inventory invalidated: ${attemptTempFailureDetail(error)}`);
+    }
+    if (!checkpointed && error instanceof AttemptTempBudgetDeferred) {
+      if (active) pending.push(active);
+      checkpoint();
+    }
+    throw error;
+  } finally { inventory?.close(); }
   let namespace: AttemptNamespaceProtection | undefined;
   if (inaccessible) {
     const result = await containerCommand(directory, "snapshot", directory, undefined, false, undefined,
@@ -937,7 +1015,7 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
     // removal namespace, which rechecks every directory before deletion.
     if (namespace && !namespaceRemoval) return false;
     try {
-      for (const [file, before] of directories) if (signature(fs.lstatSync(file, { bigint: true })) !== before) return false;
+      for (const [file, before] of directories) { checkAttemptTempDeadline(); if (signature(fs.lstatSync(file, { bigint: true })) !== before) return false; }
       for (const [file, before] of markerFiles) {
         if (signature(fs.lstatSync(file, { bigint: true })) !== before.version
           || before.content && !markerContent(file).equals(before.content)) return false;

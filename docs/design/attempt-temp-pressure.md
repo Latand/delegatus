@@ -22,12 +22,24 @@ resumptions per root per pass. Fully unavailable proofs advance the cursor.
 For each visited root, the sweep builds a bounded proof of its descendant
 directories and protection markers. Repeated checks on the same path reuse
 the proof while it remains current. Quarantine renames, changed directory
-metadata and proofs aged 30 seconds require a fresh observation. The
-snapshot covers up to 65,536 directories. At dispatch, native mutation watches
+metadata and proofs aged 30 seconds require a fresh observation. Traversal
+checkpoints after 16,384 directories in a private SQLite inventory and resumes
+after helper restarts. The directory count limits each preparation slice;
+larger trees continue through further slices. Before a completed inventory
+becomes a proof, every saved directory and marker version is revalidated.
+An inventory change restarts that proof, and descendant pins still hold the
+entire root. A continuing inventory receives up to the existing 30-second
+root window, within the tick's deadline. At dispatch, native mutation watches
 cover that proof while the sweep checks ownership, checkout links and process
 inputs again. Explicit keep and Git markers, recorded custody, linked report
-evidence, sockets and mounts remain removal guards. Expired lanes also hold
-the existing retirement claim while the sweep reclaims them.
+evidence, sockets and mounts remain removal guards. Every lane-owned removal
+holds the existing retirement claim until the remover and journal cleanup
+settle, including pressure cleanup before ordinary expiry. Pipeline activation
+writers honor that claim. Physical ancestry is checked at retirement as well
+as registration; an unchanged leaf inode beneath a rebound ancestor grants
+no authority. Command arguments and embedded absolute input values use the
+checkout link resolver's component-wise traversal, preserving symlink/`..`
+semantics.
 
 Disposable finished-lane roots with a recorded measurement reuse it before
 deletion. These outcomes carry `allocation: "recorded"`.
@@ -80,6 +92,16 @@ under its process-shared sweep lock. Production reads the returned fields into
 the existing JSON report and log; fixture helpers exercise the same ledger
 reader after process restarts. The report adds fields without changing its
 existing accounting fields or removal controls.
+
+The partial protection inventory has one writer and reader,
+`src/lib/runtime/attemptProtectionInventory.ts`, called only by the descendant
+snapshot builder under the sweep lock. It stores pending directories, completed
+directory versions and marker bytes; directory completion and discovered
+children commit together. A root metadata binding invalidates replacement
+roots, and recovered paths must remain canonical descendants. Completed
+snapshots feed the existing tree inspector and native mutation fence. Retirement
+forgets both original and quarantine inventories; forgetting a vanished root
+also removes its partial inventory. These records grant no removal permission.
 
 ## Historical page scheduler
 

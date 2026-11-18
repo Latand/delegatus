@@ -10,10 +10,10 @@ import { sweepMonotonicNow } from "./attemptTempDeadline";
 
 export const NOW = Date.parse("2030-01-20T00:00:00Z");
 export const roots: string[] = [];
-export function realParentWorker(realClock = false) {
+export function realParentWorker(realClock = false, timeoutMs = 60_000) {
   return new WorktreeSweepWorker({ executable: process.execPath, entry: "--preload",
     args: [path.join(import.meta.dir, "attemptTempPressure.preload.ts"), path.join(import.meta.dir, "../worktreeSweep.worker.ts")] },
-  60_000, { now: realClock ? sweepMonotonicNow : () => 0, setTimeout, clearTimeout });
+  timeoutMs, { now: realClock ? sweepMonotonicNow : () => 0, setTimeout, clearTimeout });
 }
 export async function realParentPass(realClock = false) {
   const worker = realParentWorker(realClock);

@@ -22,6 +22,7 @@ const config = JSON.parse(fs.readFileSync(fixture, "utf8")) as { now: number; fr
   fixtureRemoval?: boolean;
   forbidFullMeasurement?: boolean;
   realClock?: boolean;
+  exhaustMeasurement?: string;
   tickClock?: boolean;
   slowProof?: { phase: "allocation" | "protection"; prefix: number; requiredCost?: number; timeoutPrefix?: number }; windows?: number[]; elapsed?: number };
 let elapsed = 0;
@@ -76,6 +77,12 @@ spyOn(filesystem, "attemptReferencesClear").mockImplementation(async () => {
 });
 const measure = filesystem.measureAttemptAllocation;
 spyOn(filesystem, "measureAttemptAllocation").mockImplementation(async (...args) => {
+  if (config.exhaustMeasurement === path.basename(args[0])) {
+    delete config.exhaustMeasurement;
+    fs.writeFileSync(fixture, JSON.stringify(config));
+    await new Promise(resolve => setTimeout(resolve, attemptTempRemaining() + 5));
+    throw new AttemptTempBudgetDeferred("fixture exhausted the real helper measurement deadline");
+  }
   if (config.forbidFullMeasurement && !args[1]?.recordedOnly) throw new AttemptTempBudgetDeferred("fixture forbids a full allocation walk");
   if (config.partialMeasurement) {
     if (config.partialMeasurement === "timeout") elapsed += Math.floor(attemptTempRemaining()) + 1;

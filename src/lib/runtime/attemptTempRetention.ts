@@ -5,7 +5,7 @@ import type { Database } from "bun:sqlite";
 import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync, FileTransactionBusyError } from "@/lib/state/fileTransaction";
-import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
+import { attemptTempJournalPath, sweepStaleTempDirs, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
 import { allocatedAttemptBytes, attemptReferencesClear, attemptProcessReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation,
   privilegedCleanupUnavailable, snapshotAttemptProtection, closedAttemptProtection, removeAttemptTree, RepositoryLinkInventory, ledgerLinkedEvidence,
   type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
@@ -23,6 +23,7 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { pipelineRecordReader } from "@/lib/pipelines/store";
 import { laneFinish } from "@/lib/pipelines/laneFinish";
 import { stateDatabaseBusy } from "@/lib/state/lockWait";
+import { AttemptProtectionInventory, forgetAttemptProtection } from "./attemptProtectionInventory";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
 export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; revision: string; isCurrent: () => boolean };
@@ -64,6 +65,13 @@ export type CompletedPressurePass = { startedAt: number; endedAt: number; durati
 export const EXPIRED_HOLD_RETRY_MS = 30 * 60_000;
 /** How long a root waits for the operator to remove what this user cannot. */
 export const BLOCKED_SUBTREE_RETRY_MS = 60 * 60_000;
+/** An unchanged leaf inode cannot authorize a rebound parent or evidence. */
+function attemptTempPathAdmitted(directory: string): boolean {
+  try {
+    const physical = fs.realpathSync(directory), evidence = resolvePhysicalPath(statePath("evidence"));
+    return physical === path.resolve(directory) && physical !== evidence && !physical.startsWith(evidence + path.sep);
+  } catch { return false; }
+}
 /** Roots whose blocked subtrees one report lists in full. */
 const BLOCKED_REPORT_ROOTS = 32;
 export type BlockedRoot = { directory: string; bytes: number; count: number; entries: BlockedSubtree[]; at: number };
@@ -292,6 +300,7 @@ export class AttemptTempStore {
   }
   defer(directory: string, until: number) { this.db.query("UPDATE roots SET checkedAt=? WHERE directory=?").run(until, directory); }
   forget(directory: string) {
+    forgetAttemptProtection(directory);
     this.db.transaction(() => {
       this.db.query("DELETE FROM root_retention WHERE directory=?").run(directory);
       this.db.query("DELETE FROM root_expiry_admission WHERE directory=?").run(directory);
@@ -635,7 +644,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       };
       const retirementAuthorityCurrent = (directory: string, validateCheckouts = true) => {
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
-        return !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
+        return attemptTempPathAdmitted(directory) && !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === owner.identity
           && (!validateCheckouts || inventory.unchangedAll()) && ownerAuthorityCurrent();
       };
       // The evidence snapshot must match until content deletion dispatches.
@@ -718,11 +727,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         reason = state === "live" ? "live lane or checkout dependency" : state === "settled" && owner.retainUntilClose
           ? "declared evidence until lane close" : `ownership ${state}`;
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
-        if (!current?.isDirectory() || current.isSymbolicLink() || `${current.dev}:${current.ino}` !== owner.identity) { reason = "identity changed during authority read"; return false; }
+        if (!attemptTempPathAdmitted(directory) || !current?.isDirectory() || current.isSymbolicLink() || `${current.dev}:${current.ino}` !== owner.identity) { reason = "physical ancestry or identity changed during authority read"; return false; }
         const settled = state === "closed" || state === "expired" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled) return false;
-        if (state === "expired") await claim();
         if (pressure && ledgerLinkedEvidence(owner.directory).length) {
           disposition = "evidence"; reason = "linked report evidence hold"; return false;
         }
@@ -776,6 +784,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (!await observeReferences(directory)) return false;
         checkBudget();
         // All awaited authority and consumer observations are complete.
+        // Activation may revoke the observations above. Once admitted here,
+        // every lane-owned deletion holds the writer fence until its owned
+        // remover and journal cleanup settle, including pressure retirement.
+        await claim();
+        checkBudget();
         // Decide from their synchronous snapshots so nothing can yield between
         // the final consumer-reference validation and dispatch.
         const dispatchRoot = fs.lstatSync(directory, { throwIfNoEntry: false });
@@ -874,6 +887,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // receipt succeeding. Keep the row for recovery if that write fails.
         store.measure(owner.directory, 0);
         bytes = 0;
+        forgetAttemptProtection(currentDirectory);
         await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory), "completed", "acknowledged owned-root retirement completed", remaining);
         store.forget(owner.directory);
         options.onRetired?.(result.removed.length + (result.trashFinished ?? 0), result.removedBytes + (result.trashFinished ? owner.bytes : 0));
@@ -952,7 +966,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       if (!owner || owner.identity !== next.identity) { store.savePressurePass(pass); continue; }
       pass.visited++;
       store.savePressurePass(pass);
-      const window = Math.min(attemptTempRootWindow(owner.bytes), remaining());
+      const rootWindow = AttemptProtectionInventory.exists(owner.directory)
+        ? ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS : attemptTempRootWindow(owner.bytes);
+      const window = Math.min(rootWindow, remaining());
       const removedBefore = report.removed, removedBytesBefore = report.removedBytes, deferredBefore = report.deferred;
       await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
       pass.removed += report.removed - removedBefore;
@@ -967,7 +983,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         pass.resumes = pass.resumeSeq === next.seq ? pass.resumes + 1 : 1;
         pass.resumeSeq = next.seq;
         pass.position = previous;
-      } else if (deferred && remaining() <= 0 && window < attemptTempRootWindow(owner.bytes) && pass.cutSeq !== next.seq) {
+      } else if (deferred && remaining() <= 0 && window < rootWindow && pass.cutSeq !== next.seq) {
         // The end of the tick, not the root's own window, cut this visit.
         // It goes first next tick, once, with a complete window.
         pass.cutSeq = next.seq;
