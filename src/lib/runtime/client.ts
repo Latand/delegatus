@@ -163,6 +163,7 @@ export interface RuntimeHostClient {
   snapshotBytes?(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<Uint8Array>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
+  append(event: RuntimeEventInput, authorize: () => void): Promise<unknown>;
   append(event: RuntimeEventInput): Promise<unknown>;
   /** The RPC itself requires the host's transactional session revision fence.
       An incumbent without that method refuses it; callers never retry append. */
@@ -257,7 +258,9 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   }
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
   waitEvents(after: number, timeoutMs = 15_000, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("wait", { after, timeoutMs }, timeoutMs + 1_000, signal) as Promise<RuntimeReplay>; }
-  append(event: RuntimeEventInput): Promise<unknown> { return this.call("append", { event }); }
+  append(event: RuntimeEventInput, authorize?: () => void): Promise<unknown> {
+    return this.call("append", { event }, this.timeoutMs, undefined, false, authorize);
+  }
   appendSessionFenced(event: RuntimeEventInput & { expectedSessionRevision: number }): Promise<unknown> {
     return this.call("append-session-fenced", { event });
   }
