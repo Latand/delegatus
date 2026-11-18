@@ -190,3 +190,25 @@ test("a journal cannot introduce an outside target or invalid recovered outcome"
     }
   } finally { f.close(); }
 }, 60000);
+
+test.skipIf(process.platform !== "linux")("a fresh helper resumes after the exact 32-row page boundary", async () => {
+  const f = fixture(34);
+  let worker: WorktreeSweepWorker | undefined;
+  try {
+    for (const directory of f.directories.slice(0, 32)) plantKeepMarker(path.join(directory, ".delegatus-keep"));
+    const config = path.join(f.root, "fixture.json"), entry = path.join(f.root, "worker.ts");
+    fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, realClock: true, measureCost: 0 }));
+    process.env.LLV_PRESSURE_FIXTURE = config;
+    fs.writeFileSync(entry, `import ${JSON.stringify(path.resolve("src/lib/runtime/attemptTempPressure.preload.ts"))};\nawait import(${JSON.stringify(path.resolve("src/lib/worktreeSweep.worker.ts"))});\n`);
+    const launch = { executable: process.execPath, entry };
+    worker = new WorktreeSweepWorker(launch, 60000);
+    const first = await worker.approvedAttemptTemp(f.request);
+    expect(first).toMatchObject({ complete: false, checked: 32, removed: 0, skipped: 32 });
+    await worker.close(); worker = new WorktreeSweepWorker(launch, 60000);
+    const last = await worker.approvedAttemptTemp(f.request);
+    expect(last).toMatchObject({ complete: true, checked: 34, removed: 2, skipped: 32 });
+    expect(last.freeBefore).toBe(first.freeBefore);
+    for (const directory of f.directories.slice(0, 32)) expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("fixture payload");
+    expect(fs.readFileSync(path.join(f.directories[34]!, "data"), "utf8")).toBe("fixture payload");
+  } finally { await worker?.close(); f.close(); }
+}, 120000);
