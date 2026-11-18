@@ -1496,7 +1496,7 @@ test.each([
         "SELECT generation,dirty,attempt_cursor FROM pipeline_tick_work WHERE row_key=?",
       );
       const timedOutPeer = enteredBlocker;
-      const before = timedOutPeer === undefined ? undefined : readWork.get(timedOutPeer);
+      const before = timedOutPeer === undefined ? null : readWork.get(timedOutPeer);
       if (blocked) {
         // The production selection transaction must already be durable.
         expect(db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_cursor WHERE id=1").get()?.row_key).toBe(timedOutPeer);
