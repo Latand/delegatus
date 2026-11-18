@@ -620,7 +620,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       let dispatchAuthority: AttemptTempAuthority | undefined;
       let dispatchState: AttemptTempState | undefined;
       let dispatchEvidence: AttemptProtection | undefined;
-      let permissionProof: AttemptProtection | undefined;
       const ownerAuthorityCurrent = () => {
         const binding = store.owner(owner.directory);
         requiredExpiry = store.requiredRootExpiry(owner.directory);
@@ -653,7 +652,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const rootWatches = (directory: string) => [...(namespaceProtection ? [] : [directory]), ...attemptPathWatches([directory], false)];
       const mutationDirectories = (directory: string) => [...rootWatches(directory), ...authorityWatches(),
         ...(dispatchEvidence?.mutationDirectories ?? []), ...inventory.mutationDirectories()];
-      const processInputsClear = (directory: string) => !pressure && (dispatchState === undefined || !finished(dispatchState))
+      const processInputsClear = (directory: string) => (!pressure && (dispatchState === undefined || !finished(dispatchState)))
         || attemptProcessReferencesClear(owner.directory, directory, options.scan([owner.directory, directory]));
       const dispatchEligible = (directory: string) => attemptMutationCurrent(
         mutationDirectories(directory),
@@ -816,9 +815,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         remove: (directory, mutationStarted) => {
           if (options.remove) return options.remove(directory, () => eligible(directory), () => dispatchEligible(directory), mutationStarted);
           const closedRoot = dispatchState !== undefined && disposableClosed(dispatchState);
-          // Permission repair has a narrow proof over the pinned directory it
-          // changes. The independent tree proof still gates every unlink.
-          permissionProof = closedRoot && !namespaceProtection ? closedAttemptProtection(directory) : dispatchEvidence;
+          // Permission repair proves the pinned directory it changes.
+          // Recursive deletion still uses the full tree proof.
+          const permissionProof = closedRoot && !namespaceProtection ? closedAttemptProtection(directory) : dispatchEvidence;
           return removeAttemptTree(directory, owner.directory, () => eligible(directory), namespaceOnly,
             () => dispatchEligible(directory), () => emptyRootEligible(directory), pressure || dispatchState === "expired", namespaceProtection,
             { budgetMs: remaining(), bytes,
