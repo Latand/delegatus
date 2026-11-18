@@ -111,7 +111,8 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
     const store = new AttemptTempStore();
     try {
       const space = () => { const value = fs.statfsSync(statePath("scratch")); return value.bavail * value.bsize; };
-      const filesystem = String(fs.statSync(statePath("scratch")).dev), freeBefore = space();
+      const filesystem = String(fs.statSync(statePath("scratch")).dev);
+      let freeBefore = space();
       let rows: ReceiptRow[] = [];
       if (fs.existsSync(journal)) {
         const prior = JSON.parse(regularFile(journal, MAX_MANIFEST_BYTES).toString()) as ApprovedAttemptTempReport;
@@ -122,7 +123,9 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
             || !Number.isFinite(row.bytes) || row.bytes < 0 || typeof row.reason !== "string" || !Number.isFinite(Date.parse(row.at)))
           || new Set(prior.rows.map(row => row.directory)).size !== prior.rows.length)
           throw new Error("execution journal does not belong to approved manifest");
+        if (!Number.isFinite(prior.freeBefore) || prior.freeBefore < 0) throw new Error("invalid execution journal space observation");
         rows = prior.rows;
+        if (!(prior.mode === "dry-run" && mode === "on")) freeBefore = prior.freeBefore;
       }
       const result = (): ApprovedAttemptTempReport => ({ version: 1, reviewId: request.reviewId, manifestSha256: proof.binding.manifestSha256,
         mode, checked: rows.length, removed: rows.filter(row => row.disposition === "removed").length,
@@ -131,7 +134,11 @@ export async function runApprovedAttemptTempSweep(request: ApprovedAttemptTempRe
         complete: rows.length === proof.rows.length && rows.every(row => row.disposition !== "pending"), freeBefore, freeAfter: space(), filesystem, rows });
       const record = (row: ReceiptRow) => { rows = [...rows.filter(old => old.directory !== row.directory), row]; writeJsonDurably(journal, result()); };
       let visited = 0;
-      for (const row of proof.rows) {
+      // Fresh rows go before interrupted ones so a bounded page of blocked
+      // recoveries cannot starve the rest of the approved inventory.
+      const ordered = [...proof.rows.filter(root => !rows.some(row => row.directory === root.directory)),
+        ...proof.rows.filter(root => rows.some(row => row.directory === root.directory))];
+      for (const row of ordered) {
         const prior = rows.find(old => old.directory === row.directory);
         // A completed receipt cannot authorize a replacement with the same name.
         if (prior && prior.disposition !== "pending" && !(prior.disposition === "preview" && mode === "on")) continue;
