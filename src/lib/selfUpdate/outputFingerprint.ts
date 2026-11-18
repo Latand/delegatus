@@ -41,7 +41,7 @@ export const OUTPUT_INVENTORY_TIMEOUT_MS = 120_000;
 /** Metadata work belongs to a bounded child of the pinned Bun running this
  * server. No dependency bytes or symlink destinations are traversed. Reject
  * only after close, including cancellation, so a retry owns no old worker. */
-export function outputFingerprint(dir: string, output: string, signal?: AbortSignal, start = spawn): Promise<string> {
+export function outputFingerprint(dir: string, output: string, signal?: AbortSignal, start = spawn, timeoutMs = OUTPUT_INVENTORY_TIMEOUT_MS): Promise<string> {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = start(process.execPath, ["--no-env-file", "--no-install", "--eval", OUTPUT_INVENTORY_SOURCE, absolutePath(dir), output], {
@@ -51,7 +51,7 @@ export function outputFingerprint(dir: string, output: string, signal?: AbortSig
     let stdout = "";
     const stop = (error: Error) => { failure ??= error; child.kill("SIGKILL"); };
     const abort = () => stop(new Error("Release output inventory cancelled"));
-    const timer = setTimeout(() => stop(new Error("Release output inventory timed out")), OUTPUT_INVENTORY_TIMEOUT_MS);
+    const timer = setTimeout(() => stop(new Error("Release output inventory timed out")), timeoutMs);
     child.on("error", error => { failure ??= error; });
     child.stdout!.on("data", (bytes: Buffer) => {
       if (stdout.length + bytes.length > 65) stop(new Error("Invalid release output inventory response"));

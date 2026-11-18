@@ -1,13 +1,13 @@
-import { afterEach, expect, jest, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { outputFingerprint, OUTPUT_INVENTORY_TIMEOUT_MS } from "./outputFingerprint";
+import { outputFingerprint } from "./outputFingerprint";
 
 const roots: string[] = [];
-afterEach(() => { jest.useRealTimers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture() {
   const root = fs.mkdtempSync(join(tmpdir(), "output-inventory-")); roots.push(root);
   fs.mkdirSync(join(root, "node_modules/sub"), { recursive: true });
@@ -134,18 +134,14 @@ test("cancellation during a real walk rejects after the child exits, then permit
   expect(await outputFingerprint(root, "node_modules/")).toBe(legacyFingerprint(root, "node_modules/"));
 });
 
-test("the fixed deadline kills a stalled worker and waits for close", async () => {
+test("the deadline kills a stalled worker and waits for close", async () => {
   const root = fixture(); let child: ChildProcess | undefined;
-  let ready!: () => void;
-  const started = new Promise<void>(resolve => { ready = resolve; });
-  jest.useFakeTimers();
+  let ready = false;
   const done = outputFingerprint(root, "node_modules/", undefined, worker(() => 'process.stderr.write("ready"); setInterval(() => {}, 1000)', c => {
-    child = c; c.stderr!.once("data", ready);
-  }));
-  const rejected = expect(done).rejects.toThrow("timed out");
-  await started;
-  jest.advanceTimersByTime(OUTPUT_INVENTORY_TIMEOUT_MS);
-  await rejected;
+    child = c; c.stderr!.once("data", () => { ready = true; });
+  }), 1_000);
+  await expect(done).rejects.toThrow("timed out");
+  expect(ready).toBe(true);
   expect(child!.signalCode).toBe("SIGKILL");
   expect(() => process.kill(child!.pid!, 0)).toThrow();
 });
