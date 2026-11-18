@@ -94,6 +94,12 @@ for (const mode of ["flag-alias", "plain-symlink-dotdot", "relative-flag-alias",
     }, 60000);
 test.skipIf(process.platform !== "linux")("a finished lane cannot reopen while its native removal is in flight", async () => {
     const f = fixture();
+    f.lane.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "retention-launch",
+        effectiveRole: f.lane.stages[0]!.effectiveRole, conversationId: "fixture", sessionId: null, agentPath: null,
+        paneId: null, flowId: null, startedAt: new Date(NOW - 7200_000).toISOString(),
+        completedAt: new Date(NOW - 3600_000).toISOString(), input: null, activatedBy: null,
+        output: null, verdict: "pass", error: null }] }];
+    savePipelines([f.lane]);
     const native = removal.removeTreeWithinAttemptBudget;
     let reopened = false, refused = false, removerStarted = false;
     const hook = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (directory, started) => {
@@ -108,6 +114,10 @@ test.skipIf(process.platform !== "linux")("a finished lane cannot reopen while i
                 removerStarted = true;
                 try {
                     f.lane.state = "running";
+                    f.lane.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+                    const prior = f.lane.runs[0]!.attempts[0]!;
+                    f.lane.runs[0]!.attempts.push({ ...prior, n: 2, state: "running", launchId: "reopened-launch",
+                        startedAt: new Date(NOW).toISOString(), completedAt: null, verdict: null });
                     savePipelines([f.lane]);
                     reopened = true;
                 }
@@ -115,6 +125,7 @@ test.skipIf(process.platform !== "linux")("a finished lane cannot reopen while i
                     expect(String(error)).toContain("retirement pending");
                     refused = true;
                 }
+                if (reopened) expect((await attemptTempAuthority(f.store.owner(f.directory)!, undefined, () => NOW)).state).toBe("live");
                 child.stdin.write("go");
                 child.stdin.end();
                 const drain = (async () => { try {
