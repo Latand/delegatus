@@ -34,7 +34,7 @@ cover that proof while the sweep checks ownership, checkout links and process
 inputs again. Explicit keep and Git markers, recorded custody, linked report
 evidence, sockets and mounts remain removal guards. Every lane-owned removal
 holds the existing retirement claim until the remover and journal cleanup
-settle, including pressure cleanup before ordinary expiry. Pipeline activation
+settle during pressure cleanup. Pipeline activation
 writers honor that claim. Physical ancestry is checked at retirement as well
 as registration; an unchanged leaf inode beneath a rebound ancestor grants
 no authority. Stable ancestor aliases remain valid while their physical parent
