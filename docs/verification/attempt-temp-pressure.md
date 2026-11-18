@@ -1,5 +1,36 @@
 # Attempt-temp pressure verification
 
+## Current review regression files
+
+The review corrections add explicit files for the automatic owner, approved
+manifest execution, native removal races and persistent descendant inventory:
+
+- `src/lib/runtime/attemptTempRetention.automatic.test.ts`: ordinary cleanup of
+  expired registered scratch without pressure, live/protected/unknown holds,
+  and zero-cache roots beyond a protected prefix across real helper restarts.
+- `src/lib/runtime/attemptTempRetention.safety.test.ts`: native removal held
+  behind a child barrier while a lane tries to reopen; live inputs reached
+  through flags, relative paths, aliases and symlink/parent traversal; evidence
+  ancestry changes while the leaf inode stays unchanged.
+- `src/lib/runtime/attemptTempRetention.inventoryRecovery.test.ts`: a real
+  65,536-directory tree, helper restarts, a late keep marker in an already
+  checkpointed descendant, and eventual retirement after its removal.
+- `src/lib/runtime/attemptTempRetention.pressureScale.test.ts`: 1,000 real roots
+  under small real monotonic helper deadlines, first-tick deletion, cancellation
+  and cold restarts, with live and keep roots surviving.
+- `src/lib/runtime/attemptProtectionInventory.test.ts`: writer/reader output,
+  quarantine rebasing, incomplete inventories and rejected escaping paths.
+- `src/lib/runtime/attemptTempApproved.test.ts`: exact manifest/form binding,
+  primary human decisions, hostile inputs, identity and shared retention holds,
+  durable receipts, 32-row pages and replacement names across helper restarts.
+
+The automatic path and the manual approved list have separate inventories.
+Neither path treats forgetting a vanished root's cached allocation as a
+physical reclamation. Production free-space and throughput comparisons belong
+to the authorized cleanup executor after review and deployment. Retained private
+baseline reports distinguish physical scratch blocks, cached allocation,
+outside-page observations and retention forecasts.
+
 ## Persistent-pass regression coverage
 
 `src/lib/runtime/attemptTempRetention.pressurePass.test.ts` exercises a
