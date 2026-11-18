@@ -1275,14 +1275,14 @@ class Checkout:
                          and process_group(proc["stat"]) == process_session(proc["stat"]) == leader]
             for pid, proc in members.items():
                 stat, args, member = proc["stat"], proc["args"], proc["member"]
-                if process_group(stat) != leader or process_session(stat) != leader:
+                if len(holders[pid]) != 1:
+                    member["reason"] = "stderr drain: ambiguous FIFO"
+                elif process_group(stat) != leader or process_session(stat) != leader:
                     member["reason"] = "stderr drain: process group differs from its leader"
                 elif pid != leader and (len(subshells) > 1 or parent_pid(stat) not in [leader, *subshells]):
                     member["reason"] = "stderr drain: parent link outside the group"
                 elif pid != leader and pid not in subshells and (not args or os.path.basename(args[0]) not in ["dd", "tee", "wc", "cat"]):
                     member["reason"] = "stderr drain: unexpected program"
-                elif len(holders[pid]) != 1:
-                    member["reason"] = "stderr drain: ambiguous FIFO"
                 else:
                     admit(pid, "stderr-drain", waiter["host"])
         # Recheck every admitted identity after the final filesystem/systemd

@@ -32,7 +32,8 @@ function retainedLivenessFixture(count = 12) {
   catch (error) { fixture.close(); throw error; }
 }
 const sha = (file: string) => fs.existsSync(file) ? crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") : null;
-const fields = (rows: Awaited<ReturnType<typeof censusSnapshot>>["conversations"]) => rows.filter(row => row.host.state === "alive")
+const fields = (rows: readonly { conversationId: string | null; host: { state: string; kind: string; pid: number | null };
+  turnState: string; pipeline: { pipelineId: string; stageId: string; attempt: number } | null }[]) => rows.filter(row => row.host.state === "alive")
   .map(row => [row.conversationId, row.host.state, row.host.kind, row.host.pid, row.turnState, row.pipeline && [row.pipeline.pipelineId, row.pipeline.stageId, row.pipeline.attempt]])
   .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 
@@ -97,7 +98,7 @@ test("custody census carries recorded identities and bounded writer evidence wit
   const f = fixture();
   const directory = temporary();
   try {
-    const host = f.rows[0]!.entry.structuredHost!.process;
+    const host = f.rows[0]!.entry.structuredHost!.process!;
     const writer = { pid: 8001, startIdentity: "8001:42", bootEpoch: "fixture-boot" };
     bindHostExitWriter(directory, host, writer);
     const exitFile = JSON.parse(fs.readFileSync(path.join(directory, "host-exit.json"), "utf8")).file as string;

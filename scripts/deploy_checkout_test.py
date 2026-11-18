@@ -1406,8 +1406,13 @@ class CheckoutIntegration(unittest.TestCase):
                         else: self.moving.add(group["host"] if changed == "host" else group["leader"])
                     return value
                 self.adapter.process_read = process
-                with self.assertRaises(RuntimeError) if changed == "host-parent" else self.assertRaisesRegex(RuntimeError, "service cgroup member changed while it was read"):
+                with self.assertRaises(RuntimeError) as refusal:
                     self.adapter.preflight()
+                if isinstance(refusal.exception, deploy.LeftoverProcesses):
+                    reason = "wait owner: host is not its child" if changed == "host-parent" else "wait owner: host identity differs from registry"
+                    self.assertEqual(refusal.exception.members[0]["reason"], reason)
+                else:
+                    self.assertEqual(str(refusal.exception), "service cgroup member changed while it was read")
                 self.assert_no_switch()
 
     def test_older_release_refusal_never_enters_custody(self):
