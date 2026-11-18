@@ -901,7 +901,7 @@ export function closedAttemptProtection(directory: string): AttemptProtection {
  * in-place rewrites even when expired evidence is deliberately discarded. Native metadata is checked synchronously
  * after awaited observations. Opaque descendants also require their digest
  * to be checked inside the removal namespace. Never follow links. */
-export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000, namespaceRemoval = false, bytes?: number):
+export async function snapshotAttemptProtection(directory: string, budgetMs = 30_000, namespaceRemoval = false, bytes?: number, original = directory):
   Promise<AttemptProtection> {
   const until = performance.now() + attemptTempRemaining(Math.max(0, Math.min(30_000, budgetMs)));
   const directories = new Map<string, string>();
@@ -911,16 +911,16 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
   const pending = [directory];
   const device = fs.lstatSync(directory).dev;
   let inaccessible = false;
-  let inventory = AttemptProtectionInventory.exists(directory)
-    ? new AttemptProtectionInventory(directory, signature(fs.lstatSync(directory, { bigint: true }))) : undefined;
-  let checkpointed = inventory !== undefined;
   const budget = () => {
     if (attemptTempRemaining(until - performance.now()) <= 0) throw new AttemptTempBudgetDeferred("attempt protection snapshot budget exceeded");
   };
+  let inventory = AttemptProtectionInventory.exists(directory, original) || directory !== original && AttemptProtectionInventory.exists(original)
+    ? new AttemptProtectionInventory(directory, signature(fs.lstatSync(directory, { bigint: true })), original, budget) : undefined;
+  let checkpointed = inventory !== undefined;
   const checkpoint = () => {
     if (!inventory) {
       checkpointed = true;
-      inventory = new AttemptProtectionInventory(directory, signature(fs.lstatSync(directory, { bigint: true })));
+        inventory = new AttemptProtectionInventory(directory, signature(fs.lstatSync(directory, { bigint: true })), original, budget);
       inventory.seed(directories, readableDirectories, markerFiles, pending);
     }
   };
@@ -937,8 +937,8 @@ export async function snapshotAttemptProtection(directory: string, budgetMs = 30
       const version = signature(stat), children: string[] = [], markersHere = new Map<string, { version: string; content?: Buffer }>();
       visited++;
       if (stat.dev !== BigInt(device)) {
-        // A mount is a boundary, not an opaque descendant needing namespace
-        // inspection. Keep its binding watched; the removal mount guard holds it.
+        // Watch mount bindings directly; the removal mount guard holds them
+        // without entering a cleanup namespace to inspect their contents.
         if (inventory) inventory.record(current, version, true, [], markersHere);
         else { directories.set(current, version); readableDirectories.push(current); }
         active = undefined;

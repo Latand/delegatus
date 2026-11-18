@@ -104,6 +104,12 @@ roots, and recovered paths must remain canonical descendants. Completed
 snapshots feed the existing tree inspector and native mutation fence. Retirement
 forgets both original and quarantine inventories; forgetting a vanished root
 also removes its partial inventory. These records grant no removal permission.
+Each registered owner has at most two inventory files, for its original and
+current quarantine names; retiring or forgetting the owner removes both.
+After quarantine renames a proven root, its completed inventory is translated
+to the new name only while identity, mode and mtime agree. The new root ctime
+is sampled, and every translated descendant and marker is checked again before
+dispatch. Refused quarantines discard their temporary inventory after restore.
 
 ## Historical page scheduler
 

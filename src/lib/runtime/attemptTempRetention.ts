@@ -500,6 +500,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     // Persist fairness before the first await; a killed helper resumes elsewhere.
     const retirement: { release?: () => void } = {};
     let recoveredTrash = false;
+    let currentDirectory = owner.directory;
     let requiredExpiry: number | null = null;
     const finished = (state: AttemptTempState) => owner.pipelineId !== null && (state === "closed" || state === "expired");
     const disposableClosed = (state: AttemptTempState) => pressure && finished(state);
@@ -634,7 +635,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           outcome(owner.directory, "evidence", bytes, "recorded check evidence hold"); return;
         }
       }
-      let currentDirectory = owner.directory;
       let namespaceOnly = false;
       let namespaceProtection: AttemptNamespaceProtection | undefined;
       let dispatchAuthority: AttemptTempAuthority | undefined;
@@ -713,7 +713,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           && treeProof.protection.current()) return treeProof;
         treeProof = undefined;
         const at = now();
-        const snapshot = await snapshotAttemptProtection(directory, remaining(), true, bytes);
+        const snapshot = await snapshotAttemptProtection(directory, remaining(), true, bytes, owner.directory);
         const protection: AttemptProtection = { ...snapshot, current: () => now() >= at
           && now() - at < ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS && snapshot.current() };
         const unpinned = await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes });
@@ -898,7 +898,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // receipt succeeding. Keep the row for recovery if that write fails.
         store.measure(owner.directory, 0);
         bytes = 0;
-        forgetAttemptProtection(currentDirectory);
+        forgetAttemptProtection(currentDirectory, owner.directory);
         await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory), "completed", "acknowledged owned-root retirement completed", remaining);
         store.forget(owner.directory);
         options.onRetired?.(result.removed.length + (result.trashFinished ?? 0), result.removedBytes + (result.trashFinished ? owner.bytes : 0));
@@ -923,7 +923,12 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       outcome(owner.directory, "failed", bytes, detail);
       if (noteFailure(detail)) console.error("[attempt temp] root retained", detail);
     } finally {
-      try { retirement.release?.(); }
+      // A pre-delete refusal restores the original namespace. Its temporary
+      // quarantine inventory cannot be resumed under that now-missing name.
+      try {
+        if (currentDirectory !== owner.directory && !fs.existsSync(currentDirectory)) forgetAttemptProtection(currentDirectory, owner.directory);
+        retirement.release?.();
+      }
       catch (error) {
         report.errors++;
         const detail = attemptTempFailureDetail(error);

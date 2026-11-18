@@ -38,7 +38,7 @@ test("large protection inventories resume across helper restarts and honor a lat
     let scannedDirectory = path.join(directory, "000000");
     if (inventoryFiles.length) {
       expect(inventoryFiles).toHaveLength(1);
-      const inventory = new Database(path.join(inventories, inventoryFiles[0]!), { readonly: true });
+      const inventory = new Database(path.join(inventories, inventoryFiles[0]!, "root.sqlite"), { readonly: true });
       const scanned = inventory.query<{ file: string }, [string]>("SELECT file FROM directories WHERE version IS NOT NULL AND file<>? ORDER BY file LIMIT 1").get(directory)!;
       inventory.close(); scannedDirectory = scanned.file;
     }
