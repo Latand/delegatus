@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { RuntimeOperationResult } from "@/lib/runtime/contracts";
-import { claimPipelineControlOwnership, consumePipelineControlOwnership, pipelineControlOwnership } from "./store";
+import { claimPipelineControlOwnership, consumePipelineControlOwnership, pipelineControlOwnership, settlePipelineControlOwnership } from "./store";
 import type { PipelineStageHostRef } from "./types";
 
 const idleStopBinding = z.object({
@@ -77,7 +77,7 @@ export async function claimWithdrawal(key: string, identity: Omit<WithdrawalBind
     kind: "continuation-withdrawal", producerPrefix: "pipeline-withdrawal:" + authority + ":", ...identity,
   });
   const record = await claimPipelineControlOwnership(key, JSON.stringify(binding), "pipeline-withdrawal-fence-" + authority,
-    replaces && JSON.stringify(replaces));
+    replaces && JSON.stringify(replaces), replaces && deadWithdrawalKey(replaces));
   return { acquired: record.acquired, binding: withdrawalBinding.parse(JSON.parse(record.binding)) };
 }
 
@@ -97,4 +97,18 @@ export async function hasWithdrawalRefusal(binding: WithdrawalBinding, reason: s
 
 export async function consumeWithdrawalRefusal(binding: WithdrawalBinding, reason: string): Promise<boolean> {
   return consumePipelineControlOwnership(withdrawalRefusalKey(binding), JSON.stringify(reason));
+}
+
+const deadWithdrawalReason = JSON.stringify("expired fence on a dead session");
+
+function deadWithdrawalKey(binding: WithdrawalBinding): string {
+  return "pipeline-withdrawal-dead-" + digest(binding.producerPrefix);
+}
+
+export async function settleDeadWithdrawal(key: string, binding: WithdrawalBinding): Promise<boolean> {
+  return settlePipelineControlOwnership(key, JSON.stringify(binding), deadWithdrawalKey(binding), deadWithdrawalReason);
+}
+
+export async function withdrawalSettledDead(binding: WithdrawalBinding): Promise<boolean> {
+  return await pipelineControlOwnership(deadWithdrawalKey(binding)) === deadWithdrawalReason;
 }

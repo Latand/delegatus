@@ -1593,12 +1593,14 @@ test.each(["stop", "withdrawal", "close-withdrawal"] as const)(
 test.each([
   ["stop", false, "none"], ["withdrawal", false, "none"], ["stop", true, "none"],
   ["withdrawal", true, "none"], ["withdrawal", true, "stale"], ["withdrawal", false, "legacy"],
-  ["withdrawal", false, "unclassified"],
+  ["withdrawal", false, "unclassified"], ["withdrawal", false, "dead"], ["withdrawal", false, "legacy-dead"],
 ] as const)(
   "a fresh process reconciles an owned %s after its sender exits, admission still pending %s, refusal %s",
   (mutation, holdBeforeAdmission, refusal) => withControllerAuditState(async () => {
-    const withdrawalRefusal = refusal === "legacy" || refusal === "unclassified" ? refusal : undefined;
+    const withdrawalRefusal = refusal === "dead" || refusal === "unclassified" ? "unclassified"
+      : refusal === "legacy" || refusal === "legacy-dead" ? "legacy" : undefined;
     const fixture = await ownedStageControl(mutation, "2026-11-18T12:00:00.000Z", holdBeforeAdmission, { withdrawalRefusal });
+    if (refusal === "legacy-dead") fixture.publish("dead", null);
     const target = {
       conversationId: fixture.conversationId, launchId: fixture.launchId, agentPath: fixture.transcriptPath,
       stageId: "build", attempt: 1, paneId: null,
@@ -1657,6 +1659,22 @@ test.each([
           expect(await observe()).toMatchObject(unknown);
           expect(fixture.dispatches).toEqual(["append-session-fenced"]);
           expect(fixture.withdrawals).toHaveLength(0);
+          if (refusal === "dead") {
+            const { claimWithdrawal, readWithdrawal } = await import("./stageControlCustody");
+            const ownerKey = "fixture-restart-withdrawal";
+            const old = await readWithdrawal(ownerKey);
+            if (!old) throw new Error("the pending withdrawal has no durable owner");
+            fixture.publish("dead", null);
+            expect(await observe()).toEqual({ outcome: "confirmed" });
+            fixture.publish("idle", "fixture-writer-two");
+            const revived = fixture.journal.readSession({ conversationId: fixture.conversationId })!;
+            expect(await claimWithdrawal(ownerKey, { conversationId: old.conversationId, sessionKey: old.sessionKey,
+              artifactPath: old.artifactPath, revision: revived.revision, writerClaim: revived.writerClaim ?? null }, old))
+              .toEqual({ acquired: false, binding: old });
+            expect(await observe()).toEqual({ outcome: "confirmed" });
+            expect(fixture.dispatches).toEqual(["append-session-fenced"]);
+            expect(fixture.withdrawals).toHaveLength(0);
+          }
           return;
         }
         expect(await observe()).toEqual({ outcome: "confirmed" });

@@ -15,10 +15,11 @@ import { RuntimeJournal } from "@/runtime-host/journal";
  * has recorded it, with an optional held acknowledgement. It runs no delivery
  * workers and the only process it stops is the child it created. */
 export async function ownedStageControl(hold: "stop" | "withdrawal", now: string, holdBeforeAdmission = false,
-  options: { withdrawalRefusal?: "legacy" | "unclassified"; readDelayMs?: number } = {}) {
+  options: { withdrawalRefusal?: "legacy" | "unclassified"; readDelayMs?: number; fixtureOrdinal?: number } = {}) {
   const dir = fs.mkdtempSync(path.join(process.env.TMPDIR!, "stage-control-"));
   const socketPath = path.join(dir, "host.sock");
-  const sessionId = ["00000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const ordinal = options.fixtureOrdinal ?? 1;
+  const sessionId = ["00000000", "0000", "4000", "8000", ordinal.toString(16).padStart(12, "0")].join("-");
   const key = { engine: "codex" as const, sessionId };
   const transcriptPath = path.join(dir, key.sessionId + ".jsonl");
   const registry = agentRegistry();
@@ -101,7 +102,7 @@ export async function ownedStageControl(hold: "stop" | "withdrawal", now: string
   };
   try {
     fs.writeFileSync(transcriptPath, "{}\n");
-    let serial = 0;
+    let serial = (ordinal - 1) * 16;
     const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `bcf00001-0000-4000-8000-${(++serial).toString(16).padStart(12, "0")}`);
     const spawn = (() => {
       try { return beginLegacySpawnFixture(registry, { engine: "codex", cwd: dir, transport: "structured" }); }
@@ -120,10 +121,11 @@ export async function ownedStageControl(hold: "stop" | "withdrawal", now: string
       || !entry?.structuredHost?.process || !processIdentityMayRun(entry.structuredHost.process)) {
       throw new Error("fixture registry did not record a resident stage process");
     }
-    const publish = (turn: "idle" | "running", writerClaim: string) => journal.append({
+    const publish = (turn: "idle" | "running" | "dead", writerClaim: string | null) => journal.append({
       scope: { type: "session", id: conversationId }, kind: "session-status",
       payload: { sessionKey: key, artifactPath: transcriptPath, writerClaim, hostKind: "codex-app-server",
-        host: "hosted", turn, activeTurnId: turn === "running" ? "fixture-new-turn" : null, nativeTurnClaims: [] },
+        host: turn === "dead" ? "dead" : "hosted", turn: turn === "dead" ? "unknown" : turn,
+        activeTurnId: turn === "running" ? "fixture-new-turn" : null, nativeTurnClaims: [] },
     });
     publish("idle", "fixture-writer-one");
     await new Promise<void>((resolve, reject) => {

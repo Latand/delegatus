@@ -42,7 +42,7 @@ import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
 import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts } from "./controllerSnapshot";
-import { claimIdleStop, claimWithdrawal, consumeWithdrawalRefusal, hasWithdrawalRefusal, idleStopReceiptMatches, readIdleStop, readWithdrawal, recordWithdrawalRefusal, terminalIdleStopKey, terminalIdleStopOwner, type IdleStopBinding, type WithdrawalBinding } from "./stageControlCustody";
+import { claimIdleStop, claimWithdrawal, consumeWithdrawalRefusal, hasWithdrawalRefusal, idleStopReceiptMatches, readIdleStop, readWithdrawal, recordWithdrawalRefusal, settleDeadWithdrawal, terminalIdleStopKey, terminalIdleStopOwner, withdrawalSettledDead, type IdleStopBinding, type WithdrawalBinding } from "./stageControlCustody";
 import { pipelineStageHostTerminationSourceCurrent, probePipelineStageHostTermination, type HostTerminationInput, type HostTerminationProbe } from "./hostTermination";
 import { guardHostTerminationCheckpoint, hostTerminationKey } from "./hostTerminationProof";
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, recoverableRuntimeSwitch, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
@@ -4192,16 +4192,17 @@ export async function invalidateProviderContinuation(conversationId: string, cli
   const appendFenced = client.appendSessionFenced;
   if (!appendFenced) throw new Error("runtime host cannot fence provider withdrawal");
   const signal = currentOperationLease()?.abort.signal;
-  const cursorFor = (record: WithdrawalBinding) => {
+  const cursorFor = (record: WithdrawalBinding) => awaitLeasedOperation("pipelines.provider-withdrawal-receipt", () =>
+    client.producerCursor(producerKind, record.producerPrefix, { signal }));
+  const settled = async (record: WithdrawalBinding) => {
     if (record.conversationId !== conversationId || record.artifactPath !== owner.artifactPath) {
       throw new Error("provider withdrawal custody changed");
     }
-    return awaitLeasedOperation("pipelines.provider-withdrawal-receipt", () =>
-      client.producerCursor(producerKind, record.producerPrefix, { signal }));
+    return await withdrawalSettledDead(record) || await cursorFor(record) === 1;
   };
   const pending = () => new Error("provider withdrawal awaits a confirmed receipt");
   const previous = await readWithdrawal(owner.key);
-  if (previous && await cursorFor(previous) === 1) return;
+  if (previous && await settled(previous)) return;
   const session = await awaitLeasedOperation("pipelines.provider-withdrawal-fence", () =>
     client.readSession?.({ conversationId }, { signal }) ?? null);
   const { artifactPath } = owner;
@@ -4209,13 +4210,16 @@ export async function invalidateProviderContinuation(conversationId: string, cli
     throw previous ? pending() : new Error("provider withdrawal cannot prove session authority");
   }
   let retry: WithdrawalBinding | undefined;
+  let dead: WithdrawalBinding | undefined;
   if (previous) {
     if (session.revision < previous.revision || session.sessionKey.engine !== previous.sessionKey.engine
-      || session.sessionKey.sessionId !== previous.sessionKey.sessionId || !session.writerClaim
-      || session.host !== "hosted" || session.turn !== "idle" || session.activeTurnId !== null
+      || session.sessionKey.sessionId !== previous.sessionKey.sessionId || session.activeTurnId !== null
       || session.attentionIds.length !== 0) throw pending();
+    const deadSession = session.host === "dead" && !session.writerClaim;
+    if (session.revision > previous.revision && deadSession) dead = previous;
+    if (!deadSession && (session.host !== "hosted" || session.turn !== "idle" || !session.writerClaim)) throw pending();
     if (session.revision === previous.revision) {
-      if (session.writerClaim !== previous.writerClaim || !await hasWithdrawalRefusal(previous, LEGACY_WITHDRAWAL_REFUSAL)) throw pending();
+      if ((session.writerClaim ?? null) !== previous.writerClaim || !await hasWithdrawalRefusal(previous, LEGACY_WITHDRAWAL_REFUSAL)) throw pending();
       retry = previous;
     }
     // Once the row has advanced, the journal cannot admit the old revision.
@@ -4227,6 +4231,13 @@ export async function invalidateProviderContinuation(conversationId: string, cli
   }
   const issued = await tryConversationActuation(conversationId, async lease => {
     assertOperationLease();
+    if (previous && await withdrawalSettledDead(previous)) return null;
+    if (dead) {
+      // The old revision cannot arrive after this proof. Retain the
+      // settlement so later readers never rebase it onto a new writer.
+      if (!await settleDeadWithdrawal(owner.key, dead)) throw pending();
+      return null;
+    }
     const claim = retry
       ? { acquired: await consumeWithdrawalRefusal(retry, LEGACY_WITHDRAWAL_REFUSAL), binding: retry }
       : await claimWithdrawal(owner.key, { conversationId, sessionKey: session.sessionKey,
@@ -4247,7 +4258,7 @@ export async function invalidateProviderContinuation(conversationId: string, cli
     return null;
   });
   if (!issued.acquired) throw new Error("provider withdrawal is waiting for its conversation owner");
-  if (issued.value && await cursorFor(issued.value) !== 1) throw pending();
+  if (issued.value && !await settled(issued.value)) throw pending();
 }
 
 async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, condition: ProviderCondition, ports: PipelinePorts, persist: () => void | Promise<void>, target: string | null): Promise<boolean> {
@@ -9563,7 +9574,7 @@ function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: Pi
 /** Persist the stop before contacting the runtime. Replays use the same key and
  * retain custody until termination and pending delivery settlement are proven. */
 async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
-  ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
+  ports: PipelinePorts, persist: () => void | Promise<void>, accountBlocked = false): Promise<boolean> {
   const suspension = attempt.suspension!;
   await persist();
   const withdraw = async (): Promise<string | undefined> => {
@@ -9579,10 +9590,10 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
   };
   const target = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
     conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
-  const stop = async (refresh: boolean): Promise<boolean> => {
+  const stop = async (): Promise<boolean> => {
     // A host can resume while awaiting a receipt. An unreadable probe
     // reports resident and still requires a fresh stop.
-    if (suspension.stoppedAt && (refresh || await ports.stageHostResident(target)
+    if (suspension.stoppedAt && (await ports.stageHostResident(target)
       || target.paneId && await ports.paneAgentAlive(target.paneId))) {
       suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
       delete suspension.stoppedAt;
@@ -9610,17 +9621,17 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
     }
     return true;
   };
-  const stopFirst = suspension.reason === "account";
+  const stopFirst = accountBlocked || suspension.reason === "account";
   // Termination of an ineligible host gets its own bounded port before a
   // multi-read withdrawal can use the rest of the detached lane's budget.
-  if (stopFirst && !await stop(pipeline.state !== "paused")) return false;
+  if (stopFirst && !await stop()) return false;
   const withdrawalFailure = await withdraw();
-  if (!stopFirst && !await stop(pipeline.state !== "paused")) return false;
+  if (!stopFirst && !await stop()) return false;
   if (withdrawalFailure !== undefined) {
     pipeline.stateDetail = `${suspension.detail}; host stopped, waiting to withdraw queued continuation: ${withdrawalFailure}`;
     await persist(); ports.scheduleTick?.(1_000); return false;
   }
-  if (stopFirst && !await stop(false)) return false;
+  if (stopFirst && !await stop()) return false;
   if (pipelineSurvivorRefusal(pipeline) || attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
     pipeline.stateDetail = `${suspension.detail}; host stopped, waiting for pending delivery settlement`;
     await persist(); ports.scheduleTick?.(1_000); return false;
@@ -9680,7 +9691,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   }
   attempt.suspension ??= { reason: "account", detail: blocked!, requestedAt: ports.now() };
   recordAccountHold(attempt, blocked, ports);
-  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
+  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist, blocked !== null)) return true;
   if (pipeline.state === "paused" || attempt.report) return true;
   const retryCancelledByPause = attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE || attempt.error === SUSPENDED_RETRY_CANCELLED_BY_PAUSE;
   if (attempt.suspension.retryRequestedAt && retryCancelledByPause) attempt.error = null;
@@ -9758,7 +9769,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   }
   // Transcript and operator-evidence reads above yielded custody. Reconfirm
   // the current host immediately before allocating a replacement.
-  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
+  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist, blocked !== null)) return true;
   if (configuredRetry && await settleStoppedReport()) return true;
   let finalBlock: string | null;
   try { finalBlock = stageAccountBlocked(pipeline, targetAttempt(target), ports); }

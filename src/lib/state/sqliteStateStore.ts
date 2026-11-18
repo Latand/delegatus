@@ -2387,13 +2387,16 @@ export class SqliteStateCollection<T> {
     ).get(key)?.binding_json ?? null;
   }
 
-  async claimPipelineControlOwnership(key: string, binding: string, ownerKey = key, replaces?: string): Promise<{ acquired: boolean; binding: string }> {
+  async claimPipelineControlOwnership(key: string, binding: string, ownerKey = key, replaces?: string,
+    settledKey?: string): Promise<{ acquired: boolean; binding: string }> {
     return stateTransactionAsync(this.filename, "pipelines.control-ownership", db => {
       const read = db.query<{ binding_json: string }, [string]>(
         "SELECT binding_json FROM pipeline_control_ownership WHERE control_key=?",
       );
       const previous = read.get(key);
-      if (previous && previous.binding_json !== replaces) return { acquired: false, binding: previous.binding_json };
+      if (previous && (previous.binding_json !== replaces || settledKey && read.get(settledKey))) {
+        return { acquired: false, binding: previous.binding_json };
+      }
       const insert = db.query("INSERT OR IGNORE INTO pipeline_control_ownership VALUES(?,?)");
       const { changes } = insert.run(ownerKey, binding);
       const owner = read.get(ownerKey);
@@ -2407,6 +2410,15 @@ export class SqliteStateCollection<T> {
   async consumePipelineControlOwnership(key: string, binding: string): Promise<boolean> {
     return stateTransactionAsync(this.filename, "pipelines.control-ownership", db =>
       db.query("DELETE FROM pipeline_control_ownership WHERE control_key=? AND binding_json=?").run(key, binding).changes === 1);
+  }
+
+  async settlePipelineControlOwnership(key: string, binding: string, markerKey: string, marker: string): Promise<boolean> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db => {
+      const owned = db.query("SELECT 1 FROM pipeline_control_ownership WHERE control_key=? AND binding_json=?").get(key, binding);
+      if (!owned) return false;
+      db.query("INSERT OR IGNORE INTO pipeline_control_ownership VALUES(?,?)").run(markerKey, marker);
+      return true;
+    });
   }
 
   async recordPipelineTickSelection(work: PipelineTickWork, now: number): Promise<void> {

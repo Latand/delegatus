@@ -133,9 +133,8 @@ test("an unconfirmed stop is retried with the same operation key before any repl
   expect(f.current().runs[0]!.attempts).toHaveLength(1);
   confirm = true;
   await tickPipelines([], { ...f.h.ports });
-  expect(keys).toHaveLength(3);
+  expect(keys).toHaveLength(2);
   expect(keys[1]).toBe(keys[0]);
-  expect(keys[2]).not.toBe(keys[1]);
   expect(f.current().runs[0]!.attempts).toHaveLength(2);
 });
 
@@ -170,6 +169,7 @@ test("a reactivated predecessor must stop again before delivery settlement admit
   f.allow(["account-b"]);
   let outstanding = true, active = true, stopAllowed = true;
   const keys: string[] = [];
+  f.h.ports.stageHostResident = async () => active;
   f.h.ports.conversationDeliveryOutstanding = () => outstanding;
   f.h.ports.stopStageAgent = async (_target, options) => {
     keys.push(options!.operationId!);
@@ -195,6 +195,7 @@ test("custody is rechecked after transcript reads and suspended attempts refuse 
   const f = await fixture();
   f.allow(["account-b"]);
   let active = true, stops = 0;
+  f.h.ports.stageHostResident = async () => active;
   f.h.ports.stopStageAgent = async () => { stops++; active = false; return { outcome: "stopped" }; };
   const read = f.h.ports.durableTurnEvidence;
   f.h.ports.durableTurnEvidence = async (...args) => {
@@ -235,22 +236,33 @@ test("a failed continuation withdrawal still stops usage and holds replacement u
   expect(f.current().runs[0]!.attempts[1]!.accountId).toBe("account-b");
 });
 
-test("account guard fences and stops a denied host before a multi-read withdrawal uses the lane deadline", async () => {
+test.each(["account", "recovered pause"] as const)("account guard stops a denied host before a slow withdrawal (%s)", async prior => {
   const { ownedStageControl } = await import("./fixtures/ownedStageControl");
   const { claimWithdrawal } = await import("./stageControlCustody");
   const { defaultPipelinePorts } = await import("./engine");
   const { tickPipelinesController } = await import("./controllerPass");
   const { settlePipelineStopReadLanes } = await import("./controllerStopRead");
   const f = await fixture();
+  if (prior === "recovered pause") {
+    f.h.ports.conversationAgentActive = async () => true;
+    f.h.ports.stopStageAgent = async (_target, options) => ({
+      outcome: "unconfirmed", operationId: options?.operationId ?? null, detail: "pause remains pending",
+    });
+    expect((await patchPipeline(f.lane.id, { action: "pause" }, f.h.ports)).pipeline?.state).toBe("paused");
+    expect((await patchPipeline(f.lane.id, { action: "resume" }, f.h.ports)).pipeline?.state).toBe("running");
+    expect(f.current().runs[0]!.attempts[0]!.suspension?.reason).toBe("pause");
+  }
   const requestedAt = f.h.ports.now();
   f.h.ports.now = () => requestedAt;
-  const control = await ownedStageControl("withdrawal", requestedAt, false, { readDelayMs: 8_000 });
+  const control = await ownedStageControl("withdrawal", requestedAt, false, {
+    readDelayMs: 8_000, fixtureOrdinal: prior === "account" ? 1 : 2,
+  });
   try {
     f.allow(["account-b"]);
     const lane = f.current();
     const active = lane.runs[0]!.attempts[0]!;
-    Object.assign(active, { conversationId: control.conversationId, launchId: control.launchId, agentPath: control.transcriptPath,
-      suspension: { reason: "account", detail: "fixture account is now disallowed", requestedAt } });
+    Object.assign(active, { conversationId: control.conversationId, launchId: control.launchId, agentPath: control.transcriptPath });
+    active.suspension = { reason: prior === "account" ? "account" : "pause", detail: "fixture account is now disallowed", requestedAt };
     savePipelines([lane]);
     const previous = control.journal.readSession({ conversationId: control.conversationId })!;
     const owner = `stage-continuation-withdrawal:${lane.id}:build:${active.n}:${requestedAt}`;
