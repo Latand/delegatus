@@ -10,10 +10,25 @@ import { realExec } from "../src/lib/workflows/provision";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { runSteps } from "./local-gate";
 
+// This release predates bounded gate waits and cap locks. Use its actual
+// shell, helper and queue, including the legacy SQL used on final claim.
+const legacyRevision = "2c7e437a553f56d81afa39e71878f60a1e6d73a3";
+const hasLegacyGate = process.platform === "linux" &&
+  Bun.spawnSync(["git", "cat-file", "-e", `${legacyRevision}:scripts/gate-slot.sh`], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+
+function legacyGateTree(directory: string) {
+  const tree = path.join(directory, "legacy");
+  fs.mkdirSync(tree);
+  execFileSync("bash", ["-o", "pipefail", "-c", 'git archive "$1" | tar -xf - -C "$2"', "archive-legacy-gate", legacyRevision, tree]);
+  fs.symlinkSync(path.resolve("node_modules"), path.join(tree, "node_modules"), "dir");
+  return tree;
+}
+
 async function until(check: () => boolean, timeoutMs = 5_000) {
   const ends = Date.now() + timeoutMs;
   while (!check()) { if (Date.now() > ends) throw new Error("queue fixture did not reach its barrier"); await Bun.sleep(10); }
 }
+const queuedTickets = "FROM tickets WHERE key NOT GLOB 'command:gate-active:*'";
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gate-queue-"));
   const env = { ...process.env, LLV_GATE_LOCK_DIR: dir, LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_POLL_SECONDS: "0.02", DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "on", LLV_GATE_PSI_RELEASE_SECONDS: "0" };
@@ -28,8 +43,8 @@ function fixture() {
   db.exec("PRAGMA busy_timeout=5000");
   const command = (word: string) => ["bash", "scripts/gate-slot.sh", "bash", "-c", `echo ${word} >> "$CPU_QUEUE_OUTPUT"`];
   return { dir, env: { ...env, CPU_QUEUE_OUTPUT: path.join(dir, "output") }, db, command,
-    count: () => db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tickets").get()!.n,
-    age: () => db.query("UPDATE tickets SET since = ?").run(Date.now() - CPU_QUEUE_MAX_WAIT_MS),
+    count: () => db.query<{ n: number }, []>(`SELECT COUNT(*) AS n ${queuedTickets}`).get()!.n,
+    age: () => db.query("UPDATE tickets SET since = ? WHERE key NOT GLOB 'command:gate-active:*'").run(Date.now() - CPU_QUEUE_MAX_WAIT_MS),
     close: () => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 
@@ -135,6 +150,74 @@ test("gate-slot lifts the pressure hold at ten minutes and preserves FIFO throug
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n"); f.age(); await Promise.allSettled(pending); f.close(); }
 }, 20_000);
 
+test.skipIf(!hasLegacyGate)("an older pressure-only head yields to bounded gates in FIFO order under sustained pressure", async () => {
+  const f = fixture(), control = new AbortController();
+  const pending: ReturnType<typeof realExec>[] = [];
+  const output = () => fs.existsSync(f.env.CPU_QUEUE_OUTPUT) ? fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8") : "";
+  try {
+    const legacy = legacyGateTree(f.dir);
+    for (const [index, word] of ["legacy", "first", "second"].entries()) {
+      pending.push(realExec("bash", f.command(word).slice(1), index === 0 ? legacy : process.cwd(),
+        { ...f.env, LLV_GATE_SLOTS: "2" }, { signal: control.signal, timeoutMs: 15_000 }));
+      await until(() => f.count() === index + 1);
+    }
+    const initial = f.db.query<{ key: string }, []>(`SELECT key ${queuedTickets} ORDER BY fifo_seq`).all();
+    expect(output()).toBe("");
+    f.age();
+    const current = await Promise.all(pending.slice(1));
+    expect(current.map(result => result.code), JSON.stringify(current)).toEqual([0, 0]);
+    expect(output()).toBe("first\nsecond\n");
+    expect(f.db.query(`SELECT key ${queuedTickets}`).all()).toEqual([initial[0]]);
+    expect(fs.readFileSync(f.env.LLV_GATE_PSI_FILE, "utf8")).toContain("avg10=90.00");
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+    expect((await pending[0]!).code).toBe(0);
+    expect(output()).toBe("first\nsecond\nlegacy\n");
+    expect(f.count()).toBe(0);
+  } finally { control.abort(); await Promise.allSettled(pending); f.close(); }
+}, 45_000);
+
+for (const legacyHolds of [true, false]) test.skipIf(!hasLegacyGate)(`mixed wrappers wait for a cap-one holder (legacy holds: ${legacyHolds})`, async () => {
+  const f = fixture(), control = new AbortController();
+  const pending: ReturnType<typeof realExec>[] = [];
+  const release = path.join(f.dir, "release"), stderr = path.join(f.dir, "entrant-stderr");
+  const log = () => fs.existsSync(stderr) ? fs.readFileSync(stderr, "utf8") : "";
+  const last = () => f.db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last;
+  try {
+    const legacy = legacyGateTree(f.dir);
+    if (legacyHolds) fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+    const launchEntrant = () => pending.push(realExec("bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "mixed-gate", ...f.command("entrant")],
+      legacyHolds ? process.cwd() : legacy, { ...f.env, LLV_GATE_SLOTS: "2", CPU_SLOT_STDERR: stderr }, { timeoutMs: 15_000, signal: control.signal }));
+    pending.push(realExec("bash", ["scripts/gate-slot.sh", "bash", "-c", 'echo holder >> "$CPU_QUEUE_OUTPUT"; while [[ ! -f "$CPU_SLOT_RELEASE" ]]; do sleep 0.02; done'],
+      legacyHolds ? legacy : process.cwd(), { ...f.env, LLV_GATE_SLOTS: "1", CPU_SLOT_RELEASE: release }, { timeoutMs: 15_000, signal: control.signal }));
+    // Queue the legacy entrant before the current holder records its fence.
+    // It will be in the highest effective class when its pressure hold lifts.
+    if (!legacyHolds) {
+      await until(() => f.count() === 1);
+      launchEntrant(); await until(() => f.count() === 2);
+      f.age();
+    }
+    await until(() => fs.existsSync(f.env.CPU_QUEUE_OUTPUT));
+    const holderAdmission = last();
+    expect(holderAdmission).not.toBeNull();
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, `some avg10=${legacyHolds ? "90.00" : "0.00"} total=1\n`);
+    if (legacyHolds) { launchEntrant(); await until(() => f.count() === 1); f.age(); }
+    // Move past shared spacing so that the active protocol fence is the only
+    // reason an otherwise-ready entrant cannot take the second slot.
+    await until(() => last() !== holderAdmission ||
+      (log().includes(legacyHolds ? "all 1 busy" : "2nd") && f.db.query<{ polled: number }, []>(`SELECT polled ${queuedTickets}`).get()!.polled > holderAdmission! + CPU_QUEUE_SPACING_MS + 250));
+    expect(last(), log()).toBe(holderAdmission);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("holder\n");
+    expect(f.count()).toBe(1);
+    fs.writeFileSync(release, "release");
+    const results = await Promise.all(pending);
+    expect(results.map(result => result.code), log()).toEqual([0, 0]);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("holder\nentrant\n");
+    expect(f.count()).toBe(0);
+  } finally {
+    fs.writeFileSync(release, "release"); control.abort(); await Promise.allSettled(pending); f.close();
+  }
+}, 45_000);
+
 test.skipIf(process.platform !== "linux")("an aged gate respects the strictest active cap under sustained pressure", async () => {
   const f = fixture(), control = new AbortController();
   const pending: ReturnType<typeof realExec>[] = [];
@@ -145,7 +228,7 @@ test.skipIf(process.platform !== "linux")("an aged gate respects the strictest a
   // Model a readiness observation that missed the strict cap. Only the wait
   // helper's probe lies. The shell and the fresh claim helper use real locks.
   fs.writeFileSync(path.join(bin, "flock"), `#!/bin/bash
-if [[ \${CPU_SLOT_WAIT_PROBE:-} == yes && -f "$CPU_SLOT_STALE" && "$2" == *.cap1.lock ]]; then exit 0; fi
+if [[ \${CPU_SLOT_WAIT_PROBE:-} == yes && -f "$CPU_SLOT_STALE" && "$2" == *.slot1.lock ]]; then exit 0; fi
 exec "$CPU_SLOT_REAL_FLOCK" "$@"
 `, { mode: 0o755 });
   fs.writeFileSync(bun, `#!/bin/bash
@@ -229,10 +312,10 @@ test("a lost slot claim keeps the shell retry pause outside the caller's executi
   try {
     pending = realExec("bash", f.command("claimed").slice(1), process.cwd(), {
       ...f.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, CPU_CLAIM_READY: ready, CPU_CLAIM_LOST: lost,
-      DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_SLOTS: "1", LLV_GATE_POLL_SECONDS: "2",
-    }, { timeoutMs: 1000, signal: controller.signal });
+      DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_SLOTS: "1", LLV_GATE_POLL_SECONDS: "4",
+    }, { timeoutMs: 3000, signal: controller.signal });
     await until(() => fs.existsSync(lost), 15_000);
-    await Bun.sleep(1300);
+    await Bun.sleep(3300);
     fs.writeFileSync(ready, "ready");
     const result = await pending;
     expect(result.code, result.stderr).toBe(0);
@@ -287,7 +370,7 @@ test("dead and unverifiable owners at the head stop blocking real gates, each wi
     const stderr = results.map(r => r.stderr).join("\n");
     expect(stderr.match(/removed command:dead-head: its owner process \d+ has exited/g)).toHaveLength(1);
     expect(stderr.match(/passed over command:foreign-head: its owner process 4242 cannot be verified from here and has not checked in for \d+ s/g)).toHaveLength(1);
-    expect(f.db.query("SELECT key FROM tickets").all()).toEqual([{ key: "command:foreign-head" }]);
+    expect(f.db.query(`SELECT key ${queuedTickets}`).all()).toEqual([{ key: "command:foreign-head" }]);
   } finally { await Promise.allSettled(pending); f.close(); }
 }, 30_000);
 
@@ -384,13 +467,13 @@ test("pre-push keeps completed admission waits outside its budget across later s
   let waiting: Promise<unknown> | undefined;
   try {
     waiting = runSteps("pre-push", [{ name: "one", command: f.command("one") }, { name: "two", command: f.command("two") }], {
-      root: process.cwd(), deadline: { startedAt: Date.now(), at: Date.now() + 1200 }, logDir: f.dir, say: () => {},
+      root: process.cwd(), deadline: { startedAt: Date.now(), at: Date.now() + 5000 }, logDir: f.dir, say: () => {},
       prepare: (step) => ({ command: step.command, env: f.env }),
     });
     // Native helper startup can be slow on a loaded host. Keep fixture
     // readiness separate from the short execution budget exercised below.
     await until(() => f.count() === 1, 15_000);
-    await Bun.sleep(1300); f.age();
+    await Bun.sleep(5200); f.age();
     fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
     await until(() => fs.existsSync(f.env.CPU_QUEUE_OUTPUT), 15_000);
     await until(() => f.count() === 1, 15_000); f.age();
@@ -448,10 +531,10 @@ test("the owned runner keeps a nested queue wait outside its execution deadline"
 
 function simulateActiveAdmissionWait(f: ReturnType<typeof fixture>, durationMs: number) {
   const root = f.env.LLV_GATE_LOCK_DIR!;
-  const ledgers = fs.readdirSync(root).filter(name => name.startsWith("budget-")).map(name => path.join(root, name));
+  const ledgers = fs.readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name.startsWith("budget-"));
   expect(ledgers.length).toBeGreaterThan(0);
   const interval = JSON.stringify({ start: Date.now() - durationMs, end: Date.now() });
-  for (const ledger of ledgers) fs.writeFileSync(path.join(ledger, "simulated-queue.json"), interval);
+  for (const ledger of ledgers) fs.writeFileSync(path.join(root, ledger.name, "simulated-queue.json"), interval);
 }
 
 for (const fails of [false, true]) test(`pre-push credits admission across a supervisor and keeps a real touched test verdict (fails: ${fails})`, async () => {

@@ -493,13 +493,14 @@ text changes, as today, so at most once a minute:
 gate-slot: Waiting for the CPU queue · 3rd · waited 12 min · normal priority
 gate-slot: <pressure reason from GateCpuPressure> · 1st in CPU queue · waited 4 min
 gate-slot: Waiting for a heavy command slot · all 6 busy · waited 8 min
+gate-slot: Waiting for a heavy command slot · all 6 busy · stalled for 2 min
 ```
 
-The slot case is the one where the queue answers "ready" (`null`) and so
-carries no `since`. `gate-slot.sh` records `queued_at=$(date +%s)` once, before
-its admission loop, and passes it as a fourth argument to `--wait`. A helper
-called without it counts from its own start. The shell and the helper always
-come from the same checkout, so the argument needs no compatibility handling.
+When the queue answers "ready" and the slots are full, the helper reads the
+ticket's persisted `since` and the last admission from the queue. The elapsed
+wait survives helper restarts. The slot line switches to `stalled for` once
+more than one minute has passed since both the wait bound and the last
+admission.
 
 ### 4. Mixed versions on one file
 
@@ -715,10 +716,23 @@ minute 10; (b) the stage check returns `null`.
 the installed `/var/tmp/llv-gate` uses, so both gates count against the same six
 slots by default. Before accepting a final claim, gate-slot serializes the
 check of occupied slots and applies the lowest cap among the caller and active
-gate-slot jobs. Each admitted job holds a shared lock for its cap alongside
-its slot until the owned runner exits. The legacy gate contributes its slot
-occupancy. `LLV_GATE_LOCK_DIR` overrides the directory, and the hooks pass the
-shared directory into their isolated environment.
+current gate-slot jobs. Each admitted job holds a per-slot cap lock alongside
+its slot until the owned runner exits. An occupied slot without that marker
+fences current claims because the older holder's cap is unknown. The hand-run
+gate also contributes occupied slots.
+
+Older installed and checkout wrappers can keep polling during the transition.
+At high pressure, an aged current ticket can pass older pressure-only tickets.
+Current tickets keep their FIFO order within their effective priority and use
+the same spacing. Older tickets keep their stored place for when their own
+pressure check permits a start. A current claim records a live fence at the
+front of the older command queue, in the same transaction that consumes its
+ticket. Older wrappers reap the fence when its owner exits. A change to the
+last admission during the kernel slot probe forces a fresh claim. Stage
+admission keeps its own queue order.
+
+`LLV_GATE_LOCK_DIR` overrides the directory, and the hooks pass the shared
+directory into their isolated environment.
 
 ## Installation files (written by the operator, applied at a quiet moment)
 

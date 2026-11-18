@@ -207,21 +207,21 @@ claim() {
   if [[ $code != 0 && $code != 75 ]]; then exit "$code"; fi
   return "$code"
 }
-queue_key="command:$$:$RANDOM:$RANDOM"
+queue_key="command:bounded:$$:$RANDOM:$RANDOM"
 while :; do
   "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
   if ! command -v flock >/dev/null; then
     if claim; then end_cpu_wait; run "$@"; fi
   else
-    # Serialize the slot and cap check with other final claims. The shared
-    # cap lock lives alongside fd 9 for the owned runner's whole lifetime.
+    # Serialize current final claims. The cap lock identifies this particular
+    # slot's protocol and stays held alongside fd 9 for the runner's lifetime.
     exec 8>"$lock_dir/llv-heavy-gate.claim.lock"
     if flock -n 8; then
       for ((i=1; i<=slots; i++)); do
         exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
         if flock -n 9; then
-          exec 7>"$lock_dir/llv-heavy-gate.cap$slots.lock"
-          if flock -s -n 7 && claim "$i"; then
+          exec 7>"$lock_dir/llv-heavy-gate.slot$i.cap$slots.lock"
+          if flock -n 7 && claim "$i"; then
             exec 8>&-
             end_cpu_wait
             run "$@"

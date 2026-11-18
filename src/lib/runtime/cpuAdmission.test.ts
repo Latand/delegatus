@@ -53,6 +53,22 @@ test("low pressure admits a newly queued heavy gate immediately", () => {
   expect(queue.check("command:gate", true, owner, true, undefined, true)).toBeNull();
 });
 
+test("a slot observation made before another admission cannot consume a ready gate", () => {
+  const f = fixture(), owner = captureProcessIdentity(process.pid), gate = f.open(), peer = f.open();
+  const key = "command:bounded:probe";
+  expect(gate.check(key, true, owner, false, undefined, true)).toBeNull();
+  const lastBeforeProbe = gate.lastAdmission();
+  expect(peer.check("stage:peer", true)).toBeNull();
+  f.at(CPU_QUEUE_SPACING_MS);
+  expect(gate.check(key, true, owner, true, undefined, true, { lastBeforeProbe })).toMatchObject({ since: 0, heldBy: "queue" });
+  expect(gate.lastAdmission()).toBe(0);
+  expect(gate.check(key, true, owner, true, undefined, true, { lastBeforeProbe: gate.lastAdmission() })).toBeNull();
+  expect(gate.lastAdmission()).toBe(CPU_QUEUE_SPACING_MS);
+  f.at(2 * CPU_QUEUE_SPACING_MS);
+  // The live reservation affects the old command lane only.
+  expect(peer.check("stage:next", true)).toBeNull();
+});
+
 test.each(["stage", "workflow"])("a gate held for pressure at the head lets a %s start at its own bound; gates keep FIFO", prefix => {
   const f = fixture(), owner = captureProcessIdentity(process.pid), gates = f.open(), key = `${prefix}:s`;
   const gate = (name: string, low = false) => gates.check(name, low, owner, true, undefined, true);

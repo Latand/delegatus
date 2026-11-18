@@ -21,6 +21,8 @@ export const CPU_QUEUE_UNPOLLED_MS = 60_000;
 export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 /** How long a head may stay past its bound, with nothing admitted, before the wait reads as stalled. */
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
+const BOUNDED_GATE_PREFIX = "command:bounded:";
+const ACTIVE_GATE_PREFIX = "command:gate-active:";
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; waitedMs: number; heldBy: "queue" | "pressure"; priority?: TaskPriority; stalledMs?: number };
 type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null; low_pressure: number };
@@ -277,6 +279,9 @@ export class CpuAdmissionQueue {
     const now = this.now();
     return { waitedMs: Math.max(0, now - row.since), stalledMs: this.stalledDuration(now, row.since, row.last) };
   }
+  lastAdmission(): number | null {
+    return this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
+  }
   /** Only the release owning this pipeline namespace reconciles stage tickets. */
   reconcile(prefix: string, active: ReadonlySet<string>, eligible = active): void {
     this.db.transaction(() => {
@@ -298,7 +303,8 @@ export class CpuAdmissionQueue {
       }
     }).immediate();
   }
-  check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource, requireLowPressure = false): CpuQueueWait | null {
+  check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource, requireLowPressure = false,
+    gateSlot?: { lastBeforeProbe: number | null }): CpuQueueWait | null {
     // Process probes and reads of the task database must not hold this
     // queue's writer. Re-read the rows under the lock and match observations
     // by their exact owner/binding and observed rank. Peers may poll or reorder
@@ -340,7 +346,7 @@ export class CpuAdmissionQueue {
         const { identity, status, dead } = observed;
         if (dead) {
           this.cancel(row.key);
-          decisions.push(`removed ${row.key}: its owner process ${identity.pid} has exited`);
+          if (!row.key.startsWith(ACTIVE_GATE_PREFIX)) decisions.push(`removed ${row.key}: its owner process ${identity.pid} has exited`);
           continue;
         }
         // An owner recorded in another PID namespace, or one the kernel will
@@ -417,22 +423,37 @@ export class CpuAdmissionQueue {
       // At its bound, an install can pass checks that may be waiting for a slot.
       // Gate tickets count each other even after they become eligible under pressure.
       const passesLowPressure = !requireLowPressure && budget === 0 ? 1 : 0;
-      const counted = `${lane} AND (${agedClass} < ? OR (${agedClass} = ? AND fifo_seq <= ?)) AND (? = 0 OR low_pressure = 0 OR key = ?) AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)`;
+      // The active gate's fence is visible to older command checkers. It is
+      // outside this release's FIFO. At its bound a current shell also passes
+      // older pressure-only shells, which cannot act on an expired hold.
+      const passLegacyGates = key.startsWith(BOUNDED_GATE_PREFIX) && budget === 0 && !pressureAllows;
+      const gateFilter = passLegacyGates ? `AND (low_pressure = 0 OR key GLOB '${BOUNDED_GATE_PREFIX}*')` : "";
+      const counted = `${lane} AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*' ${gateFilter} AND (${agedClass} < ? OR (${agedClass} = ? AND fifo_seq <= ?)) AND (? = 0 OR low_pressure = 0 OR key = ?) AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)`;
       const args: [number, number, number, number, number, number, number, number, string] = [now, this.maxWaitMs, effectiveClass, now, this.maxWaitMs, effectiveClass, ticket.fifo_seq, passesLowPressure, key];
       const ahead = this.db.query<{ n: number }, typeof args>(`SELECT COUNT(*) AS n FROM tickets WHERE ${counted}`).get(...args)!;
       const head = this.db.query<{ since: number }, [...typeof args, number, number]>(`SELECT since FROM tickets WHERE ${counted} ORDER BY ${agedClass}, fifo_seq LIMIT 1`).get(...args, now, this.maxWaitMs)!;
       const position = ahead.n;
-      const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
+      const last = this.lastAdmission();
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
       // The durable wait bound lifts the pressure hold in both lanes.
       // Readiness and claim still require the same queue position and spacing.
-      if (!observationChanged && position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
+      const slotObservationChanged = gateSlot !== undefined && gateSlot.lastBeforeProbe !== last;
+      if (!observationChanged && !slotObservationChanged && position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
         if (consume) {
           // Commands settle at their kernel slot claim. Stages retain a
           // recoverable admission until their own start checkpoint is read.
           if (!owner && (key.startsWith("stage:") || key.startsWith("workflow:"))) {
             this.db.query("INSERT OR IGNORE INTO stage_admissions VALUES (?)").run(key);
           } else this.cancel(key);
+          if (gateSlot && owner) {
+            // Earlier legacy claims are covered by the probe and last check.
+            // A later legacy claim sees this head until the owner exits. Its
+            // negative FIFO sequence keeps it ahead even when peers age to 0.
+            this.db.query(`INSERT INTO tickets (key, since, owner, priority, low_pressure, fifo_seq)
+              VALUES (?, ?, ?, -1, 1, -(SELECT next FROM ticket_order WHERE id = 1))`)
+              .run(`${ACTIVE_GATE_PREFIX}${key}`, now, JSON.stringify(owner));
+            this.db.exec("UPDATE ticket_order SET next = next + 1 WHERE id = 1");
+          }
           this.db.query("UPDATE admission SET last = ? WHERE id = 1").run(now);
         }
         return null;
@@ -441,7 +462,7 @@ export class CpuAdmissionQueue {
       // admission, is stalled. This reading never estimates a remaining wait.
       const stalledMs = this.stalledDuration(now, head.since, last);
       return {
-        since: ticket.since, position, waitedMs, heldBy: observationChanged || position > 1 || spacing > 0 ? "queue" as const : "pressure" as const,
+        since: ticket.since, position, waitedMs, heldBy: observationChanged || position > 1 || spacing > 0 || slotObservationChanged ? "queue" as const : "pressure" as const,
         ...(ticket.priority === 1 ? {} : { priority: ticket.priority === 0 ? "high" as const : "low" as const }),
         ...(stalledMs !== undefined ? { stalledMs } : {}),
       };

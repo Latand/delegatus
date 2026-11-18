@@ -64,8 +64,8 @@ const endWait = reportCpuWait();
 let queue: CpuAdmissionQueue | undefined;
 const configuredSlots = Number(process.env.LLV_GATE_SLOTS || 6);
 const flock = Bun.which("flock");
-/** Return the effective cap only if it is full. The final claim runs under
- * the shell's admission lock and excludes the slot it just took. */
+/** A held slot without a matching cap lock belongs to the older protocol
+ * (or to the hand-run gate). Let it finish before sharing the pool. */
 function fullSlotLimit(ownSlot?: string): number | undefined {
   if (!flock) return undefined;
   const dir = process.env.LLV_GATE_LOCK_DIR ?? "/var/tmp";
@@ -77,14 +77,21 @@ function fullSlotLimit(ownSlot?: string): number | undefined {
     throw new Error("could not probe a heavy command slot lock");
   };
   let cap = configuredSlots;
+  const markedSlots = new Set<string>();
   for (const file of files) {
-    const match = /^llv-heavy-gate\.cap([1-9]\d*)\.lock$/.exec(file);
-    if (match && Number(match[1]) < cap && locked(file)) cap = Number(match[1]);
+    const match = /^llv-heavy-gate\.slot([1-9]\d*)\.cap([1-9]\d*)\.lock$/.exec(file);
+    if (match && match[1] !== ownSlot && locked(file)) {
+      markedSlots.add(match[1]!);
+      cap = Math.min(cap, Number(match[2]));
+    }
   }
   let busy = 0;
   for (const file of files) {
     const match = /^llv-heavy-gate\.slot([1-9]\d*)\.lock$/.exec(file);
-    if (match && match[1] !== ownSlot && locked(file) && ++busy >= cap) return cap;
+    if (match && match[1] !== ownSlot && locked(file)) {
+      if (!markedSlots.has(match[1]!)) return 1;
+      if (++busy >= cap) return cap;
+    }
   }
   return undefined;
 }
@@ -112,16 +119,16 @@ try {
     checkOwner();
     // Mark this as a gate ticket in both modes. The queue applies its durable
     // pressure bound, and the shell takes a slot before calling --claim.
-    const wait = queue!.check(key, !reason, owner, mode === "--claim", priority, true);
-    return { reason, wait };
+    const gateSlot = mode === "--claim" && claimSlot ? { lastBeforeProbe: queue!.lastAdmission() } : undefined;
+    if (gateSlot && fullSlotLimit(claimSlot) !== undefined) return { reason, wait: null, slotBlocked: true };
+    checkOwner();
+    const wait = queue!.check(key, !reason, owner, mode === "--claim", priority, true, gateSlot);
+    return { reason, wait, slotBlocked: false };
   };
   if (mode === "--claim") {
-    if (claimSlot && fullSlotLimit(claimSlot) !== undefined) process.exitCode = 75;
-    else {
-      const { reason, wait } = await lockWait(check);
-      if (wait?.heldBy === "pressure" && reason) console.error(`gate-slot: ${reason}`);
-      process.exitCode = !wait ? 0 : 75;
-    }
+    const { reason, wait, slotBlocked } = await lockWait(check);
+    if (wait?.heldBy === "pressure" && reason) console.error(`gate-slot: ${reason}`);
+    process.exitCode = !wait && !slotBlocked ? 0 : 75;
   } else {
     let shown = "";
     for (;;) {
