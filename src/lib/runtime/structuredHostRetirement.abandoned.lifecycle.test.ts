@@ -7,10 +7,10 @@ import path from "node:path";
 import { AgentRegistry, setAgentRegistryForTests, structuredClaimIdentity } from "@/lib/agent/registry";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
 import { fixtureRecords, fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_TURN as FIXTURE_TURN_ID } from "@/lib/agentState/testFixture";
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { statePath } from "@/lib/configDir";
-import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { determined } from "./determinable";
 import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
 import type { HandoffRow } from "./handoffQueue";
@@ -18,6 +18,7 @@ import * as control from "./structuredHostControl";
 import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry } from "./structuredHostRetirement";
 
 const identities: ProcessIdentity[] = [], roots: string[] = [], registries: AgentRegistry[] = [];
+const fixtureChildren: ChildProcess[] = [];
 const originalMcpRoot = process.env.LLV_MCP_RUNTIME_ROOT;
 // Provenance probes have a one-second deadline and can retry. Give recovery
 // more than one attempt before fixture teardown ends any remaining children.
@@ -27,10 +28,11 @@ afterEach(async () => {
   else process.env.LLV_MCP_RUNTIME_ROOT = originalMcpRoot;
   const owned = new Map(identities.splice(0).map(identity => [`${identity.pid}:${identity.startIdentity}`, identity]));
   if (process.platform === "linux") {
-    const pending = [...owned.values()].map(identity => identity.pid), visited = new Set<number>();
+    const pending = [...owned.values()], visited = new Set<number>();
     while (pending.length && visited.size < 512) {
-      const pid = pending.shift()!;
-      if (visited.has(pid)) continue;
+      const parent = pending.shift()!;
+      const pid = parent.pid;
+      if (visited.has(pid) || processIdentityStatus(parent) !== "alive") continue;
       visited.add(pid);
       let tids: string[];
       try { tids = fs.readdirSync(`/proc/${pid}/task`).filter(tid => /^\d+$/.test(tid)); } catch { continue; }
@@ -41,13 +43,16 @@ afterEach(async () => {
           const childPid = Number(child);
           if (!Number.isSafeInteger(childPid) || childPid <= 0 || visited.has(childPid)) continue;
           const identity = captureProcessIdentity(childPid);
+          if (procBackend.readPpid(childPid) !== pid || processIdentityStatus(parent) !== "alive"
+            || processIdentityStatus(identity) !== "alive") continue;
           owned.set(`${identity.pid}:${identity.startIdentity}`, identity);
-          pending.push(childPid);
+          pending.push(identity);
         }
       }
     }
   }
   for (const identity of [...owned.values()].reverse()) await stopFixtureIdentity(identity);
+  for (const child of fixtureChildren.splice(0)) await stopFixtureProcess(child);
   clearAgentObservations();
   setAgentRegistryForTests(null);
   for (const registry of registries.splice(0)) registry.close();
@@ -55,7 +60,8 @@ afterEach(async () => {
 });
 
 function start(args: string[]): ChildProcess {
-  const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+  const child = ownFixtureTree(spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"] }));
+  fixtureChildren.push(child);
   identities.push(captureProcessIdentity(child.pid!));
   return child;
 }

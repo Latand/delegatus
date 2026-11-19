@@ -1,0 +1,163 @@
+import { expect, test } from "bun:test";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { AgentRegistry, type SpawnReceipt } from "@/lib/agent/registry";
+import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, fixtureRecords, fixtureRegistry, at } from "@/lib/agentState/testFixture";
+import { observeAgentProcess } from "@/lib/agentState/process";
+import { captureProcessIdentity } from "@/lib/processIdentity";
+import { stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { readHostExit } from "./hostExit";
+import { spawnNativeWaitOwner } from "./nativeWaitOwner";
+import { treeHasOnlyMcpChildren } from "./structuredHostRetirement";
+import { reconcileUnregisteredAgentProcesses } from "./unregisteredAgentProcesses";
+
+const launchId = "fixture-orphan-launch";
+const now = FIXTURE_NOW + 2 * 3_600_000;
+const idleMs = 3_600_000;
+
+for (const engine of ["claude", "codex"] as const) {
+  test.skipIf(process.platform !== "linux").each([
+    "dead-row", "absent-row", "live-row", "other-live-row", "ambiguous-owner", "open-journal",
+    "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission", "missing-launch-proof",
+  ] as const)(`${engine} unregistered process reconciliation: %s`, async condition => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-orphan-"));
+    const binary = path.join(root, engine);
+    // Use a versioned native image behind the CLI symlink in the absent-row
+    // case. Linux reports the executable's target name through /proc.
+    const executable = condition === "absent-row" ? path.join(root, "2.1.0") : binary;
+    fs.copyFileSync(Bun.which("sleep")!, executable);
+    fs.chmodSync(executable, 0o700);
+    if (executable !== binary) fs.symlinkSync(executable, binary);
+    const capability = createHash("sha256").update("fixture native launch").digest("base64url");
+    const env = { ...process.env, ["LLV_SPAWN_" + "CAPABILITY"]: capability };
+    const native = spawnNativeWaitOwner(binary, ["60"], { env, stdio: "pipe" });
+    const waiter = captureProcessIdentity(native.pid!);
+    const nativeClosed = new Promise<void>(resolve => native.once("close", () => resolve()));
+    const peer = spawn(binary, ["60"], { env, stdio: "ignore" });
+    const peerIdentity = captureProcessIdentity(peer.pid!);
+    let registry: AgentRegistry | undefined;
+    let journal: RuntimeJournal | undefined;
+    try {
+      await native.spawnReady;
+      const identity = captureProcessIdentity(native.pid!);
+      expect(identity).not.toEqual(waiter);
+      if (condition === "absent-row") expect(fs.readlinkSync(`/proc/${identity.pid}/exe`)).toBe(fs.realpathSync(binary));
+      native.retainExit(true);
+      const file = fixtureRegistry(root, engine, identity, null);
+      const key = { engine, sessionId: FIXTURE_SESSION } as const;
+      const keyId = `${engine}:${FIXTURE_SESSION}`;
+      const entry = file.entries[keyId]!;
+      const artifactPath = entry.artifactPath!;
+      const records = fixtureRecords(engine);
+      const writeTranscript = (rows: unknown[]) => fs.writeFileSync(artifactPath, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+      writeTranscript([...records.open, ...records.close]);
+      fs.utimesSync(artifactPath, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+      file.conversations[FIXTURE_CONVERSATION]!.turn = { state: "terminal", source: "lifecycle", terminalAt: at(1000), observedAt: at(1000) };
+      file.receipts[launchId] = {
+        launchId, key, engine, transport: "structured", state: "completed", conversationId: FIXTURE_CONVERSATION,
+        artifactPath, cwd: root, createdAt: at(0),
+        spawnCapabilityDigest: createHash("sha256").update(capability).digest("hex"),
+        ...(condition === "absent-row" ? { hostSetup: { phase: "executing", processes: [identity] } } : {}),
+      } as SpawnReceipt;
+      entry.structuredHostOperationId = launchId;
+      if (condition === "absent-row") delete file.entries[keyId];
+      else if (condition !== "live-row") {
+        if (condition === "other-live-row") {
+          const another = FIXTURE_SESSION.slice(0, -1) + "c";
+          file.entries[`${engine}:${another}`] = { ...entry, key: { engine, sessionId: another },
+            artifactPath: path.join(root, "other.jsonl") };
+        }
+        entry.structuredHost = null;
+        entry.status = "dead";
+        if (condition !== "missing-launch-proof") entry.hostExitProcess = identity;
+        if (condition === "ambiguous-owner") {
+          entry.claimOwner = `structured-host:${JSON.stringify({ pid: waiter.pid, startIdentity: waiter.startIdentity })}`;
+        }
+      }
+      const filename = path.join(root, "registry.json");
+      const options = { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") } as const;
+      fs.writeFileSync(filename, JSON.stringify(file));
+      registry = new AgentRegistry(filename, undefined, undefined, options);
+      journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true, now: () => now });
+      journal.append({ scope: { type: "session", id: FIXTURE_CONVERSATION }, kind: "session-status", payload: {
+        conversationId: FIXTURE_CONVERSATION, sessionKey: key, artifactPath, cwd: root,
+        hostKind: engine === "codex" ? "codex-app-server" : "claude-broker",
+        host: condition === "other-runtime-work" ? "hosted" : "unhosted",
+        turn: "idle", activeTurnId: null, provenance: "structured",
+      } });
+      if (condition === "open-journal") journal.executeOperation({ kind: "spawn", operationId: launchId, idempotencyKey: launchId,
+        conversationId: FIXTURE_CONVERSATION, engine, cwd: root, prompt: "fixture" });
+      if (condition === "other-runtime-work") {
+        journal.executeOperation({ kind: "send", operationId: "fixture-pending-send",
+          idempotencyKey: "fixture-pending-send", conversationId: FIXTURE_CONVERSATION, text: "fixture" });
+        expect(journal.readSession({ conversationId: FIXTURE_CONVERSATION })?.retirementBlocked).toBe(true);
+      }
+      const activeRegistry = registry;
+      let writerAdmissions = 0;
+      if (condition === "writer-admission") {
+        const admit = activeRegistry.deliveryWriteOrBusy.bind(activeRegistry);
+        activeRegistry.deliveryWriteOrBusy = (correlation, write) => {
+          if (correlation.label === "registry.unregistered-agent-stop") {
+            writerAdmissions++;
+            activeRegistry.upsert({ ...entry, status: "live", claimOwner: `structured-host:${JSON.stringify(waiter)}` });
+          }
+          return admit(correlation, write);
+        };
+      }
+      let ready = true;
+      let sessionReads = 0;
+      const ports = {
+        registry, idleMs, now: () => now, ready: () => ready, noLocalWork: () => true, treeIdle: treeHasOnlyMcpChildren,
+        pids: (async function* () { yield peerIdentity.pid; yield identity.pid; })(),
+        client: {
+          operationStatus: async (id: string) => journal!.currentRetryResult(id),
+          readSession: async (request: { conversationId?: string; artifactPath?: string }) => {
+            if (++sessionReads === 1) {
+              if (condition === "replacement-owner") activeRegistry.upsert({ ...entry, status: "live",
+                claimOwner: `structured-host:${JSON.stringify(waiter)}` });
+              if (condition === "resumed-turn") writeTranscript([...records.open, ...records.close,
+                ...(engine === "codex" ? [{ type: "event_msg", timestamp: at(1500),
+                  payload: { type: "task_started", turn_id: "fixture-reopened" } }] : records.open)]);
+              if (condition === "release-changed") ready = false;
+            }
+            return journal!.readSession(request);
+          },
+        },
+      };
+      const outcomes = await reconcileUnregisteredAgentProcesses(ports);
+      if (["dead-row", "absent-row", "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission"].includes(condition)) {
+        expect(sessionReads).toBeGreaterThan(0);
+      }
+      if (condition === "writer-admission") expect(writerAdmissions).toBe(1);
+      expect(observeAgentProcess(peerIdentity)).toBe("alive");
+      expect(readHostExit(peerIdentity)?.stop).toBeNull();
+      if (condition === "dead-row" || condition === "absent-row") {
+        expect(outcomes).toEqual([{ launchId, key: keyId, process: identity, outcome: "stopped" }]);
+        await nativeClosed;
+        expect(observeAgentProcess(waiter)).toBe("dead");
+        expect(observeAgentProcess(identity)).toBe("dead");
+        expect(readHostExit(identity)).toMatchObject({ stop: { operationId: launchId,
+          path: "unregistered-agent-reconciliation", signal: "SIGTERM" }, exit: { signal: "SIGTERM" } });
+      } else {
+        expect(outcomes).toEqual([]);
+        expect(observeAgentProcess(identity)).toBe("alive");
+        expect(readHostExit(identity)?.stop).toBeNull();
+      }
+    } finally {
+      try {
+        await Promise.all([stopFixtureProcess(peer), (async () => {
+          try { await native.abortLaunch(); await nativeClosed; }
+          finally { await stopFixtureIdentity(waiter); }
+        })()]);
+      } finally {
+        journal?.close();
+        registry?.close();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  }, 15_000);
+}
