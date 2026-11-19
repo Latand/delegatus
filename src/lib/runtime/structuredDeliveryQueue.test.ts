@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { hostControlFactsFromHealth } from "@/lib/agentState/control";
 
 afterEach(() => setSystemTime());
 
@@ -66,6 +67,49 @@ function host(send: (entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, a
     release: async () => {},
   };
 }
+
+test.each(["current", "turn", "writer", "attention"] as const)(
+  "delivery rechecks %s at the journal-to-host boundary",
+  async replacement => {
+    const writes: string[] = [];
+    const statuses: string[] = [];
+    let turn = "turn-one";
+    let writer = "writer:1";
+    let request = {};
+    const adapter = host(async (_entry, _dispatch, authorize) => {
+      authorize?.();
+      writes.push("send");
+      return { outcome: "turn-started", turnId: "new-turn" };
+    });
+    adapter.health = async () => { throw new Error("delivery must read live facts synchronously"); };
+    adapter.agentControlState = () => hostControlFactsFromHealth({
+      ...idleState(), activeTurnRef: turn, status: "active",
+    });
+    adapter.agentAttentionRequest = () => request;
+    adapter.answer = async () => { writes.push("answer"); };
+    adapter.interrupt = async () => { writes.push("interrupt"); };
+    const answer = replacement === "attention" || replacement === "current";
+    const kind = answer ? "answer" : "interrupt";
+    const queue = new StructuredDeliveryQueue({
+      effects: async () => [{ id: "effect:control", kind: `runtime.${kind}`, eventSeq: 1,
+        payload: { operationId: "control", conversationId: "conversation-one",
+          ...(answer ? { attentionId: "request-one", resolution: { behavior: "allow" } } : { turnId: turn }) } }],
+      status: async () => ({ status: "pending", revision: 1 }),
+      currentHostClaim: () => writer,
+      transition: async (_id, status) => {
+        statuses.push(status);
+        if (status !== "delivering") return;
+        if (replacement === "turn") turn = "turn-two";
+        if (replacement === "writer") writer = "writer:2";
+        if (replacement === "attention") request = {};
+      },
+    }, () => adapter);
+
+    await queue.drain();
+    expect(writes).toEqual(replacement === "current" ? ["answer"] : []);
+    expect(statuses).toEqual(["delivering", replacement === "current" ? "answered" : "failed"]);
+  },
+);
 
 test("every regular drain reconciles the native queue before reading even an empty effect batch (#1674)", async () => {
   const order: string[] = [];

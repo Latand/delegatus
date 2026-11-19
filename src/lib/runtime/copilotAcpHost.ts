@@ -1,3 +1,4 @@
+import { hostControlFacts } from "@/lib/agentState/control";
 import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { readNativePromptAnchor } from "@/lib/agentState/transcript";
 import type { NativePromptAnchor } from "@/lib/agentState/model";
@@ -803,13 +804,22 @@ export class CopilotAcpHost implements EngineHost {
   private agentStateTurnStartedAt: number | null = null;
   private agentStateNativePromptAnchor: NativePromptAnchor | null = null;
 
+  agentControlState() {
+    const facts = hostControlFacts(this.identity.sessionId,
+      this.dead ? "dead" : this.released ? "unhosted" : "idle",
+      this.running?.turnId ?? null, this.attentions.size > 0, this.attentions.size > 0, this.launchFlags);
+    const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
+    return { ...facts, transport: pid ? { pid, startIdentity: this.childStartIdentity,
+      endpoint: `stdio:${pid}` } : null };
+  }
+
+  agentAttentionRequest(id: string): object | undefined {
+    return this.attentions.get(id);
+  }
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
-    const status: HostState["status"] = this.dead ? "dead"
-      : this.released ? "unhosted"
-      : this.attentions.size ? "attention"
-      : this.running ? "active"
-      : "idle";
+    const { status, turnId } = this.agentControlState();
     return {
       status,
       sessionKey: this.identity.sessionId,
@@ -821,7 +831,7 @@ export class CopilotAcpHost implements EngineHost {
       ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
-      activeTurnRef: this.running?.turnId ?? null,
+      activeTurnRef: turnId,
       agentStateTurnStartedAt: this.agentStateTurnStartedAt,
       agentStateNativePromptAnchor: this.agentStateNativePromptAnchor,
       agentStateNativePromptOrdinal: this.agentStateNativePromptAnchor === null ? null : this.turnCounter,

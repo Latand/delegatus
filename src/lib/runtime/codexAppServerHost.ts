@@ -1,3 +1,4 @@
+import { hostControlFacts } from "@/lib/agentState/control";
 import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { clearEngineHostText, createEngineHostLedgerProjection } from "./engineHostEvents";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
@@ -3669,16 +3670,25 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       attentionUnverified: [...this.attentions.values()].some(attention => attention.isBlocking !== false && attention.origin === "restored"), eventCursor: this.cursor };
   }
 
+  agentControlState() {
+    const facts = hostControlFacts(this.identity.threadId,
+      this.dead ? "dead" : this.released ? "unhosted" : this.engineStatus,
+      this.activeTurnId, this.hasBlockingAttention(), this.attentions.size > 0, [...this.activeFlags, ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.nativeQueue ? [NATIVE_QUEUE_CAPABILITY] : [])]);
+    const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
+    return { ...facts, transport: pid ? { pid, startIdentity: this.childStartIdentity,
+      endpoint: this.child instanceof CodexSocketTransport ? this.child.endpoint : `stdio:${pid}` } : null };
+  }
+
+  agentAttentionRequest(id: string): object | undefined {
+    return this.attentions.get(id);
+  }
+
   private currentState(): HostState {
     const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const processStartIdentity = pid && this.childProcessOwnership() === "owned"
       ? this.childStartIdentity
       : null;
-    const status: HostState["status"] = this.dead ? "dead"
-      : this.released ? "unhosted"
-      : this.hasBlockingAttention() ? "attention"
-      : this.activeTurnId ? "active"
-      : this.engineStatus;
+    const { status, turnId } = this.agentControlState();
     return {
       status,
       ...(this.viewerMcp ? { viewerMcp: structuredClone(this.viewerMcp) } : {}),
@@ -3691,7 +3701,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
-      activeTurnRef: this.activeTurnId,
+      activeTurnRef: turnId,
       agentStateAttention: { pending: this.agentStateMemory().pendingAttention, unverified: this.agentStateMemory().attentionUnverified },
       pendingAttention: [...this.attentions].filter(([, attention]) => attention.params.tool !== gateCheckTool.name).map(([id]) => id),
       nativeQueueRevision: this.nativeQueueRevision,

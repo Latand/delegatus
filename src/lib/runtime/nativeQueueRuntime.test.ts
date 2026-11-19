@@ -5,6 +5,7 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import { hostControlFacts } from "@/lib/agentState/control";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { NativeCodexQueue, NativeQueueProtocolRefusal, type NativeQueuedSubmission } from "./nativeCodexQueue";
 import { NativeQueueExecutor, withdrawNativeSeatMessage } from "./nativeQueueExecutor";
@@ -126,6 +127,43 @@ function fixture(journal = makeJournal()) {
         turnId: "canonical-turn", itemId: "canonical-item", input: entry.versions.at(-1)!.input! };
     } };
 }
+
+test.each(["prepare", "settlement", "journal", "wire"] as const)("native add fences a replacement turn during %s", async boundary => {
+  const f = fixture();
+  try {
+    let turnId = "active-a";
+    f.host.agentControlState = () => hostControlFacts(binding.threadId, "idle", turnId, false, false, []);
+    f.host.health = async () => { throw new Error("native queue must read live control facts"); };
+    const prepare = f.host.nativeQueue!.prepare;
+    f.host.nativeQueue!.prepare = async (...args) => {
+      const input = await prepare(...args);
+      if (boundary === "prepare") turnId = "active-b";
+      return input;
+    };
+    const transition = f.client.nativeQueueTransition!;
+    f.client.nativeQueueTransition = async (id, change) => {
+      const result = await transition(id, change);
+      if (boundary === "journal" && change.phase === "prepared") turnId = "active-b";
+      return result;
+    };
+    if (boundary === "wire") {
+      const add = f.queue.add.bind(f.queue);
+      f.queue.add = (...args) => {
+        queueMicrotask(() => { turnId = "active-b"; });
+        return add(...args);
+      };
+    }
+    const c = command("replacement");
+    f.journal.executeOperation(c);
+    await f.executor.execute(c, undefined, undefined, undefined, async () => {
+      if (boundary === "settlement") turnId = "active-b";
+      return { readable: true, value: false };
+    });
+    expect(f.calls).toEqual([]);
+    expect(f.journal.operationResult(c.operationId)?.receipt.status).toBe("failed");
+    expect(f.journal.nativeQueueRead(conversationId)[0]?.nativeSubmissionId).toBeNull();
+  } finally { f.journal.close(); }
+});
 
 test.each(["add", "start", "update", "send-now"] as const)("native %s checks account admission after the prepared journal write", async action => {
   const f = fixture();

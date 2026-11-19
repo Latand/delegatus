@@ -1,3 +1,4 @@
+import { runtimeControlFacts } from "@/lib/agentState/control";
 import { recordedAgentScope } from "./agentScope";
 import { recoverMemberAdoption } from "./memberAdoptionRecovery";
 import { withStructuredSetupCustody } from "./structuredSetupCustody";
@@ -526,7 +527,7 @@ function admissionTransportReason(error: unknown): string {
 
 function runtimeEntryStatus(session: RuntimeSession): "dead" | "live" | "idle" {
   if (session.host === "dead" || session.host === "unhosted") return "dead";
-  if (session.turn === "running") return "live";
+  if (runtimeControlFacts(session).open) return "live";
   return "idle";
 }
 
@@ -927,7 +928,7 @@ export async function reconcileStructuredSpawnReplay(
           eventCursor: sessionMatches.revision,
           protocolVersion: null,
           writerClaimEpoch: 0,
-          activeTurnRef: sessionMatches.activeTurnId,
+          activeTurnRef: runtimeControlFacts(sessionMatches).turnId,
           pendingAttention: sessionMatches.attentionIds,
           activeFlags: [],
         }

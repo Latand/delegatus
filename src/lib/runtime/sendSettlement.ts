@@ -1,3 +1,5 @@
+import { checkpointControlFacts, hostControlFactsFromHealth, matchesControlTransport, runtimeControlFacts } from "@/lib/agentState/control";
+import { readControlProjection } from "@/lib/agentState/controlStore";
 import { cancelSendFailureNotice, recordSendFailureNotice } from "./sendFailureNotice";
 import { structuredDeliveryHostForConversation } from "./structuredDeliveryController";
 import { processIdentityStatus } from "@/lib/processIdentity";
@@ -605,7 +607,14 @@ function awaitingRecipientTurn(
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) return false;
   const entry = file.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
-  return Boolean(entry?.structuredHost?.activeTurnRef);
+  const host = structuredDeliveryHostForConversation(conversationId, registry);
+  const live = host?.agentControlState?.();
+  if (live?.sessionKey === generation.id && matchesControlTransport(live, entry?.structuredHost)) {
+    return live.turnId !== null && (live.status === "active" || live.status === "attention");
+  }
+  const projection = entry && readControlProjection(registry, entry, conversation.id);
+  if (projection) return projection.facts.turn.determined && projection.facts.turn.value.state === "open";
+  return checkpointControlFacts(entry?.structuredHost).turnId !== null;
 }
 
 /** A live host's turn, read under its current generation and writer fence.
@@ -628,12 +637,9 @@ async function recipientStillWorking(
   const host = structuredDeliveryHostForConversation(subject.conversationId, registry);
   const evidence = await readEvidenceWithin(async () => {
     if (host) {
-      const health = await host.health();
-      return health.sessionKey === generation.id && health.endpoint === entry?.structuredHost?.endpoint
-        && health.pid === entry?.structuredHost?.process?.pid
-        && health.processStartIdentity === entry?.structuredHost?.process?.startIdentity
-        && Boolean(health.activeTurnRef)
-        && (health.status === "active" || health.status === "attention");
+      const live = host.agentControlState?.() ?? hostControlFactsFromHealth(await host.health());
+      return live.sessionKey === generation.id && matchesControlTransport(live, entry?.structuredHost)
+        && live.turnId !== null && (live.status === "active" || live.status === "attention");
     }
     // A retained journal row alone cannot keep a departed writer alive.
     const writer = entry?.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
@@ -643,9 +649,10 @@ async function recipientStillWorking(
     const session = await readRuntimeSession(client, { conversationId: subject.conversationId });
     const claim = entry.claimOwner ? `${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` : null;
     const published = session?.writerStatus?.writerClaim === claim ? session.writerStatus : session;
+    const control = published && runtimeControlFacts(published);
     return published?.sessionKey.engine === conversation.engine && published.sessionKey.sessionId === generation.id
       && (!claim || session?.writerClaim === claim) && published.host === "hosted"
-      && Boolean(published.activeTurnId) && (published.turn === "running" || published.turn === "interrupt_requested");
+      && control?.turnId != null && control.open;
   }, ports.readMs ?? SEND_SETTLEMENT_READ_MS, "recipient turn evidence is unavailable");
   ports.assertActive?.();
   const observedAt = (ports.now ?? Date.now)();
@@ -659,6 +666,7 @@ async function recipientStillWorking(
   if (currentConversation?.generations.at(-1)?.id !== generation.id
     || currentEntry?.claimOwner !== entry?.claimOwner
     || currentEntry?.structuredHost?.writerClaimEpoch !== entry?.structuredHost?.writerClaimEpoch
+    || currentEntry?.structuredHost?.endpoint !== entry?.structuredHost?.endpoint
     || (host && structuredDeliveryHostForConversation(subject.conversationId, registry) !== host)) return true;
   if (!evidence.readable || !evidence.value) return false;
   const progress = ports.progress === undefined ? ownedDeliveryProgressStore() : ports.progress;
@@ -918,12 +926,8 @@ export function settlementDeadlineForRow(
   if (!subject?.settleable) return null;
   const acceptedAt = parseTime(subject.acceptedAt);
   if (acceptedAt === null) return null;
-  const conversation = registry.conversation(subject.conversationId);
-  const generation = conversation?.generations.at(-1);
-  const entry = conversation && generation
-    ? registry.conversationDeliverySnapshot({ conversationId: conversation.id }).entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })]
-    : undefined;
-  const inTurn = Boolean(entry?.structuredHost?.activeTurnRef);
+  const file = registry.conversationDeliverySnapshot({ conversationId: subject.conversationId });
+  const inTurn = awaitingRecipientTurn(registry, file, subject.conversationId);
   const span = inTurn
     ? ports.inTurnCeilingMs ?? SEND_SETTLEMENT_IN_TURN_CEILING_MS
     : ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS;
