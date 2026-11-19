@@ -10,7 +10,7 @@ import { allocatedAttemptBytes, attemptReferencesClear, blockedSubtrees, inspect
   privilegedCleanupUnavailable, snapshotAttemptProtection, removeAttemptTree, RepositoryLinkInventory, ledgerLinkedEvidence,
   type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
-import { preserveAttemptEvidence } from "./attemptTempEvidence";
+import { preserveAttemptEvidence, type AttemptEvidenceSelection } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
 import { trackSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
 import { AttemptRetentionReporting } from "./attemptRetentionReporting";
@@ -26,6 +26,15 @@ import { laneFinish } from "@/lib/pipelines/laneFinish";
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
 export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; revision: string; isCurrent: () => boolean };
 const authorityDisposition = (state: AttemptTempState): "live" | "held" => state === "live" ? "live" : "held";
+function attemptEvidenceLane(pipelineId: string | null) {
+  if (!pipelineId) return {};
+  try {
+    const reader = pipelineRecordReader(pipelineId), version = reader.version();
+    const repoDir = reader.read()?.repoDir;
+    return { repoDir, repoCurrent: () => reader.version() === version };
+  } catch { return {}; } // Repository provenance is optional for preservation.
+}
+
 export type AttemptTempOwner = {
   directory: string;
   pipelineId: string | null;
@@ -386,7 +395,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const pressure = lowSpace || store.bytes() > capBytes;
   type Outcome = { directory: string; disposition: "deferred" | "live" | "evidence" | "held" | "operator" | "failed" | "removed"; bytes: number; reason: string;
     /** Part of the tree could not be read; `bytes` counts the rest. */
-    unreadable?: true };
+    unreadable?: true; evidenceSelection?: AttemptEvidenceSelection };
   const report = { adopted: adoption.adopted, checked: 0, removed: 0, removedBytes: 0,
     deferred: 0, deferredBytes: 0, held: 0, liveHeld: 0, liveHeldBytes: 0,
     evidenceHeld: 0, evidenceHeldBytes: 0, operatorHeld: 0, operatorHeldBytes: 0, otherHeldBytes: 0,
@@ -397,8 +406,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     /** Every root the ledger holds for the operator, not only this page's. */
     blocked: { roots: 0, bytes: 0, listed: [] as BlockedRoot[] } };
   const partiallyRead = new Set<string>();
+  const evidenceSelections = new Map<string, AttemptEvidenceSelection>();
   const outcome = (directory: string, disposition: Outcome["disposition"], bytes: number, reason: string) => {
-    report.outcomes.push({ directory, disposition, bytes, reason, ...(partiallyRead.has(directory) ? { unreadable: true as const } : {}) });
+    const evidenceSelection = evidenceSelections.get(directory);
+    report.outcomes.push({ directory, disposition, bytes, reason, ...(partiallyRead.has(directory) ? { unreadable: true as const } : {}),
+      ...(evidenceSelection ? { evidenceSelection } : {}) });
     if (disposition === "deferred") { report.deferred++; report.deferredBytes += bytes; }
     else if (disposition === "failed") { report.failedBytes += bytes; }
     else if (disposition !== "removed") {
@@ -631,9 +643,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         checkBudget();
         if (!await observeReferences(directory)) return false;
         checkBudget();
-        const evidence = pressure || options.mode === "dry-run" || state === "expired" ? { current: protection.current, namespaceOnly: false, destination: undefined }
+        const evidence = pressure || options.mode === "dry-run" || state === "expired"
+          ? { current: protection.current, namespaceOnly: false, destination: undefined, selection: undefined }
           : await preserveAttemptEvidence(directory, owner.directory, owner.identity, {
-            pipelineId: owner.pipelineId, launchId: owner.launchId, register: destination => {
+            pipelineId: owner.pipelineId, launchId: owner.launchId, ...attemptEvidenceLane(owner.pipelineId), register: destination => {
               const prior = store.copy(destination);
               const createdAt = prior?.createdAt ?? now();
               const expiresAt = owner.pipelineId ? retentionExpiry : createdAt + retentionMs;
@@ -642,6 +655,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
                 checkedAt: expiresAt ?? now() + 3600000, bytes: prior?.bytes ?? 0 });
             },
           });
+        if (evidence.selection?.skippedTracked.count || evidence.selection?.selectionFallback) evidenceSelections.set(owner.directory, evidence.selection);
         if (evidence.destination) {
           const copy = store.copy(evidence.destination)!;
           store.registerCopy({ ...copy, bytes: await allocatedAttemptBytes(evidence.destination) });
