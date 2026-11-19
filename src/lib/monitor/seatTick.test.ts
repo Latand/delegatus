@@ -1894,16 +1894,80 @@ test("a newly owed settled child is due on the next check despite a recent wake 
   }
 });
 
-test("running children bring the interval wake to a quarter of an hour, and a still board keeps the hour (#1881)", () => {
+test("a running child keeps the configured interval for a routine wake", () => {
   const running = child({ status: "running", outcome: null, terminalAt: null, lastRecordAt: new Date(NOW - 2 * MINUTE).toISOString() });
   const at = (minutes: number) => stateWith({ lastWakeAt: new Date(NOW - minutes * MINUTE).toISOString() });
   const quarter = SEAT_TICK_RUNNING_CHILD_WAKE_INTERVAL_MS / MINUTE;
   expect(seatTickDecision(input({ pipelines: [], children: [running], state: at(quarter - 1) })).verdict.kind).toBe("quiet");
   expect(seatTickDecision(input({ pipelines: [], children: [running], state: at(quarter) })).verdict)
+    .toMatchObject({ kind: "quiet" });
+  expect(seatTickDecision(input({ pipelines: [], children: [running], state: at(60) })).verdict)
     .toMatchObject({ kind: "wake", reasons: [{ kind: "interval" }] });
   /* An open lane and no child: the project's own hour, unchanged. */
   expect(seatTickDecision(input({ pipelines: [lane()], children: [], state: at(quarter) })).verdict.kind).toBe("quiet");
   expect(seatTickDecision(input({ pipelines: [lane()], children: [], state: at(60) })).verdict).toMatchObject({ kind: "wake", reasons: [{ kind: "interval" }] });
+});
+
+test("live children and new events leave task pages on the 30-minute project cadence", () => {
+  const at = (minute: number) => new Date(NOW + minute * MINUTE).toISOString();
+  const tasks = Array.from({ length: 26 }, (_, n) => card({
+    id: `queued-${String(n).padStart(2, "0")}`, accepted: true, updatedAt: at(-120),
+  }));
+  const overdue = card({ id: "due", dueAt: at(-1) });
+  const running = child();
+  const finished = child({ conversationId: SECOND_CHILD, status: "terminal", outcome: "finished", terminalAt: at(17) });
+  const check = input({ tasks: [...tasks, overdue], overdueTasks: [overdue], children: [running],
+    settings: settings({ wakeIntervalMinutes: 30 }) });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "task-cadence-"));
+  const stateFile = path.join(dir, "seat-tick.json");
+  let state = stateWith({ lastWakeAt: at(-30) });
+  const decide = (minute: number, extra: Partial<SeatTickCheckInput> = {}) =>
+    seatTickDecision({ ...check, now: NOW + minute * MINUTE, state, ...extra });
+  const land = (minute: number, decision: ReturnType<typeof seatTickDecision>, eventsThrough = state.eventsThrough ?? 0) => {
+    if (decision.verdict.kind !== "wake") throw new Error(JSON.stringify(decision.verdict));
+    const rendered = seatTickWakeMessage({ ...check, ...decision.verdict });
+    const commit = seatTickWakeCommitPlan(decision.verdict, {
+      fingerprint: check.changeFingerprint, eventsThrough,
+      terminalChildren: [finished.conversationId], frozenText: rendered,
+    })!;
+    writeSeatTickState(PROJECT, seatTickWakeCommit(decision.state, commit, NOW + minute * MINUTE), stateFile);
+    state = readSeatTickState(PROJECT, stateFile);
+    return rendered;
+  };
+  try {
+    const first = decide(0);
+    expect(reasonsOf(first.verdict)).toEqual(["overdue-task", "unstarted-task"]);
+    expect(land(0, first)).toContain("- due | overdue");
+    for (const minute of [5, 10, 15]) expect(decide(minute).verdict.kind).toBe("quiet");
+    expect(state.lastTaskWakeAt).toBe(at(0));
+
+    const laneNews = event({ at: at(15.5) });
+    const mixed = decide(16, { events: [laneNews] });
+    expect(reasonsOf(mixed.verdict)).toEqual(["lane-event"]);
+    expect(land(16, mixed, laneNews.seq)).not.toContain("Tasks:");
+    expect(state.lastWakeAt).toBe(at(16));
+    expect(state.lastTaskWakeAt).toBe(at(0));
+
+    const settlement = decide(17, { children: [running, finished] });
+    expect(reasonsOf(settlement.verdict)).toEqual(["child-terminal"]);
+    expect(land(17, settlement)).not.toContain("Tasks:");
+
+    const ask = { id: "parked-lane", key: "decision:route", label: "Choose a route" };
+    const decisionRequest = decide(25, { workerAsks: [ask] });
+    expect(reasonsOf(decisionRequest.verdict)).toEqual(["worker-ask"]);
+    expect(land(25, decisionRequest)).not.toContain("Tasks:");
+    expect(decide(29).verdict.kind).toBe("quiet");
+
+    const moreNews = event({ seq: 43, at: at(29.5) });
+    const due = decide(30, { events: [moreNews] });
+    expect(reasonsOf(due.verdict)).toEqual(["lane-event", "unstarted-task"]);
+    expect(land(30, due, moreNews.seq)).toContain("- queued-09 | unstarted");
+    expect(state.lastTaskWakeAt).toBe(at(30));
+    expect(decide(45).verdict.kind).toBe("quiet");
+    expect(reasonsOf(decide(60).verdict)).toEqual(["unstarted-task"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("an unreadable settled child is listed with its reason, and an unreadable running one is named once (#1881)", () => {

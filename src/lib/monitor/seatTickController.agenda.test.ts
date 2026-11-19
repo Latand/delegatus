@@ -2046,7 +2046,7 @@ test("a busy child whose host is gone is a stall the registry can see, reported 
   expect(record).toMatchObject({ verdict: "wake", reasons: ["interval"] });
   expect(first.liveness).toEqual([{ conversationId: fixture.seat.conversationId }]);
   expect(fixture.row().stalledSeen).toEqual([`child:${child.id}`]);
-  const second = childRig(fixture, { now: fixture.now + 61 * MINUTE });
+  const second = childRig(fixture, { now: fixture.now + MINUTE });
   const stalled = await runSeatTickCheck(fixture.project, second.deps);
   expect(stalled).toMatchObject({ verdict: "wake", reasons: ["stalled"] });
   expect(stalled!.detail).toContain("host_gone_turn_open");
