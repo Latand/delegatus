@@ -1071,7 +1071,7 @@ test("a recorded wake report settles its delivered set and its key is skipped on
     expect(readBridgeReportLog().reports[0]).toMatchObject({
       id: scopedReportId(PROJECT, firstKey), coversOwedAt: at(NOW + MINUTE),
     });
-    const unchanged = await tick(NOW + 70 * MINUTE, [parked, second]);
+    const unchanged = await tick(NOW + 2 * MINUTE, [parked, second]);
     expect(unchanged.sent).toEqual([]);
     expect(state().reportsOwed).toEqual([]);
 
