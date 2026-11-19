@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -581,6 +582,132 @@ test("task HTTP execution preserves protocol validation, exact text, caller rece
       .toMatchObject({ ok: true, task: { text: args.text, details } });
   } finally { await client.close(); }
 });
+
+test("the outer listener joins a lost task reply to its receipt across an executor restart", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { installServingControlIngress } = await import("./controlIngress");
+  const { MCP_OUTER_REQUEST_HEADER, outerMcpKeyDigest, prepareOuterMcpEvidence } = await import("./outerEvidence");
+  const { controlEvidenceStore } = await import("./controlEvidence");
+  const { viewerMcpHttpClaudeEntry, viewerMcpHttpCodexEntry } = await import("@/lib/agent/spawnPolicy");
+  const { viewerTaskExecutor } = await import("./taskExecutor");
+  const uninstall = await installServingControlIngress();
+  await prepareOuterMcpEvidence();
+  const evidence = controlEvidenceStore("outer");
+  let cut: "before-route" | "after-route" | undefined;
+  const dropped: string[] = [];
+  const server = http.createServer(async (req, res) => {
+    const mode = req.method === "POST" ? cut : undefined;
+    if (mode) {
+      dropped.push(String(res.getHeader(MCP_OUTER_REQUEST_HEADER)));
+      cut = undefined;
+    }
+    if (mode === "before-route") { req.socket.destroy(); return; }
+    try {
+      const body: Buffer[] = [];
+      for await (const chunk of req) body.push(Buffer.from(chunk));
+      const controller = new AbortController();
+      res.once("close", () => { if (!res.writableFinished) controller.abort(); });
+      const next = new NextRequest(new URL(req.url!, `http://${req.headers.host}`), {
+        method: req.method, headers: req.headers as HeadersInit, signal: controller.signal,
+        ...(req.method === "POST" ? { body: Buffer.concat(body).toString() } : {}),
+      });
+      const perimeter = proxy(next);
+      const answer = perimeter.headers.get("x-middleware-next") !== "1" ? perimeter
+        : req.method === "POST" ? await route.POST(next) : req.method === "DELETE" ? route.DELETE() : route.GET();
+      const bytes = await answer.text();
+      if (mode === "after-route") { req.socket.destroy(); return; }
+      res.writeHead(answer.status, Object.fromEntries(answer.headers)).end(bytes);
+    } catch {
+      if (!res.destroyed) res.writeHead(500).end();
+    }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/mcp`;
+  const config = { LLV_MCP_HTTP_URL: endpoint };
+  const agent = launchAgent("Outer HTTP task receipt");
+  const clients: Client[] = [];
+  async function connect(engine: "claude" | "codex", capability: string) {
+    const name = engine === "claude" ? "claude-code" : "codex-mcp-client";
+    const definition = engine === "claude" ? viewerMcpHttpClaudeEntry(config) : viewerMcpHttpCodexEntry(config);
+    const env = { LLV_SPAWN_CAPABILITY: capability };
+    const headers = engine === "claude"
+      ? Object.fromEntries(Object.entries(definition.headers as Record<string, string>)
+        .map(([header, value]) => [header, env[value.slice(2, -1) as keyof typeof env]]))
+      : Object.fromEntries(Object.entries(definition.env_http_headers as Record<string, string>)
+        .map(([header, variable]) => [header, env[variable as keyof typeof env]]));
+    const client = new Client({ name, version: "1" });
+    clients.push(client);
+    await client.connect(new StreamableHTTPClientTransport(new URL(String(definition.url)), { requestInit: {
+      headers: { ...headers, "user-agent": `${name}/fixture`, [MCP_OUTER_REQUEST_HEADER]: "untrusted-fixture-id" },
+    } }));
+    return client;
+  }
+  const call = async (client: Client, name: string, args: Record<string, unknown>) => {
+    const answer = await client.callTool({ name, arguments: args });
+    const first = Array.isArray(answer.content) ? answer.content[0] : undefined;
+    if (first?.type !== "text") throw new Error("Expected the native client's text result");
+    return JSON.parse(first.text) as { taskId: string; task: { details?: string } } & Record<string, unknown>;
+  };
+  try {
+    const claude = await connect("claude", agent.capability);
+    const codex = await connect("codex", agent.capability);
+    const foreign = await connect("codex", bob.capability);
+    const initial = await call(claude, "create_task", withTaskDue({
+      project: "Fixture Viewer", text: "Outer HTTP fixture", clientRequestId: "outer-http-create", board: "hidden", full: true,
+    }));
+    expect(initial).toMatchObject({ ok: true });
+    const taskId = initial.taskId;
+    const update = { taskId, appendLine: "Private fixture line", clientRequestId: "outer-http-update", full: true };
+    const read = () => call(codex, "get_task", { taskId, full: true });
+    const lookup = (client: Client) => call(client, "update_task", { ...update, recoveryOnly: true });
+
+    cut = "before-route";
+    expect(await call(claude, "update_task", update).then(() => "answered", () => "lost")).toBe("lost");
+    expect(await lookup(codex)).toMatchObject({ code: "outcome_unknown", details: { outcome: "unknown" } });
+    expect((await read()).task.details ?? "").toBe("");
+
+    cut = "after-route";
+    expect(await call(claude, "update_task", update).then(() => "answered", () => "lost")).toBe("lost");
+    await viewerTaskExecutor().close();
+    const settled = await lookup(codex);
+    expect(settled).toMatchObject({ ok: true, replayed: true, task: { details: update.appendLine } });
+    expect(await lookup(foreign)).toMatchObject({ ok: false, code: "recovery_not_permitted" });
+    expect(await call(codex, "update_task", { ...update, appendLine: "Changed arguments", recoveryOnly: true }))
+      .toMatchObject({ ok: false, code: "idempotency_conflict" });
+    expect(await call(codex, "update_task", update)).toEqual(settled);
+    expect((await read()).task.details).toBe(update.appendLine);
+    const concurrent = { ...update, appendLine: "Concurrent fixture line", clientRequestId: "outer-http-concurrent" };
+    const overlap = await Promise.all([call(claude, "update_task", concurrent), call(codex, "update_task", concurrent), read()]);
+    expect(overlap.slice(0, 2)).toEqual(expect.arrayContaining([expect.objectContaining({ ok: true, replayed: false }),
+      expect.objectContaining({ ok: true, replayed: true })]));
+    expect(overlap[2]).toMatchObject({ ok: true });
+    expect((await read()).task.details?.split(concurrent.appendLine)).toHaveLength(2);
+
+    await evidence.ready();
+    const db = new Database(evidence.filename, { readonly: true });
+    try {
+      const events = (id: string) => db.query<{ event: string; code: string | null; route: string | null }, [string]>(
+        "SELECT event,code,route FROM events WHERE id=? ORDER BY seq").all(id);
+      const lost = events(dropped[1]!);
+      expect(events(dropped[0]!).map(row => row.event)).toContain("close");
+      expect(events(dropped[0]!).map(row => row.event)).not.toContain("tool");
+      expect(lost.map(row => row.event)).toEqual(expect.arrayContaining(["start", "executor", "tool", "claim", "dispatch", "settled", "result", "close"]));
+      expect(lost).toContainEqual({ event: "close", code: "premature", route: null });
+      expect(lost.map(row => row.event)).not.toContain("response");
+      expect(lost.find(row => row.event === "tool")?.route?.split(":").slice(0, 2))
+        .toEqual(["update_task", outerMcpKeyDigest("update_task", update.clientRequestId)]);
+      const rows = JSON.stringify(db.query("SELECT * FROM events").all());
+      for (const privateValue of [agent.capability, taskId, update.appendLine, update.clientRequestId, "untrusted-fixture-id"]) {
+        expect(rows).not.toContain(privateValue);
+      }
+    } finally { db.close(); }
+  } finally {
+    await Promise.all(clients.map(client => client.close()));
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    uninstall();
+  }
+}, 20_000);
 
 function send(client: Client, clientRequestId: string, to: Agent = bob) {
   return client.callTool({ name: "send_message", arguments: { clientRequestId, conversationId: to.conversationId, text: "hello over http" } });

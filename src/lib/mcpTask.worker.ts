@@ -23,6 +23,7 @@ const { WebStandardStreamableHTTPServerTransport } = await import("@modelcontext
 const { agentRegistry } = await import("./agent/registry");
 const { capabilityConversationResolver } = await import("./mcp/bindings");
 const { mcpHttpRefusal } = await import("./mcp/httpResponse");
+const { setOuterMcpToolEventSink } = await import("./mcp/outerEvidence");
 const { startTaskChannel } = await import("./mcp/taskChannelServer");
 const { TASK_CHANNEL_CALLS, TASK_CHANNEL_INPUT_BYTES, encodeTaskChannel } = await import("./mcp/taskChannel");
 const { residentWorkerOverLimit } = await import("./residentWorkerMemory");
@@ -93,6 +94,7 @@ const write = (frame: () => string, limit: number, activity = true) => {
   void writing.catch(() => { logMcpLifecycle("output-failure"); process.exit(1); });
 };
 const send = (message: unknown) => write(() => JSON.stringify(message) + "\n", TASK_EXECUTOR_FRAME_BYTES);
+setOuterMcpToolEventSink(outerEvidence => write(() => JSON.stringify({ id: 0, control: { outerEvidence } }) + "\n", 4096));
 
 // This process owns task calls, while startup mutations belong to its Viewer.
 // One bounded request is shared by concurrent calls, including private-channel
@@ -167,7 +169,7 @@ async function httpTaskCall(request: TaskExecutorRequest, signal: AbortSignal): 
       parsedBody: body,
       authInfo: { token: request.caller.capability ?? "local-peer", clientId: MCP_HTTP_CLIENT_ID, scopes: [],
         extra: { nativePeer: request.caller.nativePeer, unidentified: !request.caller.capability && !request.caller.nativePeer,
-          paginationIdentity: request.caller.paginationIdentity, cancelSignal: () => signal } },
+          paginationIdentity: request.caller.paginationIdentity, outerRequestId: request.caller.outerRequestId, cancelSignal: () => signal } },
     });
     return await serialized(response);
   } finally { await server.close().catch(() => undefined); }

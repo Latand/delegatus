@@ -8,6 +8,9 @@ import { EVIDENCE_TTL_MS, requestTime } from "./controlRequest";
 export { CONTROL_REQUEST_HEADER, CONTROL_RECOVERY_PATH, EVIDENCE_LIMIT, EVIDENCE_TTL_MS, OUTCOME_LIMIT, controlRequestId } from "./controlRequest";
 
 export type ControlEvidence = { state: "seen" | "fenced" | "unknown"; status?: number; outcome?: string | null; fresh?: boolean; nonce?: string };
+type EvidenceEvent = "start" | "response" | "close" | "error" | "executor" | "tool" | "claim" | "dispatch" | "settled" | "result";
+const OUTER_EVENT_LIMIT = 262_144;
+const OUTER_EVENT_TTL_MS = 48 * 60 * 60_000;
 
 function evidenceDatabaseOpener(fs: typeof import("node:fs"), filename: string, open: () => Database): Database {
   const identity = () => { try { const s = fs.statSync(filename); return `${s.dev}:${s.ino}`; } catch { return null; } };
@@ -29,7 +32,8 @@ function evidenceDatabaseOpener(fs: typeof import("node:fs"), filename: string, 
 // the source tests and in a worker embedded in a packaged Next/MCP bundle.
 function evidenceStoreFactory(fs: typeof import("node:fs"), path: typeof import("node:path"),
   database: () => typeof import("bun:sqlite").Database, openCurrentDatabase: (filename: string, open: () => Database) => Database,
-  assertMutation: typeof assertStateStartupMutation, requestTime: (id: string) => number | null, ttl: number) {
+  assertMutation: typeof assertStateStartupMutation, requestTime: (id: string) => number | null, ttl: number,
+  eventLimit = 2048, eventTtl = ttl) {
   return function createStore(filename: string, now = Date.now, prepare = true) {
     if (prepare) assertMutation(path.dirname(filename), "prepare MCP HTTP evidence");
     if (prepare) fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
@@ -50,6 +54,7 @@ function evidenceStoreFactory(fs: typeof import("node:fs"), path: typeof import(
       // Retain positive witnesses across restart. A missing pre-open witness
       // is conservative even if an older database was restored in place.
       db.query("UPDATE coverage SET opened=max(opened,?) WHERE id=1").run(now());
+      if (eventLimit > 2048) db.exec("CREATE INDEX IF NOT EXISTS events_at ON events(at)");
       return db;
       } catch (error) { db.close(); throw error; }
     });
@@ -83,12 +88,16 @@ function evidenceStoreFactory(fs: typeof import("node:fs"), path: typeof import(
       closed(id: string, read: number, written: number): void {
         db.query("UPDATE requests SET closed=?,read_bytes=?,written_bytes=? WHERE id=?").run(now(), read, written, id);
       },
-      event(id: string, event: "start" | "response" | "close" | "error", read = 0, written = 0, code?: string, route?: string): void {
+      event(id: string, event: EvidenceEvent, read = 0, written = 0, code?: string, route?: string, observedAt = now()): void {
         db.transaction(() => {
           db.query("INSERT INTO events(at,id,event,code,route,read_bytes,written_bytes) VALUES(?,?,?,?,?,?,?)")
-            .run(now(), id, event, code && /^[A-Za-z0-9_]{1,64}$/.test(code) ? code : null, route?.slice(0, 256) ?? null, read, written);
-          db.query("DELETE FROM events WHERE seq <= (SELECT coalesce(max(seq),0)-2048 FROM events) OR at<?")
-            .run(now() - ttl);
+            .run(observedAt, id, event, code && /^[A-Za-z0-9_]{1,64}$/.test(code) ? code : null, route?.slice(0, 256) ?? null, read, written);
+          if (eventLimit === 2048) {
+            db.query("DELETE FROM events WHERE seq <= (SELECT coalesce(max(seq),0)-2048 FROM events) OR at<?").run(now() - ttl);
+          } else {
+            db.query("DELETE FROM events WHERE seq <= (SELECT coalesce(max(seq),0)-? FROM events)").run(eventLimit);
+            db.query("DELETE FROM events WHERE at<?").run(now() - eventTtl);
+          }
         }).immediate();
       },
       close(): void { db.close(); },
@@ -120,14 +129,15 @@ export class AsyncControlEvidenceStore {
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private sequence = 0;
   private failed = false;
-  constructor(readonly filename: string, prepare = mayRunStateStartupMutation(path.dirname(filename)), private readonly timeoutMs = 15_000) {
+  constructor(readonly filename: string, prepare = mayRunStateStartupMutation(path.dirname(filename)), private readonly timeoutMs = 15_000,
+    outer = false) {
     if (prepare) assertStateStartupMutation(path.dirname(filename), "prepare MCP HTTP evidence");
     const source = `
       const fs = require('node:fs'), path = require('node:path');
       const { parentPort, workerData } = require('node:worker_threads');
       const openCurrentDatabase=(filename,open)=>(${evidenceDatabaseOpener.toString()})(fs,filename,open);
       const Store = (${evidenceStoreFactory.toString()})(fs,path,()=>require('bun:sqlite').Database,
-        openCurrentDatabase,()=>{},(${requestTime.toString()}),${EVIDENCE_TTL_MS});
+        openCurrentDatabase,()=>{},(${requestTime.toString()}),${EVIDENCE_TTL_MS}, workerData.eventLimit, workerData.eventTtl);
       const ready=(async()=>{
         const until=Date.now()+10000;
         for(let attempt=0;;attempt++) {
@@ -148,7 +158,8 @@ export class AsyncControlEvidenceStore {
           parentPort.postMessage({key,value});
         } catch (error) { parentPort.postMessage({key,error:String(error.message).slice(0,200)}); }
       });`;
-    this.worker = new Worker(source, { eval: true, workerData: { filename, prepare } });
+    this.worker = new Worker(source, { eval: true, workerData: { filename, prepare,
+      eventLimit: outer ? OUTER_EVENT_LIMIT : 2048, eventTtl: outer ? OUTER_EVENT_TTL_MS : EVIDENCE_TTL_MS } });
     this.worker.on("message", ({ key, value, error }: { key: number; value: unknown; error?: string }) => {
       const pending = this.pending.get(key);
       if (!pending) return;
@@ -180,19 +191,19 @@ export class AsyncControlEvidenceStore {
   async complete(id: string, status: number, outcome: string | null, nonce?: string): Promise<void> { await this.call("complete", [id, status, outcome, nonce]); }
   async abandon(id: string, nonce: string): Promise<void> { await this.call("abandon", [id, nonce]); }
   async closed(id: string, read: number, written: number): Promise<void> { await this.call("closed", [id, read, written]); }
-  async event(id: string, event: "start" | "response" | "close" | "error", read = 0, written = 0, code?: string, route?: string): Promise<void> { await this.call("event", [id, event, read, written, code, route]); }
+  async event(...args: Parameters<EvidenceOperations["event"]>): Promise<void> { await this.call("event", args); }
   async close(): Promise<void> { this.failed = true; await this.worker.terminate(); }
 }
 
 const stores = globalThis as typeof globalThis & { __mcpControlEvidence?: Map<string, AsyncControlEvidenceStore> };
-export function controlEvidenceStore(side: "client" | "server"): AsyncControlEvidenceStore {
+export function controlEvidenceStore(side: "client" | "server" | "outer"): AsyncControlEvidenceStore {
   const filename = statePath(`mcp-http-${side}.sqlite`);
   const cache = stores.__mcpControlEvidence ??= new Map();
   // One root per serving process. Tests use explicit stores for other roots.
   let store = cache.get(filename);
   if (!store) {
-    if (cache.size >= 2) { for (const old of cache.values()) void old.close(); cache.clear(); }
-    store = new AsyncControlEvidenceStore(filename);
+    if (cache.size >= 3) { for (const old of cache.values()) void old.close(); cache.clear(); }
+    store = new AsyncControlEvidenceStore(filename, undefined, undefined, side === "outer");
     cache.set(filename, store);
   }
   return store;

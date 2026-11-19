@@ -77,7 +77,8 @@ import {
   MIN_SNAPSHOT_STRING_LENGTH, VIEW_RESOLUTIONS, VIEW_SCOPE_KINDS,
 } from "@/lib/view/types";
 
-import { runWithMcpCallerResolution, runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
+import { currentMcpHttpCaller, runWithMcpCallerResolution, runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
+import { outerMcpKeyDigest, outerMcpToolEvent } from "./outerEvidence";
 import type { McpToolPolicy } from "./toolAllowlist";
 import { MCP_TOOL_CATALOG_CAPABILITY } from "./toolCatalog";
 import { proposalSchema as voiceToolProposalSchema } from "@/lib/voiceTools/contracts";
@@ -870,6 +871,7 @@ function dispatchedReceipt(receipt: Receipt): boolean {
 function reclaimLocalClaim(receipt: Pick<McpReceiptRecord, "binding" | "stage" | "result"> | Receipt, binding?: McpRequestBinding): boolean {
   return binding?.localDispatch === true && receipt.binding?.localDispatch === true
     && receipt.stage === "claimed" && !receipt.result
+    && (receipt.binding.caller.kind === "unidentified" || sameCaller(receipt.binding.caller, binding.caller, binding.toolName))
     && processIdentityProvenDead(receipt.binding.owner);
 }
 
@@ -2625,6 +2627,8 @@ export function mcpToolTimingSnapshot(): McpToolTimingSummary[] {
 
 export interface McpToolServiceOptions {
   timings?: McpToolTimingAggregate;
+  /** Live lookup of a managed HTTP capability for task receipt ownership. */
+  taskReceiptCaller?: (capability: string) => string | null;
   /** #1490: the tools whose claim is bound to the caller before dispatch and
       recoverable under the original clientRequestId afterwards. Requires a
       store that {@link supportsMcpRecovery}. */
@@ -2867,6 +2871,9 @@ export function createMcpToolService(
           () => callTool(toolName, logicalArgs, context));
       }
       const typedTool = toolName as McpToolName;
+      const taskMutation = typedTool === "create_task" || typedTool === "update_task";
+      const httpCaller = currentMcpHttpCaller();
+      const outerId = httpCaller?.outerRequestId;
       const pageCaller = mcpPageCursorCaller();
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
       let effectiveArgs = normalized.args;
@@ -2894,6 +2901,7 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        outerMcpToolEvent(outerId, "result", outcome);
         const images = relayImages(result);
         const imageGuard = relayImageGuard(result);
         const imageNote = relayImageNote(result);
@@ -2939,6 +2947,13 @@ export function createMcpToolService(
       }
       const retention: ReceiptRetention = MUTATING_MCP_TOOL_NAMES.has(typedTool) ? "durable" : "bounded";
       const requestId = clientRequestId(effectiveArgs);
+      const traceTool = (digest: string, lookup = false) => {
+        if (!outerId) return;
+        const origin = httpCaller?.capability ?? (httpCaller?.nativePeer ? JSON.stringify(httpCaller.nativePeer) : null);
+        const callerDigest = origin ? crypto.createHash("sha256").update(origin).digest("hex") : "-";
+        outerMcpToolEvent(outerId, "tool", lookup ? "lookup" : "call",
+          [typedTool, outerMcpKeyDigest(typedTool, requestId) ?? "-", digest, callerDigest].join(":"));
+      };
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
       // Private reads bypass receipts with explicit keys too; other keyed reads replay below.
       if (RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "curate_rules" && effectiveArgs.action === "read")
@@ -2947,6 +2962,7 @@ export function createMcpToolService(
         || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool))) {
         const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
+        traceTool("-");
         try {
           await measure("caller", async () => bindings[typedTool].authorizeReceipt?.(effectiveArgs));
           if (context.signal?.aborted) throw context.signal.reason;
@@ -3016,13 +3032,57 @@ export function createMcpToolService(
       /* #1490: `recoveryOnly` decides only whether an absent claim may start
          work, so it is excluded from the digest — the same logical call with
          and without it is one call. */
+      const taskLookup = taskMutation && effectiveArgs.recoveryOnly === true;
       const recoveryOnly = recoverable !== null && effectiveArgs.recoveryOnly === true;
-      const digestArgs: McpToolArgs = recoverable
+      const digestArgs: McpToolArgs = recoverable || taskLookup
         ? Object.fromEntries(Object.entries(effectiveArgs).filter(([name]) => name !== "recoveryOnly"))
         : effectiveArgs;
       const canonicalArgs = bindings[typedTool].canonicalizeReceiptArgs?.(digestArgs) ?? digestArgs;
       const digest = requestDigest(typedTool, canonicalArgs);
       const key = receiptKey(typedTool, requestId, scope);
+      traceTool(digest, recoveryOnly || taskLookup);
+      const findTaskCaller = taskMutation && httpCaller?.capability && options.taskReceiptCaller
+        ? () => options.taskReceiptCaller!(httpCaller.capability!) : undefined;
+      const liveTaskCaller = () => { try { return findTaskCaller?.() ?? null; } catch { return null; } };
+      const taskCaller = liveTaskCaller();
+      const taskCallerRefusal = () => failure(typedTool, requestId, "caller_unidentified",
+        "The launch capability no longer identifies the original caller.", false);
+      const callerChanged = () => findTaskCaller && liveTaskCaller() !== taskCaller ? taskCallerRefusal() : null;
+      const assertTaskCaller = () => {
+        if (callerChanged()) throw new McpUnadmittedRefusal("The launch capability changed before the task write.",
+          { code: "caller_unidentified", retryable: false });
+      };
+      const deniedTaskRecovery = () => failure(typedTool, requestId, "recovery_not_permitted", RECOVERY_NOT_PERMITTED, false);
+      const taskOwnerRefusal = (record: McpReceiptRecord | null | undefined) => record?.binding?.localDispatch
+        && record.binding.caller.kind !== "unidentified" && record.binding.caller.conversationId !== taskCaller
+        ? deniedTaskRecovery() : null;
+      if (findTaskCaller && !taskCaller) return finish(taskCallerRefusal(), "failure");
+      if (findTaskCaller) retainResponseAuthority(context, () => {
+        if (callerChanged()) throw new McpToolRefusal("The launch capability changed", { code: "caller_unidentified" });
+      });
+      if (taskLookup) {
+        const unknown = (reason: string, evidence = "none") => finish(recoveryAnswer(typedTool, requestId, {
+          outcome: "unknown", evidence, reason, ids: {},
+        }, false), "pending");
+        if (!taskCaller || !supportsMcpRecovery(receipts)) return unknown("No authorized task receipt is available.");
+        let record: McpReceiptRecord | null;
+        try { record = await measure("replay", () => receipts.lookup(key)); }
+        catch { return unknown("The receipt store could not be read.", "mcp-receipt-unreadable"); }
+        const refused = callerChanged() ?? taskOwnerRefusal(record);
+        if (refused) return finish(refused, "failure");
+        if (context.signal?.aborted || (context.deadlineAt !== undefined && context.deadlineAt <= Date.now())) {
+          return unknown("The receipt lookup was cancelled or exceeded its deadline.");
+        }
+        if (!record?.binding?.localDispatch || record.binding.caller.conversationId !== taskCaller) {
+          return unknown("No caller-bound receipt was found. The original request may still arrive.");
+        }
+        if (record.digest !== digest) return finish(failure(typedTool, requestId, "idempotency_conflict",
+          "clientRequestId was already used with different arguments", false, true), "conflict");
+        if (!record.result || (!record.result.ok && ["call_interrupted", "tool_failed", "outcome_unknown"].includes(record.result.code))) {
+          return unknown("The request has no settled receipt. Read the task and keep the original request key.", "mcp-receipt");
+        }
+        return finish({ ...record.result, replayed: true }, "replay");
+      }
       const finishReceipt = trackMcpClaim(key, digest);
       try {
       /* A recoverable mutation never joins an in-process duplicate: who is
@@ -3036,10 +3096,10 @@ export function createMcpToolService(
         const replayStartedAt = performance.now();
         const replayed = { ...await active.result, replayed: true };
         phaseDurations.replay = performance.now() - replayStartedAt;
-        return finish(replayed, "replay");
+        return finish(callerChanged() ?? replayed, "replay");
       }
       let outcome: McpTimingOutcome = "failure";
-      let revalidateNative: () => McpToolResult | null = () => null;
+      let revalidateNative: () => McpToolResult | null = callerChanged;
       let unfinishedAgeMs: number | undefined;
       const recoverableCall = async (tool: McpRecoverableTool, store: McpRecoveryReceiptStore): Promise<McpToolResult> => {
         /* Authority first, before the store is read: who is calling decides
@@ -3378,6 +3438,7 @@ export function createMcpToolService(
           return unreadableReceipt(cause, false);
         }
         phaseDurations.claim = performance.now() - claimStartedAt;
+        outerMcpToolEvent(outerId, "claim", claim.kind);
         if (claim.kind !== "fresh") {
           let record = claim.record ?? null;
           if (!record) {
@@ -3427,6 +3488,7 @@ export function createMcpToolService(
         let settled: McpToolResult;
         const dispatch: McpDispatchTracker = { attempted: false };
         try {
+          outerMcpToolEvent(outerId, "dispatch");
           const payload = await bindings[typedTool](effectiveArgs, { ...context, binding, dispatch,
             assertCaller: assertSession,
             bindCreatedTarget: async (identity) => {
@@ -3518,6 +3580,7 @@ export function createMcpToolService(
             false,
             binding.target.identity?.startsWith("machine:") ? binding : undefined,
           );
+          outerMcpToolEvent(outerId, "settled");
         } catch {
           /* The answer is real whether or not the row took it: the row stays
              `dispatching`, and every later call under the key reads the
@@ -3547,6 +3610,8 @@ export function createMcpToolService(
               }, false);
             }
           }
+          const refused = callerChanged();
+          if (refused) return refused;
           if (!existing || existing.digest === digest && existing.stage === "claimed"
             && existing.binding?.localDispatch === true && processIdentityProvenDead(existing.binding.owner)) {
             try {
@@ -3564,7 +3629,7 @@ export function createMcpToolService(
         const localBinding: McpRequestBinding | undefined = localStore ? {
           version: 1, toolName: typedTool, clientRequestId: requestId, localDispatch: true,
           claimGeneration: crypto.randomUUID(),
-          caller: { kind: "unidentified", conversationId: null, project: null },
+          caller: { kind: taskCaller ? "worker" : "unidentified", conversationId: taskCaller, project: null },
           target: { project: null, identity: null }, downstreamKey: key,
           owner: captureProcessIdentity(process.pid), claimedAt: new Date().toISOString(),
         } : undefined;
@@ -3602,7 +3667,17 @@ export function createMcpToolService(
             }, false);
           }
         }
-        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding));
+        const beforeClaim = callerChanged();
+        if (beforeClaim) return beforeClaim;
+        let claim: ReceiptClaim;
+        try {
+          claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding,
+            findTaskCaller ? assertTaskCaller : undefined));
+        } catch (error) {
+          if (findTaskCaller && error instanceof McpUnadmittedRefusal) return taskCallerRefusal();
+          throw error;
+        }
+        outerMcpToolEvent(outerId, "claim", claim.kind);
         curatorApply?.assertCurrent();
         if (claim.kind === "conflict") {
           outcome = "conflict";
@@ -3668,7 +3743,7 @@ export function createMcpToolService(
         if (localStore && claim.kind !== "replay") {
           let dispatchMarked: boolean;
           try {
-            dispatchMarked = await localStore.markDispatching(key, digest);
+            dispatchMarked = await localStore.markDispatching(key, digest, taskCaller ? localBinding : undefined);
           } catch {
             /* The binding is below this await, so even a lost acknowledgement
                after the marker commit proves this invocation sent nothing.
@@ -3727,6 +3802,19 @@ export function createMcpToolService(
         let unadmitted = false;
         const bindingStartedAt = performance.now();
         try {
+          const expiredCaller = callerChanged();
+          if (expiredCaller) {
+            if (claim.kind === "fresh") await localStore?.release?.(key, digest, localBinding);
+            return expiredCaller;
+          }
+          if (findTaskCaller) {
+            const assertCaller = context.assertCaller;
+            context = { ...context, assertCaller: () => {
+              assertCaller?.();
+              assertTaskCaller();
+            } };
+          }
+          outerMcpToolEvent(outerId, "dispatch");
           const payload = await bindings[typedTool](effectiveArgs, typedTool === "deploy_exact_sha" && (retryDeployment || claim.kind === "pending")
             ? { ...context, priorAttemptUncertain: true,
               ...(retryDeployment && claim.result.ok && claim.result.state === "accepted"
@@ -3857,6 +3945,7 @@ export function createMcpToolService(
         curatorApply?.assertCurrent();
         settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
         await measure("completion", () => receipts.complete(key, digest, settled, retention));
+        outerMcpToolEvent(outerId, "settled");
         curatorApply?.assertCurrent();
         return settled;
       })();
@@ -4169,6 +4258,8 @@ const lessonTextSchema = (min: number, max: number) => z.string()
    same logical call with and without it is one call. */
 const recoveryOnlySchema = z.boolean().optional()
   .describe("Default false. true: read what became of the call already made under this clientRequestId with these same arguments, and never claim an absent key or start any work — an absent claim is answered unknown (the original may still be on its way), nothing is written under the key, and nothing is disclosed — without a claim no durable binding establishes whose work a downstream record would be. false: claim and dispatch once if the key is new; otherwise recover exactly as with true. Excluded from the argument digest.");
+const taskRecoveryOnlySchema = z.boolean().optional()
+  .describe("After a lost response, send true with the original clientRequestId and identical arguments to look up a caller-bound task receipt. This lookup starts no write. Missing or unsettled evidence returns outcome_unknown.");
 /* #844 §7: the selected-card reference an operator turn carried, in either of
    the two forms a caller actually holds — the `ctx=` token copied off the
    structured-user marker, or that token already decoded. The object stays open
@@ -4411,6 +4502,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     operationId: z.string().min(1).describe("The operationId a send_message call returned."),
   }).passthrough(),
   create_task: z.object({
+    recoveryOnly: taskRecoveryOnlySchema,
     accounting: taskDeclarationSchema.optional().describe("Freeze acceptance criteria, task class, original-task membership and defect correction link at creation. Unknown fields stay null."),
     progress: z.number().int().min(0).max(100).nullable().optional()
       .describe("Task progress estimate from 0 to 100; omitted or null leaves it absent on creation. On a finding match, omitted preserves it and null clears it. Time and reporter are server-derived. Maintain it whenever you update the task."),
@@ -4447,6 +4539,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("The machine that runs the task on a linked board; a new task always runs on the machine that creates it, so the only value is \"here\"."),
   }).passthrough(),
   update_task: z.object({
+    recoveryOnly: taskRecoveryOnlySchema,
     accept: acceptTaskSchema.optional().describe("Record acceptance against creation criteria with evidence. Requires current expectedProject and expectedRevision. Done alone records no acceptance."),
     summary: taskSummaryInputSchema.nullable().optional().describe("The task's Summary panel: headline, two or three sentences, what is left. Replaces it; null clears it. Author and time are server-derived."),
     progress: z.number().int().min(0).max(100).nullable().optional()
@@ -5362,7 +5455,8 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
       });
       const finishClaim = trackMcpClaim(`${toolName}:${clientRequestId(args as McpToolArgs) ?? "unkeyed"}`);
       try {
-        const authority: McpResponseAuthority | undefined = toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
+        const authority: McpResponseAuthority | undefined = taskMutation || toolName === "pipeline_action" && args.action === "set-src"
+          ? { checks: [] } : undefined;
         const curatorResponse: McpToolCallContext["curatorResponse"] = toolName === "curate_rules" ? {} : undefined;
         const call = () => service.callTool(toolName, args as McpToolArgs, {
           responseAuthority: authority,
@@ -5428,13 +5522,14 @@ export const MCP_HTTP_CLIENT_ID = "llv-spawn-capability";
     for a request that did not come through it (every stdio call). */
 function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancelSignal: (requestId: unknown) => AbortSignal | null }) | null {
   if (!authInfo || typeof authInfo !== "object") return null;
-  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown; nativePeer?: McpHttpCaller["nativePeer"]; unidentified?: boolean; paginationIdentity?: unknown } };
+  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown; nativePeer?: McpHttpCaller["nativePeer"]; unidentified?: boolean; paginationIdentity?: unknown; outerRequestId?: string } };
   if (clientId !== MCP_HTTP_CLIENT_ID || typeof token !== "string" || !token) return null;
   const lookup = typeof extra?.cancelSignal === "function" ? extra.cancelSignal as (requestId: unknown) => unknown : null;
   return {
     ...(extra?.nativePeer ? { nativePeer: extra.nativePeer } : extra?.unidentified ? {
       ...(typeof extra.paginationIdentity === "string" && extra.paginationIdentity ? { paginationIdentity: extra.paginationIdentity } : {}),
     } : { capability: token }),
+    outerRequestId: extra?.outerRequestId,
     cancelSignal: (requestId) => {
       const signal = lookup?.(requestId);
       return signal instanceof AbortSignal ? signal : null;
@@ -5479,6 +5574,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   // Receipt construction remains lazy for the inline service; task calls keep
   // their complete service and protocol work in the owned executor.
   const {
+    capabilityConversationResolver,
     productionViewerControlDependencies,
     productionDomainDependencies,
     viewerMcpBindings,
@@ -5517,14 +5613,16 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
   const { withWorkspaceMcpFence } = await import("./workspaceFence");
-  const { prepareAgentRegistry } = await import("@/lib/agent/registry");
+  const { agentRegistry, prepareAgentRegistry } = await import("@/lib/agent/registry");
   const service = createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
       legacyFilePath: statePath("mcp-receipts.json"),
     }),
     viewerMcpToolPolicy(undefined, hostHealthProbe),
-    { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
+    { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools(),
+      taskReceiptCaller: capability => capabilityConversationResolver(capability,
+        digest => agentRegistry().conversationIdForSpawnCapabilityDigest(digest))() },
   );
   return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(
     service, productionDomainDependencies,

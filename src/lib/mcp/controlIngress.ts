@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse, Server } from "node:http";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { CONTROL_RECOVERY_PATH, CONTROL_REQUEST_HEADER, OUTCOME_LIMIT, controlEvidenceStore, type ControlEvidenceStore, type AsyncControlEvidenceStore } from "./controlEvidence";
+import { observeOuterMcpRequest, prepareOuterMcpEvidence } from "./outerEvidence";
 
 type Emitter = Pick<Server, "emit">;
 const shared = globalThis as typeof globalThis & { __mcpIngressTargets?: WeakSet<object>; __mcpIngressWrappers?: WeakSet<Server["emit"]> };
@@ -13,7 +14,7 @@ const wrappers = shared.__mcpIngressWrappers ??= new WeakSet<Server["emit"]>();
 export function installControlIngress(target: Emitter, store: ControlEvidenceStore | AsyncControlEvidenceStore): () => void {
   if (installed.has(target) || wrappers.has(target.emit)) return () => {};
   const original = target.emit;
-  const wrapped: Server["emit"] = function (this: Server, event: string | symbol, ...args: unknown[]): boolean {
+  const dispatch: Server["emit"] = function (this: Server, event: string | symbol, ...args: unknown[]): boolean {
     if (event !== "request") return Reflect.apply(original, this, [event, ...args]);
     const [request, response] = args as [IncomingMessage, ServerResponse];
     const pathname = request.url?.split("?", 1)[0];
@@ -109,6 +110,15 @@ export function installControlIngress(target: Emitter, store: ControlEvidenceSto
     });
     return true;
   } as Server["emit"];
+  const wrapped: Server["emit"] = function (this: Server, event: string | symbol, ...args: unknown[]): boolean {
+    if (event === "request") {
+      const [request, response] = args as [IncomingMessage, ServerResponse];
+      if (request.method === "POST" && request.url?.split("?", 1)[0] === "/api/mcp") {
+        return observeOuterMcpRequest(request, response, () => Reflect.apply(dispatch, this, [event, ...args]));
+      }
+    }
+    return Reflect.apply(dispatch, this, [event, ...args]);
+  } as Server["emit"];
   target.emit = wrapped;
   wrappers.add(wrapped);
   installed.add(target);
@@ -122,5 +132,6 @@ export async function installServingControlIngress(): Promise<() => void> {
   await Promise.all([client.ready(), server.ready()]);
   const undoHttp = installControlIngress(http.Server.prototype, server);
   const undoHttps = installControlIngress(https.Server.prototype, server);
+  void prepareOuterMcpEvidence();
   return () => { undoHttps(); undoHttp(); };
 }
