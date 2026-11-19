@@ -103,7 +103,7 @@ export class NativeQueueExecutor {
     const owns = () => {
       const current = this.port.binding(command.conversationId);
       return host === this.port.resolveHost(command.conversationId) && current && sameNativeQueueBinding(current, binding)
-        && (!this.port.writerClaim || (!!writer && writer === this.port.writerClaim(command.conversationId)));
+        && (!this.port.writerClaim || writer === this.port.writerClaim(command.conversationId));
     };
     if ((!host || !native) && rebinding && sameNativeQueueBinding(this.port.binding(command.conversationId) ?? command.binding, binding)) {
       note("awaiting-host", "the account switch's successor has no host yet");

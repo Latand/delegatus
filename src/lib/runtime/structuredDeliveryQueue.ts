@@ -3221,7 +3221,7 @@ export class StructuredDeliveryQueue {
     const claim = this.port.currentHostClaim?.(conversationId);
     return () => {
       if (this.retirementExecutor.retired || ((host.agentControlState || this.port.currentHostClaim) && this.resolveHost(conversationId) !== host)
-        || (this.port.currentHostClaim && (!claim || claim !== this.port.currentHostClaim(conversationId)))) {
+        || (this.port.currentHostClaim && claim !== this.port.currentHostClaim(conversationId))) {
         throw new StructuredDispatchDeferredError("structured host writer changed before dispatch");
       }
     };

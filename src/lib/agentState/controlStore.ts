@@ -5,7 +5,7 @@ import { entryRevision, subjectId } from "./store";
 /** Read from the same registry backend as the recipient. The serving
  * reconciler's process-wide cache also serves other registries. */
 export function controlProjectionForEntry(file: Pick<RegistryFile, "agentStates">, entry: AgentRegistryEntry, conversationId: string | null) {
-  const row = file.agentStates[subjectId(entry)];
+  const row = file.agentStates?.[subjectId(entry)];
   return row && row.entryKey === sessionKeyId(entry.key) && row.conversationId === conversationId
     && row.facts.revision === entryRevision(entry) ? row : null;
 }
