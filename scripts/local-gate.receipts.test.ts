@@ -18,7 +18,8 @@ test("a standalone typecheck supplies only its exact pass to the later native pu
   writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
   f.git("add", ".gitignore", "example.ts"); f.git("commit", "-m", "fixture change");
   // Native Git adds this directory to PATH before it invokes a hook.
-  const env = { ...f.env, PATH: f.git("--exec-path").toString().trim() + path.delimiter + f.env.PATH };
+  const fixtureEnv: NodeJS.ProcessEnv = f.env;
+  const env = { ...fixtureEnv, PATH: f.git("--exec-path").toString().trim() + path.delimiter + (fixtureEnv.PATH ?? "") };
   const run = (args: string[], extra = {}) => spawnSync(args[0]!, args.slice(1), { cwd: f.dir, env: { ...env, ...extra }, encoding: "utf8" });
   const check = [process.execPath, "scripts/local-gate.ts", "check-step", "types"];
   const first = run(check);
