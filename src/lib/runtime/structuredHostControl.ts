@@ -355,6 +355,9 @@ export type StructuredHostTerminationOutcome =
       /** A runtime termination or signal was attempted; refusals must retain
           its effects even when authority is subsequently lost. */
       terminationStarted?: true;
+      /** Runtime release succeeded or the kernel accepted a signal for the
+          captured tree. Exit still has to be independently verified. */
+      stoppedVia?: "runtime" | "process-group";
       /** The authority this target carried is spent: the pid is no longer the
           process the snapshot listed, so the target is consumed, not retried. */
       stale?: true;
@@ -670,6 +673,7 @@ async function terminateStructuredHostTreeFenced(
   }
   let terminationStarted = false;
   let completed = false;
+  let stoppedVia: "runtime" | "process-group" | undefined;
   /* Asking the runtime is not an effect: an answer of false means it holds
      nothing of this host and ended nothing, so a refusal that follows still
      owes the row its capture back. */
@@ -684,7 +688,7 @@ async function terminateStructuredHostTreeFenced(
       try { return processIdentityStatus(identity, identityProbe) !== "dead"; }
       catch { return true; }
     });
-    return { survivors, terminationStarted: true as const };
+    return { survivors, terminationStarted: true as const, ...(stoppedVia ? { stoppedVia } : {}) };
   };
   const identityRefusal = (): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
     for (const [candidate, expectedIdentity] of identities) {
@@ -731,12 +735,11 @@ async function terminateStructuredHostTreeFenced(
   try {
     const refusedBeforeRuntime = await readAuthority() ?? authorityRefusal();
     if (refusedBeforeRuntime) return refusedBeforeRuntime;
-    let via: "runtime" | "process-group" = "process-group";
     let runtimeFailure = false;
     if (key && rootAlive && (dependencies.retainedSurvivors?.length ?? 0) === 0) {
       try {
         if (await withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: key.sessionId }, () => terminateOwned(key, expected))) {
-          via = "runtime";
+          stoppedVia = "runtime";
           markStarted();
         }
       } catch {
@@ -764,6 +767,7 @@ async function terminateStructuredHostTreeFenced(
         const changed = identityRefusal();
         if (changed) throw new Error(changed.error);
         signal(target, value);
+        stoppedVia ??= "process-group";
         return true;
       } catch (error) {
         const code = signalErrorCode(error);
@@ -868,12 +872,12 @@ async function terminateStructuredHostTreeFenced(
        Retire only after the full captured tree has passed identity checks, and
        require the registry to accept that exact evidence on every path. */
     const scopeRefusal = await endScope();
-    if (scopeRefusal) return scopeRefusal;
+    if (scopeRefusal) return { ...scopeRefusal, ...partialEvidence() };
     if (key && await retire(key, expected, [...identities.values()], registryCustody) === false) {
-      return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
+      return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], ...partialEvidence() };
     }
     completed = true;
-    return { ok: true, via, pids: tree };
+    return { ok: true, via: stoppedVia ?? "already-exited", pids: stoppedVia ? tree : [] };
   } catch (error) {
     const evidence = partialEvidence();
     return {

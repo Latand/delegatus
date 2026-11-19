@@ -226,7 +226,10 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
   for (const boundary of ["measurement", "pre-authorize", "admission", "capture", "release", "scope"] as const) {
     if (!scoped && boundary === "scope") continue;
     for (const change of boundary === "measurement" || boundary === "pre-authorize" ? ["conversation-turn"] as const
-      : ["none", "held", "dead-owner", "publication", "entry missing", "process identity", "pid", "claimEpoch", "claimOwner", "writerClaimEpoch", "scope", "turn", "conversation-turn", "flags", "attention", "seat", "queue", "transcript", "moved-transcript", "replaced-transcript", "refresh-unchanged", "busy-memory", ...(boundary === "admission" ? ["seat-restored"] as const : [])] as const) {
+      : ["none", "held", "dead-owner", "publication", "entry missing", "process identity", "pid", "claimEpoch", "claimOwner", "writerClaimEpoch", "scope", "turn", "conversation-turn", "flags", "attention", "seat", "queue", "transcript", "moved-transcript", "replaced-transcript", "refresh-unchanged", "busy-memory",
+        ...(boundary === "admission" ? ["seat-restored"] as const : []),
+        ...(boundary === "release" ? ["runtime-exit", "runtime-live-child"] as const : []),
+        ...(boundary === "scope" ? ["late-cas", "closed-event-tail"] as const : [])] as const) {
       test(`${engine} ${scoped ? "scope" : "tree"}: central-state retirement after ${boundary}, ${change}`, async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-lifecycle-"));
         roots.push(root);
@@ -242,7 +245,8 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
         expect(descendant.startIdentity).not.toBeNull();
         const tree = [identity.pid, descendant.pid];
         identities.push(descendant);
-        const owner = change === "held" ? captureProcessIdentity(process.pid) : change === "dead-owner"
+        const runtimeStop = change === "runtime-exit" || change === "runtime-live-child";
+        const owner = change === "held" ? captureProcessIdentity(process.pid) : change === "dead-owner" || change === "late-cas" || runtimeStop
           ? { pid: 2_147_483_647, startIdentity: "fixture-dead-owner", bootEpoch: identity.bootEpoch } : null;
         const file = fixtureRegistry(root, engine, identity, owner);
         const entry = file.entries[`${engine}:${FIXTURE_SESSION}`]!;
@@ -261,6 +265,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
         let released = 0;
         let changed = false;
         let signalsAtChange = 0;
+        const events = new FileRuntimeEventStore(path.join(root, "events"));
         const holds = spyOn(delivery, "hasStructuredDeliveryHost").mockImplementation(() => change === "held");
         const service = new AgentStateService({ registry, now: () => now, owns: () => true,
           process: value => procBackend.pidAlive(value.pid) ? "alive" : "dead", memory: () => change === "held" && !released ? { activeTurnRef: null, pendingAttention: [], eventCursor: 0 } : null,
@@ -277,6 +282,10 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
         const mutate = () => {
           changed = true;
           signalsAtChange = signals.length;
+          if (change === "queue" || change === "closed-event-tail") {
+            events.append(FIXTURE_SESSION, { kind: "delta", turnId: "fixture-turn", text: "retained output", seq: 1 });
+            return;
+          }
           if (change === "conversation-turn") {
             const before = entryRevision(registry.hostEntry(entry.key)!);
             registry.reconcileConversations([{ engine, accountId: null, path: entry.artifactPath!,
@@ -329,6 +338,9 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
             mutate();
             await refresh();
           }
+          if (change === "late-cas" && correlation.label === "termination.retire") {
+            expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
+          }
           return admit(correlation, write);
         });
         const outcomes: control.StructuredHostTerminationOutcome[] = [];
@@ -345,12 +357,27 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
             },
             terminateOwnedHost: async () => {
               released++;
+              if (runtimeStop) {
+                if (change === "runtime-exit") await stopFixtureIdentity(descendant);
+                await stopFixtureIdentity(identity);
+                await stopFixtureProcess(child);
+                if (change === "runtime-exit") {
+                  for (let attempt = 0; attempt < 200 && procBackend.pidAlive(descendant.pid); attempt++) await Bun.sleep(10);
+                  expect(procBackend.pidAlive(descendant.pid)).toBe(false);
+                }
+                expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
+                return true;
+              }
               if (boundary === "release") { mutate(); await refresh(); }
-              return true;
+              return !["queue", "closed-event-tail", "late-cas"].includes(change);
             },
             stopScope: async (_scope, options) => {
               await options.authorizeAsync?.();
-              if (boundary === "scope") { mutate(); await refresh(); }
+            if (boundary === "scope" && change !== "late-cas") { mutate(); await refresh(); }
+              if (change === "closed-event-tail") {
+                expect(registry.terminateStructuredHost(entry.key, identity, [identity, descendant], undefined,
+                  entry.structuredHost!.scope!)).toBe(true);
+              }
               options.authorize();
             },
             signal: (pid, signal) => { signals.push({ pid, signal }); process.kill(pid, signal); },
@@ -360,7 +387,9 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
           return outcome;
         });
         try {
-          const report = await runStructuredHostRetirementSweep({
+          const accountingCase = runtimeStop || change === "closed-event-tail"
+            || boundary === "scope" && (change === "queue" || change === "late-cas");
+          const options: StructuredHostRetirementDependencies = {
             snapshot: () => {
               // Planning and the post-measurement eligibility check see the
               // original turn. Reopen on the first read after that check.
@@ -368,17 +397,80 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
               return registry.readOnlySnapshot();
             }, requireAgentState: true,
             publicationState: () => changed && change === "publication" ? "unbound" : "ready", now: () => now,
-            handoffRows: () => determined([]), durableEventTail: () => determined(changed && change === "queue" ? 1 : 0),
+            handoffRows: () => determined([]), durableEventTail: sessionId => durableRuntimeEventTailSeq(sessionId, path.join(root, "events")),
             realtimeBound: () => determined(false),
             orchestratorSeatConversations: () => determined(new Set<string>(changed && ["seat", "seat-restored"].includes(change) ? Object.keys(file.conversations) : [])),
             revokedSeatConversations: () => determined(new Set<string>()),
-            readCursor: () => null, writeCursor: () => {}, record: () => {},
+            readCursor: () => null, writeCursor: () => {}, record: accountingCase ? undefined : () => {},
             treePss: async () => {
               await Promise.resolve();
               if (boundary === "measurement") mutate();
               return { bytes: null, measuredProcesses: 0 };
-            }, graceMs: 50,
-          });
+            }, scopeLoadState: async () => "not-found", graceMs: 50,
+          };
+          const report = await runStructuredHostRetirementSweep(options);
+          if (accountingCase) {
+            const debt = "verdict events-flushed: the flushed cursor 0 is behind the session's 1";
+            const cause = runtimeStop ? "scope retirement target changed: claimOwner"
+              : change === "queue" ? debt : change === "closed-event-tail" ? "scope retirement target changed: process identity"
+                : "structured host changed before registry retirement";
+            expect(outcomes).toMatchObject([{ ok: false, status: 409, error: expect.stringContaining(cause) }]);
+            if (change === "runtime-live-child") {
+              expect(report).toMatchObject({ retired: [], gone: [], reclaimed: { processes: 0 },
+                failed: [{ error: expect.stringContaining(cause), remaining: [descendant.pid] }] });
+              expect(procBackend.pidAlive(descendant.pid)).toBe(true);
+              return;
+            }
+            const via = runtimeStop ? "runtime" : "process-group";
+            expect(report.retired).toMatchObject([{ engine, via, pids: expect.arrayContaining(tree) }]);
+            expect(report.retired[0]!.reclaimed).toEqual(report.reclaimed);
+            expect(report.reclaimed.processes).toBe(tree.length);
+            expect(report.gone).toEqual([]);
+            if (runtimeStop) expect(signals).toEqual([]);
+            else expect(signals.length).toBeGreaterThan(0);
+            expect(tree.filter(pid => procBackend.pidAlive(pid))).toEqual([]);
+            if (change === "queue") {
+              expect(report.failed).toMatchObject([{ error: expect.stringContaining(cause) }]);
+              expect(events.load(FIXTURE_SESSION)).toHaveLength(1);
+            } else if (change === "closed-event-tail") {
+              expect(report.failed).toEqual([]);
+              expect(report.refused).toMatchObject([{ clause: "events-flushed", reason: expect.stringContaining(debt), changed: true }]);
+              expect(events.load(FIXTURE_SESSION)).toHaveLength(1);
+            } else {
+              expect(report.failed).toEqual([]);
+              expect(report.refused).toEqual([]);
+              expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
+            }
+            const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
+            const journal = JSON.parse(fs.readFileSync(statePath("host-retirement-journal.ndjson"), "utf8").trim().split("\n").at(-1)!);
+            expect(stored.retired).toEqual(report.retired);
+            expect(journal.retired).toEqual(report.retired);
+            const replay = Bun.spawn([process.execPath, "--eval", `
+              import path from "node:path";
+              import { AgentRegistry, setAgentRegistryForTests } from "./src/lib/agent/registry";
+              import { runStructuredHostRetirementSweep } from "./src/lib/runtime/structuredHostRetirement";
+              const root = process.argv[1];
+              const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined,
+                { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
+              setAgentRegistryForTests(registry);
+              const report = await runStructuredHostRetirementSweep({
+                snapshot: () => registry.readOnlySnapshot(),
+                publicationState: () => "ready",
+                now: () => Number(process.argv[2]),
+                scopeLoadState: async () => "not-found",
+                readCursor: () => null, writeCursor: () => {}, record: () => {},
+                terminate: () => { throw new Error("replay entered termination"); },
+              });
+              registry.close();
+              console.log(JSON.stringify([report.retired, report.reclaimed, report.failed]));
+            `, root, String(now)], { stdout: "pipe", stderr: "pipe" });
+            const [output, stderr, exit] = await Promise.all([
+              new Response(replay.stdout).text(), new Response(replay.stderr).text(), replay.exited,
+            ]);
+            expect({ stderr, exit }).toEqual({ stderr: "", exit: 0 });
+            expect(JSON.parse(output.trim().split("\n").at(-1)!)).toEqual([[], { rssBytes: 0, swapBytes: 0, processes: 0 }, []]);
+            return;
+          }
           if (boundary === "measurement") {
             expect(changed).toBe(true);
             expect(report.retired).toEqual([]);
@@ -391,10 +483,11 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
             return;
           }
           if (change !== "none" && change !== "held" && change !== "dead-owner" && change !== "refresh-unchanged") {
-            expect(report.retired).toEqual([]);
+            if (boundary === "scope") expect(report.retired).toMatchObject([{ engine, via: "runtime", pids: expect.arrayContaining(tree) }]);
+            else expect(report.retired).toEqual([]);
             if (boundary === "scope" && change === "claimOwner") {
               expect(report.failed).toEqual([]);
-              expect(report.refused).toMatchObject([{ clause: "process-identity", changed: true,
+              expect(report.refused).toMatchObject([{ changed: true, clause: "process-identity",
                 reason: "scope retirement target changed: claimOwner" }]);
               expect(outcomes[0]).toMatchObject({ ok: false, status: 409,
                 error: "scope retirement target changed: claimOwner" });
@@ -413,6 +506,9 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
             expect(outcomes[0]!.ok).toBe(false);
             if (!outcomes[0]!.ok) expect(report.failed[0]!.error).toContain(outcomes[0]!.error);
             expect(outcomes[0]).toMatchObject({ ok: false, status: 409, error: expect.stringContaining(condition) });
+            if (["pre-authorize", "admission", "capture"].includes(boundary)) {
+              expect(outcomes[0]).not.toHaveProperty("stoppedVia");
+            }
             expect(signals).toHaveLength(signalsAtChange);
             if (["moved-transcript", "replaced-transcript", "transcript"].includes(change)) expect(report.failed[0]!.error).toContain("transcript");
             if (boundary !== "scope") expect(released).toBe(["pre-authorize", "admission", "capture"].includes(boundary) ? 0 : 1);

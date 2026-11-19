@@ -31,6 +31,12 @@ already-exited tree can still take read-only reconciliation for lost process cus
 refusal, after proving that no descendants remain and the scope was collected.
 Other verdict refusals retain their cause.
 
+The sweep credits a stop after an accepted runtime release or process signal
+and confirmed exit of the captured tree. A later reconciliation can clear
+the registry or report the condition that blocked cleanup. Either result
+preserves the retirement count and the stop method. A tree that exited on
+its own appears in `gone` and contributes no reclaim totals.
+
 ## Verification
 
 The lifecycle regression uses real isolated process trees, engine-specific
