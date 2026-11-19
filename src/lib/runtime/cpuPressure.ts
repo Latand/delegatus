@@ -10,15 +10,13 @@ import { delegatusSetting } from "./cpuPlacement";
 /*
  * CPU-pressure admission for heavy work (docs/design/cpu-placement.md).
  *
- * A pipeline stage start, a workflow setup or stage-agent start, a
- * publication's dependency install and a release install or build wait while
- * the machine's CPU pressure is high: each is held once `some avg10` reaches
- * the hold threshold and released only after the value has stayed below the
- * release threshold for the release window. A persistent priority queue admits
- * the head after ten minutes even when pressure stays high, with short spacing
- * between admissions. Operator sends, receipt reconciliation and recovery never ask.
- * A failed sample admits: the work scopes' CPU quotas still bound the work.
- * `scripts/gate-slot.sh` applies the same policy to gates.
+ * Stages, workflows, installs, builds and local heavy checks wait when
+ * `some avg10` reaches the hold threshold. The pressure hold lifts after a
+ * full release window below the release threshold, or when the ticket reaches
+ * the persistent queue's ten-minute wait bound. Order and spacing still apply,
+ * and heavy checks also need a free slot. Operator sends, receipt reconciliation
+ * and recovery never ask. A failed sample permits a start in this gate.
+ * `scripts/gate-slot.sh` samples separately and falls back to load per CPU.
  */
 
 export interface CpuPressurePolicy { holdAt: number; releaseBelow: number; releaseAfterMs: number; deferAfterMs: number }
