@@ -136,7 +136,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       fs.existsSync(path.join(root, "scripts", "gate-runner")) && fs.existsSync(script)) return path.join(directory, path.basename(script));
   };
   const isHookParent = (command: string[], cwd: () => string) => {
-    const argv = command[2] === "--in-cpu-scope" && path.basename(command[1] ?? "") === "gate-slot.sh"
+    const argv = path.basename(command[0] ?? "") === "bash" && command[2] === "--in-cpu-scope" && path.basename(command[1] ?? "") === "gate-slot.sh"
       ? command.slice(3) : command;
     // The legacy wrapper also kept exactly this pre-push parent outside
     // admission. Its admitted half has a separate argv and takes a slot.
@@ -201,10 +201,21 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       const member = path.join(proc, child);
       const env = readEnvironment(member);
       if (env("LLV_OWNED_TEST_RUN_CGROUP") !== group) return true;
-      const parent = env("LLV_OWNED_RUN_PARENT_IDENTITY");
+      // A worker moves into its own entry leaf before it starts the hook.
+      // Require kernel membership as well as the supervisor's launch stamp.
+      const membership = fs.readFileSync(path.join(member, "cgroup"), "utf8").split("\n");
+      if (!membership.includes(`0::${group}`) && !membership.includes(`0::${group}/entry-${child}`)) return true;
       const cwd = readCwd(member);
-      if (parent && isPrepareSupervisor(serviceCommand(readArgv(member), runner), cwd, () => recordedParent(JSON.parse(parent)))) return false;
-      return samePool(env("LLV_GATE_LOCK_DIR"), cwd());
+      if (!samePool(env("LLV_GATE_LOCK_DIR"), cwd())) return false;
+      if (env("LLV_GATE_SLOT_LEASE") !== undefined) return true;
+      const command = serviceCommand(readArgv(member), runner);
+      if (command[2] === "--in-cpu-scope") {
+        const wrapper = fs.realpathSync(path.resolve(cwd(), command[1]!));
+        if (fs.realpathSync(path.join(path.dirname(wrapper), "owned-runner.ts")) !== fs.realpathSync(runner)) return true;
+      }
+      if (isHookParent(command, cwd)) return false;
+      const parent = env("LLV_OWNED_RUN_PARENT_IDENTITY");
+      return !(parent && isPrepareSupervisor(command, cwd, () => recordedParent(JSON.parse(parent))));
     });
   };
   const readCandidate = (entry: string) => {
