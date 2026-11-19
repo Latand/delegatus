@@ -309,6 +309,8 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   const now = options.now ?? (() => performance.now());
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
+  const fileWindow = budgets.fileMs + SUPERVISOR_MARGIN_MS;
+  const reserve = label === "head" && budgets.runMs > fileWindow ? fileWindow : 0;
   const results: TestRun[] = new Array(files.length);
   let next = 0;
   const workers = await Promise.allSettled(Array.from({ length: Math.min(options.workers ?? 3, files.length) }, async () => {
@@ -318,6 +320,12 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
     if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
+    // A capacity retry can resume the unstarted head files from checkpoints.
+    // Leave admitted files a full deadline and cleanup window instead of
+    // starting more with a shrinking timeout near the phase deadline.
+    if (remaining < reserve) {
+      throw new BudgetExhausted(`${label}: test run budget leaves too little time to start another file; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
+    }
     const sites = options.sites?.filter(site => site.file === file);
     const filtered = !!sites && !sites.some(site => site.kind === "error");
     const filter = filtered ? testNameFilter(sites) : [];

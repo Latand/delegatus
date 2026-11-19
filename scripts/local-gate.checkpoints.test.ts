@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
 import { headFileCache } from "./local-gate-tests";
+import { fixtureCheckAdmissionEnv } from "./local-gate.fixture";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -44,7 +45,8 @@ function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "gate-head-checkpoint-")); roots.push(root);
   const repo = path.join(root, "repo"); mkdirSync(repo);
   const env = isolatedEnvironment(path.join(root, "environment"), process.env);
-  Object.assign(env, { GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+  Object.assign(env, fixtureCheckAdmissionEnv(repo), { LLV_GATE_LOCK_DIR: path.join(root, "cpu-gate"),
+    GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
     GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid" });
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, env, encoding: "utf8", stdio: "pipe" }).trim();
   git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null");
@@ -67,7 +69,7 @@ test("fixture contract", () => { ${interrupted ? "process.exit(124);" : "expect(
   const samples = () => readFileSync(marker, "utf8").trim().split("\n").reduce((counts, name) => {
     counts[name] = (counts[name] ?? 0) + 1; return counts;
   }, {} as Record<string, number>);
-  return { root, repo, git, source, run, samples };
+  return { root, repo, env, git, source, run, samples };
 }
 
 serviceTest("an incomplete head run retains only complete green files across fresh isolated workers", () => {
@@ -133,7 +135,7 @@ serviceTest("head checkpoints invalidate environment and ignored inputs, and ref
   expect(f.samples()).toEqual({ a: 5, b: 5 });
 }, 60_000);
 
-serviceTest("an aggregate deadline preserves completed files without certifying the interrupted run", () => {
+serviceTest.each(["expired", "cleanup reserve"] as const)("an aggregate deadline preserves completed files without certifying the interrupted run: %s", mode => {
   const f = fixture();
   rmSync(path.join(f.repo, "a.test.ts")); rmSync(path.join(f.repo, "b.test.ts"));
   const files = Array.from({ length: 12 }, (_, index) => `sample-${String(index).padStart(2, "0")}.test.ts`);
@@ -145,22 +147,21 @@ serviceTest("an aggregate deadline preserves completed files without certifying 
   writeFileSync(driver, `import * as comparator from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
 import { existsSync, readFileSync } from "node:fs";
 const expires = process.argv.at(-1) === "expire";
-// A deterministic parent clock expires only after the first eight owned
-// children have started. Child checks retain their real clocks and budgets.
+// The parent clock advances only after the first eight owned children
+// have started. Child checks retain their real clocks and deadlines.
 Object.defineProperty(performance, "now", { value: () => expires && existsSync(${JSON.stringify(marker)})
-  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? 1000000 : 0 });
+  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? ${mode === "expired" ? 1_000_000 : 65_000} : 0 });
 try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
-  { budgets: { fileMs: 300000, runMs: 15000 } }); } catch (error) {
+  { budgets: { fileMs: 20000, runMs: 100000 } }); } catch (error) {
   const ending = comparator.comparatorEnding?.(error);
   console.error(ending?.line ?? String(error)); process.exitCode = ending?.code ?? 1;
 }
 `);
   const run = (mode: string) => spawnSync(process.execPath, [driver, mode],
-    { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
+    { cwd: f.repo, env: f.env, encoding: "utf8", timeout: 30_000 });
   const stopped = run("expire");
   expect(stopped.status, stopped.stdout + stopped.stderr).toBe(75);
-  expect(stopped.stderr).toContain("touched-tests: no verdict: head: test run exceeded");
-  expect(stopped.stderr).toContain("test run exceeded");
+  expect(stopped.stderr).toContain(`touched-tests: no verdict: head: test run ${mode === "expired" ? "exceeded" : "budget leaves too little time"}`);
   expect(Object.keys(f.samples())).toHaveLength(8);
   const resumed = run("continue");
   expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
@@ -207,7 +208,7 @@ console.log("retryable=" + publicationDeadlineOnly(lines.join("\\n") + "\\nowned
   for (const mode of ["single", "aggregate"]) {
     rmSync(marker, { force: true });
     const result = spawnSync(process.execPath, [driver], { cwd: f.repo,
-      env: { ...process.env, CLEANUP_CONTROL_MODE: mode }, encoding: "utf8", timeout: 30_000 });
+      env: { ...f.env, CLEANUP_CONTROL_MODE: mode }, encoding: "utf8", timeout: 30_000 });
     const output = result.stdout + result.stderr;
     expect(result.status, output).toBe(1);
     expect(output).toContain("<ownership error> owned runner: surviving owned processes:");
