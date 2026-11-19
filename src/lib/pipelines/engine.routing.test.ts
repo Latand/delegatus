@@ -27,10 +27,18 @@ test.each(["actionAt", "continuationRequestedAt"] as const)("close persists a pa
   savePipelines(records);
   let cancellations = 0;
   let unavailable = true;
-  h.ports.invalidateProviderContinuation = async () => {
+  const owners: unknown[] = [];
+  h.ports.invalidateProviderContinuation = async (conversationId, owner) => {
     cancellations++;
-    if (unavailable) throw new Error("runtime host is unavailable");
     expectPipelineLeaseAbsent();
+    const persisted = loadPipelines()[0]!;
+    expect(persisted.state).toBe("closed");
+    expect(persisted.closeReport?.pendingContinuations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ conversationId }),
+    ]));
+    expect(owner?.key).toBeTruthy();
+    owners.push(owner);
+    if (unavailable) throw new Error("runtime host is unavailable");
   };
   const request = { action: "close", clientRequestId: "close-provider-outage" } as const;
   const closed = await patchPipeline(pipeline.id, request, h.ports);
@@ -65,6 +73,7 @@ test.each(["actionAt", "continuationRequestedAt"] as const)("close persists a pa
     closeReport: { status: "settled", pendingContinuations: [] },
   });
   expect(cancellations).toBe(3);
+  expect(owners).toEqual([owners[0], owners[0], owners[0]]);
   await patchPipeline(pipeline.id, request, h.ports);
   await engineModule.drainStageActivations(h.ports);
   expect(cancellations).toBe(3);
