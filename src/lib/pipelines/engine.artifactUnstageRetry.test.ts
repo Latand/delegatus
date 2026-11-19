@@ -65,7 +65,7 @@ async function parkedPass() {
     const parked = current();
     expect(parked.state).toBe("needs_decision");
     expect(parked.cursor).toMatchObject({ stageId: "merge", state: "committing" });
-    expect(attempt().error).toMatch(/^unstaging controller pipeline artifacts:.*index\.lock/s);
+    expect(attempt().error).toMatch(/^unstaging controller pipeline artifacts:[\s\S]*index\.lock/);
     expect(attempt().report).toEqual(saved);
     expect(parked.delivery!.operation).toBeUndefined();
     return { ...box, current, attempt, saved, sha, lock, descriptor, release, cleanup, drive, pushes: () => pushes };
@@ -101,7 +101,7 @@ test("retry-stage settles a saved fifth pass through the index lock and controll
     expect(admitted.pipeline?.runs[0]!.attempts[4]!.state).toBe("committing");
     await box.drive();
     expect(current().state).toBe("needs_decision");
-    expect(attempt().error).toMatch(/^unstaging controller pipeline artifacts:.*index\.lock/s);
+    expect(attempt().error).toMatch(/^unstaging controller pipeline artifacts:[\s\S]*index\.lock/);
     expect(fs.statSync(box.lock).ino).toBe(fs.fstatSync(box.descriptor).ino);
     await checkPreserved();
     expect(await git(origin, "for-each-ref", "--format=%(refname)", target)).toBe("");
