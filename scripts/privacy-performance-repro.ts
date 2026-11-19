@@ -11,7 +11,6 @@ type Config = {
   inputHead: string;
   knownValuesFile: string;
   fingerprintFile: string;
-  ocrLanguages: string;
   samples: number;
   outputFile: string;
 };
@@ -33,7 +32,7 @@ function gitNulList(repository: string, args: string[]): string[] {
 
 function loadConfig(path: string): Config {
   const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<Config>;
-  for (const key of ["repository", "baseline", "candidate", "inputBase", "inputHead", "knownValuesFile", "fingerprintFile", "ocrLanguages", "outputFile"] as const) {
+  for (const key of ["repository", "baseline", "candidate", "inputBase", "inputHead", "knownValuesFile", "fingerprintFile", "outputFile"] as const) {
     if (typeof raw[key] !== "string" || raw[key]!.length === 0) fail(`config requires ${key}`);
   }
   if (!Number.isInteger(raw.samples) || raw.samples! < 1 || raw.samples! > 25) fail("samples must be an integer from 1 to 25");
@@ -61,7 +60,6 @@ async function runGate(checkout: string, inputRepository: string, args: string[]
     ...process.env as Record<string, string>,
     LLV_PRIVACY_KNOWN_VALUES_FILE: config.knownValuesFile,
     LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: config.fingerprintFile,
-    LLV_PRIVACY_OCR_LANGUAGES: config.ocrLanguages,
     LLV_PRIVACY_FINGERPRINT_CACHE_DIR: cache,
   };
   if (ci) env.CI = "true"; else delete env.CI;
