@@ -4,15 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// Set roots before importing the service: even a refused call must be isolated.
+// The gate supplies isolated process state. Keep this directory for fixture-only files.
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-sizes-"));
-for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
-  process.env[key] = path.join(sandbox, key);
-  fs.mkdirSync(process.env[key]!, { recursive: true });
-}
-process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
-process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "absent.sock");
-process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent-control.sock");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 const bindingModule = process.env.MCP_SIZE_BINDINGS ?? "./bindings";
