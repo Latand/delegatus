@@ -143,30 +143,30 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
     const base = path.join(procRoot, name);
     const namespace = readLink(path.join(base, "ns", "mnt"));
     if (!namespace) continue;
-    const paths: string[] = [];
+    const paths = new Set<string>();
     const cwd = readLink(path.join(base, "cwd"));
-    if (cwd) paths.push(cwd);
+    if (cwd) paths.add(cwd);
     try {
       for (const fd of fs.readdirSync(path.join(base, "fd"))) {
         const target = readLink(path.join(base, "fd", fd));
-        if (target?.startsWith("/")) paths.push(target);
+        if (target?.startsWith("/")) paths.add(target);
       }
     } catch {
       /* Exited mid-scan, or not ours. */
     }
     for (const link of ["exe", "root"]) {
       const target = readLink(path.join(base, link));
-      if (target?.startsWith("/") && target !== "/") paths.push(target);
+      if (target?.startsWith("/") && target !== "/") paths.add(target);
     }
     const references: string[] = [];
     try {
       for (const token of fs.readFileSync(path.join(base, "cmdline"), "utf8").split("\0")) {
         references.push(token);
-        if (token.startsWith("/")) paths.push(token);
+        if (token.startsWith("/")) paths.add(token);
       }
       for (const line of fs.readFileSync(path.join(base, "maps"), "utf8").split("\n")) {
         const target = /^\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\/.*)$/.exec(line)?.[1];
-        if (target) paths.push(target.replace(/ \(deleted\)$/, ""));
+        if (target) paths.add(target.replace(/ \(deleted\)$/, ""));
       }
     } catch { /* A process can exit during inspection. */ }
     let stamped = false;
@@ -177,12 +177,12 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
         references.push(pair.slice(equals + 1));
         const key = pair.slice(0, equals);
         if (key === STRUCTURED_HOST_STAMP_ENV) stamped = true;
-        else if ((IN_USE_ENV as readonly string[]).includes(key) && pair.length > equals + 1) paths.push(pair.slice(equals + 1));
+        else if ((IN_USE_ENV as readonly string[]).includes(key) && pair.length > equals + 1) paths.add(pair.slice(equals + 1));
       }
     } catch {
       /* Exited mid-scan, or not ours. */
     }
-    processes.push({ pid: Number(name), namespace, stamped, paths, references });
+    processes.push({ pid: Number(name), namespace, stamped, paths: [...paths], references });
   }
   return { ownNamespace: readLink(path.join(procRoot, "self", "ns", "mnt")), processes };
   });
@@ -265,7 +265,7 @@ export function writableRoots(roots: string[], check: (root: string) => void = (
 /** The roots one sweep visits: this process's temp dirs and scratch directory,
     and `/tmp` and `/var/tmp` of every other mount namespace a Delegatus agent
     runs in. */
-export function sweepRoots(scan: ProcessScan, ownRoots: string[], procRoot = "/proc"): TempSweepRoot[] {
+export function sweepRoots(scan: { ownNamespace: string | null; processes: Iterable<Pick<ScannedProcess, "pid" | "namespace" | "stamped">> }, ownRoots: string[], procRoot = "/proc"): TempSweepRoot[] {
   const roots: TempSweepRoot[] = ownRoots.map((root) => ({ path: root, via: "" }));
   const seen = new Set<string>();
   for (const process of scan.processes) {
@@ -278,6 +278,30 @@ export function sweepRoots(scan: ProcessScan, ownRoots: string[], procRoot = "/p
     }
   }
   return roots;
+}
+
+/** Discover mount anchors without enumerating open files or memory maps.
+ * The separate reference scan at retirement still inspects every process. */
+export function discoverSweepRoots(ownRoots: string[], procRoot = "/proc"): TempSweepRoot[] {
+  const ownNamespace = readLink(path.join(procRoot, "self", "ns", "mnt"));
+  function* mounts() {
+    let entries: string[];
+    try { entries = fs.readdirSync(procRoot); }
+    catch { return; } // Without proc there are no foreign namespace anchors.
+    for (const name of entries) {
+      if (!/^\d+$/.test(name)) continue;
+      const base = path.join(procRoot, name);
+      const namespace = readLink(path.join(base, "ns", "mnt"));
+      if (!namespace || namespace === ownNamespace) continue;
+      try {
+        const env = fs.readFileSync(path.join(base, "environ"), "utf8");
+        if (env.split("\0").some(field => field.startsWith(STRUCTURED_HOST_STAMP_ENV + "="))) {
+          yield { pid: Number(name), namespace, stamped: true };
+        }
+      } catch { /* The process exited or its environment is inaccessible. */ }
+    }
+  }
+  return sweepRoots({ ownNamespace, processes: mounts() }, ownRoots, procRoot);
 }
 
 function inside(candidate: string, directory: string): boolean {
@@ -679,7 +703,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const readScan = () => options.currentScan?.() ?? options.scan ?? scanProcesses(procRoot);
   const scan = readScan();
   const roots = options.roots ?? sweepRoots(scan, ownTempRoots(), procRoot);
-  const inUse = scan.processes.flatMap((process) => process.paths.map((entry) => path.resolve(entry)));
+  const inUse = [...new Set(scan.processes.flatMap(process => process.paths.map(entry => path.resolve(entry))))];
   const readWorktrees = () => (options.currentWorktrees?.() ?? options.worktrees ?? []).map(entry => path.resolve(entry));
   const worktrees = readWorktrees();
   const accounted = (options.accountedWorktrees ?? []).map(entry => path.resolve(entry));
@@ -1007,7 +1031,7 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
     return null;
   }
   const scratch = realDirectory(statePath("scratch"));
-  const candidates = ports.roots ?? sweepRoots(scanProcesses(), [...ownTempRoots(env), ...(scratch ? [scratch] : [])]);
+  const candidates = ports.roots ?? discoverSweepRoots([...ownTempRoots(env), ...(scratch ? [scratch] : [])]);
   const writable = new Set(writableRoots(candidates.filter(root => !root.via).map(root => root.path)));
   const view = await openHostTempRoots(candidates, env);
   const roots = view.roots.filter(root => root.via || writable.has(root.path));
