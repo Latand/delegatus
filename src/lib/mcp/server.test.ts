@@ -56,6 +56,15 @@ function rewriteReceiptFileAsV1(receiptPath: string): void {
 const MILESTONE_TIMEOUT_MS = 60_000;
 const SLOW_ACTION_LINE = /^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=conversation_action(?: [a-zA-Z]+Ms=\d+)+$/;
 
+// Each race starts twenty independent Bun processes. Bound their per-process
+// GC and JIT pools so a larger pool inherited from the launcher cannot exhaust
+// the owning runner's task limit before the contenders reach the barrier.
+const receiptRaceRuntime = {
+  BUN_JSC_numberOfGCMarkers: "1",
+  BUN_JSC_numberOfDFGCompilerThreads: "1",
+  BUN_JSC_numberOfFTLCompilerThreads: "1",
+};
+
 async function waitForAnyFile(filenames: string[], child?: { exited: Promise<number> }, timeoutMs = MILESTONE_TIMEOUT_MS): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
   let exited = false;
@@ -201,7 +210,7 @@ describe("MCP tool service", () => {
         String(index),
       ],
       cwd: import.meta.dir,
-      env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state", String(index)) },
+      env: { ...process.env, ...receiptRaceRuntime, LLV_STATE_DIR: path.join(directory, "state", String(index)) },
       stdout: "pipe",
       stderr: "pipe",
     })));
@@ -319,7 +328,7 @@ describe("MCP tool service", () => {
           path.join(directory, `${schema.name}-result-${index}.json`), String(index), key,
         ],
         cwd: import.meta.dir,
-        env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state", schema.name, String(index)) },
+        env: { ...process.env, ...receiptRaceRuntime, LLV_STATE_DIR: path.join(directory, "state", schema.name, String(index)) },
         stdout: "pipe",
         stderr: "pipe",
       })));
