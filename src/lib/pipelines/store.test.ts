@@ -103,7 +103,7 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
 test("a batch landing fence finds active PR owners and holds new claims until its receipt", async () => isolatedDelivery(async () => {
   const target = { ...deliveryTarget, remote: "https://github.com/acme/widgets.git", prRepository: "acme/widgets" };
   const owner = await createPipelineWithDelivery(deliveryFixture("batch-owner"), target);
-  const findOwner = () => withDeliveryAdmissionFence(mutate => mutate(tx =>
+  const findOwner = () => withDeliveryAdmissionFence(async mutate => mutate(tx =>
     tx.activeDeliveryOwnerForPullRequest(637, pipeline =>
       deliveryPullRequestRepository(pipeline.delivery?.target) === "acme/widgets")));
   expect(await findOwner()).toMatchObject({ id: owner.id, delivery: { active: true, disposition: "owner" } });
