@@ -33,8 +33,8 @@ function retainedLivenessFixture(count = 12) {
 }
 const sha = (file: string) => fs.existsSync(file) ? crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") : null;
 const fields = (rows: readonly { conversationId: string | null; host: { state: string; kind: string; pid: number | null };
-  turnState: string; pipeline: { pipelineId: string; stageId: string; attempt: number } | null }[]) => rows.filter(row => row.host.state === "alive")
-  .map(row => [row.conversationId, row.host.state, row.host.kind, row.host.pid, row.turnState, row.pipeline && [row.pipeline.pipelineId, row.pipeline.stageId, row.pipeline.attempt]])
+  turnState: string; lifecycle: string; pipeline: { pipelineId: string; stageId: string; attempt: number } | null }[]) => rows.filter(row => row.host.state === "alive")
+  .map(row => [row.conversationId, row.host.state, row.host.kind, row.host.pid, row.turnState, row.lifecycle, row.pipeline && [row.pipeline.pipelineId, row.pipeline.stageId, row.pipeline.attempt]])
   .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 
 function fixture() {

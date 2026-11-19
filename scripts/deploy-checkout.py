@@ -71,7 +71,7 @@ def protected_host_census(release, bun, state, target, timeout):
     child = subprocess.Popen([bun, "--no-env-file", str(release / "scripts/protected-host-census.ts"), target,
                               str(max(0, int(timeout * 1000)))], cwd=release,
                              env=census_environment(state), stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     data = bytearray()
     try:
         while True:
@@ -114,6 +114,7 @@ def protected_host_census(release, bun, state, target, timeout):
                     or host.get("kind") not in ["structured", "tmux", "headless", "none"]
                     or (host.get("state") == "alive" and (type(host.get("pid")) is not int or host["pid"] <= 0))
                     or row.get("turnState") not in ["busy", "idle", "unknown"]
+                    or row.get("lifecycle") not in ["starting", "running", "waiting", "stalled", "completed", "failed", "blocked", "gone"]
                     or row.get("evidenceSource") not in ["transcript", "projection", "unreadable"]
                     or (row.get("conversationId") is not None and not isinstance(row["conversationId"], str))
                     or (pipeline is not None and (not isinstance(pipeline, dict)
@@ -128,11 +129,14 @@ def protected_host_census(release, bun, state, target, timeout):
                 raise RuntimeError("census row malformed")
         return answer
     finally:
-        # Kill the process group even when the leader exited with a pipe held by
-        # a descendant. Only this child's newly-created session is owned here.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(child.pid, signal.SIGKILL)
-        child.wait()
+        # This child inherits the evidence worker's process group, so the
+        # sampler can stop it with its owner at the phase cleanup boundary.
+        if child.poll() is None:
+            child.kill()
+        try:
+            child.wait(timeout=1)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("census cleanup unconfirmed") from error
         child.stdout.close()
 
 
@@ -244,19 +248,38 @@ def observe_switch(adapter, target, samples, interval, timeout):
     finally:
         # A restart that raised after stopping still recorded what it did.
         relocation = relocation or getattr(adapter, "relocation", None)
+        last_owner_start = None
         for index in range(samples):
             if index:
                 adapter.clock.sleep(interval)
             # Only the lock owner can recover a start. Recovery has its own
             # job-settlement bounds and is outside the read-only sample.
-            if relocation and relocation["stopSubmitted"] and (
-                    index == 0 or not relocation["started"] or serving.get("checks", {}).get("service") is not True):
+            recovered_during_sample = False
+            def owner_check():
+                nonlocal recovered_during_sample, last_owner_start
+                if not relocation or not relocation["stopSubmitted"]:
+                    return False
+                now = adapter.clock.now()
+                if (relocation.get("started") is not True and last_owner_start is not None
+                        and now - last_owner_start < 5):
+                    return False
+                attempts = relocation.get("startAttempts", 0)
                 try:
-                    adapter.recover_start()
+                    adapter.recover_start(settle_timeout=0.5)
                 except Exception as error:
                     diagnostics.append("sample-recovery:" + type(error).__name__)
+                changed = relocation.get("startAttempts", 0) != attempts
+                if changed:
+                    last_owner_start = adapter.clock.now()
+                recovered = changed and relocation.get("started") is True
+                recovered_during_sample |= recovered
+                return recovered
+            owner_check()
             sample_started = adapter.clock.now()
-            sample = adapter.sample(old, hosts, target, started if index == samples - 1 else None, index, timeout)
+            sample = adapter.sample(old, hosts, target, started if index == samples - 1 else None, index, timeout,
+                                    owner_check=owner_check)
+            if recovered_during_sample and not ready(sample.serving, target):
+                sample.incomplete = True
             serving, protected = sample.serving, sample.protected
             interrupted, unreadable = sample.interrupted, sample.unreadable
             for note in sample.diagnostics:
@@ -270,7 +293,7 @@ def observe_switch(adapter, target, samples, interval, timeout):
                 diagnostics.append("sample-log:" + type(error).__name__)
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
-    unknown = ("unknown" in outcomes or interrupted is None or bool(unreadable)
+    unknown = ("unknown" in outcomes or interrupted is None or bool(unreadable) or sample.incomplete
                or any("worker-cleanup-pending" in note for note in diagnostics))
     relocation_ready = (relocation is not None and relocation.get("released") is True
                         and relocation.get("placement") == "placed" and relocation.get("started") is True)
@@ -278,6 +301,8 @@ def observe_switch(adapter, target, samples, interval, timeout):
     result = {"verdict": verdict, "target": target, "serving": serving,
               "protected": protected, "interrupted": interrupted,
               "interruptedUnreadable": unreadable, "relocation": relocation, "diagnostics": diagnostics}
+    if locals().get("recovered_during_sample"):
+        result["recovery"] = {"state": "complete", "ownerPid": os.getpid(), "unit": adapter.unit}
     adapter.last_result = result
     return result
 
@@ -290,6 +315,7 @@ class EvidenceSample:
                            "outcome": "unknown", "reason": "not-observed"} for host in hosts]
         self.interrupted, self.unreadable = None, ["interrupted:not-observed"]
         self.diagnostics = []
+        self.incomplete = False
 
     def accept(self, frame):
         kind, value = frame
@@ -316,6 +342,7 @@ class EvidenceSample:
     def unavailable(self, lane, reason):
         kind, inputs = lane
         self.accept(("diagnostic", kind + ":" + reason))
+        self.incomplete = True
         if kind == "protected":
             for index, _ in inputs:
                 row = self.protected[index]
@@ -389,12 +416,13 @@ def evidence_frames(adapter, kind, inputs, deadline):
             clock.sleep(max(0, min(1, deadline - clock.now())))
 
 
-def run_evidence_workers(adapter, lanes, sample, cutoff):
+def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
     # Leave part of this phase's allowance for bounded teardown. Fork returns
     # before exec, so a slow interpreter startup cannot stall the sampler.
     limit = cutoff - min(1, max(0, cutoff - time.monotonic()) / 10)
     children = []
     completed = set()
+    eof_pending = {}
     with selectors.DefaultSelector() as incoming:
         try:
             for lane in lanes:
@@ -437,32 +465,27 @@ def run_evidence_workers(adapter, lanes, sample, cutoff):
                         incoming.register(read_fd, selectors.EVENT_READ, (child_pid, lane, bytearray()))
                 except OSError as error:
                     sample.unavailable(lane, "worker-start:" + type(error).__name__)
-            while incoming.get_map() and time.monotonic() < limit:
-                for key, _ in incoming.select(max(0, limit - time.monotonic())):
+            next_owner_check = time.monotonic()
+            while (incoming.get_map() or eof_pending) and time.monotonic() < limit:
+                if owner_check and time.monotonic() >= next_owner_check:
+                    try:
+                        owner_check()
+                    except Exception as error:
+                        sample.unavailable(("owner", []), "owner-recovery:" + type(error).__name__)
+                    next_owner_check = time.monotonic() + 1
+                wait = max(0, limit - time.monotonic())
+                if owner_check:
+                    wait = min(wait, max(0, next_owner_check - time.monotonic()))
+                if eof_pending:
+                    wait = min(wait, 0.02)
+                for key, _ in incoming.select(wait):
                     if time.monotonic() >= limit:
                         break
                     child_pid, lane, buffer = key.data
                     chunk = os.read(key.fd, 65536)
                     if not chunk:
                         incoming.unregister(key.fileobj)
-                        if buffer or child_pid not in completed:
-                            waited, status = 0, 0
-                            while not waited and time.monotonic() < cutoff:
-                                try:
-                                    waited, status = os.waitpid(child_pid, os.WNOHANG)
-                                except ChildProcessError:
-                                    waited, status = child_pid, 0
-                                if not waited:
-                                    time.sleep(min(0.01, max(0, cutoff - time.monotonic())))
-                            if not waited:
-                                cause = "worker-exit-unconfirmed"
-                            elif os.WIFEXITED(status):
-                                cause = "worker-exit:" + str(os.WEXITSTATUS(status))
-                            elif os.WIFSIGNALED(status):
-                                cause = "worker-signal:" + signal.Signals(os.WTERMSIG(status)).name
-                            else:
-                                cause = "worker-output-incomplete"
-                            sample.unavailable(lane, cause if not buffer else "worker-output-incomplete:" + cause)
+                        eof_pending[child_pid] = (lane, buffer)
                         continue
                     buffer.extend(chunk)
                     try:
@@ -484,9 +507,29 @@ def run_evidence_workers(adapter, lanes, sample, cutoff):
                     except (ValueError, KeyError, IndexError, TypeError):
                         sample.unavailable(lane, "worker-output-invalid")
                         incoming.unregister(key.fileobj)
+                for child_pid, (lane, buffer) in tuple(eof_pending.items()):
+                    try:
+                        status = os.waitid(os.P_PID, child_pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                    except ChildProcessError:
+                        status = True
+                    if status is None:
+                        continue
+                    eof_pending.pop(child_pid)
+                    exit_code = status.si_status if status is not True and status.si_code == os.CLD_EXITED else None
+                    exit_signal = status.si_status if status is not True and status.si_code in [os.CLD_KILLED, os.CLD_DUMPED] else None
+                    if buffer or child_pid not in completed or exit_code != 0:
+                        if exit_code is not None:
+                            cause = "worker-exit:" + str(exit_code)
+                        elif exit_signal is not None:
+                            cause = "worker-signal:" + signal.Signals(exit_signal).name
+                        else:
+                            cause = "worker-output-incomplete"
+                        sample.unavailable(lane, cause if not buffer else "worker-output-incomplete:" + cause)
             for key in incoming.get_map().values():
                 _, lane, _ = key.data
                 sample.unavailable(lane, "sample-deadline")
+            for lane, _ in eof_pending.values():
+                sample.unavailable(lane, "worker-exit-unconfirmed")
         finally:
             # Signal before reaping the leader, while its process-group id is
             # still reserved. This also stops MCP or command descendants that
@@ -514,9 +557,14 @@ def run_evidence_workers(adapter, lanes, sample, cutoff):
                     sample.unavailable(lane, "worker-cleanup-pending")
 
 
-def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collect=run_evidence_workers):
+def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collect=run_evidence_workers, owner_check=None):
     deadline = adapter.clock.now() + timeout
     sample = EvidenceSample(hosts)
+    recovered = False
+    def check_owner():
+        nonlocal recovered
+        if owner_check and owner_check():
+            recovered = True
     if hosts:
         # Reserve a serving read after stage reconciliation. A slow stage
         # cannot use that time, and an early finish leaves it for serving.
@@ -525,13 +573,18 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
         numbered = numbered[offset:] + numbered[:offset]
         lanes = [("protected", numbered[i::PROTECTED_READERS])
                  for i in range(min(len(hosts), PROTECTED_READERS))]
-        collect(adapter, lanes, sample, deadline - timeout / 3)
+        collect(adapter, lanes, sample, deadline - timeout / 3, owner_check=check_owner)
+        check_owner()
     # Read the cut inventory after the final serving observation. Boot can
     # still record cuts while the serving checks are waiting for readiness.
     inventory_reserve = min(5, timeout / 10) if since else 0
-    collect(adapter, [("serving", [old, target])], sample, deadline - inventory_reserve)
+    collect(adapter, [("serving", [old, target])], sample, deadline - inventory_reserve, owner_check=check_owner)
+    check_owner()
     if since:
-        collect(adapter, [("interrupted", [since, hosts])], sample, deadline)
+        collect(adapter, [("interrupted", [since, hosts])], sample, deadline, owner_check=check_owner)
+        check_owner()
+    if recovered:
+        collect(adapter, [("serving", [old, target])], sample, deadline, owner_check=check_owner)
     return sample
 
 
@@ -971,8 +1024,7 @@ def stage_outcome(host, attempts, activity):
         result["outcome"] = "lost" if lost else "completed"
     elif (current["state"] in ["running", "reviewing", "committing"]
           and activity.get("host", {}).get("state") == "alive"
-          and (activity.get("lifecycle") in ["running", "waiting", "blocked"]
-               or activity.get("turnState") == "busy")):
+          and activity.get("lifecycle") in ["running", "waiting", "blocked"]):
         result["outcome"] = "fresh attempt started" if current["n"] > host["attempt"] else "recovered"
     return result
 
@@ -992,6 +1044,9 @@ def complete_census(answer):
             or any(selection.get(key, 0) for key in ["projected", "unreadable"])
             or any(row.get("evidenceSource") != "transcript" for row in answer.get("conversations", []))):
         raise RuntimeError("protected activity capture incomplete")
+    if any(row.get("lifecycle") not in ["starting", "running", "waiting", "stalled", "completed", "failed", "blocked", "gone"]
+           for row in answer.get("conversations", [])):
+        raise RuntimeError("protected lifecycle evidence incomplete")
     return answer["conversations"]
 
 
@@ -1002,8 +1057,8 @@ def detached_command(script, config, state, run_id):
             sys.executable, script, "--approved", "--config", config, "--worker", run_id]
 
 
-def command(args, cwd=None):
-    result = subprocess.run(args, cwd=cwd, capture_output=True, timeout=10, text=True)
+def command(args, cwd=None, timeout=10):
+    result = subprocess.run(args, cwd=cwd, capture_output=True, timeout=timeout, text=True)
     if result.returncode:
         # Subprocess output and arguments can contain paths or credentials.
         raise RuntimeError("command refused")
@@ -1062,6 +1117,9 @@ class Mcp:
             if not isinstance(answer.get("tools"), list) or not any(
                     isinstance(tool, dict) and tool.get("name") == "get_pipeline" for tool in answer["tools"]):
                 raise RuntimeError("MCP tool registry unavailable")
+            live = self.call("list_pipelines", {"limit": 1})
+            if not isinstance(live.get("pipelines"), list):
+                raise RuntimeError("MCP live read unavailable")
             return True
         except Exception:
             self.close()
@@ -1096,7 +1154,7 @@ class Mcp:
             self.connect()
             # get_pipeline is an optional-key pure read. Omitting the key keeps
             # each sample fresh without creating a durable or bounded receipt.
-            arguments = (dict(args) if tool == "get_pipeline" else
+            arguments = (dict(args) if tool in ["get_pipeline", "list_pipelines"] else
                          {**args, "clientRequestId": "deploy-checkout-" + uuid.uuid4().hex})
             result = self.exchange("tools/call", {"name": tool, "arguments": arguments}).get("structuredContent", {})
             if result.get("ok") is not True:
@@ -1945,7 +2003,7 @@ class Checkout:
                 self.clock.sleep(min(0.2, deadline - self.clock.now()))
         return signalled
 
-    def start(self, relocation, attempts=START_ATTEMPTS):
+    def start(self, relocation, attempts=START_ATTEMPTS, settle_timeout=STOP_SETTLE):
         """Starts the unit, retrying a refused or failed start. Whatever the
         relocation found, this always runs once a stop was submitted."""
         for attempt in range(attempts):
@@ -1953,11 +2011,15 @@ class Checkout:
                 self.clock.sleep(5)
             try:
                 relocation["startAttempts"] += 1
-                self.command(["systemctl", "--user", "--no-block", "start", self.unit])
+                start_command = ["systemctl", "--user", "--no-block", "start", self.unit]
+                if self.command is command:
+                    self.command(start_command, timeout=0.5)
+                else:
+                    self.command(start_command)
                 def settled():
                     if self.jobs():
                         raise RuntimeError("named start pending")
-                retry(settled, self.clock, STOP_SETTLE)
+                retry(settled, self.clock, settle_timeout)
                 state = self.active_state()
                 if state == "active":
                     relocation["started"] = True
@@ -1970,7 +2032,7 @@ class Checkout:
         relocation["started"] = False
         relocation["outcome"] = "start-failed"
 
-    def recover_start(self, attempts=1):
+    def recover_start(self, attempts=1, settle_timeout=STOP_SETTLE):
         relocation = self.relocation
         try:
             if not self.jobs() and self.active_state() == "active":
@@ -1979,7 +2041,7 @@ class Checkout:
                 return
         except Exception:
             pass
-        self.start(relocation, attempts)
+        self.start(relocation, attempts, settle_timeout)
         with contextlib.suppress(Exception):
             observed = self.placement()
             relocation["placement"] = "placed" if observed["actual"] == observed["expected"] else "failed"
