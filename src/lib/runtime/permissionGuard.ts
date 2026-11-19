@@ -181,7 +181,7 @@ export class PermissionRequestGuard {
     if (host.agentAttentionRequest && !request) return;
     if (this.wasSettled(key, request)) return;
     const active = this.timers.get(key);
-    if (active?.request === request) return;
+    if (active && active.request === request) return;
     if (active) {
       this.clearTimer(active.timer);
       this.timers.delete(key);
