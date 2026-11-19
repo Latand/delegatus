@@ -185,7 +185,8 @@ function withGitFault<T>(root: string, command: string, run: () => Promise<T>) {
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
   const originalPath = process.env.PATH!;
-  const actual = Bun.which("git")!;
+  // The stage Git wrapper delegates through PATH and would reenter this stub.
+  const actual = Bun.which("git", { PATH: "/usr/bin:/bin:" + originalPath })!;
   fs.writeFileSync(path.join(bin, "git"), `#!/bin/sh
 if [ "$1" = cat-file ]; then
   ${command}
