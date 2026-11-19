@@ -229,6 +229,25 @@ export async function pipelineRecoveryWindow(after: { row_order: number; row_key
 export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
   return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
 }
+export async function pipelineControlOwnership(key: string) {
+  return waitForStateLock("pipelines.control-ownership", () => stateLockAttempt("pipelines.control-ownership", () =>
+    pipelineStore().pipelineControlOwnership(key)));
+}
+
+export async function claimPipelineControlOwnership(key: string, binding: string, ownerKey?: string, replaces?: string, settledKey?: string) {
+  return (await waitForStateLock("pipelines.control-ownership", pipelineStore))
+    .claimPipelineControlOwnership(key, binding, ownerKey, replaces, settledKey);
+}
+
+export async function consumePipelineControlOwnership(key: string, binding: string) {
+  return (await waitForStateLock("pipelines.control-ownership", pipelineStore)).consumePipelineControlOwnership(key, binding);
+}
+
+export async function settlePipelineControlOwnership(key: string, binding: string, markerKey: string, marker: string) {
+  return (await waitForStateLock("pipelines.control-ownership", pipelineStore))
+    .settlePipelineControlOwnership(key, binding, markerKey, marker);
+}
+
 export async function recordPipelineControllerSelection(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork, now: number) {
   return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).recordPipelineTickSelection(work, now);
 }

@@ -647,6 +647,10 @@ const stateSchema = [
     END`,
   `CREATE INDEX IF NOT EXISTS pipeline_integration_format
     ON state_rows(collection,row_key) WHERE ${PIPELINE_INTEGRATION_FORMAT}`,
+  `CREATE TABLE IF NOT EXISTS pipeline_control_ownership (
+    control_key TEXT PRIMARY KEY,
+    binding_json TEXT NOT NULL CHECK(json_valid(binding_json))
+  )`,
   `CREATE TABLE IF NOT EXISTS pipeline_request_receipts (
     collection TEXT NOT NULL,
     row_key TEXT NOT NULL,
@@ -2404,6 +2408,46 @@ export class SqliteStateCollection<T> {
     return Boolean(sharedStateReadonlyDatabase(this.filename).query(`SELECT 1 FROM pipeline_tick_work
       WHERE (dirty=1 OR due_at<=?) AND row_key NOT IN (SELECT value FROM json_each(?)) LIMIT 1`)
       .get(now, JSON.stringify(excluded)));
+  }
+
+  pipelineControlOwnership(key: string): string | null {
+    return sharedStateReadonlyDatabase(this.filename).query<{ binding_json: string }, [string]>(
+      "SELECT binding_json FROM pipeline_control_ownership WHERE control_key=?",
+    ).get(key)?.binding_json ?? null;
+  }
+
+  async claimPipelineControlOwnership(key: string, binding: string, ownerKey = key, replaces?: string,
+    settledKey?: string): Promise<{ acquired: boolean; binding: string }> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db => {
+      const read = db.query<{ binding_json: string }, [string]>(
+        "SELECT binding_json FROM pipeline_control_ownership WHERE control_key=?",
+      );
+      const previous = read.get(key);
+      if (previous && (previous.binding_json !== replaces || settledKey && read.get(settledKey))) {
+        return { acquired: false, binding: previous.binding_json };
+      }
+      const insert = db.query("INSERT OR IGNORE INTO pipeline_control_ownership VALUES(?,?)");
+      const { changes } = insert.run(ownerKey, binding);
+      const owner = read.get(ownerKey);
+      if (!owner) throw new Error("pipeline control ownership was not recorded");
+      if (previous) db.query("UPDATE pipeline_control_ownership SET binding_json=? WHERE control_key=?").run(owner.binding_json, key);
+      else if (ownerKey !== key) insert.run(key, owner.binding_json);
+      return { acquired: changes === 1, binding: owner.binding_json };
+    });
+  }
+
+  async consumePipelineControlOwnership(key: string, binding: string): Promise<boolean> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db =>
+      db.query("DELETE FROM pipeline_control_ownership WHERE control_key=? AND binding_json=?").run(key, binding).changes === 1);
+  }
+
+  async settlePipelineControlOwnership(key: string, binding: string, markerKey: string, marker: string): Promise<boolean> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db => {
+      const owned = db.query("SELECT 1 FROM pipeline_control_ownership WHERE control_key=? AND binding_json=?").get(key, binding);
+      if (!owned) return false;
+      db.query("INSERT OR IGNORE INTO pipeline_control_ownership VALUES(?,?)").run(markerKey, marker);
+      return true;
+    });
   }
 
   async recordPipelineTickSelection(work: PipelineTickWork, now: number): Promise<void> {
