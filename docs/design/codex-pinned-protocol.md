@@ -1,7 +1,7 @@
 # Pinned Codex app-server boundary
 
 Delegatus pins the generated app-server schemas for Codex 0.154.0, 0.159.0,
-0.162.1, 0.163.0, 0.164.0, 0.165.0, 0.166.0, 0.167.0, 0.168.0 and 0.169.0.
+0.162.1, 0.163.0, 0.164.0, 0.165.0, 0.166.0, 0.167.0, 0.168.0, 0.169.0 and 0.170.0.
 Each version has the CLI's stable and experimental bundles and their SHA-256 digests under `src/lib/accounts/protocol/`. Each
 schema is read and checked against its digest when a protocol check first
 needs it, then cached for the process. Production server bundles retain the
@@ -29,17 +29,16 @@ contract.
 Installed CLI pin: `0.166.0`.
 
 The installed pin was verified with `codex --version` on 2026-11-14 (UTC).
-The supported CLI window is the latest three reviewed pins: **0.167.0,
-0.168.0 and 0.169.0**, with a minimum tested version of **0.167.0**.
+The supported CLI window is the latest three reviewed pins: **0.168.0,
+0.169.0 and 0.170.0**, with a minimum tested version of **0.168.0**.
 `src/lib/accounts/codexVersions.ts` selects them numerically from the retained
 protocol manifests. Adding a reviewed pin automatically rotates the oldest
 version out of the window. Historical schemas remain available for exact-version
-admission. The tested window is not a launch floor: `resolveCodexProtocol` admits every retained exact
-pin before considering fallback. Regression tests put **0.165.0 and 0.166.0**
-outside the new window and prove that both retain their own schema and skip
-generation. Structured-host tests take both, plus 0.167.0, through `thread/start`
-and `turn/start` with their original protocol receipts. The installed 0.166.0
-therefore keeps launching, and the window stays at three versions.
+admission. `resolveCodexProtocol` admits every retained exact pin before
+considering fallback. Regression tests prove that **0.165.0, 0.166.0 and
+0.167.0** retain their own schemas and skip generation. Structured-host tests
+take all three through `thread/start` and `turn/start` with their original
+protocol receipts.
 
 The `codex-versions` job in `.github/workflows/bun-runtime.yml` resolves that
 window for the native runtime job and manual queue campaign. PRs (including
@@ -201,7 +200,28 @@ No existing method was removed. All 80 generated server-request type files
 still match 0.167.0 byte for byte. The router retains that closure, and decoding
 and answers keep their offered-decision constraints. No new Codex feature is
 enabled. The native CI matrix, local pre-push native phase and supported-version
-message all resolve 0.167.0–0.169.0 from the same manifest inventory.
+message resolved 0.167.0–0.169.0 when this pin landed.
+
+## 0.170.0 compatibility review
+
+Both schema bundles were generated from the native executable in
+`@openai/codex@0.170.0` and retained verbatim with SHA-256 digests.
+Before adding the exact pin, production preflight refused the real 0.170.0
+binary during fallback to 0.169.0. In both bundles, the object with a required
+`action` in `v2.AgentMessageDisplay` becomes a versioned union with
+`show`, `hide` and `block` modes. This affects moderation metadata nested
+in assistant items. The compatibility check reports `properties: removed`,
+`action: became optional` and `type changed`. The schema tests exercise the
+legacy and current forms in `item/completed` payloads.
+
+The experimental bundle adds optional, nullable `biometricType` to
+`UserVerificationVerifyResponse` and expands the documentation for
+`thread/guardianReview`. The request and notification method sets and all 80
+generated server-request type files are unchanged. The runtime keeps the same
+router and treats moderation metadata as part of the item payload. Exact
+admission selects the new schema without changing fallback rules. The native CI
+matrix, local pre-push native phase and supported-version message resolve
+0.168.0–0.170.0 from the manifest inventory.
 
 ## Requested CLI checks
 
