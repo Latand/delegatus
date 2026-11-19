@@ -448,27 +448,39 @@ import Foundation
         }
         try fm.copyItem(at: URL(fileURLWithPath: Installations.realPath(URL(fileURLWithPath: source))), to: bun)
         let fixtureExecutable = Installations.realPath(bun)
+        let install = Installation(bun: bun, cli: cli)
         func stopDetachedViewer(_ receipt: URL) throws {
             guard let text = try? String(contentsOf: receipt, encoding: .utf8), let pid = Int32(text), pid > 1 else {
                 throw LauncherError.message("detached fixture cleanup: missing or invalid PID receipt")
             }
-            if kill(pid, 0) != 0 && errno == ESRCH { return }
-            guard getpgid(pid) == pid, Server.executablePath(Int(pid)) == fixtureExecutable else {
+            guard let generation = Server.listenerIdentity(Int(pid), install: install, package: root) else {
+                if kill(pid, 0) != 0 && errno == ESRCH { return }
+                throw LauncherError.message("detached fixture cleanup: PID receipt has no readable process generation")
+            }
+            func generationIsAlive() -> Bool {
+                guard let current = Server.listenerIdentity(Int(pid), install: install, package: root) else { return false }
+                return current.birth == generation.birth && getpgid(pid) == pid
+                    && Server.executablePath(Int(pid)) == fixtureExecutable
+            }
+            guard generationIsAlive() else {
                 throw LauncherError.message("detached fixture cleanup: PID receipt does not identify the owned Bun generation")
             }
-            if kill(pid, SIGTERM) != 0 && errno != ESRCH {
+            guard generationIsAlive() else { return }
+            if kill(pid, SIGTERM) != 0 && errno != ESRCH && generationIsAlive() {
                 throw LauncherError.message("detached fixture cleanup: SIGTERM failed (errno \(errno))")
             }
             let deadline = DispatchTime.now() + 2
-            while kill(pid, 0) == 0 && DispatchTime.now() < deadline { Thread.sleep(forTimeInterval: 0.01) }
-            if kill(pid, 0) == 0 {
+            while generationIsAlive() && DispatchTime.now() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            if generationIsAlive() {
+                guard generationIsAlive() else { return }
                 guard kill(pid, SIGKILL) == 0 || errno == ESRCH else {
-                    throw LauncherError.message("detached fixture cleanup: SIGKILL failed (errno \(errno))")
+                    if generationIsAlive() { throw LauncherError.message("detached fixture cleanup: SIGKILL failed (errno \(errno))") }
+                    return
                 }
                 let killDeadline = DispatchTime.now() + 2
-                while kill(pid, 0) == 0 && DispatchTime.now() < killDeadline { Thread.sleep(forTimeInterval: 0.01) }
+                while generationIsAlive() && DispatchTime.now() < killDeadline { Thread.sleep(forTimeInterval: 0.01) }
             }
-            guard kill(pid, 0) != 0 || errno == ESRCH else {
+            guard !generationIsAlive() else {
                 throw LauncherError.message("detached fixture cleanup: process \(pid) survived SIGKILL")
             }
         }
@@ -539,7 +551,6 @@ import Foundation
         catch { try stopDetachedViewer(viewerPIDFile); throw error }
         let pid = handshake.pid, port = handshake.port
         fputs("Swift relaunch: verify the live CLI and retain its Viewer\n", stderr)
-        let install = Installation(bun: bun, cli: cli)
         try check(Server.ownsLauncher(Int(launcher.processIdentifier), parent: Int(getpid()), install: install), "retention recognises the CLI actually launched by this native process")
         try check(!Server.ownsLauncher(Int(launcher.processIdentifier), parent: Int(launcher.processIdentifier), install: install), "a CLI with a different kernel parent grants no retention authority")
         let first = await Server.listener(environment: env, install: install, port: port, launcher: Int(launcher.processIdentifier))
