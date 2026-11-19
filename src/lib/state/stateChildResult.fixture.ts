@@ -67,7 +67,7 @@ const transactionTiming = z.strictObject({ collection: z.string().min(1).max(80)
 /** Successful state admission may log after 50 ms, even without contention.
  * Allow successful state/registry [blocking-wait] records and complete [mcp slow]
  * timing lines. Keep every other diagnostic and unsuccessful exit visible to callers. */
-export function assertStateChildSuccess(code: number | null, stderr: string): void {
+export function assertStateChildSuccess(code: number | null, stderr: string, options: { correlatedOperationId?: string } = {}): void {
   const completed = new Set<string>();
   // Walk backwards so an in-flight record needs a later successful completion.
   const lines = stderr === "" ? [] : stderr.replace(/\r?\n$/, "").split(/\r?\n/);
@@ -91,7 +91,11 @@ export function assertStateChildSuccess(code: number | null, stderr: string): vo
       const parsed = successfulWait.safeParse(value);
       if (!parsed.success) return true;
       const sample = parsed.data;
-      const key = JSON.stringify([sample.stateWait.pid, sample.stateWait.callSite, sample.subject, sample.operationId]);
+      // A retry can report a different blocked call site. A fixture with one
+      // async wait per subject can explicitly give that operation a stable ID.
+      const site = !sample.synchronous && sample.operationId !== null && sample.operationId === options.correlatedOperationId
+        ? ["operation", sample.label] : ["callSite", sample.stateWait.callSite];
+      const key = JSON.stringify([sample.stateWait.pid, site, sample.subject, sample.operationId]);
       if (sample.stateWait.outcome === "success") { completed.add(key); return false; }
       return !(sample.stateWait.outcome === "waiting" && !sample.synchronous && completed.has(key));
     } catch { return true; }
