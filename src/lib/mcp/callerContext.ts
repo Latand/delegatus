@@ -24,6 +24,9 @@ export interface McpHttpCaller {
   nativePeer?: import("@/lib/processIdentity").ProcessIdentity;
   /** Connection identity for authenticated compatibility adapters without agent identity. */
   paginationIdentity?: string;
+  /** Server-assigned outer HTTP observation, carried over the private executor pipe. */
+  outerRequestId?: string;
+  authenticatedConversationId?: string;
 }
 
 const STORE_KEY = Symbol.for("llv.mcp.httpCaller");

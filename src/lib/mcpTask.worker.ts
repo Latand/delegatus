@@ -23,6 +23,7 @@ const { WebStandardStreamableHTTPServerTransport } = await import("@modelcontext
 const { agentRegistry } = await import("./agent/registry");
 const { capabilityConversationResolver } = await import("./mcp/bindings");
 const { mcpHttpRefusal } = await import("./mcp/httpResponse");
+const { setOuterMcpToolEventSink } = await import("./mcp/outerEvidence");
 const { startTaskChannel } = await import("./mcp/taskChannelServer");
 const { TASK_CHANNEL_CALLS, TASK_CHANNEL_INPUT_BYTES, encodeTaskChannel } = await import("./mcp/taskChannel");
 const { residentWorkerOverLimit } = await import("./residentWorkerMemory");
@@ -93,6 +94,7 @@ const write = (frame: () => string, limit: number, activity = true) => {
   void writing.catch(() => { logMcpLifecycle("output-failure"); process.exit(1); });
 };
 const send = (message: unknown) => write(() => JSON.stringify(message) + "\n", TASK_EXECUTOR_FRAME_BYTES);
+setOuterMcpToolEventSink(outerEvidence => write(() => JSON.stringify({ id: 0, control: { outerEvidence } }) + "\n", 4096));
 
 // This process owns task calls, while startup mutations belong to its Viewer.
 // One bounded request is shared by concurrent calls, including private-channel
@@ -142,13 +144,15 @@ async function serialized(response: Response): Promise<TaskChannelResponse> {
 async function httpTaskCall(request: TaskExecutorRequest, signal: AbortSignal): Promise<TaskChannelResponse> {
   const { toolName, body, url, headers } = request.args as { toolName: string; body: unknown; url: string; headers: [string, string][] };
   if (!TASK_EXECUTOR_TOOLS.has(toolName)) throw new Error("unsupported task HTTP tool");
+  let conversationId: string | null = null;
   if (request.caller.capability !== undefined) {
-    let conversationId: string | null;
     try { conversationId = await identifyCallerWhenReady(() => identifyCapability(request.caller.capability), request.caller.capability, request.deadlineAt, signal); }
     catch {
       return serialized(mcpHttpRefusal(503, -32002, "The Viewer could not read its agent registry to identify this caller; retry the call.", { "retry-after": "1" }));
     }
-    if (!conversationId) return serialized(mcpHttpRefusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch."));
+    if (!conversationId || (request.caller.authenticatedConversationId && request.caller.authenticatedConversationId !== conversationId)) {
+      return serialized(mcpHttpRefusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch."));
+    }
   }
   let readyService: Awaited<ReturnType<typeof taskService>>;
   try { readyService = await taskService(); }
@@ -167,7 +171,8 @@ async function httpTaskCall(request: TaskExecutorRequest, signal: AbortSignal): 
       parsedBody: body,
       authInfo: { token: request.caller.capability ?? "local-peer", clientId: MCP_HTTP_CLIENT_ID, scopes: [],
         extra: { nativePeer: request.caller.nativePeer, unidentified: !request.caller.capability && !request.caller.nativePeer,
-          paginationIdentity: request.caller.paginationIdentity, cancelSignal: () => signal } },
+          paginationIdentity: request.caller.paginationIdentity, outerRequestId: request.caller.outerRequestId,
+          authenticatedConversationId: conversationId ?? undefined, cancelSignal: () => signal } },
     });
     return await serialized(response);
   } finally { await server.close().catch(() => undefined); }

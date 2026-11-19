@@ -74,6 +74,51 @@ Recovery therefore cannot interpret retention or a restored older file as
 proof of absence. A busy or unavailable ingress journal refuses the request
 before its handler runs; other HTTP callers can still progress.
 
+## Shared HTTP MCP endpoint
+
+The serving HTTP listener assigns each POST to `/api/mcp` a fresh opaque ID
+and echoes it as `x-delegatus-mcp-http-id`. Ingress, response status and
+finish, premature close and recognized socket errors use that ID. The ingress
+event includes a separate, process-local connection ID so operators can
+identify a reused connection. Byte counters describe the socket lifetime.
+Failures before the HTTP server emits a request may leave no request witness.
+
+After authentication and tool validation, the tool service records the tool
+name, SHA-256 of the tool and trimmed original key as a JSON array, the
+argument digest used by any receipt, and a digest of the authenticated
+transport identity. The
+executor receives the ID through its existing private pipe and sends its
+events back to the Viewer. Claim, binding dispatch, receipt settlement and
+result events use the same outer ID. The outer database stores fixed labels,
+digests and counters. Request and response bodies, header values, RPC IDs,
+and exception messages are excluded. An incoming diagnostic header never
+supplies the identity, grants access or fences a request.
+
+The outer journal is private `mcp-http-outer.sqlite` state. Its worker keeps
+at most 262,144 events within a 48-hour age bound, applied on the next write.
+Actual coverage depends on request volume. Saturation or a failed writer emits
+a rate-limited warning and leaves diagnostic evidence incomplete. Tool
+admission still depends on the existing policy and receipt store. Outer
+transport events establish where handling progressed. They cannot establish
+delivery to the client or authorize a retry.
+
+Native HTTP clients keep the same launch definitions. After a lost read, ask
+again for a fresh observation. After a lost write, keep the original
+`clientRequestId` and arguments. For `create_task` and `update_task`, a
+managed client can add `recoveryOnly: true` to read its newly caller-bound
+receipt. The Viewer rechecks the launch capability after the lookup.
+Both lookup and ordinary replay enforce the owner of a caller-bound receipt.
+The lookup makes no claim and starts no write. Missing, older unbound,
+unreadable and unsettled receipts leave the outcome unknown. Task read-back
+can help establish the result. For `create_pipeline`, the existing
+`recoveryOnly` lookup also reads its durable creation witness. Ordinary calls
+with the original key still use the existing idempotency contract.
+
+The server cannot return an MCP envelope across a closed connection. A later
+authenticated lookup supplies the structured receipt verdict. The new
+journal provides no negative fence for an external request and leaves
+historical socket attribution and production acceptance open.
+
 ## Verification
 
 `src/lib/mcp/controlEvidence.test.ts` exercises durable fences, process
@@ -83,6 +128,10 @@ the exported MCP route, policy, service, SQLite receipts, production bindings
 and internal HTTP transport on ephemeral loopback ports. It checks a socket
 cut before ingress, a cut after response completion, refusal of delayed bytes,
 safe resend, response bounds and an independently stalled serving process.
+`src/lib/mcp/http.test.ts` also cuts the external SDK connection before the route
+and after a task commits, then looks up the original receipt after restarting
+the task executor. It checks both launch definitions, caller ownership,
+argument conflicts, duplicate appends and private diagnostic fields.
 
 Run the focused checks from a scratch export of the revision being reviewed,
 with matching dependencies. Give each test command a fresh private `HOME`,

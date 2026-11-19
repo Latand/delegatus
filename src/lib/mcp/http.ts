@@ -9,6 +9,7 @@ import { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } from "./taskExecutor";
 import { mcpHttpRefusal as refusal, MCP_REFUSAL_HEADER, MCP_CHECK_HEADER, MCP_CHECK_PATTERN } from "./httpResponse";
 import { MCP_MAX_REQUEST_BODY_BYTES } from "./inputLimits";
 import { logCallerIdentificationError } from "./callerIdentification";
+import { currentOuterMcpRequestId, recordOuterMcpExecutor } from "./outerEvidence";
 
 import {
   createProductionViewerMcpService,
@@ -142,6 +143,7 @@ export function mcpHttpMethodNotAllowed(): Response {
 }
 
 export async function handleMcpHttpRequest(request: NextRequest): Promise<Response> {
+  const outerRequestId = currentOuterMcpRequestId();
   /* The proxy authenticates access with the Viewer key or its local MCP
      credential; this gate also refuses a browser's cross-site request.
      Neither access credential replaces the launch identity checked below. */
@@ -272,7 +274,9 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
         // Keep ingress parsing and executor admission on separate loop turns.
         await new Promise<void>(resolve => setImmediate(resolve));
         const signal = registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal;
-        const taskCaller = nativePeer ? { nativePeer } : unidentified ? { paginationIdentity: connectionId || crypto.randomUUID() } : { capability };
+        const taskCaller = { ...(nativePeer ? { nativePeer } : unidentified ? { paginationIdentity: connectionId || crypto.randomUUID() } : { capability }),
+          outerRequestId, authenticatedConversationId: conversationId && conversationId !== "local-peer" ? conversationId : undefined };
+        recordOuterMcpExecutor(outerRequestId);
         const callOnce = () => viewerTaskExecutor().callHttpTool(requested, body, request, taskCaller, { signal });
         try { return await callOnce(); }
         catch (error) {
@@ -298,7 +302,8 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
         token: capability,
         clientId: MCP_HTTP_CLIENT_ID,
         scopes: [],
-        extra: { nativePeer, unidentified, paginationIdentity: unidentified ? connectionId || crypto.randomUUID() : undefined,
+        extra: { nativePeer, unidentified, outerRequestId, authenticatedConversationId: conversationId && conversationId !== "local-peer" ? conversationId : undefined,
+          paginationIdentity: unidentified ? connectionId || crypto.randomUUID() : undefined,
           cancelSignal: (requestId: unknown) => registered.get(inflightKey(capability, connectionId, requestId))?.signal ?? null },
       },
     });

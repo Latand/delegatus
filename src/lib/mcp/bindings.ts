@@ -2367,7 +2367,7 @@ async function withTaskCallLease<R>(context: McpToolCallContext = {}, operation:
   finally { deadline.signal.removeEventListener("abort", expire); deadline.release(); lease.expire(); }
 }
 
-async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
   /* A new task runs on the machine that creates it (M.4); "here" is the only
      machine a create names. */
   if (args.machine !== undefined && args.machine !== "here") {
@@ -2379,13 +2379,14 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   assertMaintenanceWrite(maintainer, args, undefined, true);
   refuseCrossProjectFromSeat("create_task", () => text(args.project) || null, args, dependencies);
   const input: CreateTaskInput = {
-    ...withoutKeys(args, ["crossProjectRequest"]),
+    ...withoutKeys(args, ["crossProjectRequest", "recoveryOnly"]),
     placement: args.placement ?? "unplaced",
     clientRequestId: requestId(args),
   };
   let prior: BoardTask | undefined;
   let matchedFields: string[] | undefined;
   const result = await withTaskPreparation(() => waitForStateLock("mcp.tasks.create", () => mutateTasksFile((state) => {
+    context?.assertCaller?.();
     assertWorkspaceMcpCall(typeof input.project === "string" ? input.project : undefined);
     let outcome = createTask(state.tasks, input, state.recentCreates, { requireDue: true, dueTimeZone: operatorTimeZone() ?? undefined, explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
@@ -2421,7 +2422,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
  * to, or a task already named by an operator edit or an earlier refinement is
  * answered truthfully instead of overwriting anything.
  */
-async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
   const refine = args.refine as { text?: unknown } | undefined;
   const text = typeof refine?.text === "string" ? refine.text : "";
   const caller = attributionOf(dependencies);
@@ -2431,6 +2432,7 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const taskId = typeof args.taskId === "string" && args.taskId.trim() ? args.taskId.trim() : null;
   const changes: Record<string, string[]> = {};
   const result = await mutateTasksAsync((tasks) => {
+    context?.assertCaller?.();
     assertWorkspaceMcpCall();
     const before = new Map(tasks.map(task => [task.id, fieldValues(task)]));
     const outcome = refineTask(tasks, { callerConversationId: caller.conversationId!, taskId, text });
@@ -2459,7 +2461,7 @@ function admitTaskDuePatch(args: McpToolArgs): void {
   if (!result.ok) throw new McpUnadmittedRefusal(result.error, { code: result.code ?? "TASK_INVALID_FIELD", field: result.field, status: result.status });
 }
 
-async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
   admitTaskDuePatch(args);
   const maintainer = maintenanceCaller(dependencies);
   const caller = attributionOf(dependencies);
@@ -2467,10 +2469,10 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     if (Object.hasOwn(args, "summary")) throw new McpToolRefusal("Set summary in a separate update_task call with taskId; refine only names the task.", { code: "TASK_INVALID_FIELD", field: "summary", status: 400 });
     if (Object.hasOwn(args, "progress")) throw new McpToolRefusal("Set progress in a separate update_task call with taskId; refine only names the task.", { code: "TASK_INVALID_FIELD", field: "progress", status: 400 });
     if (maintainer) throw new McpToolRefusal("Maintenance uses explicit taskId and text for retitling.", { code: "maintainer_delete_refused", status: 403 });
-    return refineBoardTask(args, dependencies);
+    return refineBoardTask(args, dependencies, context);
   }
   const taskId = required(args, "taskId");
-  const patch = withoutKeys(args, ["taskId", "clientRequestId", "full", "compact", "includeHints"]);
+  const patch = withoutKeys(args, ["taskId", "clientRequestId", "full", "compact", "includeHints", "recoveryOnly"]);
   let changedFields: string[] = [];
   let prior: BoardTask | undefined;
   let liveAgent: string | undefined;
@@ -2497,6 +2499,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     }
   }
   const result = await mutateTasksAsync((tasks) => {
+    context?.assertCaller?.();
     prior = readMutationTask(tasks, taskId);
     assertWorkspaceMcpCall(prior?.project);
     const pipelines = maintainer ? dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [] : [];
@@ -8985,8 +8988,8 @@ export function viewerMcpBindings(
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
-    create_task: requireTaskCreateDue(orchestratorProjectBinding(domainDependencies, (args, context) => withTaskCallLease(context, () => createBoardTask(args, domainDependencies)), true, true, true)),
-    update_task: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => withTaskCallLease(context, () => updateBoardTask(args, domainDependencies)), { prepareAdmission: admitTaskDuePatch }),
+    create_task: requireTaskCreateDue(orchestratorProjectBinding(domainDependencies, (args, context) => withTaskCallLease(context, () => createBoardTask(args, domainDependencies, context)), true, true, true)),
+    update_task: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => withTaskCallLease(context, () => updateBoardTask(args, domainDependencies, context)), { prepareAdmission: admitTaskDuePatch }),
     create_pipeline: Object.assign(
       (args: McpToolArgs, context?: McpToolCallContext) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
       { prepareAdmission: (args: McpToolArgs) => assertExplicitPipelineSource(args, domainDependencies) },

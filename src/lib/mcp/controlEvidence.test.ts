@@ -2,11 +2,43 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { Database } from "bun:sqlite";
 import { AsyncControlEvidenceStore, ControlEvidenceStore, EVIDENCE_LIMIT, EVIDENCE_TTL_MS, controlRequestId } from "./controlEvidence";
 import type { McpRequestBinding } from "./server";
 
 const epoch = 1_800_000_000_000;
 const id = (at: number, tail = "a") => `${at}-${tail.repeat(64)}`;
+
+test("outer evidence retains recent metadata through reopen and refuses a busy writer without storing request outcomes", async () => {
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "outer-evidence-"));
+  const filename = path.join(root, "outer.sqlite");
+  let store = new AsyncControlEvidenceStore(filename, true, 1500, true);
+  await store.ready();
+  const peer = new Database(filename);
+  try {
+    const insert = peer.query("INSERT INTO events(seq,at,id,event,read_bytes,written_bytes) VALUES(?,?,?,'start',0,0)");
+    insert.run(1, Date.now(), "discard-by-count");
+    insert.run(262_142, Date.now() - 49 * 60 * 60_000, "discard-by-age");
+    insert.run(262_144, Date.now(), "retained");
+    peer.exec("BEGIN IMMEDIATE");
+    const refusal = await store.event("unwritten", "close", 2, 3, "premature")
+      .then(() => null, (error: Error) => error.message);
+    expect(refusal).toMatch(/busy|locked|writer deadline exceeded/i);
+    await store.close();
+    peer.exec("ROLLBACK");
+    expect(peer.query("SELECT id FROM events WHERE id = 'unwritten'").get()).toBeNull();
+    store = new AsyncControlEvidenceStore(filename, true, undefined, true);
+    await store.event("new-event", "response", 2, 3, "http_200");
+    expect(peer.query("SELECT id,event,code FROM events ORDER BY seq").all()).toEqual([
+      { id: "retained", event: "start", code: null }, { id: "new-event", event: "response", code: "http_200" },
+    ]);
+    expect(peer.query("SELECT outcome FROM requests").all()).toEqual([]);
+  } finally {
+    peer.close();
+    await store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 function fixture(openedAt = epoch) {
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "control-evidence-"));
   let now = openedAt;
