@@ -87,6 +87,27 @@ test("child result checks retain failure exits, refusals and unexpected stderr",
   for (const code of [1, null]) expect(() => assertStateChildSuccess(code, line(sample))).toThrow();
 });
 
+test("explicitly correlated async retries retain their identity across blocked call sites", () => {
+  const operationId = "delivery-fixture";
+  const sample = { site: "state-write-lock", durationMs: 75, synchronous: false, subject: "pipelines",
+    role: "unowned", label: null, operationId, at: "2026-01-01T00:00:00.000Z",
+    stateWait: { callSite: "state.lease.sqlite", reason: "sqlite", outcome: "waiting", pid: 7,
+      attempts: 1, maxSliceMs: 50, backoffMs: 0, synchronousSleepMs: 0, release: null, processKind: "embedded" } };
+  const completed = { ...sample, durationMs: 150, stateWait: {
+    ...sample.stateWait, callSite: "state.transaction.pipelines", outcome: "success", attempts: 2,
+  } };
+  const line = (value: unknown) => `[blocking-wait] ${JSON.stringify(value)}\n`;
+  const waiting = line(sample);
+  const options = { correlatedOperationId: operationId };
+  assertStateChildSuccess(0, waiting + line(completed), options);
+  expect(() => assertStateChildSuccess(0, waiting + line(completed))).toThrow();
+  for (const result of [null, { ...completed, operationId: "other" }, { ...completed, subject: "other" },
+    { ...completed, stateWait: { ...completed.stateWait, pid: 8 } }, { ...completed, synchronous: true },
+    { ...completed, stateWait: { ...completed.stateWait, outcome: "timeout" } }]) {
+    expect(() => assertStateChildSuccess(0, waiting + (result ? line(result) : ""), options)).toThrow();
+  }
+});
+
 test.each([
   ["real error", "Error: child write failed\n"],
   ["malformed diagnostic", "[blocking-wait] invalid json\n"],
