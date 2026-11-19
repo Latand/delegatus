@@ -3,7 +3,7 @@ import { FlowPipelineController, type FlowPipelineControllerHeartbeat } from "./
 import { requestPipelineTick } from "./controllerSignal";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineStopReadLanes } from "./controllerStopRead";
-import { createServer } from "node:net";
+import { latch, until, withControllerAuditState } from "./fixtures/ownedStageControl";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
 import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withDeliveryMutationAsync, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
 import { SqliteStateCollection, StateSnapshotChangedError, resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "@/lib/state/sqliteStateStore";
@@ -12,9 +12,9 @@ import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
 import { instanceCpuAdmissionFile, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import { withControllerPipelineScope } from "./controllerScope";
-import { CpuAdmissionQueue, CPU_QUEUE_SPACING_MS } from "@/lib/runtime/cpuAdmission";
+import { CpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
 import { DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
-import { currentOperationLease, OperationLeaseExpiredError } from "@/lib/operationLease";
+import { OperationLeaseExpiredError } from "@/lib/operationLease";
 
 async function committing(publication: "internal" | "remote-branch" = "internal") {
   const h = harness();
@@ -26,12 +26,6 @@ async function committing(publication: "internal" | "remote-branch" = "internal"
   Object.assign(lane.runs[0]!.attempts[0]!, { state: "committing", verdict: { status: "pass" } });
   savePipelines([lane]);
   return { h, lane };
-}
-
-function latch() {
-  let resolve!: () => void;
-  const promise = new Promise<void>(done => { resolve = done; });
-  return { promise, resolve };
 }
 
 test.each(["never", "late-write"] as const)("an expired controller abandons a %s await and the next tick admits and launches the waiting stage", async mode => {
@@ -329,12 +323,6 @@ test("observing an unchanged external job does not request another immediate tic
     expect(takePipelineControllerJobChanges()).toBe(true);
   } finally { unregister(); }
 });
-
-async function until(promise: Promise<unknown>, timeout = 3_000) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try { await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("boundary did not settle")), timeout); })]); }
-  finally { clearTimeout(timer); }
-}
 
 test("the real controller returns while a 20 second fenced Git job remains pending, without a second writer", async () => {
   const { h, lane } = await committing();
@@ -1568,334 +1556,6 @@ async function auditPeerRotation(admission: "direct" | "queued", base: "pinned" 
     setSystemTime();
     if (quiet !== undefined) process.env.LLV_QUIET_DIAGNOSTICS = quiet;
     fs.rmSync(root, { recursive: true, force: true });
-  }
-}
-
-test.each([
-  ["direct", "pinned"], ["direct", "followed"], ["queued", "pinned"], ["queued", "followed"],
-] as const)("operator audit production-length deadline for cold provisioning: %s %s", (admission, base) => auditIsolatedColdProvisioning(admission, base, 1), 30_000);
-
-test("the independent deadline holds for a cold lane beside three stalled stop reads",
-  () => auditIsolatedColdProvisioning("direct", "pinned", 3), 30_000);
-
-test.each([
-  ["clear", 620], ["operator-stop", 620], ["clear-after-pause", 620],
-  ["clear", 5_500], ["operator-stop", 5_500], ["clear-after-pause", 5_500],
-] as const)(
-  "a slow scoped RPC returns %s after %i ms while an unrelated cold lane starts before the deadline",
-  (reply, responseMs) => auditIsolatedColdProvisioning("direct", "pinned", 1, { reply, responseMs }), 30_000);
-
-type StopReadCase = { reply: "clear" | "operator-stop" | "clear-after-pause"; responseMs: number };
-
-async function delayedScopedStopServer(conversationId: string, admittedAt: string, scenario: StopReadCase, pause: () => Promise<void>) {
-  const { reply, responseMs } = scenario;
-  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR!, "stop-rpc-"));
-  const socketPath = path.join(dir, "host.sock");
-  const pending = new Set<Promise<void>>();
-  const evidence = { requests: 0, responses: 0, closedBeforeResponse: 0 };
-  const server = createServer(socket => {
-    let input = "";
-    socket.on("error", () => {});
-    socket.on("data", function readRequest(chunk) {
-      input += chunk.toString();
-      const end = input.indexOf("\n");
-      if (end === -1) return;
-      socket.off("data", readRequest);
-      const request = JSON.parse(input.slice(0, end));
-      if (request.method !== "effect-batch" || request.params.conversationId !== conversationId || (request.params.afterEventSeq ?? 0) !== 0) {
-        socket.end(JSON.stringify({ id: request.id, ok: false, error: "unexpected fixture RPC" }) + "\n");
-        return;
-      }
-      evidence.requests++;
-      const operation = (async () => {
-        if (reply === "clear-after-pause") await pause();
-        await Bun.sleep(responseMs);
-        if (socket.destroyed || socket.readableEnded) { evidence.closedBeforeResponse++; return; }
-        const result = reply === "operator-stop" ? [{
-          id: "effect:fixture-stop", eventSeq: 1, kind: "runtime.stop-boundary",
-          payload: { conversationId, operationId: "fixture-stop", admittedAt, origin: "operator", originAuthenticated: true },
-        }] : [];
-        socket.end(JSON.stringify({ id: request.id, ok: true, result }) + "\n");
-        evidence.responses++;
-      })();
-      pending.add(operation);
-      void operation.then(() => pending.delete(operation), error => socket.destroy(error));
-    });
-  });
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(socketPath, resolve);
-    });
-  } catch (error) {
-    fs.rmSync(dir, { recursive: true, force: true });
-    throw error;
-  }
-  const previous = process.env.LLV_RUNTIME_HOST_SOCKET;
-  process.env.LLV_RUNTIME_HOST_SOCKET = socketPath;
-  return { evidence, async close() {
-    if (previous === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
-    else process.env.LLV_RUNTIME_HOST_SOCKET = previous;
-    await Promise.all(pending);
-    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-    fs.rmSync(dir, { recursive: true, force: true });
-  } };
-}
-
-function auditIsolatedColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, scenario?: StopReadCase) {
-  return withControllerAuditState(() => auditColdProvisioning(admission, base, blockerCount, scenario));
-}
-
-async function withControllerAuditState(audit: () => Promise<void>) {
-  const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
-  const previousRegistry = agentRegistry();
-  const previousState = process.env.LLV_STATE_DIR;
-  const state = fs.mkdtempSync(path.join(process.env.TMPDIR!, "controller-audit-state-"));
-  process.env.LLV_STATE_DIR = state;
-  let registry: InstanceType<typeof AgentRegistry> | undefined;
-  try {
-    registry = new AgentRegistry();
-    setAgentRegistryForTests(registry);
-    await audit();
-  } finally {
-    setAgentRegistryForTests(previousRegistry);
-    registry?.close();
-    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
-    else process.env.LLV_STATE_DIR = previousState;
-    fs.rmSync(state, { recursive: true, force: true });
-  }
-}
-
-async function auditColdProvisioning(admission: "direct" | "queued", base: "pinned" | "followed", blockerCount: number, scenario?: StopReadCase) {
-  const reply = scenario?.reply;
-  const f = await realWorktreeLane("cold-provision-audit", BUILD_ONLY as never);
-  const h = f.h;
-  const old = loadPipelines()[0]!;
-  const attempt = old.runs[0]!.attempts[0]!;
-  const requestedAt = h.ports.now();
-  attempt.suspension = { reason: "account", detail: "suspended producer",
-    requestedAt, stoppedAt: requestedAt, retryRequestedAt: requestedAt };
-  const blockers = [old];
-  for (let index = 1; index < blockerCount; index++) {
-    const peer = structuredClone(old);
-    peer.id = `cold-stalled-peer-${index}`;
-    peer.delivery = undefined;
-    Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
-    Object.assign(peer.runs[0]!.attempts[0]!, { conversationId: `conversation_cold_peer_${index}`,
-      launchId: `fixture-cold-peer-${index}`, agentPath: `/codex/cold-peer-${index}.jsonl`, paneId: `%cold-peer-${index}` });
-    await f.git(f.repo, "worktree", "add", "-b", peer.branch, peer.worktreeDir, f.base);
-    blockers.push(peer);
-  }
-  savePipelines(blockers);
-  const blockedConversations = new Set(blockers.map(peer => peer.runs[0]!.attempts[0]!.conversationId));
-  const blockedPanes = new Set(blockers.map(peer => peer.runs[0]!.attempts[0]!.paneId));
-  const account = attempt.accountId!;
-  h.ports.conversationAgentActive = async id => !blockedConversations.has(id);
-  h.ports.paneAgentAlive = async pane => !blockedPanes.has(pane);
-  h.ports.allowedAccountIds = () => [account];
-  h.ports.resolveProjectSpawn = engine => ({ kind: "available", account: { engine, accountId: account,
-    kind: "managed", home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
-
-  const blocked = latch(), release = latch(), launched = latch(), launchTickExited = latch();
-  let stalled = true, stopReads = 0, cancelledReads = 0, childLaunched = false;
-  const observerReady = latch(), observationComplete = latch();
-  let observation: { children: number; callbacks: number; deadlineReached: boolean;
-    callbackMs: number | null; childMs: number | null; tickExitMs: number | null } | undefined;
-  const observer = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures", "coldLaunchDeadline.ts")], {
-    stdin: "ignore", stdout: "ignore", stderr: "inherit",
-    ipc(message) {
-      if (message === "ready") observerReady.resolve();
-      else {
-        observation = message as typeof observation;
-        observationComplete.resolve();
-      }
-    },
-  });
-  const observedBlockers = new Set<string>();
-  let stopServer: Awaited<ReturnType<typeof delayedScopedStopServer>> | undefined;
-  h.ports.conversationOperatorStopped = async (id, since, ignored) => {
-    if (!blockedConversations.has(id)) return false;
-    stopReads++;
-    if (!stalled && !stopServer) return false;
-    observedBlockers.add(id);
-    blocked.resolve();
-    if (stopServer) return defaultPipelinePorts().conversationOperatorStopped!(id, since, ignored);
-    const signal = currentOperationLease()?.abort.signal;
-    await new Promise<void>(resolve => {
-      const cancel = () => { cancelledReads++; resolve(); };
-      if (signal?.aborted) cancel();
-      else signal?.addEventListener("abort", cancel, { once: true });
-      void release.promise.then(() => {
-        signal?.removeEventListener("abort", cancel);
-        resolve();
-      });
-    });
-    return false;
-  };
-  const logs: string[] = [];
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  const controller = new FlowPipelineController({
-    tickPipelines: entries => tickPipelinesController(entries, h.ports),
-    scan: async () => ({ files: [], complete: false }),
-    scheduleTimeout: (callback, delay) => {
-      const timer = setTimeout(() => { timers.delete(timer); callback(); }, delay);
-      timers.add(timer);
-      return timer;
-    },
-    clearTimeout: handle => {
-      const timer = handle as ReturnType<typeof setTimeout>;
-      clearTimeout(timer);
-      timers.delete(timer);
-    },
-    log: message => { logs.push(message); },
-  }, { phaseDeadlineMs: 15_000, maxPasses: 1 });
-  let tickExitReported = false;
-  const runTick = async () => {
-    await controller.tick();
-    if (childLaunched && !tickExitReported) {
-      tickExitReported = true;
-      observer.send("tick-exit");
-      launchTickExited.resolve();
-    }
-  };
-  let wake: Promise<void> | undefined;
-  const unregister = registerPipelineTick(() => (wake = runTick()));
-  h.ports.scheduleTick = delay => { if (delay === 0) requestPipelineTick(); };
-  let cpuNow = Date.parse(requestedAt);
-  const queue = new CpuAdmissionQueue(path.join(f.root, "cold-cpu.sqlite"), () => cpuNow);
-  const cpuKeys = new Set<string>();
-  h.ports.cpuPressureHold = (key, priority) => {
-    if (key === undefined) throw new Error("missing stage CPU admission key");
-    cpuKeys.add(key);
-    const allow = !reply || childLaunched || !key.includes(`:${old.id}:`);
-    const wait = queue.check(key, allow, undefined, true, priority);
-    return wait ? { since: wait.since, avg10: 90, deferred: false, policy: DEFAULT_CPU_PRESSURE_POLICY, queue: wait } : null;
-  };
-  let child: ReturnType<typeof Bun.spawn<"ignore", "pipe", "pipe">> | undefined;
-  let tick: Promise<void> | undefined;
-  try {
-    await until(observerReady.promise);
-    if (scenario) stopServer = await delayedScopedStopServer(attempt.conversationId!, requestedAt, scenario, async () => {
-      await withPipelineMutation(async (rows, persist) => {
-        const paused = rows.find(row => row.id === old.id)!;
-        paused.pausedState = "running";
-        paused.pausedAt = h.ports.now();
-        paused.state = "paused";
-        await persist([paused]);
-      });
-    });
-    if (process.env.LLV_COLD_CONTROLLER_LATE === "1") {
-      const exec = h.ports.provisionExec!;
-      h.ports.provisionExec = async (command, args, cwd, signal, options) => {
-        if (args[0] === "worktree" && args[1] === "add") await Bun.sleep(15_100);
-        return exec(command, args, cwd, signal, options);
-      };
-    }
-    const store = await import("./store");
-    const { StoreBusyBeforeAdmissionError } = await import("@/lib/state/fileTransaction");
-    const busy = admission === "queued" ? spyOn(store, "createPipelineWithDelivery").mockRejectedValueOnce(
-      new StoreBusyBeforeAdmissionError("fixture store busy before admission"),
-    ) : undefined;
-    const created = await createPipelineFromRequest({
-      task: "Cold lane beside a suspended stage", repoDir: f.repo, publication: "internal",
-      stages: BUILD_ONLY as never, ...(base === "pinned" ? { baseRef: f.base } : {}),
-    }, h.ports, { queueWhenBusy: true, creationRequest: { key: "cold-provision-audit", digest: base } })
-      .finally(() => busy?.mockRestore());
-    observer.send("accepted");
-    const cold = created.pipeline!;
-    expect(cold.state).toBe("provisioning");
-    expect(Boolean(created.queued)).toBe(admission === "queued");
-    expect(fs.existsSync(cold.worktreeDir)).toBe(false);
-    const spawnAgent = h.ports.spawnAgent;
-    h.ports.spawnAgent = async (input, reserve) => {
-      if (input.cwd !== cold.worktreeDir) return spawnAgent(input, reserve);
-      observer.send("callback");
-      const result = await spawnAgent(input, reserve);
-      // The reservation must already be durable before the child can execute.
-      expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, launchId: result.launchId }]);
-      child = Bun.spawn([process.execPath, "-e", "console.log('fixture first launch')"],
-        { cwd: input.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-      observer.send("child");
-      childLaunched = true;
-      const [exit, output] = await Promise.all([child.exited, new Response(child.stdout).text()]);
-      expect({ exit, output: output.trim() }).toEqual({ exit: 0, output: "fixture first launch" });
-      launched.resolve();
-      return result;
-    };
-    tick = runTick();
-    // The independent process owns the acceptance-to-child deadline. This
-    // wait also lets a deliberately late child report its actual launch.
-    await until(Promise.race([
-      Promise.all([blocked.promise, launched.promise, launchTickExited.promise]),
-      tick.then(() => new Promise<never>(() => {})),
-    ]), 24_000);
-    expect(logs.filter(line => line.includes("pending at deadline"))).toEqual([]);
-    expect(observedBlockers.size).toBe(blockerCount);
-    const retained = (await findControllerPipeline(old.id))!;
-    if (!reply) expect(retained.runs[0]?.attempts).toMatchObject([{ n: 1, suspension: { retryRequestedAt: requestedAt } }]);
-    expect(cpuKeys.size).toBeGreaterThan(0);
-    expect(await f.git(cold.worktreeDir, "rev-parse", "HEAD")).toBe(f.base);
-    const worktrees = (await f.git(f.repo, "worktree", "list", "--porcelain")).split("\n");
-    expect(worktrees.filter(line => line === `worktree ${cold.worktreeDir}`)).toHaveLength(1);
-
-    stalled = false;
-    release.resolve();
-    await settlePipelineStopReadLanes();
-    for (let pass = 0; pass < 4; pass++) await controller.tick();
-    const waitingForCpu = await findControllerPipeline(old.id);
-    if (reply === "operator-stop") {
-      expect(waitingForCpu?.stateDetail).toContain("stopped by operator");
-      const stopped = waitingForCpu?.runs[0]?.attempts[0]?.suspension?.operatorStoppedAt;
-      expect(typeof stopped).toBe("string");
-      expect(Date.parse(stopped!)).toBeGreaterThanOrEqual(Date.parse(requestedAt));
-    } else if (reply === "clear-after-pause") {
-      expect(waitingForCpu?.state).toBe("paused");
-      expect(waitingForCpu?.runs[0]?.attempts.map(item => item.n)).toEqual([1]);
-    } else {
-      expect(waitingForCpu?.stateDetail).toContain("CPU queue");
-      expect(waitingForCpu?.runs[0]?.attempts.at(-1)).toMatchObject({ n: 2, state: "pending" });
-    }
-    for (let window = 0; window < blockerCount; window++) {
-      cpuNow += CPU_QUEUE_SPACING_MS;
-      for (let pass = 0; pass < 4; pass++) await controller.tick();
-    }
-    for (const peer of blockers) {
-      const recovered = await findControllerPipeline(peer.id);
-      if (reply && reply !== "clear") {
-        expect(recovered?.runs[0]?.attempts.map(item => item.n)).toEqual([1]);
-        expect(h.spawnInputs.filter(input => input.cwd === old.worktreeDir)).toHaveLength(1);
-        continue;
-      }
-      expect(recovered?.runs[0]?.attempts.map(({ n, state, accountId }) => ({ n, state, accountId })), recovered?.stateDetail ?? "").toEqual([
-        { n: 1, state: "failed", accountId: account }, { n: 2, state: "running", accountId: account },
-      ]);
-    }
-    expect((await findControllerPipeline(cold.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, state: "running" }]);
-    expect(h.spawnInputs.filter(input => input.cwd === cold.worktreeDir)).toHaveLength(1);
-    if (stopServer) expect(stopServer.evidence).toEqual({ requests: 1, responses: 1, closedBeforeResponse: 0 });
-    observer.send("finished");
-    await until(observationComplete.promise);
-    if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
-      console.log("cold-controller-audit", JSON.stringify({ admission, base, blockerCount, ...observation, stopReads, cancelledReads, scenario, rpc: stopServer?.evidence }));
-    }
-    expect(observation).toMatchObject({ callbacks: 1, children: 1 });
-    expect(observation?.deadlineReached, "independent acceptance-to-child deadline of 15000 ms").toBe(false);
-  } finally {
-    stalled = false;
-    release.resolve();
-    unregister();
-    if (child?.exitCode === null) child.kill();
-    await child?.exited;
-    await Promise.allSettled([tick, wake]);
-    await settlePipelineStopReadLanes();
-    await stopServer?.close();
-    if (observer.exitCode === null) observer.kill();
-    await observer.exited;
-    for (const timer of timers) clearTimeout(timer);
-    await settlePipelineControllerJobs();
-    await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
-    queue.close();
-    fs.rmSync(f.root, { recursive: true, force: true });
   }
 }
 

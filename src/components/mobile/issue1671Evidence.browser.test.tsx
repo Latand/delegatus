@@ -469,6 +469,7 @@ describe("shared memory settings", () => {
     const previous = { ...process.env };
     process.env.LLV_STATE_DIR = path.join(root, "state");
     process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    const releaseTarget = path.join(process.env.LLV_STATE_DIR, "viewer-release.json");
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.PORT;
     delete process.env.LLV_STAGING;
@@ -500,7 +501,7 @@ describe("shared memory settings", () => {
         delete process.env.OPENROUTER_API_KEY;
         process.env.PORT = "9876";
         fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
-        fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:9875" }));
+        fs.writeFileSync(releaseTarget, JSON.stringify({ endpoint: "http://127.0.0.1:9875", revision: "a".repeat(40) }));
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings`, { width, height: 900 }, "light", lang, "reduce", width === 390);
         /* The operator's own browser session, as the Viewer's page navigation sets it. */
         await context.addCookies([{ name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
@@ -584,7 +585,9 @@ describe("shared memory settings", () => {
           await openPage("memory");
           await reasonIs("memoryPage.reason.notOwner");
           await measure("inactive");
+          // Return to standalone mode so SQLite can write the spend ledger.
           delete process.env.PORT;
+          fs.rmSync(releaseTarget);
           memoryIndex().recordInjectionActivity("decisions");
           memoryIndex().recordInjectionActivity("noMatches");
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
