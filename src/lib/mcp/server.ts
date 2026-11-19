@@ -2887,6 +2887,15 @@ export function createMcpToolService(
       }
       const callStartedAt = performance.now();
       const phaseDurations: Partial<Record<McpTimingPhase, number>> = {};
+      let tracedTool = false;
+      const traceTool = (digest: string, lookup = false) => {
+        if (!outerId || tracedTool) return;
+        tracedTool = true;
+        const origin = httpCaller?.capability ?? (httpCaller?.nativePeer ? JSON.stringify(httpCaller.nativePeer) : null);
+        const callerDigest = origin ? crypto.createHash("sha256").update(origin).digest("hex") : "-";
+        outerMcpToolEvent(outerId, "tool", lookup ? "lookup" : "call",
+          [typedTool, outerMcpKeyDigest(typedTool, clientRequestId(effectiveArgs)) ?? "-", digest, callerDigest].join(":"));
+      };
       context = { ...context, recordTiming: (phase, milliseconds) => {
         phaseDurations[phase] = (phaseDurations[phase] ?? 0) + milliseconds;
       } };
@@ -2905,6 +2914,7 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        traceTool("-");
         outerMcpToolEvent(outerId, "result", outcome);
         const images = relayImages(result);
         const imageGuard = relayImageGuard(result);
@@ -2951,13 +2961,6 @@ export function createMcpToolService(
       }
       const retention: ReceiptRetention = MUTATING_MCP_TOOL_NAMES.has(typedTool) ? "durable" : "bounded";
       const requestId = clientRequestId(effectiveArgs);
-      const traceTool = (digest: string, lookup = false) => {
-        if (!outerId) return;
-        const origin = httpCaller?.capability ?? (httpCaller?.nativePeer ? JSON.stringify(httpCaller.nativePeer) : null);
-        const callerDigest = origin ? crypto.createHash("sha256").update(origin).digest("hex") : "-";
-        outerMcpToolEvent(outerId, "tool", lookup ? "lookup" : "call",
-          [typedTool, outerMcpKeyDigest(typedTool, requestId) ?? "-", digest, callerDigest].join(":"));
-      };
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
       // Private reads bypass receipts with explicit keys too; other keyed reads replay below.
       if (RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "curate_rules" && effectiveArgs.action === "read")
@@ -3053,7 +3056,7 @@ export function createMcpToolService(
           { code: "caller_unidentified", retryable: false });
       };
       const deniedTaskRecovery = () => failure(typedTool, requestId, "recovery_not_permitted", RECOVERY_NOT_PERMITTED, false);
-      const taskOwnerRefusal = (binding: McpRequestBinding | undefined) => taskMutation && binding?.localDispatch
+      const taskOwnerRefusal = (binding: McpReceiptRecord["binding"] | undefined) => taskMutation && binding?.localDispatch
         && binding.caller.kind !== "unidentified" && binding.caller.conversationId !== taskCaller
         ? deniedTaskRecovery() : null;
       if (findTaskCaller && (!taskCaller || callerChanged())) return finish(taskCallerRefusal(), "failure");
