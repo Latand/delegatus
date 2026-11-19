@@ -3831,9 +3831,7 @@ export class StructuredDeliveryQueue {
       }
       const host = this.resolveHost(effect.conversationId);
       if (effect.onlyIfIdle && host) {
-        const assertOwner = this.captureHostOwner(effect.conversationId, host);
-    const request = effect.kind === "answer" ? host.agentAttentionRequest?.(effect.attentionId!) : undefined;
-    const state = await this.readHealth(host);
+        const state = await this.readHealth(host);
         if (!state.readable || !state.value.idle
           || state.value.attentionPending || blockingHostActivityFlags(state.value.activeFlags).length > 0) {
           await transition("failed", { reason: "idle-retirement-deferred" });
@@ -3904,6 +3902,8 @@ export class StructuredDeliveryQueue {
     /* An answer and an interrupt are engine writes like a message, so the same
        rule holds one step earlier: a state that could not be read authorises
        neither the control nor the `dead-host` requeue that would reissue it. */
+    const assertOwner = this.captureHostOwner(effect.conversationId, host);
+    const request = effect.kind === "answer" ? host.agentAttentionRequest?.(effect.attentionId!) : undefined;
     const state = await this.readHealth(host);
     if (!state.readable) {
       this.retrySoon();
