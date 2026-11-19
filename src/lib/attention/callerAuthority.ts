@@ -40,7 +40,10 @@ export interface AttentionCallerSources {
   ancestry(): readonly number[];
   capabilityPresented?(): boolean;
   nativeCaller?(): NativeCallerVerdict;
-  hosted(): readonly HostedConversation[];
+  /** The conversation from the snapshot that corroborated native admission. */
+  nativeConversation?(conversationId: string): HostedConversation | null;
+  /** Null when the available evidence cannot be resolved within its bound. */
+  hosted(): readonly HostedConversation[] | null;
   /** The conversation the root lineage currently names, when one is adopted. */
   rootConversationId(): string | null;
   /** The conversation named by the spawn capability the Viewer minted at
@@ -76,16 +79,16 @@ export function attentionCallerAuthority(sources: AttentionCallerSources): Atten
     return { kind: "unidentified", admission: nativeCallerRefusal("capability-unresolved") };
   }
   const hosted = sources.hosted();
+  if (!hosted) return { kind: "unidentified", admission: nativeCallerRefusal("ancestry-ambiguous") };
 
-  const byPid = new Map<number, HostedConversation>();
+  const byPid = new Map<number, HostedConversation | null>();
   const byId = new Map<string, HostedConversation>();
   for (const conversation of hosted) {
     byId.set(conversation.conversationId, conversation);
     for (const pid of conversation.pids) {
-      /* First writer wins: the nearest generation to have claimed a pid is the
-         one hosting it, and a pid reused across conversations would otherwise
-         resolve to whichever happened to be enumerated last. */
-      if (!byPid.has(pid)) byPid.set(pid, conversation);
+      const prior = byPid.get(pid);
+      if (prior === undefined) byPid.set(pid, conversation);
+      else if (prior?.conversationId !== conversation.conversationId) byPid.set(pid, null);
     }
   }
 
@@ -95,6 +98,7 @@ export function attentionCallerAuthority(sources: AttentionCallerSources): Atten
   let pidMatch: HostedConversation | null = null;
   for (const pid of sources.ancestry()) {
     const candidate = byPid.get(pid);
+    if (candidate === null) return { kind: "unidentified", admission: nativeCallerRefusal("ancestry-ambiguous") };
     if (!candidate) continue;
     pidMatch = candidate;
     break;
@@ -120,7 +124,9 @@ export function attentionCallerAuthority(sources: AttentionCallerSources): Atten
   if (!conversation && sources.nativeCaller) {
     const native = sources.nativeCaller();
     if (native.kind === "refused") return { kind: "unidentified", admission: native };
-    conversation = byId.get(native.conversationId) ?? null;
+    conversation = sources.nativeConversation
+      ? sources.nativeConversation(native.conversationId)
+      : byId.get(native.conversationId) ?? null;
     evidence = { evidence: "native-session", nativeProof: native.proof };
   }
   if (!conversation) return { kind: "unidentified" };
