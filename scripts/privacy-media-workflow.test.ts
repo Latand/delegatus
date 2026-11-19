@@ -15,14 +15,14 @@ type Step = {
   "continue-on-error"?: boolean;
   with?: Record<string, string>;
 };
-type Job = { env: Record<string, string>; steps: Step[] };
+type Job = { if?: string; steps: Step[] };
 const names = ["privacy-publication", "privacy-tracker-audit"];
 const workflows = names.map((name) => {
   const source = readFileSync(join(import.meta.dir, "..", ".github/workflows", `${name}.yml`), "utf8");
   return Bun.YAML.parse(source) as {
     // Bun 1.3's YAML 1.1 parser resolves unquoted `on` to `true`; Bun 1.4 keeps it as a string.
-    on?: { push?: { branches: string[] } };
-    true?: { push?: { branches: string[] } };
+    on?: { schedule?: { cron: string }[]; push?: { branches: string[] } };
+    true?: { schedule?: { cron: string }[]; push?: { branches: string[] } };
     jobs: Record<string, Job>;
   };
 });
@@ -72,7 +72,7 @@ esac
       if (entry === baseline) command.unshift("timeout", "--kill-after=5s", budget === "130s" ? `${entry["timeout-minutes"]}m` : budget);
       const result = Bun.spawnSync(command, {
         cwd: join(root, entry["working-directory"]!),
-        env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALL_LOG: log, BASELINE_EXIT: "1", SCAN_EXIT: "0", CANDIDATE_EXIT: "0", STALL_DIRECTORY: "", ...extra },
+        env: { ...process.env, PATH: `${root}:${process.env.PATH}`, GITHUB_EVENT_NAME: "pull_request", CALL_LOG: log, BASELINE_EXIT: "1", SCAN_EXIT: "0", CANDIDATE_EXIT: "0", STALL_DIRECTORY: "", ...extra },
         stdout: "pipe", stderr: "pipe",
       });
       text += result.stdout.toString() + result.stderr.toString();
@@ -126,7 +126,7 @@ test("candidate self-test failure still blocks publication after a red baseline"
 });
 
 test("a stalled baseline is diagnosed before inspection and candidate tests proceed", () => {
-  const result = runPublication({ STALL_DIRECTORY: "trusted" }, "0.1s");
+  const result = runPublication({ STALL_DIRECTORY: "trusted" }, "1s");
   expect(result.code).toBe(0);
   expect(result.text).toContain("::warning title=Trusted privacy self-tests::");
   expect(result.baselineCode).toBe(124);
@@ -134,7 +134,7 @@ test("a stalled baseline is diagnosed before inspection and candidate tests proc
 });
 
 test("a stalled candidate still refuses publication after a red baseline", () => {
-  const result = runPublication({ STALL_DIRECTORY: "candidate" }, "0.1s");
+  const result = runPublication({ STALL_DIRECTORY: "candidate" }, "1s");
   expect(result.code).toBe(124);
   expect(result.calls).toEqual(["trusted:test", "trusted:scripts/privacy-publication-gate.ts", "candidate:test"]);
 });
@@ -167,117 +167,16 @@ test("candidate privacy tests run last with a failing time budget", () => {
   }
 });
 
-// Execute the actual inline workflow shell. The sudo double records apt
-// invocations and refuses a warm install unless network use is disabled.
-function run(job: Job, name: string, extra: Record<string, string> = {}) {
-  const root = mkdtempSync(join(tmpdir(), "privacy-media-workflow-"));
-  try {
-    const log = join(root, "calls");
-    const output = join(root, "output");
-    writeFileSync(join(root, "sudo"), `#!/bin/bash
-printf '%s\\n' "$*" >> "$CALL_LOG"
-if [[ "$1" == timeout ]]; then
-  [[ "$FAIL_DOWNLOAD" != 1 ]]
-elif [[ "$1" == apt-get ]]; then
-  [[ "$*" == *--no-download* && "$*" == *--no-install-recommends* && "$FAIL_INSTALL" != 1 ]]
-else
-  exit 0
-fi
-`, { mode: 0o755 });
-    for (const tool of ["ffmpeg", "ffprobe", "tesseract"]) {
-      writeFileSync(join(root, tool), "#!/bin/bash\nprintf 'eng\\nukr\\n'\n", { mode: 0o755 });
-    }
-    const result = Bun.spawnSync(["bash", "-c", step(job, name).run!], {
-      env: {
-        ...process.env,
-        PATH: `${root}:${process.env.PATH}`,
-        PRIVACY_MEDIA_PACKAGES: job.env.PRIVACY_MEDIA_PACKAGES!,
-        MEDIA_CACHE_DIR: join(root, "cache"),
-        ImageOS: "ubuntu24",
-        ImageVersion: "20260930.1",
-        RUNNER_ARCH: "X64",
-        GITHUB_OUTPUT: output,
-        GITHUB_ENV: join(root, "environment"),
-        RUNNER_TEMP: root,
-        CALL_LOG: log,
-        ...extra,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    return {
-      code: result.exitCode,
-      text: result.stdout.toString() + result.stderr.toString(),
-      calls: Bun.file(log).size ? readFileSync(log, "utf8") : "",
-      output: Bun.file(output).size ? readFileSync(output, "utf8") : "",
-    };
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-for (const [index, job] of jobs.entries()) {
-  test(`${names[index]} warm installation cannot contact apt sources`, () => {
-    const result = run(job, "Install media inspection tools (offline)");
-    expect(result.code).toBe(0);
-    expect(result.calls).toContain("--no-download");
-    expect(result.calls).not.toContain(" update");
-    expect(result.calls).not.toContain("timeout");
-    const restore = step(job, "Restore media inspection tools");
-    expect(restore.with?.["restore-keys"]).toBeUndefined();
-    expect(restore.with?.path).toBe("${{ runner.temp }}/privacy-media");
-    expect(step(job, "Download media inspection tools (cold cache)").if)
-      .toBe("steps.media-cache.outputs.cache-hit != 'true'");
-  });
-
-  test(`${names[index]} cold download has a bounded retry and infrastructure verdict`, () => {
-    const result = run(job, "Download media inspection tools (cold cache)", { FAIL_DOWNLOAD: "1" });
-    expect(result.code).toBe(1);
-    expect(result.calls.trim().split("\n")).toHaveLength(2);
-    expect(result.calls).toContain("timeout --kill-after=5s 90s");
-    expect(result.text).toContain("::error title=Privacy tools provisioning::");
-    expect(result.text).toContain("infrastructure failure before privacy inspection");
-    const success = run(job, "Download media inspection tools (cold cache)");
-    expect(success.code).toBe(0);
-    expect(success.calls).toContain("timeout --kill-after=5s 180s");
-    expect(success.calls).toContain("--download-only --reinstall --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-ukr");
-  });
-
-  test(`${names[index]} offline failure fails closed without network fallback`, () => {
-    const result = run(job, "Install media inspection tools (offline)", { FAIL_INSTALL: "1" });
-    expect(result.code).toBe(1);
-    expect(result.calls.trim().split("\n")).toHaveLength(1);
-    expect(result.text).toContain("Offline cached-package installation failed");
-  });
-
-  test(`${names[index]} cache key follows tools and runner image, with no candidate input`, () => {
-    const baseline = run(job, "Resolve media tools cache");
-    expect(baseline.code).toBe(0);
-    expect(baseline.output).toContain("key=privacy-media-v3-ubuntu24-20260930.1-X64-");
-    expect(run(job, "Resolve media tools cache", { PRIVACY_MEDIA_PACKAGES: "ffmpeg" }).output).not.toBe(baseline.output);
-    expect(run(job, "Resolve media tools cache", { ImageVersion: "20261001.1" }).output).not.toBe(baseline.output);
-    const saveIndex = job.steps.findIndex((entry) => entry.uses?.startsWith("actions/cache/save@"));
-    expect(saveIndex).toBeGreaterThan(0);
-    expect(job.steps[saveIndex]!.if).toBe("steps.media-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')");
-    expect(job.steps.slice(0, saveIndex).filter((entry) => entry.uses?.startsWith("actions/checkout@"))[0]?.with?.ref)
-      .toBe("${{ github.event.repository.default_branch }}");
-    for (const entry of job.steps.slice(0, saveIndex + 1)) {
-      expect(entry.run ?? "").not.toMatch(/candidate|hashFiles|github\.event\.pull_request\.head/);
-    }
-    expect(job.steps.slice(saveIndex + 1).some((entry) => entry.run?.includes("privacy-"))).toBeTrue();
-  });
-}
-
-test("both required jobs use identical package lists and provisioning", () => {
-  expect(jobs[0]!.env).toEqual(jobs[1]!.env);
-  const media = (job: Job) => job.steps.filter((entry) => /media|inspection tools/.test(entry.name ?? ""));
-  expect(media(jobs[0]!)).toEqual(media(jobs[1]!));
-});
-
-// Default-branch caches need a trusted push writer on hosts that give
-// publication/issue events read-only cache tokens.
-test("main pushes populate the same cache without requiring a tracker number", () => {
-  for (const workflow of workflows) expect((workflow.on ?? workflow.true)?.push?.branches).toEqual(["main"]);
+test("nightly runs the complete default-branch suite and propagates its exit status", () => {
+  const publication = workflows[0]!;
+  const trigger = publication.on ?? publication.true;
+  expect(trigger?.schedule?.[0]?.cron).toBe("31 2 * * *");
+  const nightly = publication.jobs["nightly-privacy-self-tests"]!;
+  expect(nightly.if).toBe("github.event_name == 'schedule'");
+  expect(nightly.steps.at(-1)?.run).toBe("bun test scripts/privacy-*.test.ts");
+  expect(nightly.steps.at(-1)?.["continue-on-error"]).toBeUndefined();
+  const tracker = workflows[1]!;
+  expect((tracker.on ?? tracker.true)?.push?.branches).toEqual(["main"]);
   expect(step(jobs[1]!, "Audit public tracker surfaces").if).toBe("github.event_name != 'push'");
   expect(step(jobs[0]!, "Check out candidate as inspection input").with?.ref)
     .toBe("${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}");
@@ -285,10 +184,11 @@ test("main pushes populate the same cache without requiring a tracker number", (
 
 test("PR self-tests use the trusted import closure and workflow changes while inspection always runs", () => {
   const job = jobs[0]!;
-  expect(step(job, "Verify privacy gate behavior").if).toBe("github.event_name == 'push'");
+  expect(step(job, "Verify privacy gate behavior").if).toBe("steps.privacy-scope.outputs.run == 'true'");
   const scope = step(job, "Scope candidate privacy self-tests with trusted code");
+  expect(scope.if).toBe("github.event_name != 'push'");
   expect(scope["working-directory"]).toBe("trusted");
-  expect(job.steps.indexOf(scope)).toBeGreaterThan(job.steps.findIndex(entry => entry.name === "Scan changed publication surfaces, commit messages and the merge boundary"));
+  expect(job.steps.indexOf(scope)).toBeLessThan(job.steps.indexOf(step(job, "Verify privacy gate behavior")));
   expect(step(job, "Scan changed publication surfaces, commit messages and the merge boundary").if).toBeUndefined();
   const root = mkdtempSync(join(tmpdir(), "privacy-scope-workflow-"));
   try {
@@ -318,8 +218,22 @@ test("PR self-tests use the trusted import closure and workflow changes while in
     mkdirSync(join(root, "trusted/node_modules"));
     writeFileSync(join(root, "trusted/test-preload.ts"), 'import "./scripts/preload-helper";\n');
     writeFileSync(join(root, "trusted/scripts/preload-helper.ts"), "export const value = true;\n");
-    for (const [file, expected] of [["src/components/fixture.ts", false], ["scripts/fixture-rule.ts", true], ["scripts/privacy-new.test.ts", true], [".github/workflows/privacy-publication.yml", true], ["test-preload.ts", true], ["scripts/preload-helper.ts", true], ["bunfig.toml", true], ["tsconfig.json", true], ["package.json", true], ["bun.lock", true]]) {
+    // A release sees the result on the main push. Its scan covers the commit
+    // that just landed even when the protected ref already points at that tip.
+    git("commit", "--allow-empty", "-m", "landed change");
+    const landed = git("rev-parse", "HEAD");
+    const resolveBase = step(job, "Resolve current protected base");
+    for (const [event, expected] of [["push", base], ["pull_request", landed]] as const) {
+      const environmentFile = join(root, "resolved-" + event);
+      const resolved = Bun.spawnSync(["bash", "-e", "-c", resolveBase.run!], {
+        cwd: join(root, "trusted"), env: { ...env, PRIVACY_BASE_REF: "main", PUSH_BEFORE: base, GITHUB_EVENT_NAME: event, GITHUB_ENV: environmentFile },
+      });
+      expect(resolved.exitCode, resolved.stderr.toString()).toBe(0);
+      expect(readFileSync(environmentFile, "utf8")).toBe("PRIVACY_BASE_SHA=" + expected + "\n");
+    }
+    for (const [file, expected] of [["src/components/fixture.ts", false], ["scripts/fixture-rule.ts", true], ["scripts/privacy-new.test.ts", true], ["scripts/privacy-fixture.json", true], ["scripts/generate-privacy-sample.ts", true], [".github/workflows/privacy-tracker-audit.yml", true], [".github/workflows/privacy-publication.yml", true], ["test-preload.ts", true], ["scripts/preload-helper.ts", true], ["bunfig.toml", true], ["tsconfig.json", true], ["package.json", true], ["bun.lock", true]]) {
       git("checkout", "--detach", base);
+      mkdirSync(join(root, "candidate", file as string, ".."), { recursive: true });
       writeFileSync(join(root, "candidate", file as string), "// changed fixture\n"); git("add", "."); git("commit", "-m", "scope change");
       const output = join(root, "output"); writeFileSync(output, "");
       const result = Bun.spawnSync(["bash", "-e", "-c", scope.run!], { cwd: join(root, "trusted"), env: { ...env, PRIVACY_BASE_SHA: base, GITHUB_OUTPUT: output } });

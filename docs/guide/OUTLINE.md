@@ -674,7 +674,6 @@ and the reviewer's spot-checks (the acceptance asks for at least twenty).
 
    ```bash
    LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json \
-   LLV_PRIVACY_OCR_LANGUAGES=eng+ukr \
    bun scripts/privacy-publication-gate.ts --require-known-values \
      --paths docs/guide/README.md docs/guide/getting-started.md docs/guide/concepts.md docs/guide/workflows.md docs/guide/OUTLINE.md README.md
    ```
