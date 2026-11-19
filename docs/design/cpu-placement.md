@@ -49,7 +49,7 @@ pipeline scopes there are.
 | Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | CPU weight 10, I/O weight 10, 300%, `MemoryMax=14G` |
 | Merger gates: every local gate, the bisect runs and the trusted privacy checks of `scripts/merge-batch.ts` | `gateCommand` and `trustedPrivacy`, through the `gate-slot.sh` beside the script | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | CPU weight 10, I/O weight 10, 300%, `MemoryMax=14G` |
 | Workflow setup (`bun install` in the built-in template, any command a template names) | `startSetup` in `src/lib/workflows/provision.ts` | `delegatus-agents-work.slice/delegatus-work-workflow-setup-<id>.scope` | weight 100, 300% |
-| Pipeline publication: `bun install --frozen-lockfile` and `git push` with every pre-push hook | `fencedExec` in `src/lib/pipelines/git.ts` | `delegatus-agents-work.slice/delegatus-work-publish-{install,push}-<id>.scope` | weight 100, 300% |
+| Pipeline publication: frozen dependency install, check preparation, and push with its pre-push hook | `fencedExec` in `src/lib/pipelines/git.ts` | `delegatus-agents-work.slice/delegatus-work-publish-{install,checks,push}-<id>.scope` | weight 100, 300% |
 | Package install of a packaged release | `realPorts().run` in `src/lib/selfUpdate/steps.ts` | `delegatus-agents-work.slice/delegatus-work-update-package-<id>.scope` | weight 100, 300% |
 | Self-update dependency install and compilation | `realPorts().run` / `wrapReleaseCommand` | `delegatus-agents.slice/delegatus-release-<id>.scope` | weight 1000, no CPU ceiling; immediate admission |
 | Viewer, runtime host, launcher, scan and search workers, recovery controller, self-update git fetch and checkout, pipeline and workflow provisioning git, observation of a running setup | production | `delegatus.service` | the service's (weight 1000 after the installation files) |
@@ -62,6 +62,14 @@ pipeline scopes there are.
 `systemd-run --scope` executes the command in place, so the PID, process group
 and inherited descriptors of every wrapped command stay the caller's: kill
 paths, identity checks and the publication lock descriptor work unchanged.
+
+A pipeline publication launched from a systemd user service gets its own
+scope with CPU placement off as well. The scope has no publication CPU
+properties in that mode. It carries the pre-push preparation, the parent-side
+owned runner and its waiting systemd client out of the Viewer group before
+they start. The gate service keeps its own admission, deadline and receipts.
+The checkout verifier still requires the stopped Viewer group to empty and
+release before start.
 
 A tmux pane is placed after `new-window` returns: tmux built with systemd moves
 every new pane into its own `tmux-spawn-<uuid>.scope` before it answers, and a
