@@ -37,7 +37,12 @@ test.skipIf(!nativeBinary).each([false, true])("native Codex config overrides pr
   try {
     const repo = path.join(root, "repo");
     const home = path.join(root, "codex");
-    fs.mkdirSync(repo); fs.mkdirSync(home);
+    const attempt = path.join(root, "attempt");
+    const tmp = path.join(attempt, "tmp");
+    const evidence = path.join(root, "evidence");
+    fs.mkdirSync(repo); fs.mkdirSync(home); fs.mkdirSync(tmp, { recursive: true }); fs.mkdirSync(evidence);
+    fs.writeFileSync(path.join(tmp, "allocation"), Buffer.alloc(4096));
+    const attemptStat = fs.statSync(attempt);
     const personal = ["configured", "example.invalid"].join("@");
     const original = '[shell_environment_policy]\ninherit="core"\n' + (keyedFilters
       ? '[shell_environment_policy.filters]\nPATH="include"\nHOME="include"\n"PRIVATE_*"="exclude"\n'
@@ -50,6 +55,12 @@ test.skipIf(!nativeBinary).each([false, true])("native Codex config overrides pr
       NODE_ENV: "test", PATH: process.env.PATH, HOME: root, CODEX_HOME: home, TMPDIR: root,
       LLV_STATE_DIR: path.join(root, "state"), GIT_CONFIG_NOSYSTEM: "1",
       LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: ["no-reply", "build.example.invalid"].join("@"),
+      LLV_EVIDENCE_DIR: evidence,
+      LLV_ATTEMPT_TIMING_ROOT: attempt,
+      LLV_ATTEMPT_TIMING_ROOT_IDENTITY: `${attemptStat.dev}:${attemptStat.ino}`,
+      LLV_ATTEMPT_TMP_MAX_BYTES: "1",
+      UV_CACHE_DIR: path.join(root, "uv-cache"),
+      BUN_INSTALL_CACHE_DIR: path.join(root, "bun-cache"),
     };
     const raw = await readCodexShellPolicy(nativeBinary!, repo, env);
     const ignored = await readCodexShellPolicy(nativeBinary!, repo, env, [], { ignoreUserConfig: true }) as { set?: Record<string, string> };
@@ -57,13 +68,23 @@ test.skipIf(!nativeBinary).each([false, true])("native Codex config overrides pr
     const effective = await readCodexShellPolicy(nativeBinary!, repo, env, agentCodexPublicationArgs(raw, env)) as {
       set: Record<string, string>; include_only?: string[]; exclude?: string[]; filters?: Record<string, string>;
     };
-    expect(effective.set).toMatchObject({ ...agentPublicationIdentityEnv(env), OTHER: "kept" });
+    expect(effective.set).toMatchObject({ ...agentPublicationIdentityEnv(env), OTHER: "kept",
+      TMPDIR: root, LLV_EVIDENCE_DIR: evidence,
+      LLV_ATTEMPT_TIMING_ROOT: attempt, LLV_ATTEMPT_TIMING_ROOT_IDENTITY: `${attemptStat.dev}:${attemptStat.ino}`,
+      LLV_ATTEMPT_TMP_MAX_BYTES: "1", UV_CACHE_DIR: path.join(root, "uv-cache"),
+      BUN_INSTALL_CACHE_DIR: path.join(root, "bun-cache") });
     expect(keyedFilters ? effective.filters?.["private_*"] : effective.exclude).toEqual(keyedFilters ? "exclude" : ["PRIVATE_*"]);
     // Exercise Git after Codex's native config merge and its final inclusion
     // filter: `core` inherits PATH/HOME, then `set`, then include-only.
     const shellEnv: NodeJS.ProcessEnv = { NODE_ENV: "test", PATH: env.PATH, HOME: env.HOME, ...effective.set };
     const included = effective.include_only ?? Object.entries(effective.filters ?? {}).filter(([, action]) => action === "include").map(([pattern]) => pattern);
     for (const key of Object.keys(shellEnv)) if (!included.some((pattern) => pattern.toLowerCase() === key.toLowerCase())) delete shellEnv[key];
+    expect(shellEnv).toMatchObject({
+      LLV_ATTEMPT_TIMING_ROOT: attempt,
+      LLV_ATTEMPT_TIMING_ROOT_IDENTITY: `${attemptStat.dev}:${attemptStat.ino}`,
+      LLV_ATTEMPT_TMP_MAX_BYTES: "1", UV_CACHE_DIR: path.join(root, "uv-cache"),
+      BUN_INSTALL_CACHE_DIR: path.join(root, "bun-cache"),
+    });
     const run = (args: string[], childEnv = env) => {
       const result = Bun.spawnSync(args, { cwd: repo, env: childEnv, stdout: "pipe", stderr: "pipe" });
       expect(result.exitCode).toBe(0);
@@ -75,6 +96,11 @@ test.skipIf(!nativeBinary).each([false, true])("native Codex config overrides pr
     run(["git", "commit", "--allow-empty", "-m", "base"], { ...env, ...agentPublicationIdentityEnv(env) });
     const base = run(["git", "rev-parse", "HEAD"]);
     run(["git", "commit", "--allow-empty", "-m", "agent work"], shellEnv);
+    const budget = Bun.spawnSync([process.execPath, path.resolve("scripts/attempt-tmp-budget.ts")], {
+      cwd: repo, env: shellEnv, stdout: "pipe", stderr: "pipe",
+    });
+    expect(budget.exitCode).toBe(73);
+    expect(budget.stderr.toString()).toContain("Refusing another check/export");
     expect(run(["git", "log", "-1", "--format=%an%n%ae%n%cn%n%ce"])).toBe(["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"].map((key) => agentPublicationIdentityEnv(env)[key]).join("\n"));
     expect(run([process.execPath, path.resolve("scripts/privacy-publication-gate.ts"), "--repository", repo, "--base", base, "--check-commits"])).toContain("PRIVACY GATE: PASS");
     expect(fs.readFileSync(configPath, "utf8")).toBe(original);

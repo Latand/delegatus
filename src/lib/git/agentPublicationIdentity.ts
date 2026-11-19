@@ -49,11 +49,21 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
   };
 }
 
-export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment): Record<string, unknown> {
+export function agentCodexPublicationPolicy(
+  policy: unknown,
+  source: AgentEnvironment,
+  resolvedBindings: AgentEnvironment = source,
+): Record<string, unknown> {
   const identity = agentPublicationIdentityEnv(source);
-  const shellBindings = source.LLV_GATE_CPU_PRIORITY_SOURCE === undefined
-    ? {} : { LLV_GATE_CPU_PRIORITY_SOURCE: source.LLV_GATE_CPU_PRIORITY_SOURCE };
-  const storage = Object.fromEntries(["TMPDIR", "LLV_EVIDENCE_DIR"].flatMap(key => source[key] === undefined ? [] : [[key, source[key]]]));
+  const shellBindings = Object.fromEntries([
+    "LLV_GATE_CPU_PRIORITY_SOURCE",
+    "LLV_ATTEMPT_TIMING_ROOT",
+    "LLV_ATTEMPT_TIMING_ROOT_IDENTITY",
+    "LLV_ATTEMPT_TMP_MAX_BYTES",
+  ].flatMap(key => resolvedBindings[key] === undefined ? [] : [[key, resolvedBindings[key]]]));
+  const storage = Object.fromEntries([
+    "TMPDIR", "LLV_EVIDENCE_DIR", "UV_CACHE_DIR", "BUN_INSTALL_CACHE_DIR",
+  ].flatMap(key => resolvedBindings[key] === undefined ? [] : [[key, resolvedBindings[key]]]));
   const set = { ...identity, ...shellBindings, ...storage };
   const configured = policy && typeof policy === "object" && !Array.isArray(policy)
     ? policy as Record<string, unknown> : {};
@@ -67,8 +77,9 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
     if (typeof filters !== "object" || Array.isArray(filters)
       || Object.values(filters).some((value) => value !== "include" && value !== "exclude")
       || included != null || configured.exclude != null) throw new Error("Codex shell policy could not be read safely");
-    // Includes filter after `set`; add only the Git fields to an existing
-    // inclusion bound. Exclusions run before `set` and remain untouched.
+    // Includes filter after `set`; add Delegatus' published identity and
+    // launch bindings to an existing inclusion bound. Exclusions run before
+    // `set` and remain untouched.
     if (Object.values(filters).includes("include")) {
       override.filters = Object.fromEntries(Object.keys(set).map((key) => [key, "include"]));
     }
