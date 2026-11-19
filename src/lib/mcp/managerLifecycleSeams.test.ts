@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import { expect, test } from "bun:test";
 
+import { structuredHostFixture } from "@/lib/agent/registryTestFixtures";
 import { attentionCallerAuthority, type AttentionCallerSources } from "@/lib/attention/callerAuthority";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -18,12 +19,9 @@ import { mcpCallerIdentity, type ManagerTarget } from "./toolAllowlist";
  * manager afterwards. That label is what the deploy binding derives its
  * authority from (#795), so losing it here is losing the deploy.
  *
- * The property under test is that NOTHING on the authorized path reads a
- * process id. Authority comes from the spawn capability the Viewer minted at
- * admission (immutable launch lineage, stored only as a digest, so no caller
- * can restate it) joined to the durable seat. A lifecycle event may change
- * every pid, every generation path and even the conversation id — the
- * designation survives, or it fails closed for a reason the operator can act on.
+ * The spawn capability joins durable launch lineage to the seat across
+ * changes to the PID, generation path, or conversation id. When ancestry
+ * provides independent evidence, it must agree with that lineage.
  */
 
 const MANAGER_ID = "conversation_11111111-1111-4111-8111-111111111111";
@@ -55,8 +53,10 @@ function snapshotOf(
       `claude:e${index}`,
       {
         artifactPath: entry.path,
-        host: entry.pid === null ? null : { agent: { pid: entry.pid } },
-        structuredHost: null,
+        host: null,
+        structuredHost: entry.pid === null ? null : structuredHostFixture({
+          pid: entry.pid, startIdentity: `${entry.pid}:fixture`, bootEpoch: "fixture-boot",
+        }),
       },
     ])),
   } as unknown as Snapshot;
