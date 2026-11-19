@@ -53,6 +53,28 @@ test("low pressure admits a newly queued heavy gate immediately", () => {
   expect(queue.check("command:gate", true, owner, true, undefined, true)).toBeNull();
 });
 
+test.skipIf(process.platform !== "linux")("legacy retirements survive reopen and incomplete coverage starts a new observation", () => {
+  const f = fixture(), owner = cpuOwnerIdentity(process.pid), q = f.open();
+  const key = `command:${owner.pid}:1:2`;
+  const retire = () => {
+    q.check(key, false, owner, false);
+    q.cancel(key);
+  };
+  retire();
+  expect(f.open().legacyGateHistory(owner.bootEpoch!).retirements).toEqual(new Set([owner.startIdentity!]));
+  // The historical cancel and claim both retire their ticket. Overflow must
+  // preserve uncertainty about every process already running at the boundary.
+  for (let index = 0; index < 128; index++) retire();
+  const restarted = f.open().legacyGateHistory(owner.bootEpoch!);
+  expect(restarted.cutover.boot).toBe(owner.bootEpoch!);
+  expect(restarted.cutover.uptime).toBeGreaterThan(0);
+  expect(restarted.retirements.size).toBe(0);
+  retire();
+  const later = f.open().legacyGateHistory(owner.bootEpoch!);
+  expect(later.cutover).toEqual(restarted.cutover);
+  expect(later.retirements.has(owner.startIdentity!)).toBe(true);
+});
+
 test("a slot observation made before another admission cannot consume a ready gate", () => {
   const f = fixture(), owner = captureProcessIdentity(process.pid), gate = f.open(), peer = f.open();
   const key = "command:bounded:probe";

@@ -396,7 +396,8 @@ for (const [kind, title] of [
 
 const systemctl = process.platform === "linux" ? Bun.which("systemctl") : null;
 const hasUserManager = systemctl !== null && Bun.spawnSync([systemctl, "--user", "show-environment"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
-test.skipIf(!hasUserManager)("a pre-exemption service holds its cap-one grant until the ordinary hook exits", async () => {
+for (const portable of [false, true]) test.skipIf(process.platform !== "linux" || !portable && !hasUserManager)(
+  `a pre-exemption ${portable ? "portable runner" : "service"} holds its cap-one grant until the ordinary hook exits`, async () => {
   const f = fixture(), control = new AbortController(), pending: ReturnType<typeof realExec>[] = [];
   const release = path.join(f.dir, "release"), entered = path.join(f.dir, "entered");
   const finish = path.join(f.dir, "finish");
@@ -404,9 +405,11 @@ test.skipIf(!hasUserManager)("a pre-exemption service holds its cap-one grant un
     LLV_GATE_PUSH_DEADLINE: undefined, LLV_GATE_BUN: process.execPath };
   const last = () => f.db.query<{ last: number }, []>("SELECT last FROM admission").get()!.last;
   try {
-    const legacy = legacyGateTree(f.dir, "bf1c00247d496184b51c598a92e7cf4501185ae5");
+    const legacy = legacyGateTree(f.dir, portable ? "3e570adfba80059eaba26a978402a2e73a02978e" : "bf1c00247d496184b51c598a92e7cf4501185ae5");
+    if (portable) withoutInheritedGate(env);
     execFileSync("git", ["init", "--quiet", legacy], { env: fixtureGitEnv() });
     const bin = pathWithoutFlock(f.dir);
+    if (portable) fs.rmSync(path.join(bin, "systemctl"), { force: true });
     // Hold the real legacy hook in its fetch after it has consumed its ticket.
     // The empty repository then ends the hook at merge-base.
     fs.writeFileSync(path.join(bin, "git"), `#!/bin/bash
@@ -424,8 +427,8 @@ while [[ ! -f "$FIXTURE_RELEASE" ]]; do sleep 0.02; done
     const hook = fs.readFileSync(entered, "utf8").trim();
     const parent = fs.readFileSync(`/proc/${hook}/stat`, "utf8").split(") ").at(-1)!.split(" ")[1];
     const service = fs.readFileSync(`/proc/${parent}/cmdline`, "utf8").split("\0");
-    expect(service[2]).toBe("--service");
-    expect(fs.existsSync(service[3]!)).toBe(false);
+    expect(service[2]).toBe(portable ? "--portable" : "--service");
+    if (!portable) expect(fs.existsSync(service[3]!)).toBe(false);
     expect(f.count()).toBe(0);
     const held = last();
     expect(held).toBeGreaterThan(0);
@@ -458,11 +461,80 @@ while [[ ! -f "$FIXTURE_RELEASE" ]]; do sleep 0.02; done
   }
 }, 45_000);
 
-for (const mode of ["portable prepare", "service prepare", "service hooks", "historical service hook"] as const) test.skipIf(
-  process.platform !== "linux" || mode !== "portable prepare" && !hasUserManager
+for (const upgraded of [false, true]) test.skipIf(!hasUserManager)(
+  `a native hook that consumed admission keeps it after queuing its nested gate (upgrade during fetch: ${upgraded})`, async () => {
+  const f = fixture(), roots: string[] = [], holder = new AbortController(), entrant = new AbortController();
+  const pending: ReturnType<typeof realExec>[] = [];
+  const entered = path.join(f.dir, "fetch"), resume = path.join(f.dir, "resume");
+  const grants = () => f.db.query("SELECT at FROM grants ORDER BY rowid").all();
+  try {
+    const legacy = legacyGateTree(f.dir, "c0ceb7ff5eb064b1d9d29a9aef2540edd15d5dd1");
+    const publication = createPublicationFixtures(legacy, roots).fixture();
+    fs.mkdirSync(path.join(publication.dir, "scripts/gate-runner"));
+    const bin = pathWithoutFlock(f.dir);
+    for (const name of ["sh", "cat", "cut", "id", "ps", "awk", "sed", "chmod", "python3", "basename", "nproc", "env", "readlink"]) {
+      const executable = Bun.which(name);
+      if (executable) fs.symlinkSync(executable, path.join(bin, name));
+    }
+    fs.writeFileSync(path.join(bin, "git"), `#!/bin/bash
+if [[ $1 == fetch ]]; then
+  echo "$PPID" > "$FIXTURE_FETCH"
+  while [[ ! -f "$FIXTURE_RESUME" ]]; do sleep 0.02; done
+fi
+command -p git "$@"
+`, { mode: 0o755 });
+    const env = { ...publication.env, ...f.env, PATH: path.join(publication.dir, "shims") + path.delimiter + bin,
+      LLV_GATE_SLOTS: "1", LLV_GATE_RUNNER: "off", LLV_GATE_PUSH_DEADLINE: undefined, LLV_GATE_PUBLICATION_RECEIPT: undefined,
+      LLV_GATE_BUN: process.execPath, FIXTURE_FETCH: entered, FIXTURE_RESUME: resume, GIT_DIR: ".git", DELEGATUS_CPU_PRESSURE: "off" };
+    withoutInheritedGate(env);
+    f.db.exec("CREATE TABLE grants (at INTEGER); CREATE TRIGGER count_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO grants VALUES (NEW.last); END");
+    if (upgraded) f.db.exec("DROP TRIGGER IF EXISTS legacy_gate_retired; DROP TABLE IF EXISTS legacy_gate_cutover; DROP TABLE IF EXISTS legacy_gate_retirements");
+    pending.push(realExec("bash", ["scripts/gate-slot.sh", ".githooks/pre-push"], publication.dir, env, { timeoutMs: 30_000, signal: holder.signal }));
+    await until(() => fs.existsSync(entered), 10_000);
+    const hook = fs.readFileSync(entered, "utf8").trim();
+    const supervisor = fs.readFileSync(`/proc/${hook}/stat`, "utf8").split(") ").at(-1)!.split(" ")[1];
+    const args = fs.readFileSync(`/proc/${supervisor}/cmdline`, "utf8").split("\0");
+    expect(args[2]).toBe("--service");
+    expect(fs.existsSync(args[3]!)).toBe(false);
+    expect(fs.existsSync(path.join(f.dir, "llv-heavy-gate.slot1.lock"))).toBe(false);
+    expect(grants()).toHaveLength(1);
+    expect(f.count()).toBe(0);
+    const entrantEnv = { ...f.env, LLV_GATE_SLOTS: "1", LLV_GATE_RUNNER: "off" };
+    withoutInheritedGate(entrantEnv);
+    pending.push(realExec("bash", f.command("entrant").slice(1), process.cwd(), entrantEnv, { timeoutMs: 30_000, signal: entrant.signal }));
+    await until(() => f.count() === 1);
+    const head = f.db.query<{ owner: string }, []>(`SELECT owner ${queuedTickets}`).get()!.owner;
+    fs.writeFileSync(resume, "continue");
+    await until(() => f.count() === 2);
+    const nested = f.db.query<{ owner: string }, [string]>(`SELECT owner ${queuedTickets} AND owner != ?`).get(head)!;
+    expect(fs.readFileSync(`/proc/${JSON.parse(nested.owner).pid}/stat`, "utf8").split(") ").at(-1)!.split(" ")[1]).toBe(hook);
+    fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+    const held = f.db.query<{ last: number }, []>("SELECT last FROM admission").get()!.last;
+    const polls = new Set<number>();
+    await until(() => {
+      const polled = f.db.query<{ polled: number }, [string]>("SELECT polled FROM tickets WHERE owner = ?").get(head)?.polled;
+      if (polled && polled > held + CPU_QUEUE_SPACING_MS) polls.add(polled);
+      return polls.size >= 6 || grants().length !== 1;
+    }, 10_000);
+    expect(grants()).toEqual([{ at: held }]);
+    expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
+    holder.abort();
+    await until(() => fs.existsSync(f.env.CPU_QUEUE_OUTPUT), 10_000);
+    expect((await pending[1]!).code).toBe(0);
+    expect(grants()).toHaveLength(2);
+  } finally {
+    fs.writeFileSync(resume, "continue"); holder.abort(); entrant.abort();
+    await Promise.allSettled(pending);
+    for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+    f.close();
+  }
+}, 50_000);
+
+for (const mode of ["portable prepare", "portable hooks", "service prepare", "service hooks", "historical service hook"] as const) test.skipIf(
+  process.platform !== "linux" || !mode.startsWith("portable") && !hasUserManager
 )(`FIFO publication admits the first check while the peer waits (${mode})`, async () => {
-    const useService = mode !== "portable prepare";
-    const historical = mode === "historical service hook", ordinary = mode === "service hooks" || historical;
+    const useService = !mode.startsWith("portable");
+    const historical = mode === "historical service hook", ordinary = mode.endsWith("hooks") || historical;
     const f = fixture(), control = new AbortController(), roots: string[] = [];
     const pending: ReturnType<typeof realExec>[] = [];
     const { fixture: publicationFixture, commitFixtureInputs } = createPublicationFixtures(process.cwd(), roots);
@@ -483,6 +555,8 @@ for (const mode of ["portable prepare", "service prepare", "service hooks", "his
         env.LLV_GATE_PUBLICATION_RECEIPT = undefined;
         command = ["bun", "scripts/local-gate.ts", "pre-push"];
         if (name === "peer" && historical) {
+          command = ["bash", "scripts/gate-slot.sh", ".githooks/pre-push"];
+        } else if (name === "peer" && !useService) {
           command = ["bash", "scripts/gate-slot.sh", ".githooks/pre-push"];
         } else if (name === "peer") {
           // Enter the service exactly as gate-slot's placed native hook does.
