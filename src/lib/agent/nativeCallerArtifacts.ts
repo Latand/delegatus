@@ -9,6 +9,8 @@ const MAX_PATHS = 65_536;
 const MAX_DIRECTORIES = 16_384;
 const MAX_COMPONENTS = 128;
 const MOUNT_POLL = 2; // POLLPRI
+// Linux event header plus a conservatively sized, padded filename.
+const MAX_EVENT_BYTES = 16 + 4096;
 // Local filesystems whose directory bindings are observed by inotify.
 // Network and synthetic filesystems can change without sending these events.
 const WATCHABLE_FILESYSTEMS = new Set([
@@ -178,15 +180,18 @@ export class NativeCallerArtifacts {
       }
       offset += 16 + length;
     }
-    // Finish draining events that arrived while resolving the dirty paths
-    // before using the map again. Rebinding may register new watches.
+    // Rebinding may register new watches. Read again after any rebind before
+    // using the map, so changes during the rebind are also observed.
     const unchanged = this.dirty.size === 0;
     for (const spelling of this.dirty) {
       this.delete(spelling);
       this.add(spelling);
     }
     if (this.library.symbols.poll(this.pointer(this.mountPoll), 1n, 0) !== 0) throw new Error("native caller mount namespace changed");
-    return count === 0 && unchanged;
+    // A nonblocking inotify read stops at an empty queue or when the next
+    // complete event will not fit. Spare space rules out the latter. Unrelated
+    // events therefore need no second read merely to observe EAGAIN.
+    return unchanged && this.events.length - count >= MAX_EVENT_BYTES;
   }
 
   aliases(transcript: string): ReadonlySet<string> | undefined {

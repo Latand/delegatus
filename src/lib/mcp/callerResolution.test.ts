@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -400,7 +400,22 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
         expect(archived.get("codex:retained-profile-%")?.count).toBe(3600);
         expect(archived.get(releasedResumeKey)?.count).toBe(1);
         f.reset(); realpaths = 0;
-        expect(resolveNativeCaller(sources)).toEqual(admitted);
+        // Another process can keep changing unrelated directory entries.
+        // Deliver unrelated events before every kernel queue read, even
+        // between preparation and the synchronous caller check.
+        let noise = path.join(home, "unrelated-noise");
+        fs.writeFileSync(noise, "");
+        const read = fs.readSync;
+        const churn = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof read>) => {
+          if (fs.readlinkSync(`/proc/self/fd/${args[0]}`) === "anon_inode:inotify") {
+            const moved = noise.endsWith("-moved") ? noise.slice(0, -6) : noise + "-moved";
+            fs.renameSync(noise, moved);
+            noise = moved;
+          }
+          return Reflect.apply(read, fs, args);
+        }) as typeof read);
+        try { expect(resolveNativeCaller(sources)).toEqual(admitted); }
+        finally { churn.mockRestore(); }
         expect(f.reads()).toBe(1);
         expect(realpaths).toBe(4);
         // A path indexed as missing can become a matching alias between calls.
