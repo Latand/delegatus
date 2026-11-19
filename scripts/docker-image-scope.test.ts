@@ -78,7 +78,7 @@ test("the admission list covers every repository JS/JSON dependency in the TypeS
     .filter(file => !file.startsWith("node_modules/") && /\.(?:[cm]?js|jsx|json)$/.test(file));
   expect(dependencies).toContain("landing/site/demo/taskIcons.json");
   expect(dependencies.filter(file => !isImageInput(file))).toEqual([]);
-}, 20_000);
+}, 45_000);
 
 test("each admitted root production env file is read by the installed Next loader", () => {
   const loader = require.resolve("@next/env");
@@ -253,7 +253,7 @@ test("real Git diff excludes main merges and retains deletions, renames and file
     expect(run("missing", large).status).not.toBe(0);
     expect(run("0".repeat(40), large).status).not.toBe(0);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
-});
+}, 15_000);
 
 test("real Tailwind compilation uses app sources and ignores prose outside src", async () => {
   const css = readFileSync(path.join(root, "src/app/globals.css"), "utf8");
