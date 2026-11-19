@@ -24,9 +24,9 @@ test("outer evidence retains recent metadata through reopen and refuses a busy w
     const refusal = await store.event("unwritten", "close", 2, 3, "premature")
       .then(() => null, (error: Error) => error.message);
     expect(refusal).toMatch(/busy|locked|writer deadline exceeded/i);
+    await store.close();
     peer.exec("ROLLBACK");
     expect(peer.query("SELECT id FROM events WHERE id = 'unwritten'").get()).toBeNull();
-    await store.close();
     store = new AsyncControlEvidenceStore(filename, true, undefined, true);
     await store.event("new-event", "response", 2, 3, "http_200");
     expect(peer.query("SELECT id,event,code FROM events ORDER BY seq").all()).toEqual([

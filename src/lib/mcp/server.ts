@@ -3833,7 +3833,7 @@ export function createMcpToolService(
           outerMcpToolEvent(outerId, "dispatch");
           const payload = await bindings[typedTool](effectiveArgs, typedTool === "deploy_exact_sha" && (retryDeployment || claim.kind === "pending")
             ? { ...context, priorAttemptUncertain: true,
-              ...(retryDeployment && claim.result.ok && claim.result.state === "accepted"
+              ...(claim.kind === "replay" && retryDeployment && claim.result.ok && claim.result.state === "accepted"
                 && typeof claim.result.deploymentId === "string" && typeof claim.result.revision === "string"
                 ? { priorAcceptedDeployment: { deploymentId: claim.result.deploymentId, revision: claim.result.revision } } : {}) }
             : context);

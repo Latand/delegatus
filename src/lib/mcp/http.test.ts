@@ -585,7 +585,7 @@ test("task HTTP execution preserves protocol validation, exact text, caller rece
 test("the outer listener joins a lost task reply to its receipt across an executor restart", async () => {
   const { Database } = await import("bun:sqlite");
   const { installServingControlIngress } = await import("./controlIngress");
-  const { MCP_OUTER_REQUEST_HEADER, outerMcpKeyDigest, prepareOuterMcpEvidence } = await import("./outerEvidence");
+  const { MCP_OUTER_REQUEST_HEADER, prepareOuterMcpEvidence } = await import("./outerEvidence");
   const { controlEvidenceStore } = await import("./controlEvidence");
   const { viewerMcpHttpClaudeEntry, viewerMcpHttpCodexEntry } = await import("@/lib/agent/spawnPolicy");
   const { viewerTaskExecutor } = await import("./taskExecutor");
@@ -700,8 +700,8 @@ test("the outer listener joins a lost task reply to its receipt across an execut
       expect(lost.map(row => row.event)).toEqual(expect.arrayContaining(["start", "executor", "tool", "claim", "dispatch", "settled", "result", "close"]));
       expect(lost).toContainEqual({ event: "close", code: "premature", route: null });
       expect(lost.map(row => row.event)).not.toContain("response");
-      expect(lost.find(row => row.event === "tool")?.route?.split(":").slice(0, 2))
-        .toEqual(["update_task", outerMcpKeyDigest("update_task", update.clientRequestId)]);
+      const keyDigest = crypto.createHash("sha256").update(JSON.stringify(["update_task", update.clientRequestId])).digest("hex");
+      expect(lost.find(row => row.event === "tool")?.route?.split(":").slice(0, 2)).toEqual(["update_task", keyDigest]);
       const rows = JSON.stringify(db.query("SELECT * FROM events").all());
       for (const privateValue of [agent.capability, taskId, update.appendLine, update.clientRequestId, "untrusted-fixture-id"]) {
         expect(rows).not.toContain(privateValue);
