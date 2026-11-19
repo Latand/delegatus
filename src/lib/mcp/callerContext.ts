@@ -26,6 +26,7 @@ export interface McpHttpCaller {
   paginationIdentity?: string;
   /** Server-assigned outer HTTP observation, carried over the private executor pipe. */
   outerRequestId?: string;
+  authenticatedConversationId?: string;
 }
 
 const STORE_KEY = Symbol.for("llv.mcp.httpCaller");

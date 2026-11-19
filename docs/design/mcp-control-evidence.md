@@ -107,6 +107,7 @@ again for a fresh observation. After a lost write, keep the original
 `clientRequestId` and arguments. For `create_task` and `update_task`, a
 managed client can add `recoveryOnly: true` to read its newly caller-bound
 receipt. The Viewer rechecks the launch capability after the lookup.
+Both lookup and ordinary replay enforce the owner of a caller-bound receipt.
 The lookup makes no claim and starts no write. Missing, older unbound,
 unreadable and unsettled receipts leave the outcome unknown. Task read-back
 can help establish the result. For `create_pipeline`, the existing

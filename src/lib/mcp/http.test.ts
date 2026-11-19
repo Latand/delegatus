@@ -652,10 +652,12 @@ test("the outer listener joins a lost task reply to its receipt across an execut
     const claude = await connect("claude", agent.capability);
     const codex = await connect("codex", agent.capability);
     const foreign = await connect("codex", bob.capability);
-    const initial = await call(claude, "create_task", withTaskDue({
+    const create = withTaskDue({
       project: "Fixture Viewer", text: "Outer HTTP fixture", clientRequestId: "outer-http-create", board: "hidden", full: true,
-    }));
+    });
+    const initial = await call(claude, "create_task", create);
     expect(initial).toMatchObject({ ok: true });
+    expect(await call(codex, "create_task", { ...create, recoveryOnly: true })).toEqual({ ...initial, replayed: true });
     const taskId = initial.taskId;
     const update = { taskId, appendLine: "Private fixture line", clientRequestId: "outer-http-update", full: true };
     const read = () => call(codex, "get_task", { taskId, full: true });
@@ -672,9 +674,14 @@ test("the outer listener joins a lost task reply to its receipt across an execut
     const settled = await lookup(codex);
     expect(settled).toMatchObject({ ok: true, replayed: true, task: { details: update.appendLine } });
     expect(await lookup(foreign)).toMatchObject({ ok: false, code: "recovery_not_permitted" });
+    expect(await call(foreign, "update_task", update)).toMatchObject({ ok: false, code: "recovery_not_permitted" });
+    expect(await call(foreign, "update_task", { ...update, appendLine: "Changed arguments" }))
+      .toMatchObject({ ok: false, code: "recovery_not_permitted" });
     expect(await call(codex, "update_task", { ...update, appendLine: "Changed arguments", recoveryOnly: true }))
       .toMatchObject({ ok: false, code: "idempotency_conflict" });
-    expect(await call(codex, "update_task", update)).toEqual(settled);
+    expect(await call(codex, "update_task", { ...update, recoveryOnly: false })).toEqual(settled);
+    cut = "before-route";
+    expect(await read().then(() => "answered", () => "lost")).toBe("lost");
     expect((await read()).task.details).toBe(update.appendLine);
     const concurrent = { ...update, appendLine: "Concurrent fixture line", clientRequestId: "outer-http-concurrent" };
     const overlap = await Promise.all([call(claude, "update_task", concurrent), call(codex, "update_task", concurrent), read()]);

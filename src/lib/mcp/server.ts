@@ -2847,7 +2847,7 @@ export function createMcpToolService(
   policy?: McpToolPolicy,
   options: McpToolServiceOptions = {},
 ): McpToolService {
-  const inFlight = new Map<string, { digest: string; result: Promise<McpToolResult> }>();
+  const inFlight = new Map<string, { digest: string; result: Promise<McpToolResult>; taskCaller: string | null }>();
   // A failed local dispatch marker proves this invocation never called the
   // binding. Retain that proof if its owner-bound claim release is temporarily
   // unavailable, so a same-process retry can finish cleanup before claiming.
@@ -2874,6 +2874,10 @@ export function createMcpToolService(
       const taskMutation = typedTool === "create_task" || typedTool === "update_task";
       const httpCaller = currentMcpHttpCaller();
       const outerId = httpCaller?.outerRequestId;
+      const findTaskCaller = taskMutation && httpCaller?.capability && options.taskReceiptCaller
+        ? () => options.taskReceiptCaller!(httpCaller.capability!) : undefined;
+      const liveTaskCaller = () => { try { return findTaskCaller?.() ?? null; } catch { return null; } };
+      const taskCaller = findTaskCaller ? httpCaller?.authenticatedConversationId ?? liveTaskCaller() : null;
       const pageCaller = mcpPageCursorCaller();
       const normalized = normalizeBoundedMcpNumerics(typedTool, args);
       let effectiveArgs = normalized.args;
@@ -3034,17 +3038,13 @@ export function createMcpToolService(
          and without it is one call. */
       const taskLookup = taskMutation && effectiveArgs.recoveryOnly === true;
       const recoveryOnly = recoverable !== null && effectiveArgs.recoveryOnly === true;
-      const digestArgs: McpToolArgs = recoverable || taskLookup
+      const digestArgs: McpToolArgs = recoverable || taskMutation
         ? Object.fromEntries(Object.entries(effectiveArgs).filter(([name]) => name !== "recoveryOnly"))
         : effectiveArgs;
       const canonicalArgs = bindings[typedTool].canonicalizeReceiptArgs?.(digestArgs) ?? digestArgs;
       const digest = requestDigest(typedTool, canonicalArgs);
       const key = receiptKey(typedTool, requestId, scope);
       traceTool(digest, recoveryOnly || taskLookup);
-      const findTaskCaller = taskMutation && httpCaller?.capability && options.taskReceiptCaller
-        ? () => options.taskReceiptCaller!(httpCaller.capability!) : undefined;
-      const liveTaskCaller = () => { try { return findTaskCaller?.() ?? null; } catch { return null; } };
-      const taskCaller = liveTaskCaller();
       const taskCallerRefusal = () => failure(typedTool, requestId, "caller_unidentified",
         "The launch capability no longer identifies the original caller.", false);
       const callerChanged = () => findTaskCaller && liveTaskCaller() !== taskCaller ? taskCallerRefusal() : null;
@@ -3053,10 +3053,10 @@ export function createMcpToolService(
           { code: "caller_unidentified", retryable: false });
       };
       const deniedTaskRecovery = () => failure(typedTool, requestId, "recovery_not_permitted", RECOVERY_NOT_PERMITTED, false);
-      const taskOwnerRefusal = (record: McpReceiptRecord | null | undefined) => record?.binding?.localDispatch
-        && record.binding.caller.kind !== "unidentified" && record.binding.caller.conversationId !== taskCaller
+      const taskOwnerRefusal = (binding: McpRequestBinding | undefined) => taskMutation && binding?.localDispatch
+        && binding.caller.kind !== "unidentified" && binding.caller.conversationId !== taskCaller
         ? deniedTaskRecovery() : null;
-      if (findTaskCaller && !taskCaller) return finish(taskCallerRefusal(), "failure");
+      if (findTaskCaller && (!taskCaller || callerChanged())) return finish(taskCallerRefusal(), "failure");
       if (findTaskCaller) retainResponseAuthority(context, () => {
         if (callerChanged()) throw new McpToolRefusal("The launch capability changed", { code: "caller_unidentified" });
       });
@@ -3068,7 +3068,7 @@ export function createMcpToolService(
         let record: McpReceiptRecord | null;
         try { record = await measure("replay", () => receipts.lookup(key)); }
         catch { return unknown("The receipt store could not be read.", "mcp-receipt-unreadable"); }
-        const refused = callerChanged() ?? taskOwnerRefusal(record);
+        const refused = callerChanged() ?? taskOwnerRefusal(record?.binding);
         if (refused) return finish(refused, "failure");
         if (context.signal?.aborted || (context.deadlineAt !== undefined && context.deadlineAt <= Date.now())) {
           return unknown("The receipt lookup was cancelled or exceeded its deadline.");
@@ -3090,6 +3090,7 @@ export function createMcpToolService(
          this process or another — is answered from the durable record. */
       const active = recoverable || curatorApply ? undefined : inFlight.get(key);
       if (active) {
+        if (active.taskCaller && active.taskCaller !== taskCaller) return finish(deniedTaskRecovery(), "failure");
         if (active.digest !== digest) {
           return finish(failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true), "conflict");
         }
@@ -3610,7 +3611,7 @@ export function createMcpToolService(
               }, false);
             }
           }
-          const refused = callerChanged();
+          const refused = callerChanged() ?? taskOwnerRefusal(existing?.binding);
           if (refused) return refused;
           if (!existing || existing.digest === digest && existing.stage === "claimed"
             && existing.binding?.localDispatch === true && processIdentityProvenDead(existing.binding.owner)) {
@@ -3635,11 +3636,15 @@ export function createMcpToolService(
         } : undefined;
         const pendingRelease = localStore ? pendingLocalReleases.get(key) : undefined;
         if (pendingRelease && pendingRelease.digest === digest && pendingRelease.store === localStore) {
+          const refused = callerChanged() ?? taskOwnerRefusal(pendingRelease.binding);
+          if (refused) return refused;
           try {
             if (await localStore.release?.(key, digest, pendingRelease.binding)) {
               pendingLocalReleases.delete(key);
             } else {
               const current = await localStore.lookup(key);
+              const refused = taskOwnerRefusal(current?.binding);
+              if (refused) return refused;
               if (!current) pendingLocalReleases.delete(key);
               else if (current.digest !== pendingRelease.digest) {
                 pendingLocalReleases.delete(key);
@@ -3679,6 +3684,10 @@ export function createMcpToolService(
         }
         outerMcpToolEvent(outerId, "claim", claim.kind);
         curatorApply?.assertCurrent();
+        if (claim.kind !== "fresh") {
+          const refused = taskOwnerRefusal(claim.record?.binding);
+          if (refused) return refused;
+        }
         if (claim.kind === "conflict") {
           outcome = "conflict";
           return failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
@@ -3760,6 +3769,8 @@ export function createMcpToolService(
             }
             try {
               const current = await localStore.lookup(key);
+              const refused = taskOwnerRefusal(current?.binding);
+              if (refused) return refused;
               if (!current) {
                 pendingLocalReleases.delete(key);
                 return failure(typedTool, requestId, "not_executed",
@@ -3783,6 +3794,8 @@ export function createMcpToolService(
           }
           if (!dispatchMarked) {
             const current = await localStore.lookup(key);
+            const refused = taskOwnerRefusal(current?.binding);
+            if (refused) return refused;
             if (current && current.digest !== digest) {
               pendingLocalReleases.delete(key);
               return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
@@ -3949,7 +3962,7 @@ export function createMcpToolService(
         curatorApply?.assertCurrent();
         return settled;
       })();
-      inFlight.set(key, { digest, result });
+      inFlight.set(key, { digest, result, taskCaller });
       try {
         const answered = await result;
         curatorApply?.assertCurrent();
@@ -5522,7 +5535,9 @@ export const MCP_HTTP_CLIENT_ID = "llv-spawn-capability";
     for a request that did not come through it (every stdio call). */
 function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancelSignal: (requestId: unknown) => AbortSignal | null }) | null {
   if (!authInfo || typeof authInfo !== "object") return null;
-  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: { cancelSignal?: unknown; nativePeer?: McpHttpCaller["nativePeer"]; unidentified?: boolean; paginationIdentity?: unknown; outerRequestId?: string } };
+  const { clientId, token, extra } = authInfo as { clientId?: unknown; token?: unknown; extra?: Pick<McpHttpCaller, "nativePeer" | "outerRequestId" | "authenticatedConversationId"> & {
+    cancelSignal?: unknown; unidentified?: boolean; paginationIdentity?: unknown;
+  } };
   if (clientId !== MCP_HTTP_CLIENT_ID || typeof token !== "string" || !token) return null;
   const lookup = typeof extra?.cancelSignal === "function" ? extra.cancelSignal as (requestId: unknown) => unknown : null;
   return {
@@ -5530,6 +5545,7 @@ function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancel
       ...(typeof extra.paginationIdentity === "string" && extra.paginationIdentity ? { paginationIdentity: extra.paginationIdentity } : {}),
     } : { capability: token }),
     outerRequestId: extra?.outerRequestId,
+    authenticatedConversationId: extra?.authenticatedConversationId,
     cancelSignal: (requestId) => {
       const signal = lookup?.(requestId);
       return signal instanceof AbortSignal ? signal : null;

@@ -275,7 +275,7 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
         await new Promise<void>(resolve => setImmediate(resolve));
         const signal = registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal;
         const taskCaller = { ...(nativePeer ? { nativePeer } : unidentified ? { paginationIdentity: connectionId || crypto.randomUUID() } : { capability }),
-          outerRequestId };
+          outerRequestId, authenticatedConversationId: conversationId && conversationId !== "local-peer" ? conversationId : undefined };
         recordOuterMcpExecutor(outerRequestId);
         const callOnce = () => viewerTaskExecutor().callHttpTool(requested, body, request, taskCaller, { signal });
         try { return await callOnce(); }
@@ -302,7 +302,8 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
         token: capability,
         clientId: MCP_HTTP_CLIENT_ID,
         scopes: [],
-        extra: { nativePeer, unidentified, outerRequestId, paginationIdentity: unidentified ? connectionId || crypto.randomUUID() : undefined,
+        extra: { nativePeer, unidentified, outerRequestId, authenticatedConversationId: conversationId && conversationId !== "local-peer" ? conversationId : undefined,
+          paginationIdentity: unidentified ? connectionId || crypto.randomUUID() : undefined,
           cancelSignal: (requestId: unknown) => registered.get(inflightKey(capability, connectionId, requestId))?.signal ?? null },
       },
     });

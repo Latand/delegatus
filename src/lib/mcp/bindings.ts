@@ -2379,7 +2379,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   assertMaintenanceWrite(maintainer, args, undefined, true);
   refuseCrossProjectFromSeat("create_task", () => text(args.project) || null, args, dependencies);
   const input: CreateTaskInput = {
-    ...withoutKeys(args, ["crossProjectRequest"]),
+    ...withoutKeys(args, ["crossProjectRequest", "recoveryOnly"]),
     placement: args.placement ?? "unplaced",
     clientRequestId: requestId(args),
   };
@@ -2472,7 +2472,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     return refineBoardTask(args, dependencies, context);
   }
   const taskId = required(args, "taskId");
-  const patch = withoutKeys(args, ["taskId", "clientRequestId", "full", "compact", "includeHints"]);
+  const patch = withoutKeys(args, ["taskId", "clientRequestId", "full", "compact", "includeHints", "recoveryOnly"]);
   let changedFields: string[] = [];
   let prior: BoardTask | undefined;
   let liveAgent: string | undefined;
