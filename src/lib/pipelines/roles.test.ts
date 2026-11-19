@@ -119,9 +119,9 @@ test("stage runtime fields override registry and global defaults", () => {
 
 test("cross-engine overrides require a compatible model", () => {
   expect(resolvePipelineRole({ role: { roleId: "reviewer" }, engine: "claude" }, "review-loop", REGISTRY_LOOKUP).error)
-    .toContain("valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
+    .toContain("valid claude model ids: opus, fable, claude-fable-5-2, claude-fable-5-1, sonnet, claude-sonnet-5-5, haiku");
   expect(resolvePipelineRole({ engine: "claude" }, "run", REGISTRY_LOOKUP).error)
-    .toContain("valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
+    .toContain("valid claude model ids: opus, fable, claude-fable-5-2, claude-fable-5-1, sonnet, claude-sonnet-5-5, haiku");
   expect(resolvePipelineRole({ engine: "claude", model: "opus", effort: "high" }, "run", REGISTRY_LOOKUP).role)
     .toMatchObject({ engine: "claude", model: "opus", effort: "high" });
 });
@@ -130,7 +130,7 @@ test("stage model overrides enumerate the selected engine catalog when invalid",
   expect(resolvePipelineRole({ engine: "codex", model: "gpt-5.6-codex" }, "run", REGISTRY_LOOKUP).error)
     .toBe("invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
   expect(resolvePipelineRole({ engine: "claude", model: "claude-fable-5" }, "run", REGISTRY_LOOKUP).error)
-    .toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5");
+    .toBe("invalid claude model id \"claude-fable-5\"; valid claude model ids: opus, fable, claude-fable-5-2, claude-fable-5-1, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5");
 });
 
 test("review-loop roles default to read-only access", () => {
