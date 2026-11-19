@@ -727,9 +727,7 @@ script also publishes its own batch branch and deferred resolutions after
 trusted privacy with hooks skipped, like the engine's base updates; publish
 integration branches through the script. A fetch failure uses
 the last `origin/main`; a missing merge base fails the push. The hook warns
-when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to
-CI OCR. The two required privacy checks remain strict and unchanged; local
-hooks do not replace trusted CI enforcement. macOS and Windows CI keep scoped
+when main is ahead. The local hook and both required privacy checks inspect media metadata and provenance. macOS and Windows CI keep scoped
 jobs with timeouts, and Bun verification remains available by dispatch.
 Docker PR builds are limited to image inputs, push nothing, end at the
 45-minute job timeout, and are cancelled when superseded or closed. Merge-batch branches skip image verification. App changes verify

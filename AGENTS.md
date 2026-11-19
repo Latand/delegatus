@@ -159,8 +159,7 @@ once the earlier turn has settled; the original pass and accepted commits stay
 recorded. Active turns, queued deliveries and live background work fence the
 replacement. See `docs/design/publication-producer-repair.md`.
 `LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
-the branch is behind `origin/main`. Missing local media tools defer named media
-files to the required CI OCR gate. See CONTRIBUTING.md for slot settings.
+the branch is behind `origin/main`. See CONTRIBUTING.md for slot settings.
 
 ## Heavy commands may run on the gate runner
 
@@ -234,7 +233,7 @@ write into a message, a doc or a fixture, where the paragraph above still holds.
 `privacy-publication` on CI uses the committed
 `scripts/privacy-known-value-fingerprints.json` from its trusted checkout.
 The local hooks use the same fingerprints with `--require-known-values`.
-The required CI checks stay as enforcement for skipped hooks and media OCR.
+The required CI checks enforce text, metadata and provenance checks on published changes.
 Scrub before the push, and re-read every table and quote lifted out of logs.
 <!-- END:live-state-and-publication -->
 

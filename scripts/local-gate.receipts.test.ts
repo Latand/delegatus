@@ -129,6 +129,21 @@ test("stopped, deferred, cancelled and failed steps never write a pass; the runt
   expect(open(runtime).reused(runtime[0]!)).toBeFalse();
 });
 
+test("a warm group requires every exact pass and a fresh input check", () => {
+  const f = hookFixture();
+  const base = f.git("rev-parse", "origin/main").toString().trim();
+  const steps = [{ name: "types", command: ["bunx", "tsc", "--noEmit"] }, { name: "eslint", command: ["bun", "lint"] }];
+  const passes = stepPasses(f.dir, base, steps, () => {});
+  passes.passed(steps[0]!);
+  expect(passes.allReused(steps)).toBeFalse();
+  passes.passed(steps[1]!);
+  expect(passes.allReused(steps)).toBeTrue();
+  expect(passes.allReused([...steps, { name: "privacy", command: ["bun", "scan"] }])).toBeFalse();
+  expect(passes.allReused(steps, Date.now() - 1)).toBeFalse();
+  writeFileSync(path.join(f.dir, "example.ts"), "export const changed = true;\n");
+  expect(passes.allReused(steps)).toBeFalse();
+});
+
 test("privacy, frozen install and advisory audit execute on both pushes of one dependency tree", () => {
   const f = hookFixture();
   for (const file of ["audit-with-retry.test.ts", "supply-chain-check.test.ts"]) writeFileSync(path.join(f.dir, "scripts", file), "// hook fixture\n");
