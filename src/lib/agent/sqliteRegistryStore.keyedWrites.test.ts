@@ -49,6 +49,16 @@ test.each([false, true])("spawn reservation preserves full attempt identity acro
     registry = open();
   };
   try {
+    const schema = new Database(filename.replace(/\.json$/, ".sqlite"), { readonly: true });
+    try {
+      const sql = schema.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_lookup_clientAttemptId'").get()?.sql;
+      expect(sql).toContain("json_quote(json_extract(value_json");
+      const plan = schema.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT row_key FROM registry_rows
+        WHERE collection='receipts' AND json_quote(json_extract(value_json,'$.clientAttemptId'))=json_quote(?)`).all(base)
+        .map(row => row.detail).join(" ");
+      expect(plan).toContain("registry_lookup_clientAttemptId");
+      expect(plan).toContain("<expr>=?");
+    } finally { schema.close(); }
     const firstLaunch = created(first);
     reopen();
     const secondLaunch = created(second);
@@ -82,7 +92,18 @@ test.each([false, true])("spawn reservation preserves full attempt identity acro
     } finally {
       db.close();
     }
-    reopen();
+    registry.close();
+    const legacy = new Database(filename.replace(/\.json$/, ".sqlite"));
+    try {
+      legacy.exec("DROP INDEX registry_lookup_clientAttemptId");
+      legacy.exec("CREATE INDEX registry_lookup_clientAttemptId ON registry_rows(collection,json_extract(value_json,'$.clientAttemptId'),row_order)");
+    } finally { legacy.close(); }
+    registry = open();
+    const upgraded = new Database(filename.replace(/\.json$/, ".sqlite"), { readonly: true });
+    try {
+      expect(upgraded.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_lookup_clientAttemptId'").get()?.sql)
+        .toContain("json_quote(json_extract(value_json");
+    } finally { upgraded.close(); }
     verifyReplay();
     const asyncReplay = await registry.beginSpawnRequestAsync(request(variant));
     expect(asyncReplay.kind).toBe("replay");
