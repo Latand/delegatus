@@ -31,7 +31,7 @@ export type HostedCloudGuard = Pick<Input, "signal" | "assertCurrent">;
 export class CloudSubmissionNotStartedError extends HostedCloudError {
   environmentFailure?: "environment_offline" | "environment_connect_failed" | "environment_missing";
 }
-class CloudEnvironmentMissingError extends HostedCloudError {
+export class CloudEnvironmentMissingError extends HostedCloudError {
   constructor() { super("Codex Cloud environment missing", "cloud-limit", true); }
 }
 export type HostedCloudDependencies = {
