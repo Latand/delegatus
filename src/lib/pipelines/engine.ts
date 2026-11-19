@@ -63,6 +63,8 @@ import { agentMemoryScopes, PIPELINE_MEMORY_DEFAULT_ROLE, type AgentMemoryScopeI
 import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
 import { cpuPriorityEnv, type CpuPrioritySource } from "@/lib/runtime/cpuPriority";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
+import { CPU_STAGE_POLL_MS } from "@/lib/runtime/cpuAdmission";
+import type { UrgentStagePoll } from "@/lib/runtime/urgentStageCapacity";
 import { instanceCpuPrioritySource, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import crypto from "node:crypto";
@@ -195,7 +197,7 @@ import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLi
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, completedComparisonPass, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, completedComparisonPass, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pendingCpuStageRevision, wakePipelineCpuStage, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -402,7 +404,7 @@ export interface PipelinePorts {
   fencedFirstMessageRetrySafe?(launchId: string, conversationId: string, eligible: () => boolean): Promise<boolean>;
   drainHold?(): DrainLease | null;
   /** A held stage start waits in the shared bounded CPU queue; null admits. */
-  cpuPressureHold?(key?: string, priority?: CpuPrioritySource): CpuPressureHold | null;
+  cpuPressureHold?(key?: string, priority?: CpuPrioritySource, urgentStage?: UrgentStagePoll): CpuPressureHold | null;
   cpuAdmissionReconcile?(admission?: Pick<PipelinePorts, "drainHold" | "structuredDeliveryPublication" | "now">): void | Promise<void>;
   cpuAdmissionSuspend?(key: string): void;
   observeControllerLeaseHold?(heldMs: number): void;
@@ -1976,10 +1978,10 @@ export function defaultPipelinePorts(
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
     drainHold: () => activeDrain(),
-    cpuPressureHold: (key, priority) => {
+    cpuPressureHold: (key, priority, urgentStage) => {
       const gate = machineCpuPressureGate();
       if (!gate) return null;
-      return gate.check(key, priority);
+      return gate.check(key, priority, urgentStage);
     },
     cpuAdmissionReconcile: async (admission) => {
       let waiting: Pipeline[];
@@ -8951,12 +8953,22 @@ async function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist
   }
   // Heavy work yields to production under CPU pressure. Only a fresh stage
   // start asks; recovery and reconciliation of launched work never do.
-  const pressure = ports.cpuPressureHold?.(cpuStageKey(pipeline), instanceCpuPrioritySource(pipeline.taskIds));
+  const { id, cursor } = pipeline;
+  const stage = cursor?.state === "pending" ? cursor.stageId : undefined;
+  const attempt = stage ? currentAttempt(pipeline, stage) : null;
+  const n = attempt?.state === "pending" ? attempt.n : undefined;
+  const urgentStage: UrgentStagePoll | undefined = stage !== undefined && n !== undefined ? {
+    currentRevision: () => pendingCpuStageRevision(id, stage, n),
+    makeDue: (revision, expiresAt) => wakePipelineCpuStage(id, stage, n, revision, expiresAt),
+    wake: requestPipelineTick,
+  } : undefined;
+  const pressure = ports.cpuPressureHold?.(cpuStageKey(pipeline), instanceCpuPrioritySource(pipeline.taskIds), urgentStage);
   if (pressure) {
     await pauseAdmission();
     const detail = cpuPressureHoldDetail(pressure);
     if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
-    ports.scheduleTick?.(5_000);
+    pressure.observeUrgentCapacity?.();
+    ports.scheduleTick?.(CPU_STAGE_POLL_MS);
     return true;
   }
   if (heldForCpuPressure(pipeline)) { pipeline.stateDetail = null; await persist(); }

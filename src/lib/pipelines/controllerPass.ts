@@ -1,3 +1,5 @@
+import { CPU_STAGE_POLL_MS } from "@/lib/runtime/cpuAdmission";
+import { isCpuPressureDetail } from "@/lib/runtime/cpuPressure";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -66,7 +68,9 @@ export function tickPipelinesController(entries: FileEntry[], suppliedPorts?: Pi
           if (firstStart && !lane?.runs[0]?.attempts[0]?.startedAt) {
             reportProvisioningPhase(item.row_key, { phase: "first-attempt" }, firstStart);
           }
-          let due = now + 30_000;
+          // A CPU-held start needs another durable selection when its sample is ready.
+          let due = now + (fresh?.state === "running" && fresh.cursor?.state === "pending"
+            && isCpuPressureDetail(fresh.stateDetail, "stage start") ? CPU_STAGE_POLL_MS : 30_000);
           const provisionRetry = Date.parse(fresh?.provisioningWait?.retryAfter ?? "");
           if (provisionRetry > now) due = Math.min(due, provisionRetry);
           for (const ref of refs) {

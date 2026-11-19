@@ -2317,6 +2317,35 @@ export class SqliteStateCollection<T> {
     return `${databaseFileIdentity(this.filename)}:${row?.row_revision ?? "missing"}:${row?.generation ?? "missing"}`;
   }
 
+  private pendingCpuStageRevision(db: Database, key: string, stage: string, attempt: number): string | null {
+    const row = db.query<{ row_revision: number; generation: number }, [string, string, string, number]>(`
+      SELECT r.row_revision,t.generation FROM pipeline_controller_work w
+      JOIN state_rows r ON r.collection='pipelines' AND r.row_key=w.row_key
+      JOIN pipeline_tick_work t ON t.row_key=w.row_key
+      WHERE w.kind='pending-stage' AND w.row_key=? AND json_extract(r.value_json, '$.cursor.stageId')=?
+      AND (SELECT n FROM pipeline_attempt_refs WHERE row_key=w.row_key AND stageId=? AND historical=0
+        ORDER BY position DESC LIMIT 1)=?`).get(key, stage, stage, attempt);
+    // The scheduling generation also changes for raw writers that leave the
+    // row revision intact. Include both in the evidence bound to a probe.
+    return row ? `${databaseFileIdentity(this.filename)}:${row.row_revision}:${row.generation}` : null;
+  }
+
+  pipelinePendingCpuStageRevision(key: string, stage: string, attempt: number): string | null {
+    return this.pendingCpuStageRevision(sharedStateReadonlyDatabase(this.filename), key, stage, attempt);
+  }
+
+  async wakePipelineCpuStage(key: string, stage: string, attempt: number, revision: string, expiresAt: number): Promise<string | null> {
+    return stateTransactionAsync(this.filename, "pipelines.controller-cpu-wake", db => {
+      if (Date.now() > expiresAt || this.pendingCpuStageRevision(db, key, stage, attempt) !== revision) return null;
+      // Acknowledge-on-generation protects this wake from a pass already in
+      // flight. Return the exact generation we advanced for the same stage.
+      db.exec("UPDATE pipeline_tick_clock SET revision=revision+1 WHERE id=1");
+      db.query(`UPDATE pipeline_tick_work SET dirty=1,due_at=0,
+        generation=(SELECT revision FROM pipeline_tick_clock WHERE id=1) WHERE row_key=?`).run(key);
+      return this.pendingCpuStageRevision(db, key, stage, attempt);
+    });
+  }
+
   pipelineControllerCandidate(key: string): T | null {
     const row = sharedStateReadonlyDatabase(this.filename).query<{ row_revision: number }, [string, string]>(
       "SELECT row_revision FROM state_rows WHERE collection=? AND row_key=?").get(this.options.collection, key);
