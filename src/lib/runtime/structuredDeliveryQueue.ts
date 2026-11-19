@@ -3944,6 +3944,10 @@ export class StructuredDeliveryQueue {
       return { blocked: false, terminated: false };
     } catch (error) {
       const reason = failureReason(error);
+      if (error instanceof StructuredSendRefusedError || error instanceof StructuredDispatchDeferredError) {
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        return { blocked: false, terminated: false };
+      }
       if (effect.kind === "answer" && error instanceof StructuredAnswerError) {
         await this.transitionUnlessSettled(effect.operationId, error.outcome === "uncertain" ? "uncertain" : "failed", { reason });
         return { blocked: false, terminated: false };
