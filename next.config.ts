@@ -6,6 +6,10 @@ import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants
 import "./bin/envAlias.mjs";
 
 const nextConfig: NextConfig = {
+  // The files and runtime snapshot routes already gzip their large responses.
+  // Next's server compression can wrap those responses again under Bun, while
+  // leaving a single Content-Encoding header, making them unreadable.
+  compress: false,
   // Conditional standalone output keeps `bun run build && bun start` warning-free while packaging can still opt in.
   output: process.env.LLV_STANDALONE === "1" ? "standalone" : undefined,
   // Dev-only: hosts allowed to reach dev resources cross-origin (Tailscale/LAN preview).
