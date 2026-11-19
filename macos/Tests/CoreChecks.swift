@@ -359,12 +359,13 @@ import Foundation
             expect(line == Data(repeating: 48, count: 5000), "readiness reader assembles a complete line across reads")
         }
         do {
-            let (child, output) = try launch(#"printf '%s\n' '{"pid":42,"port":12345}'"#)
+            let (child, output) = try launch(#"printf '%s\n' '{"pid":42,"port":12345,"cli":43}'"#)
             defer { _ = FixtureProcess.stop(child) }
             let handshake = try FixtureProcess.handshake(output, named: "complete handshake")
-            expect(handshake.pid == 42 && handshake.port == 12345, "a complete handshake preserves the process and port")
+            expect(handshake.pid == 42 && handshake.port == 12345 && handshake.cli == 43, "a complete handshake preserves process identities and port")
         }
-        for line in [#"{"pid":42"#, #"{"pid":42,"port":0}"#] {
+        for line in [#"{"pid":42"#, #"{"pid":42,"port":0,"cli":43}"#,
+                     #"{"pid":42,"port":12345,"cli":0}"#, #"{"pid":42,"port":12345}"#] {
             let (child, output) = try launch("printf '%s\\n' '\(line)'")
             defer { _ = FixtureProcess.stop(child) }
             do {
@@ -447,10 +448,29 @@ import Foundation
         }
         try fm.copyItem(at: URL(fileURLWithPath: Installations.realPath(URL(fileURLWithPath: source))), to: bun)
         let fixtureExecutable = Installations.realPath(bun)
-        func stopDetachedViewer(_ receipt: URL) {
-            guard let text = try? String(contentsOf: receipt, encoding: .utf8), let pid = Int32(text), pid > 1,
-                  getpgid(pid) == pid, Server.executablePath(Int(pid)) == fixtureExecutable else { return }
-            kill(pid, SIGTERM)
+        func stopDetachedViewer(_ receipt: URL) throws {
+            guard let text = try? String(contentsOf: receipt, encoding: .utf8), let pid = Int32(text), pid > 1 else {
+                throw LauncherError.message("detached fixture cleanup: missing or invalid PID receipt")
+            }
+            if kill(pid, 0) != 0 && errno == ESRCH { return }
+            guard getpgid(pid) == pid, Server.executablePath(Int(pid)) == fixtureExecutable else {
+                throw LauncherError.message("detached fixture cleanup: PID receipt does not identify the owned Bun generation")
+            }
+            if kill(pid, SIGTERM) != 0 && errno != ESRCH {
+                throw LauncherError.message("detached fixture cleanup: SIGTERM failed (errno \(errno))")
+            }
+            let deadline = DispatchTime.now() + 2
+            while kill(pid, 0) == 0 && DispatchTime.now() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            if kill(pid, 0) == 0 {
+                guard kill(pid, SIGKILL) == 0 || errno == ESRCH else {
+                    throw LauncherError.message("detached fixture cleanup: SIGKILL failed (errno \(errno))")
+                }
+                let killDeadline = DispatchTime.now() + 2
+                while kill(pid, 0) == 0 && DispatchTime.now() < killDeadline { Thread.sleep(forTimeInterval: 0.01) }
+            }
+            guard kill(pid, 0) != 0 || errno == ESRCH else {
+                throw LauncherError.message("detached fixture cleanup: process \(pid) survived SIGKILL")
+            }
         }
         try Data(#"{"name":"delegatus-cli","version":"2.0.0"}"#.utf8).write(to: root.appendingPathComponent("package.json"))
         try Data(#"""
@@ -465,7 +485,7 @@ import Foundation
           if(mode==='not-found' && diagnostics) return new Response(null,{status:404});
           return new Response(null, {status:diagnostics?204:200,headers:diagnostics?{'x-delegatus-diagnostics':'1'}:{}});
         }});
-        console.log(JSON.stringify({pid:process.pid,port:server.port}));
+        console.log(JSON.stringify({pid:process.pid,port:server.port,cli:process.ppid}));
         """#.utf8).write(to: server)
         try Data(#"""
         import {spawn} from 'node:child_process';
@@ -476,15 +496,47 @@ import Foundation
         """#.utf8).write(to: cli)
         let env = ["HOME": home.path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
             "LLV_STATE_DIR": root.appendingPathComponent("state").path, "TMPDIR": fm.temporaryDirectory.path]
+        let timeoutScript = root.appendingPathComponent("readiness-timeout.mjs")
+        let timeoutReceipt = root.appendingPathComponent("readiness-timeout-pid")
+        try Data("""
+        import {spawn} from 'node:child_process';
+        import {writeFileSync} from 'node:fs';
+        const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{detached:true,stdio:'ignore'});
+        writeFileSync(process.argv[2],String(child.pid));
+        process.stdin.resume();
+        """.utf8).write(to: timeoutScript)
+        let timeoutLauncher = Process(); timeoutLauncher.executableURL = bun
+        timeoutLauncher.arguments = [timeoutScript.path, timeoutReceipt.path]; timeoutLauncher.environment = env
+        let timeoutOutput = Pipe(), timeoutInput = Pipe()
+        timeoutLauncher.standardOutput = timeoutOutput; timeoutLauncher.standardInput = timeoutInput
+        try timeoutLauncher.run()
+        defer {
+            _ = FixtureProcess.stop(timeoutLauncher)
+            do { try stopDetachedViewer(timeoutReceipt) }
+            catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
+        }
+        do {
+            _ = try FixtureProcess.readyLine(timeoutOutput, named: "induced detached readiness failure", timeout: 0.2)
+            throw LauncherError.message("induced detached readiness failure unexpectedly succeeded")
+        } catch LauncherError.message(let message) where message == "induced detached readiness failure: timed out waiting for readiness line" {
+            let detachedPID = Int32(try String(contentsOf: timeoutReceipt, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))!
+            try stopDetachedViewer(timeoutReceipt)
+            expect(kill(detachedPID, 0) != 0 && errno == ESRCH,
+                "induced readiness timeout leaves no live detached fixture")
+        }
+        try check(FixtureProcess.stop(timeoutLauncher), "timeout launcher exits after detached cleanup")
         let viewerPIDFile = root.appendingPathComponent("viewer-pid")
         let launcher = Process(); launcher.executableURL = bun; launcher.arguments = [cli.path, viewerPIDFile.path]; launcher.environment = env
         let input = Pipe(), output = Pipe(); launcher.standardInput = input; launcher.standardOutput = output
         try launcher.run()
         defer {
             _ = FixtureProcess.stop(launcher)
-            stopDetachedViewer(viewerPIDFile)
+            do { try stopDetachedViewer(viewerPIDFile) }
+            catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
         }
-        let handshake = try FixtureProcess.handshake(output, named: "detached Viewer")
+        let handshake: FixtureProcess.Handshake
+        do { handshake = try FixtureProcess.handshake(output, named: "detached Viewer") }
+        catch { try stopDetachedViewer(viewerPIDFile); throw error }
         let pid = handshake.pid, port = handshake.port
         fputs("Swift relaunch: verify the live CLI and retain its Viewer\n", stderr)
         let install = Installation(bun: bun, cli: cli)
@@ -550,7 +602,7 @@ import Foundation
           if(request.headers.has('authorization') || request.headers.has('cookie') || new URL(request.url).searchParams.has('k')) writeFileSync('\(auth.path)','received');
           return new Response(null,{status:request.headers.has('authorization')?204:Number(readFileSync('\(attackPhase.path)','utf8')),headers:{'x-delegatus-diagnostics':'1'}});
         }});
-        console.log(JSON.stringify({pid:process.pid,port:server.port}));
+        console.log(JSON.stringify({pid:process.pid,port:server.port,cli:process.ppid}));
         """.utf8).write(to: foreign)
         // spawn's argv0 survives on macOS without process.title support.
         let runner = root.appendingPathComponent("argv0.mjs")
@@ -592,9 +644,12 @@ import Foundation
             try parent.run()
             defer {
                 _ = FixtureProcess.stop(parent)
-                stopDetachedViewer(foreignPIDFile)
+                do { try stopDetachedViewer(foreignPIDFile) }
+                catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
             }
-            let attack = try FixtureProcess.handshake(parentOutput, named: "foreign bootstrap")
+            let attack: FixtureProcess.Handshake
+            do { attack = try FixtureProcess.handshake(parentOutput, named: "foreign bootstrap") }
+            catch { try stopDetachedViewer(foreignPIDFile); throw error }
             guard let helperPID = attack.keeper else { throw LauncherError.message("foreign bootstrap: missing keeper PID") }
             let attackPID = attack.pid, attackPort = attack.port
             fputs("Swift relaunch: check discovery and cleanup of the foreign bootstrap\n", stderr)
@@ -606,7 +661,7 @@ import Foundation
                 cli: cli.path, readExecutable: { Server.executablePath($0) }) { await Server.processRow($0, environment: env) }
             try check(copied.verified, "hostile fixture reaches the copied live CLI ancestry guard")
             try check(Server.processArguments(attackPID)?.first == "\(bun.path) \(server.path)", "hostile fixture uses one forged argv0 argument")
-            try check(!Server.ownsLauncher(attack["cli"]!, parent: Int(getpid()), install: install), "discovered fake CLI was never launched by the native app")
+            try check(!Server.ownsLauncher(attack.cli, parent: Int(getpid()), install: install), "discovered fake CLI was never launched by the native app")
             try? fm.removeItem(at: auth)
             let discovery = await Server.listener(environment: env, install: install, port: attackPort)
             let firstProbe = await Server.inspect(home: home, environment: env, install: install,

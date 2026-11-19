@@ -4,6 +4,7 @@ enum FixtureProcess {
     struct Handshake: Decodable {
         let pid: Int
         let port: Int
+        let cli: Int
         let keeper: Int?
     }
 
@@ -11,6 +12,7 @@ enum FixtureProcess {
         let line = try readyLine(pipe, named: name)
         guard let result = try? JSONDecoder().decode(Handshake.self, from: line),
               (2...Int(Int32.max)).contains(result.pid), (1...65535).contains(result.port),
+              (2...Int(Int32.max)).contains(result.cli),
               result.keeper.map({ (2...Int(Int32.max)).contains($0) }) ?? true else {
             throw LauncherError.message("\(name): invalid process handshake")
         }
