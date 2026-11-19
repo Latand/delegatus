@@ -41,9 +41,11 @@ if (mode === "engine") {
         case "model/list": reply({ data: [] }); break;
         case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
         case "config/read": reply({ config: { mcp_servers: {} } }); break;
+        case "thread/loaded/list": reply({ data: [threadId] }); break;
         case "thread/resume":
           config = JSON.parse(fs.readFileSync(descriptor, "utf8"));
-          reply({ thread: { id: threadId, path: null, turns: [{ id: turnId, status: config.turnEnded ? "completed" : "inProgress", items: [] }],
+          reply({ sandbox: { type: "dangerFullAccess" }, approvalPolicy: "never",
+            thread: { id: threadId, path: null, turns: [{ id: turnId, status: config.turnEnded ? "completed" : "inProgress", items: [] }],
             status: config.turnEnded ? { type: "idle" } : { type: "active", activeFlags: [] } } });
           if (config.resolveWait) send({ method: "serverRequest/resolved", params: { threadId, requestId: "gate-wait" } });
           const callback = () => {
@@ -84,6 +86,7 @@ if (mode === "engine") {
   });
   const eventStore = new FileRuntimeEventStore(config.events);
   const host = await CodexAppServerHost.adopt(threadId, { cwd: config.directory, env: process.env,
+    reconnectAccess: { cwd: config.directory, sandbox: "danger-full-access", approvalPolicy: "never" },
     socketOwner: config.owner, eventStore: { load: id => eventStore.load(id), append: (id, event) => {
       eventStore.append(id, event);
       if (mode === "crash-dispatch" && event.kind === "attention" && event.codexReceipt?.gateWait?.result) {

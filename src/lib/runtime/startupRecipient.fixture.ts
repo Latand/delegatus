@@ -86,6 +86,7 @@ export function projectHostedRestart(
   directory: string,
   artifactPath: string,
   turn: "idle" | "running" = "idle",
+  host: "hosted" | "dead" = "hosted",
 ): void {
   journal.append({
     scope: { type: "session", id: conversationId },
@@ -98,7 +99,7 @@ export function projectHostedRestart(
       conversationId,
       sessionKey: { engine, sessionId },
       hostKind: engine === "codex" ? "codex-app-server" : "claude-broker",
-      host: "hosted",
+      host,
       turn,
       provenance: "structured",
       accountId: null,
@@ -413,6 +414,7 @@ export async function addressedRecipientSocket(kind: "unhosted" | "live" | "stam
       if (!claim?.claimOwner) throw new Error("fixture recovery claim is unavailable");
       input.resumeAdmission?.claimed(claim);
       host = await CodexAppServerHost.adopt(sessionId,{cwd:directory,codexHome:directory,
+        reconnectAccess:{cwd:directory,sandbox:"danger-full-access",approvalPolicy:"never"},
         socketOwner:{endpoint,process:identity},readProtocolVersion:() => "0.162.1",mcpServers:[]});
       await bindCodexHostPersistence(registry,key,host,claim.claimOwner,claim.claimEpoch);
       await publishStructuredDeliveryHost({key,host,writerEpoch:claim.claimEpoch},
