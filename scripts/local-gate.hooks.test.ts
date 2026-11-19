@@ -191,14 +191,17 @@ test("a red lane cancels its peer and never starts its next step", async () => {
 
 test.skipIf(process.platform !== "linux")("a real push takes one queue ticket and nested capped steps reuse its slot", () => {
   const f = hookFixture();
-  const slot = path.join(f.dir, "scripts/gate-slot.sh");
-  writeFileSync(slot, readFileSync(slot, "utf8").replace('queue_key="command:$$:$RANDOM:$RANDOM"', 'queue_key="command:$$:$RANDOM:$RANDOM"\nprintf "%s\\n" "$queue_key" >> "$QUEUE_PROBE"'));
+  const gateBun = path.join(f.dir, "record-gate-bun");
+  writeFileSync(gateBun, `#!/bin/bash
+if [[ "$2" == --wait ]]; then printf '%s\\n' "$3" >> "$QUEUE_PROBE"; fi
+exec "$HOOK_BUN" "$@"
+`, { mode: 0o755 });
   writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
-  const env: NodeJS.ProcessEnv = { ...f.env, DELEGATUS_CPU_PRESSURE: "off", QUEUE_PROBE: path.join(f.dir, "queue-probe") };
+  const env: NodeJS.ProcessEnv = { ...f.env, DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_BUN: gateBun, QUEUE_PROBE: path.join(f.dir, "queue-probe") };
   delete env.LLV_GATE_SLOT_LEASE;
   const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" });
   expect(result.status, result.stdout + result.stderr).toBe(0);
-  expect(readFileSync(env.QUEUE_PROBE!, "utf8").trim().split("\n")).toHaveLength(1);
+  expect(new Set(readFileSync(env.QUEUE_PROBE!, "utf8").trim().split("\n")).size).toBe(1);
   const calls = f.calls();
   expect(calls.some(call => call.args.includes("tsc"))).toBeTrue();
   expect(calls.some(call => call.args.includes("scripts/eslint-changes.ts"))).toBeTrue();
