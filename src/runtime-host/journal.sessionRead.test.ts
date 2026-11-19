@@ -102,7 +102,7 @@ test("an event bound to a session revision is recorded only while the row still 
   const journal = new RuntimeJournal(path.join(root, "fence.sqlite"));
   const host = new RuntimeHost(journal);
   const scope = runtimeScope("session", "conversation_fenced");
-  const status = (payload: Record<string, unknown>, expectedSessionRevision?: number) => ({ scope, kind: "session-status",
+  const status = (payload: Record<string, unknown>, expectedSessionRevision?: number | null) => ({ scope, kind: "session-status",
     payload: { hostKind: "codex-app-server", ...payload }, ...(expectedSessionRevision === undefined ? {} : { expectedSessionRevision }) });
   try {
     journal.append(status({ host: "hosted", turn: "running", activeTurnId: "turn-one" }));
