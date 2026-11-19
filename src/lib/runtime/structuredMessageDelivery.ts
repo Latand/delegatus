@@ -477,6 +477,10 @@ class ReservationWriterBusyError extends Error {
 }
 
 function deliveryFailure(error: unknown): Extract<StructuredMessageResult, { ok: false }> {
+  if ((error as { code?: string } | null)?.code === "STAGED_LAUNCH_DEADLINE") return refusedBeforeReservation({
+    ok: false, structured: true, outcome: "failed", error: error instanceof Error ? error.message : "staged launch publication deadline expired",
+    status: 408,
+  });
   if (error instanceof ReservationWriterBusyError) return refusedBeforeReservation({
     ok: false, structured: true, outcome: "failed", error: error.message, status: 503,
   });
@@ -2159,26 +2163,30 @@ export async function enqueueStructuredMessage(
         // Nothing reached the journal: terminalize the reservation so recovery
         // cannot dispatch this first prompt later as an uncertain send.
         const privacyChanged = error instanceof RoleMemoryChanged;
-        const refusal = privacyChanged ? error.message : "autonomous first prompt authorization revoked";
+        const launchDeadlineExpired = (error as { code?: string } | null)?.code === "STAGED_LAUNCH_DEADLINE";
+        const refusal = privacyChanged || launchDeadlineExpired
+          ? error instanceof Error ? error.message : "first prompt admission refused"
+          : "autonomous first prompt authorization revoked";
         // Authorization ran before this call's journal admission. Only an
         // absent operation and the unchanged first claim prove that no earlier
         // attempt could have delivered it. Unknown journal outcomes stay fenced.
         let journalAbsent = false;
-        if (privacyChanged) {
+        if (privacyChanged || launchDeadlineExpired) {
           try { journalAbsent = await client.operationStatus(assigned.command.operationId) === null; }
           catch { /* Unavailable evidence retains the uncertain outcome. */ }
         }
         const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId: assigned.command.operationId },
           () => {
             const current = registry.deliverySnapshotForOperation(assigned.command.operationId).heldDeliveries[assigned.id];
-            if (privacyChanged && journalAbsent && current?.attempts === 1
+            if ((privacyChanged || launchDeadlineExpired) && journalAbsent && current?.attempts === 1
               && current.generationId === claimed.generationId && current.state === "delivery-uncertain") {
               return registry.recordDeliveryOutcome(assigned.id, "failed", refusal, "lost");
             }
             return registry.terminalizeHeldDelivery(assigned.id, refusal);
           });
         if (!ended.acquired) return "caller-revocation-pending" as const;
-        return privacyChanged ? "role-memory-changed" as const : "caller-revoked" as const;
+        return privacyChanged ? "role-memory-changed" as const
+          : launchDeadlineExpired ? "staged-launch-deadline-expired" as const : "caller-revoked" as const;
       }
       commandResult = await client.command({
         kind: assigned.command.kind,
@@ -2205,6 +2213,7 @@ export async function enqueueStructuredMessage(
     }, dependencies.actuationLease ?? null);
     if (admitted === "caller-revoked") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt authorization revoked", status: 403 };
     if (admitted === "role-memory-changed") return { ok: false, structured: true, outcome: "failed", error: "Role-memory privacy changed; retrying before dispatch", status: 409 };
+    if (admitted === "staged-launch-deadline-expired") return { ok: false, structured: true, outcome: "failed", error: "staged launch publication deadline expired before the first prompt", status: 408 };
     if (admitted === "caller-revocation-pending") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt cancellation awaits the registry writer", status: 503, operationId: assigned.command.operationId, transportUncertain: true };
     if (admitted === "continuation-cancelled") return continuationRefused("stage eligibility changed before runtime admission");
     if (admitted && "admissionFailure" in admitted) return admitted.admissionFailure;

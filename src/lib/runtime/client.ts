@@ -167,7 +167,7 @@ export interface RuntimeHostClient {
   append(event: RuntimeEventInput): Promise<unknown>;
   /** The RPC itself requires the host's transactional session revision fence.
       An incumbent without that method refuses it; callers never retry append. */
-  appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number }): Promise<unknown>;
+  appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number | null }): Promise<unknown>;
   operation(event: RuntimeEventInput): Promise<unknown>;
   command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult>;
   operationStatus(operationId: string, options?: RuntimeReadOptions & { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
@@ -261,7 +261,7 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   append(event: RuntimeEventInput, authorize?: () => void): Promise<unknown> {
     return this.call("append", { event }, this.timeoutMs, undefined, false, authorize);
   }
-  appendSessionFenced(event: RuntimeEventInput & { expectedSessionRevision: number }): Promise<unknown> {
+  appendSessionFenced(event: RuntimeEventInput & { expectedSessionRevision: number | null }): Promise<unknown> {
     return this.call("append-session-fenced", { event });
   }
   operation(event: RuntimeEventInput): Promise<unknown> { return this.call("operation", { event }); }

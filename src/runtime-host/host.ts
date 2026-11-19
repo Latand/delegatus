@@ -166,8 +166,8 @@ export class RuntimeHost {
       else if (request.method === "append" || request.method === "append-session-fenced" || request.method === "operation") {
         const event = request.params?.event as RuntimeEventInput;
         if (request.method === "append-session-fenced" && (!event?.scope || parseRuntimeScope(event.scope).type !== "session"
-          || event.kind !== "session-status" || !Number.isSafeInteger(event.expectedSessionRevision)
-          || event.expectedSessionRevision! < 0)) {
+          || event.kind !== "session-status" || !(event.expectedSessionRevision === null
+            || (Number.isSafeInteger(event.expectedSessionRevision) && event.expectedSessionRevision! >= 0)))) {
           throw new Error("a fenced session append requires a session-status event and its observed revision");
         }
         const publishedBefore = this.journal.publishedSeq();

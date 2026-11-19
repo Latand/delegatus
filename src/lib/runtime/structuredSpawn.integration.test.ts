@@ -967,6 +967,7 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
     events: async (after) => journal.replay(after),
     waitEvents: async (after) => journal.replay(after),
     append: async (event) => journal.append(event),
+    appendSessionFenced: async (event) => journal.append(event),
     operation: async (event) => journal.append(event),
     command: async (command) => journal.executeOperation(command),
     operationStatus: async (operationId) => journal.operationResult(operationId),
@@ -7726,6 +7727,7 @@ async function fencedMigrationPublication(
       key, artifactPath: input.receipt.path, cwd, accountId: "account-b",
       launchProfile: emptyLaunchProfile({ cwd }), status: "unhosted", host: null, structuredHost: null,
       claimEpoch: 0, claimOwner: null, pendingAction: null,
+      structuredHostOperationId: `migration-operation-${sourceId}`,
     });
     registry.setStructuredHost(key, {
       kind: engine === "codex" ? "codex-app-server" : "claude-broker", endpoint: "stdio:pending", process: null,
@@ -7860,7 +7862,8 @@ function publicationLatch() {
 
 describe.each(["claude", "codex"] as const)("%s staged host publication", (engine) => {
   test.each(["lost append reply", "blocked file revision", "revoked during reconciliation", "writer replaced during reconciliation",
-    "lost proof before retry", "proof unavailable through expiry", "budget expired during proof"] as const)(
+    "lost proof before retry", "proof unavailable through expiry", "budget expired during proof",
+    "delayed append with successor projection", "deadline expires during prompt admission"] as const)(
     "settles the original launch after %s", async (fault) => {
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ack-"));
       const sessionId = ["00000000", "0000", "4000", "8000", "000000000021"].join("-");
@@ -7882,13 +7885,21 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
       const socket = process.platform === "win32" ? `\\\\.\\pipe\\delegatus-${path.basename(cwd)}`
         : path.join(directory === null ? cwd : `/proc/self/fd/${directory}`, "s");
       const invalidation = publicationLatch();
+      const delayedAppend = publicationLatch();
+      const allowDelayedAppend = publicationLatch();
+      const deadlineAdmission = publicationLatch();
+      const allowDeadlineAdmission = publicationLatch();
+      let expireDuringAdmission = false;
+      let recoveryAuthorizationCalls = 0;
+      let projectionReady = false;
       let authorized = true;
       let committed = false;
       let initialAppends = 0;
       let fileWaits = 0;
       const replacementOwner = "replacement-writer-fixture";
       let replaced = false;
-      let loseProof = fault === "lost proof before retry" || fault === "proof unavailable through expiry" || fault === "budget expired during proof";
+      let loseProof = fault === "lost proof before retry" || fault === "proof unavailable through expiry"
+        || fault === "budget expired during proof" || fault === "deadline expires during prompt admission";
       let recoveryTime = 0;
       let expireOnRead = 0;
       async function loseReply(signal: AbortSignal | undefined) {
@@ -7896,13 +7907,18 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
       }
       const server = serveRuntimeHost(socket, {
         async handle(request, options) {
+          if (fault === "delayed append with successor projection" && request.method === "append-session-fenced") {
+            delayedAppend.resolve();
+            await allowDelayedAppend.promise;
+          }
           if (request.method === "files-revision" && fault === "blocked file revision") {
             fileWaits += 1;
             await invalidation.promise;
           }
           const response = await runtime.handle(request, options);
           const input = request.params?.event as { kind?: string; payload?: { host?: string; turn?: string } } | undefined;
-          if (request.method === "append" && input?.kind === "session-status" && input.payload?.host === "hosted"
+          if ((request.method === "append" || request.method === "append-session-fenced")
+            && input?.kind === "session-status" && input.payload?.host === "hosted"
             && input.payload.turn === "idle" && host.sent.length === 0) {
             initialAppends += 1;
             if (initialAppends === 1) {
@@ -7942,9 +7958,20 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
           spec: { command: engine, cwd, windowName: "fixture", engine, launchProfile },
           account: { engine, accountId: "account-fixture", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
           ["prompt"]: firstMessage,
-          authorize: () => { if (!authorized) throw new Error("fixture launch authorization withdrawn"); },
+          authorize: async () => {
+            if (!authorized) throw new Error("fixture launch authorization withdrawn");
+            if (expireDuringAdmission && projectionReady && ++recoveryAuthorizationCalls === 2) {
+              deadlineAdmission.resolve();
+              await allowDeadlineAdmission.promise;
+            }
+          },
         }, {
           startHost: async () => host,
+          publishHost: async (key, runningHost, ownsOperation, stagedLaunchId) => {
+            const unregister = await publishStructuredDeliveryHost({ key, host: runningHost }, ownsOperation, stagedLaunchId);
+            projectionReady = true;
+            return unregister;
+          },
           bindHost: async (store, key, runningHost, owner, epoch) => {
             const state = await runningHost.health();
             store.setStructuredHostClaimed(key, {
@@ -7958,7 +7985,26 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
             return () => {};
           },
         });
-        if (fault === "revoked during reconciliation") {
+        if (fault === "delayed append with successor projection") {
+          await delayedAppend.promise;
+          const key = registry.spawnReceipt(launchId)!.key!;
+          const entry = registry.hostEntry(key)!;
+          const nextEpoch = entry.claimEpoch + 1;
+          registry.upsert({ ...entry, claimOwner: replacementOwner, claimEpoch: nextEpoch,
+            structuredHost: { ...entry.structuredHost!, writerClaimEpoch: nextEpoch } });
+          journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+            conversationId, sessionKey: key, hostKind: engine === "claude" ? "claude-broker" : "codex-app-server",
+            host: "hosted", turn: "idle", writerClaim: `${replacementOwner}:${nextEpoch}`, activeTurnId: null,
+            accountId: "successor-account", artifactPath: "successor-projection",
+          } });
+          allowDelayedAppend.resolve();
+          await expect(spawning).rejects.toThrow();
+          expect(journal.readSession({ conversationId })).toMatchObject({
+            writerClaim: `${replacementOwner}:${nextEpoch}`, accountId: "successor-account", artifactPath: "successor-projection",
+          });
+          expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
+          expect(host.sent).toHaveLength(0);
+        } else if (fault === "revoked during reconciliation") {
           await expect(spawning).rejects.toThrow("fixture launch authorization withdrawn");
           expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
           expect(journal.readSession({ conversationId })?.host).not.toBe("hosted");
@@ -7971,7 +8017,7 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
           expect(journal.readSession({ conversationId })?.writerClaim).toStartWith(replacementOwner);
           expect(host.sent).toHaveLength(0);
           expect(host.releaseCount).toBe(0);
-        } else if (loseProof) {
+        } else if (loseProof || fault === "deadline expires during prompt admission") {
           await expect(spawning).resolves.toMatchObject({ state: "path-pending", initialMessage: "queued" });
           expect(committed).toBeTrue();
           expect(host.sent).toHaveLength(0);
@@ -7988,13 +8034,32 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
           const expiresAt = recovery.startedAt + STAGED_RECOVERY_BUDGET_MS;
           recoveryTime = fault === "proof unavailable through expiry" ? expiresAt : recovery.nextTryAt;
           expireOnRead = fault === "budget expired during proof" ? expiresAt : 0;
-          await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime });
-          await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime + 60_000 });
-          if (fault === "lost proof before retry") {
+          if (fault === "deadline expires during prompt admission") {
+            expireDuringAdmission = true;
+            const recovering = recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime });
+            await deadlineAdmission.promise;
+            recoveryTime = expiresAt;
+            allowDeadlineAdmission.resolve();
+            await recovering;
+            expect(registry.spawnReceipt(launchId)).toMatchObject({
+              state: "failed", error: expect.stringContaining("staged launch publication deadline expired before the first prompt"),
+            });
+            expect(journal.operationResult(launchId)?.receipt).toMatchObject({ status: "failed", reason: expect.stringContaining("publication deadline expired") });
+            expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
+            expect(host.sent).toHaveLength(0);
+            await settleHostlessSessionProjections();
+            expect(journal.readSession({ conversationId })?.host).not.toBe("hosted");
+          } else {
+            await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime });
+            await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime + 60_000 });
+          }
+          if (fault !== "deadline expires during prompt admission" && fault === "lost proof before retry") {
+            expect(registry.spawnReceipt(launchId)).toMatchObject({ state: "completed" });
+            expect(journal.operationResult(`spawn_message_${launchId}`)?.receipt).toMatchObject({ status: "delivered" });
             expect(host.sent.map((item) => item.id)).toEqual([`spawn_message_${launchId}`]);
             expect(journal.operationResult(`spawn_message_${launchId}`)?.receipt.status).toBe("delivered");
             expect(initialAppends).toBe(2);
-          } else {
+          } else if (fault !== "deadline expires during prompt admission") {
             expect(registry.spawnReceipt(launchId)).toMatchObject({
               state: "failed", error: expect.stringContaining("staged host projection reconciliation timed out"),
             });
@@ -8014,7 +8079,9 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
           if (fault === "blocked file revision") expect(fileWaits).toBeGreaterThan(0);
         }
         expect(committed).toBeTrue();
-        if (fault !== "lost proof before retry" && fault !== "budget expired during proof") expect(initialAppends).toBe(1);
+        if (fault !== "lost proof before retry" && fault !== "budget expired during proof") {
+          expect(initialAppends).toBe(fault === "deadline expires during prompt admission" ? 2 : 1);
+        }
       } finally {
         invalidation.resolve();
         const key = registry.spawnReceipt(launchId)?.key;

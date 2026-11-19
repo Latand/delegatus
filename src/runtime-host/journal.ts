@@ -781,7 +781,9 @@ export class RuntimeJournal {
       /* Read inside the write transaction, so no other writer can land
          between this comparison and the event it admits. */
       if (input.expectedSessionRevision !== undefined && (input.scope.type !== "session"
-        || this.entity<RuntimeSession>("session", input.scope.id)?.revision !== input.expectedSessionRevision)) {
+        || (input.expectedSessionRevision === null
+          ? this.entity<RuntimeSession>("session", input.scope.id) !== null
+          : this.entity<RuntimeSession>("session", input.scope.id)?.revision !== input.expectedSessionRevision))) {
         throw new RuntimeSessionFenceError("the session row changed after this event's writer read it");
       }
       const event = this.appendInTransaction(input);

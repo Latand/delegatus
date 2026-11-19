@@ -166,7 +166,7 @@ interface ControllerState {
   activeHosts: Map<string, EngineHost> | null;
   heapCounts?: (() => { registrations: number; attachments: number; pendingPublishChains: number }) | null;
   readMcpObservation?: ((conversationId: string) => ViewerMcpObservation | undefined) | null;
-  registerActiveHost: ((item: StructuredDeliveryHost, ownsOperation?: () => Promise<boolean>) => Promise<() => Promise<void>>) | null;
+  registerActiveHost: ((item: StructuredDeliveryHost, ownsOperation?: () => Promise<boolean>, stagedLaunchId?: string) => Promise<() => Promise<void>>) | null;
   /* The hosts this generation currently serves, as re-registrable items. A
      successor takes them over at the swap, so a rebind never leaves a
      conversation without a resolvable host (#1191). */
@@ -177,7 +177,7 @@ interface ControllerState {
   detachRetiredActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   /* Optional: a controller published by a bundle realm built before #2515
      shares this object and has no such hook. */
-  settleHostlessSessions?: (() => Promise<number>) | null;
+  settleHostlessSessions?: ((conversationId?: string) => Promise<number>) | null;
   updateStartupDeferral?: ((conversationId: string, deferred: boolean) => void) | null;
   allowStartupRecovery?: (() => void) | null;
   completeActive: ((adopted: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive?: () => void, deferredConversationIds?: ReadonlySet<string>, prepared?: PreparedStartupPublication) => Promise<void>) | null;
@@ -789,9 +789,21 @@ async function publishHostState(
     if (!launch.ownsWriter()) throw new Error("staged launch writer changed before host projection");
   };
   assertWriter();
+  if (!client.readSession || !client.appendSessionFenced) {
+    throw new RuntimeHostUnavailableError("staged host projection session fence is unavailable", "HOST_BUSY");
+  }
+  let observedSession: RuntimeSession | null;
+  try { observedSession = await client.readSession({ conversationId }); }
+  catch (error) {
+    if (!isRuntimeHostTransportFailure(error)) throw error;
+    throw new RuntimeHostUnavailableError("staged host projection session read timed out", "HOST_BUSY");
+  }
+  assertWriter();
+  event.expectedSessionRevision = observedSession?.revision ?? null;
   let lostReply = false;
   try {
-    await client.append(event, assertWriter);
+    assertWriter();
+    await client.appendSessionFenced(event as RuntimeEventInput & { expectedSessionRevision: number | null });
   } catch (error) {
     if (!isRuntimeHostTransportFailure(error) || !client.readSession || !writerClaim || !launch.ownsWriter()) throw error;
     lostReply = true;
@@ -1894,13 +1906,16 @@ export async function bindStructuredDeliveryQueue(
      sweep retries through the same socket, with no cached capability verdict. */
   const settledRows = new Map<string, { endedAt: string; sweep: number }>();
   let settleSweep = 0;
-  const settleHostlessSessions = async (): Promise<number> => {
+  const settleHostlessSessions = async (onlyConversationId?: string): Promise<number> => {
     if (superseded() || !client.appendSessionFenced) return 0;
     /* Selection only: every row is read again by key below. A whole snapshot
        here was one 0.3 s slice per sweep on retained history. */
     const registrySnapshot = await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000), { recoveryIndexes: false });
     if (superseded()) return 0;
     const hostless = hostlessConversations(registrySnapshot);
+    if (onlyConversationId) {
+      for (const id of hostless.keys()) if (id !== onlyConversationId) hostless.delete(id);
+    }
     for (const id of settledRows.keys()) if (!hostless.has(id)) settledRows.delete(id);
     const candidates = [...hostless].filter(([, row]) => !registrations.has(row.key));
     const unread = candidates
@@ -2005,16 +2020,18 @@ export async function bindStructuredDeliveryQueue(
   const registerThroughSuccessor = async (
     item: StructuredDeliveryHost,
     ownsOperation?: () => Promise<boolean>,
+    stagedLaunchId?: string,
   ): Promise<() => Promise<void>> => {
     const successor = state.registerActiveHost;
     if (!successor || successor === register) throw new StructuredDeliveryControllerUnavailableError();
-    return await successor(item, ownsOperation);
+    return await successor(item, ownsOperation, stagedLaunchId);
   };
   const register = async (
     item: StructuredDeliveryHost,
     ownsOperation?: () => Promise<boolean>,
+    stagedLaunchId?: string,
   ): Promise<() => Promise<void>> => {
-    if (superseded()) return await registerThroughSuccessor(item, ownsOperation);
+    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, stagedLaunchId);
     if (ownsOperation && !await ownsOperation()) return async () => {};
     const key = sessionKeyId(item.key);
     const current = registrations.get(key);
@@ -2040,7 +2057,7 @@ export async function bindStructuredDeliveryQueue(
     const publicationConversationId = publicationEntry
       ? conversationIdForEntry(registry, publicationEntry)
       : null;
-    const launchId = ownsOperation ? publicationEntry?.structuredHostOperationId : null;
+    const launchId = stagedLaunchId && stagedLaunchId === publicationEntry?.structuredHostOperationId ? stagedLaunchId : null;
     const ownsLaunchWriter = () => {
       if (!launchId || !publicationEntry || superseded() || abandoned()
         || registrations.get(key) !== (seat ?? undefined)) return false;
@@ -2105,7 +2122,7 @@ export async function bindStructuredDeliveryQueue(
        is never handed on: the successor carried it over only if it still
        existed at the swap, and re-driving a released host would republish it. */
     if (abandoned()) return async () => {};
-    if (superseded()) return await registerThroughSuccessor(item, ownsOperation);
+    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, stagedLaunchId);
     if (launchId && !ownsLaunchWriter()) throw new Error("staged launch writer changed before host registration");
     const observable = item.host as ObservableEngineHost;
     let deliveryState = deliveryStateKey(initialState);
@@ -2753,8 +2770,8 @@ export function structuredDeliveryHeldHosts(): ReadonlyMap<string, EngineHost> {
  * what the controller does on its own timer. Zero when this process publishes
  * no delivery controller, since only its owner writes projections.
  */
-export async function settleHostlessSessionProjections(): Promise<number> {
-  return await state.settleHostlessSessions?.() ?? 0;
+export async function settleHostlessSessionProjections(conversationId?: string): Promise<number> {
+  return await state.settleHostlessSessions?.(conversationId) ?? 0;
 }
 
 export function structuredDeliveryHostForConversation(conversationId: string, registry?: AgentRegistry): EngineHost | null {
@@ -2800,8 +2817,9 @@ export function retainUnpublishedStructuredLaunchHost(item: UnpublishedLaunchHos
 export async function publishStructuredDeliveryHost(
   item: StructuredDeliveryHost,
   ownsOperation?: () => Promise<boolean>,
+  stagedLaunchId?: string,
 ): Promise<() => Promise<void>> {
-  return requireStructuredDeliveryControllerPublication()(item, ownsOperation);
+  return requireStructuredDeliveryControllerPublication()(item, ownsOperation, stagedLaunchId);
 }
 
 /** Adjust one startup row without replaying historical publication or disturbing

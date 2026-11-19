@@ -159,7 +159,7 @@ export interface RuntimeEventInput {
       writer that decides from a reading, with no host of its own behind the
       event, names the reading here so a row a new owner has published since
       is left as that owner wrote it. */
-  expectedSessionRevision?: number;
+  expectedSessionRevision?: number | null;
   /** A delta folded from consecutive engine deltas names the text length of
       each one, oldest first; the last belongs to the sequence in its producer
       key and each earlier one to the sequence before. The journal keeps only

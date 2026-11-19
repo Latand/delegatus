@@ -61,6 +61,7 @@ function runtimeClient(journal: InstanceType<typeof RuntimeJournal>): RuntimeHos
     events: async (after: number) => journal.replay(after),
     waitEvents: async (after: number) => journal.replay(after),
     append: async (event) => journal.append(event),
+    appendSessionFenced: async (event) => journal.append(event),
     operation: async (event) => journal.append(event),
     command: async (command) => journal.executeOperation(command),
     operationStatus: async (operationId: string) => journal.operationResult(operationId),
