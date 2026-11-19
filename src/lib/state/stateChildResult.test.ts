@@ -2,6 +2,32 @@ import { expect, test } from "bun:test";
 import path from "node:path";
 import { assertStateChildSuccess } from "./stateChildResult.fixture";
 
+test("transaction timing cannot conceal errors or failed child exits", () => {
+  const sample = { collection: "tasks", heldMs: 66, pid: 7, role: "unowned" };
+  const line = (value: unknown) => `[state transaction-hold] ${JSON.stringify(value)}\n`;
+  assertStateChildSuccess(0, line(sample));
+  for (const value of [null, {}, { ...sample, error: "failed" }, { ...sample, heldMs: -1 },
+    { ...sample, pid: 0 }, { ...sample, heldMs: "66" }]) expect(() => assertStateChildSuccess(0, line(value))).toThrow();
+  expect(() => assertStateChildSuccess(0, line(sample) + "failed\n")).toThrow();
+  expect(() => assertStateChildSuccess(1, line(sample))).toThrow();
+});
+
+test("task preparation counts retain errors, malformed counts and failed exits", () => {
+  const sample = { changedRows: 0, effects: { doneAt: 0, doneAdmissions: 0, findingKey: 0, finding: 0,
+    accounting: 0, proactive: 0, project: 0, machine: 0, sync: 0, projection: 0 } };
+  const line = (value: unknown) => `[tasks preparation] ${JSON.stringify(value)}\n`;
+  assertStateChildSuccess(0, line(sample));
+  for (const value of [null, {}, { ...sample, error: "failed" }, { ...sample, changedRows: -1 },
+    { ...sample, changedRows: 1.5 }, { ...sample, effects: {} },
+    { ...sample, effects: { ...sample.effects, doneAt: 1 } },
+    { ...sample, effects: { ...sample.effects, machine: -1 } },
+    { ...sample, effects: { ...sample.effects, unexpected: 0 } }]) {
+    expect(() => assertStateChildSuccess(0, line(value))).toThrow();
+  }
+  expect(() => assertStateChildSuccess(0, line(sample) + "failed\n")).toThrow();
+  expect(() => assertStateChildSuccess(1, line(sample))).toThrow();
+});
+
 test("successful state admission telemetry does not fail a child result", async () => {
   const child = Bun.spawn([process.execPath, "--eval", `
     const { recordBlockingWait } = await import(${JSON.stringify(path.join(import.meta.dir, "../blockingWaits.ts"))});
@@ -59,6 +85,27 @@ test("child result checks retain failure exits, refusals and unexpected stderr",
     ].map(value => line(value) + line(sample)),
   ]) expect(() => assertStateChildSuccess(0, stderr)).toThrow();
   for (const code of [1, null]) expect(() => assertStateChildSuccess(code, line(sample))).toThrow();
+});
+
+test("explicitly correlated async retries retain their identity across blocked call sites", () => {
+  const operationId = "delivery-fixture";
+  const sample = { site: "state-write-lock", durationMs: 75, synchronous: false, subject: "pipelines",
+    role: "unowned", label: null, operationId, at: "2026-01-01T00:00:00.000Z",
+    stateWait: { callSite: "state.lease.sqlite", reason: "sqlite", outcome: "waiting", pid: 7,
+      attempts: 1, maxSliceMs: 50, backoffMs: 0, synchronousSleepMs: 0, release: null, processKind: "embedded" } };
+  const completed = { ...sample, durationMs: 150, stateWait: {
+    ...sample.stateWait, callSite: "state.transaction.pipelines", outcome: "success", attempts: 2,
+  } };
+  const line = (value: unknown) => `[blocking-wait] ${JSON.stringify(value)}\n`;
+  const waiting = line(sample);
+  const options = { correlatedOperationId: operationId };
+  assertStateChildSuccess(0, waiting + line(completed), options);
+  expect(() => assertStateChildSuccess(0, waiting + line(completed))).toThrow();
+  for (const result of [null, { ...completed, operationId: "other" }, { ...completed, subject: "other" },
+    { ...completed, stateWait: { ...completed.stateWait, pid: 8 } }, { ...completed, synchronous: true },
+    { ...completed, stateWait: { ...completed.stateWait, outcome: "timeout" } }]) {
+    expect(() => assertStateChildSuccess(0, waiting + (result ? line(result) : ""), options)).toThrow();
+  }
 });
 
 test.each([

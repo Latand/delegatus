@@ -40,7 +40,7 @@ An incomplete catalog refuses creation. Repository identity and base ref are
 checked even when a configuration supplies a mount path. Display names do not
 establish repository ownership. Submission rereads repository metadata and the
 base ref before starting a thread, including configurations with a mount path;
-a changed configuration produces a confirmed local fallback before model work.
+a changed configuration stops the requested Cloud stage before model work.
 
 An existing ready configuration is preferred, with private configurations first
 and configuration ID breaking ties. A new private configuration contains the
@@ -48,6 +48,58 @@ account's repository ID and base ref. Previously verified setup/start scripts
 and network policy can supply the project template. Otherwise networking uses
 the restricted package-manager preset. Secrets, VPN connections and other
 account-specific requirements are excluded.
+
+## Repository setup
+
+Preparation reads the bound ref through the existing GitHub contents reader.
+It resolves the commit once, lists its root tree and reads only the immutable
+blobs for `Dockerfile`, `package.json`, `.bun-version`, `.node-version`, `.nvmrc`
+and `.tool-versions`. Lockfiles need only a presence check. Reads have one
+20-second deadline; truncated trees, oversized manifests and symbolic links
+refuse preparation with a saved readiness reason. Repository text is never
+executed on the preparing machine.
+
+Exact Bun and Node versions come from those declarations, including Docker
+image tags, a literal global Bun install, package engines, packageManager and
+Volta pins. Ranges supply requirements but cannot select a version. Missing or
+conflicting pins refuse readiness instead of installing a floating release.
+The generated Linux setup installs into `/usr/local`, verifies exact versions
+under `env -i` with the system PATH, then runs the lockfile's frozen install.
+Bun uses `--frozen-lockfile`, npm uses `ci`, and pinned pnpm and Yarn use their
+respective frozen or immutable mode. No lockfile means no dependency install.
+Conflicting lockfile families and unpinned pnpm or Yarn also refuse readiness.
+
+Matching ready environments are checked for the same generated setup before
+they can be reused. Empty setup and intact generated setup are repaired in
+place: create a draft, read its base version and revision, PATCH only its
+install script, and use the existing approval operation. A lost PATCH reply
+is recovered by reading the draft before another write. Expected revisions
+protect concurrent edits; start skills, networking and other configuration
+fields remain with the provider. The script checksum distinguishes intact
+generated setup from operator edits. A hand-written script or an edited
+generated script is preserved, and readiness names the required setup steps.
+Explicit environment selections remain authoritative and require their owner
+to supply missing setup. Approval failures retain their existing typed reason
+and never establish readiness.
+
+### Preparation callers
+
+`prepareCloudEnvironment` in `src/lib/projects/codexCloudEnvironments.ts` is the
+only production caller of backend `create`, `draft`, `configureDraft`, `begin`
+and `complete`. The last two implement `approve/begin` and `approve/complete`.
+Production preparation enters through `CloudEnvironmentController.visit`
+using its `prepare` port, or `createHostedCloudStageClient.prepareEnvironment`.
+The controller also opens the backend for read-only repository discovery.
+Publication checks consume prepared bindings and never prepare environments.
+
+Direct test callers are `codexCloudEnvironments.fixture.ts`,
+`cloudEnvironmentRestart.fixture.ts`, `cloudEnvironmentController.test.ts`,
+`codexCloudEnvironments.test.ts`, `codexCloudEnvironments.recovery.test.ts` and
+`codexCloudEnvironments.status.test.ts`. The lifecycle and setup tests use
+the shared fixtures. Their repository snapshots and provider transports are
+injected; they make no live GitHub or Cloud requests.
+
+## Approval recovery
 
 Creation persists intent before its POST, then checkpoints the configuration,
 draft, draft revision and approval-operation identifiers. Approval initiation
@@ -135,8 +187,8 @@ setup receipts stay out of the public readiness projection.
 
 The pipeline selects account/environment pairs, checkpoints the pair before
 submission and supplies the principal fingerprint to the hosted client. A
-different subscription principal cannot start a thread or turn. Preparation
-failures can use the existing durable local-fallback transition once. Ambiguous
+different subscription principal cannot start a thread or turn. A failed Codex
+Cloud preparation or connect stops a Cloud-required stage with its reason. Local execution requires an explicit runtime override. Ambiguous
 turn submissions retain remote custody. Known tasks retain their frozen account
 and environment when later settings change. Publication checks use the frozen
 task receipt or the selected account's prepared binding; hooks create no
@@ -159,7 +211,7 @@ project-settings writes retain their operator gate.
 The settings response includes saved account readiness for a separate frontend
 lane. This change adds no UI. The backend neither authorizes third-party GitHub
 connections nor deletes remote environments. A missing prerequisite remains
-visible in saved readiness and the pipeline's local-fallback reason.
+visible in saved readiness and the pipeline's failure reason.
 
 ## Verification
 
@@ -169,3 +221,12 @@ Coverage includes empty-ID pipeline execution, creation/approval, account
 separation, manual precedence, pagination, redaction, interrupted setup across
 real process restarts, persisted deadlines, release demotion and SDK MCP calls
 through the actual server, tool service, binding, HTTP route and SQLite store.
+
+A configuration's ready version does not establish that a new deferred runtime
+has connected to the environment registry. The stage client waits for a confirmed
+`environment_offline` connect refusal within its startup retry budget. An
+exhausted connect or another registry 409 records `unavailable` against that exact
+binding revision, with `environment_offline` or `environment_connect_failed`.
+A configuration that disappears after preparation records `environment_missing`.
+These outcomes keep their reason across process restarts and never leave the
+failed binding ready. See [the runtime contract](cloud-stage-runtime.md#deferred-registry-connect-and-execution-identity).

@@ -49,7 +49,7 @@ afterAll(() => fixturePullRequests.mockRestore());
 const { IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail } = engineModule;
 const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline: rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
-const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { AgentRegistry, closeAgentRegistryForTests, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { saveFlows } = await import("@/lib/flows/store");
 const rawCreatePipelineFromRequest = engineModule.createPipelineFromRequest;
 const createPipelineFromRequest: typeof rawCreatePipelineFromRequest = async (request, ports, options) =>
@@ -74,6 +74,7 @@ registerPipelineTick(async () => {});
 
 afterAll(async () => {
   await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  closeAgentRegistryForTests();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
 });
 
@@ -417,7 +418,9 @@ async function successorOnPullRequestBranch(name: string, previousState: Pipelin
     older engine stored it. */
 async function create(ports: PipelinePorts, stages = RUN_STAGES as never, request: { publication?: "internal" | "remote-branch"; repoDir?: string } = {}) {
   savePipelines([]);
-  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", repoDir: request.repoDir ?? "/repo", stages, src: "/codex/creator.jsonl", publication: "internal", ...request }, ports);
+  const cloudContext = Array.isArray(stages) && (stages as Array<{ runtime?: string }>).some(stage => stage.runtime === "codex-cloud" || stage.runtime === "claude-cloud")
+    ? { inputContext: { handoffDigest: "Preserve the accepted scope and validation plan." } } : {};
+  const result = await createPipelineFromRequest({ task: "Ship pipelines", spec: "AC1", ...cloudContext, repoDir: request.repoDir ?? "/repo", stages, src: "/codex/creator.jsonl", publication: "internal", ...request }, ports);
   if (!result.pipeline) throw new Error(result.error);
   if (!result.convertedStages?.length) return result.pipeline;
   const lane = asStoredLegacyReviewLane(result.pipeline, result.convertedStages);

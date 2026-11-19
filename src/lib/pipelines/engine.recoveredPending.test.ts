@@ -180,9 +180,26 @@ test.each([
   } finally { await f.close(); }
 });
 
+test.each(["unpublished", "uncertain", "delivered"] as const)
+("settled failure retries with retained %s launch recovery evidence", async phase => {
+  const f = await completedFailureRetry();
+  Object.assign(f.receipt, { error: "structured launch recovery: " + JSON.stringify({
+    phase, startedAt: 1, checks: 0, nextTryAt: 1, reason: "first-message acknowledgement pending",
+  }) });
+  const receipt = structuredClone(f.receipt);
+  try {
+    const result = await f.call({ action: "retry-stage", stageId: "build" });
+    expect(result.isError, result.raw).toBe(false);
+    for (let i = 0; i < 3; i++) await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(2);
+    expect(retryLane().runs[0]!.attempts[0]).toEqual(f.old);
+    expect(f.receipt).toEqual(receipt);
+  } finally { await f.close(); }
+});
+
 test.each(["live host", "unconfirmed stop", "unknown delivery", "busy transcript", "missing transcript", "missing verdict",
   "identity mismatch", "starting receipt", "missing receipt"] as const)
-("completed failure retry keeps execution fenced for %s (#2034)", async counterexample => {
+("completed retry checks execution independently of %s launch evidence (#2034)", async counterexample => {
   const f = await completedFailureRetry("path-pending", "internal", true, true);
   let stops = 0;
   f.h.ports.stopSettledStageWriter = async () => {
@@ -220,14 +237,15 @@ test.each(["live host", "unconfirmed stop", "unknown delivery", "busy transcript
   try {
     const request = { action: "retry-stage", stageId: "build", clientRequestId: "refused-completed-retry" };
     const refused = await f.call(request);
-    expect(refused.isError, refused.raw).toBe(true);
+    const staleLaunch = ["identity mismatch", "starting receipt", "missing receipt"].includes(counterexample);
+    expect(refused.isError, refused.raw).toBe(!staleLaunch);
     expect((await f.call(request)).answer.replayed).toBe(true);
-    expect(retryLane().state).toBe("needs_decision");
+    expect(retryLane().state).toBe(staleLaunch ? "running" : "needs_decision");
     expect(retryLane().runs[0]!.attempts).toHaveLength(1);
     expect(retryAttempt()).toEqual(before);
     expect(f.registry!.spawnReceipt(before.launchId!)).toEqual(receipt);
     expect(f.h.spawnInputs).toHaveLength(1);
-    expect(stops).toBe(counterexample === "live host" || counterexample === "unconfirmed stop" ? 1 : 0);
+    expect(stops).toBe(counterexample === "identity mismatch" || counterexample === "live host" || counterexample === "unconfirmed stop" ? 1 : 0);
   } finally { await f.close(); }
 });
 
@@ -255,11 +273,10 @@ test("completed retry retains unresolved stop custody across a fresh request (#2
 });
 
 test.each(["transcript read", "host stop", "shutdown read"] as const)("completed retry rechecks ownership and native completion after %s (#2034)", async boundary => {
-  for (const change of ["conversation", "delivery", "transcript"] as const) {
+  for (const change of ["delivery", "transcript"] as const) {
     const f = await completedFailureRetry();
     const before = structuredClone(retryAttempt());
     const withdraw = () => {
-      if (change === "conversation") f.receipt.conversationId = "conversation_replaced";
       if (change === "delivery") f.h.ports.conversationDeliveryOutstanding = () => true;
       if (change === "transcript") fs.appendFileSync(f.old.agentPath!, JSON.stringify({ type: "event_msg",
         timestamp: f.h.ports.now(), payload: { type: "task_started" } }) + "\n");
@@ -291,8 +308,8 @@ test.each(["transcript read", "host stop", "shutdown read"] as const)("completed
 });
 
 test.each(["before read", "transcript read", "host stop", "shutdown read"] as const)
-("completed retry rechecks production identity at %s (#2034)", async boundary => {
-  for (const change of ["entry path", "entry launch", "generation"] as const) {
+("settled retry ignores retained registry identity changes at %s (#2034)", async boundary => {
+  for (const change of ["entry path", "entry launch", "generation", "receipt conversation", "receipt state"] as const) {
     const f = await completedFailureRetry("path-pending", "internal", true, true);
     const before = structuredClone(retryAttempt());
     const receipt = f.registry!.spawnReceipt(before.launchId!);
@@ -300,6 +317,11 @@ test.each(["before read", "transcript read", "host stop", "shutdown read"] as co
       const entry = f.registry!.readOnlySnapshot().entries[`codex:${f.old.sessionId}`]!;
       if (change === "entry path") f.registry!.upsert({ ...entry, artifactPath: `${entry.artifactPath}.other` });
       if (change === "entry launch") f.registry!.upsert({ ...entry, structuredHostOperationId: "foreign-launch" });
+      if (change === "receipt conversation") {
+        const read = f.h.ports.spawnReceipt;
+        f.h.ports.spawnReceipt = id => { const receipt = read(id); return receipt ? { ...receipt, conversationId: "conversation_replaced" } : null; };
+      }
+      if (change === "receipt state") f.h.ports.spawnReceiptState = () => "starting";
       if (change === "generation") {
         const begun = f.registry!.beginSpawnRequest({ engine: "codex", cwd: entry.cwd, transport: "structured",
           launchProfile: entry.launchProfile!, conversationId: f.old.conversationId as `conversation_${string}`,
@@ -329,7 +351,8 @@ test.each(["before read", "transcript read", "host stop", "shutdown read"] as co
     }
     try {
       const refused = await f.call({ action: "retry-stage", stageId: "build" });
-      expect(refused.isError, `${change}: ${refused.raw}`).toBe(true);
+      expect(refused.isError, `${change}: ${refused.raw}`).toBe(false);
+      expect(retryLane().state).toBe("running");
       expect(retryAttempt()).toEqual(before);
       expect(f.registry!.spawnReceipt(before.launchId!)).toEqual(receipt);
       expect(f.h.spawnInputs).toHaveLength(1);

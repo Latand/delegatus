@@ -5,6 +5,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { readMessagesPage } from "@/lib/session/messagesPage";
 import { stagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { prepareControllerArtifactDirectory } from "./controllerArtifacts";
+import { settleAttemptAccounting } from "./attemptAccounting";
 import { switchOperationKey } from "./runtimeSwitchFence";
 import type { PipelinePorts } from "./engine";
 import type { AgentRegistry } from "@/lib/agent/registry";
@@ -55,6 +56,9 @@ export function parkRuntimeSwitch(pipeline: Pipeline, attempt: PipelineStageAtte
   attempt.state = "needs_decision"; attempt.error = reason; attempt.completedAt ??= now;
   attempt.verdict ??= { status: "needs_decision", findings: [] };
   record.outcome = reason;
+  // Retain the same completion snapshot the store writes, so a caller's
+  // checkpoint fence survives its own save during retry or recovery.
+  settleAttemptAccounting(attempt, pipeline.id);
 }
 
 export function requestRuntimeSwitchRetry(pipeline: Pipeline, attempt: PipelineStageAttempt, record: PipelineRuntimeSwitch, reason: string, now: string): void {
@@ -92,9 +96,10 @@ export function attemptAccountPin(stage: PipelineStage, attempt: PipelineStageAt
 export { switchOperationKey };
 
 export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effectBatch" | "operationStatus">, conversationId: string, since: string, ignoredOperationIds: readonly string[] = [], operatorOnly = false): Promise<boolean> {
+  const kinds = operatorOnly ? ["runtime.kill-boundary", "runtime.interrupt-boundary", "runtime.stop-boundary"] : ["runtime.kill-boundary"];
   let cursor = 0;
   while (true) {
-    const page = await client.effectBatch(operatorOnly ? ["runtime.kill-boundary", "runtime.interrupt-boundary", "runtime.stop-boundary"] : ["runtime.kill-boundary"], cursor);
+    const page = await client.effectBatch(kinds, cursor, { conversationId });
     for (const effect of page) {
       if (effect.payload.conversationId !== conversationId || typeof effect.payload.operationId !== "string" || ignoredOperationIds.includes(effect.payload.operationId)) continue;
       // Admission time survives receipt compaction in both modes. Ordinary

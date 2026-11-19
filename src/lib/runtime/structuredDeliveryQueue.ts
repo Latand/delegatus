@@ -1,3 +1,4 @@
+import type { ConfirmedSendEvidence } from "./confirmedSend";
 import { SEND_SETTLEMENT_WINDOW_MS } from "./sendSettlement";
 import { DELIVERY_UNVERIFIED_AFTER_ACTUATION, INJECTION_UNVERIFIED_AFTER_ACTUATION } from "./unverifiedDeliveryReasons";
 import { withHostStopOrigin } from "./hostExit";
@@ -27,7 +28,8 @@ import {
   type StructuredMessageContent,
 } from "./structuredContent";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
-import { StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
+import { StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
+import { StageAttemptSettledError } from "./stageGitEnvironment";
 import type { DeliveryProgressNote, DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
 import { ACTIVE_DELIVERY_PHASES, type DeliveryWaitReason } from "./deliveryWaitReason";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE, RoleMemoryRefusal } from "@/lib/memory/roleStore";
@@ -165,7 +167,7 @@ export interface StructuredDeliveryQueuePort {
       recipient, read by original key and never written by it: the Claude
       delivery ledger and transcript, the Codex thread. False when nothing
       proves it; a throw is unreadable evidence. */
-  confirmedDelivery?(operationId: string): Promise<boolean>;
+  confirmedDelivery?(operationId: string): Promise<boolean | ConfirmedSendEvidence | null>;
 }
 
 /** The clocks of the bounds below; tests shorten them. */
@@ -851,6 +853,8 @@ function forgetRetirementOperation(operationId: string, executorId?: string): vo
 
 export class StructuredDeliveryQueue {
   private activeDrain: Promise<void> | null = null;
+  private postAdmissionDrain: Promise<void> | null = null;
+  private postAdmissionPredecessor: Promise<void> | null = null;
   private rerun = false;
   private readonly targetErrors = new Map<string, string>();
   private readonly passRetry = new RetryBackoff();
@@ -872,6 +876,8 @@ export class StructuredDeliveryQueue {
   private readonly refusedSteerTurns = new Map<string, string | null>();
   /** Steers and native queued sends whose arrival is observed after their lane ended. */
   private readonly activeSteers = new Map<string, { conversationId: string; turnId: string; settling: Promise<void>;
+    /** This host binds each admitted input to durable native identity. */
+    nativeHost?: EngineHost;
     /** Written to a running turn that reads it at its next tool boundary. */
     awaitsToolBoundary?: boolean }>();
   /** An interrupt can need several drain passes before any message is handed
@@ -992,12 +998,18 @@ export class StructuredDeliveryQueue {
   }
 
   /** Guarantees a drain pass whose journal read starts after this request. */
-  async drainAfterAdmission(freshAdmission = false): Promise<void> {
+  drainAfterAdmission(freshAdmission = false): Promise<void> {
     const precedingDrain = this.activeDrain;
+    if (this.postAdmissionDrain && this.postAdmissionPredecessor === precedingDrain) return this.postAdmissionDrain;
     /* The preceding drain owner reports its own failure. This barrier still
        evaluates the journal state created by the completed admission. */
-    if (precedingDrain) await precedingDrain.catch(() => undefined);
-    await this.drain({ freshAdmission });
+    const run = (async () => {
+      if (precedingDrain) await precedingDrain.catch(() => undefined);
+      await this.drain({ freshAdmission });
+    })().finally(() => { if (this.postAdmissionDrain === run) this.postAdmissionDrain = null; });
+    this.postAdmissionPredecessor = precedingDrain;
+    this.postAdmissionDrain = run;
+    return run;
   }
 
   /** Admission names its recipient. Share the ordinary target lane and all
@@ -1033,6 +1045,7 @@ export class StructuredDeliveryQueue {
 
   private async drainUntilSettled(safety = false): Promise<void> {
     let first = true;
+    let passes = 0;
     do {
       this.rerun = false;
       try {
@@ -1049,7 +1062,8 @@ export class StructuredDeliveryQueue {
         this.lastPassError = failureReason(error);
         throw error;
       }
-    } while (this.rerun && !this.retirementExecutor.retired);
+    } while (this.rerun && ++passes < 2 && !this.retirementExecutor.retired);
+    if (this.rerun && !this.retirementExecutor.retired) this.retrySoon();
   }
 
   private async drainPass(safety = false, freshConversationId?: string, kickAt?: number): Promise<void> {
@@ -1153,7 +1167,9 @@ export class StructuredDeliveryQueue {
           ? right.eventSeq - left.eventSeq
           : left.eventSeq - right.eventSeq);
     });
+    const effectKinds = new Map<string, DeliveryEffect["kind"]>();
     for (const effect of effects) {
+      effectKinds.set(effect.operationId, effect.kind);
       this.markTiming(effect.operationId, "queue-kick", new Date(kickAt ?? listingStartedAt).toISOString());
       const target = grouped.get(effect.conversationId) ?? [];
       target.push(effect);
@@ -1175,7 +1191,8 @@ export class StructuredDeliveryQueue {
         if (conversationId === freshConversationId) this.freshReruns.add(conversationId);
         for (const effect of grouped.get(conversationId) ?? []) {
           if (effect.operationId !== busy.current?.operationId) {
-            this.noteWait(effect, "conversation-busy", { wake: "event" });
+            this.noteWait(effect, "conversation-busy", { wake: "event", detail:
+              `earlier ${effectKinds.get(busy.current?.operationId ?? "") ?? "delivery"} is still settling in ${busy.current?.phase ?? "host observation"}` });
           }
         }
         continue;
@@ -1183,10 +1200,10 @@ export class StructuredDeliveryQueue {
       targets.push([conversationId, this.startLane(conversationId, async (lane) => {
         if (this.port.deferTarget?.(conversationId)) {
           const deferred = grouped.get(conversationId) ?? [];
-          // Explicit termination uses the recorded session identity without
-          // adopting its host. Once cut recognition permits keyed recovery,
-          // explicit sends also take the normal fenced path. Automatic work
-          // and configuration changes still wait for startup completion.
+          // Termination uses the recorded session identity without adopting
+          // its host. Conditional kills still prove idleness and ownership at
+          // actuation. Holding them here also holds settled stage retirement
+          // after a restart. Sends and configuration retain their startup fence.
           const admitted: DeliveryEffect[] = [];
           // Never send past a configuration change or another held effect
           // that the ordinary per-conversation drain would process first. An
@@ -1197,7 +1214,7 @@ export class StructuredDeliveryQueue {
               || (effect.kind === "kill" && !effect.onlyIfIdle) || effect.kind === "interrupt");
           const heldControls: ControlEffect[] = [];
           for (const effect of deferred) {
-            if ((effect.kind === "kill" && !effect.onlyIfIdle)
+            if (effect.kind === "kill"
               || (((effect.kind === "send" && !effect.onlyIfIdle) || effect.kind === "interrupt") && recoverSends)) admitted.push(effect);
             else if (effect.kind === "interrupt" || effect.kind === "answer") heldControls.push(effect);
             else this.noteWait(effect, "startup", { wake: "event" });
@@ -1643,7 +1660,7 @@ export class StructuredDeliveryQueue {
           : evidence.value ? "reconciling: host evidence shows it arrived" : "reconciling: no host evidence yet; the send is still held",
         !overdue);
         if (evidence.readable && evidence.value) {
-          await this.transitionUnlessSettled(operationId, "delivered", {});
+          await this.transitionUnlessSettled(operationId, "delivered", confirmationDetails(evidence.value));
           this.retrySoon();
         }
       })
@@ -1682,7 +1699,7 @@ export class StructuredDeliveryQueue {
     }
     if (now - issuedAt < this.timing.interruptReconcileMs) return "wait";
     this.interruptIssuedAt.set(effect.operationId, now);
-    let evidence: Evidence<boolean> | null = null;
+    let evidence: Evidence<boolean | ConfirmedSendEvidence | null> | null = null;
     if (this.port.confirmedDelivery) {
       this.noteWait(effect, "interrupt-reconciling", {
         attempted: true, wake: "retry", detail: "reading the host's evidence for this message",
@@ -1697,7 +1714,7 @@ export class StructuredDeliveryQueue {
       if (bound) clearTimeout(bound);
       if (answered === null) {
         void read.then(async (late) => {
-          if (late.readable && late.value && await this.transitionUnlessSettled(effect.operationId, "delivered", {}).catch(() => false)) {
+          if (late.readable && late.value && await this.transitionUnlessSettled(effect.operationId, "delivered", confirmationDetails(late.value)).catch(() => false)) {
             this.retrySoon();
           }
         });
@@ -1707,7 +1724,7 @@ export class StructuredDeliveryQueue {
       }
     }
     if (evidence?.readable && evidence.value) {
-      if (await this.transitionUnlessSettled(effect.operationId, "delivered", {})) return "delivered";
+      if (await this.transitionUnlessSettled(effect.operationId, "delivered", confirmationDetails(evidence.value))) return "delivered";
       return "wait";
     }
     this.interruptAcknowledged.delete(effect.operationId);
@@ -1868,7 +1885,7 @@ export class StructuredDeliveryQueue {
       return !effect.onlyIfIdle && (effect.turnId === undefined || effect.turnId === null)
         && ["queue", "steer-or-queue", "interrupt-active"].includes(effect.policy ?? "")
         && host?.coalescesQueuedInput === true && host.sendWaitsForRunningTurn === true
-        && host.supportsSteer === false && host.supportsQueuedSend === false
+        && host.supportsSteer === false
         && this.port.coalescesConversation?.(effect.conversationId) === true && !!this.port.bindDeliveryBatch;
     };
     // Choose a bounded membership set before any selected message is claimed
@@ -1926,6 +1943,13 @@ export class StructuredDeliveryQueue {
       for (const p of remaining) await this.transitionUnlessSettled(p.effect.operationId, "queued", { reason: "inbox message bound" });
       pendingBatch = selected;
       const first = selected[0]!;
+      // composeBatch supplies an idle helper default. Native active admission
+      // keeps caller identity separate from this attempt's observed turn.
+      const attemptTurnId = first.member.entry.attemptTurnId;
+      if (first.host.usesNativeInputIdentity === true || attemptTurnId !== undefined) {
+        composed.entry.expectedTurnId = first.effect.turnId;
+        composed.entry.attemptTurnId = attemptTurnId;
+      }
       const priorityRuntime = selected.find(p => p.member.priority && p.effect.runtime)?.effect.runtime;
       if (priorityRuntime) composed.entry.runtime = priorityRuntime;
       try {
@@ -1962,35 +1986,55 @@ export class StructuredDeliveryQueue {
           catch (error) { memberRefused = p; throw error; }
         }
       };
-      let outcome: { receipt: DeliveryReceipt } | { error: unknown };
-      try {
-        authorize();
-        const observeTiming: DeliveryTimingObserver = mark => {
-          for (const p of selected) this.markTiming(p.effect.operationId, mark);
-        };
-        observeTiming("host-send");
-        outcome = { receipt: await first.host.send(composed.entry, undefined, authorize, observeTiming) };
-      } catch (error) { outcome = { error }; }
+      const receive = async (): Promise<{ receipt: DeliveryReceipt } | { error: unknown }> => {
+        try {
+          authorize();
+          const observeTiming: DeliveryTimingObserver = mark => {
+            for (const p of selected) this.markTiming(p.effect.operationId, mark);
+          };
+          observeTiming("host-send");
+          return { receipt: await first.host.send(composed.entry, undefined, authorize, observeTiming) };
+        } catch (error) { return { error }; }
+      };
       pendingBatch = [];
-      if (memberRefused && "error" in outcome) {
-        for (const p of selected) {
-          if (p === memberRefused) await this.settleSendOutcome(p.effect, p.host, outcome, p.context);
-          else await this.transitionUnlessSettled(p.effect.operationId, "queued", { reason: "inbox member authorization refused" });
+      const settle = async (outcome: { receipt: DeliveryReceipt } | { error: unknown }): Promise<boolean> => {
+        if (memberRefused && "error" in outcome) {
+          for (const p of selected) {
+            if (p === memberRefused) await this.settleSendOutcome(p.effect, p.host, outcome, p.context);
+            else await this.transitionUnlessSettled(p.effect.operationId, "queued", { reason: "inbox member authorization refused" });
+          }
+          this.retrySoon(); return true;
         }
-        this.retrySoon(); return true;
+        let stopped = remaining.length > 0;
+        for (const p of selected) {
+          this.firstDispatches.delete(p.effect.operationId);
+          this.noteWait(p.effect, "dispatching", { lane, detail: `handed over in one message with ${selected.length - 1} others` });
+          if ("error" in outcome && !(outcome.error instanceof StructuredDispatchDeferredError)
+            && !(outcome.error instanceof StructuredSendRefusedError) && !(outcome.error instanceof NativeQueueProtocolRefusal)
+            && !(outcome.error instanceof RoleMemoryRefusal && outcome.error.message === ROLE_MEMORY_CHANGED_MESSAGE)) {
+            await this.terminalizeUnverified(p.effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${failureReason(outcome.error)}`);
+            stopped = true;
+          } else if (await this.settleSendOutcome(p.effect, p.host, outcome, p.context) === "stop") stopped = true;
+        }
+        return stopped;
+      };
+      const nativeDetached = first.host.supportsQueuedSend === true && first.host.coalescesQueuedInput === true
+        && first.host.sendWaitsForRunningTurn === true;
+      if (attemptTurnId != null || nativeDetached) {
+        const settling = receive().then(settle).then(() => undefined).finally(() => {
+          for (const p of selected) this.activeSteers.delete(p.effect.operationId);
+          this.retrySoon();
+        });
+        for (const p of selected) {
+          this.firstDispatches.delete(p.effect.operationId);
+          this.activeSteers.set(p.effect.operationId, { conversationId: p.effect.conversationId,
+            turnId: attemptTurnId ?? composed.entry.id, nativeHost: first.host, awaitsToolBoundary: true, settling });
+          this.noteWait(p.effect, "dispatching", { wake: "none", detail: "written to the running turn; awaiting native receipt" });
+        }
+        void settling.catch(() => undefined);
+        return remaining.length > 0;
       }
-      let stopped = remaining.length > 0;
-      for (const p of selected) {
-        this.firstDispatches.delete(p.effect.operationId);
-        this.noteWait(p.effect, "dispatching", { lane, detail: `handed over in one message with ${selected.length - 1} others` });
-        if ("error" in outcome && !(outcome.error instanceof StructuredDispatchDeferredError)
-          && !(outcome.error instanceof StructuredSendRefusedError) && !(outcome.error instanceof NativeQueueProtocolRefusal)
-          && !(outcome.error instanceof RoleMemoryRefusal && outcome.error.message === ROLE_MEMORY_CHANGED_MESSAGE)) {
-          await this.terminalizeUnverified(p.effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${failureReason(outcome.error)}`);
-          stopped = true;
-        } else if (await this.settleSendOutcome(p.effect, p.host, outcome, p.context) === "stop") stopped = true;
-      }
-      return stopped;
+      return settle(await receive());
     });
     try {
     for (const [index, effect] of effects.entries()) {
@@ -1998,6 +2042,7 @@ export class StructuredDeliveryQueue {
         && effect.runtime && pendingBatch.every(p => !p.effect.runtime);
       if (pendingBatch.length && (!canCoalesce(effect)
         || pendingBatch[0]!.host !== this.resolveHost(effect.conversationId)
+        || effect.kind === "send" && pendingBatch[0]!.effect.turnId !== effect.turnId
         || (JSON.stringify(pendingBatch[0]!.effect.runtime) !== JSON.stringify(effect.kind === "send" || effect.kind === "steer" ? effect.runtime : undefined)
           && !priorityRuntimeCanJoin))) {
         if (await flushBatch()) return true;
@@ -2211,7 +2256,7 @@ export class StructuredDeliveryQueue {
           () => this.port.confirmedDelivery!(effect.operationId), this.timing.reconcileReadMs,
           "host delivery evidence is unavailable") : null;
         if (arrived?.readable && arrived.value) {
-          await this.transitionUnlessSettled(effect.operationId, "delivered", {}, { confirmedDelivery: true });
+          await this.transitionUnlessSettled(effect.operationId, "delivered", confirmationDetails(arrived.value), { confirmedDelivery: true });
         } else {
           const echo = await readEvidence(() => this.port.progress?.get(effect.operationId) ?? null,
             "delivery timing evidence is unavailable");
@@ -2390,12 +2435,23 @@ export class StructuredDeliveryQueue {
          without losing its tool call, where waiting for the turn's end kept a
          stage's operator waiting for the whole stage. A turn awaiting an
          answer keeps the wait, and a seat keeps its combined inbox. */
-      const joinsRunningTurn = waitsForTurn && host.acceptsInputDuringTurn === true && effect.kind === "send"
-        && effect.origin?.kind === "operator" && effect.turnId == null && !effect.onlyIfIdle && !canCoalesce(effect)
+      const nativeJoinsRunningTurn = host.supportsQueuedSend === true && host.coalescesQueuedInput === true
+        && host.sendWaitsForRunningTurn === true && host.acceptsInputDuringTurn === true && effect.kind === "send"
+        && (effect.turnId === undefined || effect.turnId === health.activeTurnRef) && !effect.onlyIfIdle
+        && (effect.policy === "queue" || steerOrQueue || waitsForTurn)
         && health.status === "active" && Boolean(health.activeTurnRef);
+      const joinsRunningTurn = nativeJoinsRunningTurn || (waitsForTurn && host.acceptsInputDuringTurn === true && effect.kind === "send"
+        && effect.origin?.kind === "operator" && effect.turnId === undefined && !effect.onlyIfIdle && !canCoalesce(effect)
+        && health.status === "active" && Boolean(health.activeTurnRef));
       const queuesDuringTurn = joinsRunningTurn || (host.supportsQueuedSend === true && effect.kind === "send"
+        && host.sendWaitsForRunningTurn !== true
         && (effect.policy === "queue" || steerOrQueue)
         && (health.status === "active" || health.status === "attention") && Boolean(health.activeTurnRef));
+      if (host.supportsQueuedSend === true && host.coalescesQueuedInput === true && effect.kind === "send"
+        && typeof effect.turnId === "string" && effect.turnId !== health.activeTurnRef) {
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-turn" });
+        continue;
+      }
       const laterOperatorReplacement = effects.slice(index + 1).some(later => {
         const status = durableStatuses.get(later.operationId)?.status;
         return later.kind === "send" && later.conversationId === effect.conversationId
@@ -2424,6 +2480,7 @@ export class StructuredDeliveryQueue {
       }
       if (!replacesTurn && [...this.activeSteers.values()].some(steer =>
         steer.conversationId === effect.conversationId
+        && !(nativeJoinsRunningTurn && steer.nativeHost === host)
         && (!steersIntoTurn || steer.turnId !== health.activeTurnRef))) {
         this.noteWait(effect, "conversation-busy", { detail: "a message handed to the running turn is still settling" });
         blockRest("conversation-busy");
@@ -2441,7 +2498,8 @@ export class StructuredDeliveryQueue {
             : health.activeTurnRef;
       // Native queued sends can follow the next turn after a pre-write refusal.
       // Keep an observed fence on this attempt; only caller fences are durable.
-      const attemptTurnFenceOnly = joinsRunningTurn || (host.supportsQueuedSend === true && effect.kind === "send"
+      const attemptTurnFenceOnly = (host.usesNativeInputIdentity === true && effect.turnId === undefined)
+        || (joinsRunningTurn && effect.turnId === undefined) || (host.supportsQueuedSend === true && effect.kind === "send"
         && effect.policy === "queue" && effect.turnId === undefined);
       const entry: QueueEntry = {
         id: effect.operationId,
@@ -2449,7 +2507,9 @@ export class StructuredDeliveryQueue {
         contentDigest: effect.contentDigest,
         text: effect.content.text,
         images: effect.content.images,
-        expectedTurnId: (replacesTurn || waitsForTurn) && !joinsRunningTurn ? null : deliveryFence,
+        expectedTurnId: host.usesNativeInputIdentity === true || nativeJoinsRunningTurn ? effect.turnId
+          : (replacesTurn || waitsForTurn) && !joinsRunningTurn ? null : deliveryFence,
+        ...(host.usesNativeInputIdentity === true || nativeJoinsRunningTurn ? { attemptTurnId: health.activeTurnRef } : {}),
         ...(effect.runtime ? { runtime: effect.runtime } : {}),
         ...(effect.selectedContext ? { selectedContext: effect.selectedContext } : {}),
         ...(effect.origin ? { origin: effect.origin } : {}),
@@ -2613,6 +2673,10 @@ export class StructuredDeliveryQueue {
       }
       const authorize = () => {
         quotaGuard?.();
+        if (host.coalescesQueuedInput === true && (lane?.released || this.retirementExecutor.retired
+          || this.port.handoffHeld?.() || this.resolveHost(effect.conversationId) !== host)) {
+          throw new StructuredDispatchDeferredError("native hand-over deferred");
+        }
         const seat = this.port.seatRecipient?.(effect.conversationId);
         if (seat?.kind === "unknown") throw new StructuredDispatchDeferredError(seat.reason);
         if (seat?.kind === "revoked") throw new StructuredSendRefusedError(seat.reason);
@@ -2664,7 +2728,9 @@ export class StructuredDeliveryQueue {
           continue;
         }
         const receiving = sendWithReadRetry(host, entry, firstDispatch, authorize, mark => this.markTiming(effect.operationId, mark));
-        if (queuesDuringTurn && !shouldInterrupt && !steersIntoTurn) {
+        const nativeDetached = host.supportsQueuedSend === true && host.coalescesQueuedInput === true
+          && host.sendWaitsForRunningTurn === true && effect.kind === "send";
+        if ((queuesDuringTurn || nativeDetached) && !shouldInterrupt && !steersIntoTurn) {
           /* The engine confirms a queued input only when its own turn starts,
              which may wait on an answer to this conversation's attention. The
              lane ends here, so controls keep flowing; later messages wait
@@ -2677,7 +2743,8 @@ export class StructuredDeliveryQueue {
               this.activeSteers.delete(effect.operationId);
               this.retrySoon();
             });
-          this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: health.activeTurnRef!, settling,
+          this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: health.activeTurnRef ?? entry.id, settling,
+            ...(nativeDetached ? { nativeHost: host } : {}),
             ...(joinsRunningTurn ? { awaitsToolBoundary: true } : {}) });
           if (joinsRunningTurn) this.port.progress?.deadline(effect.operationId,
             new Date(this.timing.now() + SEND_SETTLEMENT_WINDOW_MS).toISOString(), "turn-boundary");
@@ -2808,19 +2875,20 @@ export class StructuredDeliveryQueue {
     }
     const receipt = outcome.receipt;
     if (receipt.outcome === "rejected") {
+      const refusal = receipt.refusal ?? receipt.reason;
       if (receipt.reason === "stale-turn") {
         /* A send that lost a race with a turn change goes back to the queue.
            An interrupt-and-resend retries its interrupt path as well. */
         if ((effect.kind === "send" && effect.policy !== "steer-if-active") || context.steerByInterrupt) {
-          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
-          this.noteWait(effect, "awaiting-turn", { detail: "the turn changed before the hand-over" });
+          await this.transitionUnlessSettled(effect.operationId, "queued", { reason: refusal });
+          this.noteWait(effect, "awaiting-turn", { detail: receipt.refusal ?? "the turn changed before the hand-over" });
           return "stop";
         }
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: receipt.reason });
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: refusal });
         return "next";
       }
-      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: receipt.reason });
-      this.noteWait(effect, "awaiting-turn", { detail: receipt.reason ?? "the host declined the hand-over" });
+      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: refusal });
+      this.noteWait(effect, "awaiting-turn", { detail: receipt.refusal ?? receipt.reason ?? "the host declined the hand-over" });
       return "stop";
     }
     await this.transitionUnlessSettled(effect.operationId, "delivered", {
@@ -3601,9 +3669,10 @@ export class StructuredDeliveryQueue {
         reason: "structured host recovery did not start; retry the operation",
       });
     } catch (error) {
-      if (error instanceof StructuredStageHostGoneError) {
+      if (error instanceof StructuredStageHostGoneError || error instanceof StageAttemptSettledError) {
         try {
-          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: error.message },
+          await this.transitionUnlessSettled(effect.operationId, "failed", {
+            reason: error instanceof StageAttemptSettledError ? error.refusal : error.message },
             { fromStatuses: ["pending", "queued"], requirePristineAdmission: true });
         } catch {
           // Recovery awaited; the earlier receipt may have been overtaken by
@@ -3620,6 +3689,21 @@ export class StructuredDeliveryQueue {
         return;
       }
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
+        this.retrySoon();
+        return;
+      }
+      /* An orphan with work in flight is stopped once its grace ends; the
+         operation stays queued and names the wait. */
+      if (error instanceof StructuredOrphanGraceError) {
+        this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
+        this.retrySoon();
+        return;
+      }
+      /* An orphan whose stop was refused holds the send for a bounded time,
+         in case the refusal clears (a pending action ends, survivors exit);
+         past it the send fails with that refusal as its reason. */
+      if (error instanceof StructuredOrphanStopRefusedError && error.holding) {
+        this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
         this.retrySoon();
         return;
       }
@@ -3828,4 +3912,8 @@ export class StructuredDeliveryQueue {
       return { blocked: false, terminated: false };
     }
   }
+}
+
+function confirmationDetails(evidence: boolean | ConfirmedSendEvidence | null): { turnId?: string } {
+  return evidence && typeof evidence === "object" && evidence.turnId ? { turnId: evidence.turnId } : {};
 }

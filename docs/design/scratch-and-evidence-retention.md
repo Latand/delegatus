@@ -758,3 +758,103 @@ retries do not recreate expired copies. Unattributed legacy copies remain
 counted and retained. Read the protected-path outcomes before attributing a
 remaining root to a retention defect. No manual cleanup or deployment is part
 of this implementation stage.
+
+## 16. Follow-up: why the first production pages reclaimed nothing
+
+Read-only observation of a production install on 2026-11-12, one day after
+release: the ledger measured 261.7 GB against the 107.4 GB cap, the scratch
+directory held 526 roots and about 308 GB by `du`, and successive minute
+reports reclaimed almost nothing. Every root was classified by the sweep's own
+rules (lane authority read from the state store, the ledger's failure column,
+recorded-check holds, and about fifteen consecutive reports covering 350
+roots). Five defects explained most of it.
+
+1. **A lane closed while one attempt waited on a decision never finished.**
+   Parking (`parkPipelineState`) leaves the attempt's `completedAt` unset and
+   closing the lane does not stamp it, so §4.2 rule 6 kept 134 roots (51.7 GB)
+   of completed or closed lanes held as `live` for good. `laneFinish` now lets
+   the close bound an attempt that is `needs_decision` or `pending` with no
+   clock at all; an unreadable clock, and a completed attempt without one,
+   still keep the lane open, and so do activations, unresolved terminations
+   and unconfirmed hosts.
+2. **The namespace no-evidence proof counted every image in the tree.** A
+   tree with a directory this user cannot read (container runs leave root- or
+   container-owned database data, browser profiles and lock directories: 25
+   roots that day, owned by three uids) retires through the cleanup
+   container. Its no-evidence proof refused any picture anywhere in the tree,
+   so the static images of a checked-out source tree failed it on every
+   visit: all ten "Command failed: docker run" rows in the ledger were that
+   proof exiting 75 over readable source-tree images, none of them named by
+   any report. The proof now counts only what the evidence ledger links: a
+   picture that a stage report, a bridge report or a task named by its path
+   in the root (the report picture index), and the whole root while
+   recorded-check custody holds it. An unreadable index refuses. The copy step that preserves readable
+   captures before an ordinary retirement is unchanged. The expiry snapshot
+   also threw `EACCES` on such directories; it now keeps each as a leaf
+   versioned by its own metadata, since the namespace removal repeats the
+   keep-marker classification inside the tree before it deletes.
+   When the container cannot run at all (no docker, no installed cleanup
+   image, a refusal by the daemon or the image), retrying does not help: the
+   whole root is held as "held for the operator", the ledger records each
+   directory this user cannot list or empty with its path, owner uid, mode
+   and readable size, every report lists them under `blocked`, and the root
+   is revisited hourly.
+3. **`du` exiting 1 recorded a tree as four kilobytes.** `du` totals what it
+   can read and exits 1 when a subtree is unreadable; the fallback after a
+   failed namespace measurement kept only the root inode. The largest root
+   (51 GiB: a settled attempt of a paused lane holding twelve rehearsal
+   copies of a vendored application source tree and their container-owned
+   database files) counted 4 KiB, so it never weighed on the cap or on any
+   ranking. The readable total is now the lower bound, raised by the
+   namespace measurement when it succeeds, and the outcome is flagged
+   `unreadable`.
+4. **Paging had no order across pages.** Rows were visited round robin by
+   `checkedAt` with three quarters of a pressure page reserved for released
+   rows; "outside this page" was simply every row not in the current 32. The
+   cap only enlarged the page, and the in-page order under pressure was
+   largest first. Each page now starts with roots whose recorded lane
+   retention has ended, across the whole ledger, oldest lane finish first, for
+   up to half of the page; under pressure the retirable roots of the page go
+   oldest first. The production state port records `root_retention.expiresAt`
+   whenever a lane is known finished, including for roots that a later
+   observation holds (linked evidence, a failed namespace proof), so those are
+   found first once their seven days end. A root still held after its
+   retention steps back by 30 minutes, and a root the run budget never reached
+   keeps its place for the next tick.
+5. **Exited test processes held roots as live.** Gate checks and test runs
+   remove their working directory right after they exit. Within one reference
+   observation (several seconds with dozens of consumer checkouts) such a cwd
+   vanished between the scan and the discovery, and `ENOENT` held the root as
+   "consumer checkout became unreadable during retirement" (13 finished-lane
+   roots, 17.9 GB, in the sampled reports). A cwd, or a checkout found only
+   through cwds, now counts as abandoned once every process that held it in
+   the scan is gone from `/proc`; a process the scan did not read from `/proc`
+   cannot be proven gone and still holds. The reason now carries the path.
+
+The hourly temp sweep reported the ledger-owned scratch roots it skips as
+`inUse` with zero bytes (508 on that day); they are counted as `ledger` now,
+and `inUse` again means a process holds the directory.
+
+Expected effect of the first full pass on that day's numbers (by `du`,
+308.6 GB in 524 roots; one read-only classification, so a root that a live
+process references at its visit stays):
+
+| Outcome | Roots | GB |
+|---|---:|---:|
+| Retired: finished lanes (closed or completed, including the 134 parked ones) | 117 | 62.4 |
+| Retired: settled attempts of open lanes, unless their checkout links in | 27 | 73.4 |
+| Retired: lanes past their seven days | 16 | 5.9 |
+| Retired: unowned roots older than a day | 68 | 2.7 |
+| of these, through the cleanup container (directories another user owns) | 24 | 74.7 |
+| Held: Git worktree links into other repositories, empty `.git` files | 34 | 40.1 |
+| Held: keep markers, nearly all left by this repository's test fixtures | 29 | 37.7 |
+| Held until the lane's seven days end: linked evidence in finished lanes | 28 | 29.3 |
+| Held: open lanes (outputs declared, attempt marked running, linked evidence) | 55 | 28.0 |
+| Held: completed lanes whose close left unconfirmed hosts | 66 | 23.3 |
+| Held: unowned roots younger than a day | 86 | 4.4 |
+
+About 144 GB becomes reclaimable on the first pass. The holds that remain are
+by design: closing paused or waiting lanes, clearing the stale unconfirmed
+hosts (an engine reconcile issue outside this sweep), the fixture keep
+markers, and the worktrees that agents registered in other repositories each
+wait on an operator's decision; linked evidence waits out its seven days.

@@ -1,5 +1,4 @@
 import { registryLivenessRows, registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -23,6 +22,8 @@ import {
   ROLLED_BACK_MIGRATION_DELIVERY_REASON,
 } from "@/lib/accounts/migration/intentLiveness";
 import { procBackend } from "@/lib/proc";
+import { readReaperEvidence, recordReaperEvidence, type ReaperEvidence } from "@/lib/reaperState";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { reconcileDeadStructuredRegistryHostsOffLoop } from "@/lib/runtime/registry";
@@ -46,64 +47,8 @@ const AUTHORSHIP_PATH_PASS_BYTES = 4 * 1024 * 1024;
 const AUTHORSHIP_CYCLE_BUDGET_BYTES = 32 * 1024 * 1024;
 
 const REPORT_FILE = () => statePath("reaper-report.json");
-const STATE_FILE = () => statePath("reaper-state.json");
 const JOURNAL_FILE = () => statePath("reaper-journal.ndjson");
 const ROTATE_BYTES = 4 * 1024 * 1024;
-
-interface ReaperState {
-  version: 1;
-  firstObservedAt: Record<string, string>;
-  userAuthoredPaths: Record<string, true>;
-  /* Path-scoped authorship freshness (issue #112). For every transcript the
-     reaper has scanned to completion and found NOT owner-authored, the observed
-     transcript mtime (seconds) at that scan. The board clears
-     `authorshipUnverified` only when this per-path stamp is at least as fresh as
-     the file's current mtime — a global "last cycle" timestamp would falsely
-     certify a worker that exited before it was ever scanned, letting an
-     unobserved user-authored transcript collapse. */
-  scannedAt: Record<string, number>;
-}
-
-function readState(): ReaperState {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(STATE_FILE(), "utf8")) as Partial<ReaperState>;
-    if (parsed.version === 1 && parsed.firstObservedAt && typeof parsed.firstObservedAt === "object") {
-      return {
-        version: 1,
-        firstObservedAt: parsed.firstObservedAt,
-        userAuthoredPaths: parsed.userAuthoredPaths && typeof parsed.userAuthoredPaths === "object"
-          ? parsed.userAuthoredPaths as Record<string, true>
-          : {},
-        scannedAt: parsed.scannedAt && typeof parsed.scannedAt === "object" && !Array.isArray(parsed.scannedAt)
-          ? parsed.scannedAt as Record<string, number>
-          : {},
-      };
-    }
-  } catch { /* first run or invalid state */ }
-  return { version: 1, firstObservedAt: {}, userAuthoredPaths: {}, scannedAt: {} };
-}
-
-function atomicWrite(filename: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-  const temporary = `${filename}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-  fs.renameSync(temporary, filename);
-}
-
-/** Rewrites the state file for this cycle. `firstObservedAt` tracked pane
-    hosts; it is kept empty because a state file without it reads as invalid
-    and would drop the authorship stamps beside it. */
-function updateObservationState(): ReaperState {
-  const previous = readState();
-  const state = {
-    version: 1 as const,
-    firstObservedAt: {},
-    userAuthoredPaths: previous.userAuthoredPaths,
-    scannedAt: previous.scannedAt,
-  };
-  atomicWrite(STATE_FILE(), state);
-  return state;
-}
 
 function hasViewerWorkerLaunchPrompt(snapshot: ReturnType<AgentRegistry["snapshot"]>, pathname: string): boolean {
   return registryRowsMatching(snapshot, "receipts", "artifactPath", pathname).some((receipt) =>
@@ -176,8 +121,7 @@ async function authorshipEvidence(
   snapshot: ReturnType<AgentRegistry["snapshot"]>,
   flows: Flow[],
   files: FileEntry[],
-  priorUserAuthoredPaths: Readonly<Record<string, true>>,
-  priorScannedAt: Record<string, number>,
+  prior: ReaperEvidence,
 ): Promise<{
   userAuthoredPaths: Set<string>;
   unverifiedPaths: Set<string>;
@@ -190,9 +134,10 @@ async function authorshipEvidence(
   /* Human authorship is sticky by contract. Re-reading a path after it has
      already crossed the owner-message threshold cannot change that verdict;
      it only burns through the full transcript again because authored paths do
-     not receive a clean `scannedAt` stamp. Seed the current evidence from the
-     durable map so every later controller cycle skips those files. */
-  const userAuthoredPaths = new Set(Object.keys(priorUserAuthoredPaths));
+     not receive a clean `scannedAt` stamp. The durable evidence answers for
+     them, so every later controller cycle skips those files. `userAuthoredPaths`
+     collects the paths this pass newly proves. */
+  const userAuthoredPaths = new Set<string>();
   const unverifiedPaths = new Set<string>();
   const verifiedCleanAt = new Map<string, number>();
   /* Authorship scanning covers every quiet claude/codex transcript the scan
@@ -209,9 +154,10 @@ async function authorshipEvidence(
   await forEachCooperatively(files, (file) => {
     if (file.engine !== "claude" && file.engine !== "codex" && file.engine !== "copilot") return;
     if (file.activity === "live") return;
+    if (prior.authored(file.path)) return;
     /* Already clean-stamped at or past the current mtime — no need to re-scan;
        the persisted stamp still stands (the caller keeps prior state entries). */
-    const stamp = priorScannedAt[file.path];
+    const stamp = prior.scannedAt(file.path);
     if (stamp !== undefined && stamp >= file.mtime) return;
     targets.set(file.path, file.engine);
   });
@@ -259,33 +205,47 @@ function appendJournal(record: ReaperJournalRecord): void {
   fs.appendFileSync(filename, JSON.stringify(record) + "\n", { encoding: "utf8", mode: 0o600 });
 }
 
+/** What one reaper cycle proved, over the durable evidence: a later pass in
+    the same cycle (an actuation re-evaluates) skips those paths even when the
+    write below could not commit. */
+interface CycleEvidence {
+  authored: Set<string>;
+  scanned: Map<string, number>;
+}
+
+function cycleEvidence(cycle: CycleEvidence): ReaperEvidence {
+  const durable = readReaperEvidence();
+  return {
+    authored: (pathname) => cycle.authored.has(pathname) || durable.authored(pathname),
+    scannedAt: (pathname) => cycle.scanned.get(pathname) ?? durable.scannedAt(pathname),
+  };
+}
+
 async function makeInput(
   registry: AgentRegistry,
   files: FileEntry[],
-  state: ReaperState,
+  cycle: CycleEvidence,
   now: number,
   overrides: ReaperActuationOverrides = {},
 ): Promise<ReaperInput> {
   const flows = (overrides.loadFlows ?? loadFlows)();
-  const authorship = await authorshipEvidence(
-    registry.readOnlySnapshot(),
-    flows,
-    files,
-    state.userAuthoredPaths,
-    state.scannedAt,
-  );
-  let stateChanged = false;
-  for (const pathname of authorship.userAuthoredPaths) {
-    if (state.userAuthoredPaths[pathname]) continue;
-    state.userAuthoredPaths[pathname] = true;
-    stateChanged = true;
+  const prior = cycleEvidence(cycle);
+  const authorship = await authorshipEvidence(registry.readOnlySnapshot(), flows, files, prior);
+  /* Only what changed is written: a path newly proven owner-authored, and a
+     clean stamp that moved. A cycle that proves nothing new writes nothing. */
+  const authored = [...authorship.userAuthoredPaths].filter((pathname) => !prior.authored(pathname));
+  const scanned = [...authorship.verifiedCleanAt].filter(([pathname, observedMtime]) => prior.scannedAt(pathname) !== observedMtime);
+  for (const pathname of authored) cycle.authored.add(pathname);
+  for (const [pathname, observedMtime] of scanned) cycle.scanned.set(pathname, observedMtime);
+  try {
+    recordReaperEvidence({ authored, scanned });
+  } catch (error) {
+    /* Evaluation does not read the evidence; the board does. A busy store
+       keeps this cycle's proofs in memory, and the next cycle proves and
+       writes them again. */
+    if (!(error instanceof FileTransactionBusyError)) throw error;
+    console.warn("[reaper] authorship evidence not saved this cycle:", error.message);
   }
-  for (const [pathname, observedMtime] of authorship.verifiedCleanAt) {
-    if (state.scannedAt[pathname] === observedMtime) continue;
-    state.scannedAt[pathname] = observedMtime;
-    stateChanged = true;
-  }
-  if (stateChanged) atomicWrite(STATE_FILE(), state);
   return {
     now,
     reviewerProcesses: observeHeadlessReviewers(flows, overrides),
@@ -358,12 +318,12 @@ export async function killHeadlessReviewerIfMatches(
 async function actuateCandidate(
   registry: AgentRegistry,
   files: FileEntry[],
-  state: ReaperState,
+  cycle: CycleEvidence,
   agent: ReaperAgentReport,
   overrides: ReaperActuationOverrides = {},
 ): Promise<boolean> {
   if (agent.targetKind !== "process" || !agent.flowId || agent.round === null || !agent.processIdentity) return false;
-  const current = evaluateReaper(await makeInput(registry, files, state, (overrides.now ?? Date.now)(), overrides));
+  const current = evaluateReaper(await makeInput(registry, files, cycle, (overrides.now ?? Date.now)(), overrides));
   const candidate = current.agents.find((item) => item.targetKind === "process"
     && item.flowId === agent.flowId
     && item.round === agent.round
@@ -620,10 +580,10 @@ export async function runReaperCycle(options: {
   } catch (error) {
     console.error("[reaper] registry archive convergence failed",error);
   }
-  const state = updateObservationState();
-  const report = evaluateReaper(await makeInput(registry, options.files, state, now, options.actuation));
+  const cycle: CycleEvidence = { authored: new Set(), scanned: new Map() };
+  const report = evaluateReaper(await makeInput(registry, options.files, cycle, now, options.actuation));
   const completed = await runEvaluatedReaper(report, {
-    actuate: (agent) => actuateCandidate(registry, options.files, state, agent, options.actuation),
+    actuate: (agent) => actuateCandidate(registry, options.files, cycle, agent, options.actuation),
     journal: appendJournal,
   });
   writeJsonDurably(REPORT_FILE(), completed);

@@ -1259,6 +1259,38 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     }
   });
 
+  test.concurrent("the manual gate defaults to its committed catalog from another working directory", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-default-"));
+    temporaryDirectories.push(directory);
+    const text = join(directory, "release-notes.md");
+    writeFileSync(text, "Synthetic release evidence.\n");
+    const env = { ...process.env };
+    delete env.LLV_PRIVACY_KNOWN_VALUES;
+    delete env.LLV_PRIVACY_KNOWN_VALUES_FILE;
+    delete env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE;
+    const args = [process.execPath, gate, "--require-known-values", "--paths", text];
+    const green = await runPrivacyTestProcess({ cmd: args, cwd: directory, env, stdout: "pipe", stderr: "pipe" });
+    expect(green.exitCode, green.stdout.toString() + green.stderr.toString()).toBe(0);
+    expect(green.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    // A configured catalog stays authoritative, including an unreadable one.
+    const red = await runPrivacyTestProcess({ cmd: args, cwd: directory,
+      env: { ...env, LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: join(directory, "missing.json") }, stdout: "pipe", stderr: "pipe" });
+    expect(red.exitCode).toBe(1);
+    expect(red.stdout.toString()).toContain("configuration_error: 1");
+    // A standalone copy without the committed catalog must explain the setup.
+    const scripts = join(directory, "scripts");
+    cpSync(import.meta.dir, scripts, { recursive: true,
+      filter: source => !source.endsWith("privacy-known-value-fingerprints.json") });
+    symlinkSync(join(import.meta.dir, "../src"), join(directory, "src"));
+    symlinkSync(join(import.meta.dir, "../node_modules"), join(directory, "node_modules"));
+    const absent = await runPrivacyTestProcess({
+      cmd: [process.execPath, join(scripts, "privacy-publication-gate.ts"), ...args.slice(2)],
+      cwd: directory, env, stdout: "pipe", stderr: "pipe" });
+    expect(absent.exitCode).toBe(1);
+    expect(absent.stdout.toString()).toContain("configuration_error: 1");
+    expect(absent.stderr.toString()).toContain("Set LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE");
+  }, 15000);
+
   test.concurrent("fails closed when required known-value fingerprints are unavailable", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
@@ -1273,7 +1305,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nconfiguration_error: 1\n");
-    expect(result.stderr.toString()).toBe("");
+    expect(result.stderr.toString()).toContain("Set LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE");
   }, 15000);
 
   test.concurrent("normalizes links, HTML forms, percent encoding, and split tokens", async () => {
@@ -3210,18 +3242,26 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   test("resolves the current protected base tip for long-lived pull requests", () => {
     const workflow = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "privacy-publication.yml"), "utf8");
 
-    expect(workflow).not.toContain("github.event.pull_request.base.sha");
-    expect(workflow).toMatch(
+    const guardStart = workflow.indexOf("- name: Refuse mixed privacy repairs");
+    const baseResolutionStart = workflow.indexOf("- name: Resolve current protected base");
+    expect(guardStart).toBeGreaterThanOrEqual(0);
+    expect(baseResolutionStart).toBeGreaterThanOrEqual(0);
+    const guardEnd = workflow.indexOf("\n      - name:", guardStart + 1);
+    expect(guardEnd).toBeGreaterThan(guardStart);
+    const guard = workflow.slice(guardStart, guardEnd);
+    expect(guard).toContain("PRIVACY_GUARD_BASE: ${{ github.event.pull_request.base.sha }}");
+    const baseResolution = workflow.slice(baseResolutionStart);
+    expect(baseResolution).toMatch(
       /PRIVACY_BASE_REF: \$\{\{[^}]*github\.event\.pull_request\.base\.ref[^}]*\}\}/,
     );
-    expect(workflow).toContain(
+    expect(baseResolution).toContain(
       'git fetch --no-tags --force origin "+refs/heads/${PRIVACY_BASE_REF}:refs/remotes/origin/${PRIVACY_BASE_REF}"',
     );
-    expect(workflow).toContain(
+    expect(baseResolution).toContain(
       'git rev-parse --verify "refs/remotes/origin/${PRIVACY_BASE_REF}^{commit}"',
     );
-    expect(workflow).toContain('printf \'PRIVACY_BASE_SHA=%s\\n\' "$PRIVACY_BASE_SHA" >> "$GITHUB_ENV"');
-    expect(workflow).toContain('--base "$PRIVACY_BASE_SHA"');
+    expect(baseResolution).toContain('printf \'PRIVACY_BASE_SHA=%s\\n\' "$PRIVACY_BASE_SHA" >> "$GITHUB_ENV"');
+    expect(baseResolution).toContain('--base "$PRIVACY_BASE_SHA"');
   });
 
   test("runs candidate privacy tests last under the 130-second budget", () => {

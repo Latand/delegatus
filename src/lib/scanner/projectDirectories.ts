@@ -7,11 +7,9 @@ import { stateDir } from "@/lib/configDir";
 import { readStateCollectionRevision, readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 
 import { globalCache } from "./caches";
+import { PROJECT_CATALOG_FILE_NAME, projectCatalogSignature, readProjectCatalogFolders } from "./projectCatalogStore";
 import { projectForCwd, projectRootForCwd } from "./describe";
 
-const PROJECT_STATE_FILES = [
-  "project-catalog.json",
-] as const;
 const PROJECT_DIRECTORY_CACHE_MS = 10_000;
 
 type ProjectDirectory = { cwd: string; project: string; projectRoot: string; checkoutRoot: string | null };
@@ -24,15 +22,7 @@ type ProjectDirectoryCacheEntry = {
 const projectDirectoryCache = globalCache<ProjectDirectoryCacheEntry>("project-directories-v2");
 
 function projectStateIdentity(directory: string): string {
-  const files = PROJECT_STATE_FILES.map((name) => {
-    const filename = path.join(directory, name);
-    try {
-      const stat = fs.statSync(filename);
-      return `${name}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
-    } catch {
-      return `${name}:missing`;
-    }
-  });
+  const files = [projectCatalogSignature(path.join(directory, PROJECT_CATALOG_FILE_NAME))];
   files.push(projectStoreSignature("worktree-map.json", directory));
   const database = path.join(directory, "state.sqlite");
   for (const [collection, legacy] of [["flows", "flows.json"], ["pipelines", "pipelines.json"], ["workflows", "workflows.json"]] as const) {
@@ -77,10 +67,7 @@ function recordPaths(
 
 function projectPathsFromState(directory: string): string[] {
   const paths = new Set<string>();
-  const catalog = readObject(path.join(directory, "project-catalog.json"))?.files;
-  if (catalog && typeof catalog === "object" && !Array.isArray(catalog)) {
-    for (const value of Object.values(catalog)) recordPaths(value, ["cwd", "projectRoot"], paths);
-  }
+  for (const folder of readProjectCatalogFolders(path.join(directory, PROJECT_CATALOG_FILE_NAME)).paths) paths.add(folder);
   const database = path.join(directory, "state.sqlite");
   for (const [filename, collection, fields] of [
     ["flows.json", "flows", ["cwd"]],

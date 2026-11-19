@@ -3,23 +3,29 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { statePath } from "@/lib/configDir";
+import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { attemptReferencesClear, repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 import * as filesystem from "./attemptTempFilesystem";
+import * as removal from "./attemptTempRemoval";
 import type { ProcessScan } from "@/lib/tempSweep";
-import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
+import { AttemptTempStore, BLOCKED_SUBTREE_RETRY_MS, EXPIRED_HOLD_RETRY_MS, sweepAttemptTemps, type AttemptTempState, type AttemptTempOwner } from "./attemptTempRetention";
 import { attemptTempAuthority, attemptTempState } from "./attemptTempProduction";
-import { holdFinishedRoot } from "./attemptTempRetention.testSupport";
+import { finishedLane, holdFinishedRoot, nameInReport } from "./attemptTempRetention.testSupport";
 import { recordedRootHeld, RecordedCheckStore } from "@/lib/recordedChecks/store";
 import { Database } from "bun:sqlite";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import * as copyDiscovery from "./attemptCopyDiscovery";
 import { digest } from "@/lib/recordedChecks/wire";
+import * as evidenceCopy from "./attemptTempCopy";
 import { preserveAttemptEvidence } from "./attemptTempEvidence";
+import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
+import { attemptMutationCurrent } from "./attemptMutationFence";
+import { sweepMonotonicNow } from "./attemptTempDeadline";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { removeKeepMarkers(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(reportMediaRoot(), { recursive: true, force: true }); });
 const NOW = Date.parse("2026-10-22T12:00:00Z");
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-attempt-retention-")); roots.push(root);
@@ -44,7 +50,7 @@ test.each([1, 2, 3, 4])("expired root keeps a nested human marker added at refer
   let reads = 0, injected = false;
   try {
     const report = await f.sweep("expired", { references: async (_original: string, current: string) => {
-      if (++reads === boundary) { fs.writeFileSync(path.join(current, "nested", ".delegatus-keep"), "operator pin"); injected = true; }
+      if (++reads === boundary) { plantKeepMarker(path.join(current, "nested", ".delegatus-keep")); injected = true; }
       return true;
     } });
     expect(injected).toBeTrue(); expect(report.removed).toBe(0);
@@ -66,16 +72,19 @@ test.each([
     scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
   try {
     if (replay) {
-      const original = fs.promises.rm.bind(fs.promises);
-      const rm = spyOn(fs.promises, "rm").mockImplementation((target, settings) =>
-        path.basename(String(target)).startsWith(".delegatus-trash-") ? Promise.reject(new Error("fixture interrupted copy retirement")) : original(target, settings));
+      const original = removal.removeTreeWithinAttemptBudget;
+      const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+        started();
+        if (path.basename(target).startsWith(".delegatus-trash-")) throw new Error("fixture interrupted copy retirement");
+        return original(target, started);
+      });
       try { expect((await sweepEvidenceCopies(f.store, options)).errors).toBe(1); } finally { rm.mockRestore(); }
       f.store.registerCopy({ ...f.store.copy(destination)!, checkedAt: 0 });
     }
     let injected = false, target = "", observedDirectory = destination;
     const pin = (current: string) => {
       if (current !== destination && !injected) {
-        target = path.join(current, "nested", ".delegatus-keep"); fs.writeFileSync(target, "operator pin"); injected = true;
+        target = path.join(current, "nested", ".delegatus-keep"); plantKeepMarker(target); injected = true;
       }
     };
     const report = await sweepEvidenceCopies(f.store, { ...options, authority: async () => {
@@ -109,7 +118,7 @@ test.each([false, true])("a human marker added in the final root authority read 
   try {
     const report = await f.sweep("expired", { references: async (_original: string, current: string) => { currentDirectory = current; return true; },
       authority: async () => {
-        if (currentDirectory !== directory && !injected) { fs.writeFileSync(path.join(currentDirectory, "nested", ".delegatus-keep"), "operator pin"); injected = true; }
+        if (currentDirectory !== directory && !injected) { plantKeepMarker(path.join(currentDirectory, "nested", ".delegatus-keep")); injected = true; }
         return { state: "expired", expiresAt: 1, revision: "fixture", isCurrent: () => true };
       } });
     expect(injected).toBeTrue(); expect(report.removed).toBe(0); expect(f.store.has(directory)).toBeTrue();
@@ -329,7 +338,7 @@ test("an existing nested human marker keeps an expired automatic copy", async ()
   process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
   const destination = statePath("evidence", "attempt-temp", digest("existing-copy-marker"));
   fs.mkdirSync(path.join(destination, "nested"), { recursive: true });
-  fs.writeFileSync(path.join(destination, "nested", ".delegatus-keep"), "operator pin");
+  plantKeepMarker(path.join(destination, "nested", ".delegatus-keep"));
   f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
   try {
     expect((await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
@@ -351,7 +360,7 @@ test("a pinned copy in quarantine stays out of upcoming bytes when expiry moves 
   const f = fixture(), priorState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(f.root, "recent-trash-state");
   const destination = statePath("evidence", "attempt-temp", digest("recent-trash"));
-  fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(path.join(destination, ".delegatus-keep"), "operator pin");
+  fs.mkdirSync(destination, { recursive: true }); plantKeepMarker(path.join(destination, ".delegatus-keep"));
   const stat = fs.lstatSync(destination), trash = path.join(path.dirname(destination), `.delegatus-trash-${path.basename(destination)}-fixture`);
   fs.renameSync(destination, trash);
   fs.writeFileSync(attemptTempJournalPath(destination), JSON.stringify({ directory: destination, trash, uid: stat.uid,
@@ -370,7 +379,7 @@ test("a recent pinned copy stays out of upcoming bytes and becomes eligible afte
   const f = fixture(), priorState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(f.root, "recent-copy-state");
   const destination = statePath("evidence", "attempt-temp", digest("recent-pin")), marker = path.join(destination, ".delegatus-keep");
-  fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(marker, "operator pin");
+  fs.mkdirSync(destination, { recursive: true }); plantKeepMarker(marker);
   const expiresAt = NOW + 6 * 86400000;
   // The root sweep schedules its new copy at expiry, without a due visit first.
   f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane",
@@ -407,7 +416,7 @@ test("scheduled copy inspection advances eight rows per process independently of
   try {
     for (let n = 0; n < 20; n++) {
       const destination = statePath("evidence", "attempt-temp", digest(n)); destinations.push(destination);
-      fs.mkdirSync(destination, { recursive: true }); fs.writeFileSync(path.join(destination, ".delegatus-keep"), "operator pin");
+      fs.mkdirSync(destination, { recursive: true }); plantKeepMarker(path.join(destination, ".delegatus-keep"));
       f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane",
         createdAt: 1, expiresAt, checkedAt: expiresAt, bytes: 4096 });
     }
@@ -449,7 +458,7 @@ test.each(["late-pin", "replacement", "parent-symlink", "unreadable", "deadline"
   const observation = spyOn(filesystem, "inspectAttemptTree").mockImplementation(async (directory, original) => {
     const result = await inspect(directory, original);
     if (directory === destination) {
-      if (kind === "late-pin") fs.writeFileSync(path.join(directory, ".delegatus-keep"), "operator pin");
+      if (kind === "late-pin") plantKeepMarker(path.join(directory, ".delegatus-keep"));
       if (kind === "replacement") { fs.renameSync(directory, directory + "-previous"); fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "replacement"); }
       if (kind === "parent-symlink") {
         const parent = path.dirname(directory); fs.renameSync(parent, parent + "-previous"); fs.symlinkSync(parent + "-previous", parent);
@@ -493,7 +502,7 @@ test("expired linked evidence retires without following its target; recent failu
 test.each(["keep", "outside-git", "cwd", "checkout-link"])("retention preserves an expired root protected by %s", async kind => {
   const f = fixture(), directory = f.make(kind, 30 * 86400000), checkout = path.join(f.root, "checkout");
   fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
-  if (kind === "keep") fs.writeFileSync(path.join(directory, ".delegatus-keep"), "operator pin");
+  if (kind === "keep") plantKeepMarker(path.join(directory, ".delegatus-keep"));
   if (kind === "outside-git") fs.writeFileSync(path.join(directory, ".git"), `gitdir: ${path.join(checkout, ".git")}\n`);
   if (kind === "checkout-link") fs.symlinkSync(directory, path.join(checkout, "scratch"));
   const scan = () => ({ ownNamespace: null, processes: kind === "cwd" || kind === "checkout-link"
@@ -529,7 +538,8 @@ test("retention removal holds no state transaction or collection lease", async (
   try {
     await holdFinishedRoot(directory, "lane", "", [], f.store.owner(directory)!.launchId);
     let removals = 0;
-    const result = await f.sweep("expired", { remove: async (trash: string, guard: () => Promise<boolean>, dispatch: () => boolean) => {
+    const result = await f.sweep("expired", { remove: async (trash: string, guard: () => Promise<boolean>, dispatch: () => boolean,
+      mutationStarted: () => void) => {
       expect(await guard()).toBeTrue(); expect(dispatch()).toBeTrue();
       const db = new Database(statePath("state.sqlite"));
       try {
@@ -538,7 +548,7 @@ test("retention removal holds no state transaction or collection lease", async (
           expect(db.query("SELECT 1 FROM state_leases LIMIT 1").get()).toBeNull();
         db.exec("ROLLBACK");
       } finally { db.close(); }
-      removals++; await fs.promises.rm(trash, { recursive: true });
+      removals++; mutationStarted(); await fs.promises.rm(trash, { recursive: true });
     } });
     expect(result.errors).toBe(0); expect(removals).toBe(1);
   } finally { f.store.close(); }
@@ -632,6 +642,20 @@ test("copies retain unfinished, recent and unattributed data and never touch dur
     expect(report.errors).toBe(0); expect(report.removed).toBe(2); expect(report.unattributed.count).toBe(1);
     expect(destinations.map(destination => fs.existsSync(destination))).toEqual([false, true, true, false, true]);
     for (const filename of durable) expect(fs.readFileSync(filename, "utf8")).toBe("durable");
+  } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
+});
+
+test("a creation-expired agent copy waits for the host-finish retention owner", async () => {
+  const f = fixture(), priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "agent-copy-state");
+  const destination = statePath("evidence", "attempt-temp", digest("agent-copy")); fs.mkdirSync(destination, { recursive: true });
+  fs.writeFileSync(path.join(destination, "capture.png"), "capture");
+  f.store.registerCopy({ destination, pipelineId: null, launchId: "agent-copy", kind: "agent", createdAt: NOW - 8 * 86400000,
+    expiresAt: NOW - 1000, checkedAt: 0, bytes: 4096 });
+  try {
+    const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
+      scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true }, { agentCopiesManagedSeparately: true });
+    expect(report.removed).toBe(0); expect(fs.existsSync(destination)).toBeTrue(); expect(f.store.copy(destination)?.expiresAt).toBeNull();
   } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
 });
 
@@ -747,11 +771,12 @@ test("one failing evidence copy preserves its journal, logs once and allows an i
     fs.mkdirSync(destination); fs.writeFileSync(path.join(destination, "frame.png"), "capture");
     f.store.registerCopy({ destination, pipelineId: "lane", launchId: "copy", kind: "lane", createdAt: 1, expiresAt: 1, checkedAt: 0, bytes: 4096 });
   }
-  const remove = fs.promises.rm.bind(fs.promises), lines: unknown[][] = [];
+  const remove = removal.removeTreeWithinAttemptBudget, lines: unknown[][] = [];
   const log = spyOn(console, "error").mockImplementation((...args) => { lines.push(args); });
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, settings) => {
-    if (String(target).includes(path.basename(failed))) throw new Error("fixture copy removal refused");
-    return remove(target, settings);
+  const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+    started();
+    if (target.includes(path.basename(failed))) throw new Error("fixture copy removal refused");
+    return remove(target, started);
   });
   let now = NOW;
   const options = { now: () => now, state: async () => "expired" as const,
@@ -773,25 +798,47 @@ test("a settled attempt removes its scratch without waiting for host release", a
 });
 
 type NamespacePath = "namespace-only" | "permission-fallback";
-type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced";
-async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false) {
+type NamespaceChange = "control" | "producer-changed" | "checkout-unreadable" | "root-replaced" | "namespace-refused";
+type NamespaceTree = { foreign?: boolean; image?: "source" | "named" };
+async function integratedNamespaceSweep(kind: NamespacePath, change: NamespaceChange = "control", expired = false, tree: NamespaceTree = {}) {
   const f = fixture(), directory = f.make(`namespace-${kind}`), bin = path.join(f.root, "bin");
   const checkout = path.join(f.root, "checkout"), completion = path.join(f.root, "cleanup-complete");
   fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
   fs.mkdirSync(path.join(directory, "private")); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(directory, "private", "payload"), "reclaim me");
   if (expired) fs.writeFileSync(path.join(directory, "frame.png"), "expired evidence");
+  // A container that ran as another user leaves a directory this user cannot list.
+  const locked = path.join(directory, "private", "pgdata");
+  if (tree.foreign) { fs.mkdirSync(locked); fs.writeFileSync(path.join(locked, "base"), "database files"); fs.chmodSync(locked, 0); }
+  // An image of a checked-out source tree, and whether a report named it.
+  const image = path.join(directory, "private", "vendor", "static", "icon.png");
+  if (tree.image) { fs.mkdirSync(path.dirname(image), { recursive: true }); fs.writeFileSync(image, "source asset"); }
+  if (tree.image === "named") nameInReport(image);
   f.store.measure(directory, 8192); f.store.release(directory);
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
 import fs from "node:fs";
 const args = process.argv.slice(2);
-if (args[0] === "ps") process.exit(0);
+if (args[0] === "ps" || args[0] === "rm") process.exit(0);
 if (args[0] !== "run") process.exit(61);
 const source = /source=([^,]+)/.exec(args[args.indexOf("--mount") + 1])?.[1];
 if (!source || !source.startsWith(${JSON.stringify(f.root + path.sep)})) process.exit(62);
-const script = args[args.indexOf("-c") + 1];
+const scripts = args.flatMap((arg, index) => arg === "-c" ? [index] : []);
+const commandAt = scripts[scripts.length - 1];
+const script = args[commandAt + 1];
+if (script.includes("sha256sum /tmp/sorted") && !script.includes("-delete")) {
+  process.stdout.write("a".repeat(64) + "\\n"); process.exit(0);
+}
+// The namespace holds DAC_OVERRIDE: it lists what this user cannot.
+const grant = file => { if (!fs.lstatSync(file).isDirectory()) return; fs.chmodSync(file, 0o700); for (const entry of fs.readdirSync(file)) grant(file + "/" + entry); };
+// The no-evidence proof: the paths the evidence ledger links, passed after
+// the identity, or, before them, every picture anywhere in the tree.
+const at = commandAt + 2, linked = args.slice(at + 3, at + 3 + Number(args[at + 2]));
+const pictures = file => { try { return fs.lstatSync(file).isDirectory() ? fs.readdirSync(file).some(entry => pictures(file + "/" + entry)) : /\.(png|jpe?g|gif|webp|avif|bmp|svg|pdf|mp4|webm)$/i.test(file); } catch { return false; } };
+if (script.includes("found=$(find") ? pictures(source) : script.includes('test "$linked" = 0') && linked.some(file => fs.existsSync(source + "/" + file))) process.exit(75);
 if (script.includes("-delete")) {
-  if (script.includes("found=$(find") && fs.existsSync(source + "/frame.png")) process.exit(75);
+  if (${JSON.stringify(change)} === "namespace-refused") process.exit(75);
+  process.stdout.write("DELEGATUS_REMOVAL_STARTED\\n");
+  grant(source);
   for (const entry of fs.readdirSync(source)) fs.rmSync(source + "/" + entry, { recursive: true, force: true });
   if (${JSON.stringify(change)} === "checkout-unreadable") fs.chmodSync(${JSON.stringify(checkout)}, 0);
   if (${JSON.stringify(change)} === "root-replaced") {
@@ -810,20 +857,35 @@ if (script.includes("-delete")) {
       throw Object.assign(new Error("fixture private"), { code: "EACCES" });
     return nativeOpendir(target, options);
   });
-  const nativeRm = fs.promises.rm.bind(fs.promises);
-  const rm = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+  const nativeRm = removal.removeTreeWithinAttemptBudget;
+  const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
     if (kind === "permission-fallback" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)).startsWith(".delegatus-trash-"))
       throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
-    return nativeRm(target, options);
+    return nativeRm(target, started);
   });
   try {
-    const report = await f.sweep("closed", { maxRoots: 1, capBytes: 0, references: async () => true,
+    const report = await f.sweep("closed", { maxRoots: 1, references: async () => true,
       state: async (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => {
         await filesystem.repositoryReferencesAttemptTemp(checkout, owner.directory, owner.directory, inventory);
         return expired ? "expired" : "closed";
       },
       authority: async () => ({ state: expired ? "expired" : "closed", revision: "unchanged",
         isCurrent: () => change !== "producer-changed" || !fs.existsSync(completion) }) });
+    if (tree.image === "named") {
+      // The evidence ledger links a picture in the tree: the proof refuses.
+      expect(report).toMatchObject({ removed: 0, errors: 1 });
+      expect(fs.existsSync(image)).toBeTrue(); expect(fs.existsSync(completion)).toBeFalse();
+      return;
+    }
+    if (change === "namespace-refused") {
+      expect(fs.existsSync(completion)).toBeFalse();
+      expect(report).toMatchObject({ removed: 0, errors: 1 });
+      expect(f.store.has(directory)).toBeTrue();
+      expect(fs.readFileSync(path.join(directory, "private", "payload"), "utf8")).toBe("reclaim me");
+      expect(fs.existsSync(attemptTempJournalPath(directory))).toBeFalse();
+      expect(fs.readdirSync(f.root).filter(name => name.startsWith(".delegatus-trash-"))).toEqual([]);
+      return;
+    }
     expect(fs.existsSync(completion)).toBeTrue();
     if (change !== "control") {
       expect(report.removed).toBe(0);
@@ -847,6 +909,7 @@ if (script.includes("-delete")) {
     expect(f.store.bytes()).toBe(0);
   } finally {
     opendir.mockRestore(); rm.mockRestore(); f.store.close(); fs.chmodSync(checkout, 0o700);
+    try { fs.chmodSync(locked, 0o700); } catch { /* Removed or never made. */ }
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
     if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
   }
@@ -856,12 +919,73 @@ test.skipIf(process.platform !== "linux")("expired evidence also retires through
   await integratedNamespaceSweep("permission-fallback", "control", true);
 });
 
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("an expired root with a subtree this user cannot list retires through the namespace", async () => {
+  await integratedNamespaceSweep("permission-fallback", "control", true, { foreign: true });
+});
+
+test("the no-evidence proof counts a picture a report named, kept or not, and a root recorded-check custody holds", async () => {
+  const f = fixture(), directory = f.make("proof-ledger");
+  fs.mkdirSync(path.join(directory, "vendor")); fs.writeFileSync(path.join(directory, "vendor", "icon.png"), "source asset");
+  try {
+    expect(filesystem.ledgerLinkedEvidence(directory)).toEqual([]);
+    nameInReport(path.join(directory, "shots", "frame.png"));
+    const index = JSON.parse(fs.readFileSync(path.join(reportMediaRoot(), "index.json"), "utf8"));
+    fs.writeFileSync(path.join(reportMediaRoot(), index[0].file), "kept copy");
+    expect(filesystem.ledgerLinkedEvidence(directory)).toEqual([path.join("shots", "frame.png")]);
+    await holdFinishedRoot(directory);
+    expect(() => filesystem.ledgerLinkedEvidence(directory)).toThrow("recorded-check custody");
+  } finally { f.store.close(); }
+});
+
+test.skipIf(process.platform !== "linux").each([["source", "namespace-only"], ["source", "permission-fallback"], ["named", "namespace-only"]] as const)(
+  "the namespace no-evidence proof counts only what the evidence ledger links (%s image, %s)", (image, kind) =>
+    integratedNamespaceSweep(kind, "control", false, { image }));
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("a root whose cleanup container cannot run waits for the operator and is reported", async () => {
+  const f = fixture(), directory = f.make("blocked", 2 * 86400000), bin = path.join(f.root, "bin");
+  // What a container that ran as another user leaves behind: a directory this
+  // user can neither list nor empty. Mode 000 on our own directory models it.
+  const locked = path.join(directory, "tmp", "pgdata");
+  fs.mkdirSync(locked, { recursive: true }); fs.writeFileSync(path.join(locked, "base"), Buffer.alloc(8192)); fs.chmodSync(locked, 0);
+  fs.mkdirSync(path.join(directory, "tmp", "empty-foreign")); fs.chmodSync(path.join(directory, "tmp", "empty-foreign"), 0o500);
+  // Docker answers, but no cleanup image is installed: the namespace cannot run.
+  fs.mkdirSync(bin); fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(path.join(f.root, "docker.log"))}\n`
+    + 'case "$1" in ps) exit 0 ;; image) exit 0 ;; *) exit 1 ;; esac\n', { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = bin + path.delimiter + (previousPath ?? "");
+  try {
+    const held = await f.sweep("expired");
+    expect(held).toMatchObject({ removed: 0, errors: 0, operatorHeld: 1 });
+    expect(held.outcomes[0]).toMatchObject({ directory, disposition: "operator", unreadable: true });
+    expect(held.outcomes[0].reason).toContain("1 directory this user cannot remove");
+    expect(held.outcomes[0].reason).toContain("no installed container cleanup utility image");
+    expect(held.operatorHeldBytes).toBeGreaterThanOrEqual(4096);
+    expect(held.blocked).toMatchObject({ roots: 1, listed: [{ directory, count: 1, entries: [{ path: locked, uid: process.getuid!(), unreadable: true }] }] });
+    expect(fs.existsSync(path.join(directory, "tmp"))).toBeTrue();
+    expect(f.store.owner(directory)!.checkedAt).toBe(NOW + BLOCKED_SUBTREE_RETRY_MS);
+    const dockerLog = path.join(f.root, "docker.log");
+    expect((fs.existsSync(dockerLog) ? fs.readFileSync(dockerLog, "utf8") : "").split("\n").filter(line => line.startsWith("run"))).toEqual([]);
+    // Once the operator removed it, the next visit retires the root and the report forgets it.
+    fs.chmodSync(locked, 0o700); fs.rmSync(locked, { recursive: true });
+    const retired = await f.sweep("expired", { now: () => NOW + BLOCKED_SUBTREE_RETRY_MS });
+    expect(retired).toMatchObject({ removed: 1, errors: 0, blocked: { roots: 0, listed: [] } });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally {
+    try { fs.chmodSync(locked, 0o700); } catch { /* Removed above. */ }
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    f.store.close();
+  }
+});
+
 test.skipIf(process.platform !== "linux").each(["namespace-only", "permission-fallback"] as const)(
   "an unchanged integrated sweep finishes namespace cleanup in one pass (%s)", kind => integratedNamespaceSweep(kind));
 test.skipIf(process.platform !== "linux").each([
   ["namespace-only", "producer-changed"], ["namespace-only", "checkout-unreadable"], ["namespace-only", "root-replaced"],
   ["permission-fallback", "producer-changed"], ["permission-fallback", "checkout-unreadable"], ["permission-fallback", "root-replaced"],
 ] as const)("an integrated sweep refuses post-delete drift (%s, %s)", (kind, change) => integratedNamespaceSweep(kind, change));
+test.skipIf(process.platform !== "linux")("a namespace refusal before delete restores the root and clears its journal", async () => {
+  await integratedNamespaceSweep("namespace-only", "namespace-refused");
+});
 
 test.each(["absent", "unreadable", "restored-with-link"] as const)(
   "the final producer read revalidates a changed consumer checkout (%s)", async change => {
@@ -977,11 +1101,9 @@ test.each([false, true])("producer record revision drift preserves native remova
       srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
     const producer = pipeline.worktreeDir!;
     const producerExisted = fs.existsSync(producer);
-    pipeline.state = transition === "closed-lane-running" ? "closed" : "running";
-    if (transition === "closed-lane-running") {
-      pipeline.cursor = null;
-      pipeline.closedAt = "2026-10-22T12:00:00Z";
-    }
+    pipeline.state = "closed";
+    pipeline.cursor = null;
+    pipeline.closedAt = "2026-10-22T12:00:00Z";
     pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "revision-launch",
       effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
       startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:00:00Z", input: null, activatedBy: null, output: null,
@@ -1023,7 +1145,7 @@ test.each([false, true])("producer record revision drift preserves native remova
       const changed = await sweep();
       expect(injected).toBeTrue();
       expect(changed).toMatchObject({ removed: 0, errors: 0, liveHeld: 1 });
-      expect(await attemptTempState(owner)).toBe(transition === "attempt-running" ? "live" : "unknown");
+      expect(await attemptTempState(owner)).toBe("live");
       expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("preserve me");
     } finally {
       store.close(); savePipelines([]);
@@ -1101,10 +1223,10 @@ test.each([false, true])("final dispatch rechecks checkout discovery and externa
       srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
     const producer = pipeline.worktreeDir!;
     fs.mkdirSync(path.join(producer, ".git"), { recursive: true });
-    pipeline.state = "running";
+    pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z";
     pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "fixture-launch",
       effectiveRole: role, conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
-      startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null,
+      startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:01:00Z", input: null, activatedBy: null, output: null,
       verdict: null, error: null }] }];
     savePipelines([pipeline]);
     const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
@@ -1147,11 +1269,13 @@ test.each([false, true])("final dispatch rechecks checkout discovery and externa
         return attemptTempState(owner, current);
       },
       scan: () => ({ ownNamespace: null, processes }),
-      references: (original, current, scan) => {
+      references: async (original, current, scan) => {
         if (!armed && !changed && change !== "control") {
           fs.writeFileSync(path.join(producer, "force-fresh-inventory"), "refresh"); armed = true;
         }
-        return attemptReferencesClear(original, current, scan, async () => true, inventory);
+        const clear = await attemptReferencesClear(original, current, scan, async () => true, inventory);
+        await inventory.targets(producer);
+        return clear;
       },
     });
     try {
@@ -1317,23 +1441,59 @@ test("an incomplete real checkout inventory defers roots with their bytes instea
   } finally { clock.mockRestore(); f.store.close(); }
 });
 
-test("pressure retires the largest released settled roots first and reserves fair visits", async () => {
+test("pressure retires the largest known allocation before older small roots", async () => {
   const f = fixture();
   const oldest = f.make("oldest-unreleased", 10 * 86400000);
-  const small = f.make("a-small"), large = f.make("z-large");
-  fs.writeFileSync(path.join(large, "data"), Buffer.alloc(16 * 1024 ** 2));
-  f.store.measure(small, 4096); f.store.measure(large, 16 * 1024 ** 2);
-  f.store.release(small); f.store.release(large);
+  const older = f.make("z-older-small", 2 * 86400000), newer = f.make("a-newer-large", 86400000);
+  fs.writeFileSync(path.join(newer, "data"), Buffer.alloc(16 * 1024 ** 2));
+  f.store.measure(older, 4096); f.store.measure(newer, 16 * 1024 ** 2);
+  f.store.release(older); f.store.release(newer);
   try {
     const first = await f.sweep("closed", { maxRoots: 1, capBytes: 0 });
-    expect(first.removed).toBe(1); expect(fs.existsSync(large)).toBeFalse();
-    expect(first.removedBytes).toBeGreaterThanOrEqual(16 * 1024 ** 2);
+    expect(first.removed).toBe(1); expect(fs.existsSync(oldest)).toBeTrue(); expect(fs.existsSync(older)).toBeTrue(); expect(fs.existsSync(newer)).toBeFalse();
     const second = await f.sweep("closed", { maxRoots: 2, capBytes: 0 });
-    expect(second.removed).toBe(2); expect(fs.existsSync(oldest)).toBeFalse();
+    expect(second.removed).toBe(1); expect(fs.existsSync(older)).toBeFalse(); expect(fs.existsSync(oldest)).toBeTrue();
+    // The unmeasured root remains available to the ordinary visit queue.
+    expect((await f.sweep("closed", { maxRoots: 1 })).removed).toBe(1);
+    expect(fs.existsSync(oldest)).toBeFalse();
   } finally { f.store.close(); }
 });
 
-test("current finished-lane authority runs before a larger released live root under pressure", async () => {
+test("roots whose lane retention ended lead ordinary pages across the ledger, oldest finish first", async () => {
+  const f = fixture();
+  // Rows the round robin would visit first: they were checked longest ago.
+  const round = Array.from({ length: 12 }, (_, n) => f.make(`round-${String(n).padStart(2, "0")}`, 30 * 86400000));
+  const newer = f.make("expired-newer", 1000), older = f.make("expired-older", 2000), pending = f.make("expires-tomorrow", 3000);
+  f.store.retainRoot(newer, NOW - 1000); f.store.retainRoot(older, NOW - 2 * 86400000); f.store.retainRoot(pending, NOW + 86400000);
+  const page = (limit: number, at = NOW) => f.store.due(at, limit).map(row => row.directory);
+  try {
+    expect(page(4).slice(0, 2)).toEqual([older, newer]);
+    expect(page(4).slice(2)).toEqual(round.slice(0, 2));
+    expect(page(4)).not.toContain(pending);
+    // At most half of a page, so the round robin keeps moving.
+    expect(page(2)).toEqual([older, round[0]]);
+    // Held past its retention, the oldest steps back and the next one leads.
+    const report = await f.sweep("live", { maxRoots: 2 });
+    expect(report.outcomes.map((row: { directory: string }) => row.directory)).toEqual([older, round[0]]);
+    expect(page(2, NOW + 60_000)).toEqual([round[0], newer]);
+    expect(f.store.owner(older)!.checkedAt).toBe(NOW + EXPIRED_HOLD_RETRY_MS);
+  } finally { f.store.close(); }
+});
+
+test("a root the run budget never reached keeps its place for the next tick", async () => {
+  const f = fixture();
+  const first = f.make("budget-first", 3000), second = f.make("budget-second", 2000), third = f.make("budget-third", 1000);
+  let now = NOW;
+  try {
+    const report = await f.sweep("closed", { maxRoots: 3, now: () => now, onRetired: () => { now += 40_001; } });
+    expect(report).toMatchObject({ removed: 1, deferred: 2, errors: 0 });
+    expect(fs.existsSync(first)).toBeFalse();
+    expect(f.store.owner(second)!.checkedAt).toBe(NOW - 2000); expect(f.store.owner(third)!.checkedAt).toBe(NOW - 1000);
+    expect(f.store.due(now, 2).map(row => row.directory)).toEqual([second, third]);
+  } finally { f.store.close(); }
+});
+
+test("pressure checks the larger live root first and still retires the finished root", async () => {
   const f = fixture();
   const live = f.make("released-live"), finished = f.make("finished", 2 * 86400000);
   fs.writeFileSync(path.join(live, "data"), Buffer.alloc(16 * 1024 ** 2));
@@ -1343,7 +1503,7 @@ test("current finished-lane authority runs before a larger released live root un
     const report = await f.sweep("closed", { maxRoots: 2, capBytes: 0, now: () => now,
       state: async (owner: { directory: string }) => owner.directory === live ? "live" : "closed",
       onRetired: () => { now += 40_001; } });
-    expect(report).toMatchObject({ checked: 1, removed: 1, held: 0, deferred: 1, errors: 0 });
+    expect(report).toMatchObject({ checked: 2, removed: 1, held: 1, deferred: 0, errors: 0 });
     expect(fs.existsSync(live)).toBeTrue(); expect(fs.existsSync(finished)).toBeFalse();
   } finally { f.store.close(); }
 });
@@ -1351,23 +1511,23 @@ test("current finished-lane authority runs before a larger released live root un
 test("pressure fairness survives real process restarts behind a failing released prefix and new arrivals", async () => {
   const f = fixture();
   for (let n = 0; n < 40; n++) {
-    const directory = f.make(`blocked-error-${String(n).padStart(2, "0")}`);
+    const directory = f.make(`blocked-error-${String(n).padStart(2, "0")}`, 30 * 86400000);
     f.store.measure(directory, (40 - n) * 1024 ** 2); f.store.release(directory);
   }
   const first = f.make("later-old-owner", 10 * 86400000), second = f.make("later-next-owner", 9 * 86400000);
   f.store.measure(first, 4096); f.store.measure(second, 4096);
   f.store.close();
-  for (let tick = 0; tick < 2; tick++) {
+  let removed = 0;
+  for (let tick = 0; tick < 22; tick++) {
     const at = NOW + tick * 60000;
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(at), "pressure"], {
       env: { ...process.env }, stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(code).toBe(0); expect(stderr).toContain("fixture authority failure");
+    expect(code).toBe(0); if (tick < 10) expect(stderr).toContain("fixture authority failure");
     const report = JSON.parse(stdout);
-    expect(report).toMatchObject({ checked: 4, removed: 1 });
-    expect(report.errors + report.held).toBe(3);
-    expect(fs.existsSync(tick === 0 ? first : second)).toBeFalse();
+    expect(report.checked).toBe(4);
+    removed += report.removed;
     const reopened = new AttemptTempStore(f.filename);
     try {
       const directory = path.join(f.root, `llv-stage-blocked-arrival-${tick}`); fs.mkdirSync(directory);
@@ -1375,6 +1535,7 @@ test("pressure fairness survives real process restarts behind a failing released
       reopened.measure(directory, 100 * 1024 ** 2); reopened.release(directory);
     } finally { reopened.close(); }
   }
+  expect(removed).toBe(2); expect(fs.existsSync(first)).toBeFalse(); expect(fs.existsSync(second)).toBeFalse();
 });
 
 test("the report separates live, evidence and failed allocation with a readable cause", async () => {
@@ -1476,15 +1637,15 @@ test("a symlink replacement cannot redirect cleanup", async () => {
 
 for (const replacement of ["directory", "symlink"] as const) test(`a ${replacement} swap during measurement keeps the prior accounting and both trees`, async () => {
   const f = fixture(); const directory = f.make("measurement-swap"), saved = `${directory}-saved`;
-  const measure = filesystem.allocatedAttemptBytes;
-  const race = spyOn(filesystem, "allocatedAttemptBytes").mockImplementation(async target => {
-    const bytes = await measure(target);
+  const measure = filesystem.measureAttemptAllocation;
+  const race = spyOn(filesystem, "measureAttemptAllocation").mockImplementation(async target => {
+    const measured = await measure(target);
     if (target === directory) {
       fs.renameSync(directory, saved);
       if (replacement === "symlink") fs.symlinkSync(saved, directory);
       else { fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "keep"), "replacement"); }
     }
-    return bytes;
+    return measured;
   });
   try {
     const report = await f.sweep();
@@ -1539,10 +1700,11 @@ test("disposable test repositories retire but linked worktrees remain for their 
 test("a failed removal is recovered from its durable intent on the next tick", async () => {
   const { spyOn } = await import("bun:test");
   const f = fixture(); const directory = f.make("interrupted");
-  const remove = fs.promises.rm;
-  const refused = spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
-    if (String(target).includes(`.delegatus-trash-${path.basename(directory)}-`)) throw new Error("fixture removal refused");
-    return remove(target, options);
+  const remove = removal.removeTreeWithinAttemptBudget;
+  const refused = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
+    started();
+    if (target.includes(`.delegatus-trash-${path.basename(directory)}-`)) throw new Error("fixture removal refused");
+    return remove(target, started);
   });
   try { expect((await f.sweep()).errors).toBe(1); }
   finally { refused.mockRestore(); }
@@ -1680,14 +1842,14 @@ test("the persisted total cap raises the default sweep budget, then returns to i
   // no large payload is needed to test the 100 GiB policy.
   for (const directory of directories) f.store.measure(directory, 4 * 1024 ** 3);
   f.store.close();
-  for (const expected of [32, 4]) {
+  for (const expected of [15, 4]) {
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
       f.filename, String(NOW), "orphan", "--default-budget"], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(stdout)).toMatchObject({ checked: expected, removed: expected, capBytes: 100 * 1024 ** 3 });
   }
-  for (const [n, directory] of directories.entries()) expect(fs.existsSync(directory)).toBe(n < 4);
+  for (const [n, directory] of directories.entries()) expect(fs.existsSync(directory)).toBe(n < 21);
 }, 60000);
 
 // The waiting helper may report its file-transaction wait (50 ms or longer,
@@ -1826,15 +1988,15 @@ test("legacy scratch screenshots survive adoption and retirement across reopenin
 });
 
 test.each(["refused", "corrupt"])("%s evidence preservation keeps legacy scratch and retries", async failure => {
-  const f = fixture(), directory = legacyEvidence(f), copy = fs.promises.copyFile;
+  const f = fixture(), directory = legacyEvidence(f), copy = evidenceCopy.copyAttemptEvidenceWithinBudget;
   f.store.adopt(NOW); let attempted = false;
-  const refused = spyOn(fs.promises, "copyFile").mockImplementation(async (source, target, mode) => {
+  const refused = spyOn(evidenceCopy, "copyAttemptEvidenceWithinBudget").mockImplementation(async (source, target) => {
     if (String(target).includes(path.join("evidence", "attempt-temp"))) {
       attempted = true;
       if (failure === "refused") throw new Error("fixture preservation refused");
-      await copy(source, target, mode); fs.writeFileSync(target, "corrupt"); return;
+      await copy(source, target); fs.writeFileSync(target, "corrupt"); return;
     }
-    return copy(source, target, mode);
+    return copy(source, target);
   });
   try {
     expect(await f.sweep("orphan", { now: () => NOW + 2 * 86400000 })).toMatchObject({ removed: 0, errors: 1 });
@@ -1898,4 +2060,501 @@ test("a destination link swapped after hashing cannot authorize retirement", asy
     expect(fs.readFileSync(path.join(directory, ".artifacts/prototype.png"), "utf8")).toBe("prototype bytes");
     expect(fs.readFileSync(path.join(f.root, "outside-capture.png"), "utf8")).toBe("prototype bytes");
   } finally { lstat.mockRestore(); f.store.close(); }
+});
+
+
+// W5 exercises the public sweep with real evidence/check writers and authority.
+async function lostTrashFixture(source: "manifest" | "active" | "history" | "none", name = "lost") {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-trash-binding-")); roots.push(root);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const scratch = statePath("scratch"); fs.mkdirSync(scratch, { recursive: true });
+  const store = new AttemptTempStore();
+  const pipeline = finishedLane(root, "2026-10-01T00:00:00Z");
+  savePipelines([pipeline]);
+  const directory = path.join(scratch, `llv-stage-${name}`), trash = path.join(scratch, `.delegatus-trash-llv-stage-${name}-interrupted`);
+  fs.mkdirSync(directory, { mode: 0o700 }); fs.writeFileSync(path.join(directory, "capture.png"), "retained payload");
+  const stat = fs.lstatSync(directory), identity = `${stat.dev}:${stat.ino}`, journal = attemptTempJournalPath(directory);
+  const manifest = async (lane: string | null = pipeline.id, launch = "retention-launch") => {
+    const result = await preserveAttemptEvidence(directory, directory, identity, { pipelineId: lane, launchId: launch, register: () => {} });
+    return path.join(result.destination!, "manifest.json");
+  };
+  let checkId: string | undefined, manifestFile: string | undefined;
+  if (source === "manifest") manifestFile = await manifest();
+  if (source === "active" || source === "history") {
+    checkId = await holdFinishedRoot(directory, pipeline.id);
+    if (source === "history") {
+      const checks = new RecordedCheckStore();
+      try {
+        const row = checks.get(checkId)!;
+        await checks.write({ ...row, revision: 2, acknowledgement: { actor: "fixture", disposition: "adopt-retained", at: 1,
+          resultRevision: 0, resultDigest: "", evidenceDigest: "" } }, 1);
+        const db = new Database(statePath("state.sqlite"));
+        try { expect(db.query("SELECT id FROM recorded_checks WHERE id=?").get(checkId)).toBeNull(); }
+        finally { db.close(); }
+      } finally { checks.close(); }
+    }
+  }
+  fs.renameSync(directory, trash);
+  fs.writeFileSync(journal, JSON.stringify({ directory, trash, uid: stat.uid, identity, snapshot: null, disposable: true }));
+  const authority = (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => attemptTempAuthority(owner, inventory, () => NOW);
+  const tick = (extra = {}) => sweepAttemptTemps(store, { now: () => NOW, maxRoots: 4,
+    state: async (owner, inventory) => (await authority(owner, inventory)).state, authority,
+    scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true, ...extra });
+  const run = async (extra = {}) => {
+    let report = await tick(extra);
+    for (let n = 0; n < 12 && !report.outcomes.some(row => row.directory === directory && row.disposition !== "deferred"); n++) report = await tick(extra);
+    return report;
+  };
+  const retained = () => {
+    expect(fs.readFileSync(path.join(trash, "capture.png"), "utf8")).toBe("retained payload");
+    expect(fs.existsSync(journal)).toBeTrue(); expect(fs.existsSync(directory)).toBeFalse();
+    const owner = store.owner(directory);
+    if (owner) expect(owner.pipelineId).not.toBeNull();
+  };
+  const close = () => { store.close(); process.env.LLV_STATE_DIR = previous; };
+  return { root, store, pipeline, directory, trash, identity, journal, checkId, manifestFile, tick, run, retained, close };
+}
+
+for (const source of ["manifest", "active", "history"] as const) {
+  test(`lost trash binding from ${source} retires only after the lane expires`, async () => {
+    const f = await lostTrashFixture(source);
+    try {
+      expect(f.store.has(f.directory)).toBeFalse();
+      const report = await f.run();
+      expect(report).toMatchObject({ removed: 1, errors: 0 });
+      expect(fs.existsSync(f.trash)).toBeFalse(); expect(fs.existsSync(f.journal)).toBeFalse();
+      expect(f.store.has(f.directory)).toBeFalse();
+    } finally { f.close(); }
+  });
+  test.each(["open", "resumed", "missing-lane", "recent"] as const)(`lost trash binding from ${source} preserves %s lane`, async state => {
+    const f = await lostTrashFixture(source);
+    try {
+      if (state === "open") { f.pipeline.state = "running"; savePipelines([f.pipeline]); }
+      if (state === "missing-lane") savePipelines([]);
+      if (state === "recent") { f.pipeline.closedAt = "2026-10-21T00:00:00Z"; savePipelines([f.pipeline]); }
+      let resumed = false;
+      const report = await f.run(state !== "resumed" ? {} : { state: async (owner: AttemptTempOwner, inventory: filesystem.RepositoryLinkInventory) => {
+        const old = await attemptTempAuthority(owner, inventory, () => NOW);
+        f.pipeline.state = "running"; savePipelines([f.pipeline]); resumed = true;
+        return old.state;
+      } });
+      expect(report.removed).toBe(0); f.retained();
+      expect(f.store.owner(f.directory)).toMatchObject({ pipelineId: f.pipeline.id, launchId: "retention-launch", identity: f.identity, retainUntilClose: 1 });
+      expect(report.outcomes.find(row => row.directory === f.directory)?.reason).toMatch(/ownership (unknown|orphan|closed)|authority|expired/);
+      if (state === "resumed") expect(resumed).toBeTrue();
+    } finally { f.close(); }
+  });
+}
+
+test.each(["nonmatching", "absent"] as const)("lost trash watches a %s manifest through the synchronous dispatch fence", async kind => {
+  const f = await lostTrashFixture("manifest");
+  try {
+    const destination = statePath("evidence", "attempt-temp", digest("negative-fence-copy"));
+    fs.mkdirSync(destination);
+    const file = path.join(destination, "manifest.json"), value = { original: f.directory + "-other", identity: f.identity,
+      pipelineId: "other-open-lane", launchId: "other-launch", files: [] };
+    if (kind === "nonmatching") fs.writeFileSync(file, JSON.stringify(value));
+    f.pipeline.state = "running"; savePipelines([f.pipeline]);
+    expect((await f.run()).removed).toBe(0); f.retained();
+    expect(f.store.recoveredTrashCurrent(f.directory)).toBeTrue();
+    let changed = false;
+    expect(attemptMutationCurrent(f.store.trashRecoveryWatches(f.directory), () => {
+      const valid = f.store.recoveredTrashCurrent(f.directory);
+      expect(valid).toBeTrue();
+      // Publication after the metadata read must invalidate that same dispatch.
+      const temporary = path.join(destination, "next.json");
+      fs.writeFileSync(temporary, JSON.stringify({ ...value, original: f.directory }));
+      fs.renameSync(temporary, file); changed = true;
+      return valid;
+    })).toBeFalse();
+    expect(changed).toBeTrue(); f.retained();
+  } finally { f.close(); }
+});
+
+test.each([1024, 1025])("lost trash bounds persisted manifest observations at %i entries", async count => {
+  const f = await lostTrashFixture("active");
+  try {
+    const parent = statePath("evidence", "attempt-temp"); fs.mkdirSync(parent, { recursive: true });
+    for (let n = 0; n < count; n++) fs.mkdirSync(path.join(parent, digest(["observation-bound", n])));
+    let report;
+    for (let n = 0; n < 80; n++) {
+      report = await f.tick();
+      expect(report.recovery.manifestEntries).toBeLessThanOrEqual(32);
+      const db = new Database(f.store.filename);
+      try {
+        expect(db.query<{ count: number }, []>("SELECT count(*) AS count FROM trash_recovery_observations").get()!.count).toBeLessThanOrEqual(1024);
+      } finally { db.close(); }
+      if (report.outcomes.some(row => row.directory === f.directory && row.disposition !== "deferred")) break;
+    }
+    if (count === 1024) {
+      expect(report!.removed).toBe(1); expect(fs.existsSync(f.trash)).toBeFalse(); expect(fs.existsSync(f.journal)).toBeFalse();
+      const db = new Database(f.store.filename);
+      try { expect(db.query<{ count: number }, []>("SELECT count(*) AS count FROM trash_recovery_observations").get()!.count).toBe(0); }
+      finally { db.close(); }
+    } else {
+      expect(report!.removed).toBe(0); f.retained(); expect(f.store.has(f.directory)).toBeFalse();
+      expect(report!.outcomes).toContainEqual(expect.objectContaining({ directory: f.directory, reason: "owner-unknown: manifest observation limit" }));
+    }
+  } finally { f.close(); }
+});
+
+test.each(["complete", "interrupted"] as const)("lost trash invalidates a legacy restored checkpoint with %s proof-format upgrade", async upgrade => {
+  const f = await lostTrashFixture("manifest");
+  try {
+    const destination = statePath("evidence", "attempt-temp", digest("legacy-negative-copy")); fs.mkdirSync(destination);
+    f.pipeline.state = "running"; savePipelines([f.pipeline]);
+    expect((await f.run()).removed).toBe(0); f.retained();
+    const db = new Database(f.store.filename);
+    try { db.exec("DROP TABLE trash_recovery_observations"); } finally { db.close(); }
+    if (upgrade === "interrupted") {
+      const original = Database.prototype.exec;
+      const exec = spyOn(Database.prototype, "exec").mockImplementation(function(this: Database, sql) {
+        if (sql.startsWith("UPDATE trash_recovery SET restored=0")) throw new Error("fixture interrupted proof upgrade");
+        return original.call(this, sql);
+      });
+      try { expect(() => new AttemptTempStore(f.store.filename)).toThrow("fixture interrupted proof upgrade"); }
+      finally { exec.mockRestore(); }
+      const check = new Database(f.store.filename);
+      try { expect(check.query("SELECT 1 FROM sqlite_master WHERE name='trash_recovery_observations'").get()).toBeNull(); }
+      finally { check.close(); }
+      f.retained();
+    }
+    fs.writeFileSync(path.join(destination, "manifest.json"), JSON.stringify({ original: f.directory, identity: f.identity,
+      pipelineId: "other-open-lane", launchId: "other-launch", files: [] }));
+    f.pipeline.state = "completed"; savePipelines([f.pipeline]);
+    const report = await retentionProcess(f.store.filename, NOW + 120_001, "production");
+    expect(report.removed).toBe(0); f.retained();
+    expect(report.outcomes).toContainEqual(expect.objectContaining({ directory: f.directory, reason: "owner-unknown" }));
+  } finally { f.close(); }
+});
+
+test.each(["absent", "null-lane", "missing-check", "corrupt-check", "wrong-inode", "wrong-path"] as const)("lost trash keeps owner-unknown with %s binding", async kind => {
+  const source = kind === "missing-check" || kind === "corrupt-check" ? "active" : kind === "absent" ? "none" : "manifest";
+  const f = await lostTrashFixture(source);
+  try {
+    if (f.manifestFile) {
+      const value = JSON.parse(fs.readFileSync(f.manifestFile, "utf8"));
+      if (kind === "null-lane") value.pipelineId = null;
+      if (kind === "wrong-inode") value.identity = "0:0";
+      if (kind === "wrong-path") value.original += "-other";
+      fs.writeFileSync(f.manifestFile, JSON.stringify(value));
+    }
+    if (f.checkId) {
+      const db = new Database(statePath("state.sqlite"));
+      try {
+        if (kind === "missing-check") db.query("DELETE FROM recorded_checks WHERE id=?").run(f.checkId);
+        else db.query("UPDATE recorded_checks SET value='{}' WHERE id=?").run(f.checkId);
+      } finally { db.close(); }
+    }
+    const report = await f.run();
+    expect(report.removed).toBe(0); f.retained(); expect(f.store.has(f.directory)).toBeFalse();
+    expect(report.outcomes.find(row => row.directory === f.directory)?.reason).toBe("owner-unknown");
+  } finally { f.close(); }
+});
+
+for (const sources of ["manifests", "checks", "mixed"] as const) {
+  test.each(["lane", "launch"] as const)(`lost trash refuses conflicting ${sources} %s`, async conflict => {
+    const f = await lostTrashFixture(sources === "checks" ? "active" : "manifest");
+    try {
+      const lane = conflict === "lane" ? "other-lane" : f.pipeline.id, launch = conflict === "launch" ? "other-launch" : "retention-launch";
+      if (sources === "manifests") {
+        const value = JSON.parse(fs.readFileSync(f.manifestFile!, "utf8")), other = statePath("evidence", "attempt-temp", digest("other-copy"));
+        fs.mkdirSync(other); fs.writeFileSync(path.join(other, "manifest.json"), JSON.stringify({ ...value, pipelineId: lane, launchId: launch }));
+      } else {
+        // The root-row writer needs the original directory, then the same inode returns to quarantine.
+        fs.renameSync(f.trash, f.directory);
+        try { await holdFinishedRoot(f.directory, lane, "other-check", [], launch); }
+        finally { fs.renameSync(f.directory, f.trash); }
+      }
+      const report = await f.run();
+      expect(report.removed).toBe(0); f.retained(); expect(f.store.has(f.directory)).toBeFalse();
+      expect(report.outcomes.find(row => row.directory === f.directory)?.reason).toBe("owner-unknown");
+    } finally { f.close(); }
+  });
+}
+
+
+test("lost trash recovery pages survive helper restarts and keep missing proof past its retry", async () => {
+  const f = await lostTrashFixture("none");
+  try {
+    const parent = statePath("evidence", "attempt-temp"); fs.mkdirSync(parent, { recursive: true });
+    for (let n = 0; n < 70; n++) {
+      const destination = path.join(parent, digest(["unrelated", n])); fs.mkdirSync(destination);
+      fs.writeFileSync(path.join(destination, "manifest.json"), JSON.stringify({ original: f.directory + "-other", identity: f.identity,
+        pipelineId: f.pipeline.id, launchId: "retention-launch", files: [] }));
+    }
+    let report;
+    for (let n = 0; n < 12; n++) {
+      report = await retentionProcess(f.store.filename, NOW, "production");
+      expect(report.recovery.entries).toBeLessThanOrEqual(32);
+      expect(report.recovery.manifestEntries).toBeLessThanOrEqual(32);
+      expect(report.recovery.checks).toBeLessThanOrEqual(33);
+      expect(report.removed).toBe(0); f.retained(); expect(f.store.has(f.directory)).toBeFalse();
+      if (report.outcomes.some((row: { reason: string }) => row.reason === "owner-unknown")) break;
+    }
+    expect(report.outcomes).toContainEqual(expect.objectContaining({ directory: f.directory, reason: "owner-unknown" }));
+    report = await retentionProcess(f.store.filename, NOW + 60_001, "production");
+    expect(report.removed).toBe(0); f.retained(); expect(f.store.has(f.directory)).toBeFalse();
+    const destination = path.join(parent, digest("late-binding")); fs.mkdirSync(destination);
+    fs.writeFileSync(path.join(destination, "manifest.json"), JSON.stringify({ original: f.directory, identity: f.identity,
+      pipelineId: f.pipeline.id, launchId: "retention-launch", files: [] }));
+    let removed = 0;
+    for (let n = 0; n < 16 && !removed; n++) {
+      report = await retentionProcess(f.store.filename, NOW + 120_002, "production");
+      expect(report.recovery.entries).toBeLessThanOrEqual(32); expect(report.recovery.manifestEntries).toBeLessThanOrEqual(32);
+      removed += report.removed;
+    }
+    expect(removed).toBe(1); expect(fs.existsSync(f.journal)).toBeFalse(); expect(fs.existsSync(f.trash)).toBeFalse();
+  } finally { f.close(); }
+});
+
+test.each(["journal-link", "trash-link", "acquired-original", "identity", "uid", "outside"] as const)("lost trash recovery refuses %s without touching external data", async kind => {
+  const f = await lostTrashFixture("manifest");
+  try {
+    const value = JSON.parse(fs.readFileSync(f.journal, "utf8")), external = path.join(f.root, "external");
+    fs.mkdirSync(external); fs.writeFileSync(path.join(external, "payload"), "external payload");
+    if (kind === "journal-link") { const saved = path.join(f.root, "journal-copy"); fs.renameSync(f.journal, saved); fs.symlinkSync(saved, f.journal); }
+    if (kind === "trash-link") { fs.renameSync(f.trash, path.join(f.root, "saved-trash")); fs.symlinkSync(external, f.trash); }
+    if (kind === "acquired-original") fs.mkdirSync(f.directory);
+    if (kind === "identity") value.identity = "0:0";
+    if (kind === "uid") value.uid = -1;
+    if (kind === "outside") value.trash = external;
+    if (["identity", "uid", "outside"].includes(kind)) fs.writeFileSync(f.journal, JSON.stringify(value));
+    const report = await f.run();
+    expect(report.removed).toBe(0); expect(f.store.has(f.directory)).toBeFalse();
+    expect(fs.existsSync(f.journal)).toBeTrue(); expect(fs.readFileSync(path.join(external, "payload"), "utf8")).toBe("external payload");
+  } finally { f.close(); }
+});
+
+test("lost trash recovery defers before enumeration when its tick deadline is exhausted", async () => {
+  const f = await lostTrashFixture("manifest");
+  try {
+    // Admit the sweep, then exhaust its budget before trash recovery starts.
+    let reads = 0;
+    const report = await f.tick({ runBudgetMs: 40_000, now: () => NOW + (reads++ === 0 ? 0 : 40_000) });
+    expect(report.removed).toBe(0); expect(report.recovery).toEqual({ entries: 0, manifestEntries: 0, checks: 0, restored: 0 });
+    expect(f.store.has(f.directory)).toBeFalse(); f.retained();
+  } finally { f.close(); }
+});
+
+test("lost trash recovery refuses admission before enumeration when its tick deadline is exhausted", async () => {
+  const f = await lostTrashFixture("manifest");
+  const recovery = spyOn(f.store, "recoverTrash");
+  try {
+    const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
+    await expect(f.tick({ runBudgetMs: 0 })).rejects.toBeInstanceOf(FileTransactionBusyError);
+    expect(recovery).not.toHaveBeenCalled();
+    expect(f.store.has(f.directory)).toBeFalse(); f.retained();
+  } finally { recovery.mockRestore(); f.close(); }
+});
+
+test("lost trash recovery uses a monotonic budget with calendar retention timestamps", async () => {
+  const f = await lostTrashFixture("manifest");
+  try {
+    f.pipeline.state = "running";
+    savePipelines([f.pipeline]);
+    let report = await f.tick({ now: () => NOW, budgetNow: sweepMonotonicNow });
+    expect(report.recovery.manifestEntries).toBeGreaterThan(0);
+    let restoredOwner = report.recovery.restored ? f.store.owner(f.directory) : null;
+    for (let n = 0; n < 8 && !restoredOwner; n++) {
+      report = await f.tick({ now: () => NOW, budgetNow: sweepMonotonicNow });
+      if (report.recovery.restored) restoredOwner = f.store.owner(f.directory);
+    }
+    expect(report.recovery.restored).toBeGreaterThanOrEqual(1);
+    expect(restoredOwner).toMatchObject({ pipelineId: f.pipeline.id, launchId: "retention-launch", identity: f.identity });
+    f.retained();
+  } finally { f.close(); }
+});
+
+
+test.each(["manifest", "active", "history"] as const)("lost trash rechecks %s proof after an awaited reference observation", async source => {
+  const f = await lostTrashFixture(source);
+  try {
+    let changed = false;
+    const report = await f.run({ references: async () => {
+      if (changed) return true;
+      changed = true;
+      if (f.manifestFile) {
+        const value = JSON.parse(fs.readFileSync(f.manifestFile, "utf8")); value.launchId = "changed-launch";
+        fs.writeFileSync(f.manifestFile, JSON.stringify(value));
+      } else {
+        const db = new Database(statePath("state.sqlite"));
+        try { db.query("DELETE FROM recorded_check_roots WHERE id=?").run(f.checkId!); }
+        finally { db.close(); }
+      }
+      return true;
+    } });
+    expect(changed).toBeTrue(); expect(report.removed).toBe(0); f.retained();
+  } finally { f.close(); }
+});
+
+for (const source of ["manifest", "active", "history"] as const) {
+  for (const kind of ["nonmatching", "absent"] as const) {
+    test.each([1, 2])(`lost trash keeps a ${kind} manifest becoming conflicting at reference %i (${source})`, async boundary => {
+      const f = await lostTrashFixture(source);
+      try {
+        const destination = statePath("evidence", "attempt-temp", digest("existing-negative-copy"));
+        fs.mkdirSync(destination, { recursive: true });
+        const file = path.join(destination, "manifest.json");
+        const value = { original: f.directory + "-other", identity: f.identity,
+          pipelineId: "other-open-lane", launchId: "other-launch", files: [] };
+        if (kind === "nonmatching") fs.writeFileSync(file, JSON.stringify(value));
+        let reads = 0;
+        const report = await f.run({ references: async () => {
+          if (++reads === boundary) fs.writeFileSync(file, JSON.stringify({ ...value, original: f.directory }));
+          return true;
+        } });
+        expect(reads).toBeGreaterThanOrEqual(boundary);
+        expect(report.removed).toBe(0); f.retained();
+        expect(report.outcomes).toContainEqual(expect.objectContaining({ directory: f.directory, reason: "owner-unknown" }));
+      } finally { f.close(); }
+    });
+
+    test.each(["paging", "restored"] as const)(`lost trash revalidates ${kind} manifest observations after a process restart during %s (${source})`, async phase => {
+      const f = await lostTrashFixture(source);
+      try {
+        const parent = statePath("evidence", "attempt-temp"); fs.mkdirSync(parent, { recursive: true });
+        const value = { original: f.directory + "-other", identity: f.identity,
+          pipelineId: "other-open-lane", launchId: "other-launch", files: [] };
+        const negatives = new Set<string>();
+        for (let n = 0; n < (phase === "paging" ? 70 : 1); n++) {
+          const name = digest(["negative-copy", n]), destination = path.join(parent, name);
+          negatives.add(name); fs.mkdirSync(destination);
+          if (kind === "nonmatching") fs.writeFileSync(path.join(destination, "manifest.json"), JSON.stringify(value));
+        }
+        const first = copyDiscovery.discoverAttemptCopies(parent, "", () => NOW, NOW + 1000);
+        const victim = path.join(parent, first.names.find(name => negatives.has(name))!, "manifest.json");
+        if (phase === "restored") { f.pipeline.state = "running"; savePipelines([f.pipeline]); }
+        let report = await retentionProcess(f.store.filename, NOW, "production");
+        if (phase === "restored") {
+          for (let n = 0; n < 4 && !f.store.has(f.directory); n++) report = await retentionProcess(f.store.filename, NOW, "production");
+        }
+        expect(report.removed).toBe(0); f.retained();
+        if (phase === "paging") expect(f.store.has(f.directory)).toBeFalse();
+        else expect(f.store.has(f.directory)).toBeTrue();
+        fs.writeFileSync(victim, JSON.stringify({ ...value, original: f.directory }));
+        f.pipeline.state = "completed"; savePipelines([f.pipeline]);
+        for (let n = 0; n < 16; n++) {
+          report = await retentionProcess(f.store.filename, NOW + 120_001, "production");
+          expect(report.removed).toBe(0); f.retained();
+          expect(report.recovery.manifestEntries).toBeLessThanOrEqual(32);
+          if (report.outcomes.some((row: { reason: string }) => row.reason === "owner-unknown")) break;
+        }
+        expect(report.outcomes).toContainEqual(expect.objectContaining({ directory: f.directory, reason: "owner-unknown" }));
+      } finally { f.close(); }
+    });
+  }
+}
+
+
+test("lost trash refreshes its proof after an unrelated copy arrives and the open lane later expires", async () => {
+  const f = await lostTrashFixture("manifest");
+  try {
+    f.pipeline.state = "running"; savePipelines([f.pipeline]);
+    expect((await f.run()).removed).toBe(0); f.retained();
+    const other = statePath("evidence", "attempt-temp", digest("new-unrelated-copy")); fs.mkdirSync(other);
+    fs.writeFileSync(path.join(other, "manifest.json"), JSON.stringify({ original: f.directory + "-other", identity: f.identity,
+      pipelineId: "other-lane", launchId: "other-launch", files: [] }));
+    f.pipeline.state = "completed"; savePipelines([f.pipeline]);
+    let removed = 0;
+    for (let n = 0; n < 12 && !removed; n++) removed += (await f.tick({ now: () => NOW + 120_001 + n * 60_001 })).removed;
+    expect(removed).toBe(1); expect(fs.existsSync(f.journal)).toBeFalse(); expect(fs.existsSync(f.trash)).toBeFalse();
+  } finally { f.close(); }
+});
+
+
+test.each(["wrong-inode", "wrong-path", "null-lane"] as const)("lost trash ignores a recorded check with %s", async kind => {
+  const f = await lostTrashFixture("active");
+  try {
+    const db = new Database(statePath("state.sqlite"));
+    try {
+      if (kind === "wrong-inode") db.query("UPDATE recorded_check_roots SET identity='0:0' WHERE id=?").run(f.checkId!);
+      if (kind === "wrong-path") db.query("UPDATE recorded_check_roots SET directory=? WHERE id=?").run(f.directory + "-other", f.checkId!);
+      if (kind === "null-lane") {
+        const stored = db.query<{ value: string }, [string]>("SELECT value FROM recorded_checks WHERE id=?").get(f.checkId!)!;
+        const value = JSON.parse(stored.value); value.binding.pipeline = null;
+        db.query("UPDATE recorded_checks SET value=? WHERE id=?").run(JSON.stringify(value), f.checkId!);
+      }
+    } finally { db.close(); }
+    const report = await f.run();
+    expect(report.removed).toBe(0); expect(f.store.has(f.directory)).toBeFalse(); f.retained();
+    expect(report.outcomes).toContainEqual(expect.objectContaining({ directory: f.directory, reason: "owner-unknown" }));
+  } finally { f.close(); }
+});
+
+test.each(["manifests", "checks"] as const)("lost trash refuses consensus overflow in %s", async source => {
+  const f = await lostTrashFixture(source === "checks" ? "active" : "manifest");
+  try {
+    if (source === "manifests") {
+      const value = fs.readFileSync(f.manifestFile!, "utf8");
+      for (let n = 0; n < 32; n++) {
+        const other = statePath("evidence", "attempt-temp", digest(["overflow-copy", n])); fs.mkdirSync(other);
+        fs.writeFileSync(path.join(other, "manifest.json"), value);
+      }
+    } else {
+      fs.renameSync(f.trash, f.directory);
+      try { for (let n = 0; n < 32; n++) await holdFinishedRoot(f.directory, f.pipeline.id, `overflow-${n}`); }
+      finally { fs.renameSync(f.directory, f.trash); }
+    }
+    const report = await f.run();
+    expect(report.removed).toBe(0); expect(f.store.has(f.directory)).toBeFalse(); f.retained();
+    expect(report.outcomes).toContainEqual(expect.objectContaining({ directory: f.directory, reason: "owner-unknown" }));
+    expect(report.recovery.manifestEntries).toBeLessThanOrEqual(32); expect(report.recovery.checks).toBeLessThanOrEqual(33);
+  } finally { f.close(); }
+});
+
+test("lost trash accepts agreeing manifest and recorded-check bindings", async () => {
+  const f = await lostTrashFixture("manifest");
+  try {
+    fs.renameSync(f.trash, f.directory);
+    try { await holdFinishedRoot(f.directory, f.pipeline.id); }
+    finally { fs.renameSync(f.directory, f.trash); }
+    const report = await f.run();
+    expect(report).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(f.journal)).toBeFalse(); expect(fs.existsSync(f.trash)).toBeFalse();
+  } finally { f.close(); }
+});
+
+
+test.each(["manifest", "check"] as const)("lost trash accepts the %s writer's bounded long launch identity", async source => {
+  const f = await lostTrashFixture("none");
+  try {
+    const launch = "launch-" + "x".repeat(2048);
+    fs.renameSync(f.trash, f.directory);
+    try {
+      if (source === "manifest") await preserveAttemptEvidence(f.directory, f.directory, f.identity,
+        { pipelineId: f.pipeline.id, launchId: launch, register: () => {} });
+      else await holdFinishedRoot(f.directory, f.pipeline.id, "long-launch", [], launch);
+    } finally { fs.renameSync(f.directory, f.trash); }
+    const report = await f.run();
+    expect(report).toMatchObject({ removed: 1, errors: 0 });
+    expect(fs.existsSync(f.journal)).toBeFalse(); expect(fs.existsSync(f.trash)).toBeFalse();
+  } finally { f.close(); }
+});
+
+
+test("lost trash journal discovery advances across helper restarts while unrelated scratch arrives", async () => {
+  const f = await lostTrashFixture("none");
+  try {
+    const scratch = path.dirname(f.directory);
+    for (let n = 0; n < 100; n++) {
+      const directory = path.join(scratch, `llv-stage-journal-${String(n).padStart(3, "0")}`);
+      const trash = path.join(scratch, `.delegatus-trash-${path.basename(directory)}-interrupted`);
+      fs.mkdirSync(trash); fs.writeFileSync(path.join(trash, "payload"), "preserve me");
+      const stat = fs.lstatSync(trash);
+      fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({ directory, trash, uid: stat.uid,
+        identity: `${stat.dev}:${stat.ino}`, snapshot: null, disposable: true }));
+    }
+    let discovered = 0;
+    for (let tick = 0; tick < 15 && discovered < 101; tick++) {
+      fs.mkdirSync(path.join(scratch, `unrelated-arrival-${tick}`));
+      const report = await retentionProcess(f.store.filename, NOW, "production");
+      expect(report.removed).toBe(0); expect(report.recovery.entries).toBeLessThanOrEqual(32);
+      const db = new Database(f.store.filename);
+      try { discovered = db.query<{ count: number }, []>("SELECT count(*) AS count FROM trash_recovery").get()!.count; }
+      finally { db.close(); }
+    }
+    expect(discovered).toBe(101); f.retained(); expect(f.store.has(f.directory)).toBeFalse();
+  } finally { f.close(); }
 });

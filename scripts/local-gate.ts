@@ -1,11 +1,13 @@
-import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
+import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
+import { recordGateSandbox, releaseGateSandbox, retainGateSandbox } from "./gateSandboxRecords";
 import { gateTaskDiagnostics } from "./gate-tasks";
-import { AppServerCloudTransport, cloudCheckInputs, runCloudChecks } from "./cloud-checks";
+import { AppServerCloudTransport, cloudCheckInputs, cloudRefusalLine, runCloudChecks } from "./cloud-checks";
 import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
-import { captureProcessIdentity } from "../src/lib/processIdentity";
-import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
@@ -88,7 +90,13 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (mode === "pre-commit") return steps;
   const touched = new Set<string>();
   if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+  }
+  if (changedFiles.some(file => ["scripts/owned-runner.integration.fixture.ts", "scripts/owned-runner.cleanup.ts"].includes(file))) {
+    for (const test of env.tests) if (/^scripts\/owned-runner(?:\.[^.]+)+\.test\.ts$/.test(test)) touched.add(test);
+  }
+  if (changedFiles.includes("scripts/compiler-admission.fixture.ts")) {
+    for (const test of env.tests) if (/^scripts\/compiler-admission(?:\.[^.]+)?\.test\.ts$/.test(test)) touched.add(test);
   }
   if (changedFiles.includes("scripts/local-gate-tests.fixture.ts")) {
     for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
@@ -197,7 +205,7 @@ export function discover(root: string, base: string, files: readonly string[]): 
     native: runtimeChanged,
     linuxTests: workflowEntries(platform.jobs["windows-platform"]!.steps.find(step => step.name === "Platform tests")!.run!).filter(isTest),
     runtimeTests: runtimeEntries.filter(isTest),
-    codexVersions: bun.jobs["native-codex-runtime"]!.strategy!.matrix!.codex!,
+    codexVersions: SUPPORTED_CODEX_VERSIONS,
   };
 }
 
@@ -205,7 +213,8 @@ export function discover(root: string, base: string, files: readonly string[]): 
  * probes replace TMPDIR again, losing that exemption. Use an OS temp root
  * outside the operator installation for the gate's whole sandbox tree.
  */
-export function gateTemporaryRoot(platform: NodeJS.Platform = process.platform): string {
+export function gateTemporaryRoot(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
+  if (env.NODE_ENV === "test" && env.TMPDIR) return env.TMPDIR;
   return platform === "win32" ? tmpdir() : "/var/tmp";
 }
 
@@ -216,10 +225,12 @@ export function gateTemporaryRoot(platform: NodeJS.Platform = process.platform):
 export function createGateSandbox(
   platform: NodeJS.Platform = process.platform,
   create: (prefix: string) => string = mkdtempSync,
+  env: NodeJS.ProcessEnv = process.env,
 ): string {
   try {
-    return recordGateSandbox(create(path.join(gateTemporaryRoot(platform), "delegatus-local-gate-")));
+    return recordGateSandbox(create(path.join(gateTemporaryRoot(platform, env), "delegatus-local-gate-")));
   } catch (error) {
+    if (env.NODE_ENV === "test" && env.TMPDIR) throw error;
     if (platform === "win32" || !["EROFS", "EACCES", "ENOENT"].includes((error as NodeJS.ErrnoException)?.code ?? "")) throw error;
     return recordGateSandbox(create(path.join("/tmp", "delegatus-local-gate-")));
   }
@@ -241,7 +252,7 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   // Preserve explicit slot/queue overrides through isolation. Leave the
   // default unset: gate-slot keeps its shared /var/tmp locks, while the CPU
   // queue remains in the same writable machine cache as the Viewer.
-  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
     env[key] = path.join(root, key.toLowerCase());
     mkdirSync(env[key]!, { recursive: true });
   }
@@ -456,7 +467,24 @@ function holders(token: string, cleanup: Cleanup): number[] | null {
   });
 }
 function scopeMembers(scope: string): number[] {
-  try { return readFileSync(path.join("/sys/fs/cgroup", scope, "cgroup.procs"), "utf8").split("\n").filter(Boolean).map(Number); } catch { return []; }
+  const directory = path.join("/sys/fs/cgroup", scope);
+  try {
+    return [...readFileSync(path.join(directory, "cgroup.procs"), "utf8").split("\n").filter(Boolean).map(Number),
+      ...readdirSync(directory, { withFileTypes: true }).filter(entry => entry.isDirectory())
+        .flatMap(entry => scopeMembers(path.join(scope, entry.name)))];
+  } catch { return []; }
+}
+/** Worker leaves sit below their owned service. Never stop a containing unit
+ * of this hook, including when the hook itself runs in a worker leaf. */
+function stepGroup(group: string, own: string | null): string | null {
+  const parts = group.split("/");
+  for (let end = parts.length; end > 0; end--) {
+    const name = parts[end - 1]!;
+    if (!name.endsWith(".scope") && !/^delegatus-gate-.+\.service$/.test(name)) continue;
+    const unit = parts.slice(0, end).join("/");
+    return own === unit || own?.startsWith(`${unit}/`) ? null : unit;
+  }
+  return null;
 }
 /** The tree under `root`; null when no process table could be read. */
 function descendants(root: number, cleanup: Cleanup): number[] | null {
@@ -481,10 +509,10 @@ function descendants(root: number, cleanup: Cleanup): number[] | null {
 /** Each started step carries a token of its own in its environment. */
 const STEP_TOKEN = "LLV_GATE_STEP";
 /** Stops the step this hook started: its process tree, every process that
-    inherited its token, and every transient scope those run in. The work can
-    run in a run-*.scope the step's first PID is not in (gate-slot under a
-    wrapper or nested in the step), so scopes are read from every member, and
-    this hook's own cgroup is never one of them. Resolves by CLEANUP_MS,
+    inherited its token, and every owned service or transient scope those run
+    in. Workers can occupy leaves below a service outside the step's first
+    PID's cgroup, so units are read from every member; a unit containing this
+    hook is never one of them. Resolves by CLEANUP_MS,
     process-table queries included, with what survived, or null once nothing
     did. A process counts as gone only when that is proven: when no process
     table can be read in time, the step's helpers cannot be found, and that
@@ -492,7 +520,11 @@ const STEP_TOKEN = "LLV_GATE_STEP";
 const CLEANUP_MS = 3_000;
 async function stopStep(pid: number, token: string): Promise<string | null> {
   const own = cgroupOf("self");
-  const scopes = new Set<string>(), signalled = new Set<number>([pid]);
+  const scopes = new Set<string>(), signalled = new Map<number, ProcessIdentity>();
+  const remember = (member: number) => {
+    if (!signalled.has(member)) signalled.set(member, captureProcessIdentity(member));
+  };
+  remember(pid);
   const cleanup: Cleanup = { ends: Date.now() + CLEANUP_MS, late: false };
   let blind = false;
   const sweep = () => {
@@ -500,10 +532,15 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
     if (!tree || !inherited) blind = true;
     const members = [...new Set([pid, ...tree ?? [], ...inherited ?? []])].filter(live);
     for (const member of members) {
-      signalled.add(member);
-      const scope = cgroupOf(member);
-      if (scope && scope !== own && scope.endsWith(".scope")) scopes.add(scope);
+      remember(member);
+      const group = cgroupOf(member);
+      const scope = group && stepGroup(group, own);
+      if (scope) scopes.add(scope);
     }
+    // cgroup.procs stops listing exited tasks before their parents reap them.
+    // Retain every identity before killing the unit so the final answer also
+    // waits for descendants whose step token was replaced by a nested check.
+    for (const scope of scopes) for (const member of scopeMembers(scope)) remember(member);
     for (const member of members) { try { process.kill(member, "SIGKILL"); } catch { /* already gone, or refused: still counted below */ } }
     // Reaches helpers that left the tree and dropped the token as well.
     for (const scope of scopes) { try { writeFileSync(path.join("/sys/fs/cgroup", scope, "cgroup.kill"), "1"); } catch { /* gone, or no cgroup.kill */ } }
@@ -512,7 +549,8 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
   const left = () => {
     const inherited = holders(token, cleanup);
     if (!inherited) blind = true;
-    return [...new Set([...signalled, ...inherited ?? [], ...[...scopes].flatMap(scopeMembers)])].filter(live);
+    for (const member of [...inherited ?? [], ...[...scopes].flatMap(scopeMembers)]) remember(member);
+    return [...signalled.values()].filter(identity => processIdentityStatus(identity) !== "dead").map(identity => identity.pid);
   };
   let survivors = left();
   for (let attempt = 1; survivors.length && Date.now() < cleanup.ends; attempt++) {
@@ -526,7 +564,12 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
 }
 
 /** `cancelled`: stopped by `cancel`, never by the deadline. */
-interface Outcome { code: number | null; stopped: boolean; ranMs: number | null; preparing?: boolean; leaked?: string; cancelled?: boolean }
+interface Outcome { code: number | null; stopped: boolean; ranMs: number | null; preparing?: boolean; leaked?: string; cancelled?: boolean; signal?: string }
+/** The step supervisor can disappear while its command remains an orphan.
+ * Callers holding disposable inputs must keep them when this verdict is lost. */
+export class UnconfirmedStepExit extends Error {
+  constructor(step: string, signal?: string, code?: number | null) { super(`\"${step}\" supervisor ${signal ? `was terminated by ${signal}` : `exited with status ${code}`}; command completion is unconfirmed`); }
+}
 /** The hook owns the verdict deadline. Leave its supervisor time to print the
  * no-verdict line and finish containment before the supervisor stops the hook.
  * Each nested runner receives the current remainder, never an inherited cap. */
@@ -567,7 +610,7 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
     const code = await Promise.race([child.exited, stop.then(() => null)]);
     // Owned runners reserve 124 for a deadline after their cleanup. Keep this
     // distinct from a compiler/test refusal even if the supervisor wins a race.
-    if (!stopping) return { code, stopped: code === 124, ranMs: Date.now() - started };
+    if (!stopping) return { code, stopped: code === 124, ranMs: Date.now() - started, ...(child.signalCode ? { signal: child.signalCode } : {}) };
     const leaked = await stop;
     // A survivor must not hold this hook open: the push ends with its report.
     if (leaked) child.unref();
@@ -580,7 +623,7 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   }
 }
 
-export interface Prepared { command: string[]; env: NodeJS.ProcessEnv; root?: string }
+export interface Prepared { command: string[]; env: NodeJS.ProcessEnv; root?: string; cleanup?: () => void; completionReceipt?: { path: string; token: string }; requireCompletionReceipt?: true }
 
 /** Only a complete comparator verdict can authorize a flaky phase retry.
  * New assertions, broken runners and failed cleanup remain decisive. */
@@ -720,8 +763,18 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
     // missing verdict otherwise.
     const until = deadline ? deadline.at + (deadline.cpuWaitMs ?? 0) : Infinity;
     const runPrepared = async (step: Step, ready: Prepared, log: string | undefined, cancel?: AbortSignal): Promise<Outcome> => {
+      let cleanupSafe = false;
       const run = async (destination: string | undefined) => {
+        cleanupSafe = false;
         const outcome = await execute(ready.command, ready.root ?? root, withBudget(ready.env), until, destination, cancel);
+        const receipt = ready.completionReceipt;
+        let completionConfirmed = !ready.requireCompletionReceipt && !receipt;
+        if (receipt) {
+          try { completionConfirmed = existsSync(receipt.path) && readFileSync(receipt.path, "utf8") === receipt.token; }
+          catch { completionConfirmed = false; }
+        }
+        cleanupSafe = completionConfirmed && !outcome.leaked && outcome.code !== 137 && outcome.code !== 255 && !outcome.signal;
+        if (!completionConfirmed) throw new UnconfirmedStepExit(step.name, outcome.signal, outcome.code);
         // A runner's deadline cannot erase a refusal it already printed. Use
         // the same full-output veto as publication, before logs are truncated.
         if (outcome.stopped && destination && existsSync(destination)
@@ -730,29 +783,31 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
         }
         return outcome;
       };
-      const first = await run(log);
-      if (mode !== "pre-push" || first.code !== 1 || first.stopped || first.leaked || cancel?.aborted
-        || !comparableStep(step) || !log || !existsSync(log)) return first;
-      const original = readFileSync(log, "utf8");
-      if (!comparatorAllowsFlakyRetry(original)) return first;
-      say(`${mode}: ${step.name}: comparator reported an intermittent diagnostic; retrying the check once in fresh isolation`);
-      for (const line of original.split("\n").filter(line => line.startsWith("FLAKY "))) say(line);
-      const retryLog = `${log}.retry`;
-      const retry = await run(retryLog);
-      if (retry.leaked) {
+      try {
+        const first = await run(log);
+        if (mode !== "pre-push" || first.code !== 1 || first.stopped || first.leaked || cancel?.aborted
+          || !comparableStep(step) || !log || !existsSync(log)) return first;
+        const original = readFileSync(log, "utf8");
+        if (!comparatorAllowsFlakyRetry(original)) return first;
+        say(`${mode}: ${step.name}: comparator reported an intermittent diagnostic; retrying the check once in fresh isolation`);
+        for (const line of original.split("\n").filter(line => line.startsWith("FLAKY "))) say(line);
+        const retryLog = `${log}.retry`;
+        const retry = await run(retryLog);
+        if (retry.leaked) {
+          if (existsSync(retryLog)) writeFileSync(log, readFileSync(retryLog));
+          return retry;
+        }
+        if (retry.stopped || retry.cancelled) {
+          // A retry without a verdict cannot erase the first decisive refusal,
+          // even if another lane reached the group's deadline first.
+          say(`${mode}: ${step.name}: failed (1); flaky retry got no verdict, retaining the comparator refusal`);
+          for (const line of original.split("\n").filter(line => line.startsWith("NEW "))) say(line);
+          return first;
+        }
         if (existsSync(retryLog)) writeFileSync(log, readFileSync(retryLog));
+        say(`${mode}: ${step.name}: automatic flaky retry ${retry.code === 0 ? "passed" : "failed"}`);
         return retry;
-      }
-      if (retry.stopped || retry.cancelled) {
-        // A retry without a verdict cannot erase the first decisive refusal,
-        // even if another lane reached the group's deadline first.
-        say(`${mode}: ${step.name}: failed (1); flaky retry got no verdict, retaining the comparator refusal`);
-        for (const line of original.split("\n").filter(line => line.startsWith("NEW "))) say(line);
-        return first;
-      }
-      if (existsSync(retryLog)) writeFileSync(log, readFileSync(retryLog));
-      say(`${mode}: ${step.name}: automatic flaky retry ${retry.code === 0 ? "passed" : "failed"}`);
-      return retry;
+      } finally { if (cleanupSafe) ready.cleanup?.(); }
     };
     const settle = (step: Step, outcome: Outcome) => {
       if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked);
@@ -783,7 +838,11 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
           if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked, true);
           return deferred;
         }
-        if (!settle(step, outcome)) throw new Error(`${isOutcome(ready) ? step.name : ready.command[0]} failed (${outcome.code})`);
+        if (!settle(step, outcome)) {
+          if (outcome.code === 137 || outcome.code === 255 || outcome.signal)
+            throw new UnconfirmedStepExit(step.name, outcome.signal, outcome.code);
+          throw new Error(`${isOutcome(ready) ? step.name : ready.command[0]} failed (${outcome.code})`);
+        }
         if (!outcome.stopped && outcome.code === 0) options.passes?.passed(step);
         continue;
       }
@@ -858,7 +917,7 @@ export function endingOf(mode: Mode, error: unknown): { line: string; code: numb
 
 /** Exits at once: a stopped step's survivor must not hold the push open. */
 class AdmittedGateFailed extends Error {
-  constructor(readonly code: number) { super(`admitted checks exited ${code}`); }
+  constructor(readonly code: number, reason?: string) { super(reason ?? `admitted checks exited ${code}`); }
 }
 
 /** One ledger spans the slot handoff. Nested supervisors may create their
@@ -905,7 +964,7 @@ export async function runPushPair(privacy: (cancel: AbortSignal) => Promise<unkn
 }
 
 export function endHook(mode: Mode, error: unknown): never {
-  if (error instanceof AdmittedGateFailed) process.exit(error.code);
+  if (error instanceof AdmittedGateFailed) { console.error(error.message); process.exit(error.code); }
   const { line, code } = endingOf(mode, error);
   console.error(line);
   process.exit(code);
@@ -1002,6 +1061,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
   // Ordinary hooks still install on first use inside the selected step.
   let runtime: Promise<string> | undefined;
   let runtimeTree: string | undefined;
+  let runtimeTreeIdentity: string | undefined;
   const fixtures = new Map<string, Promise<string>>();
   // The outer hook also allocates logs and Cloud input. Acquire its cleanup
   // owner before allocation; admitted children inherit the same journal.
@@ -1021,6 +1081,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     return;
   }
   const sandbox = createGateSandbox();
+  let sandboxRetained = false;
   try {
     // Pre-push checks see one canonical environment, so a producer's pass and
     // the publication of the same tree share a key (scripts/gate-cache.ts).
@@ -1058,9 +1119,33 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
         }
       }
       const usesBuild = ["Viewer build", "MCP size budgets", "Viewer runtime", "runtime host", "runtime negative controls"].includes(step.name);
-      if (usesBuild) runtimeTree ??= createRuntimeCheckTree(root, sandbox);
+      if (usesBuild && !runtimeTree) {
+        runtimeTree = createRuntimeCheckTree(root, sandbox);
+        const stat = lstatSync(runtimeTree);
+        runtimeTreeIdentity = `${stat.dev}:${stat.ino}`;
+      }
       if (step.name === "Viewer build") env.LLV_GATE_FULL_TYPES = realpathSync(runtimeTree!);
-      return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env, ...(usesBuild ? { root: runtimeTree } : {}) };
+      const runtimeConsumer = step.name === "runtime negative controls";
+      const completionReceipt = runtimeConsumer ? { path: path.join(sandbox, "runtime-negative-controls.complete"), token: randomUUID() } : undefined;
+      if (completionReceipt) {
+        env.LLV_OWNED_RUN_COMPLETION_RECEIPT = completionReceipt.path;
+        env.LLV_OWNED_RUN_COMPLETION_TOKEN = completionReceipt.token;
+      }
+      const effectiveCommand = step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command;
+      return { command: runtimeConsumer ? [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...effectiveCommand] : effectiveCommand,
+        env, ...(completionReceipt ? { completionReceipt, requireCompletionReceipt: true as const } : {}), ...(usesBuild ? { root: runtimeTree } : {}),
+        // This is the last consumer of the shared build. Release its source
+        // and generated output before unrelated lanes finish their checks.
+        ...(step.name === "runtime negative controls" ? { cleanup: () => {
+          if (runtimeTree) {
+            const stat = lstatSync(runtimeTree, { throwIfNoEntry: false });
+            if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== runtimeTreeIdentity))
+              throw new Error("runtime check tree changed identity");
+            if (stat) rmSync(runtimeTree, { recursive: true, force: true });
+          }
+          runtimeTree = undefined;
+          runtimeTreeIdentity = undefined;
+        } } : {}) };
     };
     const parentChecks = mode === "pre-push" && !admitted && !transport;
     const execution = parentChecks
@@ -1146,14 +1231,21 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
         git(root, ["bundle", "create", destination, "HEAD", `^${base}`]);
         const bundle = readFileSync(destination).toString("base64");
         console.error("pre-push: Cloud checks");
-        const inputs = cloudCheckInputs(root, process.env);
+        let inputs: ReturnType<typeof cloudCheckInputs>;
+        try { inputs = cloudCheckInputs(root, process.env); }
+        catch (error) {
+          const reason = error instanceof Error && /^(?:Unsupported Cloud check input (?:name|value|path)|Cloud check input is outside tracked files)$/.test(error.message)
+            ? error.message : "check inputs could not be safely transferred";
+          throw new AdmittedGateFailed(1, cloudRefusalLine({ category: "environment", reason }));
+        }
+        let cloudRefusal: string | undefined;
         const code = await runCloudChecks({ head, tree, base, inputs, bundle, timeoutMs: Math.max(1, (deadline?.at ?? Date.now() + 15 * 60_000) - Date.now()) },
-          new AppServerCloudTransport(config), async () => {
+          new AppServerCloudTransport(config, undefined, () => {}), async () => {
             console.error("pre-push: Cloud unavailable after confirmation; running the same checks locally once");
             await localChecks(cancel); return 0;
-          }, cancel);
+          }, cancel, line => { cloudRefusal = line; console.error(line); });
         if (git(root, ["rev-parse", "HEAD"]) !== head || git(root, ["status", "--porcelain", "--untracked-files=normal"])) throw new Error("source changed during Cloud checks");
-        if (code !== 0) throw new AdmittedGateFailed(code);
+        if (code !== 0) throw new AdmittedGateFailed(code, cloudRefusal);
       };
       // Validate exact reusable inputs before acquiring a CPU ticket. Fresh
       // install and supply-chain steps still require their own observation.
@@ -1171,8 +1263,15 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
       assertPublicationInputs("checks");
       writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents);
     }
+  } catch (error) {
+    if (error instanceof UnconfirmedStepExit) {
+      retainGateSandbox(sandbox);
+      sandboxRetained = true;
+      throw error;
+    }
+    throw error;
   } finally {
-    releaseGateSandbox(sandbox);
+    if (!sandboxRetained) releaseGateSandbox(sandbox);
   }
 }
 

@@ -9,7 +9,8 @@ export function batchLandingFixture(root: string, kind = "rebased") {
   const git = (...args: string[]) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "core.fileMode=true", ...args], {
     cwd: directory, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
-      GIT_AUTHOR_EMAIL: "noreply@example.test", GIT_COMMITTER_EMAIL: "noreply@example.test",
+      GIT_AUTHOR_EMAIL: "fixture.invalid", GIT_COMMITTER_EMAIL: "fixture.invalid",
+      GIT_AUTHOR_DATE: "2026-10-11T04:18:00Z", GIT_COMMITTER_DATE: "2026-10-11T04:18:00Z",
       GIT_CONFIG_COUNT: "0" },
   }).trim();
   const commit = (file: string, content: string | Uint8Array) => {

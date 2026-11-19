@@ -43,7 +43,7 @@ import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, wr
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 
 import type { CompletedGenerationRead } from "@/lib/lifecycle/inventorySelection";
-import { queryLifecycleEvents } from "@/lib/lifecycle/journal";
+import { queryLifecycleEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 
@@ -243,13 +243,13 @@ test("spawn_agent rejects an explicit model outside the engine catalog before co
     (error: unknown) => error as Error & { details?: { violations?: Array<{ field: string; message: string; expected: string }> } },
   );
 
-  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna";
+  const message = "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra";
   expect(refusal?.name).toBe("McpToolRefusal");
   expect(refusal?.message).toBe(message);
   expect(refusal?.details?.violations).toEqual([{
     field: "model",
     message,
-    expected: "one of: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    expected: "one of: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6.1-sol, gpt-6.1-terra, gpt-6-luna, gpt-6-sol, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
   }]);
   expect(requests).toEqual([]);
 });
@@ -3048,9 +3048,7 @@ test("lifecycle_events projects the runtime deployment ledger into the journal (
 
   expect(result).toMatchObject({ mode: "query", journaled: 3 });
   expect((result.events as Array<Record<string, unknown>>).map((event) => event.type)).toEqual(["deploy_succeeded"]);
-  const journal = JSON.parse(fs.readFileSync(path.join(sandbox, "lifecycle-journal.json"), "utf8")) as {
-    events: Array<{ type: string; state: string; summary: string }>;
-  };
+  const journal = readLifecycleJournal();
   expect(journal.events.map((event) => event.type)).toEqual(["deploy_ready", "deploy_succeeded", "deploy_failed"]);
   expect(journal.events.map((event) => event.state)).toEqual(["waiting", "completed", "failed"]);
   expect(journal.events[2]!.summary).toBe("the health gate never went green");
@@ -3119,6 +3117,9 @@ test("lifecycle_events queries the journal by lineage and polls the bounded dige
    rejected create carries every violated constraint, with its field and the
    shape that field expects, as structured refusal details. */
 function pipelineContractBindings(src: string) {
+  // These direct calls authenticate through the explicit fixture authority.
+  // An enclosing agent capability has no matching receipt in this registry.
+  delete process.env[VIEWER_SPAWN_CAPABILITY_ENV];
   const conversationId = "conversation_creator";
   return viewerMcpBindings(undefined, undefined, {
     attentionAuthority: () => ({ kind: "worker", conversationId, role: "builder" }),
@@ -3147,7 +3148,7 @@ test("create_pipeline refuses with every violated constraint attached", async ()
   );
 
   expect(refusal?.name).toBe("McpToolRefusal");
-  expect(refusal?.details?.violations?.map((violation) => violation.field)).toEqual(["src", "stages[0].kind"]);
+  expect(refusal?.details?.violations?.map((violation) => violation.field), refusal?.message).toEqual(["src", "stages[0].kind"]);
   for (const violation of refusal?.details?.violations ?? []) expect(violation.expected.length).toBeGreaterThan(0);
   expect(refusal?.message).toContain("stages[0].kind: stage kind must be run or review-loop");
 });
@@ -3178,8 +3179,8 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     "stages[0].model",
     "stages[1].model",
   ]);
-  expect(refusal?.message).toContain("valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna");
-  expect(refusal?.message).toContain("valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku");
+  expect(refusal?.message).toContain("valid codex model ids: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra");
+  expect(refusal?.message).toContain("valid claude model ids: opus, fable, claude-fable-5-2, claude-fable-5-1, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5");
 });
 
 /* ------------------------------------------------------------------------- *
@@ -3753,15 +3754,16 @@ test("an ambiguous send's operation id and resend guidance survive the control r
   sandboxes.push(sandbox);
   process.env.LLV_STATE_DIR = sandbox;
   const operationId = ["operation", "ambiguous", "legacy", "send"].join("_");
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(JSON.stringify({
+  const originalUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(JSON.stringify({
     ok: false,
     outcome: "failed",
     error: "delivery was started and never settled",
     actuation: "started",
     operationId,
     resend: "verify-first",
-  }), { status: 409, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  }), { status: 409, headers: { "content-type": "application/json" } }) });
+  process.env.LLV_VIEWER_CONTROL_URL = control.url.origin;
 
   try {
     const sendMessage = viewerMcpBindings().send_message;
@@ -3780,7 +3782,8 @@ test("an ambiguous send's operation id and resend guidance survive the control r
       actuation: "started",
     });
   } finally {
-    globalThis.fetch = originalFetch;
+    control.stop(true);
+    if (originalUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = originalUrl;
   }
 });
 
@@ -3823,7 +3826,10 @@ test("the single dispatch classifies every transport outcome by what it can prov
   const viewer = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch: () => {
+    fetch: request => {
+      // This legacy Viewer fixture has no evidence endpoint. Recovery reads
+      // do not dispatch a mutation and must not inherit its stalled answer.
+      if (request.method !== "POST") return Response.json({ state: "unknown" }, { status: 404 });
       requests += 1;
       return answer();
     },
@@ -4837,10 +4843,11 @@ test.each([
   { id: "docker-deployments", button: false, command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" },
   { id: "secure-handoff", button: false },
 ] satisfies import("../selfUpdate/types").InstallAction[])("checkout deploy prerequisite survives the production MCP control response: %j", async (action) => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (_input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => init?.method !== "POST"
+  const originalUrl = process.env.LLV_VIEWER_CONTROL_URL;
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => request.method !== "POST"
     ? Response.json({ capability: "viewer-deployments", version: 1, admissionFence: true })
-    : Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 })) as unknown as typeof fetch;
+    : Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 }) });
+  process.env.LLV_VIEWER_CONTROL_URL = control.url.origin;
   try {
     const bindings = viewerMcpBindings(undefined, undefined, {
       callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat", role: null }),
@@ -4850,7 +4857,7 @@ test.each([
     const error = await bindings.deploy_exact_sha({ revision: "a".repeat(40), clientRequestId: "deploy-prerequisite" }).catch(error => error);
     expect(error).toBeInstanceOf(McpToolRefusal);
     expect(error.details).toMatchObject({ status: 409, code: "self-update-action-required", action });
-  } finally { globalThis.fetch = originalFetch; }
+  } finally { control.stop(true); if (originalUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = originalUrl; }
 });
 
 test("seat_tick_settings acknowledges auto-rotation and records the server-derived manager and why", async () => {
@@ -4878,3 +4885,18 @@ test("list_pipelines names the successor carrying an automatic refresh", async (
   const answer = await bindings.list_pipelines({ clientRequestId: "list-refresh-successor", compact: false, project: "fixture" });
   expect(answer.pipelines).toMatchObject([{ id: "refresh-parent", merge: { state: "refreshing", refresh: "refresh-successor" } }]);
 });
+
+for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+  test(`spawn_agent admits ${model} before control-plane dispatch`, async () => {
+    const requests: Record<string, unknown>[] = [];
+    const spawn = viewerMcpBindings(undefined, { post: async (pathname, body) => {
+      expect(pathname).toBe("/api/spawn");
+      requests.push(body);
+      return { ok: true, conversationId: "conversation_model", launchId: "launch_model", state: "path-pending", initialMessage: "queued", path: null, transport: "structured" };
+    } }).spawn_agent;
+    const result = await spawn({ clientRequestId: `spawn-${model}`, engine: "codex", model, effort: "max", cwd: "/repo", prompt: "Build" });
+    expect(result).toMatchObject({ state: "path-pending", initialMessage: "queued" });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ engine: "codex", model, effort: "max" });
+  });
+}

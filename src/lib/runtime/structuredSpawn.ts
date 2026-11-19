@@ -6,6 +6,8 @@ import { recordHostStop, withHostStopOrigin } from "./hostExit";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { startupHostSnapshot } from "./startupSnapshot";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
+import { guardedDiskCleanerProfile, type CleanerSandboxObservation } from "@/lib/agent/cleanerLaunchPolicy";
+import { assertCleanerSandboxAvailable } from "./cleanerSandboxProbe";
 import { assertStageGitRehostProvable, stageGitEnvironment } from "./stageGitEnvironment";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
@@ -15,7 +17,7 @@ import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
 import { agentMemoryScopes, agentMemoryCapForPlan, PIPELINE_MEMORY_DEFAULT_ROLE } from "./agentMemorySettings";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
 import { attemptTempConfigParent } from "./attemptTempPaths";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,7 +34,7 @@ import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
-import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
+import { RegistryWriterBusyError, identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns, type StructuredHostClaimDecision } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { readRuntimeSnapshot } from "./snapshotReads";
@@ -105,6 +107,7 @@ const ADMISSION_RETRY_MAX_BACKOFF_MS = 2_000;
  * establish a concrete failure earlier; this bound supplies no causal claim.
  */
 export const STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS = 5 * 60_000;
+const SETUP_WRITER_RETRY_MS = 2_000;
 export const READ_ONLY_STAGE_PERMISSION_PROFILE = "llv-read-only-stage";
 const PINNED_SPAWN_HEALTH_TIMEOUT_MS = 600;
 
@@ -298,10 +301,74 @@ export function materializeOwnedStructuredHostAccess(
 }
 
 async function materializeAttemptAccess(input: StructuredSpawnInput, capability: string | null) {
+  assertDiskCleanerAccess(input);
   // Queued starts and resume successors reconstruct the account environment.
   // Recover the exact launch's binding before either engine builds its policy.
   const guard = await stageGitEnvironment(input.registry, input.receipt.conversationId, input.receipt.launchId, input.spec.cwd);
   return materializeOwnedStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), { ...input.account.env, ...guard }, capability, () => tempOwnerForSpawn(input));
+}
+
+type DiskCleanerHostIdentity = {
+  engine: AgentEngine;
+  receipt: Pick<SpawnReceipt, "agentRole" | "launchId" | "launchProfile">;
+  spec: Pick<ResumeSpec, "cwd" | "launchProfile">;
+};
+
+function assertDiskCleanerAccess(input: DiskCleanerHostIdentity): boolean {
+  const profile = input.spec.launchProfile;
+  if (input.receipt.agentRole !== "cleaner" || profile?.agentMemoryRoleParams?.mode !== "disk") return false;
+  if (input.engine !== "codex" || !guardedDiskCleanerProfile(profile)) throw new Error("disk cleaner requires a guarded restricted profile");
+  return true;
+}
+
+/** Keep the requested cwd for project identity, but never grant it workspace writes.
+    Each new host, including a recovered host, receives its own empty workspace. */
+export function structuredHostWorkingDirectory(
+  input: DiskCleanerHostIdentity,
+  access: StructuredHostAccessMaterialization,
+): string {
+  if (!assertDiskCleanerAccess(input)) return input.spec.cwd;
+  if (!access.scratchDirectory || access.codex.sandbox !== "workspace-write") throw new Error("disk cleaner scratch is unavailable");
+  const cwd = path.join(access.scratchDirectory, "cwd");
+  fs.mkdirSync(cwd, { mode: 0o700 });
+  // Account config is recursively merged with CLI TOML. Give this launch a
+  // fresh profile key so a preconfigured permissions.llv-stage cannot add roots.
+  const profile = `llv-cleaner-${randomUUID()}`;
+  access.codex.permissionProfile = profile;
+  access.codex.permissionProfileConfig = `permissions.${profile}={extends=":read-only",filesystem={${JSON.stringify(access.scratchDirectory)}="write",${JSON.stringify(access.env.LLV_EVIDENCE_DIR)}="write"}}`;
+  return cwd;
+}
+
+/** Applies the cleaner boundary whenever a new Codex process is made, including
+    startup adoption and account-migration successors. */
+export async function prepareDiskCleanerHost(
+  input: DiskCleanerHostIdentity & { registry: AgentRegistry },
+  access: StructuredHostAccessMaterialization,
+  options: CodexAppServerHostOptions,
+  expectedReceipt: SpawnReceipt | null,
+): Promise<CleanerSandboxObservation | null> {
+  if (!assertDiskCleanerAccess(input)) return null;
+  options.cwd = structuredHostWorkingDirectory(input, access);
+  options.sandbox = access.codex.sandbox;
+  options.permissionProfile = access.codex.permissionProfile;
+  options.permissionProfileConfig = access.codex.permissionProfileConfig;
+  if (!expectedReceipt) throw new Error("disk cleaner launch receipt is unavailable for sandbox observation");
+  let observation: CleanerSandboxObservation = { mode: "restricted", reason: null };
+  try {
+    const probeEnv = { ...(options.env ?? process.env), ...(options.codexHome ? { CODEX_HOME: options.codexHome } : {}) };
+    await assertCleanerSandboxAvailable({ ...options, env: probeEnv });
+  } catch (error) {
+    observation = { mode: "unsandboxed", reason: hardenedRedact(error instanceof Error ? error.message : String(error)).slice(0, 4096) };
+  }
+  await input.registry.recordCleanerSandboxOffLoop(expectedReceipt.launchId, observation, expectedReceipt);
+  if (observation.mode === "unsandboxed") {
+    options.sandbox = "danger-full-access";
+    options.permissionProfile = undefined;
+    options.permissionProfileConfig = undefined;
+  }
+  options.cleanerDiskWorkspace = true;
+  options.runtimeInstructions = `Include this runtime observation in your final report: ${JSON.stringify({ cleanerSandbox: observation })}`;
+  return observation;
 }
 
 /** Runtime admission calls carry the durable launch id as their idempotency
@@ -1141,6 +1208,9 @@ async function actuateQueuedPinnedSpawn(
       registry,
       client,
       admissionActive: assertActive,
+      // A queued launch has already spent its runtime-RPC admission attempt.
+      // Keep that single-attempt policy separate from the custody writer's
+      // bounded retry; the absolute queue deadline still caps both.
       ...(claimedQueue.admissionDeadlineAt ? { admissionRetryMs: 0 } : {}),
       authorize: () => {
         assertActive();
@@ -1402,6 +1472,9 @@ export interface StructuredSpawnInput {
   authorize?: () => void | Promise<void>;
   /** Recovery must leave unbound durable work to the next serving owner. */
   admissionActive?: () => void;
+  /** Bounded no-write retry budget for setup custody, independent of the
+      runtime RPC admission retry budget. Absolute caller deadlines still cap it. */
+  setupCustodyRetryMs?: number;
   /** A recovery pass tries once, then durably requeues for a later tick. */
   admissionRetryMs?: number;
   /** Recovery hands its predecessor fence to the writer this spawn acquires.
@@ -2226,7 +2299,7 @@ export async function defaultStartHost(
   const env = access.env;
   if (input.engine === "codex") {
     const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.account.home, profile.allowSubagents, profile.cleanMemory === true);
-    const options = {
+    const options: CodexAppServerHostOptions = {
       cwd: input.spec.cwd,
       codexHome: input.account.home,
       fileAuthCredentials: input.account.kind === "managed",
@@ -2253,6 +2326,10 @@ export async function defaultStartHost(
       assertCurrent: () => assertMemoryPreparedStartCurrent(input),
       ...(memoryCell ? { memoryCell } : {}),
     };
+    try {
+      await prepareDiskCleanerHost(input, access, options, input.receipt);
+      assertMemoryPreparedStartCurrent(input);
+    } catch (error) { access.cleanup(); throw error; }
     await input.authorize?.();
     assertMemoryPreparedStartCurrent(input);
     return resumeSessionId
@@ -2926,11 +3003,12 @@ export async function spawnStructuredConversation(
         throw new Error("structured resume setup cleanup is pending");
       }
       assertAdmissionCurrent();
+      const claimDecision: StructuredHostClaimDecision = { refusal: null };
       const claimResume = () => input.registry.deliveryWriteOrBusy({ label: "registry.resume-claim" }, () => {
         assertResumeSurvivorsRetired();
         input.resumeAdmission?.beforeClaim();
         return input.registry.claimStructuredHost(resumeKey, processIdentity(), {
-          allowUnhosted: true, setupHost: pendingColumns(input.engine),
+          allowUnhosted: true, setupHost: pendingColumns(input.engine), decision: claimDecision,
           setupEntry: { artifactPath: resumeIdentity.artifactPath, cwd: input.spec.cwd,
             accountId: input.account.accountId, launchProfile: input.spec.launchProfile },
         });
@@ -2946,7 +3024,7 @@ export async function spawnStructuredConversation(
          it first left a parked attempt with neither its host nor a resume. */
       if (!adoptionClaim?.claimOwner) await assertStageGitRehostProvable(input.registry, input.receipt.conversationId, input.spec.cwd);
       if (!adoptionClaim?.claimOwner
-        && await stopTerminalStructuredOrphan(input.registry, resumeKey, dependencies.orphanStop)) {
+        && await stopTerminalStructuredOrphan(input.registry, resumeKey, dependencies.orphanStop, claimDecision)) {
         assertResumeSurvivorsRetired();
         adoptionClaim = await claimResume();
       }
@@ -3018,17 +3096,65 @@ export async function spawnStructuredConversation(
     });
     hostStartRequested = true;
     nativeSetupPending = true;
+    const pipelineMember = input.registry.conversationMemberships(input.receipt.conversationId)
+      .some(member => member.kind === "pipeline");
+    const writerBudgetMs = Math.min(SETUP_WRITER_RETRY_MS, input.setupCustodyRetryMs ?? Infinity);
+    let writerDeadline: number | undefined;
+    let writerRefusal: RegistryWriterBusyError | undefined;
+    let writerBackedOff = 0;
+    let writerBackoff = 25;
+    const writerRemaining = () => Math.min(
+      writerDeadline === undefined ? Infinity : writerDeadline - now(),
+      writerBudgetMs - writerBackedOff,
+      durableSetupDeadline - now(),
+      admissionDeadline === null ? Infinity : admissionDeadline - now(),
+    );
+    const writeSetupCustodyOffLoop = async (native?: ProcessIdentity) => {
+      for (;;) {
+        // Native evidence grants no publication. Keep recording cleanup custody
+        // even when authority was withdrawn during host.health().
+        if (!native) {
+          assertAdmissionCurrent();
+          await input.authorize?.();
+          assertAdmissionCurrent();
+        }
+        if ((!native && (durableSetupTimedOut || now() >= durableSetupDeadline
+          || admissionDeadline !== null && now() >= admissionDeadline))
+          || (writerRefusal && writerRemaining() <= 0))
+          throw writerRefusal ?? new Error("structured spawn setup deadline expired before native exec");
+        try {
+          input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner!, native);
+          writerRefusal = undefined;
+          return;
+        } catch (error) {
+          // Replay only this custody write: tryWriter refused before its
+          // mutation. Never recreate the host or resend its first message.
+          // Pipeline stages already own a durable retry budget in the engine.
+          if (pipelineMember || !(error instanceof RegistryWriterBusyError)
+            || error.label !== "spawn.setup-custody") throw error;
+          writerRefusal = error;
+          writerDeadline ??= now() + writerBudgetMs;
+          const delay = Math.min(writerBackoff, writerRemaining());
+          if (delay <= 0) throw error;
+          writerBackedOff += delay;
+          writerBackoff = Math.min(250, writerBackoff * 2);
+          await (dependencies.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms))))(delay);
+        }
+      }
+    };
     const setupCustody = foregroundAdmissionOwner
       ? { enabled: () => setupCustodyActive,
         beforeExec: () => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner),
-        record: (native: ProcessIdentity) => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner, native) }
+        beforeExecOffLoop: () => writeSetupCustodyOffLoop(),
+        record: (native: ProcessIdentity) => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner, native),
+        recordOffLoop: (native: ProcessIdentity) => writeSetupCustodyOffLoop(native) }
       : null;
     // Register cleanup evidence even if member authority was withdrawn while
     // the engine awaited its protocol identity. Evidence grants no publication.
     const retainHost = async (current: SpawnedStructuredHost) => {
       if (!setupCustody) return;
       const state = await current.health();
-      if (state.pid && state.pid > 1) setupCustody.record(captureProcessIdentity(state.pid, undefined, state.processStartIdentity));
+      if (state.pid && state.pid > 1) await writeSetupCustodyOffLoop(captureProcessIdentity(state.pid, undefined, state.processStartIdentity));
     };
     const confirmSetupCleanup = async () => {
       if (foregroundAdmissionOwner) await input.registry.deliveryWriteOrBusy({ label: "spawn.setup-cleanup", operationId }, () =>

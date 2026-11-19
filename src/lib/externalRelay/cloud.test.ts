@@ -17,7 +17,7 @@ test("new relay targets use Codex Cloud without local account admission", () => 
   });
 });
 
-import { createCloudTransport, CloudFailure, cloudEnvironment, runCloudRelay } from "./cloud";
+import { createCloudTransport, CloudAnswerError, CloudFailure, cloudEnvironment, runCloudRelay } from "./cloud";
 import type { EphemeralAgentRun } from "@/lib/agent/ephemeral";
 const localRun = (): EphemeralAgentRun => ({ pid: null, identity: null, cancel() {}, done: Promise.resolve({ status: "done", answer: { action: "reply", text: "local" }, durationMs: 0, code: 0, signal: null }) });
 
@@ -37,6 +37,21 @@ test("confirmed Cloud limit failure falls back to local exactly once", async () 
     transport: async () => { cloud++; throw new CloudFailure(true); }, local: async () => { local++; return localRun(); } });
   expect((await run.done).answer).toEqual({ action: "reply", text: "local" });
   expect({ cloud, local }).toEqual({ cloud: 1, local: 1 });
+});
+
+for (const customDecoder of [false, true]) test(`invalid Cloud answer has a content-free error with custom decoder=${customDecoder}`, async () => {
+  const marker = "PRIVATE_CLOUD_ANSWER_CANARY";
+  let local = 0;
+  const run = runCloudRelay({ prompt: "question", environmentId: "answer-env", fullAccess: false, timeoutMs: 1000,
+    transport: async () => marker,
+    ...(customDecoder ? { decode: () => { throw new Error(marker); } } : {}),
+    local: async () => { local++; return localRun(); } });
+  const error = await run.done.then(() => null, error => error);
+  expect(error).toBeInstanceOf(CloudAnswerError);
+  expect(error.message).toBe("Codex Cloud returned an invalid answer");
+  expect(error.cause).toBeUndefined();
+  expect(String(error.stack)).not.toContain(marker);
+  expect(local).toBe(0);
 });
 
 test("unconfirmed Cloud execution never duplicates an owner task locally", async () => {
@@ -68,7 +83,6 @@ import { contextRequest } from "./request.fixture";
 import { startTestRelay } from "./testRelay";
 import { cloneReceipt } from "./clone.fixture";
 import { readAnswerRecord } from "./answers";
-import { answerPrompt } from "./prompt";
 import { requestSchema } from "./protocol";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
@@ -177,14 +191,15 @@ test("Cloud answer is delivered through the relay with unchanged protocol steps 
   const relay: PairedRelay = { id: "cloud_relay", origin: server.origin, api_base: server.origin + "/v1", name: "Relay", description: "Relay", credential: "fixture",
     owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(), paused: false,
     features: ["progress_steps"], limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
-    targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null,
+    targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true, engine: "codex-cloud", model: "gpt-6.2-sol", effort: null,
       project: null, cloudEnvironmentId: "answer-env", concurrency: 1, hardCapMinutes: 1 }] };
   updateRelayStore(store => ({ ...store, relays: [relay] }));
   const select = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation(() => { throw new Error("local admission must not run"); });
   const raw = { ...contextRequest, request_id: "cloud_delivery", input: { ...contextRequest.input, tools: [] } };
   try {
     const result = await runClaimedRequest(relay, raw, undefined, { leaseWorker: false, cloudTransport: async input => {
-      expect(input.prompt).toBe(answerPrompt(requestSchema.parse(raw), "codex"));
+      expect(input.fullAccess).toBe(false);
+      expect(input.model).toBe("gpt-6.2-sol");
       await waitForStep("accepted");
       input.onProgress?.({ queued: true });
       await waitForStep("queued");
@@ -198,13 +213,46 @@ test("Cloud answer is delivered through the relay with unchanged protocol steps 
     expect(beats.map(beat => beat.progress?.label)).toEqual(expect.arrayContaining(["accepted", "queued", "thinking", "writing_answer"]));
     for (const beat of beats) expect(Object.keys(beat)).toEqual(["lease_id", "seq", "progress"]);
     expect(beats.map(beat => beat.seq)).toEqual(beats.map((_, i) => i + 1));
-    expect(readAnswerRecord(relay.id, "target_1", "cloud_delivery")).toMatchObject({ engine: "codex-cloud", outcome: "answered", delivery: "accepted" });
+    expect(readAnswerRecord(relay.id, "target_1", "cloud_delivery")).toMatchObject({ engine: "codex-cloud", model: "gpt-6.2-sol", outcome: "answered", delivery: "accepted" });
     expect(readRunLedger().runs.some(row => row.requestId === "cloud_delivery")).toBe(false);
     expect(select).not.toHaveBeenCalled();
   } finally { select.mockRestore(); await server.close(); }
 }, 45000);
 
-test.each([false, true])("Cloud WebSocket starts a current thread and sends the exact text (fullAccess=%s)", async (fullAccess) => {
+for (const ephemeral of [true, false, undefined]) test(`private Cloud refuses input until ephemeral thread is confirmed: ${ephemeral}`, async () => {
+  const oldUrl = process.env.LLV_CODEX_CLOUD_URL;
+  process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
+  const events = new EventEmitter();
+  const sent: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const emit = (value: unknown) => events.emit("message", JSON.stringify(value));
+  const transport = createCloudTransport(() => {
+    queueMicrotask(() => events.emit("open"));
+    return { on: events.on.bind(events), close() {}, send(data) {
+      const call = JSON.parse(data); sent.push(call);
+      if (!call.id) return;
+      queueMicrotask(() => {
+        emit({ id: call.id, result: call.method === "thread/start" ? { thread: { id: "thread", ephemeral,
+          environments: [{ environmentConfigId: "answer-env", environmentId: "ccarenv_fixture", cwd: "/workspace/fixture" }] } } : {} });
+        if (call.method === "turn/start") {
+          emit({ method: "item/completed", params: { threadId: "thread", item: { type: "agentMessage", text: "Done." } } });
+          emit({ method: "turn/completed", params: { threadId: "thread", turn: { status: "completed" } } });
+        }
+      });
+    } };
+  }, async () => "/workspace/fixture");
+  try {
+    const run = transport({ prompt: "PRIVATE_CLOUD_CANARY", privateContext: true, fullAccess: false,
+      environmentId: "answer-env", timeoutMs: 1000, signal: new AbortController().signal });
+    if (ephemeral) expect(await run).toBe("Done.");
+    else await expect(run).rejects.toMatchObject({ confirmed: true });
+    expect(sent.find(call => call.method === "thread/start")?.params.ephemeral).toBe(true);
+    expect(sent.filter(call => call.method === "turn/start")).toHaveLength(ephemeral ? 1 : 0);
+    expect(JSON.stringify(sent.filter(call => call.method !== "turn/start"))).not.toContain("PRIVATE_CLOUD_CANARY");
+  } finally { if (oldUrl === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = oldUrl; }
+});
+
+for (const model of [undefined, "gpt-6.2-sol", "gpt-6.2-astra"])
+test.each([false, true])(`Cloud WebSocket sends the selected model ${model ?? "default"} and exact text (fullAccess=%s)`, async (fullAccess) => {
   const oldUrl = process.env.LLV_CODEX_CLOUD_URL;
   process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
   const events = new EventEmitter();
@@ -228,10 +276,12 @@ test.each([false, true])("Cloud WebSocket starts a current thread and sends the 
     };
   }, async () => "/workspace/fixture");
   try {
-    expect(await transport({ prompt: "exact composed input", environmentId: "repo-env", fullAccess, timeoutMs: 1000, signal: new AbortController().signal })).toBe("answer");
-    expect(sent.find(call => call.method === "thread/start")?.params).toMatchObject({ model: "gpt-6.1-sol", approvalPolicy: "never", serviceTier: "ultrafast", environments: [{ environmentConfigId: "repo-env", cwd: "/workspace/fixture" }], sandbox: fullAccess ? "danger-full-access" : "read-only" });
+    expect(await transport({ model, effort: "max", prompt: "exact composed input", environmentId: "repo-env", fullAccess, timeoutMs: 1000, signal: new AbortController().signal })).toBe("answer");
+    expect(sent.find(call => call.method === "thread/start")?.params).toMatchObject({ model: model ?? "gpt-6.1-sol", approvalPolicy: "never", serviceTier: "ultrafast", environments: [{ environmentConfigId: "repo-env", cwd: "/workspace/fixture" }], sandbox: fullAccess ? "danger-full-access" : "read-only" });
     const config = sent.find(call => call.method === "thread/start")!.params.config as Record<string, unknown>;
+    expect(config.model_reasoning_effort).toBe("max");
     expect(config["skills.include_instructions"]).toBe(fullAccess ? undefined : false);
+    expect(config.web_search).toBe(fullAccess ? undefined : "cached");
     expect(sent.find(call => call.method === "turn/start")?.params).toEqual({ threadId: "thread", input: [{ type: "text", text: "exact composed input" }] });
   } finally { if (oldUrl === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = oldUrl; }
 });
@@ -862,3 +912,43 @@ for (const changed of [false, true])
       await fixture.cleanup();
     }
   });
+
+test("Cloud socket provider opens reach the settled round result", async () => {
+  const previous = process.env.LLV_CODEX_CLOUD_URL;
+  process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
+  const events = new EventEmitter();
+  const emit = (value: object) => events.emit("message", JSON.stringify(value));
+  const transport = createCloudTransport(() => {
+    queueMicrotask(() => events.emit("open"));
+    return { on: events.on.bind(events), close() {}, send(data) {
+      const call = JSON.parse(data); if (!call.id) return;
+      queueMicrotask(() => {
+        emit({ id: call.id, result: call.method === "thread/start" ? { thread: { id: "thread", environments: [{ environmentConfigId: "answer-env", environmentId: "ccarenv_fixture", cwd: "/workspace/fixture" }] } } : {} });
+        if (call.method === "turn/start") {
+          emit({ method: "item/completed", params: { threadId: "thread", item: { type: "webSearch", action: { type: "openPage", url: "https://example.org" } } } });
+          emit({ method: "item/completed", params: { threadId: "thread", item: { type: "agentMessage", text: '{"action":"reply","text":"page","reply_to":null}' } } });
+          emit({ method: "turn/completed", params: { threadId: "thread", turn: { status: "completed" } } });
+        }
+      });
+    } };
+  }, async () => "/workspace/fixture");
+  try {
+    const run = runCloudRelay({ prompt: "Read", environmentId: "answer-env", fullAccess: false, timeoutMs: 1000, transport, local: async () => { throw Error("unexpected fallback"); } });
+    expect(await run.done).toMatchObject({ status: "done", providerOpens: [{ urls: ["https://example.org"] }] });
+  } finally { if (previous === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = previous; }
+});
+test("a confirmed Cloud failure after an observed open cannot drop its evidence on fallback", async () => {
+  let local = 0;
+  const run = runCloudRelay({ prompt: "Read", environmentId: "answer-env", fullAccess: false, timeoutMs: 1000,
+    transport: async request => { request.onProviderOpen?.({ urls: [] }); throw new CloudFailure(true); },
+    local: async () => { local++; return localRun(); } });
+  expect(await run.done).toMatchObject({ status: "violation", answer: null }); expect(local).toBe(0);
+});
+
+test("Cloud rejects an unlisted model before opening a socket", async () => {
+  let connections = 0;
+  const transport = createCloudTransport(() => { connections++; throw new Error("must not connect"); });
+  await expect(transport({ model: "gpt-6.2-unknown", prompt: "task", environmentId: "repo-env", fullAccess: true,
+    timeoutMs: 1000, signal: new AbortController().signal })).rejects.toMatchObject({ confirmed: true });
+  expect(connections).toBe(0);
+});

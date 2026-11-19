@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Delegatus
+Comment=Your local workspace for coding agents
+Comment[uk]=Локальний простір для агентів програмування
+Keywords=AI;coding;agents;development;
+Keywords[uk]=ШІ;програмування;агенти;розробка;
+Exec=/usr/lib/delegatus-app/delegatus-app
+Icon=org.delegatus.Delegatus
+Terminal=false
+Categories=Development;
+StartupNotify=true
+StartupWMClass=org.delegatus.Delegatus

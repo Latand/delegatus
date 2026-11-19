@@ -10,6 +10,7 @@ import { descriptorSchema, terminalSchema, reportSchema, identitySchema, writeEn
 import { wakeRecordedChecks } from "./signal";
 import { captureProcessIdentity, processIdentityStatus, processIdentityMayRun, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { trackSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
 
 const bindingSchema = z.object({ project: z.string(), pipeline: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/), stage: z.string(), attempt: z.number().int().positive(),
   launch: z.string(), conversation: z.string(), session: z.string(), runtimeFence: z.string(),
@@ -93,11 +94,13 @@ const indexes = declaredIndexes([
 /** A keyed ledger in the existing state DB. History never enters active scans. */
 export class RecordedCheckStore {
   private db: Database;
+  private releaseMemoryTracking: (() => void) | undefined;
   constructor(readonly filename = statePath("state.sqlite"), create = true) {
     if (create) fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite) throw new Error("Recorded checks require Bun");
     this.db = new sqlite.Database(filename, create ? { create: true } : { readonly: true });
+    this.releaseMemoryTracking = trackSqliteMemory(this.db);
     try {
       this.db.exec("PRAGMA busy_timeout=0");
       if (create) {
@@ -127,11 +130,26 @@ export class RecordedCheckStore {
         indexes.install(this.db, path.dirname(filename));
         fs.chmodSync(filename, 0o600);
       }
-    } catch (error) { this.db.close(); throw error; }
+    } catch (error) { this.db.close(); this.releaseMemoryTracking(); this.releaseMemoryTracking = undefined; throw error; }
   }
   get(id: string): CheckRow | null {
     const row = this.db.query<{ value: string }, [string, string]>("SELECT value FROM recorded_checks WHERE id=? UNION ALL SELECT value FROM recorded_checks_history WHERE id=? LIMIT 1").get(id, id);
     return row ? rowSchema.parse(JSON.parse(row.value)) : null;
+  }
+  /** Exact creation identity, including acknowledged history. A missing or
+   * unparsable check supplies no binding; overflow cannot establish consensus. */
+  rootBindings(directory: string, identity: string) {
+    const roots = this.db.query<{ id: string }, [string, string]>(
+      "SELECT id FROM recorded_check_roots WHERE directory=? AND identity=? ORDER BY id LIMIT 33").all(directory, identity);
+    const bindings: Array<{ pipelineId: string; launchId: string }> = [];
+    for (const root of roots.slice(0, 32)) {
+      try {
+        const row = this.get(root.id);
+        if (row?.descriptor.manifest.roots.some(root => root.directory === directory && root.identity === identity))
+          bindings.push({ pipelineId: row.binding.pipeline, launchId: row.binding.launch });
+      } catch { /* Invalid rows bind nothing, just like a missing check. */ }
+    }
+    return { bindings, read: roots.length, overflow: roots.length > 32 };
   }
   byRequest(request: string): CheckRow | null {
     const row = this.db.query<{ value: string }, [string, string]>("SELECT value FROM recorded_checks WHERE request=? UNION ALL SELECT value FROM recorded_checks_history WHERE request=? LIMIT 1").get(request, request);
@@ -348,7 +366,7 @@ export class RecordedCheckStore {
       intent: state === "admitted" ? outcome : previous?.intent ?? null, outcome,
     }), directory, root.id);
   }
-  close() { this.db.close(); }
+  close() { this.db.close(); this.releaseMemoryTracking?.(); this.releaseMemoryTracking = undefined; }
 }
 
 type RecordedReader = { identity: string; store: RecordedCheckStore };
@@ -404,9 +422,9 @@ export const recordedRootHeld = (directory: string) => readRecorded(store => sto
 /** Called under attempt-sweep admission, with short CAS writes only. The
  * caller's lane revision is checked inside each write after lock admission. */
 export async function expireRecordedRootHolds(directory: string, pipelineId: string, now: number, current: () => boolean,
-  prepareRoots: (row: CheckRow) => () => boolean) {
+  prepareRoots: (row: CheckRow) => () => boolean, remaining?: () => number) {
   if (!recordedRootHeld(directory)) return;
-  const store = await openRecordedChecks();
+  const store = await openRecordedChecks(undefined, remaining?.());
   try {
     const rows = store.heldRootRuns(directory);
     if (rows.some(row => row.binding.pipeline !== pipelineId)) throw new Error("recorded root lane binding mismatch");
@@ -420,14 +438,14 @@ export async function expireRecordedRootHolds(directory: string, pipelineId: str
         resultRevision: row.result?.revision ?? 0, resultDigest: row.result?.digest ?? "", evidenceDigest: row.result?.evidenceDigest ?? "",
       } }, row.revision, () => {
         if (!current() || !rootsCurrent()) throw new Error("lane or root binding changed before retention acknowledgement");
-      });
+      }, remaining?.());
     }
   } finally { store.close(); }
 }
-export async function recordRootRetirement(directory: string, identity: string, journal: string, state: "admitted" | "completed" | "missing-unexplained", reason: string) {
+export async function recordRootRetirement(directory: string, identity: string, journal: string, state: "admitted" | "completed" | "missing-unexplained", reason: string, remaining?: () => number) {
   if (!readRecorded(store => store.hasRoot(directory), false)) return;
-  const store = await openRecordedChecks();
-  try { await waitForStateLock("recorded-check.retirement", () => stateLockAttempt("recorded-check.retirement", () => store.retirement(directory, identity, journal, state, reason))); }
+  const store = await openRecordedChecks(undefined, remaining?.());
+  try { await waitForStateLock("recorded-check.retirement", () => stateLockAttempt("recorded-check.retirement", () => store.retirement(directory, identity, journal, state, reason)), { waitMs: remaining?.() }); }
   finally { store.close(); }
 }
 export function openRecordedChecks(filename = statePath("state.sqlite"), waitMs?: number) {

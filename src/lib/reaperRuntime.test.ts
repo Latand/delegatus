@@ -10,6 +10,7 @@ import { setBoardFileForTests } from "@/lib/board/store";
 import type { Flow } from "@/lib/flows/types";
 import type { FileEntry } from "@/lib/types";
 import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
+import { readReaperStateDocument } from "@/lib/reaperState";
 
 import {
   killHeadlessReviewerIfMatches,
@@ -639,10 +640,7 @@ test("an external one-message session keeps the user-authored exemption", async 
       now,
     });
 
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBe(true);
     expect(state.scannedAt?.[pathname]).toBeUndefined();
   } finally {
@@ -693,10 +691,7 @@ test("a completed Viewer worker spawn discounts its single launch prompt", async
       now,
     });
 
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBeUndefined();
     expect(state.scannedAt?.[pathname]).toBeDefined();
   } finally {
@@ -739,10 +734,7 @@ test("authorship at the beginning of a transcript survives a tail larger than th
       now,
     });
 
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBe(true);
     expect(state.scannedAt?.[pathname]).toBeUndefined();
   } finally {
@@ -780,10 +772,7 @@ test("a clean authorship scan persists a path-scoped scannedAt stamp (issue #112
       now,
     });
 
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     const observedMtime = fs.statSync(pathname).mtimeMs / 1000;
     expect(state.userAuthoredPaths?.[pathname]).toBeUndefined();
     expect(state.scannedAt?.[pathname]).toBeDefined();
@@ -816,10 +805,7 @@ test("a non-host worker transcript still earns a clean scannedAt stamp (issue #1
       now,
     });
 
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBeUndefined();
     expect(state.scannedAt?.[pathname]).toBeDefined();
   } finally {
@@ -842,10 +828,7 @@ test("a non-host worker with an owner message is recorded user-authored (issue #
 
   try {
     await runReaperCycle({ registry, files: [runtimeFile(pathname, now / 1000 - 60 * 60)], now });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBe(true);
     expect(state.scannedAt?.[pathname]).toBeUndefined();
   } finally {
@@ -875,10 +858,7 @@ test("a native Claude subagent's automated assignment scans clean (issue #112 fi
 
   try {
     await runReaperCycle({ registry, files: [claudeSubagentFile(pathname, now / 1000 - 60 * 60)], now });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBeUndefined();
     expect(state.scannedAt?.[pathname]).toBeDefined();
   } finally {
@@ -898,9 +878,7 @@ test("an owner message on a native Claude subagent still trips authorship (issue
 
   try {
     await runReaperCycle({ registry, files: [claudeSubagentFile(pathname, now / 1000 - 30 * 60)], now });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBe(true);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -925,10 +903,7 @@ test("a native Codex subagent's automated assignment scans clean (issue #112 fin
 
   try {
     await runReaperCycle({ registry, files: [codexFile], now });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBeUndefined();
     expect(state.scannedAt?.[pathname]).toBeDefined();
   } finally {
@@ -966,10 +941,7 @@ test("a headless reviewer's automated startup prompt alone is not owner-authored
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
     });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBeUndefined();
     expect(state.scannedAt?.[pathname]).toBeDefined();
   } finally {
@@ -1010,10 +982,7 @@ test("a genuine owner message on top of a reviewer's startup prompt trips the ex
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
     });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBe(true);
     expect(state.scannedAt?.[pathname]).toBeUndefined();
   } finally {
@@ -1091,10 +1060,7 @@ test("a headless reviewer's automated startup prompt is not owner authorship (is
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
     });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[reviewerPath]).toBeUndefined();
     expect(state.scannedAt?.[reviewerPath]).toBeDefined();
   } finally {
@@ -1121,9 +1087,7 @@ test("a genuine owner message on a headless reviewer still trips authorship (iss
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
     });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[reviewerPath]).toBe(true);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -1153,10 +1117,7 @@ test("a heuristically-claimed reviewer path gets no allowance and keeps authorsh
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
     });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[ownerPath]).toBe(true);
     expect(state.scannedAt?.[ownerPath]).toBeUndefined();
   } finally {
@@ -1206,10 +1167,7 @@ test("a pane reviewer with an owner follow-up keeps authorship (no double allowa
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
     });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[reviewerPath]).toBe(true);
     expect(state.scannedAt?.[reviewerPath]).toBeUndefined();
   } finally {
@@ -1343,10 +1301,7 @@ test("Viewer flow deliveries are discounted from transcript authorship", async (
       now,
       actuation: { loadFlows: () => [flow], now: () => now },
     });
-    const state = JSON.parse(fs.readFileSync(path.join(directory, "reaper-state.json"), "utf8")) as {
-      scannedAt?: Record<string, number>;
-      userAuthoredPaths?: Record<string, true>;
-    };
+    const state = readReaperStateDocument();
     expect(state.userAuthoredPaths?.[pathname]).toBeUndefined();
     expect(state.scannedAt?.[pathname]).toBeDefined();
   } finally {

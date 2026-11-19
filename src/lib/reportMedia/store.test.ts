@@ -17,7 +17,7 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const OTHER_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
 const DAY = 86_400_000;
 const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "llv-report-media-")));
-const saved = { home: process.env.HOME, state: process.env.LLV_STATE_DIR, roots: process.env.LLV_EVIDENCE_ROOTS, temp: process.env.LLV_REPORT_MEDIA_TEMP_ROOTS };
+const saved = { home: process.env.HOME, cache: process.env.XDG_CACHE_HOME, state: process.env.LLV_STATE_DIR, roots: process.env.LLV_EVIDENCE_ROOTS, temp: process.env.LLV_REPORT_MEDIA_TEMP_ROOTS };
 let checkout = "";
 let elsewhere = "";
 let temp = "";
@@ -34,12 +34,13 @@ beforeEach(() => {
      told which one stands for it. */
   process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = temp;
   process.env.HOME = path.join(root, "home");
+  process.env.XDG_CACHE_HOME = path.join(root, "cache");
   process.env.LLV_STATE_DIR = state;
   process.env.LLV_EVIDENCE_ROOTS = path.join(state, "evidence");
   known([checkout]);
 });
 afterEach(() => {
-  for (const [name, value] of [["HOME", saved.home], ["LLV_STATE_DIR", saved.state], ["LLV_EVIDENCE_ROOTS", saved.roots], ["LLV_REPORT_MEDIA_TEMP_ROOTS", saved.temp]] as const) {
+  for (const [name, value] of [["HOME", saved.home], ["XDG_CACHE_HOME", saved.cache], ["LLV_STATE_DIR", saved.state], ["LLV_EVIDENCE_ROOTS", saved.roots], ["LLV_REPORT_MEDIA_TEMP_ROOTS", saved.temp]] as const) {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
 });
@@ -70,6 +71,21 @@ async function served(file: string): Promise<{ status: number; bytes: Buffer }> 
 
 const limits = (over: Partial<ReportMediaLimits> = {}): ReportMediaLimits => ({ ...reportMediaLimits({}), ...over });
 const storedFiles = () => fs.readdirSync(reportMediaRoot()).filter((name) => /^[a-f0-9]{64}\./.test(name));
+
+for (const spelling of ["hidden", "alias", "temp-folder", "temp-alias", "served-in-temp"]) {
+  test(`hidden path policy never keeps picture ${spelling}`, async () => {
+    const hidden = picture(".hidden-kept.png");
+    const alias = path.join(checkout, "alias.png");
+    fs.symlinkSync(hidden, alias);
+    const tempHidden = picture("x/.cache/p.png", PNG, temp);
+    const tempAlias = path.join(temp, "alias.png");
+    fs.symlinkSync(tempHidden, tempAlias);
+    if (spelling === "served-in-temp") process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = `${temp}:${checkout}`;
+    const paths: Record<string, string> = { hidden, alias, "temp-folder": tempHidden, "temp-alias": tempAlias, "served-in-temp": hidden };
+    expect(await keepReportPictures([paths[spelling]!], { now: 1000, projectOf: () => null })).toEqual([]);
+    expect(reportMediaRows()).toEqual([]);
+  });
+}
 
 test("a picture a report names still loads by its checkout path after the checkout is removed", async () => {
   const shot = picture(".artifacts/hint/390-uk.png");
@@ -280,3 +296,27 @@ test("the store is read for rasters and is no evidence root agents are sent to",
   expect(evidenceRoots()).toEqual([]);
   expect(lexicalAllowedRoots().evidence).toEqual([reportMediaRoot()]);
 });
+
+for (const proof of [undefined, 1]) {
+  test(`legacy copy proof ${proof ?? "absent"} needs a fresh admitted copy before source proof is recorded`, async () => {
+    const shot = picture("public-picture.png");
+    await keepReportPictures([shot], { now: 1000, projectOf: () => null });
+    const index = path.join(reportMediaRoot(), "index.json");
+    const rows = JSON.parse(fs.readFileSync(index, "utf8"));
+    expect(rows[0].hiddenPathPolicy).toBe(2);
+    if (proof === undefined) delete rows[0].hiddenPathPolicy;
+    else rows[0].hiddenPathPolicy = proof;
+    // Matching size and mtime cannot certify old bytes after an alias retarget.
+    const legacyCopy = path.join(reportMediaRoot(), rows[0].file);
+    fs.writeFileSync(legacyCopy, OTHER_PNG);
+    fs.writeFileSync(index, JSON.stringify(rows));
+    expect(keptReportPicture(shot)).toBeNull();
+    expect(await keepReportPictures([shot], { now: 2000, projectOf: () => null })).toEqual([shot]);
+    expect(reportMediaRows()[0]!.hiddenPathPolicy).toBe(2);
+    fs.unlinkSync(shot);
+    const res = await served(shot);
+    expect(res.status).toBe(200);
+    expect(res.bytes).toEqual(PNG);
+    expect((await served(keptReportPicture(shot)!)).bytes).toEqual(PNG);
+  });
+}

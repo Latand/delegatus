@@ -35,12 +35,37 @@ function mountTable(file: string) {
   }).sort((a, b) => b.point.length - a.point.length);
 }
 
+/** Environment names Delegatus gives the processes it starts. */
+const DELEGATUS_ENVIRONMENT = /^(?:LLV|DELEGATUS)_/;
+/** PF_KTHREAD in the flags field of /proc/<pid>/stat. */
+const KERNEL_THREAD = 0x200000;
+
 /** An inventory records uncertainty instead of discarding every keep decision.
  * Missing evidence has installation-wide scope: a different UID or a private
- * ancestor cannot exclude files inherited before a credential change. */
+ * ancestor cannot exclude files inherited before a credential change.
+ *
+ * A process whose links procfs refuses to show (EACCES or EPERM: another
+ * user, or a nondumpable process after a credential change) is judged after
+ * the inventory from what procfs shows every user: its stat, cgroup and
+ * command line. It keeps that scope unless that evidence rules out every way
+ * it can hold a release. A process holds a release because it opened it, or
+ * because it inherited a working directory, file or mapping from the process
+ * that forked it. Delegatus starts every process that runs from a release,
+ * and those processes are readable. So a refused process is ruled out when it
+ * is a kernel thread, or when its command line is readable and names nothing
+ * under the root, and no ancestor is a Delegatus process (a readable process
+ * with a Delegatus environment or with a path under the root). A process, or
+ * a refused ancestor, whose session leader is neither itself nor one of its
+ * ancestors may have lost the parent that forked it; it is ruled out only
+ * when it also shares no cgroup with a Delegatus process it did not start,
+ * because an orphan stays in its parent's cgroup. A broken ancestor chain
+ * keeps it. */
 export function retentionProcessScan(root: string, procRoot = "/proc", only?: number): RetentionScan {
   const processes: ProcessScan["processes"] = [];
   const uncertain: RetentionUncertainty[] = [];
+  const refused: { pid: number; reason: string }[] = [];
+  const readable = new Set<number>();
+  const delegatus = new Set<number>();
   const ownNamespace = fs.readlinkSync(path.join(procRoot, "self/ns/mnt"));
   if (!ownNamespace) throw new Error("missing retention mount namespace");
   const physical = new Map<string, string>();
@@ -57,6 +82,7 @@ export function retentionProcessScan(root: string, procRoot = "/proc", only?: nu
     const base = path.join(procRoot, name);
     const paths: string[] = []; const references: string[] = [];
     let namespace = ownNamespace; let operation = "stat";
+    let marked = false; let complete = false;
     const read = (file: string) => { operation = file; return fs.readFileSync(path.join(base, file), "utf8"); };
     const link = (file: string) => { operation = file; return fs.readlinkSync(path.join(base, file)); };
     try {
@@ -89,6 +115,7 @@ export function retentionProcessScan(root: string, procRoot = "/proc", only?: nu
       for (const pair of environment.split("\0")) {
         const equals = pair.indexOf("=");
         if (equals > 0) { const value = pair.slice(equals + 1); references.push(value); if (value.startsWith("/")) paths.push(value); }
+        if (equals > 0 && DELEGATUS_ENVIRONMENT.test(pair)) marked = true;
       }
       if (namespace !== ownNamespace) {
         operation = "mountinfo";
@@ -112,17 +139,111 @@ export function retentionProcessScan(root: string, procRoot = "/proc", only?: nu
       const after = read("stat");
       if (fields(after)[19] !== fields(before)[19]) { operation = "identity"; throw new Error("process identity changed"); }
       if (exited(after)) continue;
+      complete = true;
     } catch (error) {
       if (!fs.existsSync(base)) continue;
       try { if (exited(fs.readFileSync(path.join(base, "stat"), "utf8"))) continue; }
       catch { if (!fs.existsSync(base)) continue; }
-      uncertain.push({ pid: Number(name), reason: `${operation}:${(error as NodeJS.ErrnoException).code ?? "unavailable"}`, roots: [root] });
+      const code = (error as NodeJS.ErrnoException).code;
+      const reason = `${operation}:${code ?? "unavailable"}`;
+      // A single-process observation has no inventory to judge lineage against.
+      if (only === undefined && (code === "EACCES" || code === "EPERM")) refused.push({ pid: Number(name), reason });
+      else uncertain.push({ pid: Number(name), reason, roots: [root] });
     }
     const held = paths.filter(value => value.startsWith("/") && relevant(value));
     const refs = references.filter(value => value.includes(root));
     if (held.length || refs.length) processes.push({ pid: Number(name), namespace, stamped: false, paths: held, references: refs });
+    if (complete) {
+      readable.add(Number(name));
+      if (marked || held.length || refs.length) delegatus.add(Number(name));
+    }
+  }
+  if (refused.length) {
+    const mayHold = refusedProcessMayHold(procRoot, readable, delegatus,
+      value => value.includes(root) || value.startsWith("/") && relevant(value));
+    for (const row of refused) if (mayHold(row.pid)) uncertain.push({ ...row, roots: [root] });
   }
   return { ownNamespace, processes, complete: true, uncertain };
+}
+
+type Lineage = { ppid: number; session: number; start: number; flags: number };
+
+/** The verdict for a process procfs refused to show, from world-readable
+ * evidence only. True keeps installation-wide uncertainty. */
+function refusedProcessMayHold(procRoot: string, readable: ReadonlySet<number>, delegatus: ReadonlySet<number>, names: (value: string) => boolean) {
+  const file = (pid: number, name: string) => fs.readFileSync(path.join(procRoot, String(pid), name), "utf8");
+  const lineage = new Map<number, Lineage | null>();
+  const observe = (pid: number): Lineage | null => {
+    if (lineage.has(pid)) return lineage.get(pid)!;
+    let row: Lineage | null = null;
+    try {
+      const values = fields(file(pid, "stat"));
+      const ppid = Number(values[1]), session = Number(values[3]), start = Number(values[19]), flags = Number(values[6]);
+      if ([ppid, session, flags].every(value => Number.isSafeInteger(value) && value >= 0) && Number.isFinite(start)) row = { ppid, session, start, flags };
+    } catch { /* Exited or hidden: callers treat absence as a broken chain. */ }
+    lineage.set(pid, row);
+    return row;
+  };
+  const cgroups = new Map<number, string | null>();
+  const cgroup = (pid: number) => {
+    if (!cgroups.has(pid)) {
+      let value: string | null = null;
+      try { value = file(pid, "cgroup") || null; } catch { /* Unknown membership ties, below. */ }
+      cgroups.set(pid, value);
+    }
+    return cgroups.get(pid)!;
+  };
+  /** Strict ancestors, nearest first; null when the chain cannot be proven. */
+  const chains = new Map<number, number[] | null>();
+  const ancestry = (pid: number): number[] | null => {
+    if (chains.has(pid)) return chains.get(pid)!;
+    const chain: number[] = [];
+    let child = observe(pid);
+    let result: number[] | null = child ? chain : null;
+    while (child && child.ppid > 0) {
+      const parent = observe(child.ppid);
+      // A parent younger than its child is a reused PID.
+      if (!parent || parent.start > child.start || chain.includes(child.ppid) || chain.length > 4096) { result = null; break; }
+      chain.push(child.ppid);
+      child = parent;
+    }
+    chains.set(pid, result);
+    return result;
+  };
+  let groups: Map<string, number[]> | undefined;
+  /** A process lost the parent that forked it, as far as procfs can tell,
+   * when its session leader is neither itself nor one of its ancestors. Such
+   * an orphan is tied to the cgroup it inherited: it shares one with a
+   * Delegatus process it did not start. A login's own processes (sshd leads
+   * its session, as does each service) are judged by their ancestry alone. */
+  const orphanInDelegatusGroup = (pid: number) => {
+    const own = observe(pid);
+    const chain = ancestry(pid);
+    if (!own || !chain) return true;
+    if (own.session === pid || chain.includes(own.session)) return false;
+    const group = cgroup(pid);
+    if (!group) return true;
+    if (!groups) {
+      groups = new Map();
+      for (const member of delegatus) {
+        const key = cgroup(member);
+        if (key) groups.set(key, [...groups.get(key) ?? [], member]);
+      }
+    }
+    return (groups.get(group) ?? []).some(other => other !== pid && !(ancestry(other)?.includes(pid) ?? false));
+  };
+  return (pid: number) => {
+    const own = observe(pid);
+    if (!own) return fs.existsSync(path.join(procRoot, String(pid)));
+    if ((own.flags & KERNEL_THREAD) !== 0) return false;
+    let argv: string[];
+    try { argv = file(pid, "cmdline").split("\0"); }
+    catch { return true; }
+    if (argv.some(names)) return true;
+    const chain = ancestry(pid);
+    if (!chain || orphanInDelegatusGroup(pid)) return true;
+    return chain.some(ancestor => delegatus.has(ancestor) || !readable.has(ancestor) && orphanInDelegatusGroup(ancestor));
+  };
 }
 
 /** While retention removes a tree it seals its own /proc links, so a helper

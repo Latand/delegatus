@@ -5,6 +5,11 @@ import path from "node:path";
 
 import type { FileEntry } from "@/lib/types";
 
+/** The stored catalog as text, to compare one state with a later one. */
+function storedCatalogText(catalogPath: string): string {
+  return JSON.stringify(projectCatalogDocumentForTests(catalogPath));
+}
+
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-files-real-scan-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
 const previousCodexHome = process.env.LLV_CODEX_HOME;
@@ -28,6 +33,7 @@ const { listFilesWithProjectCatalog } = await import("@/lib/scanner");
 const { ROOTS } = await import("@/lib/scanner/roots");
 const { cachedFileScan, currentFileScan, persistedFileScanSnapshot, resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests } = await import("@/lib/scanner/scanCache");
 const { linkEntries } = await import("@/lib/scanner/links");
+const { projectCatalogDocumentForTests } = await import("@/lib/scanner/projectCatalogStore");
 const { activityVerdict, transcriptTurnResult } = await import("@/lib/scanner/activity");
 const { entryEffort } = await import("@/lib/scanner/effort");
 const { entryModels } = await import("@/lib/scanner/model");
@@ -78,7 +84,6 @@ test("real cached scans repair private state modes under umask 000", async () =>
   const scanSnapshotPath = path.join(privateStateDir, "files-scan-snapshot.json");
   const originalRename = fs.renameSync;
   const previousUmask = process.umask(0);
-  const projectTemporaryModes: number[] = [];
   const snapshotTemporaryModes: number[] = [];
   try {
     process.env.LLV_STATE_DIR = privateStateDir;
@@ -89,7 +94,6 @@ test("real cached scans repair private state modes under umask 000", async () =>
     fs.chmodSync(projectCatalogPath, 0o666);
     fs.chmodSync(scanSnapshotPath, 0o666);
     fs.renameSync = ((source: fs.PathLike, target: fs.PathLike) => {
-      if (target === projectCatalogPath) projectTemporaryModes.push(fs.statSync(source).mode & 0o777);
       if (target === scanSnapshotPath) snapshotTemporaryModes.push(fs.statSync(source).mode & 0o777);
       return originalRename(source, target);
     }) as typeof fs.renameSync;
@@ -100,9 +104,10 @@ test("real cached scans repair private state modes under umask 000", async () =>
 
     expect(scan.snapshot.complete).toBe(true);
     expect(fs.statSync(privateStateDir).mode & 0o777).toBe(0o700);
-    expect(projectTemporaryModes).toEqual([0o600]);
     expect(snapshotTemporaryModes).toEqual([0o600]);
-    expect(fs.statSync(projectCatalogPath).mode & 0o777).toBe(0o600);
+    /* The permissive legacy catalog is a cache: imported, then deleted. */
+    expect(fs.existsSync(projectCatalogPath)).toBe(false);
+    expect(fs.statSync(path.join(privateStateDir, "state.sqlite")).mode & 0o777).toBe(0o600);
     expect(fs.statSync(scanSnapshotPath).mode & 0o777).toBe(0o600);
   } finally {
     fs.renameSync = originalRename;
@@ -1214,7 +1219,7 @@ test("task twin EIO preserves canonical files generation and durable snapshots u
     const snapshotPath = path.join(testStateDir, "files-scan-snapshot.json");
     const indexPath = path.join(testStateDir, "project-catalog.json");
     const canonicalSnapshot = fs.readFileSync(snapshotPath);
-    const canonicalIndex = fs.readFileSync(indexPath);
+    const canonicalIndex = storedCatalogText(indexPath);
 
     fs.writeFileSync(taskPath, "finished\n");
     fs.promises.access = (async (pathname, mode) => {
@@ -1231,7 +1236,7 @@ test("task twin EIO preserves canonical files generation and durable snapshots u
     expect(stale.snapshot.files.map((entry) => entry.path)).not.toContain(taskPath);
     await Bun.sleep(50);
     expect(fs.readFileSync(snapshotPath)).toEqual(canonicalSnapshot);
-    expect(fs.readFileSync(indexPath)).toEqual(canonicalIndex);
+    expect(storedCatalogText(indexPath)).toEqual(canonicalIndex);
 
     fs.promises.access = originalAccess;
     let recovered = await cachedFileScan();
@@ -1270,7 +1275,7 @@ test("transcript metadata EIO after rewrite retains canonical snapshots until co
   const snapshotPath = path.join(process.env.LLV_STATE_DIR!, "files-scan-snapshot.json");
   const indexPath = path.join(process.env.LLV_STATE_DIR!, "project-catalog.json");
   const canonicalSnapshot = fs.readFileSync(snapshotPath);
-  const canonicalIndex = fs.readFileSync(indexPath);
+  const canonicalIndex = storedCatalogText(indexPath);
 
   fs.writeFileSync(transcript, bravo);
   fs.utimesSync(transcript, 1_700_000_001, 1_700_000_001);
@@ -1296,7 +1301,7 @@ test("transcript metadata EIO after rewrite retains canonical snapshots until co
   }
 
   expect(fs.readFileSync(snapshotPath)).toEqual(canonicalSnapshot);
-  expect(fs.readFileSync(indexPath)).toEqual(canonicalIndex);
+  expect(storedCatalogText(indexPath)).toEqual(canonicalIndex);
   let recovered = await cachedFileScan();
   for (let attempt = 0; attempt < 100; attempt += 1) {
     recovered = await cachedFileScan(undefined, undefined, Date.now(), undefined, targetGeneration);
@@ -1306,7 +1311,7 @@ test("transcript metadata EIO after rewrite retains canonical snapshots until co
   }
   expect(recovered.snapshot.files.find((entry) => entry.path === transcript)?.cwd).toBe("/repo/bravo");
   expect(fs.readFileSync(snapshotPath)).not.toEqual(canonicalSnapshot);
-  expect(fs.readFileSync(indexPath)).not.toEqual(canonicalIndex);
+  expect(storedCatalogText(indexPath)).not.toEqual(canonicalIndex);
   setFileCatalogMembershipProbeForTests(null);
 });
 
@@ -1326,7 +1331,7 @@ test("sidecar metadata EIO after rewrite retains canonical snapshots until conve
   const snapshotPath = path.join(process.env.LLV_STATE_DIR!, "files-scan-snapshot.json");
   const indexPath = path.join(process.env.LLV_STATE_DIR!, "project-catalog.json");
   const canonicalSnapshot = fs.readFileSync(snapshotPath);
-  const canonicalIndex = fs.readFileSync(indexPath);
+  const canonicalIndex = storedCatalogText(indexPath);
 
   fs.writeFileSync(sidecar, JSON.stringify({ description: "Agent bravo" }));
   fs.utimesSync(sidecar, 1_700_000_001, 1_700_000_001);
@@ -1352,7 +1357,7 @@ test("sidecar metadata EIO after rewrite retains canonical snapshots until conve
   }
 
   expect(fs.readFileSync(snapshotPath)).toEqual(canonicalSnapshot);
-  expect(fs.readFileSync(indexPath)).toEqual(canonicalIndex);
+  expect(storedCatalogText(indexPath)).toEqual(canonicalIndex);
   let recovered = await cachedFileScan();
   for (let attempt = 0; attempt < 100; attempt += 1) {
     recovered = await cachedFileScan(undefined, undefined, Date.now(), undefined, targetGeneration);
@@ -1362,7 +1367,7 @@ test("sidecar metadata EIO after rewrite retains canonical snapshots until conve
   }
   expect(recovered.snapshot.files.find((entry) => entry.path === transcript)?.title).toBe("Agent bravo");
   expect(fs.readFileSync(snapshotPath)).not.toEqual(canonicalSnapshot);
-  expect(fs.readFileSync(indexPath)).not.toEqual(canonicalIndex);
+  expect(storedCatalogText(indexPath)).not.toEqual(canonicalIndex);
   setFileCatalogMembershipProbeForTests(null);
 });
 
@@ -1376,7 +1381,7 @@ test("a confirmed ENOENT deletion remains a complete inventory change", async ()
   const after = await listFilesWithProjectCatalog(undefined, { persist: false, persistIndex: true });
   expect(after.complete).toBe(true);
   expect(after.files.map((entry) => entry.path)).not.toContain(deletedPath);
-  const index = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "project-catalog.json"), "utf8"));
+  const index = projectCatalogDocumentForTests(path.join(process.env.LLV_STATE_DIR!, "project-catalog.json"))!;
   expect(index.files[deletedPath]).toBeUndefined();
 });
 

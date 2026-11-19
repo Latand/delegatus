@@ -1,15 +1,10 @@
 import { expect, test } from "bun:test";
-import { ensureStagePullRequest, inspectPullRequestText } from "./stagePullRequest";
-import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
-import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+import { ensureStagePullRequest } from "./stagePullRequest";
 import type { ExecPort } from "@/lib/workflows/provision";
-import { emptyRepositoryEntry, forgeCacheView, readForgeCache, updateForgeCache } from "@/lib/forge/cache";
-import { resolvePipelineLink } from "./linkSource";
-import { resolveDeliveryRemote } from "./git";
-import { fs, os, path, realExec, engineModule, tickPipelines, loadPipelines, savePipelines, finishReported, realWorktreeLane } from "./engine.fixture";
+import { pipelineArtifactsDir } from "./store";
+import { fs, os, path, realExec, engineModule, tickPipelines, loadPipelines, savePipelines, finishReported } from "./engine.fixture";
+import { REMOTE, isBodyPatch, fixture, publishedHeadFixture } from "./stagePullRequest.fixture";
 
-const REMOTE = "https://github.com/example/widgets.git";
-const isBodyPatch = (args: string[]) => args[0] === "api" && args[1] === "-X" && args[2] === "PATCH";
 test.each(["publisher", "conflicting"])("native stage fixtures choose their own Git identity in the %s environment", async (mode) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-git-environment-"));
   try {
@@ -45,626 +40,50 @@ test.each(["publisher", "conflicting"])("native stage fixtures choose their own 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 60_000);
 
-async function fixture(task?: string, reviewBudget = false) {
-  const f = await realWorktreeLane("stage-pr", [
-    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
-    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null,
-      ...(reviewBudget ? { onFail: { to: "build", maxRounds: 1 } } : {}) },
-  ], "remote-branch", false, false, { task: task ?? "stage-pr" });
-  const p = loadPipelines().find(p => p.id === f.id)!;
-  p.delivery!.target.remote = REMOTE; savePipelines([p]);
-  const calls: string[][] = [];
-  let exists = false, refuse = false, loseResponse = false;
-  let expectedBody = "Stage implementation summary.";
-  let body = "";
-  let prShape: "fork" | "head" | "ambiguous" | "closed" | "merged" | "branch" | "number" | undefined;
-  let race: { call: number; kind: "pause" | "release" } | undefined;
-  f.h.ports.exec = async (command, args, cwd, env, options) => {
-    // The fake forge's delivery repository is the native fixture origin.
-    if (command === "git" && args[0] === "remote" && args[1] === "get-url" && args.at(-1) === REMOTE)
-      return { code: 0, stdout: `${f.origin}\n`, stderr: "" };
-    if (command === "gh") {
-      // Provenance observations are independent of the delivery guarantee.
-      // Only count the controller's exact PR lookup/create/patch awaits here.
-      if (args[1] !== "create" && args[1] !== "edit" && !isBodyPatch(args) && !args.some(arg => arg.includes("isCrossRepository")))
-        return { code: 1, stdout: "", stderr: "fixture has no observed pull request" };
-      calls.push(args);
-      if (race?.call === calls.length) {
-        const current = loadPipelines().find(p => p.id === f.id)!;
-        if (race.kind === "pause") { current.state = "paused"; current.pausedState = "running"; }
-        else current.delivery!.active = false;
-        savePipelines([current]);
-      }
-      if (args[0] === "pr" && (args[1] === "list" || args[1] === "view")) {
-        const row = { body, title: p.task, number: prShape === "number" ? 18 : 17, headRefName: prShape === "branch" ? "other-head" : p.branch, baseRefName: "main", state: prShape === "closed" ? "CLOSED" : prShape === "merged" ? "MERGED" : "OPEN", isCrossRepository: prShape === "fork",
-          headRefOid: prShape === "head" ? "f".repeat(40) : await f.git(f.origin, "rev-parse", `refs/heads/${p.branch}`) };
-        if (args[1] === "view") return { code: exists ? 0 : 1, stdout: exists ? JSON.stringify(row) : "", stderr: "" };
-        const base = args.indexOf("--base");
-        return { code: 0, stdout: JSON.stringify(exists && (base < 0 || args[base + 1] === row.baseRefName) && row.state === "OPEN"
-          ? (prShape === "ambiguous" ? [row, { ...row, number: 18 }] : [row]) : []), stderr: "" };
-      }
-      if (args[0] === "pr" && args[1] === "create") {
-        if (refuse) return { code: 1, stdout: "", stderr: "forge refused" };
-        expect(fs.readFileSync(args[args.indexOf("--body-file") + 1]!, "utf8")).toBe(expectedBody);
-        body = expectedBody;
-        exists = true;
-        return loseResponse ? { code: null, stdout: "", stderr: "response lost" } : { code: 0, stdout: "https://github.com/example/widgets/pull/17\n", stderr: "" };
-      }
-      if (args[0] === "pr" && args[1] === "edit")
-        return { code: 1, stdout: "", stderr: "GraphQL: Projects (classic) is being deprecated (repository.pullRequest.projectCards)" };
-      if (isBodyPatch(args)) {
-        expect(args[3]).toBe("repos/example/widgets/pulls/17");
-        expect(env).toEqual(engineForgeWriteEnv());
-        const field = args[args.indexOf("-F") + 1]!;
-        expect(field.startsWith("body=@")).toBe(true);
-        if (refuse) return { code: 1, stdout: "", stderr: "forge refused" };
-        body = fs.readFileSync(field.slice("body=@".length), "utf8");
-        return { code: loseResponse ? null : 0, stdout: "", stderr: "" };
-      }
-      throw new Error(`unexpected forge call: ${args.join(" ")}`);
-    }
-    return realExec(command, args.map(a => a === REMOTE ? f.origin : a), cwd, env, options);
-  };
-  const finish = async (summary = "Stage implementation summary.", n = 1, verdict: "pass" | "fail" = "pass") => {
-    f.h.setConversationActive(false);
-    await engineModule.reportStageCompletion({ verdict, summary,
-      ...(verdict === "fail" ? { findings: [{ severity: "P2" as const, text: "Update the checks." }] } : {}) },
-    { kind: "agent", role: n === 2 ? "reviewer" : "builder", conversationId: `conversation_stage_${n}` }, f.h.ports);
-    await tickPipelines([finishReported(f.h, `/codex/stage-${n}.jsonl`, verdict, summary)], f.h.ports);
-    return loadPipelines().find(p => p.id === f.id)!;
-  };
-  const commit = async () => {
-    await f.git(f.worktree, "commit", "--allow-empty", "-m", "stage output");
-  };
-  return { ...f, calls, finish, commit, body: () => body, setBody: (value: string) => { body = value; }, setExpectedBody: (body: string) => { expectedBody = body; }, setPrShape: (shape: typeof prShape) => { exists = true; prShape = shape; }, setRace: (call: number, kind: "pause" | "release") => { race = { call, kind }; }, setMissing: () => { exists = false; }, setExisting: () => { exists = true; }, setRefused: (value = true) => { refuse = value; }, setLost: () => { loseResponse = true; },
-    link: (successor = true) => {
-      const current = loadPipelines().find(lane => lane.id === f.id)!;
-      current.delivery!.target.pr = 17;
-      if (successor) current.baseBranch = p.branch;
-      savePipelines([current]); exists = true;
-    },
-    close: () => { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); } };
-}
 
-const originalBudgetBody = "Producer implementation notes. 7 tests passed; independent review to come.\n\n---\nGenerated with Delegatus.";
-const fixSummary = "Fixed the checks. 9 tests passed; typecheck passed.";
-
-async function finalBudgetFixFixture() {
-  const f = await fixture(undefined, true);
+test.each([undefined, "Keep GitHub publications in English"])("PR creation derives or overrides its title without changing the board (%s)", async override => {
+  const f = await fixture("Виправити публікацію результатів");
   try {
-    f.setExpectedBody(originalBudgetBody);
+    const pipeline = loadPipelines().find(p => p.id === f.id)!;
+    pipeline.prTitle = override;
+    savePipelines([pipeline]);
     await f.commit();
-    expect((await f.finish(originalBudgetBody)).cursor?.stageId).toBe("review");
-    await tickPipelines([], f.h.ports);
-    expect((await f.finish("Checks need updating.", 2, "fail")).cursor?.stageId).toBe("build");
-    await tickPipelines([], f.h.ports);
-    await f.commit();
-    return f;
-  } catch (error) { f.close(); throw error; }
-}
-
-for (const lost of [false, true]) test(`the final budget fix refreshes the PR head and reported checks before the terminal re-check (lost reply: ${lost})`, async () => {
-  const f = await finalBudgetFixFixture();
-  try {
-    if (lost) f.setLost();
-    const head = await f.git(f.worktree, "rev-parse", "HEAD");
-    const p = await f.finish(fixSummary, 3);
-    expect(p.state, p.stateDetail ?? undefined).toBe("running");
-    expect(p.cursor?.activatedBy?.budgetRecheck).toBe(true);
-    expect(p.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(1);
-    expect(f.body()).toContain(head);
-    expect(f.body()).toContain(fixSummary);
-    expect(f.body()).toContain("Last fix was not re-reviewed");
-    expect(f.body().endsWith(originalBudgetBody)).toBe(true);
-    expect(f.body()).toContain("supersedes earlier head, checks and review-status statements");
-    expect(f.calls.filter(isBodyPatch)).toHaveLength(1);
-    // Restart from the durable lane and the forge's observed body. Replaying
-    // settlement must keep exactly one update and must not edit again.
-    const observed = { number: 17, headRefName: p.branch, baseRefName: "main", state: "OPEN",
-      isCrossRepository: false, headRefOid: head, body: f.body(), title: p.task };
-    const replay = await realExec(process.execPath, ["-e", `
-      const { loadPipelines } = await import("@/lib/pipelines/store");
-      const { ensureStagePullRequest } = await import("@/lib/pipelines/stagePullRequest");
-      const lane = loadPipelines().find(lane => lane.id === ${JSON.stringify(f.id)});
-      const attempt = lane.runs.find(run => run.stageId === "build").attempts.at(-1);
-      let writes = 0;
-      const result = await ensureStagePullRequest(lane, attempt, async (command, args) => {
-        if (command !== "gh" || args[1] !== "view") writes++;
-        return { code: 0, stdout: ${JSON.stringify(JSON.stringify(observed))}, stderr: "" };
-      });
-      console.log(JSON.stringify({ result, writes }));
-    `], process.cwd(), undefined, { timeoutMs: 15_000 });
-    expect(replay.code, replay.stderr).toBe(0);
-    expect(JSON.parse(replay.stdout.trim())).toEqual({ result: { ok: true }, writes: 0 });
-  } finally { f.close(); }
-});
-
-test("the final budget PR refresh uses REST when GraphQL Projects classic is unavailable", async () => {
-  const f = await finalBudgetFixFixture();
-  try {
-    const summary = 'Перевірено résumé: "quoted", \\backslash, $value, `code`, {owner}, {repo}, {branch}.';
-    const original = "Перевірено résumé & details.\n".repeat(1_000) + originalBudgetBody;
-    f.setBody(original);
-    const head = await f.git(f.worktree, "rev-parse", "HEAD");
-    const p = await f.finish(summary, 3);
-    expect(p.state, p.stateDetail ?? undefined).toBe("running");
-    expect(p.cursor?.activatedBy?.budgetRecheck).toBe(true);
-    expect(f.body()).toBe(`## Latest pipeline result\n\nHead: \`${head}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
-      + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${summary}\n\n---\n\n${original}`);
-    expect(f.calls.filter(isBodyPatch)).toHaveLength(1);
-    expect(f.calls.some(args => args[0] === "pr" && args[1] === "edit")).toBe(false);
-    expect(f.calls.flat().some(arg => arg.includes(summary))).toBe(false);
-  } finally { f.close(); }
-});
-
-test.each(["exit", "throw", "unconfirmed"] as const)("a final budget PR body refresh failure is reported on the lane (%s)", async failure => {
-  const f = await finalBudgetFixFixture();
-  try {
-    const exec = f.h.ports.exec;
-    f.h.ports.exec = async (...input) => {
-      if (input[0] === "gh" && isBodyPatch(input[1])) {
-        if (failure === "throw") throw new Error("forge unavailable");
-        return { code: failure === "exit" ? 1 : 0, stdout: "", stderr: "forge refused" };
-      }
-      return exec(...input);
-    };
-    const p = await f.finish(fixSummary, 3);
-    expect(p.state).toBe("needs_decision");
-    const error = "the delivery pull request body refresh could not be verified; the stage cannot pass without it";
-    expect(p.stateDetail).toContain(error);
-    expect(p.runs.find(run => run.stageId === "build")!.attempts.at(-1)!.error).toContain(error);
-    expect(p.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(1);
-    expect(f.body()).toBe(originalBudgetBody);
-  } finally { f.close(); }
-});
-
-for (const text of [
-  { kind: "path", value: "/home/" + "private-user/work" },
-  { kind: "email", value: ["someone", "private.invalid"].join("@") },
-  { kind: "credential", value: "ghp_" + "A".repeat(36) },
-]) test(`the final budget fix refuses private report text before editing the PR (${text.kind})`, async () => {
-  const f = await finalBudgetFixFixture();
-  try {
-    const p = await f.finish(text.value, 3);
-    expect(p.state).toBe("needs_decision");
-    expect(p.stateDetail).toContain("privacy");
-    expect(p.stateDetail).not.toContain(text.value);
-    expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
-    expect(f.body()).toBe(originalBudgetBody);
-  } finally { f.close(); }
-});
-
-test("the final budget PR refresh keeps the repository's publication gate", async () => {
-  const f = await finalBudgetFixFixture();
-  try {
-    const scripts = path.join(f.worktree, "scripts"); fs.mkdirSync(scripts);
-    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "console.log(\"known_value: 1\"); process.exit(1);\n");
-    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json"));
-    await f.git(f.worktree, "add", "scripts");
-    await f.commit();
-    const p = await f.finish(fixSummary, 3);
-    expect(p.state).toBe("needs_decision");
-    expect(p.stateDetail).toContain("repository publication privacy gate");
-    expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
-    expect(f.body()).toBe(originalBudgetBody);
-  } finally { f.close(); }
-});
-
-test.each(["body", "title"] as const)("the final budget refresh adopts the matching PR with a missing %s diagnostic", async field => {
-  const f = await finalBudgetFixFixture();
-  try {
-    const exec = f.h.ports.exec;
-    f.h.ports.exec = async (...input) => {
-      const result = await exec(...input);
-      if (input[0] === "gh" && input[1][1] === "view") {
-        const row = JSON.parse(result.stdout); delete row[field];
-        return { ...result, stdout: JSON.stringify(row) };
-      }
-      return result;
-    };
-    const p = await f.finish(fixSummary, 3);
-    expect(p.state).toBe("running");
-    expect(p.cursor?.activatedBy?.budgetRecheck).toBe(true);
-    const error = p.runs.find(run => run.stageId === "build")!.attempts.at(-1)!.error;
-    expect(error).toContain("inspection-error");
-    expect(error).toContain(`"${field}":"missing"`);
-    expect(f.calls.filter(isBodyPatch)).toHaveLength(0);
-    expect(f.body()).toBe(originalBudgetBody);
-  } finally { f.close(); }
-});
-
-for (const missing of ["body", "title"] as const) test.each(["available", "update"] as const)(`the final budget refresh checks %s text before adopting a PR missing ${missing}`, async source => {
-  const f = await finalBudgetFixFixture();
-  try {
-    const exec = f.h.ports.exec;
-    f.h.ports.exec = async (...input) => {
-      const result = await exec(...input);
-      if (input[0] === "gh" && input[1][1] === "view") {
-        const row = JSON.parse(result.stdout);
-        delete row[missing];
-        if (source === "available") row[missing === "body" ? "title" : "body"] = unsafeSummary;
-        return { ...result, stdout: JSON.stringify(row) };
-      }
-      return result;
-    };
-    const lane = await f.finish(source === "update" ? unsafeSummary : fixSummary, 3);
-    expect(lane.cursor?.stageId).toBe("build");
-    const attempt = lane.runs[0]!.attempts.at(-1)!;
-    expect(attempt.error).toContain("absolute-path");
-    expect(attempt.error).not.toContain(unsafeSummary);
-    expect(attempt.pullRequestInspection).toBeUndefined();
-    expect(f.calls.some(isBodyPatch)).toBe(false);
-  } finally { f.close(); }
-});
-
-for (const kind of ["pause", "release"] as const) for (const at of ["read", "edit", "verify"] as const) {
-  test(`a ${kind} during the final PR body ${at} cannot complete stale settlement`, async () => {
-    const f = await finalBudgetFixFixture();
-    try {
-      const exec = f.h.ports.exec;
-      let reads = 0;
-      f.h.ports.exec = async (...input) => {
-        const result = await exec(...input);
-        if (input[0] === "gh") {
-          const operation = input[1][1];
-          if (operation === "view") reads++;
-          if ((at === "read" && reads === 1) || (at === "edit" && isBodyPatch(input[1])) || (at === "verify" && reads === 2)) {
-            const p = loadPipelines().find(lane => lane.id === f.id)!;
-            if (kind === "pause") { p.state = "paused"; p.pausedState = "running"; }
-            else p.delivery!.active = false;
-            savePipelines([p]);
-          }
-        }
-        return result;
-      };
-      const p = await f.finish(fixSummary, 3);
-      expect(p.state).not.toBe("completed");
-      if (kind === "pause") expect(p.state).toBe("paused");
-      else expect(p.delivery!.active).toBe(false);
-      if (at === "read") expect(f.body()).toBe(originalBudgetBody);
-      expect(p.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(1);
-    } finally { f.close(); }
-  });
-}
-
-async function publishedHeadFixture(linked = true) {
-  const f = await fixture();
-  const pipeline = loadPipelines().find(p => p.id === f.id)!;
-  const attempt = pipeline.runs[0]!.attempts[0]!;
-  const head = "1".repeat(40);
-  pipeline.lastPassedCommit = pipeline.publishedCommit = head;
-  pipeline.delivery!.operation = { id: "published-stage", epoch: pipeline.delivery!.epoch, sha: head,
-    requestKey: `pass:${pipeline.cursor!.stageId}:${attempt.n}`, passedStage: true,
-    state: "settled", result: { ok: true, sha: head, remote: "published" } };
-  if (linked) pipeline.delivery!.target.pr = 17;
-  const row = { number: 17, headRefName: pipeline.branch, baseRefName: pipeline.baseBranch,
-    state: "OPEN", isCrossRepository: false, headRefOid: head };
-  let clock = 0;
-  const waits: number[] = [];
-  const timing = { now: () => clock, sleep: async (ms: number) => { waits.push(ms); clock += ms; } };
-  return { ...f, pipeline, attempt, row, timing, waits, advance: (ms: number) => { clock += ms; }, elapsed: () => clock };
-}
-
-test.each([true, false])("published stage waits for lagging PR head then accepts it (linked: %s)", async linked => {
-  const f = await publishedHeadFixture(linked);
-  try {
-    let reads = 0;
-    const exec: ExecPort = async (command, args) => {
-      expect(command).toBe("gh");
-      expect(args[1]).toBe(linked ? "view" : "list");
-      const row = { ...f.row, headRefOid: ++reads < 3 ? "2".repeat(40) : f.row.headRefOid };
-      return { code: 0, stdout: JSON.stringify(linked ? row : [row]), stderr: "" };
-    };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
-    expect(reads).toBe(3);
-    expect(f.waits).toEqual([1_000, 2_000]);
-    expect(f.pipeline.delivery!.target.pr).toBe(17);
-  } finally { f.close(); }
-});
-
-test.each([true, false])("published stage keeps the head mismatch refusal after bounded rereads (linked: %s)", async linked => {
-  const f = await publishedHeadFixture(linked);
-  try {
-    const timeouts: number[] = [];
-    const exec: ExecPort = async (_command, _args, _cwd, _env, options) => {
-      timeouts.push(options!.timeoutMs!);
-      const row = { ...f.row, headRefOid: "2".repeat(40) };
-      return { code: 0, stdout: JSON.stringify(linked ? row : [row]), stderr: "" };
-    };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
-      .toEqual({ ok: false, error: "the delivery pull request differs in headRefOid" });
-    expect(f.waits).toEqual([1_000, 2_000, 4_000, 8_000, 14_000]);
-    expect(f.elapsed()).toBe(29_000);
-    expect(timeouts).toEqual([30_000, 29_000, 27_000, 23_000, 15_000, 1_000]);
-  } finally { f.close(); }
-});
-
-test.each(["exit", "throw", "json"] as const)("PR reread failure refuses publication immediately (%s)", async failure => {
-  const f = await publishedHeadFixture();
-  try {
-    let reads = 0;
-    const exec: ExecPort = async () => {
-      if (++reads === 1) return { code: 0, stdout: JSON.stringify({ ...f.row, headRefOid: "2".repeat(40) }), stderr: "" };
-      if (failure === "throw") throw new Error("forge transport unavailable");
-      return { code: failure === "exit" ? 1 : 0, stdout: "invalid json", stderr: "forge read failed" };
-    };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: false,
-      error: failure === "exit" ? "the delivery pull request lookup failed"
-        : "the delivery pull request could not be verified; the stage cannot pass without it" });
-    expect(reads).toBe(2);
-    expect(f.waits).toEqual([1_000]);
-  } finally { f.close(); }
-});
-
-/* A fork PR (docs/research/competitors-2026-10.md rank 4): the lane pushes to
-   the fork, and the PR it settles on lives in the upstream `prRepository`. */
-async function forkFixture() {
-  const f = await publishedHeadFixture();
-  f.pipeline.delivery!.target.remote = "https://github.com/contributor/widgets.git";
-  f.pipeline.delivery!.target.prRepository = "example/widgets";
-  const row = { ...f.row, isCrossRepository: true, headRepository: { name: "Widgets" }, headRepositoryOwner: { login: "Contributor" } };
-  return { ...f, row };
-}
-
-test("a fork delivery reads its PR in the upstream repository and accepts its head in the fork", async () => {
-  const f = await forkFixture();
-  try {
-    const calls: string[][] = [];
-    const exec: ExecPort = async (command, args) => {
-      expect(command).toBe("gh");
-      calls.push(args);
-      return { code: 0, stdout: JSON.stringify(f.row), stderr: "" };
-    };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
-    expect(calls).toEqual([["pr", "view", "17", "--repo", "example/widgets", "--json",
-      "number,headRefName,baseRefName,state,headRefOid,isCrossRepository,headRepository,headRepositoryOwner"]]);
-    expect(f.pipeline.delivery!.target.pr).toBe(17);
-  } finally { f.close(); }
-});
-
-test("a fork renamed in the forge cache keeps its identity from link preview through publication", async () => {
-  const f = await publishedHeadFixture();
-  const oldRepository = "old-fork/widgets";
-  const previous = readForgeCache().data.repositories[oldRepository];
-  try {
-    updateForgeCache(data => { data.repositories[oldRepository] = { ...emptyRepositoryEntry(), canonical: "contributor/widgets" }; });
-    const repoDir = f.pipeline.repoDir;
-    for (const args of [
-      ["remote", "set-url", "origin", REMOTE],
-      ["remote", "add", "contributor", `https://github.com/${oldRepository}.git`],
-    ]) {
-      const result = await realExec("git", args, repoDir);
-      expect(result.code, result.stderr).toBe(0);
-    }
-    const preview = await resolvePipelineLink("https://github.com/example/widgets/pull/17", repoDir, {
-      exec: realExec, cache: forgeCacheView(), tasks: () => [], pipelines: () => [], projectForCwd: () => null, taskLinks: () => [],
-      gh: async () => JSON.stringify({ number: 17, title: "Fork fix", state: "open", base: { ref: f.pipeline.baseBranch },
-        head: { ref: f.row.headRefName, sha: f.row.headRefOid, repo: { full_name: "Contributor/Widgets" } } }),
-    });
-    if (!preview.ok) throw new Error(preview.error);
-    expect(preview.source.head).toMatchObject({ repository: "contributor/widgets", remote: "contributor", fork: true });
-    const input = preview.source.request.delivery!;
-    const stored = await resolveDeliveryRemote(repoDir, input.remote, realExec, { allowLiteral: true });
-    if (!stored.ok) throw new Error(stored.error);
-    expect(stored.remote).toBe(`https://github.com/${oldRepository}.git`);
-    f.pipeline.delivery!.target = { ...f.pipeline.delivery!.target, ...input, remote: stored.remote, repository: stored.repository };
-    const row = { ...f.row, isCrossRepository: true, headRepository: { name: "Widgets" }, headRepositoryOwner: { login: "Contributor" } };
-    const exec: ExecPort = async (command, args) => {
-      expect(command).toBe("gh");
-      expect(args.slice(0, 5)).toEqual(["pr", "view", "17", "--repo", "example/widgets"]);
-      return { code: 0, stdout: JSON.stringify(row), stderr: "" };
-    };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
-    row.headRepositoryOwner.login = "unrelated";
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
-      .toEqual({ ok: false, error: "the delivery pull request differs in headRepository (expected the delivery remote's repository)" });
-  } finally {
-    updateForgeCache(data => {
-      if (previous) data.repositories[oldRepository] = previous;
-      else delete data.repositories[oldRepository];
-    });
-    f.close();
-  }
-});
-
-test.each([
-  ["same repository", { isCrossRepository: false }, "isCrossRepository (expected the fork)"],
-  ["another fork", { headRepositoryOwner: { login: "someone" } }, "headRepository (expected the delivery remote's repository)"],
-  ["no head repository", { headRepository: null }, "headRepository (expected the delivery remote's repository)"],
-] as const)("a fork delivery refuses an upstream PR whose head is elsewhere (%s)", async (_name, change, error) => {
-  const f = await forkFixture();
-  try {
-    const exec: ExecPort = async () => ({ code: 0, stdout: JSON.stringify({ ...f.row, ...change }), stderr: "" });
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
-      .toEqual({ ok: false, error: `the delivery pull request differs in ${error}` });
-  } finally { f.close(); }
-});
-
-test("a same-repository delivery still refuses a cross-repository PR, and a fork delivery never opens one in the fork", async () => {
-  const same = await publishedHeadFixture();
-  try {
-    const exec: ExecPort = async () => ({ code: 0, stdout: JSON.stringify({ ...same.row, isCrossRepository: true }), stderr: "" });
-    expect(await ensureStagePullRequest(same.pipeline, same.attempt, exec, undefined, same.timing))
-      .toEqual({ ok: false, error: "the delivery pull request differs in isCrossRepository (expected same repository)" });
-  } finally { same.close(); }
-  const fork = await forkFixture();
-  try {
-    delete fork.pipeline.delivery!.target.pr;
-    let calls = 0;
-    const exec: ExecPort = async () => { calls++; return { code: 0, stdout: "[]", stderr: "" }; };
-    expect(await ensureStagePullRequest(fork.pipeline, fork.attempt, exec, undefined, fork.timing))
-      .toEqual({ ok: false, error: "a fork delivery names no pull request; the lane cannot open one in the fork" });
-    expect(calls).toBe(0);
-  } finally { fork.close(); }
-});
-
-test("an initial gh failure has no head-lag evidence to retry", async () => {
-  const f = await publishedHeadFixture();
-  try {
-    const exec: ExecPort = async () => ({ code: 1, stdout: "", stderr: "forge unavailable" });
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
-      .toEqual({ ok: false, error: "the delivery pull request lookup failed" });
-    expect(f.waits).toEqual([]);
-  } finally { f.close(); }
-});
-
-test.each(["attempt", "epoch", "head", "pending", "failed", "review"] as const)("head lag is retried only for this attempt's successful publication (%s)", async stale => {
-  const f = await publishedHeadFixture();
-  try {
-    const operation = f.pipeline.delivery!.operation!;
-    if (stale === "attempt") operation.requestKey = "pass:build:99";
-    if (stale === "epoch") operation.epoch++;
-    if (stale === "head") operation.sha = "3".repeat(40);
-    if (stale === "pending") operation.state = "pending";
-    if (stale === "failed") operation.result = { ok: false, error: "push failed" };
-    if (stale === "review") operation.passedStage = false;
-    let reads = 0;
-    const exec: ExecPort = async () => {
-      reads++;
-      return { code: 0, stdout: JSON.stringify({ ...f.row, headRefOid: "2".repeat(40) }), stderr: "" };
-    };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
-      .toEqual({ ok: false, error: "the delivery pull request differs in headRefOid" });
-    expect(reads).toBe(1);
-    expect(f.waits).toEqual([]);
-  } finally { f.close(); }
-});
-
-test("the production head retry clock bounds slow lookups in a supervised process", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-pr-deadline-"));
-  const home = path.join(root, "home"), config = path.join(root, "config"), tmp = path.join(root, "tmp"), state = path.join(root, "state");
-  fs.mkdirSync(home); fs.mkdirSync(config); fs.mkdirSync(tmp); fs.mkdirSync(state);
-  const childSource = `
-    import { ensureStagePullRequest } from ${JSON.stringify(path.resolve("src/lib/pipelines/stagePullRequest.ts"))};
-    const head = "1".repeat(40);
-    const attempt = { n: 1, effectiveRole: { access: "read-write" } };
-    const pipeline = {
-      id: "pipeline-fixture", worktreeDir: process.cwd(), baseRef: "0".repeat(40), baseBranch: "main",
-      publishedCommit: head, lastPassedCommit: head, cursor: { stageId: "build" }, runs: [{ attempts: [attempt] }],
-      delivery: { publish: "enabled", active: true, disposition: "owner", ownerId: "pipeline-fixture", epoch: 1,
-        operation: { epoch: 1, sha: head, requestKey: "pass:build:1", state: "settled", passedStage: true,
-          result: { ok: true, sha: head, remote: "published" } },
-        target: { remote: "https://github.com/example/widgets.git", branch: "refs/heads/branch", pr: 17 } },
-    };
-    let reads = 0;
-    const started = performance.now();
-    const result = await ensureStagePullRequest(pipeline, attempt, async (_command, _args, _cwd, _env, _options) => {
-      if (++reads > 1) await Bun.sleep(2_000);
-      return { code: 0, stdout: JSON.stringify({ number: 17, headRefName: "branch", baseRefName: "main",
-        state: "OPEN", isCrossRepository: false, headRefOid: "2".repeat(40) }), stderr: "" };
-    });
-    console.log(JSON.stringify({ result, reads, elapsedMs: Math.round(performance.now() - started) }));
-  `;
-  const child = Bun.spawn([process.execPath, "-e", childSource], {
-    cwd: process.cwd(),
-    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: config, TMPDIR: tmp, LLV_STATE_DIR: state,
-      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_STATE_OWNER: undefined },
-    stdout: "pipe", stderr: "pipe",
-  });
-  let watchdogExpired = false;
-  const watchdog = setTimeout(() => { watchdogExpired = true; child.kill("SIGKILL"); }, 28_000);
-  try {
-    const exitCode = await child.exited;
-    const stdout = await new Response(child.stdout).text();
-    const stderr = await new Response(child.stderr).text();
-    expect(watchdogExpired, `production retry exceeded the parent watchdog: ${stderr}`).toBe(false);
-    expect(exitCode, stderr || stdout).toBe(0);
-    const result = JSON.parse(stdout.trim());
-    expect(result.result).toEqual({ ok: false, error: "the delivery pull request differs in headRefOid" });
-    expect(result.reads).toBe(5);
-    expect(result.elapsedMs).toBeLessThan(28_000);
-  } finally {
-    clearTimeout(watchdog);
-    if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-}, 35_000);
-
-test("each reread validates the PR's other fields before accepting its head", async () => {
-  const f = await publishedHeadFixture();
-  try {
-    let reads = 0;
-    const exec: ExecPort = async () => ({ code: 0, stderr: "", stdout: JSON.stringify(++reads === 1
-      ? { ...f.row, headRefOid: "2".repeat(40) } : { ...f.row, state: "CLOSED" }) });
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
-      .toEqual({ ok: false, error: "the delivery pull request differs in state (expected OPEN, received CLOSED)" });
-    expect(reads).toBe(2);
-    expect(f.waits).toEqual([1_000]);
-  } finally { f.close(); }
-});
-
-test.each(["read", "sleep"] as const)("the head retry deadline includes slow %s time", async slow => {
-  const f = await publishedHeadFixture();
-  try {
-    let reads = 0;
-    const exec: ExecPort = async () => {
-      if (++reads > 1) f.advance(29_000);
-      return { code: 0, stdout: JSON.stringify({ ...f.row, headRefOid: "2".repeat(40) }), stderr: "" };
-    };
-    if (slow === "sleep") f.timing.sleep = async () => { f.advance(30_000); };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing))
-      .toEqual({ ok: false, error: "the delivery pull request differs in headRefOid" });
-    expect(f.elapsed()).toBe(30_000);
-    expect(reads).toBe(slow === "sleep" ? 1 : 2);
-  } finally { f.close(); }
-});
-
-test("head backoff carries the pipeline operation label across its await", async () => {
-  const f = await publishedHeadFixture();
-  try {
-    let reads = 0;
-    const exec: ExecPort = async () => ({ code: 0, stderr: "", stdout: JSON.stringify({ ...f.row,
-      headRefOid: ++reads === 1 ? "2".repeat(40) : f.row.headRefOid }) });
-    f.timing.sleep = async ms => {
-      expect(viewerLoopMonitor.current()).toBe("pipelines.controller-job");
-      await new Promise<void>(resolve => setImmediate(resolve));
-      expect(viewerLoopMonitor.current()).toBe("pipelines.controller-job");
-      f.advance(ms);
-    };
-    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
-  } finally { f.close(); }
-});
-
-test("a published lane advances through real asynchronous PR head backoff", async () => {
-  const f = await fixture();
-  try {
-    f.link(); await f.commit();
-    const exec = f.h.ports.exec;
-    let reads = 0, scheduledTurnRanDuringBackoff = false;
-    f.h.ports.exec = async (...args) => {
-      const isHeadLookup = args[0] === "gh" && args[1].some(arg => arg.includes("isCrossRepository"));
-      if (isHeadLookup) {
-        reads++;
-        if (reads === 2) await new Promise(resolve => setTimeout(resolve, 50));
-      }
-      const result = await exec(...args);
-      if (isHeadLookup && reads === 1) {
-        const row = JSON.parse(result.stdout);
-        setImmediate(() => { scheduledTurnRanDuringBackoff = reads === 1; });
-        return { ...result, stdout: JSON.stringify({ ...row, headRefOid: "2".repeat(40) }) };
-      }
-      return result;
-    };
     const p = await f.finish();
-    expect(p.state).toBe("running");
+    const create = f.calls.find(args => args[0] === "pr" && args[1] === "create")!;
+    expect(create[create.indexOf("--title") + 1]).toBe(override ?? "Stage implementation summary.");
+    expect(p.task).toBe("Виправити публікацію результатів");
+    expect(f.body()).toBe("Stage implementation summary.");
+  } finally { f.close(); }
+});
+
+
+test("a foreign summary is omitted and its advisory hint survives settlement and storage", async () => {
+  const f = await fixture();
+  try {
+    f.setExpectedBody("Implementation report omitted because its prose needs an English publication summary.");
+    await f.commit();
+    const p = await f.finish("Виправлено публікацію результатів.");
     expect(p.cursor?.stageId).toBe("review");
-    expect(reads).toBe(2);
-    expect(scheduledTurnRanDuringBackoff).toBe(true);
+    expect(f.body()).not.toContain("Виправлено");
+    expect(p.runs[0]!.attempts[0]!.publicationLanguageHints?.hints).toEqual([{ part: "body", line: 1 }]);
+    expect(loadPipelines().find(p => p.id === f.id)!.runs[0]!.attempts[0]!.publicationLanguageHints).toEqual(p.runs[0]!.attempts[0]!.publicationLanguageHints);
   } finally { f.close(); }
-}, 10_000);
+});
 
-test.each(["pause", "release"] as const)("a %s during the PR head reread cannot advance the lane", async kind => {
+
+test("a foreign explicit title is flagged without refusing the lane", async () => {
   const f = await fixture();
   try {
-    f.link(); f.setPrShape("head"); f.setRace(2, kind); await f.commit();
-    const p = await f.finish();
-    expect(p.cursor?.stageId).toBe("build");
-    expect(p.cursor?.state).toBe("committing");
-    expect(p.runs.find(run => run.stageId === "review")?.attempts.length ?? 0).toBe(0);
-    if (kind === "pause") expect(p.state).toBe("paused");
-    else expect(p.delivery!.active).toBe(false);
+    const p = loadPipelines().find(p => p.id === f.id)!;
+    p.prTitle = "Змінити публікацію";
+    savePipelines([p]);
+    await f.commit();
+    const settled = await f.finish();
+    expect(settled.cursor?.stageId).toBe("review");
+    expect(settled.runs[0]!.attempts[0]!.publicationLanguageHints?.hints).toContainEqual({ part: "title", line: 1 });
   } finally { f.close(); }
-}, 10_000);
+});
+
 
 test("C: controller creates and links a delivery PR before advancing to review", async () => {
   const f = await fixture();
@@ -675,8 +94,10 @@ test("C: controller creates and links a delivery PR before advancing to review",
     expect(p.cursor?.stageId).toBe("review");
     const create = f.calls.find(a => a[1] === "create")!;
     expect(create).toContain("--body-file"); expect(create[create.indexOf("--head") + 1]).toBe(p.branch);
+    expect(create[create.indexOf("--base") + 1]).toBe(p.baseBranch);
   } finally { f.close(); }
 });
+
 
 test("C: an existing delivery PR is discovered without another create", async () => {
   const f = await fixture();
@@ -688,10 +109,11 @@ test("C: an existing delivery PR is discovered without another create", async ()
   } finally { f.close(); }
 });
 
-test.each([true, false])("linked PR accepts the published stage regardless of lane base (successor: %s)", async successor => {
+
+test("linked PR accepts the published stage with the lane base", async () => {
   const f = await fixture();
   try {
-    f.link(successor); await f.commit();
+    f.link(); await f.commit();
     const p = await f.finish();
     expect(p.state).toBe("running");
     expect(p.cursor).toMatchObject({ stageId: "review", state: "pending" });
@@ -701,6 +123,60 @@ test.each([true, false])("linked PR accepts the published stage regardless of la
     expect(f.calls.find(args => args[1] === "view")).toContain("17");
   } finally { f.close(); }
 });
+
+
+test.each([false, true])("lane targeting main refuses a predecessor PR base and recovers after correction (linked: %s)", async linked => {
+  const f = await fixture();
+  try {
+    if (linked) f.link(); else f.setExisting();
+    f.setPrBase("pipeline/predecessor");
+    await f.commit();
+    const refused = await f.finish();
+    expect(refused.baseBranch).toBe("main");
+    expect(refused.state).toBe("needs_decision");
+    expect(refused.cursor).toMatchObject({ stageId: "build", state: "committing" });
+    expect(refused.stateDetail).toContain("baseRefName (expected the lane's baseBranch; correct the PR base before retrying)");
+    expect(f.calls.filter(args => args[1] === "create" || isBodyPatch(args))).toHaveLength(0);
+    expect(refused.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(0);
+    f.setPrBase("main");
+    const retry = await engineModule.patchPipeline(f.id, { action: "publish" }, f.h.ports);
+    expect(retry.error).toBeUndefined();
+    await tickPipelines([], f.h.ports);
+    const recovered = loadPipelines().find(lane => lane.id === f.id)!;
+    expect(recovered.delivery!.target.pr).toBe(17);
+    expect(recovered.cursor?.stageId).toBe("review");
+    expect(f.calls.filter(args => args[1] === "create" || isBodyPatch(args))).toHaveLength(0);
+  } finally { f.close(); }
+});
+
+
+test.each(["main", "release"])("publication creates a PR against its configured %s base", async base => {
+  const f = await publishedHeadFixture(false);
+  const artifacts = pipelineArtifactsDir(f.pipeline.id);
+  try {
+    f.pipeline.baseBranch = base;
+    f.attempt.output = "Stage implementation summary.";
+    fs.mkdirSync(artifacts, { recursive: true });
+    const calls: string[][] = [];
+    let exists = false;
+    const exec: ExecPort = async (command, args) => {
+      expect(command).toBe("gh");
+      calls.push(args);
+      if (args[1] === "create") {
+        expect(args[args.indexOf("--base") + 1]).toBe(base);
+        expect(args[args.indexOf("--head") + 1]).toBe(f.row.headRefName);
+        exists = true;
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      expect(args[1]).toBe("list");
+      return { code: 0, stdout: JSON.stringify(exists ? [{ ...f.row, baseRefName: base }] : []), stderr: "" };
+    };
+    expect(await ensureStagePullRequest(f.pipeline, f.attempt, exec, undefined, f.timing)).toEqual({ ok: true });
+    expect(f.pipeline.delivery!.target.pr).toBe(17);
+    expect(calls.map(args => args[1])).toEqual(["list", "create", "list"]);
+  } finally { fs.rmSync(artifacts, { recursive: true, force: true }); f.close(); }
+});
+
 
 test.each([false, true])("an unchanged successor still verifies its linked PR (closed: %s)", async closed => {
   const f = await fixture();
@@ -714,6 +190,7 @@ test.each([false, true])("an unchanged successor still verifies its linked PR (c
     if (closed) expect(p.stateDetail).toContain("state (expected OPEN, received CLOSED)");
   } finally { f.close(); }
 });
+
 
 test.each([
   ["closed", "state"], ["merged", "state"], ["fork", "isCrossRepository"],
@@ -729,6 +206,7 @@ test.each([
     expect(f.calls.filter(args => args[1] === "create")).toHaveLength(0);
   } finally { f.close(); }
 }, 40_000);
+
 
 test.each(["skip-stage", "retry-stage", "publish"] as const)("blocked linked PR admits %s after publication settled", async action => {
   const f = await fixture();
@@ -768,6 +246,7 @@ test.each(["skip-stage", "retry-stage", "publish"] as const)("blocked linked PR 
   } finally { f.close(); }
 });
 
+
 test("a successor PR refusal accepts a guarded decision answer", async () => {
   const f = await fixture();
   try {
@@ -784,6 +263,7 @@ test("a successor PR refusal accepts a guarded decision answer", async () => {
     expect(result.pipeline?.decisionAnswers).toHaveLength(1);
   } finally { f.close(); }
 });
+
 
 test("a terminal PR refusal stays parked after controller restart and accepts skip-stage", async () => {
   const f = await fixture();
@@ -827,6 +307,7 @@ test("a terminal PR refusal stays parked after controller restart and accepts sk
   } finally { f.close(); }
 });
 
+
 test("C: a lost creation response recovers the PR from the delivery branch", async () => {
   const f = await fixture();
   try {
@@ -835,6 +316,7 @@ test("C: a lost creation response recovers the PR from the delivery branch", asy
     expect(f.calls.filter(a => a[1] === "create")).toHaveLength(1);
   } finally { f.close(); }
 });
+
 
 test("C: a refused PR cannot leave a passing stage without a linked PR", async () => {
   const f = await fixture();
@@ -846,6 +328,7 @@ test("C: a refused PR cannot leave a passing stage without a linked PR", async (
     expect(p.stateDetail).toContain("pull request"); expect(p.delivery?.target.pr).toBeUndefined();
   } finally { f.close(); }
 });
+
 
 test.each([
   { kind: "path", privateText: "/home/" + "private-user/work" },
@@ -863,6 +346,7 @@ test.each([
 });
 
 
+
 for (const kind of ["pause", "release"] as const) for (const call of [1, 2, 3]) {
   test(`C: ${kind} during forge await ${call} cannot accept a stale PR result`, async () => {
     const f = await fixture();
@@ -878,6 +362,7 @@ for (const kind of ["pause", "release"] as const) for (const call of [1, 2, 3]) 
   });
 }
 
+
 test("C: the repository's privacy gate can refuse otherwise public summary text", async () => {
   const f = await fixture();
   try {
@@ -890,6 +375,7 @@ test("C: the repository's privacy gate can refuse otherwise public summary text"
     expect(f.calls.filter(a => a[1] === "create")).toHaveLength(0);
   } finally { f.close(); }
 });
+
 
 test.each([{ terminalOutput: false }, { terminalOutput: true }])("C: a migrated lane gets its PR before review finishes (local output=$terminalOutput)", async ({ terminalOutput }) => {
   const f = await fixture();
@@ -913,6 +399,7 @@ test.each([{ terminalOutput: false }, { terminalOutput: true }])("C: a migrated 
     expect(done.state).toBe("completed");
   } finally { f.close(); }
 });
+
 
 
 test("C: retrying a legacy terminal-output forge refusal never publishes its local report commit", async () => {
@@ -951,992 +438,5 @@ test("C: retrying a legacy terminal-output forge refusal never publishes its loc
     expect(retried.runs[1]!.attempts[0]!.terminalOutputPublication).toBeUndefined();
     expect(retried.delivery?.target.pr).toBe(17);
     expect(retried.state).toBe("completed");
-  } finally { f.close(); }
-});
-
-test("a legacy privacy rewrite checkpoint removes the old terminal marker before report delivery and survives restart", async () => {
-  const f = await fixture();
-  try {
-    fs.mkdirSync(path.join(f.worktree, "scripts"), { recursive: true });
-    fs.writeFileSync(path.join(f.worktree, "scripts/privacy-publication-gate.ts"), "// Controlled privacy gate fixture.\n");
-    const initialExec = f.h.ports.exec;
-    f.h.ports.exec = async (command, args, cwd, env, options) => command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")
-      ? { code: 0, stdout: "PRIVACY GATE: PASS\n", stderr: "" }
-      : initialExec(command, args, cwd, env, options);
-    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json"));
-    await f.git(f.worktree, "add", "scripts");
-    await f.commit(); f.setExisting();
-    await f.finish();
-    const current = loadPipelines().find(p => p.id === f.id)!;
-    delete current.delivery!.target.pr;
-    delete current.publication;
-    current.stages[1]!.outputs = ["review.md"];
-    current.runs[0]!.attempts[0]!.paneId = null;
-    savePipelines([current]);
-    f.setMissing();
-    await tickPipelines([], f.h.ports);
-    fs.writeFileSync(path.join(f.worktree, "review.md"), "Review passed.\n");
-    const publishedHead = await f.git(f.origin, "rev-parse", `refs/heads/${current.branch}`);
-    f.setRefused();
-    f.setExpectedBody("Review passed.");
-    f.h.setConversationActive(false);
-    await engineModule.reportStageCompletion({ verdict: "pass", summary: "Review passed.", result: "Review result", taskSummary: { headline: "Reviewed", text: "Review complete." } },
-      { kind: "agent", role: "reviewer", conversationId: "conversation_stage_2" }, f.h.ports);
-    await tickPipelines([finishReported(f.h, "/codex/stage-2.jsonl", "pass", "Review passed.")], f.h.ports);
-    const legacyRefusal = loadPipelines().find(p => p.id === f.id)!;
-    const owner = legacyRefusal.runs[1]!.attempts[0]!;
-    expect(owner.terminalOutputPublication).toMatchObject({ pullRequestHead: publishedHead });
-    expect(owner.terminalOutputPublication!.localSha).not.toBe(publishedHead);
-    const localReportSha = owner.terminalOutputPublication!.localSha;
-
-    const originalExec = f.h.ports.exec;
-    let gateCalls = 0;
-    f.h.ports.exec = async (command, args, cwd, env, options) => {
-      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")) gateCalls++;
-      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts") && args.at(-1)?.endsWith("body.md"))
-        return { code: 1, stdout: "PRIVACY GATE: FAIL\nknown_value: 1\n", stderr: "" };
-      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts"))
-        return { code: 0, stdout: "PRIVACY GATE: PASS\n", stderr: "" };
-      return originalExec(command, args, cwd, env, options);
-    };
-    f.setRefused(false); f.setMissing(); f.setExpectedBody(publicSummary);
-    expect(fs.existsSync(path.join(f.worktree, "scripts/privacy-publication-gate.ts"))).toBe(true);
-    f.h.ports.resumeSeveredTurn = async () => {
-      const report = await engineModule.reportStageCompletion({ verdict: "pass", summary: publicSummary },
-        { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
-      expect(report.error).toBeUndefined();
-      f.h.setConversationActive(false);
-      const checkpoint = loadPipelines().find(p => p.id === f.id)!;
-      const saved = checkpoint.runs[1]!.attempts[0]!;
-      expect(saved.publicationTextRepair).toMatchObject({ state: "answered", sha: localReportSha });
-      expect(saved.report?.result).toBe("Review result");
-      expect(saved.report?.taskSummary).toEqual({ headline: "Reviewed", text: "Review complete." });
-      expect(saved.terminalOutputPublication).toBeUndefined();
-      expect(checkpoint.lastPassedCommit).toBe(localReportSha);
-      return true;
-    };
-    expect((await engineModule.patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
-    await tickPipelines([], f.h.ports);
-
-    const checkpoint = loadPipelines().find(p => p.id === f.id)!;
-    const checkpointAttempt = checkpoint.runs[1]!.attempts[0]!;
-    expect(gateCalls).toBeGreaterThan(0);
-    expect(checkpointAttempt.publicationTextRepair).toMatchObject({ state: "answered", pullRequestHead: publishedHead });
-    expect(checkpointAttempt.terminalOutputPublication).toBeUndefined();
-
-    const reload = await realExec(process.execPath, ["-e", `
-      const { loadPipelines } = await import("@/lib/pipelines/store");
-      const { defaultPipelinePorts, settlePendingStageGit } = await import("@/lib/pipelines/engine");
-      const { realExec } = await import("@/lib/workflows/provision");
-      const lane = loadPipelines().find(item => item.id === ${JSON.stringify(f.id)});
-      const attempt = lane.runs[1].attempts[0];
-      const head = attempt.publicationTextRepair.pullRequestHead;
-      const branch = lane.delivery.target.branch.replace(/^refs\\/heads\\//, "");
-      const at = Date.parse(attempt.publicationTextRepair.answeredAt) + 1_000;
-      await settlePendingStageGit({ ...defaultPipelinePorts(), now: () => new Date(at).toISOString(),
-        conversationAgentActive: async () => false, conversationDeliveryOutstanding: () => false,
-        durableTurnEvidence: async () => ({ turn: "terminal", message: { ts: at, text: "Rewrite completed." } }),
-        exec: async (command, args, cwd, env, options) => command === "gh"
-          ? { code: 0, stdout: JSON.stringify([{ number: 17, headRefName: branch, baseRefName: lane.baseBranch,
-            state: "OPEN", isCrossRepository: false, headRefOid: head }]), stderr: "" }
-          : realExec(command, args, cwd, env, options) });
-      const settled = loadPipelines().find(item => item.id === ${JSON.stringify(f.id)});
-      const saved = settled.runs[1].attempts[0];
-      console.log(JSON.stringify({ state: settled.state, lastPassedCommit: settled.lastPassedCommit,
-        repair: saved.publicationTextRepair, terminalOutputPublication: saved.terminalOutputPublication,
-        pullRequest: settled.delivery.target.pr }));
-    `], process.cwd(), process.env, { timeoutMs: 15_000 });
-    expect(reload.code, reload.stderr).toBe(0);
-    const persisted = JSON.parse(reload.stdout.trim());
-    expect(persisted.state).toBe("completed");
-    expect(persisted.pullRequest).toBe(17);
-    expect(persisted.terminalOutputPublication).toBeUndefined();
-    expect(persisted.lastPassedCommit).toBe(localReportSha);
-
-    const done = loadPipelines().find(p => p.id === f.id)!;
-    expect(done.state).toBe("completed");
-    expect(done.runs[1]!.attempts[0]!.terminalOutputPublication).toBeUndefined();
-    expect(await f.git(f.origin, "rev-parse", `refs/heads/${current.branch}`)).toBe(publishedHead);
-  } finally { f.close(); }
-});
-
-test("C: summary fingerprint inspection lets an independent scheduler advance", async () => {
-  const { pipelinePublicationTextSafe } = await import("./git");
-  let progressed = 0;
-  let heartbeat: ReturnType<typeof setImmediate>;
-  const tick = () => { progressed++; heartbeat = setImmediate(tick); };
-  heartbeat = setImmediate(tick);
-  try {
-    const inspected = await pipelinePublicationTextSafe("Public implementation detail. ".repeat(100));
-    expect(progressed).toBeGreaterThan(1);
-    expect(inspected).not.toBeNull();
-  } finally { clearImmediate(heartbeat); }
-});
-
-
-test.each(["fork", "head", "ambiguous"] as const)("C: an unrelated PR result is refused (%s)", async shape => {
-  const f = await fixture();
-  try {
-    await f.commit(); f.setPrShape(shape);
-    const p = await f.finish();
-    expect(p.state).toBe("needs_decision"); expect(p.delivery?.target.pr).toBeUndefined();
-    expect(f.calls.filter(a => a[1] === "create")).toHaveLength(0);
-  } finally { f.close(); }
-}, 40_000);
-
-
-test("C: a publishing delivery without a supported PR service cannot pass", async () => {
-  const f = await fixture();
-  try {
-    const p = loadPipelines().find(p => p.id === f.id)!;
-    p.lastPassedCommit = "1".repeat(40);
-    p.delivery!.target.remote = "https://forge.invalid/example/widgets.git";
-    const { ensureStagePullRequest } = await import("./stagePullRequest");
-    const result = await ensureStagePullRequest(p, p.runs[0]!.attempts[0]!, realExec);
-    expect(result.ok).toBe(false);
-  } finally { f.close(); }
-});
-
-
-test.each(([
-  ["body", "/home/" + "private-user/evidence", "absolute-path"],
-  ["title", ["someone", "private.invalid"].join("@"), "email"],
-  ["body", "ghp_" + "A".repeat(36), "credential"],
-  ["body", "%" + "25".repeat(20) + "41", "decode"],
-  ["body", "", "size"],
-  ["body", "a".repeat(60 * 1024 + 1), "size"],
-] as const).map(([part, value, kind], index) => ({ part, value, kind, index })))("PR text diagnostic redacts $part/$kind ($index)", async ({ part, value, kind }) => {
-  const { inspectPullRequestText } = await import("./stagePullRequest");
-  const result = await inspectPullRequestText(part, value);
-  expect(result).toMatchObject({ ok: false, privacy: { part, kind } });
-  if (!result.ok) {
-    expect(result.error).toContain("[redacted]");
-    if (value) expect(result.error).not.toContain(value);
-  }
-});
-
-const unsafeSummary = "Evidence: /home/" + "private-user/evidence";
-const publicSummary = "Verified ORM write_uid/create_uid/calculated_by_id fields. 42 tests passed. Revision " + "ab12".repeat(10) + ".";
-
-async function rewritingFixture() {
-  const f = await fixture();
-  const sends: Array<Parameters<NonNullable<typeof f.h.ports.resumeSeveredTurn>>[0]> = [];
-  f.h.ports.resumeSeveredTurn = async input => { sends.push(input); f.h.setConversationActive(true); return true; };
-  await f.commit();
-  const before = loadPipelines().find(p => p.id === f.id)!;
-  before.runs[0]!.attempts[0]!.paneId = null;
-  savePipelines([before]);
-  const initial = await f.finish(unsafeSummary);
-  const read = () => loadPipelines().find(p => p.id === f.id)!;
-  const answer = async (summary: string) => {
-    const report = await engineModule.reportStageCompletion({ verdict: "pass", summary },
-      { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
-    expect(report.error).toBeUndefined();
-    f.h.setConversationActive(false);
-    await tickPipelines([finishReported(f.h, "/codex/stage-1.jsonl", "pass", summary)], f.h.ports);
-    return read();
-  };
-  return { ...f, sends, initial, read, answer };
-}
-
-test("PR summary rewrite preserves attempt, accepted SHA, verdict and provenance", async () => {
-  const f = await rewritingFixture();
-  try {
-    const initial = f.initial;
-    expect(initial.state).toBe("running");
-    expect(initial.stateDetail).toContain("absolute-path");
-    expect(initial.runs[0]!.attempts[0]!.error).toContain("body [redacted]");
-    const { projectPipelineEvents } = await import("@/lib/lifecycle/projector");
-    const events = projectPipelineEvents([initial]);
-    const refusal = events.find(event => event.key.includes("summary-rewrite:"))!;
-    const { isTerminalHighSignalEvent } = await import("@/lib/lifecycle/vocabulary");
-    expect(refusal.summary).toContain("absolute-path");
-    expect(isTerminalHighSignalEvent(refusal.type)).toBe(true); // The seat's actual wake filter.
-    const answered = structuredClone(initial);
-    answered.runs[0]!.attempts[0]!.publicationTextRepair!.state = "answered";
-    expect(projectPipelineEvents([answered]).find(event => event.key === refusal.key)?.summary).toBe(refusal.summary);
-    const exhausted = structuredClone(initial);
-    exhausted.runs[0]!.attempts[0]!.publicationTextRepair!.state = "exhausted";
-    const exhaustedRefusal = projectPipelineEvents([exhausted]).find(event => event.key.includes("summary-rewrite:"))!;
-    expect(exhaustedRefusal.key).not.toBe(refusal.key);
-    expect(isTerminalHighSignalEvent(exhaustedRefusal.type)).toBe(true);
-    expect(JSON.stringify(events)).not.toContain(unsafeSummary);
-    expect(f.sends).toHaveLength(1);
-    expect(f.sends[0]!.text).toContain("absolute-path");
-    expect(f.sends[0]!.text).not.toContain(unsafeSummary);
-    expect(f.calls.some(call => call[1] === "create")).toBe(false);
-    const original = structuredClone(initial.runs[0]!.attempts[0]!.report!);
-    f.setExpectedBody(publicSummary);
-    const done = await f.answer(publicSummary);
-    expect(done.cursor?.stageId).toBe("review");
-    expect(done.lastPassedCommit).toBe(initial.lastPassedCommit);
-    expect(done.runs[0]!.attempts).toHaveLength(1);
-    const report = done.runs[0]!.attempts[0]!.report!;
-    expect(report.verdict).toEqual(original.verdict);
-    expect(report.provenance).toEqual(original.provenance);
-    expect(report.summary).toBe(publicSummary);
-    expect(f.calls.filter(call => call[1] === "create")).toHaveLength(1);
-  } finally { f.close(); }
-});
-
-test("two refused summary rewrites park with the class; retry-stage asks again on the same attempt", async () => {
-  const f = await rewritingFixture();
-  try {
-    await f.answer(unsafeSummary);
-    expect(f.sends).toHaveLength(2);
-    const exhausted = await f.answer(unsafeSummary);
-    expect(exhausted.state).toBe("needs_decision");
-    expect(exhausted.stateDetail).toContain("absolute-path");
-    expect(exhausted.stateDetail).toContain("budget exhausted");
-    expect(f.sends).toHaveLength(2);
-    const retried = await engineModule.patchPipeline(f.id, { action: "retry-stage" }, f.h.ports);
-    expect(retried.error).toBeUndefined();
-    await tickPipelines([], f.h.ports);
-    expect(f.sends).toHaveLength(3);
-    expect(f.sends[2]!.clientMessageId).not.toBe(f.sends[0]!.clientMessageId);
-    f.setExpectedBody(publicSummary);
-    const done = await f.answer(publicSummary);
-    expect(done.cursor?.stageId).toBe("review");
-    expect(done.runs[0]!.attempts).toHaveLength(1);
-    expect(done.lastPassedCommit).toBe(exhausted.lastPassedCommit);
-  } finally { f.close(); }
-});
-
-test("a refused task title asks the seat to correct it and sends no producer rewrite", async () => {
-  const f = await fixture(unsafeSummary);
-  try {
-    const sends: string[] = [];
-    f.h.ports.resumeSeveredTurn = async input => { sends.push(input.text); return true; };
-    await f.commit();
-    const parked = await f.finish();
-    expect(parked.stateDetail).toContain("title [redacted]");
-    expect(parked.stateDetail).toContain("pipeline task");
-    expect(parked.stateDetail).not.toContain(unsafeSummary);
-    expect(sends).toEqual([]);
-  } finally { f.close(); }
-});
-
-test("summary rewrite rejects verdict changes and cannot accept a new commit", async () => {
-  const f = await rewritingFixture();
-  try {
-    const refused = await engineModule.reportStageCompletion({ verdict: "fail", summary: "Changed outcome" },
-      { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
-    expect(refused.code).toBe("STAGE_REPORT_SUMMARY_ONLY");
-    const stranger = await engineModule.reportStageCompletion({ verdict: "pass", summary: publicSummary },
-      { kind: "agent", role: "builder", conversationId: "unrelated-conversation" }, f.h.ports);
-    expect(stranger.code).toBe("STAGE_REPORT_NOT_AN_ATTEMPT");
-    fs.writeFileSync(path.join(f.worktree, "extra.txt"), "Extra change.\n");
-    await tickPipelines([], f.h.ports);
-    expect(f.read().state).toBe("needs_decision");
-    expect(f.read().stateDetail).toContain("unchanged clean accepted head");
-    expect(f.calls.some(call => call[1] === "create")).toBe(false);
-  } finally { f.close(); }
-});
-
-test("ORM identifiers, counts and a full SHA pass every real PR text check", async () => {
-  const f = await fixture();
-  try {
-    const gate = path.join(process.cwd(), "scripts/privacy-publication-gate.ts");
-    const fingerprints = path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json");
-    const scripts = path.join(f.worktree, "scripts"); fs.mkdirSync(scripts);
-    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "// Fixture uses the real gate through its exec port.\n");
-    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json"));
-    await f.git(f.worktree, "add", "scripts");
-    const exec = f.h.ports.exec;
-    f.h.ports.exec = async (command, args, cwd, env, options) => command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")
-      ? realExec(process.execPath, [gate, ...args.slice(1)], cwd, { ...env, LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: fingerprints }, options)
-      : exec(command, args, cwd, env, options);
-    await f.commit(); f.setExpectedBody(publicSummary);
-    const done = await f.finish(publicSummary);
-    expect(done.cursor?.stageId).toBe("review");
-    expect(done.delivery?.target.pr).toBe(17);
-  } finally { f.close(); }
-});
-
-
-test("a fresh controller process honors the persisted summary rewrite budget", async () => {
-  const f = await rewritingFixture();
-  try {
-    await f.answer(unsafeSummary); // Second request is durable before restart.
-    const submitted = await engineModule.reportStageCompletion({ verdict: "pass", summary: unsafeSummary },
-      { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
-    expect(submitted.error).toBeUndefined();
-    const at = Date.parse(submitted.report!.at) + 1_000;
-    const driver = `
-      const { defaultPipelinePorts, settlePendingStageGit } = await import("@/lib/pipelines/engine");
-      const { loadPipelines } = await import("@/lib/pipelines/store");
-      const { realExec } = await import("@/lib/workflows/provision");
-      const sends = [];
-      const ports = { ...defaultPipelinePorts(), now: () => new Date(${at}).toISOString(),
-        conversationAgentActive: async () => false, conversationDeliveryOutstanding: () => false,
-        durableTurnEvidence: async () => ({ turn: "terminal", message: { ts: ${at}, text: "Rewrite completed." } }),
-        resumeSeveredTurn: async input => { sends.push(input.clientMessageId); return true; },
-        exec: async (command, args, cwd, env, options) => command === "gh"
-          ? { code: 0, stdout: "[]", stderr: "" }
-          : realExec(command, args.map(arg => arg === ${JSON.stringify(REMOTE)} ? ${JSON.stringify(f.origin)} : arg), cwd, env, options) };
-      await settlePendingStageGit(ports);
-      const lane = loadPipelines().find(lane => lane.id === ${JSON.stringify(f.id)});
-      console.log(JSON.stringify({ state: lane.state, rounds: lane.runs[0].attempts[0].publicationTextRepair.rounds, sends }));
-    `;
-    const result = await realExec(process.execPath, ["-e", driver], process.cwd(), {
-      ...process.env, LLV_STATE_DIR: process.env.LLV_STATE_DIR,
-      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_RUNTIME_HOST_CONTROL_URL: "http://127.0.0.1:1",
-    }, { timeoutMs: 30_000 });
-    expect(result.code, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout.trim())).toEqual({ state: "needs_decision", rounds: 2, sends: [] });
-    expect(f.read().stateDetail).toContain("absolute-path");
-    expect(f.read().lastPassedCommit).toBe(f.initial.lastPassedCommit);
-  } finally { f.close(); }
-});
-
-test.each(["known-value", "unavailable"] as const)("repository PR text refusal identifies its class (%s) and withholds raw output", async mode => {
-  const f = await fixture();
-  try {
-    const scripts = path.join(f.worktree, "scripts"); fs.mkdirSync(scripts);
-    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "// Controlled gate fixture.\n");
-    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json"));
-    await f.git(f.worktree, "add", "scripts");
-    const exec = f.h.ports.exec;
-    f.h.ports.exec = async (command, args, cwd, env, options) => {
-      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")) {
-        if (mode === "unavailable") throw Object.assign(new Error("private diagnostic"), { code: "ENOENT" });
-        if (args.at(-1)?.endsWith("body.md")) return { code: 1,
-          stdout: "PRIVACY GATE: FAIL\nknown_value: 1\n" + unsafeSummary, stderr: unsafeSummary };
-        return { code: 0, stdout: "PRIVACY GATE: PASS\n", stderr: "" };
-      }
-      return exec(command, args, cwd, env, options);
-    };
-    await f.commit();
-    const parked = await f.finish();
-    expect(parked.stateDetail).toContain(mode === "known-value" ? "body [redacted]" : "inspection-error for title");
-    expect(parked.stateDetail).toContain(mode === "known-value" ? "known-value" : "inspection-error");
-    expect(parked.stateDetail).not.toContain(unsafeSummary);
-    expect(f.calls.some(call => call[1] === "create")).toBe(false);
-  } finally { f.close(); }
-});
-
-test("a summary rewrite that never reports expires with the original named refusal", async () => {
-  const f = await rewritingFixture();
-  try {
-    f.h.advanceWallClock(10 * 60_000);
-    f.h.setConversationActive(false);
-    await tickPipelines([], f.h.ports);
-    expect(f.read().state).toBe("needs_decision");
-    expect(f.read().stateDetail).toContain("absolute-path");
-    expect(f.read().stateDetail).toContain("ten minutes");
-    expect(f.sends).toHaveLength(1);
-  } finally { f.close(); }
-});
-
-
-test("a legacy terminal-output PR refusal rewrites the producer summary while its output commit stays local", async () => {
-  const f = await fixture();
-  try {
-    await f.commit(); f.setExisting(); await f.finish();
-    const current = loadPipelines().find(p => p.id === f.id)!;
-    delete current.delivery!.target.pr;
-    delete current.publication;
-    current.stages[1]!.outputs = ["review.md"];
-    current.runs[0]!.attempts[0]!.report!.summary = unsafeSummary;
-    savePipelines([current]); f.setMissing();
-    await tickPipelines([], f.h.ports);
-    fs.writeFileSync(path.join(f.worktree, "review.md"), "Review passed.\n");
-    f.h.setConversationActive(false);
-    const sends: string[] = [];
-    f.h.ports.resumeSeveredTurn = async input => { sends.push(input.conversationId); f.h.setConversationActive(true); return true; };
-    await engineModule.reportStageCompletion({ verdict: "pass", summary: "Review passed." },
-      { kind: "agent", role: "reviewer", conversationId: "conversation_stage_2" }, f.h.ports);
-    await tickPipelines([finishReported(f.h, "/codex/stage-2.jsonl", "pass", "Review passed.")], f.h.ports);
-    const rewriting = loadPipelines().find(p => p.id === f.id)!;
-    expect(sends).toEqual(["conversation_stage_1"]);
-    const accepted = rewriting.lastPassedCommit;
-    const remote = await f.git(f.origin, "rev-parse", `refs/heads/${rewriting.branch}`);
-    expect(remote).not.toBe(accepted);
-    f.setExpectedBody(publicSummary);
-    expect((await engineModule.reportStageCompletion({ verdict: "pass", summary: publicSummary },
-      { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports)).error).toBeUndefined();
-    f.h.setConversationActive(false);
-    await tickPipelines([finishReported(f.h, "/codex/stage-1.jsonl", "pass", publicSummary)], f.h.ports);
-    const done = loadPipelines().find(p => p.id === f.id)!;
-    expect(done.state).toBe("completed");
-    expect(done.lastPassedCommit).toBe(accepted);
-    expect(await f.git(f.origin, "rev-parse", `refs/heads/${done.branch}`)).toBe(remote);
-  } finally { f.close(); }
-});
-
-
-test("a summary reported during rewrite delivery survives the settlement fence", async () => {
-  const f = await fixture();
-  try {
-    await f.commit();
-    const lane = loadPipelines().find(p => p.id === f.id)!;
-    lane.runs[0]!.attempts[0]!.paneId = null; savePipelines([lane]);
-    let calls = 0;
-    f.h.ports.resumeSeveredTurn = async () => {
-      calls++;
-      const result = await engineModule.reportStageCompletion({ verdict: "pass", summary: publicSummary },
-        { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
-      expect(result.error).toBeUndefined();
-      return true;
-    };
-    f.setExpectedBody(publicSummary);
-    await f.finish(unsafeSummary);
-    await tickPipelines([], f.h.ports);
-    const done = loadPipelines().find(p => p.id === f.id)!;
-    expect(done.cursor?.stageId).toBe("review");
-    expect(done.runs[0]!.attempts[0]!.report!.summary).toBe(publicSummary);
-    expect(calls).toBe(1);
-  } finally { f.close(); }
-});
-
-
-test("a detector match across title and body keeps its actual class", async () => {
-  const { inspectPullRequestText } = await import("./stagePullRequest");
-  const title = "password:", body = "a".repeat(20);
-  expect(await inspectPullRequestText("title", title)).toEqual({ ok: true });
-  expect(await inspectPullRequestText("body", body)).toEqual({ ok: true });
-  const combined = await inspectPullRequestText("title/body", title + "\n" + body);
-  expect(combined).toMatchObject({ ok: false, privacy: { part: "title/body", kind: "credential", check: "staticSensitiveClasses" } });
-  expect(JSON.stringify(combined)).not.toContain(body);
-});
-
-
-test("a static refusal locates its decoded line without quoting the match", async () => {
-  const { inspectPullRequestText } = await import("./stagePullRequest");
-  const result = await inspectPullRequestText("body", "Public result.\nEvidence:\n/home/" + "private-user/evidence");
-  expect(result).toMatchObject({ ok: false, privacy: { kind: "absolute-path", line: 3 } });
-  if (!result.ok) expect(result.error).toContain("decoded line 3");
-});
-
-
-async function inspectionFixture(mode: "timeout" | "empty" | "signal" | "spawn" | "spawn-zero" | "finding" | "missing") {
-  const f = await fixture();
-  let clock = Date.parse(f.h.ports.now());
-  f.h.ports.now = () => new Date(clock).toISOString();
-  const scripts = path.join(f.worktree, "scripts"); fs.mkdirSync(scripts);
-  fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "// Controlled gate process.\n");
-  if (mode !== "missing") fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"),
-    path.join(scripts, "privacy-known-value-fingerprints.json"));
-  await f.git(f.worktree, "add", "scripts");
-  const exec = f.h.ports.exec;
-  let checks = 0, recover = false, adopt = false;
-  const sends: string[] = [];
-  f.h.ports.resumeSeveredTurn = async input => { sends.push(input.text); return true; };
-  f.h.ports.exec = async (command, args, cwd, env, options) => {
-    if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")) {
-      expect(options?.timeoutMs).toBe(60_000);
-      if (recover || args.at(-1)?.endsWith("title.txt")) return { code: 0, stdout: "", stderr: "" };
-      checks++;
-      if (adopt) f.setExisting();
-      if (mode === "spawn" || mode === "spawn-zero") throw Object.assign(new Error(unsafeSummary), { code: mode === "spawn" ? "EAGAIN" : 0 });
-      return mode === "timeout" ? { code: null, signal: "SIGKILL", stdout: "", stderr: "command timed out after 60000ms" }
-        : mode === "signal" ? { code: null, signal: "SIGTERM", stdout: "", stderr: unsafeSummary }
-        : mode === "finding" ? { code: 1, stdout: "known_value: 1\ninspection_error: 1\n", stderr: unsafeSummary }
-        : { code: 1, stdout: "", stderr: "gate could not load its input" };
-    }
-    return exec(command, args, cwd, env, options);
-  };
-  await f.commit();
-  return { ...f, checks: () => checks, sends, advance: (ms: number) => { clock += ms; }, recover: () => { recover = true; }, adopt: () => { adopt = true; } };
-}
-
-test.each(["timeout", "empty", "signal", "spawn", "spawn-zero", "missing"] as const)("PR inspection %s retries without summary rewrites and recovers", async mode => {
-  const f = await inspectionFixture(mode);
-  try {
-    const waiting = await f.finish();
-    const first = waiting.runs[0]!.attempts[0]!;
-    expect(waiting.state).toBe("running");
-    expect(waiting.cursor?.state).toBe("committing");
-    expect(first.publicationTextRepair).toBeUndefined();
-    expect(first.pullRequestInspection?.failures).toBe(1);
-    expect(first.error).toContain('"budgetMs":60000');
-    expect(first.error).toMatch(/"elapsedMs":[0-9]+/);
-    expect(first.error).toContain(`"cause":"${mode === "empty" ? "exit" : mode === "missing" ? "missing-input" : mode === "spawn-zero" ? "spawn" : mode}"`);
-    if (mode === "empty") expect(first.error).toContain('"stderrTail":"gate could not load its input"');
-    if (mode === "timeout") expect(first.error).toContain('"stderrTail":"command timed out after 60000ms"');
-    expect(first.error).toContain('"body":"available"');
-    expect(first.error).toContain(mode === "missing" ? '"fingerprints":"missing"' : '"fingerprints":"available"');
-    expect(first.error).toContain(mode === "timeout" ? '"signal":"SIGKILL"' : mode === "spawn" ? '"spawn":"EAGAIN"' : mode === "signal" ? '"signal":"SIGTERM"' : mode === "missing" ? '"exit":0' : mode === "spawn-zero" ? '"spawn":"exception"' : '"exit":1');
-    if (mode === "spawn-zero") expect(first.error).toContain('"exit":0');
-    expect(first.error).not.toContain(unsafeSummary);
-    expect(f.sends).toEqual([]);
-    await tickPipelines([], f.h.ports);
-    expect(f.checks()).toBe(1); // Repeated ticks respect the due time.
-    if (mode === "missing") return;
-    f.recover(); f.advance(1_001);
-    await tickPipelines([], f.h.ports);
-    const done = loadPipelines().find(p => p.id === f.id)!;
-    expect(done.cursor?.stageId).toBe("review");
-    expect(done.delivery?.target.pr).toBe(17);
-    expect(done.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
-    expect(f.sends).toEqual([]);
-  } finally { f.close(); }
-});
-
-test.each(["missing", "signal", "null-exit", "exception", "buffer-exception", "zero-exit"] as const)("PR inspection preserves a content finding with %s even when a matching PR exists", async mode => {
-  const f = await inspectionFixture(mode === "missing" ? "missing" : "empty");
-  try {
-    const exec = f.h.ports.exec;
-    f.h.ports.exec = async (...input) => {
-      if (input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")) {
-        if (input[1].at(-1)?.endsWith("title.txt")) return { code: 0, stdout: "", stderr: "" };
-        f.setExisting();
-        const stdout = "known_value: 1\ninspection_error: 1\n";
-        if (mode === "exception" || mode === "buffer-exception") throw Object.assign(new Error("input unavailable"), {
-          code: "EAGAIN", stdout: mode === "buffer-exception" ? Buffer.from(stdout) : stdout,
-        });
-        return { code: mode === "signal" || mode === "null-exit" ? null : mode === "zero-exit" ? 0 : 1,
-          ...(mode === "signal" ? { signal: "SIGTERM" as const } : {}), stdout, stderr: "input unavailable" };
-      }
-      return exec(...input);
-    };
-    const waiting = await f.finish();
-    const attempt = waiting.runs[0]!.attempts[0]!;
-    expect(waiting.cursor?.stageId).toBe("build");
-    expect(waiting.delivery?.target.pr).toBeUndefined();
-    expect(attempt.pullRequestInspection).toBeUndefined();
-    expect(attempt.error).toContain("known-value");
-    expect(attempt.publicationTextRepair?.state).toBe("pending");
-    expect(f.sends).toHaveLength(1);
-  } finally { f.close(); }
-});
-
-test("PR inspection adopts an open PR created during the failed inspection and retains its diagnostic", async () => {
-  const f = await inspectionFixture("empty");
-  try {
-    f.adopt();
-    const done = await f.finish();
-    expect(done.cursor?.stageId).toBe("review");
-    expect(done.delivery?.target.pr).toBe(17);
-    expect(done.runs[0]!.attempts[0]!.error).toContain('"exit":1');
-    expect(done.runs[0]!.attempts[0]!.publicationTextRepair).toBeUndefined();
-    expect(f.calls.some(call => call[1] === "create")).toBe(false);
-    expect(f.sends).toEqual([]);
-  } finally { f.close(); }
-});
-
-test.each([false, true])("PR inspection checks its bounded diagnostic after truncation, unsafe boundary=%s", async unsafe => {
-  const f = await inspectionFixture("empty");
-  try {
-    const tail = (unsafe ? ["user", " synthetic fixture words"].join(":") : "gate input unavailable").padEnd(1_000, "x");
-    const stderr = "prefix" + tail;
-    expect(await inspectPullRequestText("title/body", stderr)).toEqual({ ok: true });
-    const exec = f.h.ports.exec;
-    f.h.ports.exec = async (...input) => input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")
-      && input[1].at(-1)?.endsWith("body.md") ? { code: 1, stdout: "", stderr } : exec(...input);
-    const waiting = await f.finish();
-    const attempt = waiting.runs[0]!.attempts[0]!;
-    const diagnostic = JSON.parse(attempt.error!.split("gate diagnostic ")[1]!);
-    expect(diagnostic.stderrTail).toBe(unsafe ? "[redacted: transcript-content]" : tail);
-    expect(await inspectPullRequestText("title/body", diagnostic.stderrTail)).toEqual({ ok: true });
-    expect(attempt.pullRequestInspection?.failures).toBe(1);
-    expect(attempt.publicationTextRepair).toBeUndefined();
-    expect(f.sends).toEqual([]);
-  } finally { f.close(); }
-});
-
-test("PR inspection content repair retires its prior counter before a concurrent summary report", async () => {
-  const f = await inspectionFixture("empty");
-  try {
-    const waiting = await f.finish();
-    waiting.runs[0]!.attempts[0]!.paneId = null;
-    savePipelines([waiting]);
-    const exec = f.h.ports.exec;
-    let finding = true, reports = 0;
-    f.h.ports.exec = async (...input) => {
-      if (finding && input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")
-        && input[1].at(-1)?.endsWith("body.md")) {
-        finding = false;
-        return { code: 1, stdout: "known_value: 1\n", stderr: "" };
-      }
-      return exec(...input);
-    };
-    f.setExpectedBody(publicSummary);
-    f.h.ports.resumeSeveredTurn = async () => {
-      reports++;
-      const result = await engineModule.reportStageCompletion({ verdict: "pass", summary: publicSummary },
-        { kind: "agent", role: "builder", conversationId: "conversation_stage_1" }, f.h.ports);
-      expect(result.error).toBeUndefined();
-      return true;
-    };
-    f.advance(1_001);
-    await tickPipelines([], f.h.ports);
-    const answered = loadPipelines().find(p => p.id === f.id)!;
-    expect(reports).toBe(1);
-    expect(answered.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("answered");
-    expect(answered.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
-    await tickPipelines([], f.h.ports);
-    const retried = loadPipelines().find(p => p.id === f.id)!;
-    expect(retried.runs[0]!.attempts[0]!.pullRequestInspection?.failures).toBe(1);
-    expect(reports).toBe(1);
-  } finally { f.close(); }
-});
-
-test("PR inspection real content finding still refuses beside an inspection error and withholds its diagnostic", async () => {
-  const f = await inspectionFixture("finding");
-  try {
-    f.adopt();
-    const refused = await f.finish();
-    const attempt = refused.runs[0]!.attempts[0]!;
-    expect(attempt.publicationTextRepair?.state).toBe("pending");
-    expect(attempt.pullRequestInspection).toBeUndefined();
-    expect(attempt.error).toContain("known-value");
-    expect(attempt.error).toContain("stderrTail");
-    expect(attempt.error).not.toContain(unsafeSummary);
-    expect(f.sends).toHaveLength(1);
-    expect(refused.delivery?.target.pr).toBeUndefined();
-  } finally { f.close(); }
-});
-
-
-test("PR inspection backoff and exhaustion survive fresh controller processes", async () => {
-  const f = await inspectionFixture("empty");
-  try {
-    let lane = await f.finish();
-    const accepted = lane.lastPassedCommit;
-    const restart = async (at: number) => {
-      const driver = `
-        const { defaultPipelinePorts, settlePendingStageGit } = await import("@/lib/pipelines/engine");
-        const { loadPipelines } = await import("@/lib/pipelines/store");
-        const { realExec } = await import("@/lib/workflows/provision");
-        const sends = []; let checks = 0;
-        const ports = { ...defaultPipelinePorts(), now: () => new Date(${at}).toISOString(),
-          conversationAgentActive: async () => false, conversationDeliveryOutstanding: () => false,
-          resumeSeveredTurn: async input => { sends.push(input.clientMessageId); return true; },
-          exec: async (command, args, cwd, env, options) => {
-            if (command === "gh") return { code: 0, stdout: "[]", stderr: "" };
-            if (command === "bun") { checks++; return { code: 1, stdout: "", stderr: "input unavailable" }; }
-            return realExec(command, args.map(arg => arg === ${JSON.stringify(REMOTE)} ? ${JSON.stringify(f.origin)} : arg), cwd, env, options);
-          } };
-        await settlePendingStageGit(ports);
-        const lane = loadPipelines().find(lane => lane.id === ${JSON.stringify(f.id)});
-        console.log(JSON.stringify({ lane, checks, sends }));
-      `;
-      const result = await realExec(process.execPath, ["-e", driver], process.cwd(), {
-        ...process.env, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_RUNTIME_HOST_CONTROL_URL: "http://127.0.0.1:1",
-      }, { timeoutMs: 30_000 });
-      expect(result.code, result.stderr).toBe(0);
-      return JSON.parse(result.stdout.trim());
-    };
-    const before = await restart(Date.parse(lane.runs[0]!.attempts[0]!.pullRequestInspection!.retryAt) - 1);
-    expect(before.checks).toBe(0);
-    for (const failures of [2, 3, 4]) {
-      const result = await restart(Date.parse(lane.runs[0]!.attempts[0]!.pullRequestInspection!.retryAt) + 1);
-      lane = result.lane;
-      expect(lane.runs[0]!.attempts[0]!.pullRequestInspection!.failures).toBe(failures);
-      expect(result.checks).toBe(2); // Both fields are inspected before adoption is considered.
-      expect(result.sends).toEqual([]);
-      expect(lane.lastPassedCommit).toBe(accepted);
-    }
-    expect(lane.state).toBe("needs_decision");
-    expect(lane.stateDetail).toContain("inspection retry budget exhausted");
-    expect(lane.runs[0]!.attempts[0]!.publicationTextRepair).toBeUndefined();
-    const after = await restart(Date.parse(lane.runs[0]!.attempts[0]!.pullRequestInspection!.retryAt) + 60_000);
-    expect(after.checks).toBe(0);
-    // Recovery can observe the durable budget before the terminal lane write.
-    // Reopening that cursor must not grant another automatic inspection.
-    const interrupted = loadPipelines().find(p => p.id === f.id)!;
-    interrupted.state = "running";
-    interrupted.runs[0]!.attempts[0]!.state = "passed";
-    savePipelines([interrupted]);
-    const held = await restart(Date.parse(lane.runs[0]!.attempts[0]!.pullRequestInspection!.retryAt) + 60_001);
-    expect(held.checks).toBe(0);
-    expect(held.lane.state).toBe("needs_decision");
-    f.advance(120_000); f.recover();
-    expect((await engineModule.patchPipeline(f.id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
-    await tickPipelines([], f.h.ports);
-    const done = loadPipelines().find(p => p.id === f.id)!;
-    expect(done.cursor?.stageId).toBe("review");
-    expect(done.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
-  } finally { f.close(); }
-});
-
-
-test("PR inspection adopts a matching PR during a final-fix refresh without changing its body", async () => {
-  const f = await inspectionFixture("empty");
-  try {
-    const lane = await f.finish();
-    const attempt = lane.runs[0]!.attempts[0]!;
-    attempt.activatedBy = { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true };
-    f.setExisting();
-    const result = await ensureStagePullRequest(lane, attempt, f.h.ports.exec);
-    expect(result).toEqual({ ok: true });
-    expect(lane.delivery?.target.pr).toBe(17);
-    expect(attempt.error).toContain("inspection-error");
-    expect(f.calls.some(isBodyPatch)).toBe(false);
-    expect(f.body()).toBe("");
-  } finally { f.close(); }
-});
-
-test.each([
-  ["body", false], ["body", true], ["title", false], ["title", true],
-  ["title/body", false], ["clean", false], ["clean", true],
-] as const)("PR inspection checks refreshed %s before fallback adoption (missing companion=%s)", async (part, missing) => {
-  const f = await finalBudgetFixFixture();
-  try {
-    const scripts = path.join(f.worktree, "scripts");
-    fs.mkdirSync(scripts);
-    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "// Controlled infrastructure failure.\n");
-    fs.copyFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"),
-      path.join(scripts, "privacy-known-value-fingerprints.json"));
-    await f.git(f.worktree, "add", "scripts");
-    await f.commit();
-    const exec = f.h.ports.exec;
-    let inspectionFailed = false, refreshed = false;
-    const title = "api_token:", body = "Z".repeat(16);
-    if (part === "title/body") {
-      expect(await inspectPullRequestText("title", title)).toEqual({ ok: true });
-      expect(await inspectPullRequestText("body", body)).toEqual({ ok: true });
-      expect(await inspectPullRequestText("title/body", `${title}\n${body}`)).toMatchObject({ ok: false, privacy: { kind: "credential" } });
-    }
-    f.h.ports.exec = async (...input) => {
-      if (input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")) {
-        inspectionFailed = true;
-        return { code: 1, stdout: "inspection_error: 1\n", stderr: "gate input unavailable" };
-      }
-      const result = await exec(...input);
-      if (inspectionFailed && input[0] === "gh" && input[1][1] === "view" && result.code === 0) {
-        const row = JSON.parse(result.stdout);
-        if (part === "body" || part === "title") row[part] = unsafeSummary;
-        if (part === "title/body") Object.assign(row, { title, body });
-        if (missing) delete row[part === "body" ? "title" : "body"];
-        refreshed = true;
-        return { ...result, stdout: JSON.stringify(row) };
-      }
-      return result;
-    };
-    const lane = await f.finish(fixSummary, 3);
-    const attempt = lane.runs[0]!.attempts.at(-1)!;
-    expect(refreshed).toBe(true);
-    if (part === "clean") {
-      expect(lane.cursor?.activatedBy?.budgetRecheck).toBe(true);
-      expect(attempt.error).toContain("inspection-error");
-      expect(lane.delivery?.target.pr).toBe(17);
-    } else {
-      expect(lane.cursor?.stageId).toBe("build");
-      expect(attempt.error).toContain(part === "title/body" ? "credential" : "absolute-path");
-      expect(attempt.error).not.toContain(unsafeSummary);
-      expect(attempt.pullRequestInspection).toBeUndefined();
-    }
-    expect(f.calls.some(isBodyPatch)).toBe(false);
-    expect(f.body()).toBe(originalBudgetBody);
-  } finally { f.close(); }
-});
-
-for (const [part, missing, content] of [
-  ["body", false, true], ["body", true, true], ["title", false, true], ["title", true, true],
-  ["body", false, false], ["body", true, false], ["title", false, false], ["title", true, false],
-] as const) test(`PR inspection runs the repository gate on refreshed ${part} (missing companion=${missing}, content finding=${content})`, async () => {
-  const f = await finalBudgetFixFixture();
-  try {
-    const marker = "RepositoryPrivacyReviewSentinel";
-    expect(await inspectPullRequestText(part, marker)).toEqual({ ok: true });
-    const scripts = path.join(f.worktree, "scripts");
-    fs.mkdirSync(scripts);
-    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "// Controlled infrastructure failure.\n");
-    const catalog = JSON.parse(fs.readFileSync(path.join(process.cwd(), "scripts/privacy-known-value-fingerprints.json"), "utf8"));
-    const { createHash } = await import("node:crypto");
-    catalog.fingerprints.push({ length: marker.length, sha256: createHash("sha256").update(marker.toLowerCase()).digest("hex") });
-    fs.writeFileSync(path.join(scripts, "privacy-known-value-fingerprints.json"), JSON.stringify(catalog));
-    await f.git(f.worktree, "add", "scripts");
-    await f.commit();
-    const sample = path.join(f.root, "sample.md");
-    fs.writeFileSync(sample, marker);
-    const control = await realExec(process.execPath, [path.join(process.cwd(), "scripts/privacy-publication-gate.ts"),
-      "--require-known-values", "--paths", sample], f.worktree,
-    { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(scripts, "privacy-known-value-fingerprints.json") }, { timeoutMs: 30_000 });
-    expect(control.code, control.stdout + control.stderr).toBe(1);
-    expect(control.stdout).toContain("known_value: 1");
-    const exec = f.h.ports.exec;
-    let inspectionFailed = false, refreshed = false, contentSeen = false;
-    const checkedParts: string[] = [];
-    f.h.ports.exec = async (command, args, cwd, env, options) => {
-      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")) {
-        if (!refreshed) {
-          inspectionFailed = true;
-          return { code: 1, stdout: "inspection_error: 1\n", stderr: "gate input unavailable" };
-        }
-        checkedParts.push(path.basename(args.at(-1)!));
-        const result = await realExec(process.execPath, [path.join(process.cwd(), "scripts/privacy-publication-gate.ts"),
-          ...args.slice(1)], cwd, env, options);
-        contentSeen ||= /known_value: 1/m.test(result.stdout);
-        return result;
-      }
-      const result = await exec(command, args, cwd, env, options);
-      if (inspectionFailed && command === "gh" && args[1] === "view" && result.code === 0) {
-        const row = JSON.parse(result.stdout);
-        row[part] = content ? marker : "Public refreshed result.";
-        if (missing) delete row[part === "body" ? "title" : "body"];
-        refreshed = true;
-        return { ...result, stdout: JSON.stringify(row) };
-      }
-      return result;
-    };
-    const lane = await f.finish(fixSummary, 3);
-    const attempt = lane.runs[0]!.attempts.at(-1)!;
-    expect(refreshed).toBe(true);
-    if (content) {
-      expect(lane.cursor?.stageId).toBe("build");
-      expect(lane.state).toBe("needs_decision");
-      expect(attempt.error).toContain("repository publication privacy gate (known-value)");
-      expect(attempt.error).not.toContain(marker);
-      expect(attempt.publicationTextRepair?.part).toBe(part);
-    } else {
-      expect(lane.cursor?.activatedBy?.budgetRecheck).toBe(true);
-      expect(attempt.error).toContain("inspection-error");
-      expect(lane.delivery?.target.pr).toBe(17);
-    }
-    expect(checkedParts).toContain(part === "title" ? "title.txt" : "body.md");
-    expect(contentSeen).toBe(content);
-    expect(attempt.pullRequestInspection).toBeUndefined();
-    expect(f.calls.some(isBodyPatch)).toBe(false);
-    expect(f.body()).toBe(originalBudgetBody);
-  } finally { f.close(); }
-});
-
-test.each([
-  ["inspection-error", false], ["inspection-error", true], ["configuration-error", false],
-  ["tool-unavailable", false], ["configuration-error, inspection-error", false], ["inspection-error, tool-unavailable", false],
-] as const)("PR inspection retires a legacy %s summary wait and adopts the matching PR (prefixed=%s)", async (kind, prefixed) => {
-  const f = await rewritingFixture();
-  try {
-    const lane = loadPipelines().find(p => p.id === f.id)!;
-    lane.runs[0]!.attempts[0]!.publicationTextRepair!.detail = `${prefixed ? "publishing the passed stage: " : ""}pull request publication privacy gate refused body [redacted]: repository publication privacy gate (${kind})`;
-    savePipelines([lane]);
-    f.setExisting();
-    const sent = f.sends.length;
-    await tickPipelines([], f.h.ports);
-    const done = loadPipelines().find(p => p.id === f.id)!;
-    expect(done.cursor?.stageId).toBe("review");
-    expect(done.delivery?.target.pr).toBe(17);
-    expect(done.runs[0]!.attempts[0]!.error).toContain(kind);
-    expect(done.runs[0]!.attempts[0]!.publicationTextRepair).toBeUndefined();
-    expect(f.sends).toHaveLength(sent);
-  } finally { f.close(); }
-});
-
-test.each(["current", "legacy-mixed"] as const)("a content finding keeps its %s rewrite wait when stderr mentions a legacy inspection failure", async mode => {
-  const f = await inspectionFixture("finding");
-  try {
-    const resume = f.h.ports.resumeSeveredTurn!;
-    f.h.ports.resumeSeveredTurn = async input => {
-      const accepted = await resume(input);
-      if (accepted) f.h.setConversationActive(true);
-      return accepted;
-    };
-    const initial = loadPipelines().find(p => p.id === f.id)!;
-    initial.runs[0]!.attempts[0]!.paneId = null;
-    savePipelines([initial]);
-    const exec = f.h.ports.exec;
-    f.h.ports.exec = async (...input) => input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")
-      && input[1].at(-1)?.endsWith("body.md")
-      ? { code: 1, stdout: "known_value: 1\ninspection_error: 1\n", stderr: "repository publication privacy gate (inspection-error)" }
-      : exec(...input);
-    const refused = await f.finish();
-    expect(refused.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("pending");
-    const repair = refused.runs[0]!.attempts[0]!.publicationTextRepair!;
-    expect(repair.detail).toContain("known-value");
-    if (repair.detail.includes("gate diagnostic"))
-      expect(repair.detail).toContain("repository publication privacy gate (inspection-error)");
-    if (mode === "legacy-mixed") {
-      repair.detail = repair.detail.replace("(known-value)", "(inspection-error, known-value)");
-      savePipelines([refused]);
-    }
-    f.setExisting();
-    f.advance(1_001);
-    await tickPipelines([], f.h.ports);
-    const held = loadPipelines().find(p => p.id === f.id)!;
-    expect(held.cursor?.stageId).toBe("build");
-    expect(held.cursor?.state).toBe("committing");
-    expect(held.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("pending");
-    expect(held.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
-    expect(f.sends).toHaveLength(1);
-  } finally { f.close(); }
-});
-
-
-test.each(["retry-stage", "publish"] as const)("PR inspection %s preserves answered content repairs and grants inspection recovery", async action => {
-  const f = await inspectionFixture("empty");
-  try {
-    await f.finish(unsafeSummary);
-    expect(f.sends).toHaveLength(1); // The genuine content finding requests one rewrite.
-    f.setExpectedBody(publicSummary);
-    const waiting = await f.finish(publicSummary);
-    expect(waiting.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("answered");
-    expect(waiting.runs[0]!.attempts[0]!.pullRequestInspection?.failures).toBe(1);
-    for (const delay of [1_001, 5_001, 15_001]) {
-      f.advance(delay);
-      await tickPipelines([], f.h.ports);
-    }
-    const parked = loadPipelines().find(p => p.id === f.id)!;
-    expect(parked.state).toBe("needs_decision");
-    expect(parked.runs[0]!.attempts[0]!.pullRequestInspection?.exhausted).toBe(true);
-    f.recover();
-    if (action === "retry-stage") f.setExisting();
-    const renewed = await engineModule.patchPipeline(f.id, { action }, f.h.ports);
-    expect(renewed.error).toBeUndefined();
-    expect(renewed.pipeline!.runs[0]!.attempts[0]!.pullRequestInspection?.failures).toBe(0);
-    await tickPipelines([], f.h.ports);
-    const done = loadPipelines().find(p => p.id === f.id)!;
-    expect(done.cursor?.stageId).toBe("review");
-    expect(done.delivery?.target.pr).toBe(17);
-    expect(done.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("answered");
-    expect(done.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
-    if (action === "retry-stage") expect(done.runs[0]!.attempts[0]!.error).toContain("inspection-error");
-    expect(f.sends).toHaveLength(1);
-  } finally { f.close(); }
-});
-
-test("PR inspection checks body findings after title inspection fails", async () => {
-  const f = await inspectionFixture("empty");
-  try {
-    const exec = f.h.ports.exec;
-    f.h.ports.exec = async (...input) => {
-      if (input[0] === "bun" && input[1][0]?.endsWith("privacy-publication-gate.ts")) {
-        f.setExisting();
-        return { code: 1, stdout: input[1].at(-1)?.endsWith("body.md") ? "known_value: 1\n" : "inspection_error: 1\n", stderr: "" };
-      }
-      return exec(...input);
-    };
-    const lane = await f.finish();
-    expect(lane.cursor?.stageId).toBe("build");
-    expect(lane.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("pending");
-    expect(lane.runs[0]!.attempts[0]!.pullRequestInspection).toBeUndefined();
-    expect(lane.delivery?.target.pr).toBeUndefined();
-  } finally { f.close(); }
-});
-
-test("PR inspection preserves a real repository finding after a companion input disappears", async () => {
-  const f = await inspectionFixture("empty");
-  try {
-    const marker = "CatalogReviewSentinel";
-    const catalog = path.join(f.worktree, "scripts/privacy-known-value-fingerprints.json");
-    const data = JSON.parse(fs.readFileSync(catalog, "utf8"));
-    const { createHash } = await import("node:crypto");
-    data.fingerprints.push({ length: marker.length, sha256: createHash("sha256").update(marker.toLowerCase()).digest("hex") });
-    fs.writeFileSync(catalog, JSON.stringify(data));
-    await f.git(f.worktree, "add", "scripts");
-    await f.commit();
-    f.setExpectedBody(marker);
-    const exec = f.h.ports.exec;
-    let contentSeen = false;
-    f.h.ports.exec = async (command, args, cwd, env, options) => {
-      if (command === "bun" && args[0]?.endsWith("privacy-publication-gate.ts")) {
-        const result = await realExec(process.execPath, [path.join(process.cwd(), "scripts/privacy-publication-gate.ts"), ...args.slice(1)], cwd, env, options);
-        if (args.at(-1)?.endsWith("title.txt")) {
-          expect(result.code, result.stdout + result.stderr).toBe(0);
-          fs.unlinkSync(args.at(-1)!);
-        } else {
-          contentSeen = /known_value: 1/m.test(result.stdout);
-          f.setExisting();
-        }
-        return result;
-      }
-      return exec(command, args, cwd, env, options);
-    };
-    const lane = await f.finish(marker);
-    expect(contentSeen).toBe(true);
-    expect(lane.cursor?.stageId).toBe("build");
-    expect(lane.runs[0]!.attempts[0]!.publicationTextRepair?.state).toBe("pending");
   } finally { f.close(); }
 });

@@ -1,5 +1,13 @@
 # Claude queued-send containment
 
+Current native admission for the verified installed CLI is documented in
+[Claude input during a running turn](claude-native-delivery-evidence.md).
+Its kill switch retains this contained seat/agent delivery path and the bounded
+ordinary-operator join. The observations below describe the earlier contained
+revisions and their installed-CLI checks; they are not an admission capability
+statement for the current broker.
+
+
 Issue #2741 follows the queued-send admission enabled by #2694. The broker
 allocated a turn slot for each input and shifted one slot per result. Claude
 can echo several inputs before one result, leaving an already-consumed input
@@ -25,7 +33,7 @@ without interrupting its tool. A turn awaiting permission retains the wait.
 Agent `queue` and `steer-or-queue` follow-ups retain the containment above.
 The historical replacement/interrupt evidence below predates that change.
 
-## Reproduce the current installed-CLI checks
+## Reproduce the installed-CLI checks
 
 Resolve the installed Claude binary before isolating HOME. Export the source
 to a scratch directory, make dependencies available there, and run the one

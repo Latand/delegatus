@@ -3,8 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { listClaudeAccounts } from "@/lib/accounts/claude";
-import type { AgentRegistry } from "@/lib/agent/registry";
-type RegistrySnapshot = ReturnType<AgentRegistry["readOnlySnapshot"]>;
 import { procBackend } from "@/lib/proc";
 import { processIdentityStatus } from "@/lib/processIdentity";
 import { argvEngine, isHelperArgv, readStructuredHostStamp } from "@/lib/scanner/process";
@@ -47,7 +45,7 @@ function realpath(file: string): string | null {
   try { return fs.realpathSync(file); } catch { return null; }
 }
 
-export function nativeCallerSources(snapshot: () => Pick<RegistrySnapshot, "conversations" | "entries">, peerPid = process.pid): NativeCallerSources {
+export function nativeCallerSources(snapshot: NativeCallerSources["snapshot"], peerPid = process.pid): NativeCallerSources {
   // Per-resolution snapshots; a later tool call rereads both accounts and records.
   const accounts = listClaudeAccounts();
   const bootTime = (): number | null => {

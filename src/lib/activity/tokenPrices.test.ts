@@ -113,3 +113,17 @@ test("models the providers publish are priced, retired Claude and older OpenAI r
   expect(tokenCost("gpt-5-mini", "flex", million({ input: 1e6 }))).toBe(0.125);
   expect(tokenCost("gpt-5.3-codex", "flex", million({ input: 1e6 }))).toBeNull();
 });
+
+for (const [model, input, cached, output] of [["gpt-6.2-sol", 2, 0.1, 10], ["gpt-6.2-astra", 8, 0.4, 40]] as const) {
+  test(`${model} uses its published standard, Fast and promotional Ultrafast rates`, () => {
+    for (const [tier, multiplier] of [["standard", 1], ["priority", 2], ["ultrafast", 3]] as const) {
+      const rate = tokenRate(model, tier)!;
+      expect(rate.input).toBeCloseTo(input * multiplier);
+      expect(rate.cacheRead).toBeCloseTo(cached * multiplier);
+      expect(rate.output).toBeCloseTo(output * multiplier);
+      expect(tokenCost(model, tier, million({ input: 1e6, cacheRead: 1e6, output: 1e6 }))).toBeCloseTo((input + cached + output) * multiplier);
+    }
+    expect(tokenRate(model, "flex")).toBeNull();
+    expect(tokenRate(model, "unknown")).toBeNull();
+  });
+}

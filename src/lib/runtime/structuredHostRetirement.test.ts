@@ -48,7 +48,7 @@ import {
 const SESSION = ["019f4906", "4c21", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
 const CONVERSATION = ["conversation", "9ec3b5ad1326be7f"].join("_");
 const NOW = Date.parse("2026-08-27T12:00:00.000Z");
-const IDLE_MS = 6 * 3_600_000;
+const IDLE_MS = 3_600_000;
 const TRANSCRIPT = `/home/user/.claude/projects/-repo/${SESSION}.jsonl`;
 const HOST_PID = 4_100;
 const HOST_IDENTITY = "4100:118820";
@@ -705,6 +705,132 @@ test("an unflushed event tail blocks retirement", async () => {
   await refusedBy("events-flushed", { durableEventTail: () => determined(19) });
 });
 
+/* The flush settles as impossible only when the recorded owner, the one process
+   that persists the cursor, is proven dead by the same liveness check the agent
+   state uses. These cases read the real kernel for the owner: the injected
+   readers above only describe the host process. */
+const claimToken = (identity: ProcessIdentity) => `structured-host:${JSON.stringify(identity)}`;
+
+async function exitedOwnerIdentity(): Promise<ProcessIdentity> {
+  const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  if (child.pid === undefined) throw new Error("fixture owner did not start");
+  const identity = captureProcessIdentity(child.pid);
+  fixtureIdentities.push(identity);
+  const exited = new Promise<void>((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) resolve();
+    else child.once("exit", () => resolve());
+  });
+  await stopFixtureIdentity(identity);
+  await exited;
+  return identity;
+}
+
+function ownedBy(owner: ProcessIdentity | Record<string, unknown>): StructuredHostRetirementDependencies["snapshot"] {
+  return () => snapshot({
+    entries: { [`claude:${SESSION}`]: entry({ claimOwner: claimToken(owner as ProcessIdentity) }) },
+  });
+}
+
+test.skipIf(process.platform !== "linux")("a dead owner settles an unflushed tail as impossible and the host retires with the reason", async () => {
+  const owner = await exitedOwnerIdentity();
+  const probe = await sweep({ snapshot: ownedBy(owner), owned: () => false, durableEventTail: () => determined(15) });
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.terminated).toHaveLength(1);
+  const retired = probe.report.retired[0]!;
+  expect(retired.passed).toContain("events-flushed");
+  expect(retired.unflushedEvents).toEqual({
+    cursor: 12,
+    tail: 15,
+    ownerPid: owner.pid,
+    reason: `the owner process ${owner.pid} is dead, so events 13-15 can never be flushed`,
+  });
+  /* The journal keeps every action whole, so the reason survives there too. */
+  expect(structuredHostRetirementJournalRecord(probe.report).retired[0]!.unflushedEvents).toEqual(retired.unflushedEvents);
+});
+
+test.skipIf(process.platform !== "linux")("a reused owner pid is not a live owner", async () => {
+  const self = captureProcessIdentity(process.pid);
+  const probe = await sweep({
+    snapshot: ownedBy({ ...self, startIdentity: `${self.startIdentity}-earlier-holder` }),
+    owned: () => false,
+    durableEventTail: () => determined(13),
+  });
+  expect(probe.terminated).toHaveLength(1);
+  expect(probe.report.retired[0]!.unflushedEvents).toMatchObject({ cursor: 12, tail: 13, ownerPid: process.pid });
+});
+
+test("a live owner keeps the unflushed tail blocking retirement", async () => {
+  await refusedBy("events-flushed", {
+    snapshot: ownedBy(captureProcessIdentity(process.pid)),
+    owned: () => false,
+    durableEventTail: () => determined(15),
+  });
+});
+
+test.skipIf(process.platform !== "linux")("an owner whose death cannot be verified keeps the tail blocking", async () => {
+  const owner = await exitedOwnerIdentity();
+  /* A legacy claim names no boot domain, so its pid's absence proves nothing. */
+  await refusedBy("events-flushed", {
+    snapshot: ownedBy({ pid: owner.pid, startIdentity: owner.startIdentity }),
+    owned: () => false,
+    durableEventTail: () => determined(15),
+  });
+});
+
+test.skipIf(process.platform !== "linux")("a dead recorded owner whose host this process still holds keeps the tail blocking", async () => {
+  const owner = await exitedOwnerIdentity();
+  await refusedBy("events-flushed", { snapshot: ownedBy(owner), owned: () => true, durableEventTail: () => determined(15) });
+});
+
+test.skipIf(process.platform !== "linux")("a dead owner does not settle a ledger that could not be read", async () => {
+  const owner = await exitedOwnerIdentity();
+  await refusedBy("events-flushed", {
+    snapshot: ownedBy(owner),
+    owned: () => false,
+    durableEventTail: () => undetermined("the ledger tail could not be read"),
+  }, "undetermined");
+});
+
+test.skipIf(process.platform !== "linux")("a flushed host with a dead owner records no unflushed events", async () => {
+  const owner = await exitedOwnerIdentity();
+  const probe = await sweep({ snapshot: ownedBy(owner), owned: () => false });
+  expect(probe.terminated).toHaveLength(1);
+  expect(probe.report.retired[0]!.unflushedEvents).toBeUndefined();
+});
+
+test.skipIf(process.platform !== "linux")("an owner that adopts the host before the signal keeps it", async () => {
+  const owner = await exitedOwnerIdentity();
+  let reads = 0;
+  const dead = ownedBy(owner)!;
+  const adopted = ownedBy(captureProcessIdentity(process.pid))!;
+  const probe = await sweep({
+    snapshot: () => (reads++ === 0 ? dead() : adopted()),
+    owned: () => false,
+    durableEventTail: () => determined(15),
+  });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.retired).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "process-identity", changed: true }]);
+});
+
+test.skipIf(process.platform !== "linux")("a host acquired locally during measurement keeps its unflushed tail blocking", async () => {
+  const owner = await exitedOwnerIdentity();
+  let held = false;
+  const probe = await sweep({
+    snapshot: ownedBy(owner),
+    owned: () => held,
+    durableEventTail: () => determined(15),
+    treePss: async () => {
+      await Promise.resolve();
+      held = true;
+      return { bytes: null, measuredProcesses: 0 };
+    },
+  });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.retired).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "events-flushed", changed: true }]);
+});
+
 test("an unreadable event ledger blocks retirement", async () => {
   await refusedBy("events-flushed", { durableEventTail: () => undetermined("the ledger tail could not be read") }, "undetermined");
 });
@@ -765,7 +891,7 @@ const rotatedAway: StructuredHostRetirementDependencies = {
 };
 
 test("a revoked seat is retired however recently it wrote — the self-tick stops protecting it", async () => {
-  /* Written 90 seconds ago against a six-hour threshold: under the old rule
+  /* Written 90 seconds ago against the one-hour threshold: under the old rule
      this host cleared `transcript-idle`'s floor at every sweep forever, which
      is exactly what a 25-minute self-scheduled cron produced in production. */
   const probe = await sweep({ ...rotatedAway, transcriptStat: () => determined({ mtimeMs: NOW - 90_000 }) });
@@ -1166,7 +1292,9 @@ test("the controller seam sweeps on its own, honours the configured interval and
   });
   expect(disabled).toBeNull();
   expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "0" })).toBeNull();
-  expect(structuredHostRetirementIdleMs({})).toBe(6 * 3_600_000);
+  expect(structuredHostRetirementIdleMs({})).toBe(IDLE_MS);
+  expect(structuredHostRetirementIdleMs({})).toBe(3_600_000);
+  expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "1" })).toBe(3_600_000);
 
   /* A failing sweep never blocks the reconciliation cycle around it. */
   const failed = await reconcileStructuredHostRetirement({
@@ -1188,7 +1316,8 @@ test("an unset and a blank grace are the same statement, and neither is zero", a
   /* An explicit zero is still the operator's word. */
   expect(structuredHostRetirementGraceMs({ LLV_HOST_RETIREMENT_GRACE_MS: "0" })).toBe(0);
   expect(structuredHostRetirementGraceMs({ LLV_HOST_RETIREMENT_GRACE_MS: "999999" })).toBe(60_000);
-  expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "" })).toBe(6 * 3_600_000);
+  expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "" })).toBe(IDLE_MS);
+  expect(structuredHostRetirementIdleMs({ LLV_HOST_RETIREMENT_IDLE_HOURS: "   " })).toBe(3_600_000);
 });
 
 test("the sweep runs on its own timer, once per process", async () => {
@@ -1571,4 +1700,81 @@ test("an unsettled own launch explains the unknown turn as a determined retireme
   expect(probe.report.refused[0]!.undetermined).toBeUndefined();
   state.receipts[launchId]!.state = "completed";
   await refusedBy("turn-settled", { snapshot: () => state }, "undetermined");
+});
+
+test("serving retirement requires a central projection and refuses legacy fallback while reconciliation is incomplete", async () => {
+  const probe = await sweep({ requireAgentState: true });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused).toEqual([expect.objectContaining({ clause: "turn-settled", reason: "central agent state is unavailable" })]);
+});
+
+for (const engine of ["codex", "claude", "copilot"] as const) {
+  for (const protection of ["none", "recent", "seat", "question"] as const) {
+    test(`unowned ${engine} host: configured idle retirement with ${protection} protection`, async () => {
+      const file = snapshot();
+      const host = file.entries[`claude:${SESSION}`]!;
+      delete file.entries[`claude:${SESSION}`];
+      host.key = { engine, sessionId: SESSION };
+      host.structuredHost!.kind = engine === "codex" ? "codex-app-server" : engine === "claude" ? "claude-broker" : "copilot-acp";
+      host.structuredHost!.activeFlags = [];
+      if (protection === "question") host.structuredHost!.pendingAttention = ["open-question"];
+      file.entries[`${engine}:${SESSION}`] = host;
+      file.conversations[CONVERSATION]!.engine = engine;
+      const probe = await sweep({ snapshot: () => file, owned: () => false,
+        idleMs: structuredHostRetirementIdleMs({})!,
+        transcriptStat: () => determined({ mtimeMs: NOW - structuredHostRetirementIdleMs({})! + (protection === "recent" ? 1 : -1) }),
+        orchestratorSeatConversations: () => determined(new Set(protection === "seat" ? [CONVERSATION] : [])),
+      });
+      expect(probe.terminated).toHaveLength(protection === "none" ? 1 : 0);
+      if (protection === "none") expect(probe.terminated[0]).toMatchObject({ owned: false, engine });
+      else expect(probe.report.refused[0]?.clause).toBe(protection === "recent" ? "transcript-idle" : protection === "seat" ? "seat-free" : "attention-settled");
+    });
+  }
+}
+
+test("the persisted cursor round-trips Copilot after mixed and protected retirement candidates", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-retirement-copilot-cursor-"));
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  try {
+    const file = snapshot();
+    const template = file.entries[`claude:${SESSION}`]!;
+    const conversationTemplate = structuredClone(file.conversations[CONVERSATION]!);
+    const generationTemplate = structuredClone(file.conversations[CONVERSATION]!.generations[0]!);
+    delete file.entries[`claude:${SESSION}`];
+    delete file.conversations[CONVERSATION];
+    for (const [index, engine] of (["claude", "codex", "copilot"] as const).entries()) {
+      const sessionId = `${index}${SESSION.slice(1)}`;
+      const conversationId = `conversation_retirement_${engine}` as const;
+      const host = structuredClone(template);
+      host.key = { engine, sessionId };
+      host.structuredHost!.kind = engine === "codex" ? "codex-app-server"
+        : engine === "copilot" ? "copilot-acp" : "claude-broker";
+      host.structuredHost!.activeFlags = [];
+      if (engine === "copilot") host.structuredHost!.pendingAttention = ["open-question"];
+      file.entries[`${engine}:${sessionId}`] = host;
+      file.conversations[conversationId] = {
+        ...conversationTemplate,
+        id: conversationId,
+        engine,
+        generations: [{ ...generationTemplate, id: sessionId }],
+      };
+    }
+
+    const persistence = { readCursor: undefined, writeCursor: undefined,
+      snapshot: () => file, owned: () => false, batch: 10 };
+    const first = await sweep(persistence);
+    expect(first.terminated.map(host => host.engine)).toEqual(["claude", "codex"]);
+    expect(first.report.refused.map(item => item.clause)).toEqual(["attention-settled"]);
+    expect(fs.readFileSync(path.join(root, "host-retirement-cursor.json"), "utf8"))
+      .toContain(`copilot:${`2${SESSION.slice(1)}`}`);
+
+    const second = await sweep(persistence);
+    expect(second.terminated.map(host => host.engine)).toEqual(["claude", "codex"]);
+    expect(second.report.refused.map(item => item.clause)).toEqual(["attention-settled"]);
+  } finally {
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousStateDir;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -1,3 +1,4 @@
+import { attemptTempRemaining } from "./attemptTempDeadline";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -11,6 +12,7 @@ import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
 import { restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
 import { discoverAttemptCopies } from "./attemptCopyDiscovery";
+import { readAttemptEvidenceBinding } from "./attemptEvidenceBinding";
 
 const HOUR = 3600000;
 /** Pin the nearest existing ancestor as well as each absent segment. A missing
@@ -48,24 +50,25 @@ function copyPath(destination: string, parent: string) {
 async function adoptCopies(store: AttemptTempStore, now: () => number, deadline: number) {
   const parent = copyParent(), cursor = store.copyCursor();
   if (!parent || cursor.done) return 0;
-  const page = discoverAttemptCopies(parent, cursor.cursor, now, deadline);
+  const page = discoverAttemptCopies(parent, cursor.cursor, () => attemptTempRemaining() <= 0 ? deadline : now(), deadline);
   let adopted = 0;
   for (const name of page.names) {
-    if (now() >= deadline) return adopted;
+    if ((now() >= deadline || attemptTempRemaining() <= 0)) return adopted;
     if (!/^[a-f0-9]{64}$/.test(name)) continue;
     const destination = path.join(parent, name);
     if (store.copy(destination)) continue;
     const stat = fs.lstatSync(destination, { throwIfNoEntry: false });
     if (!stat?.isDirectory() || stat.isSymbolicLink() || process.getuid && stat.uid !== process.getuid()) continue;
     try {
-      const manifest = readEnvelope(path.join(destination, "manifest.json")) as { pipelineId?: unknown; launchId?: unknown; original?: unknown; identity?: unknown };
+      const manifest = readAttemptEvidenceBinding(path.join(destination, "manifest.json"));
       if (typeof manifest.original !== "string" || typeof manifest.identity !== "string" || !/^\d+:\d+$/.test(manifest.identity)
         || createHash("sha256").update(manifest.original).update("\0").update(manifest.identity).digest("hex") !== name)
         throw new Error("attempt evidence manifest has no matching creation identity");
       const owner = typeof manifest.original === "string" ? store.owner(manifest.original) : null;
       const pipelineId = typeof manifest.pipelineId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(manifest.pipelineId)
         ? manifest.pipelineId : owner?.identity === manifest.identity ? owner?.pipelineId ?? null : null;
-      const launchId = typeof manifest.launchId === "string" ? manifest.launchId : owner?.launchId ?? "legacy";
+      const launchId = typeof manifest.launchId === "string" ? manifest.launchId
+        : owner?.identity === manifest.identity ? owner.launchId : "legacy";
       store.registerCopy({ destination, pipelineId, launchId, kind: pipelineId ? "lane" : "unattributed",
         createdAt: now(), expiresAt: null, checkedAt: now(), bytes: 0 });
       adopted++;
@@ -90,12 +93,15 @@ async function adoptCopies(store: AttemptTempStore, now: () => number, deadline:
 
 /** Runs after root admission is released. Each removal has its own journal;
  * due-row checkpoints, attribution and errors survive a helper restart. */
-export async function sweepEvidenceCopies(store: AttemptTempStore, options: AttemptTempSweepOptions) {
-  return withFileTransactionAsync(store.filename + ".sweep", "attempt evidence copy admission", () => sweepOwnedCopies(store, options));
+export async function sweepEvidenceCopies(store: AttemptTempStore, options: AttemptTempSweepOptions, policy: { agentCopiesManagedSeparately?: boolean } = {}) {
+  if (attemptTempRemaining() <= 0) return { adopted: 0, checked: 0, inspected: 0, removed: 0, removedBytes: 0,
+    errors: 0, unattributed: store.unattributedCopies() };
+  return withFileTransactionAsync(store.filename + ".sweep", "attempt evidence copy admission", () => sweepOwnedCopies(store, options, policy),
+    { waitMs: attemptTempRemaining(10_000) });
 }
 
-async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSweepOptions) {
-  const now = options.now ?? Date.now, deadline = now() + 10000;
+async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSweepOptions, policy: { agentCopiesManagedSeparately?: boolean }) {
+  const now = options.now ?? Date.now, deadline = now() + attemptTempRemaining(10000);
   const report = { adopted: 0, checked: 0, inspected: 0, removed: 0, removedBytes: 0, errors: 0, unattributed: { count: 0, bytes: 0 } };
   if (options.mode !== "dry-run") {
     try {
@@ -109,10 +115,12 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
     }
   }
   if (options.mode !== "dry-run") {
-    store.refreshReporting(now, deadline);
+    store.refreshReporting(() => attemptTempRemaining() <= 0 ? deadline : now(), deadline);
   }
-  const inventory = new RepositoryLinkInventory({ now, budgetMs: 10000 });
+  const inventory = new RepositoryLinkInventory({ now, budgetMs: attemptTempRemaining(10000) });
   const observe = async (row: EvidenceCopy): Promise<AttemptTempAuthority> => {
+    if (row.kind === "agent" && policy.agentCopiesManagedSeparately) return { state: "unknown", expiresAt: null,
+      revision: "host-ended-retention", isCurrent: () => false };
     if (row.kind === "agent") return { state: row.expiresAt !== null && now() >= row.expiresAt ? "expired" : "closed",
       expiresAt: row.expiresAt, revision: "agent", isCurrent: () => row.expiresAt !== null && now() >= row.expiresAt };
     const owner = { directory: row.destination, pipelineId: row.pipelineId, launchId: row.launchId, createdAt: row.createdAt, retainUntilClose: true };
@@ -120,8 +128,8 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       : { state: await options.state(owner, inventory), revision: "", isCurrent: () => true };
   };
   const visited = new Set<string>();
-  for (const row of now() >= deadline ? [] : store.dueCopies(now(), 8)) {
-    if (now() >= deadline) break;
+  for (const row of (now() >= deadline || attemptTempRemaining() <= 0) ? [] : store.dueCopies(now(), 8)) {
+    if ((now() >= deadline || attemptTempRemaining() <= 0)) break;
     visited.add(row.destination);
     report.checked++;
     store.registerCopy({ ...row, checkedAt: now() + 60000 });
@@ -131,9 +139,9 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       copyPath(row.destination, parent);
       const journal = attemptTempJournalPath(row.destination), pending = fs.existsSync(journal);
       if (pending && row.pipelineId && options.mode !== "dry-run")
-        releaseClaim = await claimAttemptRetirement(row.pipelineId, row.destination);
+        releaseClaim = await claimAttemptRetirement(row.pipelineId, row.destination, attemptTempRemaining(deadline - now()));
       const authority = await observe(row);
-      const expiresAt = row.kind === "agent" ? row.expiresAt : authority.expiresAt ?? null;
+      const expiresAt = authority.expiresAt ?? null;
       store.registerCopy({ ...row, expiresAt, checkedAt: expiresAt && expiresAt > now() ? expiresAt : now() + (authority.state === "expired" ? 60000 : HOUR) });
       if (!parentProof.current()) throw new Error("attempt evidence parent changed after authority");
       let target = row.destination;
@@ -146,8 +154,8 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       if (parentProof.exists && fs.lstatSync(target, { throwIfNoEntry: false })?.isDirectory()) {
         // Eligibility is independent of the lane's expiry. Recent copies must
         // also drop out of the forecast when a person pins them.
-        const protection = await snapshotAttemptProtection(target, deadline - now());
-        const clear = await inspectAttemptTree(target, row.destination);
+        const protection = await snapshotAttemptProtection(target, attemptTempRemaining(deadline - now()));
+        const clear = await inspectAttemptTree(target, row.destination, { budgetMs: attemptTempRemaining(deadline - now()) });
         store.copyEligible(row.destination, clear && protection.current() && parentProof.current());
       }
       if (authority.state !== "expired" || !authority.isCurrent()) {
@@ -155,11 +163,11 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
         continue;
       }
       if (!releaseClaim && row.pipelineId && options.mode !== "dry-run") {
-        releaseClaim = await claimAttemptRetirement(row.pipelineId, row.destination);
+        releaseClaim = await claimAttemptRetirement(row.pipelineId, row.destination, attemptTempRemaining(deadline - now()));
       }
       const stat = fs.lstatSync(target, { throwIfNoEntry: false });
       if (!stat && !pending) {
-        if (!parentProof.current() || !authority.isCurrent() || now() >= deadline)
+        if (!parentProof.current() || !authority.isCurrent() || (now() >= deadline || attemptTempRemaining() <= 0))
           throw new Error("attempt evidence absence proof changed");
         if (options.mode !== "dry-run") store.forgetCopy(row.destination);
         continue;
@@ -169,14 +177,14 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       let dispatchAuthority = authority;
       let protection: { current: () => boolean } | undefined;
       const validate = (directory: string) => {
-        if (!parentProof.current() || !dispatchAuthority.isCurrent() || dispatchAuthority.state !== "expired" || now() >= deadline) return false;
+        if (!parentProof.current() || !dispatchAuthority.isCurrent() || dispatchAuthority.state !== "expired" || (now() >= deadline || attemptTempRemaining() <= 0)) return false;
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
         return !!current?.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === identity
           && protection?.current() === true && inventory.unchangedAll();
       };
       const held = async (directory: string) => {
-        protection = await snapshotAttemptProtection(directory, deadline - now());
-        if (!await inspectAttemptTree(directory, row.destination)) {
+        protection = await snapshotAttemptProtection(directory, attemptTempRemaining(deadline - now()));
+        if (!await inspectAttemptTree(directory, row.destination, { budgetMs: attemptTempRemaining(deadline - now()) })) {
           store.copyEligible(row.destination, false);
           return true;
         }
@@ -218,8 +226,8 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
   // A producer schedules checkedAt at expiry. Visit a separate indexed page
   // for human pins without changing that schedule or granting removal authority.
   // The durable cursor keeps advancing even if a particular copy is unreadable.
-  for (const row of now() >= deadline ? [] : store.copiesToInspect(8)) {
-    if (now() >= deadline) break;
+  for (const row of (now() >= deadline || attemptTempRemaining() <= 0) ? [] : store.copiesToInspect(8)) {
+    if ((now() >= deadline || attemptTempRemaining() <= 0)) break;
     store.checkpointCopyInspection(row.destination);
     if (visited.has(row.destination)) continue;
     report.inspected++;
@@ -232,8 +240,8 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
       if (!stat) continue;
       if (!stat.isDirectory() || stat.isSymbolicLink() || process.getuid && stat.uid !== process.getuid())
         throw new Error("attempt evidence identity changed");
-      const protection = await snapshotAttemptProtection(row.destination, deadline - now());
-      const clear = await inspectAttemptTree(row.destination, row.destination);
+      const protection = await snapshotAttemptProtection(row.destination, attemptTempRemaining(deadline - now()));
+      const clear = await inspectAttemptTree(row.destination, row.destination, { budgetMs: attemptTempRemaining(deadline - now()) });
       store.copyEligible(row.destination, clear && protection.current() && parent.current() && now() < deadline);
       store.copyFailure(row.destination, null);
     } catch (error) {

@@ -13,8 +13,8 @@ import { stateDatabaseBusy, stateLockAttempt, stateLockDeferral, waitForStateLoc
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { AgentLivenessPipelineRef, LivenessFlow } from "@/lib/lifecycle/liveness";
 import type { fleetLimitWaits } from "@/lib/mcp/agentFleet";
-import { isStoredPipeline } from "@/lib/pipelines/store";
-import { isStoredFlow } from "@/lib/flows/store";
+import { isStoredPipeline } from "@/lib/pipelines/storedRecord";
+import { isStoredFlow } from "@/lib/flows/validation";
 
 const tracked = (row: string) => `${row}.collection IN ('pipelines','pipelines_archive','flows')`;
 const enqueue = (row: string) => `INSERT INTO history_pending SELECT ${row}.collection,${row}.row_key WHERE ${tracked(row)} ON CONFLICT(collection,row_key) DO NOTHING;`;
@@ -195,10 +195,12 @@ function projectOne(db: Database, collection: string, key: string): CountUpdate 
     WHERE json_extract(s.value,'$.id')=json_extract(r.value,'$.stageId') LIMIT 1),'unassigned') FROM json_each(?,'$.runs') r`).run(collection,key,input,input);
   db.query(`INSERT INTO history_attempts SELECT ?,?,r.key,a.key,json_extract(r.value,'$.stageId'),
     ${["n","state","historical","conversationId","agentPath","paneId","startedAt"].map(field => `json_extract(a.value,'$.${field}')`).join(",")},
-    CASE WHEN julianday(json_extract(a.value,'$.startedAt')) IS NOT NULL THEN CAST(ROUND((julianday(json_extract(a.value,'$.startedAt'))-2440587.5)*86400000) AS INTEGER) END,
+    NULL,
     ${["role","providerWait"].map(field => `json_extract(a.value,'$.${field}')`).join(",")}
     FROM json_each(?,'$.runs') r,json_each(r.value,'$.attempts') a`).run(collection,key,input);
   const projectedTimes=db.query<{run:number;attempt:number;startedAt:string|null},[string,string]>("SELECT run,attempt,startedAt FROM history_attempts WHERE collection=? AND row_key=?").all(collection,key);
+  // Readers and the startedMs index see only Date.parse's exact value: this
+  // replacement is in the same transaction as the projection insert.
   for(const attempt of projectedTimes){const parsed=Date.parse(attempt.startedAt??"");db.query("UPDATE history_attempts SET startedMs=? WHERE collection=? AND row_key=? AND run=? AND attempt=?").run(Number.isFinite(parsed)?parsed:null,collection,key,attempt.run,attempt.attempt);}
   return countChanged ? {oldProject:before?.project ?? null,newProject:row.project,oldSignature:oldCountSignature,newSignature:newCountSignature} : null;
 }

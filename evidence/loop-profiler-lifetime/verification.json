@@ -1,0 +1,302 @@
+{
+  "baselineRevision": "dd8686ee444b68933485e0127650da9a7aa11cca",
+  "observedAtUtc": "2026-11-13T16:18:34Z",
+  "isolation": "Scratch exports, private HOME/XDG_CONFIG_HOME/TMPDIR/LLV_STATE_DIR, closed loopback control URL; one recorded gate at a time.",
+  "causeOnBaseline": {
+    "startup": "src/lib/viewerInstrumentation.ts:996",
+    "guards": "src/lib/loopProfilerServing.ts:69",
+    "claimBeforeSettings": "src/lib/loopProfilerServing.ts:76",
+    "sameRevisionRefusal": "src/lib/loopProfilerServing.ts:58",
+    "claimWrite": "src/lib/loopProfilerServing.ts:62",
+    "killSwitchReaders": [
+      "src/lib/loopProfilerServing.ts:22",
+      "src/lib/loopProfilerServing.ts:28"
+    ],
+    "explanation": "First production Bun Viewer start claims the revision before reading the kill switch, even when disabled. The matching revision refuses subsequent starts. The old armMinutes window was 30 to 120 minutes."
+  },
+  "sourceInputs": [
+    {
+      "path": "src/lib/loopProfiler.ts",
+      "sha256": "7d9c24eae1bfa7728e3d7d2ade28b753f112f5ea20543fc170251d5ad4e7b7aa"
+    },
+    {
+      "path": "src/lib/loopProfilerServing.ts",
+      "sha256": "b568b0034eb1f6fa18be4f29e55b28230108d35a5672012856bdb444c6b390e6"
+    },
+    {
+      "path": "src/lib/loopProfilerStore.ts",
+      "sha256": "d399ac9000869ab1017ada0dc324a7ca5c1e4c6378f3d8043dd5984a71d691d0"
+    },
+    {
+      "path": "src/lib/loopProfilerSupervisor.ts",
+      "sha256": "22d0f41ef0d5898a43d18c42e454b0d322860a090a2256782dce7b25c8d20984"
+    },
+    {
+      "path": "src/lib/loopProfilerSupervisor.test.ts",
+      "sha256": "a6a9b9cc0c44bc2c168aea99c64edd44f959df85707d8c6ca80cb99cdb620e32"
+    },
+    {
+      "path": "src/lib/loopProfiler.test.ts",
+      "sha256": "0e21ab20b47e42d31c6c5eeb6936f001ece736e5b655852d20f62602e2e3f471"
+    },
+    {
+      "path": "src/lib/loopProfiler.fixture.ts",
+      "sha256": "05ac195c7be5010c64678693ee2c1339c3070faa51e9676b02d350cc5ae25bc2"
+    }
+  ],
+  "checks": [
+    {
+      "run": "red before implementation",
+      "command": "bash $GATE bun test --timeout=60000 ./src/lib/loopProfilerSupervisor.test.ts",
+      "exit": 1,
+      "pass": 0,
+      "fail": 1,
+      "errors": 1,
+      "note": "New supervisor module absent on baseline; runner failed during module loading."
+    },
+    {
+      "run": "initial supervisor",
+      "command": "bash $GATE bun test --timeout=60000 ./src/lib/loopProfilerSupervisor.test.ts",
+      "exit": 0,
+      "pass": 14,
+      "fail": 0,
+      "assertions": 64
+    },
+    {
+      "run": "intermediate serving",
+      "command": "bash $GATE bun test --timeout=60000 ./src/lib/loopProfiler.test.ts",
+      "exit": 1,
+      "pass": 64,
+      "fail": 1,
+      "assertions": 315,
+      "note": "Fixture object spread evaluated a collector getter before startup; corrected to preserve lazy getters."
+    },
+    {
+      "run": "original main baseline",
+      "command": "bash $GATE bun test --timeout=60000 ./src/lib/loopProfiler.test.ts",
+      "exit": 0,
+      "pass": 61,
+      "fail": 0,
+      "assertions": 255
+    },
+    {
+      "run": "final serving",
+      "command": "bash $GATE bun test --timeout=60000 ./src/lib/loopProfiler.test.ts",
+      "exit": 0,
+      "pass": 65,
+      "fail": 0,
+      "assertions": 315
+    },
+    {
+      "run": "final supervisor and store",
+      "command": "bash $GATE bun test --timeout=60000 ./src/lib/loopProfilerSupervisor.test.ts",
+      "exit": 0,
+      "pass": 16,
+      "fail": 0,
+      "assertions": 119
+    },
+    {
+      "run": "local idle overhead",
+      "command": "LLV_GATE_RUNNER=off bash $GATE bun src/lib/loopProfiler.fixture.ts idle-arm-cost",
+      "exit": 0,
+      "pairs": 8,
+      "runs": 16,
+      "captures": 0
+    }
+  ],
+  "idleOverhead": {
+    "command": "LLV_GATE_RUNNER=off bash $GATE bun src/lib/loopProfiler.fixture.ts idle-arm-cost",
+    "runtime": "1.4.0",
+    "load": "Each run replays 100000 healthy 10 ms monitor turns and 1000 asynchronous settings polls, with 5000 integer additions per poll. Clock is injected to exclude stalls. Background polling is disabled for exact replay counts. Enabled/disabled order alternates by pair; all eight pairs are retained.",
+    "metric": "Process CPU includes filesystem workers; wall time includes scheduling and I/O. This measures the idle arming controller, excluding native capture. Both modes retain settings polling for live control.",
+    "summary": {
+      "disabled": {
+        "runs": 8,
+        "medianCpuMs": 126.0585,
+        "medianWallMs": 131.98493999999994,
+        "minCpuMs": 114.606,
+        "maxCpuMs": 361.978
+      },
+      "enabledIdle": {
+        "runs": 8,
+        "medianCpuMs": 122.308,
+        "medianWallMs": 126.22273749999994,
+        "minCpuMs": 108.245,
+        "maxCpuMs": 203.147
+      }
+    },
+    "pairedCpuDeltaMs": [
+      -158.83100000000002,
+      -5.434999999999988,
+      -27.27000000000001,
+      -18.757999999999996,
+      -0.6509999999999962,
+      10.074000000000012,
+      14.253,
+      3.096999999999994
+    ],
+    "medianPairedCpuDeltaMs": -3.042999999999992,
+    "measurements": [
+      {
+        "pair": 0,
+        "enabled": false,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 482.562777,
+        "cpuMs": 361.978,
+        "captures": 0
+      },
+      {
+        "pair": 0,
+        "enabled": true,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 190.87285499999996,
+        "cpuMs": 203.147,
+        "captures": 0
+      },
+      {
+        "pair": 1,
+        "enabled": true,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 125.171244,
+        "cpuMs": 119.936,
+        "captures": 0
+      },
+      {
+        "pair": 1,
+        "enabled": false,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 100.30408,
+        "cpuMs": 125.371,
+        "captures": 0
+      },
+      {
+        "pair": 2,
+        "enabled": false,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 145.0189999999999,
+        "cpuMs": 136.757,
+        "captures": 0
+      },
+      {
+        "pair": 2,
+        "enabled": true,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 129.072181,
+        "cpuMs": 109.487,
+        "captures": 0
+      },
+      {
+        "pair": 3,
+        "enabled": true,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 104.33043100000009,
+        "cpuMs": 108.245,
+        "captures": 0
+      },
+      {
+        "pair": 3,
+        "enabled": false,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 131.52481999999986,
+        "cpuMs": 127.003,
+        "captures": 0
+      },
+      {
+        "pair": 4,
+        "enabled": false,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 108.28047200000015,
+        "cpuMs": 116.925,
+        "captures": 0
+      },
+      {
+        "pair": 4,
+        "enabled": true,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 105.85873100000003,
+        "cpuMs": 116.274,
+        "captures": 0
+      },
+      {
+        "pair": 5,
+        "enabled": true,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 121.05632500000002,
+        "cpuMs": 124.68,
+        "captures": 0
+      },
+      {
+        "pair": 5,
+        "enabled": false,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 124.52920799999993,
+        "cpuMs": 114.606,
+        "captures": 0
+      },
+      {
+        "pair": 6,
+        "enabled": false,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 161.67533300000014,
+        "cpuMs": 126.746,
+        "captures": 0
+      },
+      {
+        "pair": 6,
+        "enabled": true,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 185.91975600000023,
+        "cpuMs": 140.999,
+        "captures": 0
+      },
+      {
+        "pair": 7,
+        "enabled": true,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 127.27423099999987,
+        "cpuMs": 124.904,
+        "captures": 0
+      },
+      {
+        "pair": 7,
+        "enabled": false,
+        "polls": 1000,
+        "ticks": 100000,
+        "wallMs": 132.44506,
+        "cpuMs": 121.807,
+        "captures": 0
+      }
+    ],
+    "interpretation": "Run-to-run variation dominates the small median difference. These results establish no performance gain; no native captures occurred."
+  },
+  "limits": {
+    "captureMs": 5000,
+    "cooldownMs": 600000,
+    "profiles": 12,
+    "profileBytes": 8192,
+    "storeBytes": 102400,
+    "settingsPollMs": 1000,
+    "manualRequestMaxMs": 60000
+  },
+  "limitations": [
+    "Recovery-triggered sampling cannot reconstruct the stack of the triggering pause.",
+    "A further blocked turn can delay the native timer and prolong collection.",
+    "The optional compiled-bundle control was disabled; no production build was requested.",
+    "Final-commit typecheck, lint, privacy and hook verdict are reported in the handover."
+  ]
+}

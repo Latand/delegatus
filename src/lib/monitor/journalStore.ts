@@ -4,8 +4,27 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { withFileTransactionAsync, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { fsyncPath, writeTextDurably } from "@/lib/state/durableJson";
+import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import {
+  openJournalCollection,
+  readableJournal,
+  writableJournal,
+  type JournalLocation,
+  type JournalRow,
+} from "@/lib/state/journalCollection";
+import {
+  importLegacyCollection,
+  writeLegacyRollbackMirror,
+  type LegacyCollectionSpec,
+  type LegacyImportHooks,
+  type LegacyImportOutcome,
+  type LegacyReconcileSummary,
+} from "@/lib/state/legacyImport";
+import { waitForStateLock } from "@/lib/state/lockWait";
+import { readStateRowsPage, type SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import { compactSeatTickTiming, sanitizeSeatTickTiming } from "./seatTickTiming";
+import { appendThroughSeatTickJournalWorker } from "./seatTickJournalWorker";
 
 import {
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -265,68 +284,224 @@ export function sanitizeSeatTickRecord(value: unknown): SeatTickRunRecord | null
   };
 }
 
-export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatTickJournalPath()): void {
-  const projectFile = seatTickProjectJournalPath(record.project, filePath);
-  const line = `${JSON.stringify(record.timing ? { ...record, timing: compactSeatTickTiming(record.timing) } : record)}\n`;
-  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  // The global ring remains small. Each project's own ring is independent,
-  // so unrelated checks cannot consume its diagnostic window.
-  withViewerOperation("seat-tick.audit", () => withFileTransactionSync(filePath, "the seat tick journal is busy", () => {
-    fs.mkdirSync(path.dirname(projectFile), { recursive: true, mode: 0o700 });
-    if (!fs.existsSync(projectFile)) {
-      const legacy = readJournalRecords(SEAT_TICK_RUN_HISTORY, { filePath, sanitize: sanitizeSeatTickRecord })
-        .filter(row => row.project === record.project);
-      if (legacy.length) fs.writeFileSync(projectFile, `${legacy.map(row => JSON.stringify(row)).join("\n")}\n`, { encoding: "utf8", mode: 0o600 });
-    }
-    for (const target of [projectFile, filePath]) {
-      fs.appendFileSync(target, line, { encoding: "utf8", mode: 0o600 });
-      trim(target, SEAT_TICK_RUN_HISTORY);
-    }
-  }));
+/* ------------------------------------------------------------------------- *
+ * Where the seat tick journal lives (#1870 slice 8,
+ * docs/design/state-sqlite-migration.md §4.4).
+ *
+ * The legacy form was two rings of ndjson, both rewritten on every check: the
+ * global ring `runs.ndjson` (the newest 500 checks of every project) and one
+ * `runs.ndjson.projects/<sha256(project)>.ndjson` per project (its newest 500).
+ * On a busy installation that was 3.2 MB plus 48 MB, and every line carried a
+ * phase timing about fourteen times the size of the check it timed.
+ *
+ * Layout of the `seat_tick_runs` collection in `state.sqlite`, one row per key:
+ *
+ *   meta                  { nextSeq }
+ *   r:<project>:<seq>     one check without its timing (the sanitized line),
+ *                         plus `i`, the identity of the legacy line it carries
+ *   t:<project>:<seq>     that check's phase timing, compacted as on disk
+ *
+ * `<project>` is the sha256 the legacy file was named by and `<seq>` is
+ * zero-padded, so a project's checks are one key range in check order, and the
+ * row order across projects is the global check order. A check is kept while
+ * it is among the newest 500 of its project or the newest 500 overall, the two
+ * legacy rings; an append removes what fell out of both, in the same
+ * transaction. A reader of one project's newest checks reads that range only,
+ * and the alarm reader leaves the timing rows unread.
+ *
+ * A journal at another path (`LLV_SEAT_TICK_AUDIT_FILE`, or a path a caller
+ * passes) is its own collection in the same database, named after the path.
+ * ------------------------------------------------------------------------- */
+
+export const SEAT_TICK_RUNS_COLLECTION = "seat_tick_runs";
+const SEAT_TICK_BUSY = "the seat tick journal is busy";
+const RUN_PREFIX = "r:";
+const TIMING_PREFIX = "t:";
+const RUN_META_KEY = "meta";
+/** Checks of its own project an append may remove past the bound; one leaves per append. */
+const RETENTION_PAGE = 16;
+
+type StoredSeatTickRun = Omit<SeatTickRunRecord, "timing"> & { i: string };
+
+function defaultSeatTickJournalPath(): string {
+  return statePath(path.join("seat-tick", "runs.ndjson"));
 }
 
-/** The check awaits durability, while file I/O stays off the Viewer thread.
- * Retention scans bytes backwards, avoiding decoding and copying every saved
- * phase in both rings on every append. Shares the legacy writer's lock. */
+function seatTickProjectKey(project: string): string {
+  return crypto.createHash("sha256").update(project).digest("hex");
+}
+
+function runKey(projectKey: string, seq: number): string {
+  return `${projectKey}:${String(seq).padStart(12, "0")}`;
+}
+
+function seatTickCollectionName(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  return resolved === path.resolve(defaultSeatTickJournalPath())
+    ? SEAT_TICK_RUNS_COLLECTION
+    : `${SEAT_TICK_RUNS_COLLECTION}:${crypto.createHash("sha256").update(resolved).digest("hex").slice(0, 16)}`;
+}
+
+function seatTickLocation(filePath: string): JournalLocation {
+  return {
+    collection: seatTickCollectionName(filePath),
+    database: statePath("state.sqlite"),
+    legacyPath: filePath,
+    busyMessage: SEAT_TICK_BUSY,
+    importLegacy: (options) => importLegacySeatTickJournal(filePath, options),
+  };
+}
+
+/** The line a check is journaled as, split for storage: the sanitized check,
+    its compacted timing, and the identity of that line. Null for a record no
+    reader would show. */
+function storedSeatTickRun(value: unknown): { run: StoredSeatTickRun; timing: unknown } | null {
+  const sanitized = sanitizeSeatTickRecord(value);
+  if (!sanitized) return null;
+  const { timing, ...run } = sanitized;
+  const compact = timing ? compactSeatTickTiming(timing) : null;
+  const identity = crypto.createHash("sha256").update(JSON.stringify({ run, timing: compact })).digest("hex");
+  return { run: { ...run, i: identity }, timing: compact };
+}
+
+/** The legacy line for a stored check, as the legacy writer wrote it. */
+function seatTickLine(run: StoredSeatTickRun, timing: unknown): string {
+  const check: Partial<StoredSeatTickRun> = { ...run };
+  delete check.i;
+  return JSON.stringify(timing ? { ...check, timing } : check);
+}
+
+function decodeStoredRun(valueJson: string | null | undefined): unknown {
+  if (!valueJson) return null;
+  const parsed = JSON.parse(valueJson) as unknown;
+  return parsed && typeof parsed === "object" && "value" in parsed ? (parsed as { value: unknown }).value : null;
+}
+
+/** The newest `limit` checks (at most one ring's worth), oldest first. */
+function readStoredSeatTickRuns(location: JournalLocation, limit: number, project: string | undefined, withTiming: boolean): SeatTickRunRecord[] {
+  const bounded = limit > 0 ? Math.min(limit, SEAT_TICK_RUN_HISTORY) : SEAT_TICK_RUN_HISTORY;
+  const page = readStateRowsPage(location.database, location.collection, {
+    prefix: project === undefined ? RUN_PREFIX : `${RUN_PREFIX}${seatTickProjectKey(project)}:`,
+    by: project === undefined ? "order" : "key",
+    descending: true,
+    limit: bounded,
+    ...(withTiming ? { companion: { from: RUN_PREFIX, to: TIMING_PREFIX } } : {}),
+  });
+  if (!page) return [];
+  const records: SeatTickRunRecord[] = [];
+  for (const row of [...page.rows].reverse()) {
+    try {
+      const run = decodeStoredRun(row.valueJson) as Record<string, unknown> | null;
+      if (!run || typeof run !== "object") continue;
+      const timing = withTiming ? decodeStoredRun(row.companionJson) : null;
+      if (timing) run.timing = timing;
+      const record = sanitizeSeatTickRecord(run);
+      if (record) records.push(record);
+    } catch {
+      /* A row that does not decode is skipped, as a torn line was. */
+    }
+  }
+  return records;
+}
+
+/** Keys of one ring beyond `bound`, newest first. */
+function ringOverflow(location: JournalLocation, prefix: string, by: "key" | "order", bound: number, limit: number): string[] {
+  return readStateRowsPage(location.database, location.collection, { prefix, by, descending: true, offset: bound, limit, keysOnly: true })
+    ?.rows.map((row) => row.key) ?? [];
+}
+
+/** The rows one append writes and removes. Runs inside the write transaction,
+    so the rings it reads are the committed ones. */
+function seatTickAppendPatch(
+  location: JournalLocation,
+  collection: SqliteStateCollection<JournalRow>,
+  stored: { run: StoredSeatTickRun; timing: unknown },
+): { records: JournalRow[]; deleteKeys: string[] } {
+  const meta = collection.get(RUN_META_KEY)?.value as { nextSeq?: unknown } | undefined;
+  const seq = Number.isSafeInteger(meta?.nextSeq) && (meta!.nextSeq as number) > 0 ? meta!.nextSeq as number : 1;
+  const projectKey = seatTickProjectKey(stored.run.project);
+  const key = runKey(projectKey, seq);
+  const records: JournalRow[] = [{ key: `${RUN_PREFIX}${key}`, value: stored.run }];
+  if (stored.timing) records.push({ key: `${TIMING_PREFIX}${key}`, value: stored.timing });
+  records.push({ key: RUN_META_KEY, value: { nextSeq: seq + 1 } });
+  /* The new check is the newest of both rings, so 499 committed checks stay
+     beside it in each. A check of this project past that is past both rings.
+     The one check this append pushes out of the global ring stays while its
+     own project still keeps it; its project's later appends remove it. */
+  const doomed = new Set(ringOverflow(location, `${RUN_PREFIX}${projectKey}:`, "key", SEAT_TICK_RUN_HISTORY - 1, RETENTION_PAGE));
+  for (const candidate of ringOverflow(location, RUN_PREFIX, "order", SEAT_TICK_RUN_HISTORY - 1, 1)) {
+    const owner = candidate.slice(RUN_PREFIX.length, candidate.lastIndexOf(":"));
+    if (doomed.has(candidate) || owner === projectKey) continue;
+    const ownBound = ringOverflow(location, `${RUN_PREFIX}${owner}:`, "key", SEAT_TICK_RUN_HISTORY, 1)[0];
+    if (ownBound !== undefined && candidate <= ownBound) doomed.add(candidate);
+  }
+  const deleteKeys = [...doomed].flatMap((runRow) => [runRow, `${TIMING_PREFIX}${runRow.slice(RUN_PREFIX.length)}`]);
+  return { records, deleteKeys };
+}
+
+/** The synchronous append, for settlement and refusal lines written where
+ * they happen. Its commit does not wait for the disk, as the legacy append did
+ * not; see `appendSeatTickRecordOnThisThread`. */
+export function appendSeatTickRecord(record: SeatTickRunRecord, filePath = seatTickJournalPath()): void {
+  const stored = storedSeatTickRun(record);
+  if (!stored) return;
+  const location = seatTickLocation(filePath);
+  withViewerOperation("seat-tick.audit", () => {
+    const collection = writableJournal(location);
+    collection.patchSync(() => seatTickAppendPatch(location, collection, stored), { durability: "process" });
+  });
+}
+
+/** The check awaits the append. In the Viewer it runs on the seat tick
+ * journal's worker thread (`seatTickJournalWorker.ts`), so the transaction
+ * never blocks the Viewer thread; elsewhere it runs here. */
 export async function appendSeatTickRecordAsync(record: SeatTickRunRecord, filePath = seatTickJournalPath()): Promise<void> {
-  const projectFile = seatTickProjectJournalPath(record.project, filePath);
-  const line = `${JSON.stringify(record.timing ? { ...record, timing: compactSeatTickTiming(record.timing) } : record)}\n`;
-  await fs.promises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  await withFileTransactionAsync(filePath, "the seat tick journal is busy", async () => {
-    await fs.promises.mkdir(path.dirname(projectFile), { recursive: true, mode: 0o700 });
-    try { await fs.promises.access(projectFile); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      let legacy = "";
-      try { legacy = await fs.promises.readFile(filePath, "utf8"); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      const rows = legacy.split("\n").flatMap(line => {
-        try { const row = sanitizeSeatTickRecord(JSON.parse(line)); return row ? [row] : []; }
-        catch { return []; }
-      }).slice(-SEAT_TICK_RUN_HISTORY).filter(row => row.project === record.project);
-      if (rows.length) await fs.promises.writeFile(projectFile, `${rows.map(row => JSON.stringify(row)).join("\n")}\n`, { mode: 0o600 });
-    }
-    for (const target of [projectFile, filePath]) {
-      await fs.promises.appendFile(target, line, { mode: 0o600 });
-      const bytes = await fs.promises.readFile(target);
-      let cursor = bytes.length - 1;
-      for (let kept = 0; kept < SEAT_TICK_RUN_HISTORY && cursor >= 0; kept++) cursor = bytes.lastIndexOf(10, cursor - 1);
-      if (cursor < 0) continue;
-      const temp = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
-      try {
-        await fs.promises.writeFile(temp, bytes.subarray(cursor + 1), { mode: 0o600 });
-        await fs.promises.rename(temp, target);
-      } finally { await fs.promises.rm(temp, { force: true }); }
-    }
-  }, { waitMs: 1_000 });
+  const offThread = appendThroughSeatTickJournalWorker(record, filePath);
+  if (offThread) return offThread;
+  return appendSeatTickRecordOnThisThread(record, filePath);
+}
+
+/** The append on the calling thread. A busy database is waited for up to a
+ * second, as the legacy file lock was, yielding between attempts. The commit
+ * survives the process and does not wait for the disk: the legacy rings were
+ * appended and trimmed without an fsync. */
+export async function appendSeatTickRecordOnThisThread(record: SeatTickRunRecord, filePath = seatTickJournalPath()): Promise<void> {
+  const stored = storedSeatTickRun(record);
+  if (!stored) return;
+  const location = seatTickLocation(filePath);
+  await waitForStateLock("seat-tick.audit", () => {
+    const collection = writableJournal(location);
+    collection.patchSync(() => seatTickAppendPatch(location, collection, stored), { durability: "process" });
+  }, { waitMs: 1_000, subject: location.collection });
 }
 
 function seatTickProjectJournalPath(project: string, filePath: string): string {
-  return path.join(`${filePath}.projects`, `${crypto.createHash("sha256").update(project).digest("hex")}.ndjson`);
+  return path.join(seatTickProjectsRoot(filePath), `${seatTickProjectKey(project)}.ndjson`);
+}
+
+function seatTickProjectsRoot(filePath: string): string {
+  return `${filePath}.projects`;
 }
 
 /** The newest `limit` checks, oldest first, scoped before limiting. */
 export function readSeatTickRecords(limit: number, filePath = seatTickJournalPath(), project?: string): SeatTickRunRecord[] {
+  const location = seatTickLocation(filePath);
+  if (readableJournal(location)) return readStoredSeatTickRuns(location, limit, project, true);
+  return readLegacySeatTickRecords(limit, filePath, project);
+}
+
+/** The compact fields needed to reconcile a check-error alarm: the timing
+ * rows are never read, so this post-check bookkeeping reads a few hundred
+ * bytes per check and leaves its phase history unread. */
+export function readSeatTickAlarmRecords(limit: number, filePath = seatTickJournalPath(), project?: string): SeatTickRunRecord[] {
+  const location = seatTickLocation(filePath);
+  if (readableJournal(location)) return readStoredSeatTickRuns(location, limit, project, false);
+  return readLegacySeatTickAlarmRecords(limit, filePath, project);
+}
+
+/* ------------------------------------------------- legacy reads and import */
+
+function readLegacySeatTickRecords(limit: number, filePath: string, project?: string): SeatTickRunRecord[] {
   if (project !== undefined) {
     const scoped = seatTickProjectJournalPath(project, filePath);
     if (fs.existsSync(scoped)) return readJournalRecords(limit, { filePath: scoped, sanitize: sanitizeSeatTickRecord });
@@ -337,10 +512,8 @@ export function readSeatTickRecords(limit: number, filePath = seatTickJournalPat
   return readJournalRecords(limit, { filePath, sanitize: sanitizeSeatTickRecord });
 }
 
-/** Read the compact fields needed to reconcile a check-error alarm. Skip each
- * record's potentially large timing value before JSON.parse so this post-check
- * bookkeeping never rebuilds the phase history on the Viewer thread. */
-export function readSeatTickAlarmRecords(limit: number, filePath = seatTickJournalPath(), project?: string): SeatTickRunRecord[] {
+/** Skip each record's potentially large timing value before JSON.parse. */
+function readLegacySeatTickAlarmRecords(limit: number, filePath: string, project?: string): SeatTickRunRecord[] {
   const scoped = project === undefined ? filePath : seatTickProjectJournalPath(project, filePath);
   let source = scoped;
   if (project !== undefined && !fs.existsSync(scoped)) source = filePath;
@@ -357,6 +530,223 @@ export function readSeatTickAlarmRecords(limit: number, filePath = seatTickJourn
     } catch { /* A malformed line does not hide records around it. */ }
   }
   return rows.slice(-Math.max(0, limit));
+}
+
+/** Every readable line of an ndjson ring; a torn line is skipped, as readers did. */
+function ndjsonValues(text: string): unknown[] {
+  const values: unknown[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try { values.push(JSON.parse(line) as unknown); } catch { continue; }
+  }
+  return values;
+}
+
+type SeatTickImport = { runs: { run: StoredSeatTickRun; timing: unknown }[] };
+
+/**
+ * Both legacy rings as one list in check order. The global ring holds the
+ * newest checks of every project in the order they were made, and each of its
+ * lines is also the newest line of its project's ring; every other project
+ * line is older than all of them. So those older lines come first, merged
+ * across projects by check time with each project's own order kept, and the
+ * global ring follows as it stood. A line that appears in both rings is one
+ * check.
+ */
+function mergedSeatTickRings(globalValues: readonly unknown[], projectsRoot: string): SeatTickImport["runs"] {
+  const global = globalValues.flatMap((value) => {
+    const stored = storedSeatTickRun(value);
+    return stored ? [stored] : [];
+  });
+  const covered = new Map<string, Map<string, number>>();
+  for (const { run } of global) {
+    const owner = seatTickProjectKey(run.project);
+    const counts = covered.get(owner) ?? new Map<string, number>();
+    counts.set(run.i, (counts.get(run.i) ?? 0) + 1);
+    covered.set(owner, counts);
+  }
+  const older: SeatTickImport["runs"][] = [];
+  let names: string[] = [];
+  try { names = fs.readdirSync(projectsRoot).filter((name) => /^[0-9a-f]{64}\.ndjson$/.test(name)).sort(); }
+  catch { names = []; }
+  for (const name of names) {
+    let text: string;
+    try { text = fs.readFileSync(path.join(projectsRoot, name), "utf8"); }
+    catch { continue; }
+    const runs = ndjsonValues(text).flatMap((value) => {
+      const stored = storedSeatTickRun(value);
+      return stored ? [stored] : [];
+    });
+    /* The global ring's lines of this project are its newest: match them from
+       the end, one line each, and keep what came before. */
+    const counts = new Map(covered.get(name.slice(0, 64)) ?? []);
+    const kept: SeatTickImport["runs"] = [];
+    for (let index = runs.length - 1; index >= 0; index -= 1) {
+      const left = counts.get(runs[index]!.run.i) ?? 0;
+      if (left > 0) { counts.set(runs[index]!.run.i, left - 1); continue; }
+      kept.push(runs[index]!);
+    }
+    older.push(kept.reverse());
+  }
+  const merged: SeatTickImport["runs"] = [];
+  const heads = older.map(() => 0);
+  for (;;) {
+    let pick = -1;
+    for (let queue = 0; queue < older.length; queue += 1) {
+      const candidate = older[queue]![heads[queue]!];
+      if (!candidate) continue;
+      if (pick < 0 || candidate.run.at < older[pick]![heads[pick]!]!.run.at) pick = queue;
+    }
+    if (pick < 0) break;
+    merged.push(older[pick]![heads[pick]!]!);
+    heads[pick] = heads[pick]! + 1;
+  }
+  return [...merged, ...global];
+}
+
+function seatTickRows(runs: SeatTickImport["runs"], firstSeq: number): JournalRow[] {
+  const rows: JournalRow[] = [];
+  runs.forEach(({ run, timing }, index) => {
+    const key = runKey(seatTickProjectKey(run.project), firstSeq + index);
+    rows.push({ key: `${RUN_PREFIX}${key}`, value: run });
+    if (timing) rows.push({ key: `${TIMING_PREFIX}${key}`, value: timing });
+  });
+  return rows;
+}
+
+/** Rename the per-project rings aside with the global ring, or remove an
+    untouched mirror of them. Nothing is left in their place: an older writer
+    fails on the global ring's tombstone before any line counts as journaled. */
+function retireSeatTickProjectRings(filePath: string, mode: "keep" | "delete", suffix: string): void {
+  const root = seatTickProjectsRoot(filePath);
+  let stat: fs.Stats;
+  try { stat = fs.lstatSync(root); }
+  catch { return; }
+  if (!stat.isDirectory()) return;
+  if (mode === "delete") fs.rmSync(root, { recursive: true, force: true });
+  else {
+    const target = fs.existsSync(`${root}.${suffix}`) ? `${root}.${suffix}-${Date.now()}` : `${root}.${suffix}`;
+    fs.renameSync(root, target);
+  }
+  fsyncPath(path.dirname(root));
+}
+
+/**
+ * Fold rings a rollback release (or an older writer) appended to back into
+ * the collection. Journal lines only accumulate, so this is a union: each line
+ * the collection does not already hold, counted once per occurrence, joins
+ * after every stored check in ring order. Nothing is removed.
+ */
+function mergeLegacySeatTickRings(filePath: string, imported: SeatTickImport, options: { fenceOwner: boolean; consumedSha256?: string }): LegacyReconcileSummary {
+  const location = seatTickLocation(filePath);
+  const collection = openJournalCollection(location);
+  const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
+  collection.patchSync(() => {
+    const held = new Map<string, number>();
+    for (let offset = 0; ; offset += 4096) {
+      const page = readStateRowsPage(location.database, location.collection, { prefix: RUN_PREFIX, limit: 4096, offset });
+      for (const row of page?.rows ?? []) {
+        const run = decodeStoredRun(row.valueJson) as Partial<StoredSeatTickRun> | null;
+        if (typeof run?.i === "string") held.set(run.i, (held.get(run.i) ?? 0) + 1);
+      }
+      if (!page || page.rows.length < 4096) break;
+    }
+    const added = imported.runs.filter(({ run }) => {
+      const left = held.get(run.i) ?? 0;
+      if (left > 0) { held.set(run.i, left - 1); summary.kept += 1; return false; }
+      return true;
+    });
+    if (added.length === 0) return { records: [] };
+    const meta = collection.get(RUN_META_KEY)?.value as { nextSeq?: unknown } | undefined;
+    const firstSeq = Number.isSafeInteger(meta?.nextSeq) && (meta!.nextSeq as number) > 0 ? meta!.nextSeq as number : 1;
+    const records = seatTickRows(added, firstSeq);
+    summary.added = added.length;
+    summary.keys.push(...records.filter((row) => row.key.startsWith(RUN_PREFIX)).map((row) => row.key));
+    return { records: [...records, { key: RUN_META_KEY, value: { nextSeq: firstSeq + added.length } }] };
+  }, {
+    fenceOwner: options.fenceOwner,
+    ...(options.consumedSha256 ? { afterPersist: (db) => {
+      const result = db.query("UPDATE state_imports SET reconciled_sha256 = ? WHERE collection = ?").run(options.consumedSha256!, location.collection);
+      if (result.changes !== 1) throw new Error(`missing import evidence for ${location.collection} reconciliation`);
+    } } : {}),
+  });
+  return summary;
+}
+
+/** Both rings as files, from one collection revision, for a rollback release
+    that predates the move: the per-project rings are written first, and the
+    global ring is the body the shared helper publishes last. */
+function seatTickMirror(filePath: string): { body: unknown; revision: number; text: string } {
+  const location = seatTickLocation(filePath);
+  const collection = openJournalCollection(location);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const revision = collection.revision();
+    const owners = new Set<string>();
+    for (let offset = 0; ; offset += 4096) {
+      const page = readStateRowsPage(location.database, location.collection, { prefix: RUN_PREFIX, limit: 4096, offset, keysOnly: true });
+      for (const row of page?.rows ?? []) owners.add(row.key.slice(RUN_PREFIX.length, row.key.lastIndexOf(":")));
+      if (!page || page.rows.length < 4096) break;
+    }
+    const lines = (prefix: string, by: "key" | "order", descending: boolean, limit: number) => {
+      const page = readStateRowsPage(location.database, location.collection, {
+        prefix, by, descending, limit, companion: { from: RUN_PREFIX, to: TIMING_PREFIX },
+      });
+      const rows = descending ? [...page?.rows ?? []].reverse() : page?.rows ?? [];
+      return rows.flatMap((row) => {
+        const run = decodeStoredRun(row.valueJson) as StoredSeatTickRun | null;
+        return run ? [seatTickLine(run, decodeStoredRun(row.companionJson))] : [];
+      });
+    };
+    const root = seatTickProjectsRoot(filePath);
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    for (const owner of [...owners].sort()) {
+      const text = lines(`${RUN_PREFIX}${owner}:`, "key", false, SEAT_TICK_RUN_HISTORY);
+      if (text.length) writeTextDurably(path.join(root, `${owner}.ndjson`), `${text.join("\n")}\n`);
+    }
+    fsyncPath(path.dirname(root));
+    const global = lines(RUN_PREFIX, "order", true, SEAT_TICK_RUN_HISTORY);
+    if (collection.revision() !== revision) continue;
+    return { body: global, revision, text: global.length ? `${global.join("\n")}\n` : "" };
+  }
+  throw new Error(`${location.collection} rollback checkpoint did not converge`);
+}
+
+/** The seat tick journal's import spec, for the import driver and its tests. */
+export function seatTickJournalLegacyCollection(filePath = seatTickJournalPath()): LegacyCollectionSpec<SeatTickImport> {
+  const location = seatTickLocation(filePath);
+  return {
+    collection: location.collection,
+    schemaVersion: 1,
+    migrationId: "seat-tick-runs-ndjson-v1",
+    legacyPath: filePath,
+    databasePath: location.database,
+    decode: (bytes) => ({ ok: true, value: ndjsonValues(bytes.toString("utf8")) }),
+    /* The per-project rings are read here, under the global ring's lock,
+       which every legacy writer held for both. */
+    parse: (raw) => ({ runs: mergedSeatTickRings(Array.isArray(raw) ? raw : [], seatTickProjectsRoot(filePath)) }),
+    toRows: ({ runs }) => [
+      ...seatTickRows(runs, 1),
+      { key: RUN_META_KEY, value: { nextSeq: runs.length + 1 } },
+    ].map((row) => ({ key: row.key, value: row, controllerActive: true })),
+    retireCompanions: (mode, suffix) => retireSeatTickProjectRings(filePath, mode, suffix),
+    reconcile: (imported, _baseline, options) => mergeLegacySeatTickRings(filePath, imported, options),
+    mirrorBody: () => seatTickMirror(filePath),
+  };
+}
+
+/** Import the seat tick rings now. The Viewer's activation calls this with
+    `reconcile: true`; tests drive the crash seams through `hooks`. */
+export function importLegacySeatTickJournal(
+  filePath = seatTickJournalPath(),
+  options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true },
+): LegacyImportOutcome {
+  return importLegacyCollection(seatTickJournalLegacyCollection(filePath), options);
+}
+
+/** Write both rings from SQLite for a rollback release that predates the move. */
+export function checkpointSeatTickJournalRollbackMirrorForDemotion(filePath = seatTickJournalPath()): void {
+  writeLegacyRollbackMirror(seatTickJournalLegacyCollection(filePath));
 }
 
 /** Remove one top-level JSON property without parsing its value. */

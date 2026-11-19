@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
+import { KEEP_PNG, localFileKeepFixture, legacyReportPictureFixture } from "@/lib/artifact/localFile.fixture";
+import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 
 const { GET: serve } = await import("./route");
 const responses: Response[] = [];
@@ -14,7 +16,7 @@ async function GET(...args: Parameters<typeof serve>) {
 const PNG_BYTES = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-image-route-"));
 const savedState = process.env.LLV_STATE_DIR;
-const saved = { home: process.env.HOME, roots: process.env.LLV_EVIDENCE_ROOTS };
+const saved = { home: process.env.HOME, cache: process.env.XDG_CACHE_HOME, roots: process.env.LLV_EVIDENCE_ROOTS };
 let home = "";
 let evidence = "";
 
@@ -22,6 +24,7 @@ beforeEach(() => {
   home = fs.mkdtempSync(path.join(sandbox, "home-"));
   evidence = fs.mkdtempSync(path.join(sandbox, "evidence-"));
   process.env.HOME = path.dirname(home);
+  process.env.XDG_CACHE_HOME = path.join(home, "cache");
   process.env.LLV_STATE_DIR = path.join(home, "state");
   fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
   fs.writeFileSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: home, projectRoot: home } } }));
@@ -31,12 +34,76 @@ afterEach(async () => {
   for (const response of responses.splice(0)) if (response.body && !response.body.locked) await response.body.cancel();
   if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = saved.home;
+  if (saved.cache === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = saved.cache;
   if (saved.roots === undefined) delete process.env.LLV_EVIDENCE_ROOTS;
   else process.env.LLV_EVIDENCE_ROOTS = saved.roots;
 });
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 const request = (p: string) => new NextRequest(`http://127.0.0.1:8898/api/image?path=${encodeURIComponent(p)}`, { headers: { host: "127.0.0.1" } });
+
+for (const spelling of ["direct", "alias", "chain", "folder", "evidence", "lexical-alias"]) {
+  test(`hidden path policy refuses image ${spelling}`, async () => {
+    const hidden = path.join(home, ".hidden.png");
+    fs.writeFileSync(hidden, PNG_BYTES);
+    fs.symlinkSync(hidden, path.join(home, "alias.png"));
+    fs.symlinkSync(path.join(home, "alias.png"), path.join(home, "chain.png"));
+    for (const dir of [path.join(home, ".meta"), path.join(evidence, ".cache-x")]) {
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, "shot.png"), PNG_BYTES);
+    }
+    fs.writeFileSync(path.join(home, "visible.png"), PNG_BYTES);
+    fs.symlinkSync(path.join(home, "visible.png"), path.join(home, ".meta/alias.png"));
+    const paths: Record<string, string> = {
+      direct: hidden, alias: path.join(home, "alias.png"), chain: path.join(home, "chain.png"),
+      folder: path.join(home, ".meta/shot.png"), evidence: path.join(evidence, ".cache-x/shot.png"),
+      "lexical-alias": path.join(home, ".meta/alias.png"),
+    };
+    const res = await GET(request(paths[spelling]!));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "path not allowed" });
+  });
+}
+
+test("hidden path policy refuses an image's legacy kept copy", async () => {
+  const requested = path.join(home, ".hidden-kept.png");
+  const store = reportMediaRoot();
+  const file = `${"a".repeat(64)}.png`;
+  fs.mkdirSync(store, { recursive: true });
+  fs.writeFileSync(path.join(store, file), PNG_BYTES);
+  fs.writeFileSync(path.join(store, "index.json"), JSON.stringify([{ path: requested, file, bytes: PNG_BYTES.length, mtimeMs: 1, at: 1, project: null }]));
+  const res = await GET(request(requested));
+  expect(res.status).toBe(403);
+  expect(await res.json()).toEqual({ error: "path not allowed" });
+});
+
+test("keep path policy serves worktree and evidence pictures and deleted copies with identical bytes", async () => {
+  const fixture = localFileKeepFixture(home);
+  const previousTemp = process.env.LLV_REPORT_MEDIA_TEMP_ROOTS;
+  try {
+    process.env.HOME = fixture.home;
+    process.env.LLV_STATE_DIR = fixture.state;
+    process.env.LLV_EVIDENCE_ROOTS = `${fixture.evidence}:${fixture.external}`;
+    process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = fixture.temp;
+    for (const file of fixture.images) {
+      const res = await GET(request(file));
+      expect(res.status).toBe(200);
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(KEEP_PNG);
+    }
+    const { keepReportPictures } = await import("@/lib/reportMedia/store");
+    const gone = [fixture.deletedProject, fixture.deletedTemp];
+    expect(await keepReportPictures(gone, { now: 1000, projectOf: () => null })).toEqual(gone);
+    for (const file of gone) fs.unlinkSync(file);
+    for (const file of gone) {
+      const res = await GET(request(file));
+      expect(res.status).toBe(200);
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(KEEP_PNG);
+    }
+  } finally {
+    if (previousTemp === undefined) delete process.env.LLV_REPORT_MEDIA_TEMP_ROOTS;
+    else process.env.LLV_REPORT_MEDIA_TEMP_ROOTS = previousTemp;
+  }
+});
 
 test("an inline markdown picture under an evidence root is served, as one under home is", async () => {
   for (const dir of [home, evidence]) {
@@ -72,3 +139,23 @@ test("a file whose bytes are no image is refused whatever its extension says", a
   fs.writeFileSync(renamed, "plain text\n");
   expect((await GET(request(renamed))).status).toBe(415);
 });
+
+for (const hidden of [".private-picture.png", ".private/picture.png"]) {
+  for (const spelling of ["deleted-alias", "direct-copy", "copy-alias", "deleted-checkout"]) {
+    test(`hidden path policy refuses legacy retained ${hidden} via ${spelling}`, async () => {
+      const legacy = legacyReportPictureFixture(path.join(home, "legacy-checkout"), hidden);
+      const copyAlias = path.join(home, "copy-alias.png");
+      fs.symlinkSync(legacy.copy, copyAlias);
+      const file = spelling === "direct-copy" ? legacy.copy : spelling === "copy-alias" ? copyAlias : legacy.alias;
+      if (spelling === "deleted-checkout") {
+        fs.rmSync(path.join(home, "legacy-checkout"), { recursive: true, force: true });
+        fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-catalog.json"), JSON.stringify({ files: {} }));
+      } else {
+        expect(fs.existsSync(legacy.source)).toBeTrue();
+      }
+      const res = await GET(request(file));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: "path not allowed" });
+    });
+  }
+}

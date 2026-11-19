@@ -8,7 +8,6 @@ import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import {
   agentRegistry,
-  deliveryHasDurableClaimOwner,
   registryReceiptsForConversation,
   RegistryWriterBusyError,
   type AgentRegistry,
@@ -42,6 +41,7 @@ import { SEND_SETTLEMENT_WINDOW_MS } from "@/lib/runtime/sendSettlement";
 import { ADVANCEMENT_LEASE_MS, HELD_DRAIN_PASS_BUDGET_MS, requestAccountMigrationTick } from "./controllerSignal";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { migrationLane, startMigrationLane, withAdvancementPermit } from "./lanes";
+import { reconciliationCursor } from "./reconcileCursor";
 import {
   emptyLaunchProfile,
   migrationSuccessorLaunchProfile,
@@ -101,6 +101,7 @@ export interface HeldDeliveryPort {
 
 export interface DrainHeldDeliveriesOptions {
   now?: () => number;
+  orphanedDeliveryReason?: (item: HeldDelivery) => string;
 }
 
 /** One registry write the coordinator makes, waited for off the event loop
@@ -1322,7 +1323,17 @@ export async function drainHeldDeliveries(
   const conversation = registry.conversation(conversationId);
   const current = conversation?.generations.at(-1);
   if (!current) return;
-  await forEachCooperatively(registry.pendingDeliveries(conversationId), async (item) => {
+  const candidates = registry.openDeliveries(conversationId, ["assigned", "delivery-uncertain"], { advance: true });
+  if (options.orphanedDeliveryReason) {
+    // Preflight exactly the page that can act, before even reconciling an
+    // uncertain peer. A refused cancellation leaves this page without effects.
+    for (const item of candidates) {
+      if (item.state !== "assigned" || item.recoveryIntent === "reclaimed-host" || registry.hasDurableDeliveryOwner(item)) continue;
+      if (!await offLoop(registry, "delivery.cancel", item.command.operationId,
+        () => registry.terminalizeOrphanedHeldDelivery(item, options.orphanedDeliveryReason!(item)))) return;
+    }
+  }
+  await forEachCooperatively(candidates, async (item) => {
     const reconciling = item.state === "delivery-uncertain";
     if (reconciling && !delivery.reconcileUncertain) return;
     if (!reconciling && (item.state !== "assigned" || item.generationId !== current.id)) return;
@@ -1346,7 +1357,8 @@ export async function drainHeldDeliveries(
       if (!reconciling) {
         /* Waited for off the loop (rule c). A claim the lock refused claimed
            nothing: the reservation stays assigned for the next pass. */
-        const claim = await offLoop(registry, "delivery.claim", operationId, () => registry.beginDeliveryAttempt(item.id, current.id));
+        const claim = await offLoop(registry, "delivery.claim", operationId, () => registry.beginDeliveryAttempt(item.id, current.id,
+          options.orphanedDeliveryReason ? { expected: item, reason: options.orphanedDeliveryReason(item) } : undefined));
         if (!claim) {
           delivery.wait?.({ delivery: item, registry, reason: "checking", detail: "the writer claim waited past its lock deadline" });
           return;
@@ -1404,11 +1416,19 @@ export async function drainHeldDeliveries(
 }
 
 export interface ReconcileMigrationsOptions extends MigrationCoordinatorOptions {
-  /** How long the pass waits for its lanes ({@link HELD_DRAIN_PASS_BUDGET_MS}). */
+  /** Whole-pass elapsed budget, including discovery, repairs and lane waits. */
   passBudgetMs?: number;
   /** How long one lane keeps the advancement permit ({@link ADVANCEMENT_LEASE_MS}). */
   advancementLeaseMs?: number;
+  /** When the process serving this pass started (epoch ms). A reservation
+      admitted before it predates the release now serving; one admitted after
+      it was not left behind by an upgrade. */
+  servingStartedAt?: number;
 }
+
+const coordinatorProcess = process as typeof process & { __llvMigrationServingStartedAt?: number };
+const SERVING_PROCESS_STARTED_AT = coordinatorProcess.__llvMigrationServingStartedAt
+  ??= Date.now() - process.uptime() * 1_000;
 
 /**
  * One coordinator pass (docs/design/delivery-progress-and-drain.md, B1).
@@ -1429,36 +1449,49 @@ export async function reconcileMigrations(
   registry: AgentRegistry = agentRegistry(),
   options: ReconcileMigrationsOptions = {},
 ): Promise<void> {
-  const { passBudgetMs = HELD_DRAIN_PASS_BUDGET_MS, advancementLeaseMs = ADVANCEMENT_LEASE_MS, ...coordinatorOptions } = options;
-  const orphanedDeliveryReason =
-    `${MIGRATION_DELIVERY_CANCELLATION_PREFIX} its upgrade-era reservation has no durable owner evidence; send again to authorize a fresh delivery action`;
-  const before = registry.readOnlySnapshot();
+  const { passBudgetMs = HELD_DRAIN_PASS_BUDGET_MS, advancementLeaseMs = ADVANCEMENT_LEASE_MS,
+    servingStartedAt = SERVING_PROCESS_STARTED_AT, ...coordinatorOptions } = options;
+  /* Only a reservation admitted before this process started can be residue of
+     an upgrade. One admitted since was orphaned here, by a host that never
+     took it: saying "upgrade-era" about it sends the reader after a cause that
+     did not happen. */
+  const orphanedDeliveryReason = (item: HeldDelivery) => {
+    const admittedAt = Date.parse(item.createdAt);
+    return !Number.isFinite(admittedAt) || admittedAt < servingStartedAt
+      ? `${MIGRATION_DELIVERY_CANCELLATION_PREFIX} its upgrade-era reservation has no durable owner evidence; send again to authorize a fresh delivery action`
+      : `${MIGRATION_DELIVERY_CANCELLATION_PREFIX} no host owns its conversation and no launch is starting for it${item.generationId === null ? ", and it was never assigned to one" : ""}; send again to authorize a fresh delivery action`;
+  };
+  const deadline = performance.now() + Math.max(0, passBudgetMs);
+  const remaining = () => Math.max(0, deadline - performance.now());
+  if (!remaining()) return;
+  const cursor = reconciliationCursor(registry);
   const cleanups = new Map<ViewerConversationId, RegistryFile["pendingSuccessorCleanups"][string][]>();
-  for (const pending of Object.values(before.pendingSuccessorCleanups)) {
-    const id = registry.canonicalConversationId(pending.conversationId);
-    cleanups.set(id, [...cleanups.get(id) ?? [], pending]);
-  }
   const pendingDeliveries = new Set<ViewerConversationId>();
   const uncertainDeliveries = new Set<ViewerConversationId>();
   const currentlyAssignedDeliveries = new Set<ViewerConversationId>();
-  await forEachCooperatively(Object.values(before.heldDeliveries), (item) => {
-    if (item.state !== "delivered" && item.state !== "failed"
-      && (item.state !== "delivery-uncertain" || delivery.reconcileUncertain)) {
-      const id = registry.canonicalConversationId(item.conversationId);
-      pendingDeliveries.add(id);
-      if (item.state === "delivery-uncertain") uncertainDeliveries.add(id);
-      if (item.state === "assigned" && item.generationId === before.conversations[id]?.generations.at(-1)?.id) {
-        currentlyAssignedDeliveries.add(id);
-      }
+  // Keys are bounded before normalization or copies. Advance only past rows
+  // actually handled; a budget stop leaves the remainder owed next pass.
+  const page = async <C extends "heldDeliveries" | "conversations" | "pendingSuccessorCleanups" | "migrationIntents">(collection: C,
+    visit: (row: RegistryFile[C][string]) => void, cursorKey: keyof typeof cursor.after = collection, repairs = false) => {
+    if (!remaining()) return;
+    const rows = registry.migrationWorkPage(collection, cursor.after[cursorKey], 64, repairs);
+    let handled = 0;
+    for (const [key, row] of rows) {
+      if (!remaining()) break;
+      visit(row);
+      cursor.after[cursorKey] = key;
+      handled++;
+      await yieldToRuntime();
     }
-  });
+    if (handled === rows.length && rows.length < 64) cursor.after[cursorKey] = "";
+  };
   /* #1709: a parked switch leaves the conversation on its current generation, where sends are assigned and
      claimed in admission order. An assigned reservation no sender went on to claim would hold back every later
      send until the switch left the phase, so this pass delivers what is assigned to that generation, in order.
      Nothing uncertain is replayed: uncertain rows only reconcile. */
   const drainParkedSwitch = async (parked: RegistryConversation) => {
     const currentGeneration = parked.generations.at(-1)?.id;
-    if (registry.pendingDeliveries(parked.id).some((item) => item.state === "assigned" && item.generationId === currentGeneration)) {
+    if (registry.openDeliveries(parked.id, ["assigned"]).some((item) => item.generationId === currentGeneration)) {
       await drainHeldDeliveries(parked.id, delivery, registry);
     }
   };
@@ -1485,31 +1518,19 @@ export async function reconcileMigrations(
       && conversation.migration.phase !== "committed"
       && conversation.migration.phase !== "rolled-back"
       && delivery.reconcileUncertain
-      && registry.pendingDeliveries(conversation.id).some((item) => item.state === "delivery-uncertain")) {
+      && registry.openDeliveries(conversation.id, ["delivery-uncertain"]).length > 0) {
       await drainHeldDeliveries(conversation.id, delivery, registry);
       drained = true;
       conversation = registry.conversation(conversation.id) ?? conversation;
     }
     if (!conversation.migration) {
-      const pending = registry.pendingDeliveries(conversation.id);
-      for (const item of pending) {
-        if ((item.state === "held" || item.state === "assigned")
-          && item.recoveryIntent !== "reclaimed-host"
-          && !deliveryHasDurableClaimOwner(before, conversation, item)) {
-          /* A cancellation the lock refused leaves the reservation as it was,
-             and this conversation is not drained this pass: nothing it would
-             have cancelled may be delivered first. */
-          if (!await offLoop(registry, "delivery.cancel", item.command.operationId,
-            () => registry.terminalizeOrphanedHeldDelivery(item, orphanedDeliveryReason))) return;
-        }
+      // Held reservations cannot actuate. Assigned candidates are checked
+      // on the advancing actuator page inside the writer that claims them.
+      for (const item of registry.openDeliveries(conversation.id, ["held"], { advance: true })) {
+        if (!await offLoop(registry, "delivery.cancel", item.command.operationId,
+          () => registry.terminalizeOrphanedHeldDelivery(item, orphanedDeliveryReason(item)))) return;
       }
-      const latest = registry.readOnlySnapshot();
-      const current = latest.conversations[conversation.id] ?? conversation;
-      if (registry.pendingDeliveries(conversation.id).some((item) =>
-        (item.state === "assigned" && (item.recoveryIntent === "reclaimed-host" || deliveryHasDurableClaimOwner(latest, current, item)))
-        || (item.state === "delivery-uncertain" && delivery.reconcileUncertain))) {
-        await drainHeldDeliveries(conversation.id, delivery, registry);
-      }
+      await drainHeldDeliveries(conversation.id, delivery, registry, { orphanedDeliveryReason });
       return;
     }
     if (conversation.migration.phase === "rolled-back") {
@@ -1517,7 +1538,7 @@ export async function reconcileMigrations(
          clears it. Apply the same latest-admission ownership fence here so an
          exact resend cannot be cancelled through its older reservation. */
       const intentId = conversation.migration.intentId;
-      for (const item of registry.pendingDeliveries(conversation.id)) {
+      for (const item of registry.openDeliveries(conversation.id)) {
         if (item.state !== "held" && item.state !== "assigned" && item.state !== "delivery-uncertain") continue;
         if (!await offLoop(registry, "delivery.cancel", item.command.operationId, () => registry.terminalizeRolledBackMigrationDelivery(
           item.id,
@@ -1525,7 +1546,7 @@ export async function reconcileMigrations(
           "delivery cancelled because its owning account migration was rolled back; send again to authorize a fresh delivery action",
         ))) return;
       }
-      if (registry.pendingDeliveries(conversation.id).some((item) =>
+      if (registry.openDeliveries(conversation.id, ["assigned", "delivery-uncertain"]).some((item) =>
         item.state === "assigned"
         || (item.state === "delivery-uncertain" && delivery.reconcileUncertain))) {
         await drainHeldDeliveries(conversation.id, delivery, registry);
@@ -1533,7 +1554,7 @@ export async function reconcileMigrations(
       return;
     }
     if (conversation.migration.phase === "committed") {
-      if (registry.pendingDeliveries(conversation.id).some((item) =>
+      if (registry.openDeliveries(conversation.id, ["assigned", "delivery-uncertain"]).some((item) =>
         item.state === "assigned"
         || (item.state === "delivery-uncertain" && delivery.reconcileUncertain))) {
         await drainHeldDeliveries(conversation.id, delivery, registry);
@@ -1556,7 +1577,7 @@ export async function reconcileMigrations(
     const advanced = await withAdvancementPermit(advancementLeaseMs,
       () => advanceConversationMigration(conversation.id, registry, provider, { ...coordinatorOptions, deferBoardRepair: true }));
     if ((advanced.migration?.phase === "committed" || advanced.migration?.phase === "rolled-back")
-      && registry.pendingDeliveries(advanced.id).some((item) =>
+      && registry.openDeliveries(advanced.id, ["assigned", "delivery-uncertain"]).some((item) =>
         item.state === "assigned"
         || (item.state === "delivery-uncertain" && delivery.reconcileUncertain))) {
       await drainHeldDeliveries(advanced.id, delivery, registry);
@@ -1577,7 +1598,7 @@ export async function reconcileMigrations(
       /* The conversation is its lane's until that lane ends: its other
          assigned sends say so, and the acting one keeps its own record. */
       running.rerun = true;
-      for (const item of registry.pendingDeliveries(conversationId)) {
+      for (const item of registry.openDeliveries(conversationId)) {
         if (item.state === "assigned") delivery.wait?.({ delivery: item, registry, reason: "conversation-busy", observer: true });
       }
       return;
@@ -1591,68 +1612,103 @@ export async function reconcileMigrations(
         }
       }
     }, (ended) => {
+      // Recent completions get prompt repair, even when the retained-history
+      // repair cursor is elsewhere. Eviction falls back to durable markers.
+      if (cursor.repairIds.size >= 256) cursor.repairIds.delete(cursor.repairIds.values().next().value!);
+      cursor.repairIds.add(conversationId);
       if (ended.rerun || ended.outlived) requestAccountMigrationTick();
     }));
   };
-  await forEachCooperatively(Object.values(before.conversations), (snapshotConversation) => {
-    const owed = cleanups.get(snapshotConversation.id) ?? [];
-    cleanups.delete(snapshotConversation.id);
-    const work = hasWork(snapshotConversation);
-    if (!work && owed.length === 0) return;
-    start(snapshotConversation.id, () => lane(snapshotConversation, owed, work));
-  });
-  /* Cleanups owed for a conversation the snapshot no longer lists under its id. */
-  for (const [conversationId, owed] of cleanups) {
-    const owner = registry.conversation(conversationId);
-    if (owner) start(owner.id, () => lane(owner, owed, false));
-  }
-  const started = lanes.slice();
-  let budget: ReturnType<typeof setTimeout> | null = null;
-  const finished = await Promise.race([
-    Promise.allSettled(started).then(() => true),
-    new Promise<false>((resolve) => { budget = setTimeout(() => resolve(false), passBudgetMs); }),
-  ]);
-  if (budget) clearTimeout(budget);
-  if (!finished) {
-    for (const conversation of Object.values(before.conversations)) {
-      const running = migrationLane(conversation.id);
-      if (running) running.outlived = true;
+  const selected = new Set<ViewerConversationId>();
+  const select = (conversation: RegistryConversation, owed = cleanups.get(conversation.id) ?? []) => {
+    if (selected.has(conversation.id)) return;
+    const work = hasWork(conversation);
+    // Committed rows also owe idempotent board repairs after a crash.
+    if (work || owed.length || conversation.migration?.phase === "committed") {
+      selected.add(conversation.id);
+      start(conversation.id, () => lane(conversation, owed, work));
     }
+  };
+  const cleanupStart = cursor.after.pendingSuccessorCleanups;
+  await page("pendingSuccessorCleanups", pending => {
+    const id = registry.canonicalConversationId(pending.conversationId);
+    cleanups.set(id, [...cleanups.get(id) ?? [], pending]);
+  });
+  await page("heldDeliveries", item => {
+    if (item.state === "delivery-uncertain" && !delivery.reconcileUncertain) return;
+    const id = registry.canonicalConversationId(item.conversationId);
+    if (item.state === "held" && registry.conversationMigrationPhase(id) === "failed-recoverable") return;
+    const conversation = registry.conversation(id);
+    if (!conversation) return;
+    pendingDeliveries.add(id);
+    if (item.state === "delivery-uncertain") uncertainDeliveries.add(id);
+    if (item.state === "assigned" && item.generationId === conversation.generations.at(-1)?.id) currentlyAssignedDeliveries.add(id);
+    select(conversation);
+  });
+  await page("conversations", conversation => { select(conversation); });
+  for (const [id, owed] of cleanups) {
+    if (!remaining()) { cursor.after.pendingSuccessorCleanups = cleanupStart; break; }
+    const conversation = registry.conversation(id);
+    if (conversation) select(conversation, owed);
   }
-  await yieldToRuntime();
-  const after = registry.readOnlySnapshot();
-  await repairCommittedBoardSuccessions(
-    Object.values(after.conversations),
-    registry,
-    coordinatorOptions.remapBoardPaths ?? remapDurableBoardPaths,
-    coordinatorOptions.transferBoardPathPlacements ?? transferDurableBoardPathPlacements,
-  );
-  const conversationsByIntent = new Map<string, RegistryConversation[]>();
-  await forEachCooperatively(Object.values(after.conversations), (conversation) => {
-    const intentId = conversation.migration?.intentId;
-    if (!intentId) return;
-    const owned = conversationsByIntent.get(intentId) ?? [];
-    owned.push(conversation);
-    conversationsByIntent.set(intentId, owned);
+  if (!cursor.repair) for (const id of [...cursor.repairIds].slice(0, 64)) {
+    if (!remaining()) break;
+    const conversation = registry.conversation(id);
+    if (conversation?.migration?.phase === "committed") select(conversation);
+    else cursor.repairIds.delete(id);
+  }
+  // Historical committed migrations have a separate cursor, so repair scans
+  // cannot delay a newly requested migration behind retained completions.
+  if (!cursor.repair) await page("conversations", conversation => { select(conversation); }, "repairs", true);
+  const wait = async (work: Promise<void>[]) => {
+    if (!work.length) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([Promise.allSettled(work), new Promise<void>(resolve => { timer = setTimeout(resolve, remaining()); })]);
+    } finally { if (timer) clearTimeout(timer); }
+  };
+  await wait(lanes);
+  for (const id of selected) {
+    const running = migrationLane(id);
+    if (running) running.outlived = true;
+  }
+  // Repair related aliases together. Parallel per-conversation remaps can
+  // choose different provisional roots and displace each other's cards.
+  if (remaining() && !cursor.repair) {
+    const repairs = [...selected].flatMap(id => {
+      const current = registry.conversation(id);
+      return current?.migration?.phase === "committed" ? [current] : [];
+    });
+    const repair = repairCommittedBoardSuccessions(repairs, registry,
+      coordinatorOptions.remapBoardPaths ?? remapDurableBoardPaths,
+      coordinatorOptions.transferBoardPathPlacements ?? transferDurableBoardPathPlacements)
+      .then(() => {
+        for (const repaired of repairs) {
+          const current = registry.conversation(repaired.id);
+          if (!current || !boardRepairPlan(current)) cursor.repairIds.delete(repaired.id);
+        }
+      })
+      .catch(error => { console.error("[account-migration] board repair failed", safeProviderDiagnostic(error)); })
+      .finally(() => { cursor.repair = null; if (!remaining()) requestAccountMigrationTick(); });
+    cursor.repair = repair;
+    // Observe a refused write even if the whole-pass deadline stops waiting.
+    await wait([repair]);
+  }
+  const endings: Promise<void>[] = [];
+  await page("migrationIntents", intent => {
+    if (cursor.intents.has(intent.id)) return;
+    cursor.intents.add(intent.id);
+    const ending = offLoop(registry, "migration.intent", null,
+      () => registry.completeSettledMigrationIntent(intent.id, new Date(Date.now() + AUTO_BALANCE_COOLDOWN_MS).toISOString()))
+      .then(() => undefined).catch(error => {
+        if (!(error instanceof RegistryWriterBusyError)) console.error("[account-migration] intent completion failed", safeProviderDiagnostic(error));
+      }).finally(() => {
+        cursor.intents.delete(intent.id);
+        if (!remaining()) requestAccountMigrationTick();
+      });
+    endings.push(ending);
   });
-  await forEachCooperatively(Object.values(after.migrationIntents), async (intent) => {
-    if (intent.state !== "draining") return;
-    const owned = conversationsByIntent.get(intent.id) ?? [];
-    if (!owned.length || owned.every((conversation) => ["committed", "rolled-back", "failed-recoverable"].includes(conversation.migration?.phase ?? ""))) {
-      /* The outcome is written first: a completion the lock refused leaves the
-         intent draining, and the next pass repeats both writes, the outcome's
-         idempotently, so neither is lost. A conversation-scoped reseat (issue
-         #97) settles one thread: it must not book an engine-wide balance
-         outcome nor start the auto-balance cooldown that would suppress a real
-         engine drain. */
-      if (intent.scope !== "conversation") {
-        const outcome = owned.some((conversation) => conversation.migration?.phase === "failed-recoverable") ? "failed-partial" : "complete";
-        if (!await offLoop(registry, "migration.intent", null,
-          () => registry.recordAutoBalanceOutcome(intent.engine, outcome, intent.evidence, new Date(Date.now() + AUTO_BALANCE_COOLDOWN_MS).toISOString()))) return;
-      }
-      await offLoop(registry, "migration.intent", null, () => registry.setMigrationIntentState(intent.id, "complete"));
-    }
-  });
+  await wait(endings);
 }
 
 export function deliveryFence(conversation: RegistryConversation): "deliver" | "held" | "recoverable" {

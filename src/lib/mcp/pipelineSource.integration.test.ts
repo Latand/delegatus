@@ -26,7 +26,7 @@ const { viewerMcpBindings, viewerMcpToolPolicy, productionDomainDependencies } =
 const { withWorkspaceMcpFence } = await import("./workspaceFence");
 const { runAsMcpHttpCaller } = await import("./callerContext");
 const { buildPipeline, savePipelines, loadPipelines, pipelineRevision } = await import("../pipelines/store");
-const { patchPipeline, defaultPipelinePorts, getPipeline } = await import("../pipelines/engine");
+const { patchPipeline, defaultPipelinePorts, getPipeline, normalizeStages } = await import("../pipelines/engine");
 const { injectStateWriteFaultForTests } = await import("../state/sqliteStateStore");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } = await import("../orchestrator/seats");
 const { beginDeputy, recordDeputyFork } = await import("../orchestrator/deputies");
@@ -486,4 +486,134 @@ test("unsettled source receipt remains UNKNOWN after reopen without dispatch", a
   expect((await f.call("uncertain")).structuredContent).toMatchObject({ ok: false, code: "outcome_unknown", details: { outcome: "unknown" } });
   expect(f.count()).toBe(0); expect(f.row()).toEqual(before);
   expect(f.receipts().lookup(key)).toEqual(receipt);
+});
+
+test.each([undefined, "", "   "])("SDK create refuses missing Cloud handoff before provisioning: %s", async handoffDigest => {
+  setSystemTime(new Date("2026-11-12T00:00:00Z"));
+  cleanups.push(() => { setSystemTime(); });
+  const f = await fixture();
+  const before = loadPipelines();
+  const { loadTasks } = await import("../tasks/store");
+  const beforeTasks = loadTasks();
+  const repoDir = path.join(root, `cloud-admission-${handoffDigest === undefined ? "missing" : handoffDigest.length}`);
+  fs.mkdirSync(repoDir, { recursive: true });
+  const gitDir = path.join(repoDir, ".git");
+  expect(fs.existsSync(gitDir)).toBe(false);
+  const args = { clientRequestId: "cloud-handoff-refused", src: f.caller.src, repoDir,
+    task: "Verify Cloud admission", stages: [{ id: "review", kind: "run", runtime: "codex-cloud", engine: "codex", role: { roleId: "reviewer" }, prompt: "Review" }],
+    ...(handoffDigest === undefined ? {} : { inputContext: { handoffDigest } }) };
+  const result = await f.client.callTool({ name: "create_pipeline", arguments: args });
+  expect(result.isError, JSON.stringify(result)).toBe(true);
+  expect(result.structuredContent).toMatchObject({ ok: false, retryable: false, details: { outcome: "not-executed" } });
+  expect(JSON.stringify(result)).toContain("inputContext.handoffDigest");
+  expect(loadPipelines()).toEqual(before);
+  expect(loadTasks()).toEqual(beforeTasks);
+  expect(fs.existsSync(gitDir)).toBe(false);
+  f.reopen();
+  const replay = await f.client.callTool({ name: "create_pipeline", arguments: args });
+  expect(replay.isError).toBe(true);
+  expect(replay.structuredContent).toMatchObject({ details: { outcome: "not-executed" } });
+  expect(loadPipelines()).toEqual(before);
+  expect(loadTasks()).toEqual(beforeTasks);
+  expect(fs.existsSync(gitDir)).toBe(false);
+});
+
+function legacyFallbackPipeline(f: Awaited<ReturnType<typeof fixture>>, reason: string, running = false) {
+  const now = "2026-11-12T00:00:00Z";
+  const normalized = normalizeStages([{ id: "build", kind: "run", role: { roleId: "builder" }, runtime: "codex-cloud",
+    engine: "codex", model: "gpt-6.1-sol", effort: "high", prompt: "Build", next: null }], defaultPipelinePorts().roleLookup, undefined, 1, f.pipeline.project);
+  if (!normalized.stages) throw new Error(normalized.error ?? "legacy stage normalization failed");
+  const stage = normalized.stages[0]!;
+  const record = buildPipeline({ id: f.pipeline.id, task: "Retained local execution", state: "draft", project: f.pipeline.project,
+    repoDir: root, stages: normalized.stages, srcPath: null, srcConversationId: null, now });
+  const attempt: import("../pipelines/types").PipelineStageAttempt = {
+    n: 1, state: running ? "running" : "passed", effectiveRole: stage.effectiveRole,
+    launchId: f.caller.launchId, conversationId: f.caller.id, sessionId: f.caller.id, agentPath: f.caller.src,
+    accountId: "default", paneId: null, flowId: null, startedAt: now, completedAt: running ? null : now,
+    input: null, activatedBy: null, output: running ? null : "Verified locally", verdict: running ? null : { status: "pass", findings: [] },
+    error: null, executionRuntime: "cloud-then-local",
+    cloud: { phase: "failed", error: "registry connect failed", environmentId: "asenvcfg_fixture", branch: record.branch,
+      headSha: "a".repeat(40), deadlineAt: now, nextPollAt: now, polls: 0, taskId: null, taskUrl: null, model: null,
+      fallback: { at: now, reason } },
+  };
+  record.state = "running";
+  record.runs = [{ stageId: stage.id, attempts: [attempt] }];
+  record.cursor = { stageId: stage.id, state: running ? "running" : "pending", input: null, activatedBy: null };
+  savePipelines([record]);
+  return { record, stage, attempt };
+}
+
+type ExecutionEvidence = { requestedRuntime: string; executionRuntime: string; reason: string | null };
+type ProjectedAttempt = { n: number; execution: ExecutionEvidence };
+type ProjectedStage = { id: string; latestAttempt: ProjectedAttempt | null };
+type ExecutionAnswer = { pipelineId?: string; stages?: ProjectedStage[]; attempt?: ProjectedAttempt;
+  pipelines?: Array<{ id: string; stages: ProjectedStage[] }>;
+  pipeline?: { runs: Array<{ stageId: string; attempts: ProjectedAttempt[] }> };
+};
+
+test.each([0, 294, 394])("SDK list, compact, full and stage reads expose a passing legacy fallback safely (secret offset: %s)", async secretOffset => {
+  setSystemTime(new Date("2026-11-12T00:00:00Z"));
+  cleanups.push(() => { setSystemTime(); });
+  const f = await fixture();
+  const secret = "sk-" + "z".repeat(48), prefix = "registry connect failed ";
+  const reason = prefix + ".".repeat(Math.max(0, secretOffset - prefix.length)) + secret + " " + "reason-tail".repeat(100);
+  const { record, stage } = legacyFallbackPipeline(f, reason);
+  for (const [name, args] of [
+    ["list_pipelines", { project: record.project, compact: true }],
+    ["list_pipelines", { project: record.project, compact: false }],
+    ["get_pipeline", { pipelineId: record.id }],
+    ["get_pipeline", { pipelineId: record.id, full: true }],
+    ["get_pipeline", { pipelineId: record.id, stageId: stage.id }],
+  ] as const) {
+    const result = await f.client.callTool({ name, arguments: args });
+    expect(result.isError, JSON.stringify(result)).not.toBe(true);
+    const answer = result.structuredContent as ExecutionAnswer;
+    let execution: ExecutionEvidence | undefined;
+    if (name === "list_pipelines") {
+      const row = answer.pipelines?.find(row => row.id === record.id);
+      expect(row?.id).toBe(record.id);
+      execution = row?.stages.find(row => row.id === stage.id)?.latestAttempt?.execution;
+    } else {
+      expect(answer.pipelineId).toBe(record.id);
+      execution = "full" in args ? answer.pipeline?.runs.find(run => run.stageId === stage.id)?.attempts.find(row => row.n === 1)?.execution
+        : "stageId" in args ? answer.attempt?.execution
+          : answer.stages?.find(row => row.id === stage.id)?.latestAttempt?.execution;
+    }
+    expect(execution).toMatchObject({ requestedRuntime: "codex-cloud", executionRuntime: "local-after-cloud-failure" });
+    expect(execution?.reason?.startsWith(prefix)).toBe(true);
+    const text = JSON.stringify(result.structuredContent);
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain(secret.slice(0, 6));
+  }
+});
+
+test("SDK stage reports derive execution from the held attempt and refuse another conversation", async () => {
+  setSystemTime(new Date("2026-11-12T00:00:00Z"));
+  cleanups.push(() => { setSystemTime(); });
+  const f = await fixture();
+  const secret = "sk-" + "z".repeat(48), prefix = "registry connect failed ";
+  const reason = prefix + ".".repeat(394 - prefix.length) + secret + " " + "reason-tail".repeat(100);
+  legacyFallbackPipeline(f, reason, true);
+  const args = { verdict: "pass", findings: [], summary: "Verified the retained local execution", clientRequestId: "execution-report" };
+  const other = new Client({ name: "other-fixture", version: "1" });
+  try {
+    await other.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", f.listener.url), {
+      requestInit: { headers: { "x-llv-spawn-capability": f.other.capability } },
+    }));
+    const refused = await other.callTool({ name: "stage_report", arguments: { ...args, clientRequestId: "other-execution-report" } });
+    expect(refused.isError).toBe(true);
+    expect(f.row().runs[0]!.attempts[0]!.report).toBeUndefined();
+  } finally { await other.close(); }
+  const result = await f.client.callTool({ name: "stage_report", arguments: args });
+  expect(result.isError, JSON.stringify(result)).not.toBe(true);
+  expect(result.structuredContent).toMatchObject({ pipelineId: f.pipeline.id, stageId: "build", attempt: 1,
+    execution: { requestedRuntime: "codex-cloud", executionRuntime: "local-after-cloud-failure" } });
+  const execution = (result.structuredContent as { execution: ExecutionEvidence }).execution;
+  expect(execution.reason?.startsWith(prefix)).toBe(true);
+  expect(execution.reason!.length).toBeLessThanOrEqual(401);
+  const text = JSON.stringify(result.structuredContent);
+  expect(text).toContain("registry connect failed");
+  expect(text).not.toContain(secret);
+  expect(text).not.toContain(secret.slice(0, 6));
+  expect(text).not.toContain("reason-tail".repeat(100));
 });

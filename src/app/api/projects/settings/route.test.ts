@@ -208,6 +208,7 @@ test("cloud environment is off by default, persists, clears, and rejects malform
   expect((await put({ project, codexCloudEnvironmentId: "  env-fixture  " })).status).toBe(200);
   expect((await (await get(project)).json()).codexCloudEnvironmentId).toBe("env-fixture");
   expect((await (await get(project)).json()).claudeCloudTasks).toEqual([]);
+  expect((await (await get(project)).json()).claudeCloudReadiness).toEqual(expect.any(Array));
   expect((await put({ project, claudeCloudTasks: [{ accountId: "account-a", taskId: "trig_fixture" }] })).status).toBe(200);
   expect((await (await get(project)).json()).claudeCloudTasks).toEqual([{ accountId: "account-a", taskId: "trig_fixture" }]);
   for (const value of ["trig_fixture", [{ accountId: "account-a" }], [{ accountId: "a", taskId: "b c" }], [{ accountId: "a", taskId: "b" }, { accountId: "a", taskId: "c" }], [{ accountId: "a", taskId: "b", token: "c" }]]) {

@@ -1,3 +1,4 @@
+import { gateToolingFiles } from "./gateTooling";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +10,7 @@ import type { AgentMemoryCell } from "./agentMemory";
 import { STDERR_READ_BYTES, startupStderrText, withoutUnterminatedSecret } from "./startupStderr";
 import { bindHostExitWriter } from "./hostExit";
 import { spawnNativeWaitOwner } from "./nativeWaitOwner";
-import { beforeStructuredSetupExec, retainStructuredSetupProcess } from "./structuredSetupCustody";
+import { beforeStructuredSetupExecOffLoop, retainStructuredSetupProcessOffLoop } from "./structuredSetupCustody";
 
 export interface AgentSignalDomain {
   policyVersion: 1;
@@ -55,10 +56,11 @@ export async function spawnManagedEngine(command: string, args: string[], option
   memory: AgentMemoryCell | null | undefined, injected?: EngineSpawn, sourceEnv = options.env ?? process.env,
   transportSpawn?: EngineSpawn, assertCurrent?: () => void): Promise<ChildProcessWithoutNullStreams> {
   assertCurrent?.();
-  beforeStructuredSetupExec();
+  await beforeStructuredSetupExecOffLoop();
+  assertCurrent?.();
   if (injected) {
     const child = (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
-    retainStructuredSetupProcess(child.pid);
+    await retainStructuredSetupProcessOffLoop(child.pid);
     return child;
   }
   options = { ...options, env: { ...(options.env ?? process.env), LLV_HOST_EXIT_RECEIPTS: "1" } };
@@ -364,7 +366,7 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
         const candidates = bridge ? [path.join(directory, "dist/gate")] : [path.join(directory, "scripts"), path.join(directory, "dist/gate")];
         for (const scripts of candidates) {
           try {
-            for (const name of ["gate-slot.sh", "owned-runner.ts", "cpu-admission.ts", "gate-wait.ts"]) fs.accessSync(path.join(scripts, name), fs.constants.R_OK);
+            for (const name of gateToolingFiles) fs.accessSync(path.join(scripts, name), fs.constants.R_OK);
             if (!fs.readFileSync(path.join(scripts, "owned-runner.ts"), "utf8").includes("runSandboxGate")
               || !fs.readFileSync(path.join(scripts, "gate-slot.sh"), "utf8").includes("LLV_SIGNAL_SANDBOX")) continue;
             return bridge ? cacheHostTooling(launcher, scripts)
@@ -384,7 +386,7 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
  * bundled tools have no checkout imports and are published atomically into
  * the home mounted at the same path on both sides of the transition. */
 function cacheHostTooling(launcher: string, scripts: string): { launcher: string; gate: string } {
-  const files = new Map([...["gate-slot.sh", "owned-runner.ts", "cpu-admission.ts", "test-child-guardian.ts", "gate-wait.ts"].map(name => [name, fs.readFileSync(path.join(scripts, name))] as const),
+  const files = new Map([...gateToolingFiles.map(name => [name, fs.readFileSync(path.join(scripts, name))] as const),
     ["launch.py", fs.readFileSync(launcher)] as const]);
   const digest = createHash("sha256");
   for (const [name, body] of files) digest.update(name).update(body);
@@ -416,7 +418,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
     // Main's launch path: the engine under its memory and CPU wrapper only.
     const child = start(command, args, options);
     await (child as ChildProcess & { spawnReady?: Promise<void> }).spawnReady;
-    retainStructuredSetupProcess(child.pid);
+    await retainStructuredSetupProcessOffLoop(child.pid);
     recordSignalBoundaryOff(child, prepared.off, "managed");
     return child;
   }
@@ -447,7 +449,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
       if (fs.existsSync(receipt)) {
         const parsed = readReceipt(receipt);
         if ("off" in parsed) {
-          retainStructuredSetupProcess(child.pid);
+          await retainStructuredSetupProcessOffLoop(child.pid);
           recordSignalBoundaryOff(child, parsed.off, "managed");
           if (assertCurrent) {
             if (!parsed.execAck) throw new Error("agent signal sandbox unavailable: fallback exec acknowledgement is unavailable");
@@ -463,7 +465,8 @@ export async function spawnSignalSandbox(command: string, args: string[], option
         const domain = parsed.domain;
         if (parsed.handle !== child.pid || domain.directory !== directory || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         domains.set(child, domain);
-        retainStructuredSetupProcess(domain.native.pid);
+        await retainStructuredSetupProcessOffLoop(domain.native.pid);
+        if (!agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         if (env.LLV_HOST_EXIT_RECEIPTS === "1") bindHostExitWriter(directory, domain.native, domain.monitor);
         assertCurrent?.();
         fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });

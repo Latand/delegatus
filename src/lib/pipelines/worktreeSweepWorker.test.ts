@@ -1,3 +1,4 @@
+import { sweepMonotonicNow } from "../runtime/attemptTempDeadline";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   if (previous === undefined) delete process.env.SWEEP_TEST_ROOT; else process.env.SWEEP_TEST_ROOT = previous;
 });
+const workerClock = { now: sweepMonotonicNow, setTimeout, clearTimeout };
 function fixture(flag?: string, timeoutMs = 10_000) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-worker-")); roots.push(root);
   fs.mkdirSync(path.join(root, "tree/nested"), { recursive: true });
@@ -25,7 +27,7 @@ function fixture(flag?: string, timeoutMs = 10_000) {
   return { root, worker };
 }
 function launch(flag?: string, timeoutMs = 10_000) {
-  const worker = new WorktreeSweepWorker({ executable: process.execPath, entry: path.join(import.meta.dir,"worktreeSweep.fixture.ts"), args: flag ? [flag] : [] },timeoutMs);
+  const worker = new WorktreeSweepWorker({ executable: process.execPath, entry: path.join(import.meta.dir,"worktreeSweep.fixture.ts"), args: flag ? [flag] : [] },timeoutMs, workerClock);
   workers.push(worker); return worker;
 }
 const counters = (report: unknown) => (report as {cacheStats:{allocationHits:number;allocationMisses:number}}).cacheStats;
@@ -33,9 +35,9 @@ const counters = (report: unknown) => (report as {cacheStats:{allocationHits:num
 function productionFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-protocol-")); roots.push(root);
   const env = { ...process.env, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"),
-    LLV_STATE_DIR: path.join(root, "state"), TMPDIR: path.join(root, "tmp"),
+    LLV_STATE_DIR: path.join(root, "state"), TMPDIR: root,
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_TEMP_SWEEP: "on" };
-  for (const directory of [env.HOME, env.XDG_CONFIG_HOME, env.LLV_STATE_DIR, env.TMPDIR]) fs.mkdirSync(directory);
+  for (const directory of [env.HOME, env.XDG_CONFIG_HOME, env.LLV_STATE_DIR]) fs.mkdirSync(directory);
   const preload = path.join(root, "preload.ts");
   fs.writeFileSync(preload, `
     import fs from "node:fs";
@@ -118,11 +120,30 @@ test("production helper returns attempt reports and survives its own abandoned l
   }
 }, 30_000);
 
+test("production maintenance keeps Docker dry and all ledger writes inside its fixture", async () => {
+  const { root, env } = productionFixture(), calls = path.join(root, "docker-calls");
+  fs.writeFileSync(path.join(root, "docker"), `#!/usr/bin/python3 -IB\nwith open(${JSON.stringify(calls)},'a') as f: f.write('unexpected call\\n')\nraise RuntimeError('unexpected Docker runner')\n`, { mode: 0o700 });
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../worktreeSweep.worker.ts")], {
+    env: { ...env, PATH: root }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();
+  try {
+    child.stdin.write(JSON.stringify({ kind: "maintenance", deadline: sweepMonotonicNow() + 20000 }) + "\n"); child.stdin.end();
+    expect(await child.exited, await stderr).toBe(0);
+    const frames = (await stdout).trim().split("\n").map(line => JSON.parse(line));
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ report: { checked: 0, removed: 0, errors: 0 } });
+    expect(fs.existsSync(path.join(env.LLV_STATE_DIR, "temporary-data.sqlite"))).toBeTrue();
+    expect(fs.existsSync(path.join(env.LLV_STATE_DIR, "docker-cache-retention.json"))).toBeFalse();
+    expect(fs.existsSync(calls)).toBeFalse();
+  } finally { if (child.exitCode === null) { child.kill(); await child.exited; } }
+}, 30_000);
+
 test("production helper takeover of a killed helper lease emits only reply frames on stdout", async () => {
   const { root, env, command } = productionFixture();
   const holder = Bun.spawn(command, { env: { ...env, SWEEP_LEASE_CONTROL: "hold" }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   try {
-    holder.stdin.write('{"kind":"attempt-temp"}\n');
+    holder.stdin.write(JSON.stringify({ kind: "attempt-temp", deadline: sweepMonotonicNow() + 20000 }) + "\n");
     await waitForFile(path.join(root, "held"));
     expect(Number(fs.readFileSync(path.join(root, "held"), "utf8"))).toBe(holder.pid);
     holder.kill("SIGKILL");
@@ -132,7 +153,7 @@ test("production helper takeover of a killed helper lease emits only reply frame
     const stdout = new Response(successor.stdout).text();
     const stderr = new Response(successor.stderr).text();
     try {
-      successor.stdin.write('{"kind":"attempt-temp"}\n{"kind":"attempt-temp"}\n');
+      successor.stdin.write((JSON.stringify({ kind: "attempt-temp", deadline: sweepMonotonicNow() + 20000 }) + "\n").repeat(2));
       successor.stdin.end();
       expect(await successor.exited).toBe(0);
       const frames = (await stdout).trim().split("\n").map(line => JSON.parse(line));
@@ -234,7 +255,7 @@ test("a restored full cache admits a new root within its persistent bound across
 },30_000);
 
 
-test("temp and disk observations share the lease, coalesce polls, and serialize with worktrees", async () => {
+test("temp serializes with worktrees while disk observations coalesce on their own lease", async () => {
   const { root, worker } = fixture();
   const worktrees = worker.run("dry-run");
   const temp = worker.temp();
@@ -243,8 +264,8 @@ test("temp and disk observations share the lease, coalesce polls, and serialize 
   expect(worker.diskPressure()).toBe(disk);
   expect((await worktrees).errors).toEqual([]);
   expect((await temp)?.removed).toEqual([]);
-  await expect(disk).rejects.toThrow("stale while the sweep helper is busy");
-  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("temp\n");
+  expect((await disk).volumes.length).toBeGreaterThan(0);
+  expect(fs.readFileSync(path.join(root, "requests"), "utf8").trim().split("\n").sort()).toEqual(["disk-pressure", "temp"]);
   expect(await worker.temp({ NODE_ENV: "test", LLV_TEMP_SWEEP: "off" })).toBeNull();
   await worker.close();
   expect((await launch().diskPressure()).volumes.length).toBeGreaterThan(0);
@@ -299,7 +320,7 @@ test("fresh disk pressure returns while a worktree sweep holds the leased helper
 }, 20_000);
 
 
-test("disk-pressure cache misses fail promptly instead of joining a held sweep", async () => {
+test("disk-pressure cache misses observe independently of a held sweep", async () => {
   const { root, worker } = fixture("--hold-worktree", 10_000);
   const shared = globalThis as typeof globalThis & { __delegatusWorktreeSweepWorker?: WorktreeSweepWorker };
   shared.__delegatusWorktreeSweepWorker = worker;
@@ -327,13 +348,13 @@ test("disk-pressure cache misses fail promptly instead of joining a held sweep",
       ),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("disk cache miss waited behind sweep")), 1_000); }),
     ]).finally(() => { if (timer) clearTimeout(timer); });
-    expect("error" in result && result.error.message).toContain("stale while the sweep helper is busy");
-    expect(fs.existsSync(path.join(root, "requests"))).toBe(false);
+    expect("report" in result && result.report.volumes.length).toBeGreaterThan(0);
+    expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("disk-pressure\n");
   } finally {
     fs.writeFileSync(path.join(root, "release-worktree"), "release");
   }
   expect((await sweep).errors).toEqual([]);
-  expect(fs.existsSync(path.join(root, "requests"))).toBe(false);
+  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("disk-pressure\n");
 }, 20_000);
 
 for (const kind of ["temp", "disk-pressure"] as const) {
@@ -411,6 +432,13 @@ test("attempt retirement coalesces through the owned worker", async () => {
   expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("attempt-temp\n");
 });
 
+test("temporary data maintenance coalesces and carries its deadline through the owned worker", async () => {
+  const { root, worker } = fixture(); const before = sweepMonotonicNow(), request = worker.maintenance();
+  expect(worker.maintenance()).toBe(request); expect(await request).toMatchObject({ checked: 0, removed: 0 });
+  expect(Number(fs.readFileSync(path.join(root, "maintenance-deadline"), "utf8"))).toBeGreaterThan(before);
+  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("maintenance\n");
+});
+
 test("an attempt tick whose queue budget expired defers, then a fresh tick runs", async () => {
   const { root, worker } = fixture("--hold-worktree", 10_000);
   await worker.run("dry-run");
@@ -423,7 +451,7 @@ test("an attempt tick whose queue budget expired defers, then a fresh tick runs"
   const worktree = worker.run("on");
   await ready;
   let now = Date.parse("2026-11-04T12:00:00Z");
-  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const clock = spyOn(workerClock, "now").mockImplementation(() => now);
   const queued = worker.attemptTemp();
   now += 10_001;
   fs.writeFileSync(path.join(root, "release-worktree"), "release");
@@ -442,7 +470,7 @@ for (const flag of ["--malformed", "--wrong-kind", "--exit", "--oversize", "--ha
   expect((await worker.run("dry-run"))!.errors).toEqual([]);
 }, 20000);
 
-test("a disk reading behind the bounded attempt tick answers from its last observation, then refuses once that is too old", async () => {
+test("a stale disk reading refreshes independently while an attempt tick is held", async () => {
   const { root, worker } = fixture("--hold-attempt");
   const observed = await worker.diskPressure();
   const tick = worker.attemptTemp();
@@ -454,11 +482,28 @@ test("a disk reading behind the bounded attempt tick answers from its last obser
     const clock = spyOn(Date, "now");
     try {
       clock.mockImplementation(() => base + 45_000);
-      expect((await worker.diskPressure()).at).toBe(observed.at);
+      expect((await worker.diskPressure()).volumes.length).toBeGreaterThan(0);
       clock.mockImplementation(() => base + 95_000);
-      await expect(worker.diskPressure()).rejects.toThrow("stale while the sweep helper is busy");
+      expect((await worker.diskPressure()).volumes.length).toBeGreaterThan(0);
     } finally { clock.mockRestore(); }
-    expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("disk-pressure\nattempt-temp\n");
+    expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("disk-pressure\nattempt-temp\ndisk-pressure\ndisk-pressure\n");
   } finally { fs.writeFileSync(path.join(root, "release-attempt"), "release"); }
   expect(await tick).toMatchObject({ checked: 0, removed: 0 });
+}, 20_000);
+
+
+test("a full pass releases its helper heap before idle and queued work gets a new lease", async () => {
+  const { root, worker } = fixture("--complete-pass");
+  const first = worker.run("dry-run");
+  const queued = worker.temp({ NODE_ENV: "test", LLV_TEMP_SWEEP: "off" });
+  expect((await first).progress?.complete).toBeTrue();
+  const retired = Number(fs.readFileSync(path.join(root, "pass-pids"), "utf8").trim());
+  expect(() => process.kill(retired, 0)).toThrow();
+  expect(await queued).toBeNull();
+  const second = await worker.run("dry-run");
+  expect(counters(second).allocationHits).toBe(0);
+  const pids = fs.readFileSync(path.join(root, "pass-pids"), "utf8").trim().split("\n").map(Number);
+  expect(pids).toHaveLength(2);
+  expect(pids[0]).not.toBe(pids[1]);
+  for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
 }, 20_000);

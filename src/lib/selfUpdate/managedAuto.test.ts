@@ -22,6 +22,18 @@ const OLD = "b".repeat(40);
 const TARGET = "a".repeat(40);
 const revision = (sha: string): Revision => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
 
+test("installation policy prevents a saved managed automatic preference from deploying", async () => {
+  const h = scenario();
+  h.deps.env = { ...h.deps.env, LLV_DISABLE_SELF_UPDATE: "1" };
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    expect(h.requests).toHaveLength(0);
+    expect(readAuto(join(h.dir, "auto.json")).enabled).toBe(true);
+    expect((await service.snapshot()).auto).toMatchObject({ enabled: false, availability: "disabled-by-admin", decision: null });
+  } finally { service.stop(); }
+});
+
 test("automatic waiting admits launches at the ten-minute bound and persists its deferral", async () => {
   const h = scenario();
   h.deps.quiet!.controllerBusyReason = async () => "pipeline-controller";

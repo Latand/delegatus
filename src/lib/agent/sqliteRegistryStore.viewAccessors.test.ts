@@ -124,6 +124,98 @@ test("a refresh that adds one row makes one accessor per row and no function per
   });
 });
 
+test("a refresh that adds one row and is read by key makes no accessor per row", () => {
+  const { reader, writer, first, receipt } = fixture();
+  const rows = Object.keys(first.receipts).length;
+  const cost = costOfRefreshes(reader, 8, round => writer.mutate((file) => {
+    file.receipts[`keyed-launch-${round}`] = { ...JSON.parse(JSON.stringify(file.receipts[receipt]!)), launchId: `keyed-launch-${round}` };
+  }, false));
+  // Each held view has its own key list; none of them was asked for its keys.
+  expect(cost.accessors).toBeLessThan(rows / 10);
+  expect(cost.functions).toBeLessThan(rows / 10);
+  expect(cost.scopes).toBeLessThan(rows / 10);
+  cost.held.forEach((view, index) => {
+    const added = `keyed-launch-${index + 1}`;
+    expect(view.receipts[added]!.launchId).toBe(added);
+    expect(added in view.receipts).toBe(true);
+    expect(`keyed-launch-${index + 2}` in view.receipts).toBe(false);
+  });
+  // Asking for keys or descriptors gives the view its frozen accessors.
+  const last = cost.held.at(-1)!;
+  const added = "keyed-launch-8";
+  expect(Object.hasOwn(last.receipts, added)).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(last.receipts, added)).toMatchObject({ enumerable: true, configurable: false });
+  expect(Object.getOwnPropertyDescriptor(last.receipts, added)!.get!.call(last.receipts)).toEqual(last.receipts[added]!);
+  expect(Object.isFrozen(last.receipts)).toBe(true);
+  expect(Object.isExtensible(cost.held[0]!.receipts)).toBe(false);
+  expect(Object.keys(last.receipts)).toHaveLength(rows + 8);
+  expect(Object.keys(cost.held[3]!.receipts)).toEqual([...Object.keys(first.receipts), "keyed-launch-1", "keyed-launch-2", "keyed-launch-3", "keyed-launch-4"]);
+  expect(Reflect.defineProperty(last.receipts, "other", { value: 1 })).toBe(false);
+  expect(Reflect.deleteProperty(last.receipts, added)).toBe(false);
+});
+
+test("an archive pass makes no function per archived row of the collection it moves rows into", () => {
+  const { reader, writer, first, receipt } = fixture();
+  const rows = Object.keys(first.receipts).length;
+  const settled = Array.from({ length: 24 }, (_, index) => `settled-launch-${index}`);
+  writer.mutate((file) => {
+    for (const launchId of settled) {
+      file.receipts[launchId] = { ...JSON.parse(JSON.stringify(file.receipts[receipt]!)), launchId, state: "failed", key: null, queuedPinnedSpawn: null };
+    }
+  }, false);
+  reader.readOnlySnapshot();
+  let moved = 0;
+  const cost = costOfRefreshes(reader, 6, () => { moved += writer.archiveInactive(4); });
+  expect(moved).toBe(settled.length);
+  // Before the change each pass made a function, a scope and a descriptor for
+  // every archived row of the collection the moved rows belong to.
+  expect(cost.functions).toBeLessThan(rows / 10);
+  expect(cost.scopes).toBeLessThan(rows / 10);
+  const judge = new SqliteAgentRegistryStore(writer.filename, {
+    normalize: normalizeRegistry,
+    initialSnapshot: () => { throw new Error("the dataset must already exist"); },
+  });
+  stores.push(judge);
+  const whole = judge.snapshot().file;
+  const last = cost.held.at(-1)!;
+  expect(Object.keys(last.receipts)).toEqual(Object.keys(whole.receipts));
+  for (const launchId of [...settled, ...Object.keys(first.receipts).slice(0, 25)]) {
+    expect(last.receipts[launchId]).toEqual(whole.receipts[launchId]!);
+  }
+  // A view held from before a pass still reads the rows as they were then.
+  expect(cost.held[0]!.receipts[settled[0]!]).toEqual(whole.receipts[settled[0]!]!);
+});
+
+test("a new prepared reader takes over the accessors of the reader before it", async () => {
+  const { reader, writer, first } = fixture();
+  const conversation = Object.keys(first.conversations).at(-1)!;
+  const rows = (["receipts", "entries", "heldDeliveries", "deliveryOperationOwners", "conversations"] as const)
+    .reduce((total, collection) => total + Object.keys(first[collection]).length, 0);
+  await reader.prepareReadOnlySnapshot();
+  const held: RegistryFile[] = [];
+  const before = census();
+  const rounds = 4;
+  for (let round = 1; round <= rounds; round++) {
+    // A conversation change is not replayed on the published reader: each
+    // preparation opens a reader and builds every collection of its view.
+    writer.mutate((file) => {
+      file.conversations[conversation]!.generations.at(-1)!.launchProfile.title = `prepared ${round}`;
+    }, false);
+    held.push((await reader.prepareReadOnlySnapshot()).file);
+  }
+  const after = census();
+  // Before the change each prepared reader made an accessor per row and a
+  // function and a scope per row and per archived row of its first view.
+  expect((after.functions - before.functions) / rounds).toBeLessThan(rows / 5);
+  expect((after.scopes - before.scopes) / rounds).toBeLessThan(rows / 5);
+  expect((after.accessors - before.accessors) / rounds).toBeLessThan(rows / 5);
+  held.forEach((view, index) => {
+    expect(view.conversations[conversation]!.generations.at(-1)!.launchProfile.title).toBe(`prepared ${index + 1}`);
+    expect(Object.keys(view.receipts)).toEqual(Object.keys(first.receipts));
+    expect(Object.isFrozen(view.conversations)).toBe(true);
+  });
+});
+
 test("an archived operation owner reads the deliveries of the view it is read through", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-accessors-"));
   directories.push(directory);

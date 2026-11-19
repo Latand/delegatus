@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { legacyReportPictureFixture } from "@/lib/artifact/localFile.fixture";
+
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -17,7 +19,7 @@ const OTHER_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-task-album-"));
 const savedState = process.env.LLV_STATE_DIR;
-const saved = { home: process.env.HOME, roots: process.env.LLV_EVIDENCE_ROOTS };
+const saved = { home: process.env.HOME, cache: process.env.XDG_CACHE_HOME, roots: process.env.LLV_EVIDENCE_ROOTS };
 let home = "";
 let evidence = "";
 let elsewhere = "";
@@ -32,6 +34,7 @@ beforeEach(() => {
   transcripts = path.join(home, ".claude", "projects", "p");
   for (const dir of [home, evidence, elsewhere, transcripts]) fs.mkdirSync(dir, { recursive: true });
   process.env.HOME = home;
+  process.env.XDG_CACHE_HOME = path.join(root, "cache");
   process.env.LLV_STATE_DIR = path.join(home, "state");
   fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
   const project = path.join(home, "project"); fs.mkdirSync(project, { recursive: true });
@@ -41,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
   if (savedState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = savedState;
   process.env.HOME = saved.home;
+  if (saved.cache === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = saved.cache;
   if (saved.roots === undefined) delete process.env.LLV_EVIDENCE_ROOTS;
   else process.env.LLV_EVIDENCE_ROOTS = saved.roots;
 });
@@ -404,4 +408,12 @@ test("a long index pass lets other work run and still indexes a split Read once"
   }
   expect(ran).toBeGreaterThan(1);
   expect(transcriptImages(file).map((image) => image.key)).toEqual([`f:${shot}`]);
+});
+
+test("the album omits legacy hidden-source copies named by deleted aliases or hash paths", async () => {
+  const legacy = legacyReportPictureFixture(path.join(home, "project"));
+  const file = transcript("legacy-hidden", [claudeSays(`![alias](${legacy.alias}) ![copy](${legacy.copy})`, 1)]);
+  const album = await readTaskAlbum("task-a", {}, deps([task("task-a", [file])]));
+  expect(album.items).toEqual([]);
+  expect(album.total).toBe(0);
 });

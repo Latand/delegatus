@@ -30,6 +30,8 @@ import {
 import { applyOnboardingPatch, writeOnboardingMarker } from "@/lib/onboarding/marker";
 import { heldMandateMatches } from "@/components/conversation/heldMandate";
 import {
+  ORCHESTRATOR_BOARD_REPORT_DIRECTIVE,
+  ORCHESTRATOR_BOARD_REPORT_DIRECTIVE_V69,
   ORCHESTRATOR_FIRST_RUN_DIRECTIVE,
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
@@ -480,7 +482,8 @@ for (const version of [64, 65]) test(`a stored v${version} default is delivered 
 
   expect(result.status).toBe(200);
   const delivered = String(recorded.spawns[0]!.prompt);
-  expect(delivered).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
+  // A retained launch keeps its board paragraph until version-based rotation.
+  expect(delivered).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE_V69));
   /* The seat keeps the version it was recorded on, so it still reads as stale
      and its next rotation rebuilds the core from the default. */
   expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(version);
@@ -939,7 +942,7 @@ test("rotation composes a bounded handoff, switches designation atomically, and 
   })]);
 });
 
-test("a rotation onto the built-in default records the CURRENT version, whatever the incumbent ran on", async () => {
+test.each(["codex", "claude"] as const)("a %s rotation delivers the current mandate to the successor", async (engine) => {
   const seeded = dependencies();
   await executeOrchestratorSeatRequest({
     ...spawnRequest("req_00000031"),
@@ -949,13 +952,18 @@ test("a rotation onto the built-in default records the CURRENT version, whatever
   expect(orchestratorSeatFor("proj-a").active?.promptVersion).toBe(3);
 
   const successor = "conversation_66666666-6666-4666-8666-666666666666";
-  const { deps } = dependencies({
-    spawn: async () => ({ status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-default.jsonl" } }),
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      return { status: 200, body: { ok: true, conversationId: successor, path: "/tmp/successor-default.jsonl" } };
+    },
   });
   const result = await executeOrchestratorRotation({
     project: "proj-a",
     clientRequestId: "req_00000032",
     mandate: ORCHESTRATOR_SYSTEM_PROMPT,
+    engine,
+    model: defaultModelFor(engine),
   }, deps);
 
   expect(result.status).toBe(200);
@@ -963,6 +971,13 @@ test("a rotation onto the built-in default records the CURRENT version, whatever
   const active = orchestratorSeatFor("proj-a").active;
   expect(active).toMatchObject({ conversationId: successor, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
   expect(active?.mandate).toStartWith(ORCHESTRATOR_SYSTEM_PROMPT);
+  expect(recorded.spawns).toHaveLength(1);
+  const launch = recorded.spawns[0]!;
+  expect(launch.engine).toBe(engine);
+  expect(launch.prompt).toBe(orchestratorMandateWithRoleTable(active!.mandate, active!.roleTable ?? null));
+  const workRules = String(launch.prompt).split("## How work runs\n")[1]!.split("\n\n")[0]!;
+  expect(workRules).toContain("one visible spawn_agent (live role, taskId, existing cwd)");
+  expect(workRules).toContain("isolated pipeline and required checks for repository edits");
 });
 
 test.each([false, true])("an older seat rotates onto the default version (legacy keep flag=%s)", async (keepIncumbentMandate) => {
@@ -1727,7 +1742,7 @@ test("spawn-mode seat creation rejects an explicit model outside the engine cata
 
   expect(result).toEqual({
     status: 400,
-    body: { error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna", admission: "refused" },
+    body: { error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna", admission: "refused" },
   });
   expect(recorded.spawns).toEqual([]);
   expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: null, pending: null });

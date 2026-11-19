@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { shortId } from "@/lib/shortIds";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-sources-"));
+const pullRequestHangCase = process.env.LLV_PULL_REQUEST_HANG_CASE;
 const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.HOME = SANDBOX;
@@ -21,7 +22,8 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
 fs.mkdirSync(SESSIONS, { recursive: true });
 
-const { gatherSeatTickInput: gatherProduction, refreshSeatTickInput, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { gatherSeatTickInput: gatherProduction, readPullRequestsWithinBudget, refreshSeatTickInput, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { SeatTickWork } = await import("./seatTickWork");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
 const { SEND_UNVERIFIED_REASON, resolveOriginalSend } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
@@ -372,6 +374,49 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
+test("a failed host-death attempt leaves the seat projection with its failure and clears the old stall", async () => {
+  const active = lane();
+  const ports = sources({ pipelines: [active] });
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  gathered.pipelines[0]!.stageActivity = {
+    lifecycle: "gone", reason: "host_gone_turn_unverified", verified: false, turnState: "busy",
+    conversationId: STAGE_CONVERSATION,
+  };
+  const stalled = seatTickDecision(gathered);
+  expect(stalled.state.stalledSeen).toContain("pipeline_a1");
+
+  const failure = "stage host exited after recovery was cancelled; stopped by pipeline-stage-stop";
+  const settled = lane({
+    state: "needs_decision", stateDetail: failure,
+    cursor: { stageId: "build", state: "needs_decision", input: null, activatedBy: null },
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "failed", error: failure, completedAt: new Date(NOW).toISOString(),
+      conversationId: STAGE_CONVERSATION, agentPath: TRANSCRIPT, startedAt: new Date(NOW - 60_000).toISOString() }] }],
+  });
+  ports.pipelines = () => [settled] as never;
+  const refreshed = refreshSeatTickInput({ ...gathered, state: stalled.state }, ports);
+  expect(refreshed.pipelines).toHaveLength(1);
+  expect(refreshed.pipelines[0]).toMatchObject({ state: "inert", stageState: "needs_decision", stageAttemptState: "failed" });
+  expect(settled.stateDetail).toContain("stopped by pipeline-stage-stop");
+  const afterSettlement = seatTickDecision(refreshed);
+  expect(afterSettlement.state.stalledSeen).not.toContain("pipeline_a1");
+
+  const retried = lane({
+    state: "running", stateDetail: null,
+    cursor: { stageId: "build", state: "running", input: null, activatedBy: null },
+    runs: [{ stageId: "build", attempts: [{ n: 2, state: "running", conversationId: STAGE_CONVERSATION,
+      agentPath: TRANSCRIPT, startedAt: new Date(NOW + 1).toISOString() }] }],
+  });
+  ports.pipelines = () => [retried] as never;
+  const retryProjection = refreshSeatTickInput({ ...refreshed, state: afterSettlement.state }, ports);
+  expect(retryProjection.pipelines[0]).toMatchObject({ state: "active", stageAttemptState: "running" });
+  expect(seatTickDecision(retryProjection).state.stalledSeen).not.toContain("pipeline_a1");
+
+  ports.pipelines = () => [finishedLane()] as never;
+  const terminalProjection = refreshSeatTickInput({ ...retryProjection, state: afterSettlement.state }, ports);
+  expect(terminalProjection.pipelines).toHaveLength(0);
+  expect(seatTickDecision(terminalProjection).state.stalledSeen).not.toContain("pipeline_a1");
+});
+
 test("gather yields while frozen lanes move and refresh carries the replacement agenda", async () => {
   const { deepFreeze } = await import("@/lib/deepFreeze");
   const { refreshSeatTickEvidence } = await import("./seatTickSources");
@@ -401,7 +446,8 @@ test("gather and refresh retain explicit work and its blocker for the reminder c
   const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
   for (const observed of [gathered, refreshSeatTickInput(gathered, ports)]) {
     expect(observed.tasks[0]).toMatchObject({ accepted: true, hold, waitingSince: task.createdAt });
-    expect(seatTickDecision(observed).verdict.kind).toBe("quiet");
+    const verdict = seatTickDecision(observed).verdict;
+    expect(verdict.kind === "wake" && verdict.taskPage!.rows[0]!.item.reminderKind).toBe("waiting");
   }
   delete task.hold;
   const refreshed = refreshSeatTickInput(gathered, ports);
@@ -866,8 +912,8 @@ test("under a journal the cursor has already passed, only a card that recently m
   const decision = seatTickDecision(input);
   expect(reasonsOf(decision)).toEqual(["unstarted-task"]);
   expect(decision.verdict.kind === "wake" && decision.verdict.reasons[0]!.detail)
-    .toBe("wire the chip — assigned, nothing started it; 2 older than the backlog bound");
-  expect(decision.verdict.kind === "wake" && decision.verdict.items.map((item) => item.id)).toEqual(["task_b2"]);
+    .toContain("see Tasks");
+  expect(decision.verdict.kind === "wake" && decision.verdict.taskPage!.rows.map(row => row.item.id)).toEqual(["task_b2"]);
 });
 
 /* The permanently-true reason, gone: a board of nothing but stale assigned
@@ -1184,6 +1230,111 @@ test("a finished lane whose branch still has an open pull request is carried, na
   expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
 });
 
+test("a successful pull request read delayed 639 ms reaches the seat agenda", async () => {
+  const ports = sources({ pipelines: [finishedLane()] });
+  const calls: { cwd: string; limit: number }[] = [];
+  ports.openPullRequests = async (options) => {
+    calls.push(options);
+    await new Promise(resolve => setTimeout(resolve, 639));
+    return { ok: true, pullRequests: [openPullRequest()] };
+  };
+
+  const input = await gatherSeatTickInput(PROJECT, withCursor(0, OVERDUE), DEFAULT_SEAT_TICK_POLICY, ports);
+
+  expect(calls).toEqual([{ cwd: "/srv/repo", limit: 60 }]);
+  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, pipelineId: "pipeline_z9" })]);
+  expect(input.pullRequestsObserved).toBe(true);
+  expect(input.pullRequestsUnavailable).toBeNull();
+  expect(input.state.pullRequestGap).toBeNull();
+  expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
+});
+
+test.skipIf(pullRequestHangCase !== "production")("production pull request timeout subprocess", async () => {
+  const ports = sources({ pipelines: [finishedLane()] });
+  ports.openPullRequests = () => {
+    return new Promise(() => {});
+  };
+
+  const work = new SeatTickWork(PROJECT, 30_000);
+  process.stdout.write("\nPULL_REQUEST_READ_ENTERED\n");
+  try {
+    const input = await work.run(() => gatherSeatTickInput(PROJECT, withCursor(0, OVERDUE), DEFAULT_SEAT_TICK_POLICY, ports));
+    expect(input.pullRequests).toEqual([]);
+    expect(input.pullRequestsObserved).toBe(false);
+    expect(input.pullRequestsUnavailable).toBe("timed-out");
+    expect(input.state.pullRequestGap).toMatchObject({ gap: "timed-out" });
+    expect(seatTickDecision(input).verdict).toMatchObject({
+      kind: "error",
+      detail: "the open pull requests of this project's finished lanes could not be read (timed-out), so nothing owed is not established",
+    });
+  } finally { work.close(); }
+}, 60_000);
+
+test.skipIf(!!pullRequestHangCase)("a hung production pull request read reports its gap within the five-second cap", async () => {
+  const child = Bun.spawn([process.execPath, "test", "--timeout=60000", import.meta.path,
+    "--test-name-pattern", "^production pull request timeout subprocess$"], {
+    env: { ...process.env, LLV_PULL_REQUEST_HANG_CASE: "production" }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  let output = "", entered = false, timedOut = false;
+  const started = performance.now();
+  let timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 15_000);
+  const collect = async (stream: ReadableStream<Uint8Array>) => {
+    const reader = stream.getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      output = (output + new TextDecoder().decode(value)).slice(-16_000);
+      if (!entered && output.includes("PULL_REQUEST_READ_ENTERED")) {
+        entered = true;
+        clearTimeout(timer);
+        timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 7_000);
+      }
+    }
+  };
+  try {
+    const [status] = await Promise.all([child.exited, collect(child.stdout), collect(child.stderr)]);
+    expect({ entered, timedOut, status, output }).toMatchObject({ entered: true, timedOut: false, status: 0 });
+    expect(performance.now() - started).toBeLessThan(8_000);
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }
+}, 20_000);
+
+test("pull request read has a five-second cap when the check has ample time", async () => {
+  let requestedMs = 0;
+  const scheduler = {
+    setTimeout(handler: () => void, ms: number) { requestedMs = ms; handler(); return 1; },
+    clearTimeout() {},
+  };
+  const work = new SeatTickWork(PROJECT, 30_000);
+  try {
+    const result = await work.run(() => readPullRequestsWithinBudget(() => new Promise(() => {}), undefined, scheduler));
+    expect(requestedMs).toBe(5_000);
+    expect(result).toEqual({ ok: false, unavailable: "timed-out" });
+  } finally { work.close(); }
+});
+
+test("a hung pull request read uses at most half of the remaining check budget", async () => {
+  let requestedMs = 0;
+  const scheduler = {
+    setTimeout(handler: () => void, ms: number) { requestedMs = ms; handler(); return 1; },
+    clearTimeout() {},
+  };
+  const work = new SeatTickWork(PROJECT, 2_400, () => 0, {
+    setTimeout() { return 1; },
+    clearTimeout() {},
+  });
+
+  const result = await work.run(() => readPullRequestsWithinBudget(
+    () => new Promise(() => {}), undefined, scheduler,
+  ));
+
+  expect(requestedMs).toBe(1_200);
+  expect(result).toEqual({ ok: false, unavailable: "timed-out" });
+  work.close();
+});
+
 /* #2187 §3.5: a lane can complete on a spent review budget with a head no
    reviewer saw; the seat that merges its pull request reads that first. */
 test("a finished lane whose last fix was never re-reviewed says so on its open pull request", async () => {
@@ -1231,6 +1382,26 @@ test("a pull request the merge runner holds is left out, and a stopped merge nam
       .toBe(`pull request #1289 left open by a lane that finished; merge stopped: ${reason}`);
     expect(verdict.kind === "wake" && verdict.items.find((item) => item.kind === "pull-request")?.label).toContain(`merge stopped: ${reason}`);
   }
+});
+
+test("optional check failures reach the seat wake after landing and stay project-scoped", async () => {
+  const merge = { state: "merged", by: "auto-merge", prNumber: 1289, optionalFailedChecks: ["optional-audit"] };
+  const input = await gather({ pipelines: [finishedLane({ merge }),
+    finishedLane({ id: "hidden-lane", hiddenAt: "2026-08-27T11:00:00.000Z", merge }),
+    finishedLane({ id: "other-lane", project: "another-project", merge })], openPullRequests: [] }, withCursor(0, OVERDUE));
+  const notes = input.signals.filter(signal => signal.id.startsWith("optional-check-failures:"));
+  expect(notes).toHaveLength(1);
+  expect(notes[0]!.label).toContain("Note: optional checks failed on PR #1289: optional-audit");
+  const verdict = seatTickDecision(input).verdict;
+  expect(verdict.kind).toBe("wake");
+  if (verdict.kind === "wake") expect(verdict.items.find(item => item.id === notes[0]!.id)?.label).toContain("merge depends on required checks only");
+  if (verdict.kind === "wake") {
+    const shown = verdict.items.map(item => item.itemVersion!).filter(Boolean);
+    const again = seatTickDecision({ ...input, state: { ...input.state, itemsShown: shown } }).verdict;
+    expect(again.kind === "wake" && again.items.some(item => item.id === notes[0]!.id)).toBe(false);
+  }
+  const recovered = await gather({ pipelines: [finishedLane({ merge: { ...merge, optionalFailedChecks: [] } })], openPullRequests: [] }, withCursor(0, OVERDUE));
+  expect(recovered.signals.some(signal => signal.id.startsWith("optional-check-failures:"))).toBe(false);
 });
 
 /* #2187 §5.3: a finished lane marked as finishing its task, whose move to
@@ -3044,6 +3215,11 @@ test("non-actionable signal churn and machine-wide retirement stalls leave idle 
     ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
     let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString(), lastProposalAt: new Date(NOW).toISOString() };
     const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+    if (status === "blocked") {
+      const decision = seatTickDecision(baseline);
+      const { seatTickWakeCommit, seatTickWakeCommitPlan } = await import("./seatTick");
+      state = seatTickWakeCommit(decision.state, seatTickWakeCommitPlan(decision.verdict, { fingerprint: baseline.changeFingerprint, eventsThrough: 0 })!, NOW);
+    }
     state = { ...state, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
     for (let check = 0; check < 24; check++) {
       ports.now = () => NOW + check * 15 * 60_000;
@@ -3541,4 +3717,76 @@ test("project liveness completes and refreshes catalogue discovery before using 
     expect(complete).toHaveBeenCalledTimes(2);
     expect(read).toHaveBeenCalledTimes(2);
   } finally { read.mockRestore(); current.mockRestore(); complete.mockRestore(); }
+});
+
+
+test("task page facts and finished-reference review survive gathering and both refresh paths", async () => {
+  const task = boardCard({ id: "task-review-facts", priority: "high", dueAt: new Date(NOW - 1000).toISOString(), dueHistory: { firstAt: new Date(NOW - 86_400_000).toISOString(), slips: 3 } }) as unknown as import("@/lib/tasks/types").BoardTask;
+  const ports = sources({ tasks: [], pipelines: [] });
+  const tasks = Object.freeze([Object.freeze(task)]);
+  const pipelines = Object.freeze([]);
+  ports.tasks = () => tasks;
+  ports.pipelines = () => pipelines;
+  const stored = { ...defaultSeatTickSettings(PROJECT), reason: "Wait for task-review-facts", instructionLines: [{ text: "Wait for task-review-facts", author: null, at: null }] };
+  ports.settings = () => stored;
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  const refreshed = refreshSeatTickInput(gathered, ports);
+  const cached = refreshSeatTickInput(refreshed, ports);
+  expect(cached.tasks).toBe(refreshed.tasks);
+  for (const value of [gathered, refreshed, cached]) {
+    expect(value.tasks[0]).toMatchObject({ priority: "high", createdAt: task.createdAt, dueHistory: task.dueHistory });
+    expect(value.instructionReview).toContain("Instructions to review");
+  }
+  ports.tasks = () => [{ ...task, status: "done", doneAt: new Date(NOW - 1000).toISOString() }] as never;
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toContain("names task-review-facts");
+});
+
+test("closing a lane after instruction review flags it on gather and refresh, then a new review clears it", async () => {
+  const reviewedAt = "2026-08-28T11:30:00.000Z";
+  const closedAt = "2026-08-28T11:50:00.000Z";
+  const finished = lane({ id: "deadbeef", state: "closed", closedAt,
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "failed", startedAt: "2026-08-28T11:15:00.000Z", completedAt: "2026-08-28T11:16:00.000Z" }] }] });
+  const ports = sources({ pipelines: [finished], tasks: [] });
+  const settings = { ...defaultSeatTickSettings(PROJECT), reason: "Wait for deadbeef",
+    instructionLines: [{ text: "Wait for deadbeef", author: null, at: null }], instructionsReviewedAt: reviewedAt };
+  ports.settings = () => settings;
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered.instructionReview).toContain("names deadbeef");
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toContain("names deadbeef");
+  expect(refreshSeatTickInput(refreshSeatTickInput(gathered, ports), ports).instructionReview).toContain("names deadbeef");
+  settings.instructionsReviewedAt = "2026-08-28T12:00:00.000Z";
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toBeUndefined();
+});
+
+
+test("a native wake observer waits for durable original-key proof without mutating its receipt", async () => {
+  const { confirmedClaudeWakeDelivery } = await import("./seatTickSources");
+  const directory = fs.mkdtempSync(path.join(SANDBOX, "native-wake-proof-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  await registry.prepareRecoveryIndexes();
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000020"].join("-");
+  const conversation = registry.ensureConversation("claude", path.join(directory, `${sessionId}.jsonl`), null);
+  const text = "Check pending work.", key = "seat-tick:fixture:native-proof";
+  const held = registry.holdDelivery(conversation.id, text, key, "text", [], structuredContentDigest({ text, images: [] }), {
+    kind: "send", policy: "interrupt-active", origin: { kind: "agent", role: "seat-tick" },
+  });
+  expect(registry.beginDeliveryAttempt(held.id, sessionId)).toBeTruthy();
+  registry.recordDeliveryOutcome(held.id, "failed", "Claude delivery confirmation timed out; outcome is uncertain", "unverified");
+  const ledger = new FileClaudeDeliveryLedger();
+  const native = { version: 1 as const, sessionId, writerId: ["00000000", "0000", "4000", "8000", "000000000021"].join("-"),
+    process: { pid: 4100, startIdentity: "4100:fixture" }, inputUuid: ["00000000", "0000", "4000", "8000", "000000000001"].join("-"), intent: "may-have-written" as const };
+  await ledger.recordNativeIntent(sessionId, { id: held.command.operationId, text }, "turn-started", native);
+  const wake = { ...WAKE, conversationId: conversation.id, clientMessageId: key, operationId: null, text };
+  setAgentRegistryForTests(registry);
+  try {
+    expect(await confirmedClaudeWakeDelivery(wake, held.command.operationId)).toBe(false);
+    await ledger.confirmNativeResult(sessionId, { ...native, version: 1, resultUuid: ["00000000", "0000", "4000", "8000", "000000000030"].join("-"),
+      inputUuids: [native.inputUuid], turnId: held.command.operationId, status: "completed" });
+    const unavailable = spyOn(FileClaudeDeliveryLedger.prototype, "loadDurable").mockRejectedValueOnce(new Error("fixture durable read unavailable"));
+    try { expect(await confirmedClaudeWakeDelivery(wake, held.command.operationId)).toBe(false); }
+    finally { unavailable.mockRestore(); }
+    const before = JSON.stringify(registry.readOnlySnapshot());
+    expect(await confirmedClaudeWakeDelivery(wake, held.command.operationId)).toBe(true);
+    expect(JSON.stringify(registry.readOnlySnapshot())).toBe(before);
+  } finally { setAgentRegistryForTests(null); }
 });

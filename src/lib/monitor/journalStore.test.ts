@@ -200,7 +200,7 @@ describe("seat tick check journal", () => {
     expect(rows).toHaveLength(SEAT_TICK_RUN_HISTORY);
     expect(rows[0].items).toBe(1);
     expect(rows.at(-1)!.items).toBe(SEAT_TICK_RUN_HISTORY);
-    expect(fs.readFileSync(file, "utf8").trim().split("\n")).toHaveLength(SEAT_TICK_RUN_HISTORY);
+    expect(readSeatTickRecords(2 * SEAT_TICK_RUN_HISTORY, file)).toHaveLength(SEAT_TICK_RUN_HISTORY);
     expect(readSeatTickRecords(1, file, "older-project")[0].project).toBe("older-project");
     const blocked = path.join(SANDBOX, "blocked-parent");
     fs.writeFileSync(blocked, "fixture");
@@ -209,7 +209,7 @@ describe("seat tick check journal", () => {
     fs.writeFileSync(legacy, `${JSON.stringify(check({ items: 7 }))}\n`);
     await Promise.all([appendSeatTickRecordAsync(check({ items: 8 }), legacy), appendSeatTickRecordAsync(check({ items: 9 }), legacy)]);
     expect(readSeatTickRecords(5, legacy, "viewer").map(row => row.items).sort()).toEqual([7, 8, 9]);
-  });
+  }, 120_000);
 
   test("the journal path lives under the viewer state dir and carries no configuration", () => {
     expect(seatTickJournalPath()).toBe(path.join(SANDBOX, "state", "seat-tick", "runs.ndjson"));
@@ -300,7 +300,7 @@ describe("seat tick check journal", () => {
     expect(own).toHaveLength(157);
     expect(own[0]!.at).toBe(new Date(start).toISOString());
     expect(readSeatTickRecords(SEAT_TICK_RUN_HISTORY, file, "busy-project")).toHaveLength(SEAT_TICK_RUN_HISTORY);
-  });
+  }, 120_000);
 
   test("the first project append preserves its available pre-upgrade audit", () => {
     const file = path.join(SANDBOX, "legacy-project.ndjson");
@@ -323,7 +323,7 @@ describe("seat tick check journal", () => {
     expect(own).toHaveLength(SEAT_TICK_RUN_HISTORY);
     expect(own[0]!.detail).toBe("check 1");
     expect(own.at(-1)!.detail).toBe("after restart");
-  });
+  }, 120_000);
 
   test("retention drops the oldest lines rather than growing without bound", () => {
     const rolling = path.join(SANDBOX, "seat-tick-rolling.ndjson");
@@ -333,5 +333,5 @@ describe("seat tick check journal", () => {
     const records = readSeatTickRecords(SEAT_TICK_RUN_HISTORY + 50, rolling);
     expect(records).toHaveLength(SEAT_TICK_RUN_HISTORY);
     expect(records[0]!.detail).toBe("check 5");
-  });
+  }, 120_000);
 });

@@ -12,12 +12,33 @@ import { spawnSync, type ChildProcess } from "node:child_process";
 import {
   buildFilesResponseInWorker,
   drainFilesResponseWorker,
+  FILES_PROJECTION_BUILD_TIMEOUT_MS,
   filesResponseWorkerPoolDiagnostics,
+  filesResponseWorkerTimeoutMs,
   shutdownFilesResponseWorker,
   type FilesResponseWorkerRuntime,
 } from "./filesResponseWorker";
 
 const WORKER_PATH = path.resolve(import.meta.dir, "../filesResponse.worker.ts");
+
+test("files response worker bundles without request-scoped spawn deferral", async () => {
+  const result = await Bun.build({
+    entrypoints: [WORKER_PATH],
+    target: "bun",
+    plugins: [{
+      name: "worker-server-boundary",
+      setup(build) {
+        build.onResolve({ filter: /(?:^|\/)spawnDeferral$/ }, () => {
+          throw new Error("Request-scoped spawn deferral cannot enter the files response worker");
+        });
+        // Workers can use NextResponse; request-scoped after() is the boundary.
+        build.onResolve({ filter: /^next\/server(?:\.js)?$/ }, args => ({ path: args.path, external: true }));
+      },
+    }],
+  });
+  expect(result.logs.filter(log => log.level === "error").map(log => log.message)).toEqual([]);
+  expect(result.success).toBe(true);
+});
 
 function runtimeFor(stateDir: string, extra: Record<string, string> = {}): FilesResponseWorkerRuntime {
   return {
@@ -532,14 +553,14 @@ test("seat agenda worker preserves asks and ordering from the exact board repres
   const lane = (id: string, project: string) => ({ id, task: id, project, state: "needs_decision", createdAt: "2026-10-18T10:00:00Z", stateDetail: "waiting", stages: [], runs: [], cursor: null, attentionRoute: { key: `lane:${id}:lane-decision:none`, owner: "seat", seat: "seat-fixture" } });
   const body = { files: [], pipelines: [lane("first", "project-a"), lane("foreign", "elsewhere"), lane("second", "project-a")] };
   try {
-    expect(await seatAgendaInWorker(JSON.stringify(body), "project-a", now, runtimeFor(state)))
+    expect((await seatAgendaInWorker(JSON.stringify(body), "project-a", now, runtimeFor(state))).asks)
       .toEqual(seatAgendaAsks(body as never, now, "project-a"));
-    expect((await seatAgendaInWorker(JSON.stringify(body), "project-a", now, runtimeFor(state))).map(row => row.id)).toEqual(["first", "second"]);
+    expect((await seatAgendaInWorker(JSON.stringify(body), "project-a", now, runtimeFor(state))).asks.map(row => row.id)).toEqual(["first", "second"]);
     await drainFilesResponseWorker("restart agenda reader");
-    expect(await seatAgendaInWorker(JSON.stringify(body), "project-a", now, runtimeFor(state)))
+    expect((await seatAgendaInWorker(JSON.stringify(body), "project-a", now, runtimeFor(state))).asks)
       .toEqual(seatAgendaAsks(body as never, now, "project-a"));
     await expect(seatAgendaInWorker("{torn", "project-a", now, runtimeFor(state))).rejects.toThrow();
-    expect(await seatAgendaInWorker(JSON.stringify({ files: [], pipelines: [] }), "project-a", now, runtimeFor(state))).toEqual([]);
+    expect((await seatAgendaInWorker(JSON.stringify({ files: [], pipelines: [] }), "project-a", now, runtimeFor(state))).asks).toEqual([]);
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 });
 
@@ -697,6 +718,47 @@ test("seat report worker persists outcomes once, filters foreign projects, and r
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 }, 15_000);
 
+test("seat agenda worker is byte-identical to the unscoped projection across alias moves and requests", async () => {
+  const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
+  const { needsYouAnswer } = await import("@/lib/attention/needsYouProjection");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { seatReadBoard, SEAT_READ_NOW } = await import("@/lib/monitor/seatReads.fixture");
+  const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const state = scratchState(), runtime = runtimeFor(state);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  try {
+    persistProjectAliases([{ source: "old", target: "current", displayName: "Fixture" }]);
+    const body = seatReadBoard();
+    const directory = path.join(state, "files-response-results");
+    fs.mkdirSync(directory, { recursive: true });
+    const bodyFile = path.join(directory, "fixture-agenda.json");
+    fs.writeFileSync(bodyFile, JSON.stringify(body));
+    for (const project of ["current", "moved", "foreign"]) {
+      if (project === "moved") persistProjectAliases([{ source: "current", target: "moved", displayName: "Fixture" }]);
+      // The reference reproduces the original full worker projection without
+      // a scoped snapshot; the resident worker must see each later alias move.
+      const forms = needsYouAnswer({ ...body, files: [] }, null, SEAT_READ_NOW, project, {
+        tasks: body.tasks, pipelines: body.pipelines, dismissals: [], reports: null, admissions: [], unavailable: [], seatConversationId: "conversation_seat",
+      }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
+      const expected = { asks: seatAgendaAsks(body, SEAT_READ_NOW, project), forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
+      expect(expected.asks.length).toBeGreaterThan(0);
+      expect(expected.forms.count).toBeGreaterThan(0);
+      const actual = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile, project, now: SEAT_READ_NOW, seatConversationId: "conversation_seat" }, runtime);
+      expect(actual.body).toBe(JSON.stringify(expected));
+    }
+    await expect(runSeatSourceInWorker({ type: "seat-agenda", bodyFile: path.join(state, "outside.json"), project: "current", now: SEAT_READ_NOW }, runtime))
+      .rejects.toThrow("outside the worker result directory");
+    await drainFilesResponseWorker("restart agenda reader");
+    const restarted = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile, project: "moved", now: SEAT_READ_NOW, seatConversationId: "conversation_seat" }, runtime);
+    expect(JSON.parse(restarted.body).asks.length).toBeGreaterThan(0);
+  } finally {
+    await stopTestWorker();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+}, 30_000);
+
 test.each(["STATE_ADMISSION_BUSY", "DEADLINE_EXCEEDED"] as const)("seat report worker preserves retryable source failure %s", async errorCode => {
   const { runSeatSourceInWorker } = await import("./filesResponseWorker");
   const { SeatTickWork } = await import("@/lib/monitor/seatTickWork");
@@ -846,4 +908,61 @@ test("a seat source with a 1.5 s share is served by a warm worker that answers i
     await stopTestWorker();
     fs.rmSync(state, { recursive: true, force: true });
   }
+});
+
+
+test("seat agenda worker returns operator forms beside routed asks with source facts and no conversation forms", async () => {
+  const { seatAgendaInWorker } = await import("./filesResponseWorker");
+  const state = scratchState();
+  const now = Date.parse("2026-11-12T12:00:00Z") / 1000;
+  const body = { files: [], tasks: [], pipelines: [], seatDecisions: Array.from({ length: 45 }, (_, n) => ({
+    id: `prototype:round-${n}`, reviewId: `round-${n}`, project: "project-a", taskId: null, title: `Choice ${n}`, createdAt: "2026-11-10T12:00:00Z",
+    source: { conversationId: "earlier-seat" }, target: { kind: "seat-decision", project: "project-a", reviewId: `round-${n}` },
+  })) };
+  try {
+    const answer = await seatAgendaInWorker(JSON.stringify(body), "project-a", now, runtimeFor(state), "current-seat");
+    expect(answer.asks).toEqual([]);
+    expect(answer.forms.count).toBe(45);
+    expect(answer.forms.rows).toHaveLength(45);
+    expect(answer.forms.rows[0]!.evidence).toContainEqual(expect.objectContaining({ code: "earlier-seat", stale: false }));
+    expect(answer.forms.rows.every(row => row.kind === "prototype")).toBe(true);
+  } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+});
+
+
+test("task form currency survives the real board summary and notice builders", async () => {
+  const { prototypeTask } = await import("@/lib/voiceCompanion/prototypeRead.fixture");
+  const { withPrototypeReviewSummaries, prototypeReviewNotices } = await import("@/lib/prototypeReview/read");
+  const { seatAgendaInWorker } = await import("./filesResponseWorker");
+  const state = scratchState();
+  const task = prototypeTask("task-summary-form", "project-a");
+  task.prototypeReviews![0]!.source = { conversationId: "publishing-seat", pipelineId: "finished-lane", stageId: "design" };
+  const lane = { id: "finished-lane", task: "Published design", state: "completed", project: "project-a", stages: [], runs: [], taskIds: [task.id], createdAt: task.createdAt };
+  const body = { files: [], pipelines: [lane], tasks: withPrototypeReviewSummaries([task], new Map()), prototypeReviewNotices: prototypeReviewNotices([task]) };
+  expect(body.tasks[0]).not.toHaveProperty("prototypeReviews");
+  try {
+    const result = await seatAgendaInWorker(JSON.stringify(body), "project-a", Date.parse("2026-11-12T12:00:00Z") / 1000, runtimeFor(state));
+    expect(result.forms.rows[0]).toMatchObject({ stale: true, subject: { reviewId: task.prototypeReviews![0]!.id } });
+    expect(result.forms.rows[0]!.evidence).toContainEqual(expect.objectContaining({ code: "lane-moved-past", stale: true }));
+    const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+    const { dismissAttention } = await import("@/lib/attention/dismissals");
+    const previous = loadTasks();
+    const target = { kind: "prototype" as const, taskId: task.id, reviewId: task.prototypeReviews![0]!.id };
+    try {
+      saveTasks([task]);
+      await dismissAttention(target, { kind: "operator", surface: "desktop" });
+      const withdrawn = { ...body, tasks: withPrototypeReviewSummaries(loadTasks()) };
+      const next = await seatAgendaInWorker(JSON.stringify(withdrawn), "project-a", Date.parse("2026-11-12T13:00:00Z") / 1000, runtimeFor(state));
+      expect(next.forms.rows).toEqual([]);
+    } finally { await dismissAttention(target, { kind: "operator", surface: "desktop" }, { undo: true }); saveTasks(previous); }
+  } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+});
+
+test("a cold project build gets a longer cap than a seat source read, and a runtime's own cap governs both", () => {
+  const seat = { type: "seat-reports" as const, project: "fixture" };
+  expect(filesResponseWorkerTimeoutMs(request, {})).toBe(FILES_PROJECTION_BUILD_TIMEOUT_MS);
+  expect(filesResponseWorkerTimeoutMs(seat, {})).toBe(60_000);
+  expect(FILES_PROJECTION_BUILD_TIMEOUT_MS).toBeGreaterThan(60_000);
+  expect(filesResponseWorkerTimeoutMs(request, { timeoutMs: 50 })).toBe(50);
+  expect(filesResponseWorkerTimeoutMs(seat, { timeoutMs: 50 })).toBe(50);
 });

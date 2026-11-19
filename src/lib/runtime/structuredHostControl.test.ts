@@ -203,6 +203,7 @@ test("the inventory carries role, model, stage and ownership for every structure
 
   expect(records).toEqual([
     {
+      agentState: { subject: expect.stringMatching(/^[a-f0-9]{48}$/), state: null, reason: "central agent state is unavailable", quality: "unverified", evaluatedAt: 0, revision: 0 },
       id: `claude:${CLAUDE_SESSION}`,
       engine: "claude",
       sessionId: CLAUDE_SESSION,
@@ -217,10 +218,11 @@ test("the inventory carries role, model, stage and ownership for every structure
       model: "opus",
       stage: "implement",
       seat: false,
-      turnBusy: false,
+      turnBusy: null,
       owned: true,
     },
     {
+      agentState: { subject: expect.stringMatching(/^[a-f0-9]{48}$/), state: null, reason: "central agent state is unavailable", quality: "unverified", evaluatedAt: 0, revision: 0 },
       id: `codex:${CODEX_SESSION}`,
       engine: "codex",
       sessionId: CODEX_SESSION,
@@ -235,7 +237,7 @@ test("the inventory carries role, model, stage and ownership for every structure
       model: "gpt-5.6",
       stage: null,
       seat: true,
-      turnBusy: true,
+      turnBusy: null,
       owned: false,
     },
   ]);

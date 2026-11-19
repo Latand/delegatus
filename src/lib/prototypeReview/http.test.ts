@@ -516,6 +516,21 @@ test("publication refuses a builder pass after the critic stage is changed, unti
   expect(published.status).toBe(200);
   expect((await published.json()).critic).toEqual({ stageId: "critic", attempt: 2, outcome: "passed" });
 });
+test.each(["Layout ".repeat(17), "🌍".repeat(60)])("an operator-skipped critic publishes a review with a durable visible disclosure (%s)", async titleInput => {
+  const lane = criticLane();
+  Object.assign(criticAttempt(lane), { n: 3, state: "skipped", operatorCriticSkip: true });
+  lane.runs[1]!.attempts[0]!.startedAt = "2026-10-12T09:00:00Z";
+  const input = { ...await fullInput("operator-skipped-critic"), title: titleInput };
+  const response = await gatedPublishPOST(request("/api/prototype-reviews", input), { ...reviewedWorld, pipeline: () => lane });
+  expect(response.status).toBe(200);
+  expect((await response.json()).critic).toEqual({ stageId: "critic", attempt: 3, outcome: "skipped-by-operator" });
+  const title = (await read()).rounds[0]!.title;
+  expect(title).toContain("Visual critic skipped by operator");
+  expect(title.length).toBeLessThanOrEqual(120);
+  expect(prototypeReviewReplica(loadTasks()[0]!)!.rounds[0]!.title).toBe(title);
+  expect(isPrototypeReplica(prototypeReviewReplica(loadTasks()[0]!), "task-prototype", "project-a")).toBe(true);
+});
+
 test("question-only forms bypass the gate and a reviewed publication stores local provenance", async () => {
   const questionnaire = await gatedPublishPOST(request("/api/prototype-reviews", { clientRequestId: "only-questions", taskId: "task-prototype", title: "Questions", questions }), prototypeWorld);
   expect(questionnaire.status).toBe(200);

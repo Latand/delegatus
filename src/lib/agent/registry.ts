@@ -1,6 +1,12 @@
+import { incomingDeliveryOutcome, normalizeIncomingDeliveryHealth, type IncomingDeliveryHealth } from "@/lib/runtime/incomingDeliveryHealth";
+import { invalidateAgentState } from "@/lib/agentState/invalidation";
+import type { AgentProjection, AgentStateJournal, AgentStateMetrics } from "@/lib/agentState/model";
+import { validNativePromptAnchor } from "@/lib/agentState/model";
+import { normalizeAgentStateRows } from "@/lib/agentState/store";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
+import { normalizeCleanerSandboxObservation, type CleanerSandboxObservation } from "./cleanerLaunchPolicy";
 import { assertMemberLaunchAllowed, memberLaunchRevocationId } from "@/lib/team/memberLaunchAuthority";
 import { worktreeProtection, type WorktreeProtection } from "./worktreeProtection";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
@@ -23,7 +29,7 @@ import { isDeepStrictEqual } from "node:util";
 import { statePath } from "@/lib/configDir";
 import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation, MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import { assertStateMutationAllowed, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
@@ -111,16 +117,18 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
+  registryCollectionPage, type RowCollection,
+  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryOpenDeliveryKeys, registryHasDeliveryPredecessor, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection,
   type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
 } from "./sqliteRegistryStore";
+import { structuredTerminationDecision } from "./structuredTerminationDecision";
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
-import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
+import { normalizeRuntimeDeliveryFailure, type RuntimeDeliveryFailure, type RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrigin";
 import { normalizePendingPermissions, normalizePendingQuestions, normalizePendingToolUses, type PendingPermissionRequest, type PendingQuestionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
@@ -131,6 +139,19 @@ import { loadTasksByIds } from "@/lib/tasks/store";
 import type { LaunchFailureReporting } from "@/lib/tasks/launchFailureReporting";
 
 export type AgentHostStatus = "starting" | "live" | "idle" | "handoff" | "unhosted" | "dead";
+
+const STRUCTURED_CLAIM_REFUSALS = ["missing-entry", "adoption-pending", "missing-host",
+  "termination-survivors", "signal-domain", "agent-scope", "unhosted", "live-native", "writer-owned"] as const;
+export type StructuredHostClaimRefusal = typeof STRUCTURED_CLAIM_REFUSALS[number];
+
+/** Optional per-attempt output, filled at the branch that refuses the claim. */
+export interface StructuredHostClaimDecision { refusal: StructuredHostClaimRefusal | null }
+
+const STRUCTURED_TERMINATION_CALLERS = ["claude-adoption", "codex-adoption", "startup-demotion", "terminal-recovery"] as const;
+export interface StructuredTerminationDecisionContext {
+  caller: typeof STRUCTURED_TERMINATION_CALLERS[number];
+  claimRefusal: StructuredHostClaimRefusal | null;
+}
 
 export type { ProcessIdentity } from "@/lib/processIdentity";
 
@@ -175,6 +196,12 @@ export interface StructuredHostColumns {
   protocolVersion: string | null;
   writerClaimEpoch: number;
   activeTurnRef: string | null;
+  attentionVerified?: boolean;
+  agentStateAttention?: { pending: string[]; unverified: boolean };
+  agentStateTurnStartedAt?: number | null;
+  agentStateNativeTurnId?: string | null;
+  agentStateNativePromptOrdinal?: number | null;
+  agentStateNativePromptAnchor?: import("@/lib/agentState/model").NativePromptAnchor | null;
   pendingAttention: string[];
   /** The pending attentions that are tool permission requests (#2215). */
   pendingPermissions?: PendingPermissionRequest[];
@@ -193,6 +220,12 @@ export interface StructuredHostColumns {
 const STRUCTURED_CLAIM_PREFIX = "structured-host:";
 
 function structuredClaimOwner(identity: ProcessIdentity): string {
+  // Upgrade only our own verified token; never stamp a foreign legacy identity
+  // with this process's boot domain. Every comparison uses this same encoder.
+  if (!identity.bootEpoch && identity.pid === process.pid) {
+    const current = captureProcessIdentity(process.pid);
+    if (current.startIdentity !== null && (identity.startIdentity === null || identity.startIdentity === current.startIdentity)) identity = current;
+  }
   return `${STRUCTURED_CLAIM_PREFIX}${JSON.stringify(identity)}`;
 }
 
@@ -404,6 +437,9 @@ export interface SpawnReceipt {
   /** False only while a newly reserved receipt is waiting for task membership.
       Missing on legacy receipts means their historical admission is complete. */
   membershipAdmitted?: boolean;
+  /** Actual disk-cleaner boundary at its latest host start; the requested
+      launchProfile remains restricted so every successor probes again. */
+  cleanerSandbox?: CleanerSandboxObservation;
   launchProfile: LaunchProfile;
   /** Validated explicit operator project. Becomes durable conversation
       ownership at admission; `launchProfile.project` stays a hint. */
@@ -743,6 +779,9 @@ export function seatViewerMcpObservation(conversation: RegistryConversation, ent
 }
 
 export interface RegistryConversation {
+  incomingDeliveryHealth?: IncomingDeliveryHealth;
+  /** Reservation high-water mark survives unsettled owners and compaction. */
+  deliveryAdmissionSeq?: number;
   id: ViewerConversationId;
   engine: AgentEngine;
   generations: NativeGeneration[];
@@ -869,6 +908,8 @@ export interface DeliveryOperationOwner {
   evidenceText?: string | null;
   evidenceImageCount?: number;
   createdAt: string;
+  /** The reservation order within this recipient, retained after compaction. */
+  admissionSeq?: number;
   /** The attempt this row REPLACES, when a retry minted a fresh operation for a
       send that already had one (#1131).
 
@@ -882,12 +923,15 @@ export interface DeliveryOperationOwner {
 
       Null on the ordinary row a reservation writes for itself. */
   retryOfOperationId: string | null;
+  incomingUncertaintyObserved?: true;
+  incomingHealthOutcome?: "delivered" | "failed" | "unverified";
   terminalState: Extract<HeldDelivery["state"], "delivered" | "failed"> | null;
   /** Kept on the owner rather than only on the reservation, because the
       reservation is compacted away and the duplicate-send risk it recorded must
       not be compacted away with it. */
   terminalDisposition: DeliveryTerminalDisposition | null;
   terminalReason: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
   settledAt: string | null;
   /** How a delivered send reached a running turn when it took more than a
       plain send: `interrupt-then-turn-started` on an engine without steer
@@ -972,6 +1016,11 @@ export interface DeliveryEvidenceCompaction {
 
 export interface RegistryFile {
   version: 2;
+  /** JSON store lineage survives atomic commits; a replacement starts a new discovery owner. */
+  _jsonStoreId?: string | null;
+  agentStates: Record<string, AgentProjection>;
+  agentStateJournal: Record<string, AgentStateJournal>;
+  agentStateMetrics: Record<string, AgentStateMetrics>;
   entries: Record<string, AgentRegistryEntry>;
   receipts: Record<string, SpawnReceipt>;
   lineageEdges: Record<string, SpawnLineageEdge>;
@@ -1005,6 +1054,12 @@ export interface RegistryFile {
       keyed by successor conversation id. */
   pendingSupersedence: Record<string, PendingSupersedence>;
 }
+
+export type McpCallerRegistryRows = Pick<RegistryFile, "conversations" | "entries"> & {
+  nativeGenerationAmbiguous?: true;
+  nativeHostsIncomplete?: true;
+  nativeArtifact?: string;
+};
 
 /** Compact read model for resolving the bounded `spawn:<launchId>` paths that
     can appear in one Viewer snapshot. It intentionally excludes launch profile,
@@ -1410,10 +1465,11 @@ function migrationReadinessSignature(
   const conversations = [...new Map([...paths].flatMap(path => registryConversationsForPath(file, path))
     .filter(conversation => conversation.engine === engine && paths.has(conversation.generations.at(-1)?.path ?? ""))
     .map(conversation => [conversation.id, conversation])).values()];
-  const deliveries = conversations.flatMap(conversation => registryRowsMatching(file, "heldDeliveries", "conversationId", conversation.id));
   const index: MigrationReadinessIndex = {
-    uncertainDeliveryConversationIds: new Set(deliveries.filter(row => row.state === "delivery-uncertain").map(row => row.conversationId)),
-    pendingDeliveryConversationIds: new Set(deliveries.filter(row => row.state !== "delivered").map(row => row.conversationId)),
+    uncertainDeliveryConversationIds: new Set(conversations.filter(conversation =>
+      registryOpenDeliveryKeys(file, conversation.id, ["delivery-uncertain"], "", 1).length).map(row => row.id)),
+    pendingDeliveryConversationIds: new Set(conversations.filter(conversation =>
+      registryOpenDeliveryKeys(file, conversation.id, ["held", "assigned", "delivery-uncertain", "failed"], "", 1).length).map(row => row.id)),
     activeHostPaths: new Set([...paths].filter(path => registryRowsMatching(file, "entries", "artifactPath", path)
       .some(entry => ["starting", "live", "idle", "handoff"].includes(entry.status)))),
   };
@@ -2055,11 +2111,21 @@ export function compareDeliveryAdmission(
 
 /** The next admission sequence of a canonical conversation, inside the reservation's own transaction. */
 function nextAdmissionSeq(file: RegistryFile, canonicalId: ViewerConversationId): number {
-  let highest = 0;
+  // Retained deliveries are compacted. Keep reservation order monotonic from
+  // the conversation's durable outcome checkpoint after those rows disappear.
+  const health = file.conversations[canonicalId]?.incomingDeliveryHealth;
+  let highest = Math.max(health?.lastOutcomeAdmissionSeq ?? 0, health?.lastDeliveredAdmissionSeq ?? 0);
   for (const delivery of conversationRows(file, "heldDeliveries", canonicalId)) {
     if (typeof delivery.admissionSeq !== "number" || delivery.admissionSeq <= highest) continue;
     if (resolveConversationAlias(file, delivery.conversationId) === canonicalId) highest = delivery.admissionSeq;
   }
+  for (const owner of conversationRows(file, "deliveryOperationOwners", canonicalId)) {
+    highest = Math.max(highest, owner.admissionSeq ?? 0);
+  }
+  const conversation = file.conversations[canonicalId];
+  highest = Math.max(highest, conversation?.deliveryAdmissionSeq ?? 0);
+  if (!Number.isSafeInteger(highest + 1)) throw new Error("delivery admission sequence exhausted");
+  if (conversation) conversation.deliveryAdmissionSeq = highest + 1;
   return highest + 1;
 }
 
@@ -2219,22 +2285,24 @@ export function registryOpenSpawnReceipts(file: RegistryFile): SpawnReceipt[] {
 }
 
 export function deliveryHasDurableClaimOwner(
-  snapshot: RegistryFile,
+  snapshot: Pick<RegistryFile, "entries" | "receipts">,
   conversation: RegistryConversation,
   delivery: HeldDelivery,
 ): boolean {
   const current = conversation.generations.at(-1);
   if (!current || delivery.generationId !== current.id) return false;
   if (current.host !== null && current.host !== undefined) return true;
-  if (Object.values(snapshot.entries).some((entry) =>
-    entry.key.engine === conversation.engine
-    && entry.key.sessionId === current.id
+  const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: current.id })];
+  if (entry && entry.key.engine === conversation.engine && entry.key.sessionId === current.id
     && entry.artifactPath === current.path
-    && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null)))) return true;
-  return registryRowsMatching(snapshot, "receipts", "conversationId", conversation.id).some((receipt) =>
-    receipt.engine === conversation.engine
-    && receipt.conversationId === conversation.id
-    && CLAIMABLE_RECEIPT_STATES.has(receipt.state));
+    && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null))) return true;
+  // Each state is a scalar equality seek. Terminal history is excluded before
+  // LIMIT, and no receipt payload is materialized to establish existence.
+  return [...CLAIMABLE_RECEIPT_STATES].some(state => registryKeysMatchingBounded(snapshot, "receipts", [
+    { field: "conversationId", value: conversation.id },
+    { field: "engine", value: conversation.engine },
+    { field: "state", value: state },
+  ], 1).length > 0);
 }
 
 function terminalizeHeldDelivery(
@@ -2242,7 +2310,8 @@ function terminalizeHeldDelivery(
   delivery: HeldDelivery,
   reason: string,
 ): void {
-  const uncertain = delivery.state === "delivery-uncertain";
+  const uncertain = delivery.state === "delivery-uncertain"
+    || file.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "unverified";
   const terminalReason = uncertain
     ? `${reason}; a prior delivery attempt may have been delivered because its journal outcome is unknown`
     : reason;
@@ -2591,6 +2660,8 @@ function emptyPolicy(restartedAt = now()): AutoBalancePolicy {
 
 const EMPTY: RegistryFile = {
   version: 2,
+  _jsonStoreId: null,
+  agentStates: {}, agentStateJournal: {}, agentStateMetrics: {},
   entries: {},
   receipts: {},
   lineageEdges: {},
@@ -2791,6 +2862,14 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     protocolVersion: typeof host.protocolVersion === "string" ? host.protocolVersion : null,
     writerClaimEpoch: Number.isSafeInteger(host.writerClaimEpoch) && (host.writerClaimEpoch ?? -1) >= 0 ? host.writerClaimEpoch! : 0,
     activeTurnRef: typeof host.activeTurnRef === "string" ? host.activeTurnRef : null,
+    attentionVerified: host.attentionVerified ?? Array.isArray(host.pendingAttention),
+    ...(host.agentStateAttention && Array.isArray(host.agentStateAttention.pending) && typeof host.agentStateAttention.unverified === "boolean"
+      ? { agentStateAttention: { pending: host.agentStateAttention.pending.filter(ref => typeof ref === "string" && ref.length <= 128).slice(0, 32),
+          unverified: host.agentStateAttention.unverified || host.agentStateAttention.pending.length > 32 || host.agentStateAttention.pending.some(ref => typeof ref !== "string" || ref.length > 128) } } : {}),
+    agentStateNativePromptAnchor: validNativePromptAnchor(host.agentStateNativePromptAnchor) ? host.agentStateNativePromptAnchor : null,
+    agentStateNativeTurnId: typeof host.agentStateNativeTurnId === "string" ? host.agentStateNativeTurnId.slice(0, 256) : null,
+    agentStateNativePromptOrdinal: Number.isSafeInteger(host.agentStateNativePromptOrdinal) && host.agentStateNativePromptOrdinal! > 0 ? host.agentStateNativePromptOrdinal : null,
+    agentStateTurnStartedAt: typeof host.agentStateTurnStartedAt === "number" && Number.isFinite(host.agentStateTurnStartedAt) ? host.agentStateTurnStartedAt : null,
     pendingAttention: Array.isArray(host.pendingAttention)
       ? host.pendingAttention.filter((item): item is string => typeof item === "string")
       : [],
@@ -3098,6 +3177,8 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
     : null;
   return {
     ...value,
+    incomingDeliveryHealth: normalizeIncomingDeliveryHealth(value.incomingDeliveryHealth),
+    deliveryAdmissionSeq: Number.isSafeInteger(value.deliveryAdmissionSeq) && value.deliveryAdmissionSeq! > 0 ? value.deliveryAdmissionSeq : undefined,
     generations,
     continuityPaths,
     abandonedContinuityPaths,
@@ -3330,6 +3411,7 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
     requestDigest: typeof value.requestDigest === "string" ? value.requestDigest : legacyDigest,
     recoveryIntent: value.recoveryIntent === "reclaimed-host" ? value.recoveryIntent : null,
     state,
+    primaryFailure: state === "failed" ? normalizeRuntimeDeliveryFailure(value.primaryFailure) : undefined,
     fencedBy: state === "held" && typeof value.fencedBy === "string" ? value.fencedBy : null,
     waitReason: state === "held" && value.waitReason === "switching-accounts" ? value.waitReason : null,
     admissionSeq: Number.isSafeInteger(value.admissionSeq) && value.admissionSeq! > 0 ? value.admissionSeq : undefined,
@@ -3373,17 +3455,23 @@ function syncDeliveryOperationOwnerState(
   file: RegistryFile,
   delivery: HeldDelivery,
   disposition?: DeliveryTerminalDisposition,
+  observeOutcome = disposition !== undefined,
 ): void {
   const owner = file.deliveryOperationOwners[delivery.command.operationId];
   if (owner?.deliveryId !== delivery.id) return;
+  if (delivery.admissionSeq !== undefined) owner.admissionSeq = delivery.admissionSeq;
   if (delivery.generationId) owner.targetGenerationId = delivery.generationId;
   owner.evidenceText ??= delivery.text;
   owner.evidenceImageCount ??= delivery.runtimeImages.length;
   const terminalState = terminalDeliveryState(delivery);
   owner.terminalState = terminalState;
   if (terminalState === null) {
+    delete owner.incomingHealthOutcome;
+    if (delivery.state === "delivery-uncertain" && !owner.incomingUncertaintyObserved) recordIncomingDeliveryOwner(file, owner, true);
     owner.terminalDisposition = null;
     owner.terminalReason = null;
+    delete owner.primaryFailure;
+    delete delivery.primaryFailure;
     owner.settledAt = null;
     return;
   }
@@ -3391,7 +3479,32 @@ function syncDeliveryOperationOwnerState(
     ? "delivered"
     : disposition ?? owner.terminalDisposition ?? null;
   owner.terminalReason = delivery.error ?? owner.terminalReason ?? null;
+  owner.primaryFailure = terminalState === "failed" ? normalizeRuntimeDeliveryFailure(delivery.primaryFailure) : undefined;
   owner.settledAt = delivery.deliveredAt ?? owner.settledAt ?? now();
+  const outcome = terminalState === "delivered" ? "delivered" : owner.terminalDisposition === "lost" ? "failed" : "unverified";
+  if (observeOutcome && owner.incomingHealthOutcome !== outcome) recordIncomingDeliveryOwner(file, owner);
+}
+
+function recordIncomingDeliveryOwner(file: RegistryFile, owner: DeliveryOperationOwner, pendingUncertainty = false): void {
+  const conversation = file.conversations[resolveConversationAlias(file, owner.conversationId)];
+  const state = !pendingUncertainty && owner.terminalState === "delivered" ? "delivered"
+    : !pendingUncertainty && owner.terminalDisposition === "lost" ? "failed" : "unverified";
+  if (conversation) {
+    const admissionSeq = owner.admissionSeq ?? file.heldDeliveries[owner.deliveryId]?.admissionSeq;
+    const health = pendingUncertainty && conversation.incomingDeliveryHealth ? { ...conversation.incomingDeliveryHealth }
+      : incomingDeliveryOutcome(conversation.incomingDeliveryHealth, state, now(), owner.terminalReason, admissionSeq);
+    const operationId = owner.command.operationId;
+    health.lastOperationId = operationId.length <= 200 ? operationId : undefined;
+    if (state === "failed" && (admissionSeq === undefined || conversation.incomingDeliveryHealth?.lastOutcomeAdmissionSeq === undefined
+      || admissionSeq >= conversation.incomingDeliveryHealth.lastOutcomeAdmissionSeq)) health.episodeId = health.failures > 1
+      ? conversation.incomingDeliveryHealth?.episodeId
+      : operationId.length <= 200 ? operationId : `sha256:${crypto.createHash("sha256").update(operationId).digest("hex")}`;
+    health.uncertain = Math.max(0, (health.uncertain ?? 0) + Number(state === "unverified") - Number(owner.incomingUncertaintyObserved === true));
+    conversation.incomingDeliveryHealth = health;
+  }
+  if (!pendingUncertainty) owner.incomingHealthOutcome = state;
+  if (state === "unverified") owner.incomingUncertaintyObserved = true;
+  else delete owner.incomingUncertaintyObserved;
 }
 
 function placeDeliveryForRetryInFile(
@@ -3745,6 +3858,9 @@ function normalizeDeliveryOperationOwners(
         createdAt: typeof owner.createdAt === "string"
           ? owner.createdAt
           : referencedDelivery?.createdAt ?? settledDelivery?.createdAt ?? LEGACY_POLICY_RESTARTED_AT,
+        ...(Number.isSafeInteger(owner.admissionSeq) && owner.admissionSeq! > 0 ? { admissionSeq: owner.admissionSeq }
+          : referencedDelivery?.admissionSeq ? { admissionSeq: referencedDelivery.admissionSeq }
+            : settledDelivery?.admissionSeq ? { admissionSeq: settledDelivery.admissionSeq } : {}),
         retryOfOperationId: typeof owner.retryOfOperationId === "string" && owner.retryOfOperationId
           ? owner.retryOfOperationId
           : null,
@@ -3754,12 +3870,16 @@ function normalizeDeliveryOperationOwners(
         terminalDisposition: terminalState === "delivered"
           ? "delivered"
           : normalizedDisposition(owner.terminalDisposition),
+        primaryFailure: terminalState === "failed"
+          ? normalizeRuntimeDeliveryFailure(owner.primaryFailure ?? referencedDelivery?.primaryFailure ?? settledDelivery?.primaryFailure) : undefined,
         terminalReason: typeof owner.terminalReason === "string"
           ? owner.terminalReason
           : referencedDelivery?.error ?? settledDelivery?.error ?? null,
         settledAt: typeof owner.settledAt === "string"
           ? owner.settledAt
           : referencedDelivery?.deliveredAt ?? settledDelivery?.deliveredAt ?? null,
+        ...(["delivered", "failed", "unverified"].includes(owner.incomingHealthOutcome ?? "") ? { incomingHealthOutcome: owner.incomingHealthOutcome } : {}),
+        ...(owner.incomingUncertaintyObserved === true ? { incomingUncertaintyObserved: true as const } : {}),
         ...(owner.directAdmission === "native-queue-add" ? { directAdmission: owner.directAdmission } : {}),
         ...(owner.delivery === "interrupt-then-turn-started" ? { delivery: owner.delivery } : {}),
         ...(owner.delivery === "interrupt-then-turn-started" && typeof owner.interruptedTurnId === "string" && owner.interruptedTurnId
@@ -3786,10 +3906,12 @@ function normalizeDeliveryOperationOwners(
       evidenceText: delivery.text,
       evidenceImageCount: delivery.runtimeImages.length,
       createdAt: delivery.createdAt,
+      ...(delivery.admissionSeq ? { admissionSeq: delivery.admissionSeq } : {}),
       retryOfOperationId: null,
       terminalState: terminalDeliveryState(delivery),
       terminalDisposition: terminalDeliveryState(delivery) === "delivered" ? "delivered" : null,
       terminalReason: delivery.error,
+      primaryFailure: normalizeRuntimeDeliveryFailure(delivery.primaryFailure),
       settledAt: delivery.deliveredAt,
     };
   }
@@ -4437,6 +4559,8 @@ function adoptProvisionalOwner(
   /* The adopted identity's keys are answered under the target from here on, so
      the target inherits the weaker of the two histories. */
   if (!owner.deliveryEvidenceTracked) target.deliveryEvidenceTracked = false;
+  const admissionSeq = Math.max(target.deliveryAdmissionSeq ?? 0, owner.deliveryAdmissionSeq ?? 0);
+  if (admissionSeq > 0) target.deliveryAdmissionSeq = admissionSeq;
   for (const receipt of registryReceiptsReferencing(file, owner.id)) {
     if (receipt.conversationId === owner.id) receipt.conversationId = target.id;
     if (receipt.parentConversationId === owner.id) receipt.parentConversationId = target.id;
@@ -4803,6 +4927,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     } } : {}),
     ...(value.failureRepairState === "pending" || value.failureRepairState === "handled" ? { failureRepairState: value.failureRepairState } : {}),
     membershipAdmitted: value.membershipAdmitted === false ? false : true,
+    ...(normalizeCleanerSandboxObservation(value.cleanerSandbox) ? { cleanerSandbox: normalizeCleanerSandboxObservation(value.cleanerSandbox) } : {}),
     launchProfile: receiptLaunchProfile(value, policy),
     explicitProject: validExplicitProject(value.explicitProject),
     launchDisplay: normalizeLaunchDisplay(value.launchDisplay),
@@ -4970,6 +5095,11 @@ export function normalizeRegistry(
     : {};
   const normalized = backfillMaterializedSpawnArtifacts({
       version: 2,
+      _jsonStoreId: typeof parsed._jsonStoreId === "string" && /^[a-f0-9-]{36}$/.test(parsed._jsonStoreId)
+        ? parsed._jsonStoreId : null,
+      agentStates: normalizeAgentStateRows(parsed.agentStates, "projection"),
+      agentStateJournal: normalizeAgentStateRows(parsed.agentStateJournal, "journal"),
+      agentStateMetrics: normalizeAgentStateRows(parsed.agentStateMetrics, "metrics"),
       entries: Object.fromEntries(Object.entries(parsed.entries).map(([id, entry]) => [id, normalizeEntry(entry, policy)])),
       receipts: Object.fromEntries(Object.entries(parsed.receipts).map(([id, receipt]) => [id, normalizeReceipt(receipt, policy)])),
       lineageEdges: parsed.lineageEdges && typeof parsed.lineageEdges === "object"
@@ -5064,8 +5194,9 @@ function readFileWithPayload(
     const parsed = JSON.parse(payload);
     /* A whole file, so an entry no conversation owns is genuinely unowned and
        falls back to the baseline rather than keeping a claimed grant (#739). */
+    const file = reboundAssembledMcpGrants(normalizeRegistry(parsed, policy), policy);
     return {
-      file: reboundAssembledMcpGrants(normalizeRegistry(parsed, policy), policy),
+      file,
       payload,
       sqliteRevision: sqliteRevisionFromParsed(parsed),
     };
@@ -5108,6 +5239,7 @@ function compactLaunchProfile(profile: LaunchProfile): Partial<LaunchProfile> {
 
 function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string {
   const storage = {
+    _jsonStoreId: value._jsonStoreId,
     ...value,
     ...(sqliteRevision === undefined ? {} : { _sqliteRevision: sqliteRevision }),
     entries: Object.fromEntries(Object.entries(value.entries).map(([id, entry]) => [id, {
@@ -5382,7 +5514,9 @@ export class AgentRegistry {
   accountCreditGuardRevision(): number { return this.creditGuardRevision; }
   invalidateAccountCreditGuard(): void { this.creditGuardRevision += 1; }
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
-  private readOnlyCache: { signature: string; snapshot: RegistryFile } | null = null;
+  private readOnlyCache: { signature: string; snapshot: RegistryFile; termination: {
+    versions: Map<string, string>; owners: Map<string, AgentRegistryEntry[]>; conversationsByPath: Map<string, Set<string>>;
+  } } | null = null;
   private readonly mirrorCheckpointMs: number;
   private readonly now: () => number;
   private readonly scheduleMirrorCheckpoint: (callback: () => void, delayMs: number) => { unref?(): unknown };
@@ -5444,8 +5578,10 @@ export class AgentRegistry {
       afterRename: storage.afterMirrorRename,
     };
     this.beforeDualWriteMutationReplace = storage.beforeDualWriteMutationReplace;
-    const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
+    const probeReader = storage.resolveBackendIdentity === true && process.env[MCP_PROBE_READ_ONLY_ENV] === "1";
+    const mayRunStartupMaintenance = !probeReader && mayRunStateStartupMutation(path.dirname(this.filename));
     const openStore = () => new SqliteAgentRegistryStore(sqliteFilename, {
+      readOnly: probeReader,
       allowArchiveMigration: mayRunStartupMaintenance,
       deferColdKeyInitialization: storage.deferColdKeyInitialization,
       /* Lazy: an initialised store never reads the JSON (#1870). */
@@ -5463,6 +5599,9 @@ export class AgentRegistry {
       onRowPayloadParse: storage.onSqliteRowPayloadParse,
       onRevisionQuery: storage.onSqliteRevisionQuery,
     });
+    if (probeReader && backend.pendingJsonImport) {
+      throw new RegistryReadError("the registry is waiting for the serving Viewer to import it");
+    }
     this.sqliteStore = this.sqliteMode === "off"
       ? null
       : backend.pendingJsonImport
@@ -5806,8 +5945,9 @@ export class AgentRegistry {
       throw error;
     }
     let file: RegistryFile;
+    let sourceRevision: number | null;
     try {
-      file = readFile(this.filename, this.mcpGrantPolicy);
+      ({ file, sqliteRevision: sourceRevision } = readFileWithPayload(this.filename, this.mcpGrantPolicy));
     } catch (error) {
       if (error instanceof RegistryReadError) {
         console.error("agent registry startup compaction skipped:", error);
@@ -5815,8 +5955,12 @@ export class AgentRegistry {
       }
       throw error;
     }
+    // Opening a rollback mirror through the JSON reader must preserve parity.
+    // An actual JSON mutation below establishes lineage when it takes ownership.
+    if (this.sqliteMode === "off" && sourceRevision === null) file._jsonStoreId ??= crypto.randomUUID();
     compactDeliveryReservations(file, undefined, this.now());
-    if (serializeRegistry(file, sqliteRevision) !== original) writeAtomic(this.filename, file, sqliteRevision);
+    const revision = sqliteRevision ?? sourceRevision ?? undefined;
+    if (serializeRegistry(file, revision) !== original) writeAtomic(this.filename, file, revision);
   }
 
   private synchronizeDualWriteStartup(beforeReplace: (() => void) | undefined): void {
@@ -6235,6 +6379,7 @@ export class AgentRegistry {
         ? clone(original.file)
         : null;
       const file = original.file;
+      if (!sqlite) file._jsonStoreId ??= crypto.randomUUID();
       const result = mutator(file);
       const currentPayload = serializeRegistry(file, sqlite?.revision);
       const changed = original.payload !== currentPayload;
@@ -6267,6 +6412,9 @@ export class AgentRegistry {
         }
         this.assertSqliteParity();
       }
+      // Keep an observed owner's proof view warm without forcing a first
+      // read of a JSON registry that no reader has requested yet.
+      if (changed && this.readOnlyCache) this.readOnlySnapshot();
       return result;
     } finally {
       if (!admitted) this.releaseLock(claim);
@@ -6444,10 +6592,42 @@ export class AgentRegistry {
       const snapshot = deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
       const after = registryFileSignature(this.filename);
       if (before !== after) continue;
-      this.readOnlyCache = { signature: after, snapshot };
+      this.readOnlyCache = { signature: after, snapshot, termination: this.jsonTerminationIndex(snapshot) };
       return snapshot;
     }
     return deepFreeze(readFile(this.filename, this.mcpGrantPolicy));
+  }
+
+  /** The legacy backend imports whole JSON files. Build its derived tokens
+      once with that immutable view, owned and evicted by the same cache. */
+  private jsonTerminationIndex(file: RegistryFile) {
+    const byPath = new Map<string, AgentRegistryEntry[]>();
+    for (const entry of Object.values(file.entries)) if (entry.artifactPath) {
+      const entries = byPath.get(entry.artifactPath) ?? [];
+      entries.push(entry);
+      byPath.set(entry.artifactPath, entries);
+    }
+    const versions = new Map<string, string>();
+    const owners = new Map<string, AgentRegistryEntry[]>();
+    const conversationsByPath = new Map<string, Set<string>>();
+    for (const conversation of Object.values(file.conversations)) {
+      const hash = crypto.createHash("sha256").update(JSON.stringify(conversation));
+      const generationKeys = new Set(conversation.generations.map(generation => `${conversation.engine}:${generation.id}`));
+      for (const key of generationKeys) hash.update(JSON.stringify(file.entries[key] ?? null));
+      const entries = new Set<AgentRegistryEntry>();
+      for (const pathname of [...conversation.generations.map(generation => generation.path), ...conversation.continuityPaths]) {
+        for (const entry of byPath.get(pathname) ?? []) entries.add(entry);
+      }
+      for (const entry of entries) hash.update(JSON.stringify(entry));
+      owners.set(conversation.id, [...entries].filter(entry => !generationKeys.has(`${entry.key.engine}:${entry.key.sessionId}`)));
+      versions.set(conversation.id, hash.digest("hex"));
+      for (const pathname of [...conversation.generations.map(generation => generation.path), ...conversation.continuityPaths]) {
+        const ids = conversationsByPath.get(pathname) ?? new Set<string>();
+        ids.add(conversation.id);
+        conversationsByPath.set(pathname, ids);
+      }
+    }
+    return { versions, owners, conversationsByPath };
   }
 
   worktreeProtectionSnapshot(): WorktreeProtection {
@@ -6472,6 +6652,55 @@ export class AgentRegistry {
   private readKeyed<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
     return withViewerOperation("registry.read", () => performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
       ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot())));
+  }
+
+  /** Ordered controller discovery, with predicates applied before payloads are
+      decoded. Terminal delivery history stays available for keyed receipts. */
+  migrationWorkPage<C extends "heldDeliveries" | "conversations" | "pendingSuccessorCleanups" | "migrationIntents">(
+    collection: C, after = "", limit = 16, repairs = false,
+  ): Array<[string, RegistryFile[C][string]]> {
+    return this.readKeyed(file => {
+      const filter = collection === "heldDeliveries" ? { field: "state" as const, value: ["held", "assigned", "delivery-uncertain"] }
+        : collection === "conversations" ? { field: "migration.phase" as const,
+          value: repairs ? ["committed"] : ["requested", "waiting-turn", "preparing", "successor-starting", "verifying"] }
+        : collection === "migrationIntents" ? { field: "state" as const, value: "draining" } : undefined;
+      const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+      return registryCollectionPage(file, collection as RowCollection, after, limit, filter)
+        .map((key): [string, RegistryFile[C][string]] => [key, clone(rows[key]!)]);
+    }, { skipColdKeyInitialization: true });
+  }
+
+  conversationMigrationPhase(id: ViewerConversationId): string | null {
+    return withViewerOperation("registry.read", () => this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")
+      ? this.sqliteStore.conversationMigrationPhase(id) : this.readOnlySnapshot().conversations[id]?.migration?.phase ?? null);
+  }
+
+  /** Re-read under the writer after admission: a stop or a newly enrolled
+      conversation must not be completed from an earlier controller page. */
+  completeSettledMigrationIntent(id: string, cooldownUntil: string): void {
+    this.mutate(file => {
+      const intent = file.migrationIntents[id];
+      if (!intent || intent.state !== "draining") return;
+      const owned = [{ field: "migration.intentId" as const, value: id }];
+      // Unknown predecessor/future phases remain unresolved, like live work.
+      if (registryKeysMatchingBounded(file, "conversations", [...owned,
+        { field: "migration.custodyState", value: "pending" }], 1).length) return;
+      if (intent.scope !== "conversation") {
+        const failed = registryKeysMatchingBounded(file, "conversations", [...owned, { field: "migration.phase", value: "failed-recoverable" }], 1).length > 0;
+        const policy = file.autoBalance[intent.engine];
+        const evidence = intent.evidence;
+        policy.cooldownUntil = cooldownUntil;
+        policy.lastOutcome = { at: now(), kind: failed ? "failed" : "switched",
+          fromId: evidence?.sourceId ?? null, fromPercent: evidence?.sourcePercent ?? null,
+          toId: evidence?.targetId ?? null, toPercent: evidence?.targetPercent ?? null,
+          window: evidence?.sourceWindow ?? null, detail: failed ? "one or more sessions need operator recovery" : null };
+        policy.lastTrigger = evidence;
+        if (evidence) policy.departed[evidence.sourceId] = now();
+        policy.revision += 1;
+      }
+      intent.state = "complete";
+      intent.updatedAt = now();
+    }, { deliveryOnly: true });
   }
 
   /** Retention evidence for one pending runtime effect. SQLite selectors run
@@ -6560,6 +6789,111 @@ export class AgentRegistry {
     return this.scopedConversationSnapshot({ conversationId }, true, true);
   }
 
+  /** Read bounded termination evidence. The cursor visits retained generations,
+      then extra owners on any conversation path, without cloning full history. */
+  livenessConversationIdentity(target: { conversationId?: string | null; path?: string | null }): {
+    id: string; version: string; aliases: [string, string][];
+  } | null {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) return this.sqliteStore.terminationIdentity(target);
+    const file = this.readOnlyCache?.signature === registryFileSignature(this.filename) ? this.readOnlyCache.snapshot : null;
+    if (!file) return null;
+    const aliases: [string, string][] = [];
+    let selected = target.conversationId;
+    if (!selected && target.path) {
+      const matches = this.readOnlyCache!.termination.conversationsByPath.get(target.path);
+      if (matches?.size !== 1) return null;
+      selected = matches.values().next().value;
+    }
+    if (!selected) return null;
+    let id: string = selected;
+    const seen = new Set<string>();
+    while (file.conversationAliases[id]) {
+      if (seen.has(id) || seen.size >= 64) return null;
+      seen.add(id);
+      const next: string = file.conversationAliases[id]!;
+      aliases.push([id, next]);
+      id = next;
+    }
+    const conversation = file.conversations[id];
+    if (!conversation) return null;
+    const version = this.readOnlyCache?.snapshot === file ? this.readOnlyCache.termination.versions.get(id) : undefined;
+    return version ? { id, version, aliases } : null;
+  }
+
+  livenessConversationPathMatches(id: string, pathname: string): boolean {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) return this.sqliteStore.terminationPathMatches(id, pathname);
+    const file = this.readOnlyCache?.signature === registryFileSignature(this.filename) ? this.readOnlyCache.snapshot : null;
+    return Boolean(file && this.readOnlyCache?.termination.conversationsByPath.get(pathname)?.has(id));
+  }
+
+  livenessConversationPage(conversationId: string, offset: number, limit: number) {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) return this.sqliteStore.terminationPage(conversationId, offset, limit);
+    const file = this.readOnlyCache?.signature === registryFileSignature(this.filename) ? this.readOnlyCache.snapshot : null;
+    if (!file) throw new Error("termination JSON view is not prepared");
+    const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+    const id = resolveConversationAlias(file, conversationId as ViewerConversationId);
+    const conversation = file.conversations[id];
+    if (!conversation) return { snapshot: result, offset, totalGenerations: 0, currentEvidence: null, nextOffset: offset, complete: false };
+    const totalGenerations = conversation.generations.length;
+    const generations = conversation.generations.slice(offset, offset + limit);
+    // These records are read-only evidence. Keep unrelated retained arrays
+    // by reference and copy only the requested generation window.
+    result.conversations[id] = { ...conversation, generations };
+    result.conversationRevision[conversation.engine] = file.conversationRevision[conversation.engine];
+    for (const candidate of generations) {
+      const key = `${conversation.engine}:${candidate.id}`;
+      if (file.entries[key]) result.entries[key] = file.entries[key]!;
+    }
+    const generationEnd = Math.min(totalGenerations, offset + generations.length);
+    let nextOffset = generationEnd, complete = false;
+    if (generationEnd === totalGenerations) {
+      const owners = this.readOnlyCache!.termination.owners.get(id) ?? [];
+      const start = Math.max(0, offset - totalGenerations);
+      const selected = owners.slice(start, start + limit - generations.length);
+      for (const entry of selected) result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = entry;
+      nextOffset = totalGenerations + start + selected.length;
+      complete = start + selected.length === owners.length;
+    }
+    const currentEvidence = this.livenessConversationIdentity({ conversationId: id })?.version;
+    return { snapshot: result, offset, totalGenerations, currentEvidence, nextOffset, complete };
+  }
+
+  private cloneLivenessEntry(entry: AgentRegistryEntry): AgentRegistryEntry {
+    // Survivor sets can be large and immutable during this read. Clone the
+    // bounded metadata while retaining the array reference for paged probes.
+    const { structuredTerminationSurvivors, pendingHostExits, ...metadata } = entry;
+    const copied = clone(metadata) as AgentRegistryEntry;
+    if (structuredTerminationSurvivors !== undefined) copied.structuredTerminationSurvivors = structuredTerminationSurvivors;
+    if (pendingHostExits !== undefined) copied.pendingHostExits = pendingHostExits;
+    return copied;
+  }
+
+  /** Cheap revision fence for work resumed across controller ticks. */
+  livenessRevision(): string {
+    if (this.sqliteStore) return this.sqliteStore.terminationRevision();
+    const stat = fs.statSync(this.filename, { bigint: true });
+    return `file:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
+  }
+
+  /** Store identity, separate from the revision that changes on every commit.
+      JSON puts its lineage first so this read stays bounded even for old history. */
+  reconciliationSource(): string {
+    if (this.sqliteStore) return this.sqliteStore.terminationRevision().replace(/:\d+:\d+$/, "");
+    let descriptor: number;
+    try { descriptor = fs.openSync(this.filename, "r"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "json:empty";
+      throw error;
+    }
+    try {
+      const header = Buffer.alloc(128);
+      const count = fs.readSync(descriptor, header, 0, header.length, 0);
+      const lineage = header.subarray(0, count).toString().match(/^\{"_jsonStoreId":"([a-f0-9-]{36})"/);
+      // Legacy files receive their lineage at the first normal write/startup.
+      return `json:${lineage?.[1] ?? "legacy"}`;
+    } finally { fs.closeSync(descriptor); }
+  }
+
   private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean, liveness = false): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
@@ -6576,7 +6910,7 @@ export class AgentRegistry {
         const generation = conversation.generations.at(-1);
         if (generation) {
           const key = `${conversation.engine}:${generation.id}`;
-          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+          if (file.entries[key]) result.entries[key] = liveness ? this.cloneLivenessEntry(file.entries[key]!) : clone(file.entries[key]!);
         }
         if (liveness) {
           const paths = new Set([
@@ -6585,11 +6919,11 @@ export class AgentRegistry {
           ]);
           for (const candidate of conversation.generations) {
             const key = `${conversation.engine}:${candidate.id}`;
-            if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+            if (file.entries[key]) result.entries[key] = this.cloneLivenessEntry(file.entries[key]!);
           }
           for (const pathname of paths) {
             for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
-              result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = clone(entry);
+              result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = this.cloneLivenessEntry(entry);
             }
           }
         }
@@ -6664,6 +6998,8 @@ export class AgentRegistry {
       if (conversation) result.conversations[canonical] = clone(conversation);
       for (const identity of conversationIdentities(file, canonical)) {
         if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+        const compacted = file.deliveryEvidenceCompactions[identity];
+        if (compacted) result.deliveryEvidenceCompactions[identity] = clone(compacted);
       }
       for (const [id, delivery] of deliveryRegistryEntriesForKey(file, "heldDeliveries", clientMessageId, [canonical])) {
         result.heldDeliveries[id] = clone(delivery);
@@ -6699,6 +7035,12 @@ export class AgentRegistry {
   snapshotSpawns(launchIds: readonly string[]): SnapshotSpawnProjection {
     if (this.sqliteStore) return this.sqliteStore.snapshotSpawns(launchIds);
     return snapshotSpawnsFromRegistry(this.readOnlySnapshot(), launchIds);
+  }
+
+  /** One keyed recipient row; no retained delivery history is hydrated. */
+  incomingDeliveryHealth(conversationId: string): IncomingDeliveryHealth | null {
+    return this.readKeyed(file => normalizeIncomingDeliveryHealth(
+      file.conversations[resolveConversationAlias(file, conversationId as ViewerConversationId)]?.incomingDeliveryHealth) ?? null);
   }
 
   /** Monitor-only bounded lineage projection; JSON backends cannot prove a bounded read. */
@@ -6788,8 +7130,8 @@ export class AgentRegistry {
       custody of a single host; SQLite reads that row alone, through the
       writer's own transaction, where the complete view walked every retained
       row under the write lock. */
-  hostEntry(key: SessionKey): AgentRegistryEntry | null {
-    const id = sessionKeyId(key);
+  hostEntry(key: SessionKey | string): AgentRegistryEntry | null {
+    const id = typeof key === "string" ? key : sessionKeyId(key);
     if (!this.sqliteStore || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) return this.readOnlySnapshot().entries[id] ?? null;
     return this.readKeyed(file => {
       const entry = file.entries[id];
@@ -6859,6 +7201,37 @@ export class AgentRegistry {
     return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
   }
 
+  /** Active disk cleaner host generations keep their source launch receipt
+      while a migration replaces the generation's operation id. */
+  diskCleanerReceiptForConversation(conversationId: string): SpawnReceipt | null {
+    return this.readKeyed(file => {
+      const receipt = registryReceiptsForConversation(file, conversationId).findLast(row =>
+        row.agentRole === "cleaner" && row.launchProfile.agentMemoryRoleParams?.mode === "disk"
+        && !["failed", "conflicted"].includes(row.state));
+      return receipt ? clone(receipt) : null;
+    });
+  }
+
+  /** Bounded retention discovery refuses the unindexed JSON fallback. */
+  temporaryDataReceiptKeys(after: string, limit = 32): string[] {
+    if (!this.sqliteStore || !["sqlite", "read"].includes(this.sqliteMode)) throw new RegistryReadError("retention requires the indexed registry");
+    return this.sqliteStore.temporaryDataReceiptKeys(after, limit);
+  }
+
+  temporaryDataFacts(input: { launchId?: string; key?: SessionKey }) {
+    return this.readKeyed(file => {
+      const receipt = input.launchId ? file.receipts[input.launchId] ?? null : null;
+      const key = input.key ?? receipt?.key;
+      const entry = key ? file.entries[sessionKeyId(key)] ?? null : null;
+      const ids = key ? registryConversationKeysForEntryKey(file, sessionKeyId(key)) : [];
+      if (!ids || ids.length > 32) throw new RegistryReadError("retention conversation inventory unavailable");
+      const conversations = new Set([...ids, ...(receipt ? [receipt.conversationId] : [])]);
+      for (const id of conversations) conversations.add(resolveConversationAlias(file, id as ViewerConversationId));
+      const memberships = [...conversations].flatMap(id => file.memberships[id] ?? []);
+      return clone({ receipt, entry, pipelines: memberships.filter(row => row.kind === "pipeline").map(row => row.containerId) });
+    }, { skipColdKeyInitialization: true });
+  }
+
   /** What structured recovery reads for one host: its row, optionally one
       launch receipt and one lineage edge, and the small quota table its park
       check asks. Recovery asks inside writer admission, where a whole snapshot
@@ -6903,13 +7276,27 @@ export class AgentRegistry {
     });
   }
 
-  /** Caller identity reads only its generation keys, without a grant expansion. */
-  mcpCallerSnapshot(conversationId: string, ancestry: readonly number[], configuredRootId: string | null) {
+  /** Caller identity reads only the capability and ancestry candidates. */
+  mcpCallerSnapshot(conversationId: string | null, ancestry: readonly number[], configuredRootId: string | null) {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
       return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpCallerSnapshot(conversationId, ancestry, configuredRootId));
     }
     const snapshot = this.readOnlySnapshot();
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
+  }
+
+  mcpNativeCallerSnapshot(sessionId: string, configuredRootId: string | null) {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpNativeCallerSnapshot(sessionId, configuredRootId));
+    }
+    const snapshot = this.readOnlySnapshot();
+    return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
+  }
+
+  async prepareNativeCallerArtifacts(): Promise<void> {
+    if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
+      await this.sqliteStore?.prepareNativeCallerArtifacts();
+    }
   }
 
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
@@ -7013,6 +7400,14 @@ export class AgentRegistry {
           .findLast(row => row.key?.engine === key.engine && row.artifactPath === entry?.artifactPath);
       return receipt ? clone(receipt) : null;
     });
+  }
+
+  agentStateRead<T>(read: (file: RegistryFile) => T): T {
+    return this.readKeyed(read);
+  }
+
+  agentStateWrite<T>(write: (file: RegistryFile) => T): T {
+    return this.mutate(write, { deliveryOnly: true });
   }
 
   /** Revocation inspects current hosted rows without loading cold history. */
@@ -8163,6 +8558,22 @@ export class AgentRegistry {
     }));
   }
 
+  async recordCleanerSandboxOffLoop(launchId: string, observation: CleanerSandboxObservation, expected: SpawnReceipt): Promise<void> {
+    const normalized = normalizeCleanerSandboxObservation(observation);
+    if (!normalized) throw new Error("invalid cleaner sandbox observation");
+    await this.deliveryWriteOrBusy({ label: "spawn.cleaner-sandbox", operationId: launchId }, () => this.mutate((file) => {
+      const receipt = file.receipts[launchId];
+      if (!receipt || ["failed", "conflicted"].includes(receipt.state)
+        || receipt.agentRole !== "cleaner" || receipt.launchProfile.agentMemoryRoleParams?.mode !== "disk"
+        || !isDeepStrictEqual(clone(receipt.launchProfile), clone(expected.launchProfile))
+        || (expected.admissionOwner && (!receipt.admissionOwner || !sameRecordedProcessIdentity(expected.admissionOwner, receipt.admissionOwner)))) {
+        throw new Error("disk cleaner changed during sandbox probe");
+      }
+      assertMemberLaunchAllowed(receipt);
+      receipt.cleanerSandbox = normalized;
+    }));
+  }
+
   markSpawnPromptDelivered(launchId: string): SpawnReceipt {
     return this.mutate((file) => {
       const receipt = file.receipts[launchId];
@@ -9079,6 +9490,7 @@ export class AgentRegistry {
     structuredHost: StructuredHostColumns | null,
     status?: AgentHostStatus,
   ): AgentRegistryEntry {
+    invalidateAgentState(this.filename, key);
     return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
@@ -9182,11 +9594,19 @@ export class AgentRegistry {
     expectedRoot: Readonly<ProcessIdentity>,
     survivors: readonly ProcessIdentity[],
     source = "unspecified",
+    decision?: StructuredTerminationDecisionContext,
   ): StructuredTerminationCapture | null {
+    let observedDecision: Record<string, unknown> | undefined;
     const capture = this.mutate((file): StructuredTerminationCapture | null => {
       const entry = file.entries[sessionKeyId(key)];
       const current = recordedScopeProcess(entry?.structuredHost);
       if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot)) return null;
+      if (decision) {
+        observedDecision = structuredTerminationDecision(file, entry, {
+          caller: STRUCTURED_TERMINATION_CALLERS.includes(decision.caller) ? decision.caller : null,
+          claimRefusal: decision.claimRefusal && STRUCTURED_CLAIM_REFUSALS.includes(decision.claimRefusal) ? decision.claimRefusal : null,
+        }, this.filename);
+      }
       const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
       const retainedField = entry.structuredTerminationSurvivors !== undefined;
       const identities = new Map((entry.structuredTerminationSurvivors ?? []).map(identity => [identityKey(identity), identity]));
@@ -9207,6 +9627,7 @@ export class AgentRegistry {
       journalStructuredTermination(this.filename, {
         at: capture.updatedAt, event: "captured", source, key: sessionKeyId(key), root: expectedRoot.pid,
         pids: survivors.map(identity => identity.pid), added: capture.added.map(identity => identity.pid),
+        ...(observedDecision ? { decision: observedDecision } : {}),
       });
     }
     return capture;
@@ -9427,6 +9848,7 @@ export class AgentRegistry {
     claimEpoch: number,
     releaseClaim = false,
   ): AgentRegistryEntry | null {
+    invalidateAgentState(this.filename, key);
     return this.mutateHostExit(key, (file) => {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
@@ -9474,6 +9896,7 @@ export class AgentRegistry {
       prevents an old registration from appointing a replacement that took the
       same session key concurrently. */
   markStructuredHostHandoff(key: SessionKey, expected: Readonly<ProcessIdentity>): boolean {
+    invalidateAgentState(this.filename, key);
     return this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
       const structuredHost = entry?.structuredHost;
@@ -9531,8 +9954,15 @@ export class AgentRegistry {
       reclaimUnverifiedOwner?: boolean;
       setupHost?: StructuredHostColumns;
       setupEntry?: Pick<AgentRegistryEntry, "artifactPath" | "cwd" | "accountId" | "launchProfile">;
+      decision?: StructuredHostClaimDecision;
     } = {},
   ): AgentRegistryEntry | null {
+    invalidateAgentState(this.filename, key);
+    if (options.decision) options.decision.refusal = null;
+    const refuse = (reason: StructuredHostClaimRefusal): null => {
+      if (options.decision) options.decision.refusal = reason;
+      return null;
+    };
     return this.mutate((file) => {
       const keyId = sessionKeyId(key);
       const existing = file.entries[keyId];
@@ -9540,24 +9970,24 @@ export class AgentRegistry {
         ? { ...clone(options.setupEntry), key, status: "unhosted" as const, host: null,
           claimEpoch: 0, claimOwner: null, pendingAction: "resume" as const, updatedAt: now() }
         : null);
-      if (!entry) return null;
+      if (!entry) return refuse("missing-entry");
       // Every claimant (boot, resume and retry) must retain the predecessor's
       // writer epoch until native setup has confirmed cleanup.
-      if (unfinishedStructuredAdoption(file, key)) return null;
+      if (unfinishedStructuredAdoption(file, key)) return refuse("adoption-pending");
       // A dead-host cleanup clears these columns. Resume setup must publish
       // its writer claim before starting the replacement host, under this lock.
       const structuredHost = entry.structuredHost
         ?? (!entry.host && options.allowUnhosted === true ? options.setupHost : null);
-      if (!structuredHost) return null;
-      if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
+      if (!structuredHost) return refuse("missing-host");
+      if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return refuse("termination-survivors");
       if (structuredHost.signalDomain && structuredHost.signalDomain.retired !== true
         && (!options.reconnectCodex || structuredHost.kind !== "codex-app-server"
           || structuredHost.endpoint !== options.reconnectCodex.endpoint
           || !sameRecordedProcessIdentity(structuredHost.signalDomain.native, options.reconnectCodex.process)
-          || !agentSignalDomainAlive(structuredHost.signalDomain))) return null;
+          || !agentSignalDomainAlive(structuredHost.signalDomain))) return refuse("signal-domain");
       if (recordedAgentScope(structuredHost) && (!options.reconnectCodex
-        || !structuredHost.process || !sameRecordedProcessIdentity(structuredHost.process, options.reconnectCodex.process))) return null;
-      if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
+        || !structuredHost.process || !sameRecordedProcessIdentity(structuredHost.process, options.reconnectCodex.process))) return refuse("agent-scope");
+      if (entry.status === "unhosted" && options.allowUnhosted !== true) return refuse("unhosted");
       /* Adoption builds its host options from the entry this returns, and a
          mutation loads rows lazily rather than from an assembled snapshot, so
          the origin decision is applied to this one row here (#739). */
@@ -9577,7 +10007,7 @@ export class AgentRegistry {
           || structuredHost.endpoint !== reconnect.endpoint
           || !liveHost.startIdentity || liveHost.pid !== reconnect.process.pid
           || liveHost.startIdentity !== reconnect.process.startIdentity
-          || liveHost.bootEpoch !== reconnect.process.bootEpoch) return null;
+          || liveHost.bootEpoch !== reconnect.process.bootEpoch) return refuse("live-native");
       }
       const requestedOwner = structuredClaimOwner(owner);
       if (entry.claimOwner) {
@@ -9586,11 +10016,13 @@ export class AgentRegistry {
           && structuredHost.process === null
           && priorOwner?.startIdentity === null
           && owner.startIdentity !== null;
-        if (!priorOwner || (this.ownerAlive(priorOwner) && !reclaimUnverifiedOwner)) return null;
+        if (!priorOwner || (this.ownerAlive(priorOwner) && !reclaimUnverifiedOwner)) return refuse("writer-owned");
       }
+      const claimedHost = normalizeStructuredHost({ ...structuredHost, writerClaimEpoch: entry.claimEpoch + 1 });
+      if (!claimedHost) return refuse("missing-host");
       entry.claimOwner = requestedOwner;
       entry.claimEpoch += 1;
-      entry.structuredHost = { ...structuredHost, writerClaimEpoch: entry.claimEpoch };
+      entry.structuredHost = claimedHost;
       entry.updatedAt = now();
       if (!existing) {
         const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, entry);
@@ -9642,6 +10074,7 @@ export class AgentRegistry {
 
   /** Releases a structured writer only while both ownership fences still match. */
   releaseStructuredHostClaim(key: SessionKey, owner: string, claimEpoch: number): boolean {
+    invalidateAgentState(this.filename, key);
     return this.mutate((file) => {
       const entry = file.entries[sessionKeyId(key)];
       if (!entry?.structuredHost
@@ -11816,6 +12249,7 @@ export class AgentRegistry {
         evidenceText: held.text,
         evidenceImageCount: held.runtimeImages.length,
         createdAt: held.createdAt,
+        admissionSeq: held.admissionSeq,
         retryOfOperationId: null,
         terminalState: null,
         terminalDisposition: null,
@@ -11968,6 +12402,47 @@ export class AgentRegistry {
       .sort(compareDeliveryAdmission));
   }
 
+  // Only full open pages retain an offset, with at most seven state
+  // combinations per conversation. A short/empty page drops it; replacing
+  // SQLite or reopening this owner resets it. No payload or terminal row is cached.
+  private openDeliveryPages = new Map<string, string>();
+  private openDeliveryPageSource = "";
+
+  /** Bounded actuation input. Settled records remain keyed recovery evidence;
+      they never participate in periodic discovery or a conversation drain. */
+  openDeliveries(conversationId: ViewerConversationId,
+    states: readonly ("held" | "assigned" | "delivery-uncertain")[] = ["held", "assigned", "delivery-uncertain"],
+    options: { advance?: boolean } = {}): HeldDelivery[] {
+    return this.readKeyed(file => {
+      const canonical = resolveConversationAlias(file, conversationId);
+      // JSON commits atomically replace their inode. That is an ordinary
+      // write in this owner, so it must not restart an unchanged open queue.
+      const source = this.sqliteStore ? this.sqliteStore.terminationRevision().replace(/:\d+:\d+$/, "") : "json";
+      if (source !== this.openDeliveryPageSource) { this.openDeliveryPages.clear(); this.openDeliveryPageSource = source; }
+      const key = JSON.stringify([canonical, [...new Set(states)].sort()]);
+      const after = options.advance ? this.openDeliveryPages.get(key) ?? "" : "";
+      let keys = registryOpenDeliveryKeys(file, canonical, states, after, 256);
+      if (!keys.length && after) keys = registryOpenDeliveryKeys(file, canonical, states, "", 256);
+      if (options.advance) {
+        if (keys.length === 256) this.openDeliveryPages.set(key, keys.at(-1)!);
+        else this.openDeliveryPages.delete(key);
+      }
+      // The writer's compareDeliveryAdmission guard authorizes the real head.
+      // Rotating pages reach it even for legacy/storage-order disagreement;
+      // later rows cannot dispatch while an earlier assigned admission exists.
+      return keys.map(key => clone(file.heldDeliveries[key]!)).sort(compareDeliveryAdmission);
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Bounded observation for a recovery page's cancellation preflight.
+      The writer repeats this decision before cancellation and claim. */
+  hasDurableDeliveryOwner(delivery: HeldDelivery): boolean {
+    return this.readKeyed(file => {
+      const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+      return Boolean(conversation && (conversation.migration || deliveryHasDurableClaimOwner(file, conversation, delivery)));
+    }, { skipColdKeyInitialization: true });
+  }
+
   /** Startup selects only unsettled outcomes; each operation is re-read
       before its existing settlement guard runs. */
   terminalDeliveryCandidates(): HeldDelivery[] {
@@ -12114,13 +12589,28 @@ export class AgentRegistry {
     this.mutate((file) => { delete file.pendingSuccessorCleanups[operationId]; });
   }
 
-  beginDeliveryAttempt(id: string, generationId: string): HeldDelivery | null {
+  beginDeliveryAttempt(id: string, generationId: string,
+    orphanGuard?: { expected: HeldDelivery; reason: string }): HeldDelivery | null {
     return this.mutate((file) => {
       const claimed = file.heldDeliveries[id];
       if (claimed) settleStoppedMigrationOf(file, claimed.conversationId);
       const delivery = file.heldDeliveries[id];
       if (!delivery || delivery.state !== "assigned" || delivery.generationId !== generationId) return null;
       const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+      // Recovery authorizes exactly the selected candidate under the same
+      // writer as its claim. A replacement admission or newly started migration
+      // belongs to a later drain; neither inherits this candidate's authority.
+      if (orphanGuard) {
+        const expected = orphanGuard.expected;
+        if (!conversation || conversation.migration
+          || delivery.command.operationId !== expected.command.operationId
+          || delivery.attempts !== expected.attempts || delivery.assignedAt !== expected.assignedAt
+          || delivery.generationId !== expected.generationId) return null;
+        if (delivery.recoveryIntent !== "reclaimed-host" && !deliveryHasDurableClaimOwner(file, conversation, delivery)) {
+          terminalizeHeldDelivery(file, delivery, orphanGuard.reason);
+          return null;
+        }
+      }
       const paths = new Set([conversation?.generations.at(-1)?.path].filter((pathname): pathname is string => Boolean(pathname)));
       const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
       const migrationBlocksDelivery = conversation?.migration
@@ -12130,11 +12620,7 @@ export class AgentRegistry {
          switch commits cannot overtake what the switch carried. Every actuator claims here, and its claim and
          journal admission run inside `withConversationActuation`, so an earlier claim is admitted first. */
       const canonicalId = resolveConversationAlias(file, delivery.conversationId);
-      if (conversationRows(file, "heldDeliveries", canonicalId).some((other) => other.id !== delivery.id
-        && other.state === "assigned"
-        && other.generationId === generationId
-        && resolveConversationAlias(file, other.conversationId) === canonicalId
-        && compareDeliveryAdmission(other, delivery) < 0)) return null;
+      if (registryHasDeliveryPredecessor(file, conversationIdentities(file, canonicalId), delivery)) return null;
       delivery.state = "delivery-uncertain";
       delivery.attempts += 1;
       /* Keep the last proved pre-dispatch cause across another read attempt;
@@ -12243,6 +12729,7 @@ export class AgentRegistry {
           evidenceText: identity.evidenceText,
           evidenceImageCount: identity.evidenceImageCount,
           createdAt: now(),
+          admissionSeq: conversation ? nextAdmissionSeq(file, conversationId as ViewerConversationId) : undefined,
           retryOfOperationId: null,
           terminalState: null,
           terminalDisposition: null,
@@ -12337,8 +12824,10 @@ export class AgentRegistry {
           recorded.terminalState = null;
           recorded.terminalDisposition = null;
           recorded.terminalReason = null;
+          delete recorded.primaryFailure;
           recorded.settledAt = null;
           recorded.createdAt = now();
+          recorded.admissionSeq = nextAdmissionSeq(file, resolveConversationAlias(file, recorded.conversationId));
         }
         return clone(recorded);
       }
@@ -12381,6 +12870,7 @@ export class AgentRegistry {
         evidenceText: source.evidenceText ?? delivery?.text ?? null,
         evidenceImageCount: source.evidenceImageCount ?? delivery?.runtimeImages.length ?? 0,
         createdAt: now(),
+        admissionSeq: nextAdmissionSeq(file, resolveConversationAlias(file, source.conversationId)),
         retryOfOperationId: previousOperationId,
         terminalState: null,
         terminalDisposition: null,
@@ -12454,6 +12944,7 @@ export class AgentRegistry {
     error: string | null = null,
     disposition?: DeliveryTerminalDisposition,
     route?: DeliveryRoute | null,
+    primaryFailure?: RuntimeDeliveryFailure,
   ): DeliveryOperationOwner | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
@@ -12466,7 +12957,9 @@ export class AgentRegistry {
       owner.terminalState = state;
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
       owner.terminalReason = error?.slice(0, 240) ?? null;
+      owner.primaryFailure = state === "failed" ? normalizeRuntimeDeliveryFailure(primaryFailure) : undefined;
       owner.settledAt = now();
+      recordIncomingDeliveryOwner(file, owner);
       if (state === "delivered") recordDeliveryRoute(owner, route);
       return clone(owner);
     });
@@ -12509,8 +13002,9 @@ export class AgentRegistry {
     disposition?: DeliveryTerminalDisposition,
     /** How a delivered send reached the engine, when the journal recorded it. */
     route?: DeliveryRoute | null,
+    primaryFailure?: RuntimeDeliveryFailure,
   ): HeldDelivery {
-    return this.mutate((file) => this.recordDeliveryOutcomeInFile(file, id, state, error, disposition, route), { deliveryOnly: true });
+    return this.mutate((file) => this.recordDeliveryOutcomeInFile(file, id, state, error, disposition, route, primaryFailure), { deliveryOnly: true });
   }
 
   /** Shared settlement body so guarded hygiene retains every existing
@@ -12522,6 +13016,7 @@ export class AgentRegistry {
     error: string | null,
     disposition?: DeliveryTerminalDisposition,
     route?: DeliveryRoute | null,
+    primaryFailure?: RuntimeDeliveryFailure,
   ): HeldDelivery {
     const delivery = file.heldDeliveries[id];
     if (!delivery) throw new Error("held delivery is unknown");
@@ -12534,10 +13029,11 @@ export class AgentRegistry {
     delivery.state = state;
     delivery.deliveredAt = state === "delivered" ? now() : null;
     delivery.error = error?.slice(0, 240) ?? null;
+    delivery.primaryFailure = state === "failed" ? normalizeRuntimeDeliveryFailure(primaryFailure) : undefined;
     if (state === "delivered") delivery.text = "";
     if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
     if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
-    syncDeliveryOperationOwnerState(file, delivery, disposition);
+    syncDeliveryOperationOwnerState(file, delivery, disposition, true);
     if (state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), route);
     const settled = clone(delivery);
     if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
@@ -12551,6 +13047,7 @@ export class AgentRegistry {
     error: string | null = null,
     disposition?: DeliveryTerminalDisposition,
     route?: DeliveryRoute | null,
+    primaryFailure?: RuntimeDeliveryFailure,
   ): HeldDelivery | null {
     return this.recordDeliveryOutcomesForOperations([{
       conversationId,
@@ -12559,6 +13056,7 @@ export class AgentRegistry {
       error,
       ...(disposition ? { disposition } : {}),
       ...(route ? { route } : {}),
+      ...(primaryFailure ? { primaryFailure } : {}),
     }])[0] ?? null;
   }
 
@@ -12584,6 +13082,7 @@ export class AgentRegistry {
       error?: string | null;
       disposition?: DeliveryTerminalDisposition;
       route?: DeliveryRoute | null;
+      primaryFailure?: RuntimeDeliveryFailure;
     }[],
   ): (HeldDelivery | null)[] {
     return this.mutate((file) => {
@@ -12623,7 +13122,9 @@ export class AgentRegistry {
             owner.terminalState = "delivered";
             owner.terminalDisposition = "delivered";
             owner.terminalReason = null;
+            delete owner.primaryFailure;
             owner.settledAt = now();
+            recordIncomingDeliveryOwner(file, owner);
           }
           return null;
         }
@@ -12641,6 +13142,7 @@ export class AgentRegistry {
         delivery.state = outcome.state;
         delivery.deliveredAt = outcome.state === "delivered" ? now() : null;
         delivery.error = outcome.error?.slice(0, 240) ?? null;
+        delivery.primaryFailure = outcome.state === "failed" ? normalizeRuntimeDeliveryFailure(outcome.primaryFailure) : undefined;
         if (discarded) {
           delivery.text = "";
           delivery.generationId = null;
@@ -12649,7 +13151,7 @@ export class AgentRegistry {
         if (outcome.state === "delivered") delivery.text = "";
         if (outcome.state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
         if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
-        syncDeliveryOperationOwnerState(file, delivery, outcome.disposition);
+        syncDeliveryOperationOwnerState(file, delivery, outcome.disposition, true);
         if (discarded) {
           const owner = file.deliveryOperationOwners[outcome.operationId];
           if (owner) owner.evidenceText = "";
@@ -12775,7 +13277,7 @@ export class AgentRegistry {
       delivery.deliveredAt = null;
       delivery.error = reason.slice(0, 240);
       failInitialSpawnReceiptForDelivery(file, delivery);
-      syncDeliveryOperationOwnerState(file, delivery, disposition);
+      syncDeliveryOperationOwnerState(file, delivery, disposition, true);
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       compactDeliveryReservations(file, delivery.conversationId, this.now());
       return clone(delivery);

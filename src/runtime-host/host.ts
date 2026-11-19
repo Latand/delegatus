@@ -165,10 +165,22 @@ export class RuntimeHost {
       );
       else if (request.method === "append" || request.method === "append-session-fenced" || request.method === "operation") {
         const event = request.params?.event as RuntimeEventInput;
-        if (request.method === "append-session-fenced" && (!event?.scope || parseRuntimeScope(event.scope).type !== "session"
-          || event.kind !== "session-status" || !Number.isSafeInteger(event.expectedSessionRevision)
-          || event.expectedSessionRevision! < 0)) {
-          throw new Error("a fenced session append requires a session-status event and its observed revision");
+        const producerKey = event?.producer?.eventKey ?? event?.producerKey;
+        const ownedWithdrawal = event?.producer?.kind === "viewer-command"
+          && typeof producerKey === "string" && producerKey.startsWith("pipeline-withdrawal:");
+        if (ownedWithdrawal && request.method !== "append-session-fenced") {
+          throw new Error("an owned provider withdrawal requires a fenced session append");
+        }
+        if (request.method === "append-session-fenced") {
+          const scope = event?.scope && parseRuntimeScope(event.scope);
+          const withdrawal = ownedWithdrawal && event.kind === "pipeline.provider-continuation-cancelled"
+            && scope?.type === "session" && event.payload?.conversationId === scope.id
+            && /^pipeline-withdrawal:[a-f0-9]{64}:1$/.test(producerKey)
+            && event.effect === undefined && event.operationId === undefined;
+          if (scope?.type !== "session" || ((event.kind !== "session-status" || ownedWithdrawal) && !withdrawal)
+            || !Number.isSafeInteger(event.expectedSessionRevision) || event.expectedSessionRevision! < 0) {
+            throw new Error("a fenced session append requires an authorized session event and its observed revision");
+          }
         }
         const publishedBefore = this.journal.publishedSeq();
         const appended = performanceSpans.sync("runtime.commit", () => this.journal.append(event));

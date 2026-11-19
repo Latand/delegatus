@@ -2,10 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 /*
- * On-demand heap diagnostics for the serving process. Nothing here runs on a
- * timer: both modes walk the JavaScriptCore heap on the main thread and block
- * the event loop for their whole duration, so each runs only when the operator
- * asks for it.
+ * Heap diagnostics for the serving Viewer. The census walks the JavaScriptCore
+ * heap on the main thread; heapSeries records it every ten minutes. Full GC
+ * and snapshots run only on explicit operator requests.
  *
  * Snapshot cost, measured on Bun 1.4.0. It has two very different unit prices,
  * and the census names only counts, so the estimate is an upper bound:
@@ -60,6 +59,8 @@ export interface JscHeapStats {
 
 export interface HeapDiagnosticsDeps {
   heapStats(): JscHeapStats;
+  collectFull?(): void;
+  attribution?(details: boolean): unknown;
   memoryUsage(): NodeJS.MemoryUsage;
   /** The resident set split into anonymous memory and file pages, where the
       platform reports it. A memory-mapped database counts as file pages. */
@@ -90,7 +91,7 @@ export interface HeapDiagnosticsAnswer {
   body: Record<string, unknown>;
 }
 
-interface Census { at: number; heap: JscHeapStats; blockedMs: number }
+interface Census { at: number; heap: JscHeapStats; blockedMs: number; gc?: { mode: "full"; durationMs: number } }
 
 interface State {
   census: Census | null;
@@ -100,7 +101,7 @@ interface State {
 
 /* The serving bundle may hold several copies of this module; the in-flight
    flag and the attempt time must be one per process. */
-const slot = globalThis as typeof globalThis & { __delegatusHeapDiagnostics?: State };
+const slot = process as typeof process & { __delegatusHeapDiagnostics?: State };
 function sharedState(): State {
   return slot.__delegatusHeapDiagnostics ??= { census: null, snapshotRunning: false, lastSnapshotAttemptAt: null };
 }
@@ -175,16 +176,28 @@ export function createHeapDiagnostics(deps: HeapDiagnosticsDeps, state: State = 
   }
 
   /** Cheap mode: counters and the per-type object census. Writes no file. */
-  function stats(): HeapDiagnosticsAnswer {
+  function stats(fullGc = false, details = true): HeapDiagnosticsAnswer {
+    let gc: Census["gc"];
+    if (fullGc) {
+      if (!deps.collectFull) return { status: 501, body: { error: "full collection unavailable" } };
+      state.census = null;
+      const started = deps.monotonicMs();
+      deps.collectFull();
+      gc = { mode: "full", durationMs: deps.monotonicMs() - started };
+    }
     const now = deps.now();
     sweepPartials(deps.directory());
-    const { heap, at, blockedMs, cached } = census(now);
+    const result = census(now);
+    if (gc) { result.gc = gc; state.census!.gc = gc; }
+    const { heap, at, blockedMs, cached } = result;
     const { rss, heapUsed, heapTotal, external, arrayBuffers } = deps.memoryUsage();
     const estimate = estimateHeapSnapshot(heap);
     return { status: 200, body: {
       mode: "stats",
       at: new Date(at).toISOString(),
       cached, ageMs: now - at,
+      gc: result.gc ?? { mode: "none", durationMs: 0 },
+      attribution: deps.attribution?.(details) ?? null,
       blockedMs: Math.round(blockedMs * 10) / 10,
       memoryUsage: { rss, heapUsed, heapTotal, external, arrayBuffers },
       residentSet: deps.residentSet?.() ?? null,
@@ -315,7 +328,7 @@ export function createHeapDiagnostics(deps: HeapDiagnosticsDeps, state: State = 
   return { stats, snapshot };
 }
 
-type BunRuntime = { generateHeapSnapshot?: (format: "v8", encoding: "arraybuffer") => ArrayBuffer };
+type BunRuntime = { gc?: (full: boolean) => void; generateHeapSnapshot?: (format: "v8", encoding: "arraybuffer") => ArrayBuffer };
 
 /** The serving process's own heap. Null where the runtime has no JavaScriptCore census. */
 export async function servingHeapDiagnostics(): Promise<ReturnType<typeof createHeapDiagnostics> | null> {
@@ -324,7 +337,19 @@ export async function servingHeapDiagnostics(): Promise<ReturnType<typeof create
   // Next leaves the Bun builtin to the serving interpreter (see loopProfilerServing).
   const jsc = await import(/* webpackIgnore: true */ "bun:jsc") as unknown as { heapStats(): JscHeapStats };
   const { cacheEntryPath } = await import("./configDir");
+  const [{ heapAttribution }, { viewerLoopMonitor }, { cacheSizes }, { structuredDeliveryHeapCounts }, { processAttributionStatus }] = await Promise.all([
+    import("./heapAttribution"), import("./viewerLoopMonitor"), import("./cacheTelemetry"),
+    import("./runtime/structuredDeliveryController"), import("./processAttribution"),
+  ]);
   return createHeapDiagnostics({
+    collectFull: () => bun.gc!(true),
+    attribution: details => {
+      const pending = viewerLoopMonitor.pendingOperations(), caches = cacheSizes();
+      return { ...heapAttribution.snapshot(Date.now(), details),
+        pending, delivery: structuredDeliveryHeapCounts(),
+        caches: details ? caches : { caches: caches.caches.slice(0, 64), omitted: caches.omitted + Math.max(0, caches.caches.length - 64) },
+        coverage: processAttributionStatus() };
+    },
     heapStats: () => jsc.heapStats(),
     memoryUsage: () => process.memoryUsage(),
     residentSet: () => {

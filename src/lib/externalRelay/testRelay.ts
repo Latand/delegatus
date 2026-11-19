@@ -50,9 +50,10 @@ export async function startTestRelay(
   };
 }
 
-/** Apply the additive negotiation feature to earlier dated wire captures. */
+/** Apply additive deadline and guest negotiation to historical wire captures. */
 export function deadlineNegotiatedCapture(text: string): string {
   const capture = JSON.parse(text);
   capture.claim_body.features.splice(3, 0, "request_deadline");
+  capture.claim_body.features.splice(4, 0, "relay_guest_answers");
   return JSON.stringify(capture, null, 2) + "\n";
 }

@@ -209,8 +209,8 @@ test("beside a drawn glyph the identity draws no second engine mark; a model wit
 });
 
 /* Where a stage ran, in both languages: the mark on every density, the words where a row has room. */
-test.each([["en", "Claude Code cloud", "Claude Code cloud: moved to this machine: model training is on", "cloud", "local"],
-  ["uk", "Хмара Claude Code", "Хмара Claude Code: перенесено на цю машину: model training is on", "хмара", "локально"]] as const)("the identity says where a stage ran (%s)", (locale, cloud, moved, shortCloud, shortLocal) => {
+test.each([["en", "Claude Code cloud", "Local after Claude Code cloud failure: model training is on", "cloud", "local · cloud failed"],
+  ["uk", "Хмара Claude Code", "Локально після збою (Хмара Claude Code): model training is on", "хмара", "локально · збій хмари"]] as const)("the identity says where a stage ran (%s)", (locale, cloud, moved, shortCloud, shortLocal) => {
   setLocale(locale);
   const base = { engine: "claude", model: "opus", modelLabel: "Opus", effort: "high", source: "launched" as const, modelIsDefault: true, next: null };
   const draw = (place: { provider: "claude" | "codex"; movedLocal: boolean; reason: string | null } | undefined, density: "header" | "node" | "line" | "chip", words = true) => {

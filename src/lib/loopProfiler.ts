@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, statSync } from "node:fs";
+import { LoopProfilerFailure } from "./loopProfilerFailure";
 
 export const LOOP_PROFILE_WINDOW_MS = 5000;
 export const LOOP_PROFILE_ARM_MS = 30 * 60_000;
@@ -15,7 +16,7 @@ type Categories = ReturnType<typeof categorizeLoopProfile>;
 /** A gap of two seconds or more carries named frames and the category
  * histogram; a shorter gap carries the histogram alone. */
 export type LoopGapProfile = { status: "captured"; from: number; to: number; intervalUs: number; frames?: Summary; categories?: Categories }
-  | { status: "unavailable" | "not-armed" | "skipped"; reason: string };
+  | { status: "unavailable" | "not-armed" | "skipped"; reason: string; phase?: LoopProfilerFailure["phase"]; code?: string };
 /** Shortest gap that gets a category histogram; named frames need LOOP_PROFILE_FRAMES_GAP_MS. */
 export const LOOP_PROFILE_GAP_MS = 500;
 export const LOOP_PROFILE_FRAMES_GAP_MS = 2000;
@@ -259,6 +260,11 @@ export interface LoopProfilerPorts {
   flushTick(): void;
   phase<T>(phase: "collect" | "trim" | "settings", work: () => T): T;
   root: string;
+  completed?(profile: LoopGapProfile): void;
+  failed?(failure: LoopProfilerFailure): void;
+  beforeCollect?(): Promise<boolean>;
+  /** Synchronous boundary immediately before native sampling starts. */
+  captureStarted?(): void;
 }
 
 /** One owner per Viewer monitor; no runtime-host start path calls this. */
@@ -267,40 +273,63 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
   let window: { from: number; pending: { emit: Emit; frames: boolean }[] } | undefined;
   let inactive: LoopGapProfile = { status: "skipped", reason: "no-active-window" };
   const enabled = async () => {
-    if (stopped || ports.now() >= expires) return false;
+    const expired = () => {
+      if (stopped) return true;
+      if (ports.now() < expires) return false;
+      inactive = { status: "not-armed", reason: "arm-expired" }; return true;
+    };
+    if (expired()) return false;
     const on = await ports.phase("settings", ports.enabled);
-    if (stopped || ports.now() >= expires) return false;
+    if (expired()) return false;
     if (!on) inactive = { status: "not-armed", reason: "kill-switch" };
     return on;
   };
   const capture = async () => {
     if (!await enabled()) return false;
     const current = window = { from: ports.now(), pending: [] as { emit: Emit; frames: boolean }[] };
+    let phase: "collect" | "trim" = "collect";
     try {
+      if (ports.beforeCollect && !await ports.beforeCollect()) {
+        inactive = { status: "not-armed", reason: "waiting-for-capture" };
+        return false;
+      }
+      // Admission may perform durable I/O. Re-read controls after its final
+      // await so a switch or stop that arrived during admission wins.
+      if (!await enabled()) return false;
+      ports.captureStarted?.();
       const raw = await ports.phase("collect", () => ports.collect(() => ports.sleep(Math.min(LOOP_PROFILE_WINDOW_MS, expires - ports.now())), intervalUs));
       // A profile timer can recover before the monitor's timer. Observe that
       // recovery while this window still owns its pending gap records.
       ports.flushTick();
       const to = ports.now();
-      // No qualifying gap: do not access, walk or retain stackTraces.
-      if (current.pending.length) {
-        // The histogram is one pass without file reads; named frames read
-        // source files, so only a gap long enough for them pays that cost.
+      // Legacy gap-only callers discard healthy windows. An explicitly
+      // admitted lifetime capture also saves its post-trigger window.
+      if (current.pending.length || ports.completed) {
+        // The histogram reads no source files. Named frames are requested
+        // by long gaps or the explicitly admitted capture callback.
+        phase = "trim";
         const { categories, frames } = ports.phase("trim", () => ({
           categories: categorizeLoopProfile(raw.stackTraces as LoopProfile, ports.root),
-          frames: current.pending.some(gap => gap.frames) ? trimLoopProfile(raw.stackTraces as LoopProfile, ports.root) : undefined,
+          frames: ports.completed || current.pending.some(gap => gap.frames) ? trimLoopProfile(raw.stackTraces as LoopProfile, ports.root) : undefined,
         }));
         const record = (withFrames: boolean): LoopGapProfile => ({ status: "captured", from: current.from, to, intervalUs,
           ...(withFrames && frames ? { frames } : {}), categories });
         // Frames were cut to the whole budget on their own: make room for the histogram beside them.
         while (frames?.rows.length && Buffer.byteLength(JSON.stringify(record(true))) > LOOP_PROFILE_BYTES) frames.rows.pop();
-        for (const gap of current.pending) gap.emit(record(gap.frames));
+        ports.completed?.(record(true));
+        for (const gap of current.pending.splice(0)) gap.emit(record(gap.frames));
       }
-    } catch {
+    } catch (error) {
       stopped = true;
-      inactive = { status: "unavailable", reason: "capture-failed" };
-      for (const gap of current.pending) gap.emit(inactive);
-    } finally { window = undefined; }
+      const failure = new LoopProfilerFailure(phase, error);
+      inactive = { status: "unavailable", reason: "capture-failed", phase: failure.phase, code: failure.code };
+      ports.failed?.(failure);
+    } finally {
+      // Admission can refuse after correlate has accepted a deferred record.
+      // Every exit finishes those records with the fixed refusal or failure.
+      window = undefined;
+      for (const gap of current.pending.splice(0)) gap.emit(inactive);
+    }
     return true;
   };
   return {

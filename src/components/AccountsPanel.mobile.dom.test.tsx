@@ -423,7 +423,7 @@ test("an opened phone row carries Copy CLI and Remove, and the removal keeps its
   expect(removed).toEqual(["cl-lab"]);
 });
 
-test("Refresh and Use one reset act on the tap and answer with a receipt; the reset is offered only where a credit exists", async () => {
+test("Refresh acts on the tap and Use one reset on its confirm, each answering with a receipt; the reset is offered only where a credit exists", async () => {
   const refreshed: string[] = [];
   const redeemed: string[] = [];
   const claude = engineState("claude", [claudeMain], "cl-main", {
@@ -447,7 +447,12 @@ test("Refresh and Use one reset act on the tap and answer with a receipt; the re
   expect(refreshed).toEqual(["cl-main"]);
   expect(receipts.getState()?.text).toBe("Limits re-read for Main");
 
+  // The first tap arms the confirmation in the row and spends nothing; the confirm spends once.
   await click(reset);
+  expect(redeemed).toEqual([]);
+  expect(host.querySelector('[data-account-reset-armed="cx-main"]')).not.toBeNull();
+  expect(receipts.getState()?.text).toBe("Limits re-read for Main");
+  await click(host.querySelector('[data-account-reset-confirm="cx-main"]'));
   expect(redeemed).toEqual(["cx-main"]);
   expect(receipts.getState()?.text).toBe("Reset used on Main");
 });

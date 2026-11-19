@@ -174,7 +174,8 @@ export function addStructuredRestartConversation(
 ) {
   const engine = input.engine ?? "codex";
   const artifactPath = path.join(directory, `${input.sessionId}.jsonl`);
-  const transcript = (input.transcriptRecords ?? (input.turn === "busy" ? recentTurnRecords(engine) : [])).map((record) => JSON.stringify(record)).join("\n") + (input.transcriptSuffix ?? "");
+  const records = (input.transcriptRecords ?? (input.turn === "busy" ? recentTurnRecords(engine) : [])).map((record) => JSON.stringify(record)).join("\n");
+  const transcript = records + (input.transcriptSuffix ?? (records ? "\n" : ""));
   fs.writeFileSync(artifactPath, input.alignFirstRecordToTailBoundary
     ? `${JSON.stringify({ padding: "before-window" })}\n${transcript}${" ".repeat(128 * 1024 - Buffer.byteLength(transcript))}`
     : transcript);

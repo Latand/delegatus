@@ -1,4 +1,5 @@
 import { performanceSpans } from "@/lib/performanceSpans";
+import { DeadlineExceededError } from "@/lib/deadline";
 import { MeasuredCache, MeasuredWeakCache } from "@/lib/cacheTelemetry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { createHash, randomUUID } from "node:crypto";
@@ -54,9 +55,9 @@ type ProjectionResult = {
   cacheStatus: "hit" | "joined" | "miss" | "stale";
 };
 type CachedProjection = { key: string; representation: ProjectionRepresentation };
-// v2: pre-#1718 full bodies lack lastAgentWorkAt even after a fresh scan.
-// Invalidate them independently of the persisted scan's schema.
-const PERSISTED_PROJECTION_VERSION = 2;
+// v3: decision notices retain their publishing source for form currency.
+// Older bodies need rebuilding even when their stored data did not change.
+const PERSISTED_PROJECTION_VERSION = 3;
 type PersistedProjection = {
   version: typeof PERSISTED_PROJECTION_VERSION;
   bodyFile: string;
@@ -71,13 +72,10 @@ const PERSISTED_PROJECTION_META_FILE = "files-response-cache.json";
 const PERSISTED_PROJECTION_BODY_PREFIX = "files-response-cache-";
 const PERSISTED_PROJECTION_KEY_PREFIX = "persisted:";
 const PROJECTION_STATE_FILES = [
-  "reaper-state.json",
   /* A state database fallback or a refused backup (#1870 slice 10) shows in
      `systemHealth.storage` on the next poll, not after some other store moves. */
   "storage-incidents.json",
-  /* A new ask ("Asks you") and the switch that shows or hides them move no
-     scan and no other store. */
-  "operator-asks.json",
+  /* The switch that shows or hides asks moves no scan and no other store. */
   "asks-you-settings.json",
 ] as const;
 const projectionCacheStore = globalThis as typeof globalThis & {
@@ -194,6 +192,7 @@ function projectionBaseKey(
   pinnedPath: string | undefined,
 ): string {
   return createHash("sha1").update(JSON.stringify({
+    projectionVersion: PERSISTED_PROJECTION_VERSION,
     pinnedPath: pinnedPath ?? null,
     // A full disk can change with no successful state write or scan revision.
     // Healthy free-byte fluctuations do not warrant rebuilding the projection.
@@ -237,6 +236,11 @@ function projectionBaseKey(
       /* Who answers a worker's ask is the project's designated seat
          (docs/design/attention-auto-resolve.md): a rotation moves no scan. */
       hotStateSignature("orchestrator_seats", "orchestrator-seats.json"),
+      /* A new ask ("Asks you") moves no scan and no other store. */
+      hotStateSignature("operator_asks", "operator-asks.json"),
+      /* The reaper's authorship evidence pins owner-touched workers and clears
+         freshly scanned ones (#112). */
+      hotStateSignature("reaper", "reaper-state.json"),
     ],
   })).digest("hex");
 }
@@ -496,8 +500,9 @@ async function projectionFor(
           return { ...projected, built: { epoch, generation, sequence } };
         }));
       } catch (error) {
-        if (error instanceof FilesProjectionQueueError && cached) {
-          /* The last representation stands until a build gets its turn. */
+        if ((error instanceof FilesProjectionQueueError || error instanceof DeadlineExceededError) && cached) {
+          /* The last representation stands until a build gets its turn, or
+             until a build the worker could not finish is tried again. */
           return cached.representation;
         }
         if (!isDiskFullError(error)) throw error;
@@ -607,24 +612,29 @@ const nextTurn: AfterFilesResponse = (work) => { setTimeout(() => { void work();
     scope; the client's own backoff asks again. Only this boundary converts it:
     `getFiles` keeps throwing for the board's internal preparation, which treats
     a throw as "not prepared yet". */
-function projectionUnavailableResponse(request: Request, error: FilesProjectionQueueError): Response {
+function projectionUnavailableResponse(request: Request, error: FilesProjectionQueueError | DeadlineExceededError): Response {
+  const reason = error instanceof FilesProjectionQueueError ? error.reason : "build-timeout";
+  const waitedMs = error instanceof FilesProjectionQueueError ? error.waitedMs : error.timeoutMs;
   const url = new URL(request.url);
   const diagnostics = filesProjectionQueueDiagnostics();
   const yesNo = (flag: boolean) => (flag ? "yes" : "no");
+  /* The worker's bounded stderr tail travels only in this message. Next used to
+     print it with the thrown error; the summary line below stays free of it. */
+  if (error instanceof DeadlineExceededError) console.warn(`[files projection] deadline detail: ${error.message}`);
   console.warn(
-    `[files projection] ${error.reason} for a scope with nothing to serve: waited ${Math.round(error.waitedMs)}ms; `
+    `[files projection] ${reason} for a scope with nothing to serve: waited ${Math.round(waitedMs)}ms; `
     + `waiting ${diagnostics.waiting}, expired ${diagnostics.expired}, refused ${diagnostics.refused}; `
     + `pinned ${yesNo(!!url.searchParams.get("path")?.trim())}, summary ${yesNo(url.searchParams.get("view") === "summary")}, `
     + `agent ${yesNo(request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER))}`,
   );
   return Response.json(
-    { error: "files projection unavailable", code: "files_projection_unavailable", reason: error.reason },
+    { error: "files projection unavailable", code: "files_projection_unavailable", reason },
     {
       status: 503,
       headers: {
         "cache-control": "no-store",
         "x-llv-files-projection-cache": "unavailable",
-        "server-timing": `files-worker-queue;dur=${error.waitedMs.toFixed(1)};desc="${error.reason}"`,
+        "server-timing": `files-worker-queue;dur=${waitedMs.toFixed(1)};desc="${reason}"`,
       },
     },
   );
@@ -640,7 +650,7 @@ export async function GET(request: Request, afterResponse: AfterFilesResponse = 
       try {
         return await getFiles(request, false, afterResponse);
       } catch (error) {
-        if (error instanceof FilesProjectionQueueError) return projectionUnavailableResponse(request, error);
+        if (error instanceof FilesProjectionQueueError || error instanceof DeadlineExceededError) return projectionUnavailableResponse(request, error);
         throw error;
       }
     }));
@@ -879,6 +889,6 @@ export async function operatorBoardRepresentation(signal?: AbortSignal): Promise
 }
 
 /** The exact panel representation, decoded and reduced outside the Viewer. */
-export async function operatorSeatAgenda(project: string): Promise<import("@/lib/monitor/types").SeatTickWorkerAskInput[]> {
-  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000);
+export async function operatorSeatAgenda(project: string, seatConversationId?: string): Promise<import("@/lib/monitor/types").SeatTickAgendaInput> {
+  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000, undefined, seatConversationId);
 }

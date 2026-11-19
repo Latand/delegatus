@@ -24,6 +24,8 @@ export interface CurationController {
   /** Internal sweep coordination; production controllers add these methods. */
   finishProject?(project: string): void;
   fresh?(project: string): CurationController;
+  /** Queued checks publish their inputs without waiting for later projects. */
+  finishSweep?(): Promise<string | null>;
 }
 export interface CurationPorts extends CurationAdmissionPorts {
   sources: SeatTickSources;
@@ -37,7 +39,7 @@ export interface CurationPorts extends CurationAdmissionPorts {
  * wake state before making one machine-wide choice. A new sweep reads all
  * authority again; shared recovery and launch outlive individual project
  * checks and retain admission and release-generation fences. */
-export function curationForSweep(controller: CurationController, projects: readonly string[] = [], sweepIsCurrent: () => boolean = () => true): CurationController {
+export function curationForSweep(controller: CurationController, projects: readonly string[] = [], sweepIsCurrent: () => boolean = () => true, deferLaunch = false): CurationController {
   let reconcile: Promise<string | null> | undefined;
   const expected = new Set(projects);
   const ready = new Set<string>();
@@ -50,11 +52,26 @@ export function curationForSweep(controller: CurationController, projects: reado
     if (ready.size === expected.size) resolveReady();
   };
   let launch: Promise<string | null> | undefined;
+  const choose = () => {
+    if (!sweepIsCurrent()) return Promise.resolve(null);
+    const eligible = inputs.find(candidate => candidate.settings.enabled);
+    return eligible ? outsideSeatTickWork(() => controller.launchIfDue({ ...eligible, sweepIsCurrent })) : Promise.resolve("curation: paused, wakes off");
+  };
   return {
-    reconcile: project => reconcile ??= outsideSeatTickWork(() =>
-      sweepIsCurrent() ? controller.reconcile(project, sweepIsCurrent) : Promise.resolve(null)),
+    reconcile: project => {
+      // A queued follower must not spend its own budget on a shared recovery
+      // which already exhausted the first project's check. finishSweep owns
+      // the remaining wait before a new machine-wide choice can be made.
+      if (deferLaunch && reconcile) return Promise.resolve(null);
+      return reconcile ??= outsideSeatTickWork(() =>
+        sweepIsCurrent() ? controller.reconcile(project, sweepIsCurrent) : Promise.resolve(null));
+    },
     finishProject: markReady,
     fresh: project => curationForSweep(controller, [project], sweepIsCurrent),
+    finishSweep: async () => {
+      if (deferLaunch) await reconcile;
+      return ready.size === expected.size ? launch ??= choose() : null;
+    },
     // Each check publishes its fully updated wake state before the single
     // machine-wide scan. A failed check releases its place in the barrier from
     // finishProject, so it cannot strand the other projects.
@@ -62,10 +79,8 @@ export function curationForSweep(controller: CurationController, projects: reado
       if (expected.size) {
         inputs.push(input);
         markReady(input.project);
-        return launch ??= allReady.then(() => {
-          const eligible = inputs.find(candidate => candidate.settings.enabled);
-          return eligible ? outsideSeatTickWork(() => controller.launchIfDue({ ...eligible, sweepIsCurrent })) : "curation: paused, wakes off";
-        });
+        if (deferLaunch) return Promise.resolve(null);
+        return launch ??= allReady.then(choose);
       }
       if (!input.settings.enabled) return Promise.resolve("curation: paused, wakes off");
       return launch ??= controller.launchIfDue(input);

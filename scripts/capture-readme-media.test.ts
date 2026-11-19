@@ -1,10 +1,11 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { alignFeedsToWholeLines, assertFrameLayout, assertTextWhole, buildCaptureEnvironment, SHOTS, cropSvg, freezeFrameClock, judgeRenderBack, openTarget, RENDER_BACK_TILE, RENDER_BACK_TILE_LIMIT, ringClipPath, type RingBox, snapCrop, waitForFrameText, withPointSize } from "./capture-readme-media";
+import { seatTickPolicy } from "../src/lib/monitor/seatTick";
 import { seedDemoHome } from "./readme-demo-state";
 
 const box = (overrides: Partial<RingBox> = {}): RingBox => ({
@@ -108,6 +109,17 @@ test("a cropped frame's root names the crop in points and keeps everything else"
   expect(() => cropSvg("<svg></svg>", { x: 0, y: 0, width: 1, height: 1 })).toThrow();
 });
 
+test("the capture runs without the seat-tick monitor, and both board frames refuse its alarm card", () => {
+  /* The monitor files «Orchestrator seat cannot use its Viewer MCP» in Inbox
+     for the demo seat, whose conversation the agent registry does not hold. */
+  expect(seatTickPolicy(buildCaptureEnvironment("/capture-root"))).toBeNull();
+  for (const id of ["board", "phone-board"]) {
+    const shot = SHOTS.find(candidate => candidate.id === id)!;
+    expect(shot.absentText).toContain("Orchestrator seat cannot use its");
+    expect(shot.absentText).toContain("Viewer MCP");
+  }
+});
+
 test("the complete README capture seed finishes in a fresh process and private state", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "readme-seed-test-"));
   const env = buildCaptureEnvironment(root);
@@ -127,32 +139,55 @@ test("the complete README capture seed finishes in a fresh process and private s
   }
 }, 40_000);
 
-// CI supplies Chrome; the local publication hook still exercises the real seed.
-test.skipIf(!process.env.CHROME_BIN)("frame geometry accepts a whole subject and refuses clipped or missing subjects", async () => {
+async function withGeometryPage(check: (page: import("playwright-core").Page) => Promise<void>) {
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
   try {
     const page = await browser.newPage({ viewport: { width: 320, height: 240 } });
     page.setDefaultTimeout(5_000);
-    const shot = { ...SHOTS[0]!, id: "control", viewport: { width: 320, height: 240 }, subjects: ["#subject"] };
-    await page.setContent('<div id="subject" style="position:absolute;left:10px;top:10px;width:100px;height:100px"></div>');
-    expect(await assertFrameLayout(page, shot)).toHaveLength(1);
-    await expect(assertFrameLayout(page, { ...shot, subjects: [] })).rejects.toThrow("no defining subjects");
-    for (const [left, top] of [[-10, 10], [250, 10], [10, -10], [10, 200]]) {
-      await page.locator("#subject").evaluate((element, pos) => {
-        Object.assign((element as HTMLElement).style, { left: `${pos[0]}px`, top: `${pos[1]}px` });
-      }, [left, top]);
-      await expect(assertFrameLayout(page, shot)).rejects.toThrow("clipped");
-    }
-    await page.setContent('<div style="position:relative;width:50px;height:50px;overflow:hidden"><div id="subject" style="width:100px;height:100px"></div></div>');
-    await expect(assertFrameLayout(page, shot)).rejects.toThrow("clipped");
-    await page.setContent('<div id="subject" style="width:100px;height:100px"></div>');
-    await expect(assertFrameLayout(page, shot, { x: 0, y: 0, width: 50, height: 50 })).rejects.toThrow("clipped");
-    await expect(assertFrameLayout(page, { ...shot, subjects: ["#missing"] })).rejects.toThrow();
+    await check(page);
   } finally {
     await browser.close();
   }
-}, 60_000);
+}
+
+// Each control owns its browser and deadline. Combining every refusal under
+// one timeout made a slow CI browser exhaust it before reaching the last cases.
+// CI supplies Chrome; the local publication hook still exercises the real seed.
+describe.skipIf(!process.env.CHROME_BIN)("frame geometry", () => {
+  const shot = { ...SHOTS[0]!, id: "control", viewport: { width: 320, height: 240 }, subjects: ["#subject"] };
+
+  test("accepts a whole subject and refuses an empty subject list", () => withGeometryPage(async page => {
+    await page.setContent('<div id="subject" style="position:absolute;left:10px;top:10px;width:100px;height:100px"></div>');
+    expect(await assertFrameLayout(page, shot)).toHaveLength(1);
+    await expect(assertFrameLayout(page, { ...shot, subjects: [] })).rejects.toThrow("no defining subjects");
+  }), 60_000);
+
+  test.each([
+    ["left", -10, 10],
+    ["right", 250, 10],
+    ["top", 10, -10],
+    ["bottom", 10, 200],
+  ] as const)("refuses a subject clipped at the %s viewport edge", (_edge, left, top) => withGeometryPage(async page => {
+    await page.setContent(`<div id="subject" style="position:absolute;left:${left}px;top:${top}px;width:100px;height:100px"></div>`);
+    await expect(assertFrameLayout(page, shot)).rejects.toThrow("clipped");
+  }), 60_000);
+
+  test("refuses a subject clipped by an ancestor", () => withGeometryPage(async page => {
+    await page.setContent('<div style="position:relative;width:50px;height:50px;overflow:hidden"><div id="subject" style="width:100px;height:100px"></div></div>');
+    await expect(assertFrameLayout(page, shot)).rejects.toThrow("clipped");
+  }), 60_000);
+
+  test("refuses a subject clipped by the crop", () => withGeometryPage(async page => {
+    await page.setContent('<div id="subject" style="width:100px;height:100px"></div>');
+    await expect(assertFrameLayout(page, shot, { x: 0, y: 0, width: 50, height: 50 })).rejects.toThrow("clipped");
+  }), 60_000);
+
+  test("refuses a missing subject", () => withGeometryPage(async page => {
+    await page.setContent('<div id="subject" style="width:100px;height:100px"></div>');
+    await expect(assertFrameLayout(page, { ...shot, subjects: ["#missing"] })).rejects.toThrow("#missing");
+  }), 60_000);
+});
 
 test.skipIf(!process.env.CHROME_BIN)("every capture target is present in the initial document URL before hash listeners mount", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "readme-target-test-"));

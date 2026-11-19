@@ -79,3 +79,30 @@ test("the outer execution guard closes a stalled supervisor", async () => {
   expect(result.status).toBe(124);
   expect(result.stderr).toContain("execution guard expired");
 }, 10000);
+
+test.skipIf(process.platform !== "linux").each(["missing", "stale"] as const)("a publication file starts once in its private home with a %s inherited binding", async binding => {
+  const f = fixture(), repo = path.resolve(import.meta.dir, "..");
+  f.env.LLV_TEST_STARTUP_HOME = binding === "missing" ? undefined : path.join(f.dir, "previous-home");
+  const observed = path.join(f.dir, "startup.jsonl");
+  writeFileSync(path.join(f.dir, "capture.ts"), `import fs from "node:fs"; import os from "node:os";
+const group = process.env.LLV_OWNED_TEST_RUN_CGROUP;
+fs.appendFileSync(${JSON.stringify(observed)}, JSON.stringify({
+  home: os.homedir(), selected: process.env.HOME, binding: process.env.LLV_TEST_STARTUP_HOME,
+  admitted: Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid ||
+    Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid &&
+    fs.readFileSync("/proc/self/cgroup", "utf8").split("\\n").includes("0::" + group),
+}) + "\\n");`);
+  writeFileSync(path.join(f.dir, "bunfig.toml"), `[test]\npreload = ${JSON.stringify([path.join(f.dir, "capture.ts"), path.join(repo, "test-preload.ts")])}\n`);
+  writeFileSync(path.join(f.dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { paths: { "@/*": [path.join(repo, "src", "*")] } } }));
+  writeFileSync(path.join(f.dir, "example.test.ts"), 'import { expect, test } from "bun:test"; test("real preload runs the file", () => expect(1).toBe(1));');
+  const result = await touchedTests(f.dir, f.base, ["example.test.ts"], { env: f.env, log: () => {} });
+  expect(result.introduced).toEqual([]);
+  const starts = readFileSync(observed, "utf8").trim().split("\n").map(line => JSON.parse(line) as {
+    home: string; selected: string; binding?: string; admitted: boolean;
+  });
+  expect(starts).toHaveLength(1);
+  expect(starts[0]!.home).toBe(starts[0]!.selected);
+  expect(starts[0]!.binding).toBe(starts[0]!.home);
+  expect(starts[0]!.home).not.toBe(f.env.HOME);
+  expect(starts[0]!.admitted).toBe(true);
+}, 30000);

@@ -1,3 +1,4 @@
+import { installTaskTimes, prepareTaskTimes, taskTimesReady } from "./taskTimes";
 import { observeRegistryWriter } from "@/lib/agent/registryWriter";
 import { assertOperationLease, awaitLeasedOperation } from "@/lib/operationLease";
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
@@ -96,20 +97,20 @@ function forgetAbandoned(lease: AbandonedLease): void {
   if (!tokens?.delete(lease.token)) return;
   if (!tokens.size) collections!.delete(lease.collection);
   if (!collections!.size) abandoned.entries.delete(filename);
-  console.info(`[state lease] cleared abandoned ${lease.collection} after ${Date.now() - lease.abandonedAt} ms`);
+  process.stderr.write(`[state lease] cleared abandoned ${lease.collection} after ${Date.now() - lease.abandonedAt} ms\n`);
 }
 function deleteLease(lease: AbandonedLease): void {
   // If a sandbox or retired database has disappeared, do not recreate it.
   if (!fs.existsSync(lease.filename)) { finishDurableHold(lease.token, lease.collection); return; }
-  const db = connectDatabase(lease.filename);
-  try {
-    stateLockAttempt("state.lease.release", () => db.exec("BEGIN IMMEDIATE"), lease.collection);
-    injectWriteFault("release", lease.collection);
-    db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?").run(lease.collection, lease.token);
-    performanceSpans.sync("state.lease-release", () => db.exec("COMMIT"));
-    finishDurableHold(lease.token, lease.collection);
-  } catch (error) { rollbackQuietly(db); throw error; }
-  finally { db.close(); }
+  withStateWriter(lease.filename, (db) => withLeaseDurability(db, () => {
+    try {
+      stateLockAttempt("state.lease.release", () => db.exec("BEGIN IMMEDIATE"), lease.collection);
+      injectWriteFault("release", lease.collection);
+      db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?").run(lease.collection, lease.token);
+      performanceSpans.sync("state.lease-release", () => db.exec("COMMIT"));
+      finishDurableHold(lease.token, lease.collection);
+    } catch (error) { rollbackQuietly(db); throw error; }
+  }));
 }
 function scheduleAbandonedRetry(): void {
   if (!abandoned.entries.size) return;
@@ -288,6 +289,10 @@ export interface CompanionPatch<C> {
 
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
+  /** Read linked-task watermark through this transaction's admitted writer. */
+  maxTaskProjectStamp(projects: readonly string[], prefix: string): string | null;
+  /** Indexed pipeline lookup by id across the active and archive collections. */
+  pipelineGet(key: string): T | null;
   /** Indexed task evidence; each project seek and returned row spends budget. */
   taskProjectRows(projects: readonly string[]): T[];
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
@@ -378,12 +383,133 @@ function connectDatabase(filename: string): Database {
   catch (error) { throw classifyStateError(error, "state database connection"); }
 }
 
+/*
+ * One writer connection per database file and process (#3890).
+ *
+ * Every lease, write and lease release used to open its own connection: a
+ * keyed write opened three, and each paid the open, the PRAGMAs, a load of
+ * the whole schema on its first statement and an empty statement cache. The
+ * connection is now kept and reused. What makes a write safe is unchanged:
+ * cross-process exclusion is SQLite's write lock (`BEGIN IMMEDIATE` with
+ * `busy_timeout = 0`) and the lease row, both taken per write; the release
+ * fence is checked per write; and `openCurrentDatabase` still compares the
+ * file at the name with the one the connection opened on every statement,
+ * reopening a replaced file outside a transaction and rolling back inside one.
+ *
+ * Three rules keep a kept connection equivalent to a fresh one:
+ * - A write that starts while this process's connection is in use (a write
+ *   reached from inside another write's callback) gets a connection of its
+ *   own and closes it, as every write used to. Its `BEGIN IMMEDIATE` then
+ *   meets the outer transaction's lock exactly as before.
+ * - A connection is handed out only outside a transaction. One that is still
+ *   in a transaction when its operation returns is closed.
+ * - A connection whose operation failed for any reason other than contention
+ *   (busy, a deferred lock, a lost lease, a moved snapshot) is closed, so a
+ *   connection that met a SQLite error is never reused.
+ */
+type StateWriterSlot = { db: Database; depth: number };
+const writerHost = globalThis as typeof globalThis & { __llvStateWriterConnections?: Map<string, StateWriterSlot> };
+const stateWriters: Map<string, StateWriterSlot> = writerHost.__llvStateWriterConnections ??= new Map();
+/** One database in production; a test process touches one per sandbox. */
+const MAX_STATE_WRITERS = 4;
+let stateWriterOpenCount = 0;
+
+function contentionError(error: unknown): boolean {
+  return error instanceof FileTransactionBusyError || error instanceof StateSnapshotChangedError;
+}
+
+function closeStateWriter(key: string, slot: StateWriterSlot): void {
+  if (stateWriters.get(key) === slot) stateWriters.delete(key);
+  try { slot.db.close(); } catch { /* a moved or failed connection only drops its descriptors */ }
+}
+
+function withStateWriter<T>(filename: string, operation: (db: Database) => T): T {
+  const key = path.resolve(filename);
+  let slot = stateWriters.get(key);
+  if (slot && slot.depth > 0) {
+    const db = connectDatabase(filename);
+    stateWriterOpenCount += 1;
+    try { return operation(db); } finally { db.close(); }
+  }
+  if (slot?.db.inTransaction) { closeStateWriter(key, slot); slot = undefined; }
+  if (!slot) {
+    slot = { db: connectDatabase(filename), depth: 0 };
+    stateWriterOpenCount += 1;
+    for (const [held, candidate] of stateWriters) {
+      if (stateWriters.size < MAX_STATE_WRITERS) break;
+      if (candidate.depth === 0) closeStateWriter(held, candidate);
+    }
+  } else {
+    stateWriters.delete(key);
+  }
+  stateWriters.set(key, slot);
+  slot.depth += 1;
+  try {
+    const result = operation(slot.db);
+    if (slot.db.inTransaction) closeStateWriter(key, slot);
+    return result;
+  } catch (error) {
+    if (slot.db.inTransaction || !contentionError(error)) closeStateWriter(key, slot);
+    throw error;
+  } finally {
+    slot.depth -= 1;
+  }
+}
+
+/**
+ * A lease transaction commits without waiting for the disk (#3890).
+ *
+ * Each write commits three times: the lease row, the rows, the lease release.
+ * With `synchronous = FULL` each commit waited for its own fsync of the WAL,
+ * so a one-row write waited for the disk three times. A lease row protects
+ * nothing across a power loss: every process that held one is gone, and the
+ * next writer reclaims a lease whose owner is not alive. So the two lease
+ * commits use `NORMAL`, which keeps the WAL consistent and leaves the sync to
+ * the next `FULL` commit or checkpoint, and the rows' commit still waits for
+ * the disk, carrying the lease frames before it with it. Exclusion is
+ * unchanged: it is SQLite's write lock, taken by every one of these
+ * transactions, and the lease row itself.
+ */
+function withLeaseDurability<T>(db: Database, operation: () => T): T {
+  return withProcessDurability(db, operation);
+}
+
+/** Commits that survive the process but not a power loss: `NORMAL` leaves
+    the WAL sync to the next `FULL` commit or checkpoint. */
+function withProcessDurability<T>(db: Database, operation: () => T): T {
+  db.exec("PRAGMA synchronous = NORMAL");
+  try { return operation(); }
+  /* A restore that fails throws past the writer, which then closes the
+     connection, so the setting can never carry over into a later write. */
+  finally { db.exec("PRAGMA synchronous = FULL"); }
+}
+
+/** Close this process's kept writer connections. A test calls it before it
+    removes a state root; Windows refuses to remove an open database. */
+export function closeStateWriterConnections(): void {
+  for (const [key, slot] of [...stateWriters]) if (slot.depth === 0) closeStateWriter(key, slot);
+}
+
+/** Test seam: writer connections opened by this process so far. */
+export function stateWriterConnectionOpensForTests(): number {
+  return stateWriterOpenCount;
+}
+
+/** Test seam: the kept writer's `synchronous` setting (2 is FULL), or null
+    when no writer is kept for the file. */
+export function stateWriterSynchronousForTests(filename: string): number | null {
+  const slot = stateWriters.get(path.resolve(filename));
+  return slot ? slot.db.query<{ synchronous: number }, []>("PRAGMA synchronous").get()!.synchronous : null;
+}
+
 function connectRawDatabase(filename: string): Database {
   return stateLockAttempt("state.connection", () => {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    /* The call site is read when each write transaction begins: a kept
+       connection serves many operations. */
     const db = observeRegistryWriter(
       observeSqlite(new (sqliteDatabase())(filename, { create: true, strict: true }), "state"),
-      filename, viewerLoopMonitor.current() ?? "state database write",
+      filename, () => viewerLoopMonitor.current() ?? "state database write",
     );
     try {
       db.exec("PRAGMA busy_timeout = 0");
@@ -489,6 +615,7 @@ const stateSchema = [
     row_order INTEGER NOT NULL,
     row_revision INTEGER NOT NULL,
     controller_active INTEGER NOT NULL CHECK(controller_active IN (0, 1)),
+    task_due_ms INTEGER, task_hold_ms INTEGER, task_updated_ms INTEGER,
     PRIMARY KEY(collection, row_key),
     FOREIGN KEY(collection) REFERENCES state_collections(collection) ON DELETE CASCADE
   )`,
@@ -520,6 +647,10 @@ const stateSchema = [
     END`,
   `CREATE INDEX IF NOT EXISTS pipeline_integration_format
     ON state_rows(collection,row_key) WHERE ${PIPELINE_INTEGRATION_FORMAT}`,
+  `CREATE TABLE IF NOT EXISTS pipeline_control_ownership (
+    control_key TEXT PRIMARY KEY,
+    binding_json TEXT NOT NULL CHECK(json_valid(binding_json))
+  )`,
   `CREATE TABLE IF NOT EXISTS pipeline_request_receipts (
     collection TEXT NOT NULL,
     row_key TEXT NOT NULL,
@@ -586,8 +717,8 @@ const stateSchema = [
     json_extract(value_json,'$.project'),
     coalesce(json_extract(value_json,'$.machine'),''),
     CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END,
-    coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0),
-    round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key)
+    coalesce(task_hold_ms, 0),
+    task_due_ms, row_key)
     WHERE collection='tasks' AND json_valid(value_json)
       AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
       AND json_extract(value_json,'$.status') <> 'done'`,
@@ -595,7 +726,7 @@ const stateSchema = [
       ON state_rows(json_extract(value_json,'$.project'), json_extract(value_json,'$.sync.s.${field}') DESC)
       WHERE collection='tasks' AND json_valid(value_json) AND json_type(value_json,'$.sync.s.${field}')='text'`),
   `CREATE INDEX IF NOT EXISTS state_rows_task_legacy_stamp
-    ON state_rows(json_extract(value_json,'$.project'), round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) DESC)
+    ON state_rows(json_extract(value_json,'$.project'), task_updated_ms DESC)
     WHERE collection='tasks' AND json_valid(value_json)
       AND (json_type(value_json,'$.sync.s.text') IS NULL OR json_type(value_json,'$.sync.s.status') IS NULL
         OR json_type(value_json,'$.sync.s.look') IS NULL OR json_type(value_json,'$.sync.s.place') IS NULL
@@ -609,6 +740,9 @@ const stateSchema = [
     ON state_rows(collection, CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.senderConversationId') END, controller_active, row_key)`,
   `CREATE INDEX IF NOT EXISTS state_rows_send_failure_fallback_v3
     ON state_rows(collection, CASE WHEN json_valid(value_json) THEN json_extract(value_json,'$.fallbackConversationId') END, controller_active, row_key)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_send_failure_message
+    ON state_rows(json_extract(value_json,'$.clientMessageId'), row_key)
+    WHERE collection='send_failure_notices' AND json_valid(value_json)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS pipeline_delivery_owner
     ON state_rows(json_extract(value_json, '$.delivery.target.repository'), json_extract(value_json, '$.delivery.target.branch'))
     WHERE collection = 'pipelines' AND json_valid(value_json) AND json_extract(value_json, '$.delivery.active') = 1
@@ -656,7 +790,7 @@ const stateSchema = [
     reconciled_sha256 TEXT
   )`,
 ];
-const stateSchemaNames = stateSchema.map(sql => /^CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/.exec(sql)![1]!);
+const stateSchemaNames = ["task_time_pending", "task_time_insert", "task_time_update", "task_time_delete", ...stateSchema.map(sql => /^CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/.exec(sql)![1]!)];
 
 function taskDueIndexCurrent(db: Database): boolean {
   const sql = db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type='index' AND name='state_rows_task_due'").get()?.sql;
@@ -749,7 +883,7 @@ function openRawDatabase(filename: string): Database {
         }
         if ([...stateSchemaNames,
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
-          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
+          "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete", "pipeline_tick_priority_cursor"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
           && pipelineControllerReferencesReady(db, names)
           && pipelineControllerReferenceIndexesCurrent(db)
@@ -768,8 +902,11 @@ function openRawDatabase(filename: string): Database {
         db.exec("PRAGMA auto_vacuum = INCREMENTAL");
         db.exec("BEGIN IMMEDIATE");
         db.exec("DROP INDEX IF EXISTS state_rows_interruption_recipient_v2");
+        if (names.has("state_rows")) installTaskTimes(db);
         if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
+        if (!names.has("task_time_pending")) db.exec("DROP INDEX IF EXISTS state_rows_task_legacy_stamp");
         for (const sql of stateSchema) db.exec(sql);
+        installTaskTimes(db);
         if (!names.has("pipeline_request_receipts")) backfillPipelineRequestReceipts(db);
         const collectionColumns = db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all();
         if (!collectionColumns.some((column) => column.name === "change_floor")) {
@@ -825,9 +962,21 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
   noteWriterAdmitted();
   const holdStart = performance.now();
   try {
+    const pendingExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_time_pending'");
+    let pendingBefore = 0;
+    try {
+      if (pendingExists.get()) {
+        const pendingCursor = db.prepare<{ rowid: number }, []>("SELECT COALESCE(MAX(rowid), 0) AS rowid FROM task_time_pending");
+        try { pendingBefore = pendingCursor.get()!.rowid; }
+        finally { pendingCursor.finalize(); }
+      }
+    } finally { pendingExists.finalize(); }
     const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     const result = operation();
     if (result instanceof Promise) throw new Error("state SQL transactions must be synchronous");
+    // Publish only task rows changed in this transaction. Older projection
+    // backlog is prepared by readers in bounded, independently committed pages.
+    prepareTaskTimes(db, Number.MAX_SAFE_INTEGER, pendingBefore);
     const after = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     injectWriteFault("commit", collection);
     assertOperationLease();
@@ -846,21 +995,17 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
 }
 
 async function stateTransactionAsync<T>(filename: string, collection: string, operation: (db: Database) => T, afterCommit?: (result: T) => void): Promise<T> {
-  return waitForStateLock(`state.transaction.${collection}`, () => {
-    const db = connectDatabase(filename);
-    try {
-      const result = withImmediateTransaction(db, "state transaction is busy", () => operation(db), collection);
-      // Apply the committed baseline before yielding to queued edits. Keep
-      // bookkeeping failures from replaying a transaction that already committed.
-      try { afterCommit?.(result); }
-      catch (error) {
-        if (stateLockDeferral(error)) throw new FileTransactionBusyError("state checkpoint bookkeeping failed after commit");
-        throw error;
-      }
-      return result;
+  return waitForStateLock(`state.transaction.${collection}`, () => withStateWriter(filename, (db) => {
+    const result = withImmediateTransaction(db, "state transaction is busy", () => operation(db), collection);
+    // Apply the committed baseline before yielding to queued edits. Keep
+    // bookkeeping failures from replaying a transaction that already committed.
+    try { afterCommit?.(result); }
+    catch (error) {
+      if (stateLockDeferral(error)) throw new FileTransactionBusyError("state checkpoint bookkeeping failed after commit");
+      throw error;
     }
-    finally { db.close(); }
-  }, { subject: collection });
+    return result;
+  }), { subject: collection });
 }
 
 function processAlive(pid: number, expectedStartIdentity: string | null): boolean {
@@ -1214,15 +1359,10 @@ export function reimportStateCollection(filename: string, input: {
 /** Record the rollback mirror last written for a collection. Evidence only, so
     it is written during a release fence, when collection writes are refused. */
 export function recordStateImportMirror(filename: string, collection: string, mirrorSha256: string | null, mirrorRevision: number | null): void {
-  const db = connectDatabase(filename);
-  try {
-    withImmediateTransaction(db, `${collection} import is busy`, () => {
-      db.query("UPDATE state_imports SET mirror_sha256 = ?, mirror_revision = ? WHERE collection = ?")
-        .run(mirrorSha256, mirrorRevision, collection);
-    });
-  } finally {
-    db.close();
-  }
+  withStateWriter(filename, (db) => withImmediateTransaction(db, `${collection} import is busy`, () => {
+    db.query("UPDATE state_imports SET mirror_sha256 = ?, mirror_revision = ? WHERE collection = ?")
+      .run(mirrorSha256, mirrorRevision, collection);
+  }));
 }
 
 /** A cheap invalidation signature that also observes uncheckpointed WAL writes. */
@@ -1780,6 +1920,111 @@ export function readStateCollectionSelection(filename: string, collection: strin
   }
 }
 
+/** One bounded page of a collection's rows, as one read snapshot answered it. */
+export interface StateRowsPage {
+  revision: number;
+  /** Selected rows in the requested order. `valueJson` is null for a keys-only
+      page; `companionJson` is the companion row's text, or null when absent. */
+  rows: { key: string; valueJson: string | null; companionJson?: string | null }[];
+}
+
+/**
+ * One bounded page of the rows under a key prefix, ordered by key or by row
+ * order, oldest or newest first, from one read snapshot of the shared
+ * read-only connection: an append journal reads its newest entries without
+ * reading the rest. `companion` swaps the selected key's prefix for another
+ * and reads that row in the same snapshot (an entry's detail stored beside
+ * it). Values stay JSON text for the caller to decode. Null until the
+ * collection exists.
+ */
+export function readStateRowsPage(filename: string, collection: string, page: {
+  prefix: string;
+  by?: "key" | "order";
+  descending?: boolean;
+  offset?: number;
+  limit: number;
+  keysOnly?: boolean;
+  companion?: { from: string; to: string };
+}): StateRowsPage | null {
+  if (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > 4096) throw new Error("invalid state page limit");
+  const offset = page.offset ?? 0;
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("invalid state page offset");
+  if (page.companion && !page.prefix.startsWith(page.companion.from)) throw new Error("a companion prefix must cover the page prefix");
+  if (!fs.existsSync(filename)) return null;
+  const db = sharedStateReadonlyDatabase(filename);
+  let begun = false;
+  try {
+    db.exec("BEGIN");
+    begun = true;
+    const meta = db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection);
+    if (!meta) {
+      db.exec("COMMIT");
+      return null;
+    }
+    const direction = page.descending ? "DESC" : "ASC";
+    /* By row order the collection's order index answers the page from its
+       end; left to itself the planner takes the key range and sorts it. */
+    const order = page.by === "order" ? `r.row_order ${direction}` : `r.row_key ${direction}`;
+    const rowsIndex = page.by === "order" ? "INDEXED BY state_rows_collection_order" : "";
+    const value = page.keysOnly ? "NULL" : "r.value_json";
+    const bounds = [collection, page.prefix, prefixUpperBound(page.prefix), page.limit, offset] as const;
+    const rows: StateRowsPage["rows"] = page.companion
+      ? db.query<{ row_key: string; value_json: string | null; companion_json: string | null }, [string, number, string, string, string, number, number]>(`
+          SELECT r.row_key, ${value} AS value_json, c.value_json AS companion_json FROM state_rows AS r ${rowsIndex}
+          LEFT JOIN state_rows AS c ON c.collection = r.collection AND c.row_key = ? || substr(r.row_key, ?)
+          WHERE r.collection = ? AND r.row_key >= ? AND r.row_key < ? ORDER BY ${order} LIMIT ? OFFSET ?
+        `).all(page.companion.to, page.companion.from.length + 1, ...bounds)
+        .map((row) => ({ key: row.row_key, valueJson: row.value_json, companionJson: row.companion_json }))
+      : db.query<{ row_key: string; value_json: string | null }, [string, string, string, number, number]>(`
+          SELECT r.row_key, ${value} AS value_json FROM state_rows AS r ${rowsIndex}
+          WHERE r.collection = ? AND r.row_key >= ? AND r.row_key < ? ORDER BY ${order} LIMIT ? OFFSET ?
+        `).all(...bounds).map((row) => ({ key: row.row_key, valueJson: row.value_json }));
+    db.exec("COMMIT");
+    return { revision: meta.revision, rows };
+  } catch (error) {
+    if (begun) rollbackQuietly(db);
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  }
+}
+
+/**
+ * A few JSON fields of every row under one key prefix, in collection order,
+ * extracted by SQLite in one snapshot of the shared read-only connection: a
+ * reader that needs two fields of twenty thousand rows decodes none of them.
+ * `fields` are JSON paths (`$.value.cwd`); a field that is absent, or a row
+ * whose JSON does not parse, reads as null. Null until the collection exists.
+ */
+export function readStateCollectionFields(filename: string, collection: string, prefix: string, fields: readonly string[]): {
+  revision: number;
+  rows: { key: string; values: (string | number | null)[] }[];
+} | null {
+  if (!fs.existsSync(filename) || fields.length === 0) return null;
+  const db = sharedStateReadonlyDatabase(filename);
+  let begun = false;
+  try {
+    db.exec("BEGIN");
+    begun = true;
+    const meta = db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection);
+    if (!meta) {
+      db.exec("COMMIT");
+      return null;
+    }
+    const columns = fields.map((_, index) => `CASE WHEN json_valid(value_json) THEN json_extract(value_json, ?${index + 4}) END AS f${index}`).join(", ");
+    const rows = db.query<Record<string, string | number | null>, SQLQueryBindings[]>(`
+      SELECT row_key, ${columns} FROM state_rows
+      WHERE collection = ?1 AND row_key >= ?2 AND row_key < ?3 ORDER BY row_order, row_key
+    `).all(collection, prefix, prefixUpperBound(prefix), ...fields)
+      .map((row) => ({ key: String(row.row_key), values: fields.map((_, index) => row[`f${index}`] ?? null) }));
+    db.exec("COMMIT");
+    return { revision: meta.revision, rows };
+  } catch (error) {
+    if (begun) rollbackQuietly(db);
+    if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return null;
+    throw error;
+  }
+}
+
 export function resetStateReadonlyConnectionCountForTests(): void {
   readonlyConnectionCount = 0;
 }
@@ -1791,10 +2036,12 @@ export function stateReadonlyConnectionCountForTests(): number {
 type StateReadonlyReader = { filename: string; db: Database };
 const stateReadonlyReaderOwner = globalThis as typeof globalThis & { __llvStateReadonlyReader?: StateReadonlyReader };
 
-/** Release the test process's shared reader before removing its state root. */
+/** Release the test process's shared reader and kept writers before removing
+    its state root. */
 export function resetStateReadonlyReaderForTests(): void {
   stateReadonlyReaderOwner.__llvStateReadonlyReader?.db.close();
   stateReadonlyReaderOwner.__llvStateReadonlyReader = undefined;
+  closeStateWriterConnections();
 }
 
 /** Shared metadata and controller statements finish synchronously. No transaction or iterator is
@@ -1844,20 +2091,20 @@ export const OVERDUE_TASK_KEYS_SQL = `
     SELECT project, machine, priority, -9007199254740991 FROM owners
     UNION ALL
     SELECT project, machine, priority, (
-      SELECT coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0) FROM state_rows INDEXED BY state_rows_task_due
+      SELECT coalesce(task_hold_ms, 0) FROM state_rows INDEXED BY state_rows_task_due
       WHERE collection='tasks' AND json_valid(value_json)
           AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
           AND json_extract(value_json,'$.status') <> 'done'
           AND json_extract(value_json,'$.project')=scopes.project
           AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
           AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
-        AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)>scopes.held_until AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)<=?3
-      ORDER BY coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0) LIMIT 1
+        AND coalesce(task_hold_ms, 0)>scopes.held_until AND coalesce(task_hold_ms, 0)<=?3
+      ORDER BY coalesce(task_hold_ms, 0) LIMIT 1
     ) FROM scopes WHERE held_until IS NOT NULL
   ), pages AS MATERIALIZED (
     SELECT priority, (
       SELECT json_group_array(json_object('key', row_key, 'due', due)) FROM (
-        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due
+        SELECT row_key, task_due_ms AS due
         FROM state_rows INDEXED BY state_rows_task_due
         WHERE collection='tasks' AND json_valid(value_json)
           AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
@@ -1865,13 +2112,13 @@ export const OVERDUE_TASK_KEYS_SQL = `
           AND json_extract(value_json,'$.project')=scopes.project
           AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
           AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
-          AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)=scopes.held_until
-          AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) <= ?3
-        ORDER BY round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key LIMIT 25
+          AND coalesce(task_hold_ms, 0)=scopes.held_until
+          AND task_due_ms <= ?3
+        ORDER BY task_due_ms, row_key LIMIT 25
       )
     ) AS repeat_rows, (
       SELECT json_group_array(json_object('key', row_key, 'due', due)) FROM (
-        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due
+        SELECT row_key, task_due_ms AS due
         FROM state_rows INDEXED BY state_rows_task_due
         WHERE collection='tasks' AND json_valid(value_json)
           AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
@@ -1879,14 +2126,14 @@ export const OVERDUE_TASK_KEYS_SQL = `
           AND json_extract(value_json,'$.project')=scopes.project
           AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
           AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
-          AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)=scopes.held_until
-          AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) <= ?3
-          AND row_key || ':' || CAST(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS INTEGER) NOT IN (SELECT value FROM json_each(?7))
-        ORDER BY round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key LIMIT 51
+          AND coalesce(task_hold_ms, 0)=scopes.held_until
+          AND task_due_ms <= ?3
+          AND row_key || ':' || CAST(task_due_ms AS INTEGER) NOT IN (SELECT value FROM json_each(?7))
+        ORDER BY task_due_ms, row_key LIMIT 51
       )
     ) AS head_rows, (
       SELECT json_group_array(json_object('key', row_key, 'due', due)) FROM (
-        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due
+        SELECT row_key, task_due_ms AS due
         FROM state_rows INDEXED BY state_rows_task_due
         WHERE collection='tasks' AND json_valid(value_json)
           AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
@@ -1894,15 +2141,15 @@ export const OVERDUE_TASK_KEYS_SQL = `
           AND json_extract(value_json,'$.project')=scopes.project
           AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
           AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
-          AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)=scopes.held_until
-          AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) <= ?3
-          AND scopes.priority=json_extract(?6,'$[0]') AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000)=json_extract(?6,'$[1]') AND row_key>json_extract(?6,'$[2]')
-          AND row_key || ':' || CAST(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS INTEGER) NOT IN (SELECT value FROM json_each(?4))
-        ORDER BY round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key LIMIT 51
+          AND coalesce(task_hold_ms, 0)=scopes.held_until
+          AND task_due_ms <= ?3
+          AND scopes.priority=json_extract(?6,'$[0]') AND task_due_ms=json_extract(?6,'$[1]') AND row_key>json_extract(?6,'$[2]')
+          AND row_key || ':' || CAST(task_due_ms AS INTEGER) NOT IN (SELECT value FROM json_each(?4))
+        ORDER BY task_due_ms, row_key LIMIT 51
       )
     ) AS same_rows, (
       SELECT json_group_array(json_object('key', row_key, 'due', due)) FROM (
-        SELECT row_key, round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS due
+        SELECT row_key, task_due_ms AS due
         FROM state_rows INDEXED BY state_rows_task_due
         WHERE collection='tasks' AND json_valid(value_json)
           AND json_type(value_json,'$.dueAt')='text' AND json_type(value_json,'$.status')='text'
@@ -1910,11 +2157,11 @@ export const OVERDUE_TASK_KEYS_SQL = `
           AND json_extract(value_json,'$.project')=scopes.project
           AND coalesce(json_extract(value_json,'$.machine'),'')=scopes.machine
           AND CASE json_extract(value_json,'$.priority') WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END=scopes.priority
-          AND coalesce(round((julianday(json_extract(value_json,'$.hold.until'))-2440587.5)*86400000), 0)=scopes.held_until
-          AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) <= ?3
-          AND scopes.priority >= coalesce(json_extract(?6,'$[0]'), -1) AND round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000)>CASE WHEN scopes.priority=json_extract(?6,'$[0]') THEN json_extract(?6,'$[1]') ELSE -9007199254740991 END
-          AND row_key || ':' || CAST(round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000) AS INTEGER) NOT IN (SELECT value FROM json_each(?4))
-        ORDER BY round((julianday(json_extract(value_json,'$.dueAt'))-2440587.5)*86400000), row_key LIMIT 51
+          AND coalesce(task_hold_ms, 0)=scopes.held_until
+          AND task_due_ms <= ?3
+          AND scopes.priority >= coalesce(json_extract(?6,'$[0]'), -1) AND task_due_ms>CASE WHEN scopes.priority=json_extract(?6,'$[0]') THEN json_extract(?6,'$[1]') ELSE -9007199254740991 END
+          AND row_key || ':' || CAST(task_due_ms AS INTEGER) NOT IN (SELECT value FROM json_each(?4))
+        ORDER BY task_due_ms, row_key LIMIT 51
       )
     ) AS later_rows FROM scopes WHERE held_until IS NOT NULL
   ), expanded AS MATERIALIZED (
@@ -2074,6 +2321,35 @@ export class SqliteStateCollection<T> {
     return `${databaseFileIdentity(this.filename)}:${row?.row_revision ?? "missing"}:${row?.generation ?? "missing"}`;
   }
 
+  private pendingCpuStageRevision(db: Database, key: string, stage: string, attempt: number): string | null {
+    const row = db.query<{ row_revision: number; generation: number }, [string, string, string, number]>(`
+      SELECT r.row_revision,t.generation FROM pipeline_controller_work w
+      JOIN state_rows r ON r.collection='pipelines' AND r.row_key=w.row_key
+      JOIN pipeline_tick_work t ON t.row_key=w.row_key
+      WHERE w.kind='pending-stage' AND w.row_key=? AND json_extract(r.value_json, '$.cursor.stageId')=?
+      AND (SELECT n FROM pipeline_attempt_refs WHERE row_key=w.row_key AND stageId=? AND historical=0
+        ORDER BY position DESC LIMIT 1)=?`).get(key, stage, stage, attempt);
+    // The scheduling generation also changes for raw writers that leave the
+    // row revision intact. Include both in the evidence bound to a probe.
+    return row ? `${databaseFileIdentity(this.filename)}:${row.row_revision}:${row.generation}` : null;
+  }
+
+  pipelinePendingCpuStageRevision(key: string, stage: string, attempt: number): string | null {
+    return this.pendingCpuStageRevision(sharedStateReadonlyDatabase(this.filename), key, stage, attempt);
+  }
+
+  async wakePipelineCpuStage(key: string, stage: string, attempt: number, revision: string, expiresAt: number): Promise<string | null> {
+    return stateTransactionAsync(this.filename, "pipelines.controller-cpu-wake", db => {
+      if (Date.now() > expiresAt || this.pendingCpuStageRevision(db, key, stage, attempt) !== revision) return null;
+      // Acknowledge-on-generation protects this wake from a pass already in
+      // flight. Return the exact generation we advanced for the same stage.
+      db.exec("UPDATE pipeline_tick_clock SET revision=revision+1 WHERE id=1");
+      db.query(`UPDATE pipeline_tick_work SET dirty=1,due_at=0,
+        generation=(SELECT revision FROM pipeline_tick_clock WHERE id=1) WHERE row_key=?`).run(key);
+      return this.pendingCpuStageRevision(db, key, stage, attempt);
+    });
+  }
+
   pipelineControllerCandidate(key: string): T | null {
     const row = sharedStateReadonlyDatabase(this.filename).query<{ row_revision: number }, [string, string]>(
       "SELECT row_revision FROM state_rows WHERE collection=? AND row_key=?").get(this.options.collection, key);
@@ -2134,6 +2410,56 @@ export class SqliteStateCollection<T> {
       .get(now, JSON.stringify(excluded)));
   }
 
+  pipelineControlOwnership(key: string): string | null {
+    return sharedStateReadonlyDatabase(this.filename).query<{ binding_json: string }, [string]>(
+      "SELECT binding_json FROM pipeline_control_ownership WHERE control_key=?",
+    ).get(key)?.binding_json ?? null;
+  }
+
+  async claimPipelineControlOwnership(key: string, binding: string, ownerKey = key, replaces?: string,
+    settledKey?: string): Promise<{ acquired: boolean; binding: string }> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db => {
+      const read = db.query<{ binding_json: string }, [string]>(
+        "SELECT binding_json FROM pipeline_control_ownership WHERE control_key=?",
+      );
+      const previous = read.get(key);
+      if (previous && (previous.binding_json !== replaces || settledKey && read.get(settledKey))) {
+        return { acquired: false, binding: previous.binding_json };
+      }
+      const insert = db.query("INSERT OR IGNORE INTO pipeline_control_ownership VALUES(?,?)");
+      const { changes } = insert.run(ownerKey, binding);
+      const owner = read.get(ownerKey);
+      if (!owner) throw new Error("pipeline control ownership was not recorded");
+      if (previous) db.query("UPDATE pipeline_control_ownership SET binding_json=? WHERE control_key=?").run(owner.binding_json, key);
+      else if (ownerKey !== key) insert.run(key, owner.binding_json);
+      return { acquired: changes === 1, binding: owner.binding_json };
+    });
+  }
+
+  async consumePipelineControlOwnership(key: string, binding: string): Promise<boolean> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db =>
+      db.query("DELETE FROM pipeline_control_ownership WHERE control_key=? AND binding_json=?").run(key, binding).changes === 1);
+  }
+
+  async settlePipelineControlOwnership(key: string, binding: string, markerKey: string, marker: string): Promise<boolean> {
+    return stateTransactionAsync(this.filename, "pipelines.control-ownership", db => {
+      const owned = db.query("SELECT 1 FROM pipeline_control_ownership WHERE control_key=? AND binding_json=?").get(key, binding);
+      if (!owned) return false;
+      db.query("INSERT OR IGNORE INTO pipeline_control_ownership VALUES(?,?)").run(markerKey, marker);
+      return true;
+    });
+  }
+
+  async recordPipelineTickSelection(work: PipelineTickWork, now: number): Promise<void> {
+    await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
+      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
+      if (work.dirty === 1 || work.due_at <= now) {
+        db.query("UPDATE pipeline_tick_priority_cursor SET due_at=?,row_order=?,row_key=? WHERE kind=?")
+          .run(work.due_at, work.row_order, work.row_key, work.dirty === 1 ? "dirty" : "due");
+      }
+    });
+  }
+
   async acknowledgePipelineTick(work: PipelineTickWork, cursor: number, dueAt: number): Promise<void> {
     await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
       db.query("UPDATE pipeline_tick_work SET attempt_cursor=? WHERE row_key=?").run(cursor, work.row_key);
@@ -2143,7 +2469,6 @@ export class SqliteStateCollection<T> {
         (SELECT 1 FROM state_rows WHERE collection='pipelines' AND row_key=? AND controller_active=1)
         AND NOT EXISTS (SELECT 1 FROM pipeline_controller_work WHERE row_key=?)`)
         .run(work.row_key, work.generation, work.row_key, work.row_key);
-      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
     });
   }
 
@@ -2151,7 +2476,6 @@ export class SqliteStateCollection<T> {
     await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
       db.query("UPDATE pipeline_tick_work SET dirty=1,due_at=0 WHERE row_key=? AND generation=?")
         .run(work.row_key, work.generation);
-      db.query("UPDATE pipeline_tick_cursor SET row_order=?,row_key=? WHERE id=1").run(work.row_order, work.row_key);
     });
   }
 
@@ -2244,6 +2568,15 @@ export class SqliteStateCollection<T> {
     `).all(JSON.stringify(rowKeys), this.options.collection, limit).map(row => row.row_key);
   }
 
+  /** Seek named rows' order and conservative retained sizes without decoding payloads. */
+  keyMetadata(rowKeys: readonly string[]): Map<string, { order: number; bytes: number }> {
+    if (!rowKeys.length) return new Map();
+    return new Map(this.readDb.query<{ row_key: string; row_order: number; bytes: number }, [string, string]>(`
+      SELECT r.row_key, r.row_order, length(CAST(r.value_json AS BLOB)) * 2 AS bytes FROM json_each(?) AS wanted CROSS JOIN state_rows AS r
+      WHERE r.collection = ? AND r.row_key = wanted.value
+    `).all(JSON.stringify(rowKeys), this.options.collection).map(row => [row.row_key, { order: row.row_order, bytes: row.bytes }]));
+  }
+
   /** Open finding rows for one project/key pair, using the task finding index
       to avoid decoding unrelated collection history. */
   findingTaskKeys(project: string, findingKey: string): string[] {
@@ -2257,6 +2590,66 @@ export class SqliteStateCollection<T> {
     `).all(project, findingKey).map(row => row.row_key);
   }
 
+  /** Task command evidence for one project. The project index bounds the
+   * reader independently of retained history in other projects. */
+  taskProjectKeys(projects: readonly string[]): string[] {
+    if (this.options.collection !== "tasks") throw new Error("task selection requires tasks");
+    return projects.flatMap(project => this.readDb.query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_task_project
+      WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
+      ORDER BY row_order,row_key
+    `).all(project).map(row => row.row_key));
+  }
+
+  private prepareTaskTimeRead(): void {
+    if (taskTimesReady(this.readDb)) return;
+    const ready = withStateWriter(this.filename, db => {
+      assertSqliteWriteAuthority(this.filename);
+      stateLockAttempt("state.task-times", () => db.exec("BEGIN IMMEDIATE"), "tasks");
+      try {
+        const ready = prepareTaskTimes(db);
+        assertSqliteWriteAuthority(this.filename);
+        assertOperationLease();
+        db.exec("COMMIT");
+        return ready;
+      } catch (error) { rollbackQuietly(db); throw error; }
+    });
+    if (!ready) throw new FileTransactionBusyError("task time projection is preparing");
+  }
+
+  /** Finish compatibility-trigger work before a caller opens its own writer.
+      Each page is committed separately, so an old large backlog never turns
+      into one unbounded transaction. */
+  prepareTaskTimesBeforeWrite(): void {
+    for (let batch = 0; batch < 64; batch++) {
+      if (taskTimesReady(this.readDb)) return;
+      const ready = withStateWriter(this.filename, db => {
+        assertSqliteWriteAuthority(this.filename);
+        stateLockAttempt("state.task-times", () => db.exec("BEGIN IMMEDIATE"), "tasks");
+        try {
+          const ready = prepareTaskTimes(db);
+          assertSqliteWriteAuthority(this.filename);
+          assertOperationLease();
+          db.exec("COMMIT");
+          return ready;
+        } catch (error) { rollbackQuietly(db); throw error; }
+      });
+      if (ready) return;
+    }
+    throw new FileTransactionBusyError("task time projection is preparing");
+  }
+
+  private withTaskTimes<R>(read: () => R): R {
+    this.prepareTaskTimeRead();
+    this.readDb.exec("BEGIN");
+    try {
+      // A compatibility writer may have committed after preparation. Never
+      // expose stale numbers: the readiness check and query share a snapshot.
+      if (!taskTimesReady(this.readDb)) throw new FileTransactionBusyError("task time projection changed");
+      return read();
+    } finally { this.readDb.exec("ROLLBACK"); }
+  }
+
   /** One indexed read; rejected holds and remote rows never reach the decoder. */
   overdueTaskKeys(projects: readonly string[], nowMs: number, limit = 51, machine: string | null = null, shown: readonly string[] = [], cursor: OverdueTaskCursor | null = null, known: readonly string[] = shown): string[] {
     return this.overdueTaskRows(projects, nowMs, limit, machine, shown, cursor, known).map(row => row.row_key);
@@ -2266,8 +2659,8 @@ export class SqliteStateCollection<T> {
     if (!projects.length) return [];
     if (!Number.isFinite(nowMs) || !Number.isSafeInteger(limit) || limit < 1 || limit > 51) throw new Error("invalid overdue task selection");
     const machines = machine ? ["", machine] : [""];
-    return this.readDb.query<OverdueTaskRow, [string, string, number, string, number, string, string]>(OVERDUE_TASK_KEYS_SQL)
-      .all(JSON.stringify([...new Set(projects)]), JSON.stringify(machines), nowMs, JSON.stringify(shown), limit, JSON.stringify(cursor), JSON.stringify(known));
+    return this.withTaskTimes(() => this.readDb.query<OverdueTaskRow, [string, string, number, string, number, string, string]>(OVERDUE_TASK_KEYS_SQL)
+      .all(JSON.stringify([...new Set(projects)]), JSON.stringify(machines), nowMs, JSON.stringify(shown), limit, JSON.stringify(cursor), JSON.stringify(known)));
   }
 
   /** Release an evicted document owner's connection. */
@@ -2430,6 +2823,15 @@ export class SqliteStateCollection<T> {
     } catch (error) { rollbackQuietly(this.readDb); throw error; }
   }
 
+  /** Exact warning identity, including alarms retired before queue recovery. */
+  sendFailureKeyForMessage(clientMessageId: string): string | null {
+    return this.readDb.query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM state_rows INDEXED BY state_rows_send_failure_message
+      WHERE collection='send_failure_notices' AND json_valid(value_json)
+        AND json_extract(value_json,'$.clientMessageId')=? ORDER BY row_key LIMIT 1
+    `).get(clientMessageId)?.row_key ?? null;
+  }
+
   /** Indexed recipient lookup for the bounded send-failure alarm reader. */
   jsonTextKeysByRecipient(field: "senderConversationId" | "fallbackConversationId", recipient: string, after: string, limit: number): string[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128) throw new Error("invalid recipient page limit");
@@ -2448,38 +2850,42 @@ export class SqliteStateCollection<T> {
 
   /** Project-scoped replica watermark from indexed group maxima, without
       materializing or aggregating task rows. */
-  maxTaskProjectStamp(projects: readonly string[], prefix: string): string | null {
+  maxTaskProjectStamp(projects: readonly string[], prefix: string, admittedDb?: Database): string | null {
     const fields = ["text", "status", "look", "place", "links", "machine", "handover"] as const;
     if (!projects.length) return null;
-    let newest: string | null = null;
-    for (const project of new Set(projects)) {
-      for (const field of fields) {
-        const stamp = this.readDb.query<{ stamp: string }, [string]>(`
-          SELECT json_extract(value_json,'$.sync.s.${field}') AS stamp FROM state_rows
-          INDEXED BY state_rows_task_stamp_${field}
+    const read = (db: Database): string | null => {
+      if (!taskTimesReady(db)) throw new FileTransactionBusyError("task time projection is preparing");
+      let newest: string | null = null;
+      for (const project of new Set(projects)) {
+        for (const field of fields) {
+          const stamp = db.query<{ stamp: string }, [string]>(`
+            SELECT json_extract(value_json,'$.sync.s.${field}') AS stamp FROM state_rows
+            INDEXED BY state_rows_task_stamp_${field}
+            WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
+              AND json_type(value_json,'$.sync.s.${field}')='text'
+            ORDER BY json_extract(value_json,'$.sync.s.${field}') DESC LIMIT 1
+          `).get(project)?.stamp;
+          if (stamp && (!newest || stamp > newest)) newest = stamp;
+        }
+        const ms = db.query<{ ms: number }, [string]>(`
+          SELECT task_updated_ms AS ms FROM state_rows
+          INDEXED BY state_rows_task_legacy_stamp
           WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
-            AND json_type(value_json,'$.sync.s.${field}')='text'
-          ORDER BY json_extract(value_json,'$.sync.s.${field}') DESC LIMIT 1
-        `).get(project)?.stamp;
-        if (stamp && (!newest || stamp > newest)) newest = stamp;
+            AND (json_type(value_json,'$.sync.s.text') IS NULL OR json_type(value_json,'$.sync.s.status') IS NULL
+              OR json_type(value_json,'$.sync.s.look') IS NULL OR json_type(value_json,'$.sync.s.place') IS NULL
+              OR json_type(value_json,'$.sync.s.links') IS NULL OR json_type(value_json,'$.sync.s.machine') IS NULL
+              OR json_type(value_json,'$.sync.s.handover') IS NULL)
+          ORDER BY task_updated_ms DESC LIMIT 1
+        `).get(project)?.ms;
+        if (ms !== undefined && Number.isFinite(ms)) {
+          const bounded = Math.max(0, Math.min(9_999_999_999_999, ms));
+          const fallback = `${String(bounded).padStart(13, "0")}.000.${prefix}`;
+          if (!newest || fallback > newest) newest = fallback;
+        }
       }
-      const ms = this.readDb.query<{ ms: number }, [string]>(`
-        SELECT round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) AS ms FROM state_rows
-        INDEXED BY state_rows_task_legacy_stamp
-        WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
-          AND (json_type(value_json,'$.sync.s.text') IS NULL OR json_type(value_json,'$.sync.s.status') IS NULL
-            OR json_type(value_json,'$.sync.s.look') IS NULL OR json_type(value_json,'$.sync.s.place') IS NULL
-            OR json_type(value_json,'$.sync.s.links') IS NULL OR json_type(value_json,'$.sync.s.machine') IS NULL
-            OR json_type(value_json,'$.sync.s.handover') IS NULL)
-        ORDER BY round((julianday(json_extract(value_json,'$.updatedAt'))-2440587.5)*86400000) DESC LIMIT 1
-      `).get(project)?.ms;
-      if (ms !== undefined && Number.isFinite(ms)) {
-        const bounded = Math.max(0, Math.min(9_999_999_999_999, ms));
-        const fallback = `${String(bounded).padStart(13, "0")}.000.${prefix}`;
-        if (!newest || fallback > newest) newest = fallback;
-      }
-    }
-    return newest;
+      return newest;
+    };
+    return admittedDb ? read(admittedDb) : this.withTaskTimes(() => read(this.readDb));
   }
 
   /** A bounded read/modify/write transaction. No collection materialization.
@@ -2500,8 +2906,7 @@ export class SqliteStateCollection<T> {
       if (peerFirst) peerLease = peer!.acquireLeaseSync();
       lease ??= this.acquireLeaseSync();
       if (peer && !peerFirst) peerLease = peer.acquireLeaseSync();
-      const db = connectDatabase(this.filename);
-      try {
+      return withStateWriter(this.filename, (db) => {
         const result = withImmediateTransaction(db, this.options.busyMessage, () => {
           assertSqliteWriteAuthority(this.filename);
           this.assertLease(db, lease!);
@@ -2510,6 +2915,10 @@ export class SqliteStateCollection<T> {
           const consume = () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); };
           const changed = new Map<string, "upsert" | "delete">();
           const result = operation({
+            maxTaskProjectStamp: (projects, prefix) => {
+              if (this.options.collection !== "tasks") throw new Error("task watermark lookup requires tasks");
+              return this.maxTaskProjectStamp(projects, prefix, db);
+            },
             taskProjectRows: (projects) => {
               if (this.options.collection !== "tasks") throw new Error("task project lookup requires the task collection");
               const records: T[] = [];
@@ -2570,6 +2979,17 @@ export class SqliteStateCollection<T> {
               }
               return this.options.clone(value);
             },
+            pipelineGet: (key) => {
+              consume();
+              if (this.options.collection !== "pipelines") throw new Error("pipeline id lookup requires the pipeline collection");
+              const row = db.query<{ value_json: string }, [string]>(
+                "SELECT value_json FROM state_rows WHERE collection IN ('pipelines', 'pipelines_archive') AND row_key = ? ORDER BY collection LIMIT 1",
+              ).get(key);
+              if (!row) return null;
+              const value = this.decodeRow(row.value_json, db);
+              if (value === null) throw new Error("invalid bounded pipeline row");
+              return this.options.clone(value);
+            },
             put: (record) => {
               consume();
               this.validate(record);
@@ -2615,7 +3035,7 @@ export class SqliteStateCollection<T> {
         this.invalidateAfterCommit();
         peer?.invalidateAfterCommit();
         return result;
-      } finally { db.close(); }
+      });
     } finally {
       if (peerLease && !peerFirst) peer!.releaseLeaseSync(peerLease);
       if (!heldLease && lease) this.releaseLeaseSync(lease);
@@ -2903,13 +3323,10 @@ export class SqliteStateCollection<T> {
     assertSqliteWriteAuthority(this.filename);
     const lease = this.acquireLeaseSync();
     try {
-      const db = connectDatabase(this.filename);
-      try {
-        withImmediateTransaction(db, this.options.busyMessage, () => {
-          options.beforePersist?.(records);
-          this.persistReplacement(lease, records, options.mergeOmitted === true, options.deleteKeys ?? [], undefined, undefined, undefined, db);
-        }, this.options.collection);
-      } finally { db.close(); }
+      withStateWriter(this.filename, (db) => withImmediateTransaction(db, this.options.busyMessage, () => {
+        options.beforePersist?.(records);
+        this.persistReplacement(lease, records, options.mergeOmitted === true, options.deleteKeys ?? [], undefined, undefined, undefined, db);
+      }, this.options.collection));
     } finally {
       this.releaseLeaseSync(lease);
     }
@@ -2920,8 +3337,18 @@ export class SqliteStateCollection<T> {
       `appendKeys` names changed rows that move to the end of the collection
       order instead of keeping their held position. */
   patchSync<C = never>(
-    prepare: () => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> },
-    options: { fenceOwner?: boolean; companion?: SqliteStateCollection<C>; afterPersist?: (db: Database) => void } = {},
+    prepare: (db: Database) => { records: readonly T[]; deleteKeys?: readonly string[]; appendKeys?: readonly string[]; companion?: CompanionPatch<C> },
+    options: {
+      fenceOwner?: boolean;
+      companion?: SqliteStateCollection<C>;
+      afterPersist?: (db: Database) => void;
+      /** `process`: the commit survives the process ending but not a power
+          loss, and does not wait for the disk. For a store whose legacy file
+          was appended or renamed into place without an fsync, it keeps that
+          store's durability and keeps the disk off the caller's thread. Any
+          later commit that waits for the disk carries it there too. */
+      durability?: "disk" | "process";
+    } = {},
   ): void {
     const authorize = options.fenceOwner
       ? () => assertSqliteInitializationAuthority(this.filename, true)
@@ -2940,18 +3367,18 @@ export class SqliteStateCollection<T> {
     try {
       ownLease = this.acquireLeaseSync();
       if (companion && !first) laterLease = companion.acquireLeaseSync();
-      const db = connectDatabase(this.filename);
-      try {
-        withImmediateTransaction(db, this.options.busyMessage, () => {
-          const patch = prepare();
-          const companionWrite = companion && patch.companion
-            ? { collection: companion, lease: (companionLease ?? laterLease)!, ...patch.companion }
-            : undefined;
-          this.persistReplacement(ownLease!, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []),
-            companionWrite as (CompanionPatch<unknown> & { collection: SqliteStateCollection<unknown>; lease: string }) | undefined, db);
-          options.afterPersist?.(db);
-        }, this.options.collection);
-      } finally { db.close(); }
+      const commitDurability = options.durability === "process"
+        ? withProcessDurability
+        : <R>(_db: Database, operation: () => R) => operation();
+      withStateWriter(this.filename, (db) => commitDurability(db, () => withImmediateTransaction(db, this.options.busyMessage, () => {
+        const patch = prepare(db);
+        const companionWrite = companion && patch.companion
+          ? { collection: companion, lease: (companionLease ?? laterLease)!, ...patch.companion }
+          : undefined;
+        this.persistReplacement(ownLease!, patch.records, true, patch.deleteKeys ?? [], authorize, new Set(patch.appendKeys ?? []),
+          companionWrite as (CompanionPatch<unknown> & { collection: SqliteStateCollection<unknown>; lease: string }) | undefined, db);
+        options.afterPersist?.(db);
+      }, this.options.collection)));
     } finally {
       if (laterLease) companion!.releaseLeaseSync(laterLease);
       if (ownLease) this.releaseLeaseSync(ownLease);
@@ -2995,9 +3422,8 @@ export class SqliteStateCollection<T> {
     const leases: { collection: SqliteStateCollection<unknown>; token: string }[] = [];
     try {
       for (const patch of ordered) leases.push({ collection: patch.collection, token: patch.collection.acquireLeaseSync() });
-      const db = connectDatabase(filename);
       let changed = false;
-      try {
+      withStateWriter(filename, (db) => {
         withImmediateTransaction(db, options.busyMessage ?? "state is busy", () => {
           assertSqliteWriteAuthority(filename);
           options.beforeMerge?.({
@@ -3009,7 +3435,7 @@ export class SqliteStateCollection<T> {
           }
           options.beforeCommit?.();
         });
-      } finally { db.close(); }
+      });
       if (changed) {
         secureDatabaseFiles(filename);
         for (const patch of ordered) patch.collection.invalidateAfterCommit();
@@ -3245,11 +3671,16 @@ export class SqliteStateCollection<T> {
     const records: T[] = [];
     let order = -1, key = "";
     for (;;) {
+      // The pipeline scheduler already selected these exact keys from its
+      // durable obligation index. Older writers could mark a settled close
+      // inactive while it still held unconfirmed hosts. Do not let that stale
+      // optimization veto its bounded recovery window. Unscoped reads retain
+      // the active-row index; row revisions still fence every checkpoint.
       const rows = withViewerOperation("pipelines.controller-read", () => sharedStateReadonlyDatabase(this.filename).query<
         Pick<CollectionRow, "row_key" | "row_order" | "row_revision">, SQLQueryBindings[]>(`
         SELECT row_key, row_order, row_revision FROM state_rows
         ${keys ? "INDEXED BY sqlite_autoindex_state_rows_1" : ""}
-        WHERE collection = ? AND controller_active = 1 AND row_order >= ?
+        WHERE collection = ? ${keys && this.options.collection === "pipelines" ? "" : "AND controller_active = 1"} AND row_order >= ?
           AND (row_order > ? OR row_key > ?)
           ${keys ? "AND row_key IN (SELECT value FROM json_each(?))" : ""}
         ORDER BY row_order, row_key LIMIT ?
@@ -3493,8 +3924,7 @@ export class SqliteStateCollection<T> {
 
   private persistChangedRows(ownerToken: string, records: readonly T[], admittedDb?: Database): void {
     for (const record of records) this.validate(record);
-    const db = admittedDb ?? connectDatabase(this.filename);
-    try {
+    const persist = (db: Database) => {
       const write = () => {
         assertSqliteWriteAuthority(this.filename);
         this.assertLease(db, ownerToken);
@@ -3547,9 +3977,8 @@ export class SqliteStateCollection<T> {
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
       }
-    } finally {
-      if (!admittedDb) db.close();
-    }
+    };
+    if (admittedDb) persist(admittedDb); else withStateWriter(this.filename, persist);
   }
 
   private persistReplacement(
@@ -3573,8 +4002,7 @@ export class SqliteStateCollection<T> {
     if (requestedDeletes.size !== deleteKeys.length || [...requestedDeletes].some((key) => !key || seen.has(key))) {
       throw new Error(`invalid ${this.options.collection} row deletion`);
     }
-    const db = admittedDb ?? connectDatabase(this.filename);
-    try {
+    const persist = (db: Database) => {
       const write = () => {
         authorize();
         this.assertLease(db, ownerToken);
@@ -3661,9 +4089,8 @@ export class SqliteStateCollection<T> {
         this.invalidateAfterCommit();
         companion?.collection.invalidateAfterCommit();
       }
-    } finally {
-      if (!admittedDb) db.close();
-    }
+    };
+    if (admittedDb) persist(admittedDb); else withStateWriter(this.filename, persist);
   }
 
   /** Upsert and delete rows of this collection inside a transaction another
@@ -3774,16 +4201,13 @@ export class SqliteStateCollection<T> {
   }
 
   private acquireLeaseSync(_waitMs?: number): string {
-    return stateLockAttempt("state.lease", () => {
-      const db = connectDatabase(this.filename);
+    return stateLockAttempt("state.lease", () => withStateWriter(this.filename, (db) => {
       const ownerToken = crypto.randomUUID();
-      try {
-        const acquired = this.tryAcquireLease(db, ownerToken);
-        if (acquired === true) return ownerToken;
-        this.assertDiskHasSpace();
-        throw new StateLockDeferredError("state.lease", "lease", acquired);
-      } finally { db.close(); }
-    }, this.options.collection);
+      const acquired = withLeaseDurability(db, () => this.tryAcquireLease(db, ownerToken));
+      if (acquired === true) return ownerToken;
+      this.assertDiskHasSpace();
+      throw new StateLockDeferredError("state.lease", "lease", acquired);
+    }), this.options.collection);
   }
 
   private async acquireLease(waitMs?: number): Promise<string> {

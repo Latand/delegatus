@@ -5,6 +5,8 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { telegramBotFailure } from "@/lib/telegram/bot/http";
 import { telegramBotService } from "@/lib/telegram/bot/service";
 import { parseTelegramChatReference } from "@/lib/telegram/chatReference";
+import { BridgeReportTelegramAdmissionRefusal, sendBridgeReportTelegram } from "@/lib/bridge/reportTelegram";
+import { stateLockDeferral } from "@/lib/state/lockWait";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,7 +19,9 @@ export const dynamic = "force-dynamic";
  * `{op:"send", …}`, `{op:"send_media", …}` or `{op:"send_document", …}`
  * posts. The sender is resolved here from the forwarded
  * conversation capability, never from an argument, so the attribution a post
- * carries is the caller's own. No answer carries the token or the bot id.
+ * carries is the caller's own. A stored bridge report recovers its original
+ * receipt after checking the current seat and destination. No answer carries
+ * the token or the bot id.
  */
 
 export async function GET(req: NextRequest) {
@@ -53,6 +57,19 @@ export async function POST(req: NextRequest) {
   try { body = await req.json() as Record<string, unknown>; } catch { return NextResponse.json({ error: "Invalid JSON", code: "invalid_json" }, { status: 400 }); }
   if (body.op !== "send" && body.op !== "send_media" && body.op !== "send_document") return NextResponse.json({ error: "Unknown Telegram bot action", code: "invalid_action" }, { status: 400 });
   try {
+    if (body.op === "send" && Object.hasOwn(body, "reportId")) {
+      try {
+        return NextResponse.json(await sendBridgeReportTelegram(body.reportId, callerConversationId(req), body.clientRequestId));
+      } catch (error) {
+        if (error instanceof BridgeReportTelegramAdmissionRefusal) {
+          return NextResponse.json({ error: error.message, code: error.code, retryable: false, reportSendDeferred: true }, { status: 403 });
+        }
+        if (stateLockDeferral(error)) {
+          return NextResponse.json({ error: "Telegram report delivery admission is busy", code: "telegram_failed", retryable: true, reportSendDeferred: true }, { status: 503 });
+        }
+        throw error;
+      }
+    }
     const service = telegramBotService();
     const parsed = parseTelegramChatReference(body.chat);
     const known = parsed && service.listChats().chats.find((chat) => chat.postAllowed && (

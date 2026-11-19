@@ -13,6 +13,7 @@ import { runGit } from "./git";
 import { builtRevision } from "./steps";
 import { adoptLegacyTrash, isGatedTrashRow, quarantineTree, reopenGate, settleGatedTrash } from "./gatedTrash";
 import type { LauncherRecord } from "./launcher";
+import { retentionErrorDetails } from "./retentionLog";
 
 const DAY = 86_400_000;
 const TRASH_JOURNAL = /^(cache|package|release-output|release)-trash-.*\.json$/;
@@ -202,10 +203,14 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     const result = await run(["worktree", "remove", directory], record.checkout!);
     if (result.code !== 0) report.errors.push(`${directory}: cannot drop removed release registration: ${result.stderr || result.stdout}`);
   };
-  try {
+  const prune = async () => {
+    const root = path.resolve(record.releasesDir);
+    // No update cache or interrupted work exists on a clean first start.
+    // In particular, it needs no Linux procfs inventory on other platforms.
+    if (!previousTrash.some(file => TRASH_JOURNAL.test(file))
+      && fs.lstatSync(root, { throwIfNoEntry: false }) === undefined) return;
     const processes = await scan();
     const initial = await read();
-    const root = path.resolve(record.releasesDir);
     // The cache is created by the first update, not by the initial install.
     // Only absence is empty; aliases and unreadable/invalid roots still fail.
     const rootExists = fs.lstatSync(root, { throwIfNoEntry: false }) !== undefined;
@@ -529,13 +534,15 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         }
       } catch (error) { if (error instanceof RetentionInspectionError) throw error; report.errors.push(String(error)); }
     }
-  } catch (error) { report.errors.push(String(error)); }
+  };
+  try { await prune(); }
+  catch (error) { report.errors.push(String(error)); }
   try { fs.mkdirSync(path.dirname(reportFile), { recursive: true }); writeJsonDurably(reportFile, report); }
   catch (error) {
     report.errors.push(`cannot write retention report: ${String(error)}`);
-    console.error("[self-update] cannot write retention report", String(error));
+    console.error(`[self-update] cannot write retention report${retentionErrorDetails([String(error)])}`);
   }
-  const summary = `[self-update] retention removed ${report.removed.length}; reclaimed ${report.reclaimedCacheBytes} cache bytes; ${report.errors.length} error(s)`;
+  const summary = `[self-update] retention removed ${report.removed.length}; reclaimed ${report.reclaimedCacheBytes} cache bytes; ${report.errors.length} error(s)${retentionErrorDetails(report.errors)}`;
   if (report.errors.length || !startupDiagnosticsQuiet()) console.log(summary);
   return report;
   } finally { await inspection.close(); }

@@ -7,6 +7,8 @@ import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { orphanedHostNoticeContext, unreachableOrphanedHost } from "./orphanedHost";
+import { ORPHAN_FOLLOW_UP_DELAYS_MS, surfaceOrphanedHosts } from "./orphanedHostAlarm";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
@@ -64,6 +66,8 @@ import {
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
   handOverHostForDemotion,
+  releaseClaudeHostForDemotion,
+  onStructuredDeliveryHostReleased,
   releaseStructuredDeliveryHostsForDemotion,
   releaseStructuredDeliveryHost,
   type DemotionInterruptionOptions,
@@ -77,7 +81,7 @@ import { sendReceiptFor } from "./sendSettlement";
 import { structuredContentDigest } from "./structuredContent";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
-import { claudeHostLaunchPaths, materializeOwnedStructuredHostAccess, tempOwnerForConversation, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell } from "./structuredSpawn";
+import { claudeHostLaunchPaths, materializeOwnedStructuredHostAccess, tempOwnerForConversation, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell, prepareDiskCleanerHost } from "./structuredSpawn";
 import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptEvidence, restartCutDecision, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { hostTurnRecordIdentity, hostTurnRecordModifiedAt, readHostTurnRecord } from "./eventStore";
 import { holdRestartCutRow, releaseRestartCutRow, setRestartCutHeldRows } from "./restartCutHold";
@@ -127,6 +131,44 @@ const processStartup = process as typeof process & {
   __llvStructuredStartupPasses?: WeakMap<AgentRegistry, StartupPassState>;
 };
 const startupPasses = processStartup.__llvStructuredStartupPasses ??= new WeakMap<AgentRegistry, StartupPassState>();
+/* The pass states this module made, weakly, so a released host can be taken
+   out of the hosts they carry to the next pass. */
+const startupPassStates = new Set<WeakRef<StartupPassState>>();
+
+function startupPassState(registry: AgentRegistry): StartupPassState {
+  let state = startupPasses.get(registry);
+  if (!state) {
+    state = {};
+    startupPasses.set(registry, state);
+    startupPassStates.add(new WeakRef(state));
+  }
+  return state;
+}
+
+/** A host the delivery controller released, terminated or detached after
+    retirement is gone for good: no later pass may retain or publish it.
+    Held here, every host adopted at boot stayed reachable for the life of
+    the process with all it kept in memory. */
+const releasedStartupHosts = new WeakSet<object>();
+
+/** The hosts of a pass, less any released while the pass was running. */
+function unreleasedStartupHosts(hosts: AdoptedStructuredHost[]): AdoptedStructuredHost[] {
+  return hosts.some((item) => releasedStartupHosts.has(item.host)) ? hosts.filter((item) => !releasedStartupHosts.has(item.host)) : hosts;
+}
+
+function forgetReleasedStartupHost(host: object): void {
+  releasedStartupHosts.add(host);
+  const kept = (item: AdoptedStructuredHost) => item.host !== host;
+  adoptedHosts = adoptedHosts.filter(kept);
+  retryAdoptedHosts = retryAdoptedHosts.filter(kept);
+  for (const reference of startupPassStates) {
+    const state = reference.deref();
+    if (!state) { startupPassStates.delete(reference); continue; }
+    if (state.ready) state.ready = state.ready.filter(kept);
+    if (state.retained) state.retained = state.retained.filter(kept);
+  }
+}
+onStructuredDeliveryHostReleased(forgetReleasedStartupHost);
 
 /** Rows a completed pass left exactly as they were because their pipeline's
     evidence (an alive or unverifiable survivor, an unreadable record) does not
@@ -223,12 +265,15 @@ async function revalidateRetainedStartupHosts(
     // Each cleanup pass removes at least one candidate, bounding rechecks.
     if (retired.length === 0) return current;
     await forEachStartupBatch(retired, async item => {
-      await withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
+      const release = () => withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
         if (!await releaseStructuredDeliveryHost(item.key, item.host)) {
           await item.host.release();
           await flushStructuredHostPersistence(item.host);
         }
+        forgetReleasedStartupHost(item.host);
       });
+      if (item.key.engine === "claude") await releaseClaudeHostForDemotion(registry, item.key, item.host, {}, release, assertStartupReadActive);
+      else await release();
     });
     remaining = current;
     preparedSnapshot = undefined;
@@ -324,6 +369,7 @@ function rememberStructuredStartupRetry(
   hosts: AdoptedStructuredHost[],
   recoveries: readonly OrchestratorRestartRecoveryTarget[],
 ): void {
+  hosts = unreleasedStartupHosts(hosts);
   retryAdoptedHosts = hosts;
   const retainedHostKeys = new Set(hosts.map((item) => sessionKeyId(item.key)));
   retryOrchestratorRecoveries = recoveries.filter((target) => retainedHostKeys.has(target.hostKey));
@@ -1242,15 +1288,28 @@ async function unresolvedEligibleHosts(
     if (current?.structuredHost && shouldAdopt(current)) unresolved.push(current);
   }, { batchSize: 16, timeBudgetMs: 8 });
   if (unresolved.length === 0) return [];
+  /* An engine whose recorded owner is proven dead has no predecessor to hand
+     it over. Counting it contested deferred its sends for as long as it ran
+     and quarantined it as incumbent-owned, so a send to a busy orphan was
+     never recovered. Its sends go to recovery, which stops it after its grace
+     and resumes it, and the pass's orphan scan raises the seat's alarm. A Codex
+     orphan whose socket verifies stays contested: an adopter reconnects it. */
+  const orphaned = unresolved.filter((entry) => entry.pendingAction !== "handoff" && unreachableOrphanedHost(entry));
+  if (orphaned.length > 0) {
+    console.error("[structured hosts] eligible hosts outlived their owner; leaving them to send recovery", {
+      keys: orphaned.map((entry) => sessionKeyId(entry.key)),
+    });
+  }
   /* A row the incumbent handed over while this pass ran is contested too: its
      claim came free only after the adopter had passed it, and the next pass
      adopts it. One whose adoption fails ends dead, so this cannot replay
      startup without end the way a permanently pending row would (#1364). */
   const contested = unresolved.filter((entry) => {
+    if (orphaned.includes(entry)) return false;
     const process = entry.structuredHost?.process;
     return Boolean(process && processAlive(process)) || (entry.pendingAction === "handoff" && entry.status !== "dead");
   });
-  const abandoned = unresolved.filter((entry) => !contested.includes(entry));
+  const abandoned = unresolved.filter((entry) => !contested.includes(entry) && !orphaned.includes(entry));
   if (abandoned.length > 0) {
     console.error("[structured hosts] eligible hosts have no live engine process to hand over; leaving them to on-demand hosting", {
       keys: abandoned.map((entry) => sessionKeyId(entry.key)),
@@ -2155,8 +2214,9 @@ export interface StructuredStartupDependencies {
       or unresolved survivors. Defaults to reading active and archived records. */
   pipelineEvidence?: (registry: AgentRegistry, host?: AgentRegistryEntry) => PipelineStartupEvidence;
   /** Timer behind the deferred-evidence re-probe. Defaults to an unref'd
-      setTimeout, so the re-probe never holds a Viewer that is shutting down. */
-  schedule?: (callback: () => void, delayMs: number) => { unref?(): void };
+      setTimeout, so the re-probe never holds a Viewer that is shutting down.
+      Injected schedulers can await the callback's work before teardown. */
+  schedule?: (callback: () => void | Promise<void>, delayMs: number) => { unref?(): void };
   orchestratorSeats?: typeof activeOrchestratorSeats;
   /** Durable interruption obligations (#1835). Defaults to the directory
       beside the registry file. */
@@ -2270,8 +2330,7 @@ export function prepareStructuredStartupRecipient(
   const conversation = registry.conversation(conversationId);
   const generation = conversation?.generations.at(-1);
   const key = JSON.stringify([conversation?.id,generation?.id,operationId]);
-  const state = startupPasses.get(registry) ?? {};
-  startupPasses.set(registry,state);
+  const state = startupPassState(registry);
   const recipients = state.recipients ??= new Map();
   const existing = recipients.get(key);
   const verify = (authority: RecipientStartupAuthority) => {
@@ -2439,11 +2498,7 @@ function startStructuredHostPass(
 ): Promise<AdoptedStructuredHost[]> {
   dependencies.assertActive?.();
   const registry = dependencies.registry ?? agentRegistry();
-  let state = startupPasses.get(registry);
-  if (!state) {
-    state = {};
-    startupPasses.set(registry, state);
-  }
+  const state = startupPassState(registry);
   if (state.pending) return rowRetry
     ? state.pending.catch(() => {}).then(() => startStructuredHostPass(dependencies, resumeDeferred, admitHeldPendingWork, rowRetry))
     : state.pending;
@@ -2476,7 +2531,7 @@ function startStructuredHostPass(
         adoptStructuredHostsPass({ ...dependencies, registry, client }, scope, admitHeldPendingWork, isolatedRowRetry, dependencies));
     }));
     current.generation = generation;
-    current.ready = hosts;
+    current.ready = unreleasedStartupHosts(hosts);
     return hosts;
   }).finally(() => { current.pending = undefined; current.recipientDependencies = undefined; });
   return current.pending;
@@ -2526,7 +2581,8 @@ class StartupRowRetryJob {
         const failed = await rowRetries.failed(this.key, startupRowReason(error), Date.now(), releaseActive);
         if (failed.quarantined && !failed.resolved && failed.noticePending !== false) {
           try {
-            await startupRowNotice(this.entry, failed, retryActive);
+            await startupRowNotice(this.entry, failed, retryActive,
+              orphanedHostNoticeContext(startupHostSnapshot(this.registry, this.entry.key), this.key));
             await rowRetries.notified(failed, releaseActive);
           } catch { console.error("[structured hosts] quarantine card publication deferred", { key: this.key }); }
         }
@@ -2869,7 +2925,7 @@ async function adoptStructuredHostsPass(
        and retained hosts are kept for the next attempt, and the startup retry
        loop runs the pass again once a client exists. */
     if (!controllerBoundEarly && adoptionCandidates.length > 0) {
-      retryAdoptedHosts = nextAdoptedHosts;
+      retryAdoptedHosts = unreleasedStartupHosts(nextAdoptedHosts);
       retryOrchestratorRecoveries = [...orchestratorRecoveries];
       const keys = adoptionCandidates.map((entry) => sessionKeyId(entry.key));
       if (!deferredAdoptionLogged) {
@@ -3021,7 +3077,7 @@ async function adoptStructuredHostsPass(
           () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key)),
         );
         const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
-        return {
+        const options = {
           cwd: entry.cwd,
           codexHome: owner?.home,
           fileAuthCredentials: owner?.kind === "managed",
@@ -3045,6 +3101,15 @@ async function adoptStructuredHostsPass(
           env: access.env,
           ...(memoryCell ? { memoryCell } : {}),
         };
+        const cleanerReceipt = launchProfile?.agentMemoryRoleParams?.mode === "disk"
+          ? registry.diskCleanerReceiptForConversation(conversation.id) ?? registry.spawnReceiptForHost(entry.key)
+          : null;
+        if (launchProfile?.agentMemoryRoleParams?.mode === "disk") {
+          if (!cleanerReceipt) throw new Error("disk cleaner launch receipt is unavailable during startup adoption");
+          await prepareDiskCleanerHost({ engine: "codex", receipt: cleanerReceipt, spec: { cwd: entry.cwd, launchProfile }, registry }, access, options, cleanerReceipt);
+          assertActive();
+        }
+        return options;
       },
       startupEnvironment,
       shouldAdopt,
@@ -3281,6 +3346,10 @@ async function adoptStructuredHostsPass(
         ? await preparedStartupSnapshot(registry) : undefined;
       const contestedConversations = new Set([...contestedHostKeys, ...delayedRows].flatMap(key => {
         const entry = contestedSnapshot!.entries[key];
+        /* A row whose retry is not yet due, quarantined as incumbent-owned
+           before its owner was known dead, is no less an orphan: its sends
+           go to recovery now rather than when the retry comes due. */
+        if (entry && delayedRows.has(key) && entry.pendingAction !== "handoff" && unreachableOrphanedHost(entry)) return [];
         const conversation = entry && registry.conversationForPath(entry.artifactPath);
         return conversation ? [registry.canonicalConversationId(conversation.id)] : [];
       }));
@@ -3429,7 +3498,7 @@ async function adoptStructuredHostsPass(
       if (!row) continue;
       if (row.quarantined && !row.resolved && row.noticePending !== false) {
         try {
-          await startupRowNotice(entry, row, assertActive);
+          await startupRowNotice(entry, row, assertActive, orphanedHostNoticeContext(startupHostSnapshot(registry, entry.key), key));
           await rowRetries.notified(row, assertActive);
         } catch { console.error("[structured hosts] quarantine card publication deferred", { key }); }
       }
@@ -3437,12 +3506,29 @@ async function adoptStructuredHostsPass(
         { signal: dependencies.signal, assertActive: dependencies.assertActive }, retryDependencies, schedule);
       rowRetries.schedule(key, schedule, retry.run);
     }
+    /* An orphan this pass neither adopted nor quarantined would otherwise sit
+       unreachable with no card at all: the eligibility filter passes over an
+       idle one, and the Claude adopter leaves lost stdio alone. */
+    const adoptedKeys = new Set(nextAdoptedHosts.map(item => sessionKeyId(item.key)));
+    try {
+      const incumbentOwned = await surfaceOrphanedHosts({
+        registry, rows: retryEntries,
+        adopted: new Set([...adoptedKeys, ...retryEntries.filter(entry => hasStructuredDeliveryHost(entry.key)).map(entry => sessionKeyId(entry.key))]),
+        retry: key => rowRetries.get(key), sweepAbsent: !rowRetry && resumeDeferred === null, assertActive,
+      });
+      /* A row with a startup retry is looked at again by its own scoped pass,
+         whose scan raises the alarm; only the others need a follow-up. */
+      scheduleOrphanFollowUp(dependencies, registry, incumbentOwned.filter(key => !rowRetries.get(sessionKeyId(key))), 0);
+    } catch (error) {
+      assertActive();
+      console.error("[structured hosts] orphaned host scan deferred", error);
+    }
     // Publication, health and recovery all await. Re-read designation after
     // the final await so a seat changed during those phases leaves no adapter.
     nextAdoptedHosts = await revalidateRetainedStartupHosts(
       registry, nextAdoptedHosts, undefined, retainedRecoveryHostKeys(), orchestratorSeats,
     );
-    adoptedHosts = nextAdoptedHosts;
+    adoptedHosts = unreleasedStartupHosts(nextAdoptedHosts);
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     if (rowRetry) {
       if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0 || retryHostKeys.size > 0) {
@@ -3458,7 +3544,7 @@ async function adoptStructuredHostsPass(
          completes — throwing here made the boot's retry loop rerun the whole
          adoption every second for as long as one stray process lived, kept the
          startup axis failed and never reached pending-spawn recovery. */
-      retryAdoptedHosts = nextAdoptedHosts;
+      retryAdoptedHosts = unreleasedStartupHosts(nextAdoptedHosts);
       retryOrchestratorRecoveries = [...orchestratorRecoveries];
       rememberDeferredStructuredStartup(
         dependencies, registry, [...deferredHostKeys], pipelineEvidence.deferred, fencedReceipts.length, held, admitHeldPendingWork, retryHostKeys,
@@ -3558,6 +3644,52 @@ function rememberDeferredStructuredStartup(
   if (!mergePrevious || !state.probeScheduled) scheduleDeferredStartupReprobe(dependencies, registry, state);
 }
 
+const orphanFollowUps = new WeakMap<AgentRegistry, Set<string>>();
+
+/** Looks again at rows a pass found engine-alive under another live owner.
+    During a release handover that owner is the predecessor, which can exit
+    after the successor's pass; once it has, the scan raises the alarm. Each
+    row is followed by one timer chain, bounded by the delay ladder. */
+function scheduleOrphanFollowUp(
+  dependencies: StructuredStartupDependencies,
+  registry: AgentRegistry,
+  keys: readonly SessionKey[],
+  attempt: number,
+): void {
+  const pending = orphanFollowUps.get(registry) ?? new Set<string>();
+  orphanFollowUps.set(registry, pending);
+  const fresh = keys.filter(key => attempt > 0 || !pending.has(sessionKeyId(key)));
+  if (fresh.length === 0) return;
+  if (attempt >= ORPHAN_FOLLOW_UP_DELAYS_MS.length) {
+    for (const key of fresh) pending.delete(sessionKeyId(key));
+    return;
+  }
+  for (const key of fresh) pending.add(sessionKeyId(key));
+  const assertActive = () => {
+    dependencies.signal?.throwIfAborted();
+    dependencies.assertActive?.();
+  };
+  scheduleOutsidePass(dependencies)(async () => {
+    try { assertActive(); } catch { for (const key of fresh) pending.delete(sessionKeyId(key)); return; }
+    let remaining: SessionKey[] = [];
+    try {
+      remaining = await withViewerOperation("runtime.startup-row", () => surfaceOrphanedHosts({
+        registry, rows: fresh.map(key => ({ key })),
+        adopted: new Set(fresh.filter(key => hasStructuredDeliveryHost(key)).map(sessionKeyId)),
+        retry: key => startupRowRetries(registry).get(key), sweepAbsent: false, assertActive,
+      }));
+    } catch (error) {
+      console.error("[structured hosts] orphaned host follow-up scan failed", error);
+      remaining = [...fresh];
+    }
+    remaining = remaining.filter(key => !startupRowRetries(registry).get(sessionKeyId(key)));
+    const still = new Set(remaining.map(sessionKeyId));
+    for (const key of fresh) if (!still.has(sessionKeyId(key))) pending.delete(sessionKeyId(key));
+    try { assertActive(); } catch { for (const key of remaining) pending.delete(sessionKeyId(key)); return; }
+    scheduleOrphanFollowUp(dependencies, registry, remaining, attempt + 1);
+  }, ORPHAN_FOLLOW_UP_DELAYS_MS[attempt]!).unref?.();
+}
+
 /** Timers armed inside a pass outlive it. A real timer inherits the pass's
     read budget through async context, so each callback starts outside it and
     the work it starts carries its own deadline. */
@@ -3579,7 +3711,7 @@ function scheduleDeferredStartupReprobe(
     if (deferredStartup !== state) return;
     state.probeScheduled = false;
     try { dependencies.assertActive?.(); } catch { return; }
-    void reprobeDeferredStructuredStartup(dependencies, registry, state);
+    return reprobeDeferredStructuredStartup(dependencies, registry, state);
   }, state.delayMs).unref?.();
 }
 
@@ -3725,6 +3857,15 @@ export async function releaseUnpublishedStartupHostsForDemotion(
     .filter((item) => !hasStructuredDeliveryHost(item.key));
   const released = new Set<string>();
   const outcomes = await Promise.allSettled(unpublished.map(async ({ key, host }) => {
+    if (key.engine === "claude") {
+      await releaseClaudeHostForDemotion(registry, key, host, options, async () => {
+        await withHostStopOrigin({ path: "deploy-cut", operationId: options.boundary ?? sessionKeyId(key) }, () => host.release());
+        await flushStructuredHostPersistence(host);
+        forgetReleasedStartupHost(host);
+      });
+      released.add(sessionKeyId(key));
+      return;
+    }
     if (await detachCodexHostForViewerRestart(registry, key, host)) { released.add(sessionKeyId(key)); return; }
     const state = await host.health();
     try {

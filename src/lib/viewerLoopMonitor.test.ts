@@ -4,6 +4,25 @@ import { performanceProcess, createPerformanceSpans } from "./performanceSpans";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 import { MeasuredCache } from "./cacheTelemetry";
 
+test("pending operations expose oldest ages and counts, settlement removes them", async () => {
+  let at = 10;
+  const monitor = createViewerLoopMonitor(() => {}, () => at);
+  const pending = Promise.withResolvers<void>();
+  const a = monitor.run("history.read", () => pending.promise);
+  at = 30;
+  const b = monitor.run("history.read", () => pending.promise);
+  at = 50;
+  const c = monitor.run("files.get", () => pending.promise);
+  at = 100;
+  const snapshot = monitor.pendingOperations();
+  expect(snapshot.count).toBe(3);
+  expect(snapshot.byName).toEqual([{ name: "history.read", count: 2, oldestAgeMs: 90 }, { name: "files.get", count: 1, oldestAgeMs: 50 }]);
+  expect(snapshot.oldest[0]).toEqual({ name: "history.read", ageMs: 90 });
+  pending.resolve(); await Promise.all([a, b, c]);
+  expect(monitor.pendingOperations().count).toBe(0);
+  monitor.stop();
+});
+
 test("one injected memory read feeds gap and retained samples with detached cache and Bun counters", () => {
   let at = 0, reads = 0;
   const usage = { rss: 9000, heapUsed: 2000, heapTotal: 4000, external: 500, arrayBuffers: 100,

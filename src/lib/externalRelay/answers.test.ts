@@ -41,12 +41,13 @@ test("the first diagnostic survives a fresh-process interrupted-answer settlemen
   recorder.begin("claude", "opus", { webSearch: true, owner: true });
   recorder.diagnose({ source: "exception", message: "Error: fixture launch response lost" });
   recorder.diagnose({ source: "observation", message: "secondary cleanup error" });
+  recorder.recordCompletionRefusal({ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" });
   expect(readAnswerRecord("relay", "diagnostic", "reason-restart")).toMatchObject({ state: "running", diagnostic: { message: "Error: fixture launch response lost" } });
   const child = Bun.spawnSync([process.execPath, "-e", `import { settleInterruptedAnswer, readAnswerRecord } from './src/lib/externalRelay/answers.ts';
     settleInterruptedAnswer('relay', 'diagnostic', 'reason-restart', 'accepted');
     console.log(JSON.stringify(readAnswerRecord('relay', 'diagnostic', 'reason-restart')));`], { env: { ...process.env } });
   expect(child.exitCode).toBe(0);
-  expect(JSON.parse(child.stdout.toString())).toMatchObject({ state: "finished", diagnostic: { source: "exception", message: "Error: fixture launch response lost" } });
+  expect(JSON.parse(child.stdout.toString())).toMatchObject({ state: "finished", diagnostic: { source: "exception", message: "Error: fixture launch response lost" }, completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
 });
 
 test("the retention is one 30-day constant for readers and pruning", () => {
@@ -171,4 +172,29 @@ test("an interrupted owner run settled with a failure notice is recorded apart f
   expect(readAnswerRecord("relay", "notice", "notice-settled")).toMatchObject({ state: "finished", outcome: "failure_notice", delivery: "accepted" });
   expect(readAnswerRecord("relay", "notice", "answer-settled")).toMatchObject({ state: "finished", outcome: "answered", delivery: "accepted" });
   expect(listAnswerRecords("relay", "notice").map(row => row.outcome).sort()).toEqual(["answered", "failure_notice"]);
+});
+
+
+test("answer history removes media refs from input and final text", () => {
+  const ref = `media_${"a".repeat(32)}`;
+  const recorder = answerRecorder({ requestId: "private-media", relayId: "relay", targetId: "media", targetName: null, claimedAt: null,
+    input: { ...input(`Inspect ${ref}`), media: [{ ref }] } })!;
+  recorder.begin("codex", "model", { webSearch: false });
+  recorder.finish({ outcome: "answered", answer: { action: "reply", text: `Look ${ref}`, reply_to: null }, delivery: "accepted" });
+  const record = readAnswerRecord("relay", "media", "private-media")!;
+  expect(record).not.toBeNull(); expect(JSON.stringify(record)).not.toContain(ref);
+});
+
+
+test("answer history preserves ordinary image data and metadata phrases on disk", () => {
+  for (const [index, text] of ["Add image metadata to the card.", "Explain image data flow.", "Image data and metadata remain ordinary text."].entries()) {
+    const requestId = `ordinary-image-${index}`;
+    const recorder = answerRecorder({ requestId, relayId: "relay", targetId: "ordinary", targetName: null, claimedAt: null, input: input(text) })!;
+    recorder.begin("claude", "model", { webSearch: false });
+    recorder.finish({ outcome: "answered", answer: { action: "reply", text, reply_to: null }, delivery: "accepted" });
+    const disk = JSON.parse(fs.readFileSync(recordFile("relay", "ordinary", requestId), "utf8"));
+    expect(disk.input.conversation[0].text).toBe(text);
+    expect(disk.answer.text).toBe(text);
+    expect(readAnswerRecord("relay", "ordinary", requestId)).toEqual(disk);
+  }
 });

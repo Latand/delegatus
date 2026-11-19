@@ -1,6 +1,7 @@
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import type { AgentEngine } from "@/lib/agent/cli";
+import type { RuntimeDeliveryFailure } from "@/lib/runtime/contracts";
 import type { QuotaEngine } from "./quotaPolicy";
 import { grantedMcpServers, type McpGrantPolicy } from "@/lib/agent/mcpAllowlist";
 import { grantedPlugins } from "@/lib/agent/pluginAllowlist";
@@ -56,6 +57,8 @@ export function normalizeProjectOwnership(value: unknown): ConversationProjectOw
 }
 
 export interface LaunchProfile {
+  /** Bounded proof of the Claude account selector's inputs at a pipeline launch. */
+  accountSelection?: AccountSelectionSnapshot;
   /** Server-attributed team launch; copied on resume, migration and delegation. */
   /** `fromMessage` marks a seat launch whose fence came from a member's message
       and no designation: the next person who writes to the conversation decides
@@ -145,6 +148,7 @@ export function emptyLaunchProfile(
     goal: null,
     plan: null,
     ...overrides,
+    accountSelection: normalizedAccountSelection(overrides.accountSelection),
     /* Same bound, enforced again on the durable profile: an allowlist can only
        ever carry servers the Viewer is allowed to grant, and always carries
        `viewer` (issue #739). */
@@ -366,6 +370,43 @@ export interface DurableQuotaObservation {
   limitReached?: boolean;
 }
 
+export interface AccountSelectionSnapshot {
+  model: string | null;
+  selectedAccountId: string;
+  selectedAt: string;
+  reason: "headroom" | "unknown-capacity";
+  thresholdPercent: 100;
+  observationAt: string | null;
+  authCheckedAt: string | null;
+  observationFresh: boolean;
+  authFresh: boolean;
+  windows: Array<{ name: "session" | "weekly" | "tier"; usedPercent: number | null; resetsAt: number | null }>;
+}
+
+function normalizedAccountSelection(value: unknown): AccountSelectionSnapshot | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.selectedAccountId !== "string" || !row.selectedAccountId.trim() || row.selectedAccountId.length > 128
+    || !(row.model === null || typeof row.model === "string" && row.model.length <= 120)
+    || typeof row.selectedAt !== "string" || !Number.isFinite(Date.parse(row.selectedAt))
+    || (row.reason !== "headroom" && row.reason !== "unknown-capacity") || row.thresholdPercent !== 100
+    || !(row.observationAt === null || typeof row.observationAt === "string" && Number.isFinite(Date.parse(row.observationAt)))
+    || !(row.authCheckedAt === null || typeof row.authCheckedAt === "string" && Number.isFinite(Date.parse(row.authCheckedAt)))
+    || typeof row.observationFresh !== "boolean" || typeof row.authFresh !== "boolean" || !Array.isArray(row.windows)) return undefined;
+  const windows = row.windows.slice(0, 3).flatMap((item): AccountSelectionSnapshot["windows"] => {
+    if (!item || typeof item !== "object") return [];
+    const window = item as Record<string, unknown>;
+    if (window.name !== "session" && window.name !== "weekly" && window.name !== "tier") return [];
+    if (!(window.usedPercent === null || typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && window.usedPercent <= 100)) return [];
+    if (!(window.resetsAt === null || typeof window.resetsAt === "number" && Number.isSafeInteger(window.resetsAt) && window.resetsAt >= 0)) return [];
+    return [{ name: window.name, usedPercent: window.usedPercent, resetsAt: window.resetsAt }];
+  });
+  return { model: row.model as string | null, selectedAccountId: row.selectedAccountId, selectedAt: row.selectedAt,
+    reason: row.reason, thresholdPercent: 100, observationAt: row.observationAt as string | null,
+    authCheckedAt: row.authCheckedAt as string | null, observationFresh: row.observationFresh,
+    authFresh: row.authFresh, windows };
+}
+
 export interface HeldDeliveryCommand {
   operationId: string;
   /** #1560: an injection's reservation records that it IS an injection. The
@@ -440,6 +481,7 @@ export interface HeldDelivery {
   assignedAt: string | null;
   deliveredAt: string | null;
   error: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
 }
 
 export interface SuccessorProviderPort {

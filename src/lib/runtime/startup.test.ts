@@ -44,6 +44,7 @@ import {
   releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
+import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { createFakeDeliveryLedger, FakeEngineHost } from "./fixtures/fakeEngineHost";
 import {
   adoptClaudeRegistryHosts,
@@ -61,6 +62,7 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost } from "./codexAppServerHost";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { orphanWriterTree } from "./fixtures/orphanWriterTree";
 import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
 import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
@@ -796,7 +798,12 @@ test("startup socket recovery retains a partially adopted host and drains its he
   );
   const ledger = createFakeDeliveryLedger();
   const listeners = new Set<() => void>();
-  const host = Object.assign(new FakeEngineHost(ledger), {
+  const processIdentity = captureProcessIdentity(process.pid);
+  const host = Object.assign(new FakeEngineHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: "fake:partial-adoption", pid: processIdentity.pid,
+    processStartIdentity: processIdentity.startIdentity, eventCursor: 0, protocolVersion: "fixture",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  }), {
     onStateChange: () => {
       const listener = () => {};
       listeners.add(listener);
@@ -806,6 +813,7 @@ test("startup socket recovery retains a partially adopted host and drains its he
   const scheduled: Array<() => void> = [];
   let adoptedProcesses = 0;
   let effectCalls = 0;
+  let socketFailures = 0;
   const startupClient = {
     ...client,
     producerCursor: async (producerKind: string, eventKeyPrefix: string) =>
@@ -813,6 +821,7 @@ test("startup socket recovery retains a partially adopted host and drains its he
     effectBatch: async (kinds?: readonly string[], afterEventSeq?: number) => {
       effectCalls += 1;
       if (effectCalls === 2) {
+        socketFailures += 1;
         throw new RuntimeHostUnavailableError("runtime socket failed after host adoption");
       }
       return journal.effectBatch(100, kinds, afterEventSeq);
@@ -824,7 +833,6 @@ test("startup socket recovery retains a partially adopted host and drains its he
     adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => {
       const entry = received.snapshot().entries[`codex:${sessionId}`];
       if (!entry || !shouldAdopt(entry) || adoptedProcesses > 0) return [];
-      const processIdentity = { pid: process.pid, startIdentity: "partial-adoption-process" };
       const claimed = received.claimStructuredHost(key, processIdentity, { allowUnhosted: true });
       if (!claimed?.structuredHost || !claimed.claimOwner) throw new Error("partial adoption claim was unavailable");
       const persisted = received.setStructuredHostClaimed(key, {
@@ -840,6 +848,8 @@ test("startup socket recovery retains a partially adopted host and drains its he
   };
 
   let now = Date.now();
+  const previousQueueNow = STRUCTURED_DELIVERY_TIMING.now;
+  STRUCTURED_DELIVERY_TIMING.now = () => now;
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   try {
     await runStructuredHostStartup(
@@ -855,8 +865,14 @@ test("startup socket recovery retains a partially adopted host and drains its he
     );
 
     expect(adoptedProcesses).toBe(1);
-    expect(scheduled).toHaveLength(1);
-    scheduled.shift()!();
+    expect(socketFailures).toBe(1);
+    expect(scheduled).toEqual([]);
+    expect(didStructuredHostStartupFail()).toBe(false);
+    expect(ledger.writes).toEqual([]);
+    // The queue owns the socket retry; elapse its one-second listing backoff.
+    now += 1000;
+    await kickStructuredDeliveryQueue();
+    expect(effectCalls).toBeGreaterThan(2);
     await waitFor(() => !didStructuredHostStartupFail());
     expect(hasStructuredDeliveryHost(key)).toBe(true);
 
@@ -879,6 +895,7 @@ test("startup socket recovery retains a partially adopted host and drains its he
       deliver: async () => { throw new Error("delivered hold must not drain twice"); },
     }, registry);
 
+    await waitFor(() => ledger.writes.length === 1);
     expect(structuredStartupHosts()).toMatchObject([{ key, host }]);
     expect(ledger.writes).toEqual([expect.objectContaining({
       id: operationId,
@@ -891,13 +908,14 @@ test("startup socket recovery retains a partially adopted host and drains its he
     expect(registry.snapshot().entries[`codex:${sessionId}`]).toMatchObject({
       claimOwner: expect.any(String),
       structuredHost: {
-        process: { pid: process.pid, startIdentity: "partial-adoption-process" },
+        process: processIdentity,
         writerClaimEpoch: expect.any(Number),
       },
     });
   } finally {
-    clock.mockRestore();
     await bindStructuredDeliveryQueue([], { registry, client: null });
+    clock.mockRestore();
+    STRUCTURED_DELIVERY_TIMING.now = previousQueueNow;
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -2310,7 +2328,7 @@ test("startup defers hosts belonging to a preserved future pipeline and still ad
   }
 });
 
-test("SQLite startup releases a completed stage host claim with pending delivery after its recorded process dies", async () => {
+test("SQLite startup releases a dead completed-stage claim and drains pending work through one replacement", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-dead-stage-owner-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
     sqliteMode: "sqlite",
@@ -2336,21 +2354,84 @@ test("SQLite startup releases a completed stage host claim with pending delivery
       process: { pid: 2_000_000_000, startIdentity: "dead-stage-host" },
     },
     claimEpoch: stored.claimEpoch,
-    claimOwner: `structured-host:${JSON.stringify({ pid: process.pid, startIdentity: null })}`,
+    claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_001, startIdentity: "dead-stage-viewer" })}`,
     pendingAction: stored.pendingAction,
   });
   const delivery = registry.holdDelivery(conversation.id, "deliver after dead stage recovery", "dead-stage-pending");
 
-  expect(await startupAdoptionAttempts(registry)).toEqual([]);
-  expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({
-    status: "dead",
-    structuredHost: null,
-    claimOwner: null,
-  });
-  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ id: delivery.id, state: "assigned" }]);
-
-  await bindStructuredDeliveryQueue([], { registry, client: null });
-  fs.rmSync(directory, { recursive: true, force: true });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  const identity = captureProcessIdentity(process.pid);
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: "fake:replacement-stage-host", pid: identity.pid,
+    processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fixture",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  }), { onStateChange: () => () => {} });
+  let replacements = 0;
+  const selected: string[] = [];
+  const dependencies: StructuredStartupDependencies = {
+    registry, client, schedule: () => ({ unref() {} }),
+    adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => {
+      const entry = received.readOnlySnapshot().entries[`codex:${sessionId}`];
+      if (entry?.structuredHost && shouldAdopt(entry)) selected.push(sessionId);
+      return [];
+    },
+    adoptClaude: async () => [],
+  };
+  const deliveryPorts: NonNullable<Parameters<typeof deliverHeldStructuredMessage>[1]> = {
+    enabled: () => true, client: () => client, registry: () => registry,
+    recover: async request => {
+      expect(request.conversationId).toBe(conversation.id);
+      expect(request.path).toBe(stored.artifactPath);
+      const claimed = registry.claimStructuredHost(stored.key, identity, {
+        allowUnhosted: true, setupHost: { ...stored.structuredHost!, process: null },
+      });
+      if (!claimed?.structuredHost || !claimed.claimOwner) throw new Error("replacement host claim unavailable");
+      expect(registry.setStructuredHostClaimed(stored.key, { ...claimed.structuredHost,
+        endpoint: "fake:replacement-stage-host", process: identity,
+      }, "idle", claimed.claimOwner, claimed.claimEpoch)).toBeTruthy();
+      await publishStructuredDeliveryHost({ key: stored.key, host: host as never });
+      replacements += 1;
+      return { target: null, path: stored.artifactPath, conversationId: conversation.id, spawned: true };
+    },
+  };
+  const drain = () => drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery: held, path: deliveryPath, clientMessageId }) =>
+      await deliverHeldStructuredMessage({ conversationId: conversation.id, path: deliveryPath,
+        deliveryId: held.id, clientMessageId, text: held.text, command: held.command,
+      }, deliveryPorts) ?? "delivery-uncertain",
+  }, registry);
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(selected).toEqual([]);
+    expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({
+      status: "dead", structuredHost: null, claimOwner: null,
+    });
+    expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ id: delivery.id, state: "assigned" }]);
+    // Reclaiming the dead row publishes the replacement; the next drain admits its held message.
+    await drain();
+    expect(replacements).toBe(1);
+    await drain();
+    await kickStructuredDeliveryQueue();
+    await waitFor(() => ledger.writes.length === 1);
+    expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({
+      status: "idle", structuredHost: { process: identity, endpoint: "fake:replacement-stage-host" },
+      claimOwner: expect.any(String),
+    });
+    expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "delivered", text: "" });
+    expect(ledger.writes).toEqual([expect.objectContaining({ text: "deliver after dead stage recovery" })]);
+    await adoptStructuredHostsAtStartup(dependencies);
+    await kickStructuredDeliveryQueue();
+    await drainHeldDeliveries(conversation.id, { deliver: async () => { throw new Error("delivered hold must not drain twice"); } }, registry);
+    expect(replacements).toBe(1);
+    expect(ledger.writes).toHaveLength(1);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("startup adoption replaces an incumbent owner whose boot epoch is dead", async () => {
@@ -3439,6 +3520,7 @@ test.each(["codex", "claude"] as const)(
       stderr: "pipe",
     });
     const replacements: Array<ReturnType<typeof Bun.spawn>> = [];
+    const replacementLedger = createFakeDeliveryLedger();
     let replacementAttempts = 0;
     const adoptReplacement = async () => {
       replacementAttempts += 1;
@@ -3458,7 +3540,7 @@ test.each(["codex", "claude"] as const)(
         account: null,
       };
       let released = false;
-      return Object.assign(new FakeEngineHost(createFakeDeliveryLedger(), state), {
+      return Object.assign(new FakeEngineHost(replacementLedger, state), {
         setWriterFence: () => {},
         onStateChange: (listener: (value: typeof state) => void) => {
           listener(state);
@@ -3579,6 +3661,14 @@ test.each(["codex", "claude"] as const)(
       expect(refused.claimOwner).toBe(`structured-host:${JSON.stringify(identities.viewer)}`);
       expect(procBackend.pidAlive(identities.engine.pid)).toBe(true);
 
+      if (engine === "claude") {
+        projectHostedRestart(journal, engine, conversation.id, sessionId, directory,
+          registry.hostEntry({ engine, sessionId })!.artifactPath, "running");
+        registry.holdDelivery(conversation.id, "continue after handover", "handover-pending", "text", [], null,
+          { operationId: "handover-pending", kind: "send", policy: "queue" });
+        expect(journal.executeOperation({ kind: "send", operationId: "handover-pending", idempotencyKey: "handover-pending",
+          conversationId: conversation.id, text: "continue after handover", policy: "queue" }).receipt.status).toBe("queued");
+      }
       fs.writeFileSync(demotionGate, "1");
       expect(await incumbent.exited).toBe(0);
       expect(fs.existsSync(path.join(directory, "incumbent-checkpointed"))).toBe(true);
@@ -3607,6 +3697,10 @@ test.each(["codex", "claude"] as const)(
       expect(replacementAttempts).toBe(1);
       expect(replacements).toHaveLength(1);
       expect(hasStructuredDeliveryHost({ engine, sessionId })).toBe(true);
+      if (engine === "claude") {
+        await waitFor(() => replacementLedger.writes.length > 0, 1000);
+        expect(replacementLedger.writes.map(write => write.text)).toEqual(["continue after handover"]);
+      }
       expect(structuredStartupHosts().filter(
         ({ key }) => key.engine === engine && key.sessionId === sessionId,
       )).toHaveLength(1);
@@ -4719,7 +4813,7 @@ test.each([
   },
 );
 
-test("startup keeps a Codex host eligible when the bounded tail cuts off an unmatched tool call", async () => {
+test("startup accepts the next Codex request after a completion beyond an unmatched tool call", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-cutoff-tool-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
   const sessionId = "41000000-0000-0000-0000-000000000001";
@@ -4731,14 +4825,15 @@ test("startup keeps a Codex host eligible when the bounded tail cuts off an unma
     },
     { timestamp: new Date(Date.now() - 60_000).toISOString(), payload: { type: "task_complete", turn_id: "turn-1" } },
   ];
-  expect(turnStateFromRecords(transcriptRecords, "codex")).toBe("busy");
-  addStructuredRestartConversation(registry, directory, {
+  expect(turnStateFromRecords(transcriptRecords, "codex")).toBe("done");
+  const { conversation } = addStructuredRestartConversation(registry, directory, {
     sessionId,
     status: "live",
     turn: "busy",
     activeTurnRef: "turn-1",
     transcriptRecords,
   });
+  registry.holdDelivery(conversation.id, "next request after completion", "after-codex-completion");
 
   expect(await startupAdoptionAttempts(registry)).toEqual([`codex:${sessionId}`]);
 
@@ -5550,6 +5645,10 @@ test("startup terminalizes a delivered Claude spawn whose unverifiable host clai
   await client.transitionOperation(begun.receipt.launchId, "delivered");
   const receiptIds = Object.keys(registry.snapshot().receipts);
 
+  // The old producer has exited; no admission custody survives the simulated reboot.
+  for (const receipt of Object.values(registry.snapshot().receipts)) {
+    if (receipt.admissionOwner) expect(registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, receipt.admissionOwner).released).toBe(true);
+  }
   const dependencies: StructuredStartupDependencies = {
     registry,
     client,
@@ -5719,6 +5818,10 @@ test("startup settles a delivered pipeline retry and collapses its rebooted pred
   const conversationIds = Object.keys(before.conversations).sort();
   expect(before.conversations[predecessor.receipt.conversationId]?.supersededBy).toBeNull();
 
+  // The old producer has exited; no admission custody survives the simulated reboot.
+  for (const receipt of Object.values(registry.snapshot().receipts)) {
+    if (receipt.admissionOwner) expect(registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, receipt.admissionOwner).released).toBe(true);
+  }
   const dependencies: StructuredStartupDependencies = {
     registry,
     client,
@@ -5795,6 +5898,7 @@ test("deferred pipeline evidence completes the pass with both engines retained, 
   const receiptFor = (title: string) => {
     const begun = registry.beginSpawnRequest({ engine: "claude", cwd: directory, transport: "structured", accountId: null, launchProfile: { title } });
     if (begun.kind !== "created") throw new Error(`${title} receipt was unavailable`);
+    expect(registry.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner!).released).toBe(true);
     return begun.receipt.launchId;
   };
   const fencedLaunch = receiptFor("fenced pending launch");
@@ -6543,7 +6647,7 @@ test("a repeated startup retry leaves the record the queue leads as it stands be
 });
 
 
-test("D1 records the seat cut before reaping a surviving Claude tool process", async () => {
+test("D1 records the seat cut before reaping a proven-dead Claude host's surviving tool", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-before-reap-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
@@ -6559,11 +6663,15 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
     { operationId: operatorOperationId, kind: "send", policy: "queue" });
   expect(journal.executeOperation({ kind: "send", operationId: operatorOperationId, idempotencyKey: operatorOperationId,
     conversationId: conversation.id, text: operatorDelivery.text, policy: "queue" }).receipt.status).toBe("queued");
-  const native = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "pipe" });
-  const nativeIdentity = captureProcessIdentity(native.pid);
+  const native = await orphanWriterTree();
+  const nativeIdentity = native.engine;
   const entry = registry.readOnlySnapshot().entries[`claude:${sessionId}`]!;
   registry.upsert({ ...entry, claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_001, startIdentity: "dead-viewer" })}`,
     structuredHost: { ...entry.structuredHost!, process: nativeIdentity } });
+  expect(registry.recordStructuredTerminationSurvivors(key, nativeIdentity, [native.tool])).toBeTrue();
+  native.child.kill("SIGTERM");
+  await waitFor(() => !native.engineAlive(), 5_000);
+  expect(native.toolAlive()).toBeTrue();
   const seat = { project: "pre-reap-seat", state: "active", conversationId: conversation.id, path: artifactPath, seatEpoch: 7 } as OrchestratorSeat;
   const cuts = () => interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list();
   const ledger = createFakeDeliveryLedger();
@@ -6584,7 +6692,10 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
   };
   try {
     await adoptStructuredHostsAtStartup(deps);
-    expect(reaping.cuts).toEqual([expect.objectContaining({ state: "owed", owner: expect.objectContaining({ pid: native.pid }),
+    expect(native.toolAlive()).toBeFalse();
+    expect(await native.stillWriting()).toBeFalse();
+    expect(registry.hostEntry(key)?.structuredTerminationSurvivors).toBeUndefined();
+    expect(reaping.cuts).toEqual([expect.objectContaining({ state: "owed", owner: expect.objectContaining({ pid: nativeIdentity.pid }),
       claimEpoch: 3, seat: { project: seat.project, seatEpoch: 7 }, turnRef: "tool-turn" })]);
     await waitFor(() => ledger.writes.some(write => write.id === operatorOperationId));
     expect(ledger.writes.filter(write => write.id === operatorOperationId)).toHaveLength(1);
@@ -6597,8 +6708,7 @@ test("D1 records the seat cut before reaping a surviving Claude tool process", a
       resolution: "a newer message already resumed the conversation" })]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
-    if (procBackend.pidAlive(native.pid)) native.kill("SIGKILL");
-    await native.exited;
+    await native.stop();
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }

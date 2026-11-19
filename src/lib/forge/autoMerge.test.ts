@@ -17,7 +17,7 @@ const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
 const {
-  MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, lanePullRequest, mergeEligible, productionAutoMergePorts, resetAutoMergeForTests, rollupChecks, scheduleAutoMerge, sweepAutoMerge, sweepTaskFinishes,
+  MERGE_POLL_MS, MERGE_REASONS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, decideMerge, parsePullRequestView, lanePullRequest, mergeEligible, productionAutoMergePorts, resetAutoMergeForTests, rollupChecks, scheduleAutoMerge, sweepAutoMerge, sweepTaskFinishes,
 } = await import("./autoMerge");
 const { ForgeAppTokenSource, ForgeAppWriteRefused, forgeAppWriter, forgeWriter } = await import("./appWrite");
 const { pipelineGraphError } = await import("../pipelines/store");
@@ -322,7 +322,7 @@ describe("GitHub read failure recovery through production ports", () => {
     if (state === "changed head") pr.head = HEAD_X;
     if (state === "red check") pr.checks = [{ name: "ci", conclusion: "FAILURE" }];
     if (state === "conflict") pr.mergeable = "CONFLICTING";
-    const h = harness({ lanes: [lane("L1"), follower], prs: [openPr(11), pr] });
+    const h = harness({ required: ["ci"], lanes: [lane("L1"), follower], prs: [openPr(11), pr] });
     const run = h.ports.run;
     const failureTimes: number[] = [];
     const ports = productionAutoMergePorts({ ...h.ports, run: async args => {
@@ -679,7 +679,7 @@ test("regression: task finishes continue while the optional post-merge forge rea
     }
     return run(args);
   } };
-  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
+  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvIssueDeliveryRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
   let recovery: Promise<unknown> | null | undefined;
   try {
     scheduleAutoMerge(ports);
@@ -697,7 +697,7 @@ test("regression: task finishes continue while the optional post-merge forge rea
     release();
     await host.__llvAutoMergeRunning;
     await recovery;
-    await host.__llvPostMergeRunning;
+    await host.__llvPostMergeRunning; await host.__llvIssueDeliveryRunning;
   }
   expect(h.pipeline("L1").taskFinishes?.map(finish => finish.taskId)).toEqual(["task-1", "task-2"]);
 });
@@ -736,7 +736,7 @@ test.each(["ordinary", "watched"] as const)("regression: a held %s read cannot d
       return changed;
     },
   };
-  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
+  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvIssueDeliveryRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null };
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let firstRecovery: Promise<unknown> | null | undefined;
   try {
@@ -757,7 +757,7 @@ test.each(["ordinary", "watched"] as const)("regression: a held %s read cannot d
     clearTimeout(deadline); release();
     await firstRecovery;
     await host.__llvAutoMergeRunning;
-    await host.__llvPostMergeRunning;
+    await host.__llvPostMergeRunning; await host.__llvIssueDeliveryRunning;
   }
 });
 
@@ -1064,6 +1064,45 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
       fs.rmSync(repo, { recursive: true, force: true });
     }
   });
+
+  test.each(["queued", "PR read", "reviews read", "protection read", "method read", "credentials", "exact"] as const)(
+    "F2: queued review proof is revalidated after %s", async boundary => {
+      const completed = lane("queued-proof", { head: HEAD_B });
+      completed.taskIds = ["queued-task"];
+      completed.finishesTaskIds = ["queued-task"];
+      completed.runs[1]!.attempts[0]!.reviewHeadSha = HEAD_B;
+      const h = harness({ lanes: [completed], prs: [openPr(11, { head: HEAD_B })], tasks: ["queued-task"] });
+      await h.sweep();
+      // Replay the queued record as an older process would have persisted it.
+      Object.assign(h.pipeline(completed.id), JSON.parse(JSON.stringify(h.pipeline(completed.id))));
+      const mismatch = () => { h.pipeline(completed.id).runs[1]!.attempts[0]!.reviewHeadSha = HEAD_A; };
+      if (boundary === "queued") mismatch();
+      const run = h.ports.run;
+      let injected = boundary === "queued";
+      h.ports.run = async args => {
+        const result = await run(args);
+        const match = boundary === "PR read" && args[0] === "pr" && args[1] === "view"
+          || boundary === "reviews read" && args[1]?.includes("/reviews")
+          || boundary === "protection read" && args[1]?.includes("/branches/")
+          || boundary === "method read" && args[0] === "repo";
+        if (match && !injected) { mismatch(); injected = true; }
+        return result;
+      };
+      const write = h.ports.write;
+      h.ports.write = async (args, repository, beforeDispatch) => {
+        await Promise.resolve();
+        if (boundary === "credentials") { mismatch(); injected = true; }
+        return write(args, repository, beforeDispatch);
+      };
+      resetAutoMergeForTests();
+      await h.run(3 * MERGE_SETTLE_MS);
+      await h.sweepFinishes();
+      expect(injected, JSON.stringify(h.calls)).toBe(boundary !== "exact");
+      expect(h.writes).toHaveLength(boundary === "exact" ? 1 : 0);
+      expect(h.merges()).toHaveLength(boundary === "exact" ? 1 : 0);
+      expect(h.taskStatus("queued-task")).toBe(boundary === "exact" ? "done" : "assigned");
+      if (boundary !== "exact") expect(h.merge(completed.id)?.reason).toContain("review evidence does not bind the published commit");
+    });
 
   test("behind-head reason uses the latest executed review when declaration order differs", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "llv-merge-review-order-"));
@@ -1474,7 +1513,7 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
   });
 
   test("a set that grows between two reads restarts the wait", async () => {
-    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    const h = harness({ required: ["ci", "late"], lanes: [lane("L1")], prs: [openPr(11)] });
     await h.run(MERGE_SETTLE_MS - MERGE_POLL_MS);
     /* A workflow that registers late shows up, already green, on the read the
        merge would otherwise have happened on. */
@@ -1541,12 +1580,57 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.checksTimeout });
   });
 
-  test("a red check that branch protection does not require still blocks, with its name", async () => {
-    const h = harness({ required: ["ci"], lanes: [lane("L1")], prs: [openPr(11, { checks: [green("ci"), red("slow")], mergeStateStatus: "UNSTABLE" })] });
+  test("late optional failures do not delay a settled required set", async () => {
+    const h = harness({ required: ["ci"], lanes: [lane("L1")], prs: [openPr(11)] });
+    await h.run(MERGE_SETTLE_MS - MERGE_POLL_MS);
+    h.prs.get(11)!.checks = [green("ci"), red("late-optional")];
     await h.sweep();
-    expect(h.merges()).toEqual([]);
-    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: 'check "slow" failed' });
+    expect(h.merges()).toHaveLength(1);
+    expect(h.merge("L1")?.optionalFailedChecks).toEqual(["late-optional"]);
   });
+
+  test("optional red checks merge with their names retained on the record", async () => {
+    const h = harness({ required: ["ci"], lanes: [lane("L1")], prs: [openPr(11, {
+      checks: [red("slow"), green("ci"), red("audit")], mergeStateStatus: "UNSTABLE",
+    })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2);
+    expect(h.merges()).toHaveLength(1);
+    expect(h.merge("L1")).toMatchObject({ state: "merged", reason: null, optionalFailedChecks: ["audit", "slow"] });
+  });
+
+  test.each([
+    { required: ["ci"], verdict: "green", kind: "merge", reason: undefined, optional: ["audit"] },
+    { required: [], verdict: "green", kind: "merge", reason: undefined, optional: ["audit"] },
+    { required: ["ci"], verdict: "red", kind: "block", reason: 'check "ci" failed', optional: ["audit"] },
+    { required: ["ci"], verdict: "pending", kind: "wait", reason: "waiting for ci", optional: ["audit"] },
+    { required: null, verdict: "green", kind: "block", reason: 'check "audit" failed; the required check set is unknown', optional: [] },
+  ] as const)("decideMerge required=$required verdict=$verdict", async row => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    await h.sweep();
+    const merge = structuredClone(h.merge("L1")!);
+    const view = parsePullRequestView(JSON.stringify({ state: "OPEN", headRefOid: HEAD_A,
+      mergeStateStatus: "UNSTABLE", mergeable: "MERGEABLE", statusCheckRollup: [] }))!;
+    view.checks = [{ name: "audit", verdict: "red" }, { name: "ci", verdict: row.verdict }];
+    merge.lastChecks = ["audit", "ci"];
+    const decision = decideMerge(merge, view, row.required, T0 + MERGE_SETTLE_MS);
+    expect(decision.kind).toBe(row.kind);
+    if ("reason" in decision) expect(decision.reason).toBe(row.reason ?? null);
+    if (decision.kind === "wait") expect(decision.state).toBe("waiting-checks");
+    expect(merge.optionalFailedChecks).toEqual([...row.optional]);
+    view.checks = [{ name: "ci", verdict: "green" }];
+    decideMerge(merge, view, ["ci"], T0 + MERGE_SETTLE_MS);
+    expect(merge.optionalFailedChecks).toEqual([]);
+  });
+
+  test.each([{ rulesRefusal: true }, { classicRead: "not-json" }, { rulesRead: "{}" }])(
+    "unknown requirements keep every red check blocking: %j", async refusal => {
+      const h = harness({ ...refusal, required: ["ci"], lanes: [lane("L1")],
+        prs: [openPr(11, { checks: [green("ci"), red("audit")], mergeStateStatus: "UNSTABLE" })] });
+      await h.sweep();
+      expect(h.merges()).toEqual([]);
+      expect(h.merge("L1")).toMatchObject({ state: "blocked", optionalFailedChecks: [],
+        reason: 'check "audit" failed; the required check set is unknown' });
+    });
 
   test("DIRTY blocks: a conflict is never resolved by the runner", async () => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "DIRTY", mergeable: "CONFLICTING", checks: [] })] });
@@ -2016,6 +2100,33 @@ test.each(["UNKNOWN", "", "UNRECOGNIZED"])("uncertain merge receipt retains pace
   expect(h.writes).toHaveLength(0);
 });
 
+test("held issue delivery owns one slot while later merge and task finish cycles complete", async () => {
+  const completed = lane("issue-owner"); completed.taskIds = ["task-1", "task-2"];
+  const h = harness({ lanes: [completed], prs: [openPr(11)], tasks: ["task-1", "task-2"] });
+  await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS * 2, () => h.merges().length > 0);
+  h.pipeline("issue-owner").workLinks = [{ repository: REPO, number: 7, kind: "issue", addedAt: iso(T0), addedBy: "agent" }];
+  h.pipeline("issue-owner").finishesTaskIds = ["task-1"];
+  let release!: () => void; let entered!: () => void; let issueReads = 0;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const host = globalThis as typeof globalThis & { __llvAutoMergeRunning?: Promise<unknown> | null; __llvPostMergeRunning?: Promise<unknown> | null; __llvIssueDeliveryRunning?: Promise<unknown> | null };
+  const ports = { ...h.ports, prepareRead: async () => {}, issueDelivery: {
+    repositoryOf: () => REPO, since: () => iso(T0 - 1), loadTasks: () => [],
+    cache: () => ({ data: { schemaVersion: 1 as const, repositories: {} }, view: { repository: () => null } }),
+    run: async () => { issueReads++; entered(); await held; throw new Error("issue read unavailable"); },
+  } };
+  try {
+    scheduleAutoMerge(ports); const owner = host.__llvIssueDeliveryRunning;
+    await started; await host.__llvAutoMergeRunning;
+    expect(h.taskStatus("task-1")).toBe("done");
+    h.pipeline("issue-owner").finishesTaskIds!.push("task-2"); h.advance(60_000);
+    scheduleAutoMerge(ports); await host.__llvAutoMergeRunning;
+    expect(h.taskStatus("task-2")).toBe("done");
+    expect(host.__llvIssueDeliveryRunning).toBe(owner); expect(issueReads).toBe(1);
+  } finally {
+    release(); await host.__llvIssueDeliveryRunning; await host.__llvAutoMergeRunning; await host.__llvPostMergeRunning;
+  }
+});
 
 describe("merge withdrawal", () => {
   function ownedLane() {

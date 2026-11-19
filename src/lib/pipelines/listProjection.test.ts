@@ -8,7 +8,7 @@
  * clock and RSS stay in the spike script: they are the reason this exists, but
  * they are host-speed measurements and would make this suite flaky.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 
 import { CORPUS_BODY_MARKERS, pipelineCorpus } from "./fixtures/corpus";
 import {
@@ -42,6 +42,24 @@ function naiveFilter(
 
 const listPage = (filter: Parameters<typeof projectPipelineListRows>[0]) =>
   projectPipelineListRows(filter, { source });
+
+test("local list attempts retain their fields without projecting transcript output as a Cloud conclusion", () => {
+  const pipeline = pipelineCorpus(1)[0]!;
+  const attempt = pipeline.runs[0]!.attempts.at(-1)!;
+  attempt.output = "Local transcript output";
+  const before = structuredClone(pipeline);
+  const compact = pipelineCompactRow(pipeline).stages[0]!.latestAttempt!;
+  expect(compact).toEqual({
+    execution: { requestedRuntime: "local", executionRuntime: "local", reason: null },
+    n: attempt.n, state: attempt.state, verdict: attempt.verdict?.status ?? null,
+  });
+  const listed = pipelineListRow(pipeline).stages[0]!.latestAttempt!;
+  expect(listed).not.toHaveProperty("summary");
+  expect(listed).not.toHaveProperty("result");
+  expect(listed).not.toHaveProperty("runtime");
+  expect(listed.execution).not.toHaveProperty("taskUrl");
+  expect(pipeline).toEqual(before);
+});
 
 describe("bounded list rows", () => {
   test("a 100-row page stays within the row budget", async () => {
@@ -271,4 +289,40 @@ describe("needs_review rows", () => {
     }];
     expect(pipelineListRow(record).stages[1]!.onFail?.maxRounds).toBe(5);
   });
+});
+
+for (const project of [pipelineListRow, pipelineCompactRow]) {
+  test(`${project.name} reports the board's effective dismissal`, () => {
+    const original = corpus[1]!;
+    const dismissedAt = "2026-09-24T10:00:00.000Z";
+    const parked = { ...original, state: "needs_decision", runs: [], dismissedAt } as Pipeline;
+    expect(project(parked)).toMatchObject({ dismissedAt, hiddenFromBoard: true });
+    expect(project({ ...parked, dismissedAt: null })).toMatchObject({ dismissedAt: null, hiddenFromBoard: false });
+    expect(project({ ...parked, dismissedAt: undefined })).toMatchObject({ dismissedAt: null, hiddenFromBoard: false });
+    expect(project({ ...parked, state: "running" })).toMatchObject({ dismissedAt, hiddenFromBoard: false });
+    expect(project({ ...parked, state: "needs_review" })).toMatchObject({ dismissedAt, hiddenFromBoard: true });
+    const moved = { ...parked, runs: [{ stageId: "build", attempts: [{ startedAt: "2026-09-24T10:01:00.000Z" }] }] } as Pipeline;
+    expect(project(moved)).toMatchObject({ dismissedAt, hiddenFromBoard: false });
+    expect(project({ ...parked, dismissedAt: "invalid" })).toMatchObject({ hiddenFromBoard: false });
+    expect(original.dismissedAt).toBeUndefined();
+  });
+}
+
+test.each([true, false])("list and compact reads retain a successful legacy local-after-cloud-failure result (fallback receipt: %s)", receipt => {
+  setSystemTime(new Date("2026-11-12T00:00:00Z"));
+  try {
+    const row = pipelineCorpus(1)[0]!;
+    const stage = row.stages[0]!, attempt = row.runs.find(run => run.stageId === stage.id)!.attempts.at(-1)!;
+    stage.runtime = "codex-cloud"; stage.model = stage.effectiveRole.model;
+    if (attempt.definition) attempt.definition.runtime = "codex-cloud";
+    attempt.state = "passed";
+    attempt.verdict = { status: "pass", findings: [] };
+    attempt.executionRuntime = "cloud-then-local";
+    attempt.cloud = { phase: "failed", environmentId: "asenvcfg_fixture", branch: "pipeline/fixture", headSha: "a".repeat(40),
+      deadlineAt: "2026-11-12T00:00:00Z", nextPollAt: "2026-11-12T00:00:00Z", polls: 0, taskId: null, taskUrl: null, model: null,
+      error: "registry connect failed", ...(receipt ? { fallback: { at: "2026-11-12T00:00:00Z", reason: "registry connect failed" } } : {}) };
+    const expected = { requestedRuntime: "codex-cloud", executionRuntime: "local-after-cloud-failure", reason: "registry connect failed" };
+    expect(pipelineListRow(row).stages[0]!.latestAttempt).toMatchObject({ verdict: "pass", execution: expected });
+    expect(pipelineCompactRow(row).stages[0]!.latestAttempt).toMatchObject({ verdict: "pass", execution: expected });
+  } finally { setSystemTime(); }
 });

@@ -14,9 +14,10 @@ const SNAPSHOT_HEADER = "x-delegatus-heap-snapshot";
  * What holds the serving process's memory: GET /api/operator/heap.
  *
  * `?mode=stats` (the default) answers the JavaScriptCore object census and
- * `process.memoryUsage()`. `?mode=snapshot` writes one full heap snapshot under
- * the cache directory and answers its path and size. Both block the event loop
- * while they walk the heap, and nothing calls either on its own.
+ * `process.memoryUsage()` with bounded attribution counters. `gc=full` collects
+ * before a fresh census and reports its duration. `?mode=series` reads the
+ * autonomous ten-minute samples from state.sqlite. `?mode=snapshot` writes a
+ * full heap snapshot under the cache directory. Heap walks block the loop.
  *
  * The snapshot stays a GET because an operator script authenticates with the
  * access key, and on a team install the identity gate admits a key-only caller
@@ -34,7 +35,13 @@ export async function GET(request: NextRequest) {
   const authority = directOperatorActivityAuthority(request);
   if (!authority.ok) return Response.json({ error: authority.error, code: "operator_only" }, { status: authority.status, headers });
   const mode = request.nextUrl.searchParams.get("mode") ?? "stats";
-  if (mode !== "stats" && mode !== "snapshot") return Response.json({ error: "mode must be stats or snapshot" }, { status: 400, headers });
+  if (mode !== "stats" && mode !== "snapshot" && mode !== "series") return Response.json({ error: "mode must be stats, snapshot or series" }, { status: 400, headers });
+  const gc = request.nextUrl.searchParams.get("gc");
+  if (gc !== null && (gc !== "full" || mode !== "stats")) return Response.json({ error: "gc=full requires mode=stats" }, { status: 400, headers });
+  if (mode === "series") {
+    const { readHeapSeries } = await import("@/lib/heapSeries");
+    return Response.json(readHeapSeries(), { headers });
+  }
   if (mode === "snapshot") {
     if (request.headers.get(SNAPSHOT_HEADER) !== "write") {
       return Response.json({ error: `a snapshot needs the ${SNAPSHOT_HEADER}: write header`, code: "confirmation_required" }, { status: 400, headers });
@@ -47,7 +54,7 @@ export async function GET(request: NextRequest) {
     const { servingHeapDiagnostics } = await import("@/lib/heapDiagnostics");
     const diagnostics = await servingHeapDiagnostics();
     if (!diagnostics) return Response.json({ error: "heap diagnostics need the Bun runtime", code: "unavailable" }, { status: 501, headers });
-    const answer = mode === "snapshot" ? await diagnostics.snapshot() : diagnostics.stats();
+    const answer = mode === "snapshot" ? await diagnostics.snapshot() : diagnostics.stats(gc === "full");
     return Response.json(answer.body, { status: answer.status, headers });
   });
 }

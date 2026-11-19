@@ -100,6 +100,18 @@ export function projectPipelineEvents(pipelines: Pipeline[]): LifecycleEventInpu
   const events: LifecycleEventInput[] = [];
   for (const pipeline of pipelines) {
     events.push(...pipelinePauseEvents(pipeline));
+    const remote = pipeline.remoteAction;
+    if (remote?.action === "takeover" && remote.state === "settled" && remote.error) {
+      events.push({
+        key: `pipeline:${pipeline.id}:takeover:${remote.id}:refused`,
+        type: "stage_blocked",
+        at: remote.settledAt ?? remote.at,
+        project: pipeline.project,
+        pipelineId: pipeline.id,
+        stageId: pipeline.cursor?.stageId ?? null,
+        summary: `delivery takeover failed: ${remote.error}`,
+      });
+    }
     const merge = pipeline.merge;
     if (merge?.state === "merged") {
       events.push({
@@ -166,6 +178,12 @@ export function projectPipelineEvents(pipelines: Pipeline[]): LifecycleEventInpu
             at: recovery.at, summary: recovery.summary,
           });
         }
+        const language = attempt.publicationLanguageHints;
+        if (language?.hints.length) events.push({ ...lineage,
+          key: attemptKey(pipeline, run.stageId, attempt, "publication-language-hint"),
+          type: "publication_language_hint", at: language.at,
+          summary: `Publication language hint: GitHub prose should be English; review ${language.hints.map(hint => `${hint.part} line ${hint.line}`).join(", ")}. Advisory only; publication continues.`,
+        });
         const rewrite = attempt.publicationTextRepair;
         if (rewrite) {
           // Seat wakes omit routine progress. Retain the refusal after a fast

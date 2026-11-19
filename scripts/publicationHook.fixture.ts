@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { createHookFixture } from "./local-gate.fixture";
+import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 
 /** Each owned test file gets its own fixture roots and cleanup lifecycle. */
 export function createPublicationFixtures(root: string, roots: string[]) {
@@ -51,13 +52,11 @@ function nativeFixture(coldBun = false) {
     steps:
       - run: bun test ./scripts/runtime-smoke.test.ts
   native-codex-runtime:
-    strategy:
-      matrix:
-        codex: ["0.0.1"]
+    steps: []
 `);
   f.env.XDG_CACHE_HOME = path.join(f.dir, ".git", "cold-cache");
   const target = `node_modules/@openai/codex-linux-${process.arch}/vendor/${process.arch === "x64" ? "x86_64" : "aarch64"}-unknown-linux-musl/bin/codex`;
-  const codex = path.join(f.env.XDG_CACHE_HOME, "delegatus-gate/codex-0.0.1", target);
+  const codex = path.join(f.env.XDG_CACHE_HOME, `delegatus-gate/codex-${SUPPORTED_CODEX_VERSIONS[0]}`, target);
   const installer = path.join(f.dir, ".git", "install-native.ts");
   fs.writeFileSync(installer, `import fs from "node:fs"; import path from "node:path";
     if (process.env.HOOK_FAIL === "native-install") process.exit(1);
@@ -66,7 +65,7 @@ function nativeFixture(coldBun = false) {
     const binary = path.join(prefix, bun ? "node_modules/.bin/bun" : ${JSON.stringify(target)});
     fs.mkdirSync(path.dirname(binary), { recursive: true });
     fs.writeFileSync(binary, bun ? ${JSON.stringify(`#!/bin/sh\nif [ "$1" = --version ]; then\n  "${process.execPath}" -e 'if (Object.keys(process.env).some(name => name.startsWith("LLV_GATE_PUBLICATION_"))) process.exit(23)' || exit 23\n  echo ${bun}; exit 0\nfi\nexec "${process.execPath}" "$@"\n`)} : "#!/bin/sh\\nexit 0\\n", { mode: 0o755 });
-    fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: ["native-install", bun ? "bun" : "codex"], names: [] }) + "\\n");`);
+    fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: ["native-install", bun ? "bun" : "codex", args.at(-1)], names: [] }) + "\\n");`);
   write("shims/npm", `#!/bin/sh\nexec "${process.execPath}" "${installer}" "$@"\n`);
   fs.chmodSync(path.join(f.dir, "shims/npm"), 0o755);
   f.git("-c", "core.hooksPath=/dev/null", "add", ".");

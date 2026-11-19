@@ -63,6 +63,21 @@ test("cheap mode walks the heap at most once per cache window", () => {
   expect(calls.heapStats).toBe(2);
 });
 
+test("full collection precedes a fresh census and reports its duration across cached reads", () => {
+  const order: string[] = [];
+  let at = 0;
+  const { diagnostics, calls } = fixture({ collectFull: () => { order.push("gc"); at += 7; },
+    monotonicMs: () => at, attribution: () => { order.push("attribution"); return { live: 1 }; } });
+  diagnostics.stats();
+  order.length = 0;
+  expect(diagnostics.stats(true).body).toMatchObject({ cached: false, gc: { mode: "full", durationMs: 7 }, attribution: { live: 1 } });
+  expect(order).toEqual(["gc", "attribution"]);
+  expect(calls.heapStats).toBe(2);
+  expect(diagnostics.stats().body).toMatchObject({ cached: true, gc: { mode: "full", durationMs: 7 } });
+  expect(calls.heapStats).toBe(2);
+  expect(calls.generate).toBe(0);
+});
+
 test("snapshot mode writes one owner-only file under the given directory and answers its path and size", async () => {
   const { diagnostics, directory } = fixture();
   const answer = await diagnostics.snapshot();

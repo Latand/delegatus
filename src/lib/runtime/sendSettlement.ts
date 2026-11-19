@@ -23,14 +23,16 @@ import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
-import { confirmedSend } from "./confirmedSend";
+import { readConfirmedSendEvidence, type ConfirmedSendEvidence } from "./confirmedSend";
 import { admittedMessageTextForms } from "./admittedMessageText";
 import { sameMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import { structuredContentDigest } from "./structuredContent";
 import { runtimeHostClient, readRuntimeSession, type RuntimeHostClient } from "./client";
 import {
   RUNTIME_DELIVERY_DISCARDED_REASON,
+  normalizeRuntimeDeliveryFailure,
   type RuntimeDeliveryMode,
+  type RuntimeDeliveryFailure,
   type RuntimeOperationReceipt,
   type RuntimeReceiptStatus,
 } from "./contracts";
@@ -199,6 +201,7 @@ export interface SendReceipt {
   state: SendReceiptState;
   /** Why it failed, or what it is still waiting on. */
   reason: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
   acceptedAt: string | null;
   settledAt: string | null;
   /** True when re-sending this instruction could deliver it a second time. */
@@ -366,7 +369,13 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
     };
   }
   if (terminalState === "failed") {
-    const reason = attempt ? attempt.terminalReason : delivery?.error ?? owner?.terminalReason ?? null;
+    const storedReason = attempt ? attempt.terminalReason : delivery?.error ?? owner?.terminalReason ?? null;
+    const settledOwner = attempt ?? owner;
+    // Keep the journal's original refusal on the held delivery for internal
+    // recovery predicates, while the durable caller receipt exposes the
+    // classifier's canonical loss reason beside that primary failure.
+    const reason = settledOwner?.terminalDisposition === "lost" && settledOwner.primaryFailure
+      ? SEND_LOST_REASON : storedReason;
     return {
       operationId,
       kind,
@@ -374,9 +383,10 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
       clientMessageId,
       state: "failed",
       reason,
+      ...(settledOwner?.primaryFailure ? { primaryFailure: settledOwner.primaryFailure } : {}),
       acceptedAt,
       settledAt: owner?.settledAt ?? null,
-      ...resendGuidance((attempt ?? owner)?.terminalDisposition ?? null, reason),
+      ...resendGuidance(settledOwner?.terminalDisposition ?? null, reason),
       evidence: "delivery-record",
     };
   }
@@ -433,6 +443,7 @@ export function runtimeReceiptForSend(receipt: SendReceipt): RuntimeOperationRec
     kind: receipt.kind,
     status: receipt.state === "in-flight" ? "queued" : receipt.state,
     reason: receipt.reason,
+    ...(receipt.primaryFailure ? { primaryFailure: receipt.primaryFailure } : {}),
     at: receipt.settledAt ?? receipt.acceptedAt ?? new Date(0).toISOString(),
     ...(receipt.acceptedAt ? { admittedAt: receipt.acceptedAt } : {}),
     ...(receipt.resend ? { resend: receipt.resend } : {}),
@@ -462,6 +473,7 @@ export interface JournalVerdict {
   state: "delivered" | "failed";
   disposition: DeliveryTerminalDisposition;
   reason: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
 }
 
 /**
@@ -481,6 +493,7 @@ export interface JournalVerdict {
 export function journalVerdict(
   status: RuntimeReceiptStatus | null,
   reason: string | null | undefined = null,
+  primaryFailure?: RuntimeDeliveryFailure,
 ): JournalVerdict | null {
   if (status === null) return null;
   if (DELIVERED_RECEIPT_STATUSES.has(status)) {
@@ -491,16 +504,23 @@ export function journalVerdict(
      (2026-11-09). It is the same fact: actuation began, so the send keeps its
      duplicate risk and stays open to a late canonical acknowledgement, never
      reported as fenced and safe to send again. */
-  if (status === "failed" && typeof reason === "string" && reason.startsWith(DELIVERY_UNVERIFIED_AFTER_ACTUATION)) {
-    return { state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON };
+  if ((status === "failed" || status === "rejected") && typeof reason === "string"
+    && (reason.startsWith(DELIVERY_UNVERIFIED_AFTER_ACTUATION) || reason === SEND_UNVERIFIED_REASON
+      || reason === SEND_UNRECORDED_REASON || reason === SEND_UNSETTLEABLE_REASON)) {
+    return { state: "failed", disposition: "unverified",
+      reason: reason.startsWith(DELIVERY_UNVERIFIED_AFTER_ACTUATION) ? SEND_UNVERIFIED_REASON : reason };
   }
   if (status === "failed" || status === "rejected") {
+    const primary = normalizeRuntimeDeliveryFailure(primaryFailure)
+      ?? (reason !== SEND_LOST_REASON && reason !== SEND_DISCARDED_REASON && reason !== SEND_SEAT_REVOKED_REASON
+        ? normalizeRuntimeDeliveryFailure({ status, reason: reason ?? null }) : undefined);
     return {
       state: "failed",
       // A discarded uncertain attempt may already have reached the engine.
       // Recovery must retain that duplicate risk before registry projection.
       disposition: reason === SEND_DISCARDED_REASON ? "unverified" : "lost",
       reason: reason === SEND_DISCARDED_REASON || reason === SEND_SEAT_REVOKED_REASON ? reason : SEND_LOST_REASON,
+      ...(primary ? { primaryFailure: primary } : {}),
     };
   }
   if (status === "uncertain") {
@@ -512,16 +532,16 @@ export function journalVerdict(
 /** Canonical evidence acknowledges the original operation without sending it.
     The journal's transaction decides whether acknowledgement or discard won;
     a stale status read cannot make that decision in the Viewer. */
-export async function confirmJournalDelivery(client: RuntimeHostClient, operationId: string): Promise<{
+export async function confirmJournalDelivery(client: RuntimeHostClient, operationId: string, evidence?: ConfirmedSendEvidence | null): Promise<{
   operationId: string; verdict: JournalVerdict;
 } | null> {
   let result;
   try {
-    result = await client.transitionOperation(operationId, "delivered", {}, { confirmedDelivery: true, awaitProjection: true });
+    result = await client.transitionOperation(operationId, "delivered", evidence?.turnId ? { turnId: evidence.turnId } : {}, { confirmedDelivery: true, awaitProjection: true });
   } catch {
     result = await client.operationStatus(operationId, { currentRetryLeaf: true });
   }
-  const verdict = journalVerdict(result?.receipt.status ?? null, result?.receipt.reason);
+  const verdict = journalVerdict(result?.receipt.status ?? null, result?.receipt.reason, result?.receipt.primaryFailure);
   return result && verdict && (verdict.state === "delivered" || result.receipt.reason === SEND_DISCARDED_REASON)
     ? { operationId: result.operationId, verdict } : null;
 }
@@ -562,7 +582,7 @@ async function fenceOperation(
     // Acceptance can win between the read and the fence. Its actual outcome
     // must answer the operator before a stale read can call a resend safe.
     const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-    const verdict = journalVerdict(current?.receipt.status ?? null, current?.receipt.reason);
+    const verdict = journalVerdict(current?.receipt.status ?? null, current?.receipt.reason, current?.receipt.primaryFailure);
     if (verdict) return verdict;
     if (current && !OPEN_RECEIPT_STATUSES.has(current.receipt.status)) {
       return fenceOperation(client, current.operationId, current.receipt.status);
@@ -1137,12 +1157,12 @@ async function settleSendReceipt(
   /* The host's own evidence, bounded: a thread read nobody answers confirms
      nothing, and the journal below still decides what the send may be called. */
   const confirmed = mayConfirm
-    ? await readEvidenceWithin(() => confirmedSend(snapshot, operationId, true), readMs, "host delivery evidence is unavailable")
+    ? await readEvidenceWithin(() => readConfirmedSendEvidence(snapshot, operationId, true), readMs, "host delivery evidence is unavailable")
     : null;
   ports.assertActive?.();
   if (confirmed?.readable && confirmed.value) {
     if (client) {
-      const decision = await readEvidenceWithin(() => confirmJournalDelivery(client, operationId), readMs,
+      const decision = await readEvidenceWithin(() => confirmJournalDelivery(client, operationId, confirmed.value), readMs,
         "canonical delivery acknowledgement is unavailable");
       ports.assertActive?.();
       if (!decision.readable || !decision.value) return projected;
@@ -1156,6 +1176,7 @@ async function settleSendReceipt(
       }
       return settled;
     }
+    if (confirmed.value.source !== "canonical") return projected;
     return settleProjection(registry, operationId, projected, {
       state: "delivered", disposition: "delivered", reason: null,
     }, "delivery-record", null, ports.assertActive);
@@ -1174,7 +1195,7 @@ async function settleSendReceipt(
   ports.assertActive?.();
   const receipt = journal.readable ? journal.value?.receipt ?? null : null;
   const status = receipt?.status ?? null;
-  const verdict = journalVerdict(status, receipt?.reason);
+  const verdict = journalVerdict(status, receipt?.reason, receipt?.primaryFailure);
   if (verdict) return settleProjection(registry, operationId, projected, verdict, "delivery-journal", deliveryRouteOf(receipt), ports.assertActive);
 
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
@@ -1275,7 +1296,7 @@ async function settleProjection(
      this one did. */
   if (retryAttemptOwner(file, operationId)) {
     if (!await write("delivery.settle-retry",
-      () => registry.settleDeliveryRetryAttempt(operationId, verdict.state, verdict.reason, verdict.disposition, route))) {
+      () => registry.settleDeliveryRetryAttempt(operationId, verdict.state, verdict.reason, verdict.disposition, route, verdict.primaryFailure))) {
       return projected;
     }
     const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
@@ -1292,9 +1313,9 @@ async function settleProjection(
     || (delivery.state === "failed" && verdict.state === "delivered"))) {
     const written = delivery.state === "failed"
       ? await write("delivery.outcome", () => registry.recordDeliveryOutcomeForOperation(delivery.conversationId, operationId,
-        verdict.state, verdict.reason, verdict.disposition, route))
+        verdict.state, verdict.reason, verdict.disposition, route, verdict.primaryFailure))
       : await write("delivery.settle",
-        () => registry.recordDeliveryOutcome(delivery.id, verdict.state, verdict.reason, verdict.disposition, route));
+        () => registry.recordDeliveryOutcome(delivery.id, verdict.state, verdict.reason, verdict.disposition, route, verdict.primaryFailure));
     if (!written) return projected;
     const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     if (reconciled) return { ...reconciled, evidence };
@@ -1312,6 +1333,7 @@ async function settleProjection(
     ...projected,
     state: "failed",
     reason: verdict.reason,
+    ...(verdict.primaryFailure ? { primaryFailure: verdict.primaryFailure } : {}),
     ...resendGuidance(verdict.disposition, verdict.reason),
     evidence,
   };
@@ -1457,13 +1479,14 @@ async function projectCurrentSend(
   ports: SendSettlementPorts,
 ): Promise<Evidence<SendReceipt>> {
   const registry = ports.registry ?? agentRegistry();
-  if (projected.state !== "delivered" && projected.reason !== SEND_DISCARDED_REASON
+  const confirmed = projected.state !== "delivered" && projected.reason !== SEND_DISCARDED_REASON
     && (projected.state === "in-flight" || projected.duplicateRisk)
-    && await confirmedSend(registry.readOnlySnapshot(), operationId)) {
+    ? await readConfirmedSendEvidence(registry.readOnlySnapshot(), operationId) : null;
+  if (confirmed) {
     const client = ports.client === undefined ? runtimeHostClient() : ports.client;
     if (!client) return unreadableEvidence("runtime host socket is unavailable for canonical delivery arbitration");
     const arbitration = await readEvidenceWithin(
-      () => confirmJournalDelivery(client, operationId),
+      () => confirmJournalDelivery(client, operationId, confirmed),
       ports.readMs ?? SEND_SETTLEMENT_READ_MS,
       "canonical delivery arbitration is unavailable",
     );
@@ -1475,6 +1498,7 @@ async function projectCurrentSend(
         ...projected,
         state: "failed",
         reason: verdict.reason,
+        ...(verdict.primaryFailure ? { primaryFailure: verdict.primaryFailure } : {}),
         ...resendGuidance(verdict.disposition, verdict.reason),
         evidence: "delivery-journal",
       } };
@@ -1493,7 +1517,7 @@ async function projectCurrentSend(
   );
   if (!journal.readable) return journal;
   const receipt = journal.value?.receipt ?? null;
-  const verdict = journalVerdict(receipt?.status ?? null, receipt?.reason);
+  const verdict = journalVerdict(receipt?.status ?? null, receipt?.reason, receipt?.primaryFailure);
   if (!verdict) return { readable: true, value: { ...projected, evidence: "delivery-journal", ...routeFields(receipt) } };
   if (verdict.state === "delivered") {
     return { readable: true, value: { ...projected, state: "delivered", reason: null,
@@ -1501,7 +1525,7 @@ async function projectCurrentSend(
   }
   return {
     readable: true,
-    value: { ...projected, state: "failed", reason: verdict.reason, ...resendGuidance(verdict.disposition, verdict.reason), evidence: "delivery-journal" },
+    value: { ...projected, state: "failed", reason: verdict.reason, ...(verdict.primaryFailure ? { primaryFailure: verdict.primaryFailure } : {}), ...resendGuidance(verdict.disposition, verdict.reason), evidence: "delivery-journal" },
   };
 }
 

@@ -8,11 +8,27 @@ export class HostedCloudError extends Error {
   constructor(message: string, readonly category: HostedCloudFailure, readonly diagnostic = false) { super(message); }
 }
 
+/** A local session deadline is decisive even when a receipt RPC is pending. */
+export class HostedSessionTimeout extends HostedCloudError {
+  constructor() { super("Codex Cloud session deadline expired", "invalid"); }
+}
+
 /** How a provider refusal reads: a known limit, a proven error in the stage's
  * own configuration, or an unknown cause that proves nothing about the stage. */
 export type HostedRefusalKind = "account-limit" | "cloud-limit" | "configuration" | "unknown";
 export class HostedRpcRefusal extends HostedCloudError {
   constructor(message: string, category: HostedCloudFailure, readonly refusal: HostedRefusalKind) { super(message, category, true); }
+}
+
+/** A registry connect refusal is distinct from an executed command's exit. */
+export class HostedRegistryConnectRefusal extends HostedRpcRefusal {
+  constructor(readonly offline: boolean) {
+    super(`Codex Cloud environment registry connect returned 409 Conflict${offline ? " (environment_offline)" : ""}`, "cloud-limit", "cloud-limit");
+  }
+}
+/** Only the provider's explicit offline cause proves the command was not dispatched. */
+export class HostedEnvironmentOffline extends HostedRegistryConnectRefusal {
+  constructor() { super(true); }
 }
 
 type Secrets = readonly (string | undefined)[];
@@ -54,6 +70,15 @@ export function hostedRpcFailure(error: { code?: unknown; message?: unknown; dat
   const info = error.data?.codexErrorInfo;
   const raw = error.data?.code ?? (info && typeof info === "object" && Object.keys(info).length === 1 ? Object.keys(info)[0] : info) ?? error.code;
   const code = raw === undefined || raw === null ? "" : String(raw);
+  const identified = ACCOUNT_LIMIT_CODES.includes(code) || CLOUD_LIMIT_CODES.includes(code);
+  if (!identified && context.method === "command/exec" && error.code === -32602 && typeof error.message === "string"
+    && /^environment registry connect returned 409 Conflict: environment_offline(?:[:\s]|$)/.test(error.message.trim())) {
+    return new HostedEnvironmentOffline();
+  }
+  if (!identified && context.method === "command/exec" && typeof error.message === "string"
+    && /^environment registry connect returned 409 Conflict(?:$|:)/.test(error.message.trim())) {
+    return new HostedRegistryConnectRefusal(false);
+  }
   const refusal: HostedRefusalKind = ACCOUNT_LIMIT_CODES.includes(code) ? "account-limit"
     : CLOUD_LIMIT_CODES.includes(code) ? "cloud-limit"
     : context.method && CONFIGURATION_CODES[context.method]?.includes(code) ? "configuration"

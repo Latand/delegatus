@@ -46,10 +46,10 @@ const continuationSchema = z.object({ v: z.literal(1), chat: z.string().regex(ch
   from: z.string().regex(datePattern), to: z.string().regex(datePattern), after: z.string().regex(/^[1-9][0-9]{0,9}$/) }).strict();
 export interface OwnerHistoryPorts { switches(): { owner_tools: boolean }; relays(): PairedRelay[]; timeZone(): string | null; now(): number; clock?: HistoryClock;
   cloneTarget?(relays: PairedRelay[]): { relay: PairedRelay; targetId: string } | null }
-const production: OwnerHistoryPorts = { switches: readRelaySwitches, relays: () => readRelayStore().relays, timeZone: operatorTimeZone, now: Date.now,
+export const ownerHistoryProduction: OwnerHistoryPorts = { switches: readRelaySwitches, relays: () => readRelayStore().relays, timeZone: operatorTimeZone, now: Date.now,
   cloneTarget: relays => cloneDirectory().readTarget(relays) };
 /** Production's ports with a caller that knows its own zone: a voice call, from the browser that started it. */
-export const ownerHistoryPortsIn = (timeZone: string): OwnerHistoryPorts => ({ ...production, timeZone: () => timeZone });
+export const ownerHistoryPortsIn = (timeZone: string): OwnerHistoryPorts => ({ ...ownerHistoryProduction, timeZone: () => timeZone });
 export interface OwnerHistoryQuery { tz: string; from?: string; to?: string; cursor?: string; limit?: number }
 export interface OwnerHistoryInput { action: "groups" | "messages"; chat?: string; from?: string; to?: string; cursor?: string; limit?: number }
 type WireMessage = OwnerHistoryPage["messages"][number];
@@ -57,28 +57,26 @@ export type OwnerHistoryOutcome = ReturnType<typeof unavailable> | {
   available: true; groups: Array<{ chat: string; title: string }>; privacy: string;
 } | {
   available: true; chat: string; title: string; timeZone: string; start: string; end: string;
-  oldestStoredAt: string | null; nextCursor: string | null; privacy: string;
+  oldestStoredAt: string | null; editsReported?: boolean; nextCursor: string | null; privacy: string;
   messages: Array<{ messageId: number; sentAt: string; author: Pick<WireMessage["author"], "name" | "username">;
     fromAssistant: boolean; topicId: number | null; replyToMessageId: number | null;
-    text: string; media: WireMessage["media"]; truncated: boolean }>;
+    text: string; editedAt?: string | null; media: null | { kind: string; description: string | null;
+      fileName: string | null; mimeType: string | null; size: number | null; duration: number | null; width: number | null; height: number | null;
+      fetch: NonNullable<WireMessage["media"]>["fetch"] | "not_offered" | "unknown" }; truncated: boolean }>;
 };
 interface Runtime { now?: () => number; clock?: HistoryClock }
 
 async function call(relay: PairedRelay, route: string, maxBytes: number, runtime: Runtime, signal: AbortSignal, observeStatus: (status: number) => void) {
   const now = runtime.now ?? Date.now;
-  const key = `${relay.id}:${relay.api_base}`;
-  const remaining = (notBefore.get(key) ?? 0) - now();
-  if (remaining > 0) throw new ExternalRelayError("rate_limited", 429, Math.ceil(remaining / 1000));
-  notBefore.delete(key);
+  assertOwnerHistoryCooldown(relay, now());
   try {
     // The total deadline owns cancellation; a socket-idle timer could win before
     // readable bytes are processed after a Viewer stall.
     return await relayCall(relay.api_base, route, "GET", undefined, relay.credential,
-      { timeoutMs: 0, maxBytes, signal, detailedErrors: true, onResponseStatus: observeStatus });
+      { timeoutMs: 0, maxBytes, signal, detailedErrors: true, onResponseStatus: observeStatus, headers: { "Delegatus-Relay-Owner-History": "2" } });
   } catch (error) {
     if (error instanceof ExternalRelayError && error.status === 429) {
-      const seconds = Math.max(1, Math.min(60, Math.ceil(error.retryAfterSeconds ?? 60)));
-      notBefore.set(key, now() + seconds * 1000);
+      const seconds = setOwnerHistoryCooldown(relay, error.retryAfterSeconds, now());
       throw new ExternalRelayError("rate_limited", 429, seconds);
     }
     throw error;
@@ -93,7 +91,7 @@ async function historyAttempt<T>(kind: OwnerHistoryInput["action"], runtime: Run
       // Allowlist only: error messages, payloads, routes and identifiers can all
       // carry private history or credentials, including on malformed responses.
       const status = error instanceof ExternalRelayError && Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? error.status : observedStatus;
-      console.warn(`[relay owner-history] ${JSON.stringify({ cause: reason(error), routeKind: kind, status,
+      console.warn(`[relay owner-history] ${JSON.stringify({ cause: ownerHistoryReason(error), routeKind: kind, status,
         elapsedMs: Math.round(metrics.elapsedMs), loopGapMs: Math.round(metrics.loopGapMs) })}`);
       throw error;
     }
@@ -119,7 +117,7 @@ export async function readOwnerGroupMessages(relay: PairedRelay, targetId: strin
     return parsed.data;
   });
 }
-function reason(error: unknown): OwnerHistoryReason {
+export function ownerHistoryReason(error: unknown): OwnerHistoryReason {
   if (!(error instanceof ExternalRelayError)) {
     const code = error && typeof error === "object" && "code" in error ? error.code : null;
     if (typeof code === "string") {
@@ -148,12 +146,9 @@ function reason(error: unknown): OwnerHistoryReason {
   return "transport_error";
 }
 /** One page, no content persistence, and no caller-supplied owner or target. */
-export async function readOwnerHistory(input: unknown, ports: OwnerHistoryPorts = production): Promise<OwnerHistoryOutcome> {
+export async function readOwnerHistory(input: unknown, ports: OwnerHistoryPorts = ownerHistoryProduction): Promise<OwnerHistoryOutcome> {
   if (!ports.switches().owner_tools) return unavailable("switch_off");
-  const relays = ports.relays();
-  const selected = selectOwnerDestination(relays);
-  const fallback = selected.reason === "no_target" || selected.reason === "not_configured" ? ports.cloneTarget?.(relays) : null;
-  const destination = fallback ? { ...fallback, reason: undefined } : selected;
+  const destination = ownerHistoryDestination(ports);
   if (destination.reason) return unavailable(destination.reason);
   const args = z.object({ action: z.enum(["groups", "messages"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),
     cursor: z.string().max(400).optional(), limit: z.number().int().optional() }).strict().safeParse(input);
@@ -184,12 +179,17 @@ export async function readOwnerHistory(input: unknown, ports: OwnerHistoryPorts 
     const nextCursor = page.next_cursor === null ? null : Buffer.from(JSON.stringify({ v: 1, chat, tz,
       from: page.start.slice(0, 10), to: lastDay, after: page.next_cursor })).toString("base64url");
     return { available: true as const, chat, title: page.title, timeZone: page.timezone, start: page.start, end: page.end, oldestStoredAt: page.oldest_stored_at,
+      editsReported: page.messages.every(m => m.edited_at !== undefined) && page.messages.length > 0,
       messages: page.messages.map(m => ({ messageId: m.message_id, sentAt: m.sent_at, author: { name: m.author.name, username: m.author.username },
-        fromAssistant: m.from_assistant, topicId: m.thread_id, replyToMessageId: m.reply_to_message_id, text: m.text, media: m.media, truncated: m.truncated })),
+        fromAssistant: m.from_assistant, topicId: m.thread_id, replyToMessageId: m.reply_to_message_id, text: m.text, editedAt: m.edited_at ?? null,
+        media: m.media === null ? null : { kind: m.media.kind, description: m.media.description,
+          fileName: m.media.file_name ?? null, mimeType: m.media.mime_type ?? null, size: m.media.size ?? null,
+          duration: m.media.duration ?? null, width: m.media.width ?? null, height: m.media.height ?? null,
+          fetch: !relay.features?.includes("relay_owner_media") ? "not_offered" : m.media.fetch ?? "unknown" }, truncated: m.truncated })),
       nextCursor, privacy: OWNER_HISTORY_PRIVACY };
   } catch (error) {
     if (!ports.switches().owner_tools) return unavailable("switch_off");
-    const outcome = unavailable(reason(error), error instanceof ExternalRelayError && error.status === 429 ? error.retryAfterSeconds : null);
+    const outcome = unavailable(ownerHistoryReason(error), error instanceof ExternalRelayError && error.status === 429 ? error.retryAfterSeconds : null);
     if (error instanceof ExternalRelayError && error.status >= 300) {
       outcome.note = outcome.reason === "http_error" ? `Celestia returned HTTP ${error.status} while reading group history.`
         : `${outcome.note} HTTP ${error.status}.`;
@@ -198,3 +198,23 @@ export async function readOwnerHistory(input: unknown, ports: OwnerHistoryPorts 
   }
 }
 export type OwnerHistoryRead = typeof readOwnerHistory;
+
+/** One selection and rate-limit policy for H1–H4, including the persisted clone fallback. */
+export function ownerHistoryDestination(ports: OwnerHistoryPorts) {
+  const relays = ports.relays();
+  const selected = selectOwnerDestination(relays);
+  const fallback = selected.reason === "no_target" || selected.reason === "not_configured" ? ports.cloneTarget?.(relays) : null;
+  return fallback ? { ...fallback, reason: undefined } : selected;
+}
+export function assertOwnerHistoryCooldown(relay: PairedRelay, now: number) {
+  const key = `${relay.id}:${relay.api_base}`;
+  const remaining = (notBefore.get(key) ?? 0) - now;
+  if (remaining > 0) throw new ExternalRelayError("rate_limited", 429, Math.ceil(remaining / 1000));
+  notBefore.delete(key);
+}
+export function setOwnerHistoryCooldown(relay: PairedRelay, retry: number | null, now: number) {
+  const seconds = Math.max(1, Math.min(60, Math.ceil(retry ?? 60)));
+  if (notBefore.size >= 256) for (const [key, expiry] of notBefore) if (expiry <= now) notBefore.delete(key);
+  notBefore.set(`${relay.id}:${relay.api_base}`, now + seconds * 1000);
+  return seconds;
+}
