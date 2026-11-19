@@ -70,13 +70,16 @@ test("fixture contract", () => { ${interrupted ? "process.exit(124);" : "expect(
   return { root, repo, git, source, run, samples };
 }
 
-serviceTest("an incomplete head run retains only complete green files across fresh isolated processes", () => {
+serviceTest("an incomplete head run retains only complete green files across fresh isolated workers", () => {
   const f = fixture();
-  const run = (name: string) => f.run(isolatedEnvironment(path.join(f.root, name), { NODE_ENV: "test" }));
-  const first = run("first-check");
+  const run = (name: string, supervisor: number) => f.run({
+    ...isolatedEnvironment(path.join(f.root, name), { NODE_ENV: "test" }),
+    LLV_CHECK_ENTRY_SUPERVISOR: String(supervisor),
+  });
+  const first = run("first-check", 100);
   expect(first.status, first.output).toBe(1);
   expect(f.samples()).toEqual({ a: 1, b: 1 });
-  const repeated = run("retry-check");
+  const repeated = run("retry-check", 101);
   expect(repeated.status, repeated.output).toBe(1);
   expect(repeated.output).toContain("reused complete green head file a.test.ts");
   expect(repeated.output).not.toContain("reused complete green head file b.test.ts");
