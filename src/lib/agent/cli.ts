@@ -722,8 +722,8 @@ export function resumeSpecForSession(
   const mcp = codexMcpRuntimeOverrides(home, cwd, mcpServers);
   for (const override of mcp.overrides) command += ` -c ${shellQuote(override)}`;
   if (mcp.viewerMcpArgs) command += ` ${mcp.viewerMcpArgs}`;
-  const model = modelForLaunch("codex", options.model);
-  if (model) command += ` -m ${shellQuote(model)}`;
+  const model = modelForLaunch("codex", options.model ?? defaultModelFor("codex"));
+  command += ` -m ${shellQuote(model)}`;
   if (options.effort) command += ` -c ${shellQuote(`model_reasoning_effort=${options.effort}`)}`;
   if (options.serviceTier) command += ` -c ${shellQuote(`service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`)}`;
   else if (options.fast != null) command += ` -c ${shellQuote(`service_tier=${options.fast ? "priority" : "standard"}`)}`;
@@ -743,7 +743,7 @@ export function resumeSpecForSession(
     cwd,
     windowName: "codex-resume",
     engine: "codex",
-    launchProfile: { ...emptyLaunchProfileForResume(cwd, model ?? null, options.effort ?? null),
+    launchProfile: { ...emptyLaunchProfileForResume(cwd, model, options.effort ?? null),
       ...(options.omitSkillsInstructions ? { omitSkillsInstructions: true } : {}),
       ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, sandbox: explicitLaunchProfileSandbox(options), permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
   };

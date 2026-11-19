@@ -514,16 +514,16 @@ test("a level the next model does not have goes back to the default, and one it 
   const host = mount("effort-draft");
   await settle();
 
-  pickModel(host, "codex/gpt-6.1-sol");
+  pickModel(host, "codex/gpt-6.2-sol");
   click(pillOf(host));
   click(row("tier-high"));
   pickModel(host, "gpt-6-luna");
   expect(pillOf(host).textContent).toContain("Codex · 6-Luna · High");
 
-  pickModel(host, "gpt-6.1-sol");
+  pickModel(host, "gpt-6.2-sol");
   click(pillOf(host));
   click(row("tier-ultra"));
-  expect(pillOf(host).textContent).toContain("Codex · 6.1-Sol · Ultra");
+  expect(pillOf(host).textContent).toContain("Codex · 6.2-Sol · Ultra");
   pickModel(host, "gpt-6-luna");
   expect(pillOf(host).textContent).toContain("Codex · 6-Luna · Default");
 
@@ -559,7 +559,7 @@ test("Codex's speed is said and sent for Codex alone", async () => {
   const host = mount("speed-draft");
   await settle();
 
-  pickModel(host, "codex/gpt-6.1-sol");
+  pickModel(host, "codex/gpt-6.2-sol");
   click(pillOf(host));
   click(row("speed"));
   click(row("fast"));
@@ -574,7 +574,7 @@ test("Codex's speed is said and sent for Codex alone", async () => {
   click(pillOf(host));
 
   /* Back on Codex the choice stands, and the launch carries it. */
-  pickModel(host, "codex/gpt-6.1-sol");
+  pickModel(host, "codex/gpt-6.2-sol");
   expect(pillOf(host).textContent).toContain("Fast");
   type(host, "Run fast");
   submit(host);

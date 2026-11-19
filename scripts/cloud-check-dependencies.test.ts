@@ -168,7 +168,7 @@ for (const upload of [false, true]) for (const mismatch of [false, true]) test(`
 test("exact command environment refusal stays environment and cannot supply a receipt", async () => {
   let command = "";
   const rpc: CloudRpc = { cwd: "/workspace/repository", close() {}, async call(method, params) {
-    if (method === "thread/start") return { model: "gpt-6.1-sol", thread: { id: "fixture", environments: [{ environmentId: "ccarenv_fixture", cwd: this.cwd }] } };
+    if (method === "thread/start") return { model: "gpt-6.2-sol", thread: { id: "fixture", environments: [{ environmentId: "ccarenv_fixture", cwd: this.cwd }] } };
     if (method === "command/exec") return { exitCode: 0 };
     if (method === "turn/start") { command = (params.input as { text: string }[])[0]!.text.split("\n").slice(1).join("\n"); return { turn: { id: "turn" } }; }
     if (method === "thread/items/list") return { data: [{ turnId: "turn", item: { type: "commandExecution", status: "failed", command, exitCode: 78,

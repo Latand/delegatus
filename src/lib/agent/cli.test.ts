@@ -997,6 +997,7 @@ for (const engine of ["claude", "codex"] as const) test(`${engine} terminal boun
 test("fresh and resumed Codex CLI commands replace a saved retired model", () => {
   const profile = { model: "gpt-6.1-sol", effort: "high", serviceTier: "priority" };
   const sessionId = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+  expect(resumeSpecForSession("codex", sessionId, SANDBOX, SANDBOX)?.command).toContain("-m 'gpt-6.2-sol'");
   for (const spec of [freshSpecFor("codex", SANDBOX, profile), resumeSpecForSession("codex", sessionId, SANDBOX, SANDBOX, profile)!]) {
     expect(spec.command).toContain("'gpt-6.2-sol'");
     expect(spec.command).not.toContain("gpt-6.1-sol");

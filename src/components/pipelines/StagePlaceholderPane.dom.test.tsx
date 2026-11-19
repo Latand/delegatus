@@ -168,7 +168,7 @@ test.each(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-
   expect(modelSelect!.value).toBe(model);
   const labels = [...modelSelect!.options].map((option) => option.textContent);
   // The retired GPT-6-Sol is offered only to the stage already saved on it.
-  expect(labels.slice(1)).toEqual(["GPT-6.2-Sol", "GPT-6.2-Astra", "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", ...(model === "gpt-6-sol" ? ["GPT-6-Sol"] : [])]);
+  expect(labels.slice(1)).toEqual(["GPT-6.2-Sol", "GPT-6.2-Astra", "GPT-6-Astra", ...(model === "gpt-6.1-sol" ? ["GPT-6.1-Sol"] : []), "GPT-6.1-Terra", "GPT-6-Luna", ...(model === "gpt-6-sol" ? ["GPT-6-Sol"] : [])]);
   expect(effortSelect!.value).toBe("max");
   expect(Boolean(effortSelect!.querySelector('option[value="ultra"]'))).toBe(model !== "gpt-6-luna");
   flushSync(() => root.unmount());

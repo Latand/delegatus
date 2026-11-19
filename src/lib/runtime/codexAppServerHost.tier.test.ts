@@ -86,7 +86,7 @@ class TierAppServer extends EventEmitter {
     if (method === "initialize") return this.respond(message.id, { userAgent: "codex_desktop_app/0.162.1 (Linux)" });
     if (method === "account/read") return this.respond(message.id, { account: { type: "chatgpt", planType: "pro" }, requiresOpenaiAuth: false });
     if (method === "model/list") {
-      return this.respond(message.id, { data: [{ id: "gpt-6.1-sol", model: "gpt-6.1-sol", isDefault: true, inputModalities: ["text"], serviceTiers: this.tiers.map(id => ({ id, name: id })) }] });
+      return this.respond(message.id, { data: [{ id: "gpt-6.2-sol", model: "gpt-6.2-sol", isDefault: true, inputModalities: ["text"], serviceTiers: this.tiers.map(id => ({ id, name: id })) }] });
     }
     if (method === "modelProvider/capabilities/read") return this.respond(message.id, { webSearch: false, imageGeneration: false });
     if (method === "config/read") return this.respond(message.id, { config: { mcp_servers: {} } });
@@ -125,7 +125,7 @@ class TierAppServer extends EventEmitter {
 
 async function startHost(server: TierAppServer) {
   return CodexAppServerHost.start({
-    cwd: "/repo", model: "gpt-6.1-sol", readProtocolVersion: () => "0.162.1", requestTimeoutMs: 500,
+    cwd: "/repo", model: "gpt-6.2-sol", readProtocolVersion: () => "0.162.1", requestTimeoutMs: 500,
     eventStore: new MemoryEventStore(),
     spawnProcess: () => server as unknown as ChildProcessWithoutNullStreams,
     pidAlive: () => true, processIdentity: () => "6161:owned",
@@ -235,7 +235,7 @@ test("a tier missing from the live catalog is refused before any call", async ()
   const server = new TierAppServer("tier-thread", ["priority"]);
   const host = await startHost(server);
   try {
-    await expect(host.setTier({ operationId: "turbo-1", serviceTier: "ultrafast", cut: "boundary" })).rejects.toThrow('serviceTier ultrafast for model gpt-6.1-sol; evaluated selected account "default"');
+    await expect(host.setTier({ operationId: "turbo-1", serviceTier: "ultrafast", cut: "boundary" })).rejects.toThrow('serviceTier ultrafast for model gpt-6.2-sol; evaluated selected account "default"');
     expect(tierUpdates(server)).toHaveLength(0);
   } finally { await host.release(); }
 });
@@ -406,8 +406,8 @@ test("speed control roundtrip reaches native settings without release or interru
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "speed-roundtrip-"));
   const registry = new AgentRegistry(path.join(root, "registry.json"));
   const conversation = registry.ensureConversation("codex", path.join(root, "thread.jsonl"), "account-a");
-  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6.1-sol", effort: "high", fast: false, serviceTier: "default" });
-  fs.writeFileSync(path.join(root, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [{ id: "ultrafast" }, { id: "priority" }] }] }));
+  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6.2-sol", effort: "high", fast: false, serviceTier: "default" });
+  fs.writeFileSync(path.join(root, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.2-sol", service_tiers: [{ id: "ultrafast" }, { id: "priority" }] }] }));
   const native = new TierAppServer();
   const host = await startHost(native);
   const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
