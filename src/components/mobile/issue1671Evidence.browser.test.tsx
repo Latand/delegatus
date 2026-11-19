@@ -469,6 +469,7 @@ describe("shared memory settings", () => {
     const previous = { ...process.env };
     process.env.LLV_STATE_DIR = path.join(root, "state");
     process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    const releaseTarget = path.join(process.env.LLV_STATE_DIR, "viewer-release.json");
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.PORT;
     delete process.env.LLV_STAGING;
@@ -500,7 +501,7 @@ describe("shared memory settings", () => {
         delete process.env.OPENROUTER_API_KEY;
         process.env.PORT = "9876";
         fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
-        fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:9875" }));
+        fs.writeFileSync(releaseTarget, JSON.stringify({ endpoint: "http://127.0.0.1:9875", revision: "a".repeat(40) }));
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings`, { width, height: 900 }, "light", lang, "reduce", width === 390);
         /* The operator's own browser session, as the Viewer's page navigation sets it. */
         await context.addCookies([{ name: "llv_operator", value: soloBrowserSession(), url: server.base }]);
@@ -584,7 +585,9 @@ describe("shared memory settings", () => {
           await openPage("memory");
           await reasonIs("memoryPage.reason.notOwner");
           await measure("inactive");
+          // Return to standalone mode so SQLite can write the spend ledger.
           delete process.env.PORT;
+          fs.rmSync(releaseTarget);
           memoryIndex().recordInjectionActivity("decisions");
           memoryIndex().recordInjectionActivity("noMatches");
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
@@ -14477,6 +14480,74 @@ browserTest("the phone bar's meta line never cuts a word without an ellipsis", a
   if (shots) fs.writeFileSync(path.join(shots, `${label}-readings.json`), `${JSON.stringify({ results, failures }, null, 2)}\n`);
   expect(failures).toEqual([]);
 }, 1_200_000);
+
+
+/*
+ * The phone bar's model line ends in an ellipsis, and the cell's title carries the whole line. At 390 and 375 px,
+ * with a short model (it fits and is drawn whole, unchanged) and a long one (it is cut), each frame is a screenshot of
+ * the bar; the readings come from the drawn text. Frames go to $LLV_EVIDENCE_DIR (or the directory in
+ * LLV_META_LINE_SHOTS).
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=… bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "full line"
+ */
+browserTest("the phone bar's model line ends in an ellipsis on one line and its title is the full line", async () => {
+  const shots = path.resolve(process.env.LLV_META_LINE_SHOTS ?? process.env.LLV_EVIDENCE_DIR ?? path.join(os.tmpdir(), "llv-model-line"));
+  fs.mkdirSync(shots, { recursive: true });
+  const { base, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const failures: string[] = [];
+  const results: Record<string, unknown> = {};
+  const LONG = "claude-opus-5-5-preview-extended-context-2026";
+  try {
+    for (const width of [390, 375]) {
+      /* «short»: a finished conversation, whose model fits whole. «running»: the working state's timer leaves the model
+         no room (the 1.14.0 cut «Opus 5.5 · h»). «long»: a model name far wider than the line. */
+      for (const [name, model, hash] of [["short", "opus-5-5", "conversation_done-2"], ["running", "opus-5-5", "conversation_running"], ["long", LONG, "conversation_running"]] as const) {
+        const context = await browser.newContext({ viewport: { width, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "dark" });
+        const page = await context.newPage();
+        const key = `model-line-${width}-${name}`;
+        try {
+          await page.goto(`${base}/?account=spare&model=${model}#c=${hash}`);
+          await page.waitForSelector("[data-mobile2-chat-model]", { timeout: 20_000 });
+          await pause(page, 500);
+          const reading = await page.evaluate(() => {
+            const cell = document.querySelector("[data-mobile2-chat-model]") as HTMLElement;
+            const style = getComputedStyle(cell);
+            const range = document.createRange();
+            range.selectNodeContents(cell);
+            const rects = [...range.getClientRects()];
+            return {
+              text: cell.textContent ?? "",
+              title: cell.getAttribute("title") ?? "",
+              cut: cell.scrollWidth > cell.clientWidth + 1,
+              textOverflow: style.textOverflow,
+              overflow: style.overflow,
+              whiteSpace: style.whiteSpace,
+              lines: new Set(rects.map((rect) => Math.round(rect.top))).size,
+              minWidth: style.minWidth,
+            };
+          });
+          results[key] = reading;
+          const fail = (what: string) => failures.push(`${key}: ${what}`);
+          if (reading.textOverflow !== "ellipsis" || reading.overflow !== "hidden" || reading.whiteSpace !== "nowrap") fail(`the cell does not truncate with an ellipsis: ${JSON.stringify(reading)}`);
+          if (reading.lines !== 1) fail(`the model line is on ${reading.lines} lines`);
+          if (!reading.title.includes(reading.text)) fail(`the title ${JSON.stringify(reading.title)} does not carry the line ${JSON.stringify(reading.text)}`);
+          /* At 375 px the finished bar's own state and age leave even this model no room, so it is cut there, with its ellipsis. */
+          if (name === "short" && width === 390 && reading.cut) fail("a line that fits is cut");
+          if (name !== "short" && !reading.cut) fail("the model was expected to need the ellipsis");
+          await page.locator("[data-mobile2-chat-title]").first().screenshot({ path: path.join(shots, `${key}.png`) });
+        } finally {
+          await context.close();
+        }
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(shots, "model-line-readings.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  expect(failures).toEqual([]);
+}, 600_000);
 
 
 describe("new task default deadline", () => {

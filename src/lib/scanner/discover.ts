@@ -1,4 +1,5 @@
 import { isRelayConversationDir } from "@/lib/externalRelay/conversationPrivacy";
+import { MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
 import fs from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
@@ -218,7 +219,7 @@ export function publishTranscriptIndexFeed(
   projectByPath?: ReadonlyMap<string, string>,
   scheduler?: TranscriptIndexScheduler,
 ): void {
-  if (!isProjectCatalogScanCurrent(scanToken)) return;
+  if (process.env[MCP_PROBE_READ_ONLY_ENV] === "1" || !isProjectCatalogScanCurrent(scanToken)) return;
   if (complete && process.env.LLV_FILE_SCANNER_WORKER !== "1") {
     const projected = catalog.map(entry => {
       const project = projectByPath?.get(entry.path) ?? entry.project;

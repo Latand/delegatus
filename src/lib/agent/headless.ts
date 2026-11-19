@@ -91,7 +91,7 @@ export function claudeProviderCommand(
   return provider
     ? {
         command: "bun",
-        args: [claudeProviderLauncherPath(accountHome), "--home", accountHome,
+        args: ["--no-env-file", claudeProviderLauncherPath(accountHome), "--home", accountHome,
           "--base-url", provider.baseUrl, "--default-model", provider.model,
           "--small-model", provider.smallFastModel ?? "", "--header-names",
           JSON.stringify(provider.customHeaderNames ?? []), "--", resolveHostBinary("claude"), ...args],

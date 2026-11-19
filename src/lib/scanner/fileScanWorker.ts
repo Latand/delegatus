@@ -7,6 +7,7 @@ import { deadlineSignal, systemScheduler, type DeadlineScheduler } from "@/lib/d
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } from "@/lib/helperLease";
 import { scheduleTranscriptIndex, type TranscriptIndexFeed } from "@/lib/search/transcriptFeed";
+import { MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
 
 import type { FileCatalogScan, FileScanOptions } from "./index";
 import { transcriptIndexFeed } from "./discover";
@@ -296,7 +297,7 @@ function collectFileScanAttempt(
         const currentScan = isProjectCatalogScanCurrent(catalogScanToken);
         performanceSpans.sync("scanner.publication", () =>
           publishConversationCatalogForScan(completedConversationCatalog!, catalogScanToken, completed!.complete));
-        if (currentScan) {
+        if (currentScan && process.env[MCP_PROBE_READ_ONLY_ENV] !== "1") {
           if (completed!.complete) void conversationSearchProjection().prepare(completedConversationCatalog!).catch(() => undefined);
           (runtime.transcriptIndexScheduler ?? scheduleTranscriptIndex)(
             performanceSpans.sync("transcript.feed", () =>

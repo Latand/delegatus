@@ -325,3 +325,28 @@ test.each(["negative", "time", "cause", "duplicate", "oversize"])("malformed pub
   if (kind === "oversize") history.history[0]!.detail = "x".repeat(401);
   expect(isPublicationRecovery(pipeline.publicationRecovery)).toBe(false);
 });
+
+
+test.each(["settled", "executor", "cause"])("supersession preserves the previous budget and survives all history readers: %s", source => {
+  const { pipeline, attempt } = fixture();
+  const operation = pipeline.delivery!.operation!;
+  recordPublicationFailure(pipeline, attempt, { operationId: operation.id, epoch: 1, at: "2026-11-06T10:00:00.000Z",
+    cause: "infrastructure-deadline", detail: "execution deadline", recoverable: true }, DELAYS);
+  operation.id = "superseded-reservation";
+  const result = { ok: false as const, outcome: "superseded" as const, error: "admission superseded" };
+  if (source === "executor") operation.executor = { pid: 1, identity: null, lock: "fixture.lock", result };
+  else if (source === "settled") operation.result = result;
+  const input = { operationId: operation.id, epoch: 1, at: "2026-11-06T10:01:00.000Z",
+    cause: source === "cause" ? "superseded" as const : "check-failure" as const, detail: result.error, recoverable: true };
+  const entry = recordPublicationFailure(pipeline, attempt, input, DELAYS);
+  expect(entry).toMatchObject({ cause: "superseded", retryAt: null });
+  expect(recordPublicationFailure(pipeline, attempt, input, DELAYS)).toEqual(entry);
+  expect(pipeline.publicationRecovery![SHA]).toMatchObject({ failures: 1, totalAttempts: 1 });
+  const copy = JSON.parse(JSON.stringify(pipeline));
+  expect(isStoredPipeline(copy)).toBe(true);
+  const merged = mergePublicationRecovery(pipeline.publicationRecovery, copy.publicationRecovery)!;
+  expect(merged[SHA]).toMatchObject({ failures: 1, totalAttempts: 1 });
+  expect(isPublicationRecovery(merged)).toBe(true);
+  expect(pipelineCompactRow(copy).publicationRecovery).toEqual(copy.publicationRecovery[SHA]);
+  expect(recoverablePublication(result)).toBe(false);
+});

@@ -18,7 +18,7 @@ import { selectedContextArg } from "./selectedContextTarget";
 import { McpToolRefusal, retainResponseAuthority, type McpToolBindings, type McpToolService } from "./server";
 import { captureBoardAliasProof, captureBoardCaller, resolveBoardSelection, type ViewerMcpDomainDependencies } from "./bindings";
 import type { NamedProjectDirectory } from "@/lib/projects/nameResolution";
-import { runWithMcpCallerResolution } from "./callerContext";
+import { currentMcpHttpCaller, runWithMcpCallerResolution } from "./callerContext";
 
 export const assertWorkspaceMcpCall = assertWorkspaceExecution;
 
@@ -55,12 +55,21 @@ export function workspaceGuardedBindings(bindings: McpToolBindings): McpToolBind
   }, binding)])) as McpToolBindings;
 }
 
-export function withWorkspaceMcpFence(service: McpToolService, dependencies: ViewerMcpDomainDependencies): McpToolService {
+export function withWorkspaceMcpFence(
+  service: McpToolService,
+  dependencies: ViewerMcpDomainDependencies,
+  prepareNativeCaller?: () => Promise<void>,
+): McpToolService {
   return { async callTool(tool, input, context) {
     // The native proof must be in scope before resolving the caller, just as it
     // is in the core dispatcher. No caller-supplied identity hint is consulted.
     if (typeof input.nativeCallerProof === "string" && /^[A-Za-z0-9_-]{43}$/.test(input.nativeCallerProof)) {
       const { nativeCallerProof, ...args } = input;
+      const caller = currentMcpHttpCaller();
+      if (prepareNativeCaller && (!caller || caller.nativePeer)) {
+        try { await prepareNativeCaller(); }
+        catch { /* The verifier will assess whether caller evidence is available. */ }
+      }
       return runWithNativeCallProof(nativeCallerProof, tool, args, () => this.callTool(tool, args, context));
     }
     const refuse = () => ({ ok: false as const, toolName: tool, clientRequestId: typeof input.clientRequestId === "string" ? input.clientRequestId : null,

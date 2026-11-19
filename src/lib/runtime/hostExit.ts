@@ -36,6 +36,19 @@ export function bindHostExitWriter(directory: string, process: ProcessIdentity, 
   record(path.join(directory, "host-exit.json"), { file: slot(process, "exit") }, true);
 }
 
+/** Read-only custody evidence; absence or invalid evidence grants no custody. */
+export function readHostExitWriterBinding(process: ProcessIdentity): { process: ProcessIdentity; exitFile: string } | null {
+  if (!process.startIdentity) return null;
+  try {
+    const writer = read<ProcessIdentity>(slot(process, "writer"));
+    if (!writer || !Number.isSafeInteger(writer.pid) || writer.pid <= 0
+        || typeof writer.startIdentity !== "string" || !writer.startIdentity
+        || (writer.bootEpoch != null && typeof writer.bootEpoch !== "string")) return null;
+    return { process: { pid: writer.pid, startIdentity: writer.startIdentity, bootEpoch: writer.bootEpoch ?? null },
+      exitFile: slot(process, "exit") };
+  } catch { return null; }
+}
+
 /** A waiter may read this binding as soon as its native child exits. Publish
  * replacements atomically, including a decision to discard outer evidence. */
 export function discardHostExitWriter(directory: string): void {

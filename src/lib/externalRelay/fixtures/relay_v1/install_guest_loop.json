@@ -24,10 +24,9 @@
     "bytes": 4721,
     "sha256": "61d6d384f956e70d9b0097da80ab855772b4091a5184efa41bf3e1d4df9ca4f5"
   },
-  "runner": "owner",
+  "runner": "ephemeral",
   "profile": {
-    "webSearch": true,
-    "owner": true
+    "webSearch": true
   },
   "completion": {
     "lease_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

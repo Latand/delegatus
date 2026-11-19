@@ -9,6 +9,7 @@ export const MERGE_REASONS = {
   refreshSameBase: "the refresh did not clear the conflict, and main has not moved since",
   conflict: "conflict with the base branch",
   noChecks: "no checks reported on this head",
+  requiredUnknown: "the required check set is unknown",
   noPr: "no pull request is linked to this lane; open or attach its PR, then try the merge again",
   checksTimeout: "checks did not finish in 90 min",
   draft: "the PR is a draft",
@@ -31,7 +32,7 @@ export const LEGACY_MERGE_REASONS: Partial<Record<MergeReasonKey, readonly strin
 
 /** A reason with a part of its own: a named red check, or GitHub's words. */
 export const MERGE_REASON_PATTERNS = {
-  check: /^check "(.+)" failed$/,
+  check: /^check "(.+)" failed(?:; the required check set is unknown)?$/,
   refusedMerge: /^GitHub refused the merge: (.+)$/,
   refusedRefresh: /^Delegatus could not start the refresh: (.+)$/,
   refusedUpdate: /^GitHub refused to update the branch: (.+)$/,

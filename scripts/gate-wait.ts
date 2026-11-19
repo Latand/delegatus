@@ -4,11 +4,12 @@ import { retainForegroundCheckTiming } from "../src/lib/recordedChecks/timing";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { constants } from "node:os";
+import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
+import { publishGateRun, recorderGateRunRoot } from "../src/lib/runtime/gateCheckRecord";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
-import { descriptorDigest, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
+import { descriptorDigest, identitySchema, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
 export { buildManifest } from "../src/lib/recordedChecks/wire";
 
 import { waitForGate } from "../src/lib/runtime/gateWait";
@@ -35,8 +36,11 @@ export function closedQueueSpans(directory: string | null): { start: number; end
   } catch { return undefined; }
 }
 
-export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
+export async function openGateRecording(log: string, command: string[], manifestFile?: string) {
   log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
+  const root = recorderGateRunRoot(log, process.env.TMPDIR ?? tmpdir());
+  const rootDirectoryIdentity = physical(root);
+  const runId = randomBytes(32).toString("hex");
   const manifest = manifestFile ? manifestSchema.parse(readEnvelope(manifestFile)) : null;
   if (manifest) {
     await verifyManifest(manifest);
@@ -55,26 +59,41 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   catch (error) { fs.closeSync(fd); throw error; }
   let descriptor: Descriptor | null = null;
   if (manifest) {
-    const input = { version: 1 as const, runId: randomBytes(32).toString("hex"), manifest, argv: command,
+    const input = { version: 1 as const, runId, manifest, argv: command,
       recorder: cpuOwnerIdentity(process.pid) as Descriptor["recorder"], directoryIdentity: physical(dir), startedAt: Date.now(),
       startedUptimeMs: custodyClock(), deadlineUptimeMs: manifest.deadlineUptimeMs };
     descriptor = { ...input, wrapper: null, descriptorDigest: descriptorDigest(input) };
     writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
   }
+  const deadlineUptimeMs = descriptor?.deadlineUptimeMs ?? custodyClock() + COMPLETION_WAIT_MS;
+  try {
+    const completion = { runId, log, rootDirectoryIdentity, recorder: identitySchema.parse(cpuOwnerIdentity(process.pid)), directoryIdentity: physical(dir), deadlineUptimeMs };
+    fs.writeFileSync(path.join(dir, "completion.json"), JSON.stringify(completion), { mode: 0o600, flag: "wx" });
+    publishGateRun(root, completion);
+    if (physical(root) !== rootDirectoryIdentity) throw new Error("gate temporary root identity changed before dispatch");
+  } catch (error) { fs.closeSync(fd); throw error; }
+  return { log, dir, fd, root, rootDirectoryIdentity, runId, deadlineUptimeMs, descriptor };
+}
+
+export async function recordGate(log: string, command: string[], manifestFile?: string): Promise<number> {
+  const recording = await openGateRecording(log, command, manifestFile);
+  const { dir, fd, root, rootDirectoryIdentity, runId, deadlineUptimeMs, descriptor } = recording;
+  log = recording.log;
   let queueTiming: string | null = path.join(dir, "queue-timing");
   try { if (queueTiming) fs.mkdirSync(queueTiming, { mode: 0o700 }); }
   catch { queueTiming = null; }
   let code = 127;
   let wrapperSignal: string | null = null;
   let cancellation: Terminal["cancellation"] = null;
-  const deadlineUptimeMs = descriptor?.deadlineUptimeMs ?? custodyClock() + COMPLETION_WAIT_MS;
-  fs.writeFileSync(path.join(dir, "completion.json"), JSON.stringify({ recorder: cpuOwnerIdentity(process.pid), directoryIdentity: physical(dir), deadlineUptimeMs }), { mode: 0o600, flag: "wx" });
   const originalRemaining = Math.max(0, deadlineUptimeMs - custodyClock());
   const monotonicDeadline = performance.now() + originalRemaining;
   const inheritedAllowance = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
-  const executionAllowance = Math.min(manifest?.executionMs ?? Infinity,
+  const executionAllowance = Math.min(descriptor?.manifest.executionMs ?? Infinity,
     Number.isFinite(inheritedAllowance) && inheritedAllowance > 0 ? inheritedAllowance : 900_000);
   try {
+    const dispatchRoot = recorderGateRunRoot(log, process.env.TMPDIR ?? tmpdir());
+    if (dispatchRoot !== root || physical(dispatchRoot) !== rootDirectoryIdentity)
+      throw new Error("gate temporary root identity changed before dispatch");
     const child = spawn("bash", [path.join(import.meta.dir, "gate-slot.sh"), ...command], {
       stdio: ["ignore", fd, "pipe"],
       env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running"),
@@ -88,7 +107,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       descriptor.wrapper = producerCommandIdentity(child.pid) as Descriptor["recorder"] | null;
       writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
     }
-    console.log("gate-slot: recording started");
+    console.log(`gate-slot: recording started\ngate-slot: runId=${runId}`);
     // Retain admission detail independently of the bounded log tail: lock
     // diagnostics can otherwise push the latest position out of that tail.
     const decoder = new StringDecoder("utf8");
@@ -152,12 +171,16 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
       dispatch: fs.existsSync(path.join(dir, "running")) || report || reports.length ? "started" : "not-started" } satisfies Terminal);
   }
   retainForegroundCheckTiming(dir, closedQueueSpans(queueTiming));
+  publishGateExit(dir, code);
+  return code;
+}
+
+export function publishGateExit(dir: string, code: number) {
   const exit = fs.openSync(path.join(dir, "exit.tmp"), "wx", 0o600);
   try { fs.writeFileSync(exit, `${code}\n`); fs.fsyncSync(exit); } finally { fs.closeSync(exit); }
   fs.renameSync(path.join(dir, "exit.tmp"), path.join(dir, "exit"));
   const finalDirectory = fs.openSync(dir, "r");
   try { fs.fsyncSync(finalDirectory); } finally { fs.closeSync(finalDirectory); }
-  return code;
 }
 
 if (import.meta.main) {

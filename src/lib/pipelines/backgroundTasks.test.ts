@@ -393,3 +393,45 @@ test("bounded background recovery advances across unchanged pages without provin
   expect(await cache.acquire(file, T0 + 1000)).toEqual({ state: "read", names: [] });
   expect(await cache.acquire(file, T0 + 1000)).toEqual({ state: "read", names: [] });
 });
+
+test("a full cache preserves unfinished transcript cursors and admits later recovery after EOF", async () => {
+  const early = path.join(ROOT, "verified-capacity-early.jsonl");
+  const later = path.join(ROOT, "verified-capacity-later.jsonl");
+  fs.writeFileSync(early, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20)
+    + JSON.stringify(bashStart(T0, "early-task")) + "\n");
+  fs.writeFileSync(later, JSON.stringify(bashStart(T0, "later-task")) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+
+  expect(await cache.acquire(early, T0)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  expect(await cache.acquire(later, T0)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending cache capacity" });
+  let result = await cache.acquire(early, T0);
+  for (let page = 0; page < 10 && result.state !== "read"; page++) result = await cache.acquire(early, T0);
+  expect(result).toEqual({ state: "read", names: ["background task early-task"] });
+  expect(await cache.acquire(later, T0)).toEqual({ state: "read", names: ["background task later-task"] });
+});
+
+test("a deleted transcript releases its abandoned cursor so a replacement can settle", async () => {
+  const abandoned = path.join(ROOT, "verified-abandoned.jsonl");
+  const replacement = path.join(ROOT, "verified-after-abandonment.jsonl");
+  fs.writeFileSync(abandoned, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20));
+  fs.writeFileSync(replacement, JSON.stringify(bashStart(T0, "replacement-task")) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+
+  expect(await cache.acquire(abandoned, T0)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  fs.unlinkSync(abandoned);
+  expect(await cache.acquire(replacement, T0)).toEqual({ state: "read", names: ["background task replacement-task"] });
+});
+
+test("an unvisited cursor expires at a bounded idle age while an active recovery refreshes its lease", async () => {
+  const active = path.join(ROOT, "verified-active-recovery.jsonl");
+  const later = path.join(ROOT, "verified-after-idle.jsonl");
+  fs.writeFileSync(active, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20)
+    + JSON.stringify(bashStart(T0, "active-task")) + "\n");
+  fs.writeFileSync(later, JSON.stringify(bashStart(T0, "later-task")) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+
+  expect(await cache.acquire(active, T0)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  expect(await cache.acquire(active, T0 + 4 * 60_000)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  expect(await cache.acquire(later, T0 + 8 * 60_000)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending cache capacity" });
+  expect(await cache.acquire(later, T0 + 10 * 60_000)).toEqual({ state: "read", names: ["background task later-task"] });
+});

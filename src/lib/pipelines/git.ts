@@ -306,14 +306,14 @@ export async function resolvePipelineBaseAsync(
   return { ok: true, baseBranch, baseRef };
 }
 
-export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal): Promise<PipelineGitResult> {
+export async function provisionPipelineWorktreeAsync(pipeline: Pipeline, exec: ProvisionExecPort, signal?: AbortSignal, checkoutReady?: () => void): Promise<PipelineGitResult> {
   const preservation: { value?: PreservedProvisionRef } = {};
-  const result = await provisionPipelineCheckout(pipeline, exec, preservation, signal);
+  const result = await provisionPipelineCheckout(pipeline, exec, preservation, signal, checkoutReady);
   return preservation.value ? { ...result, preservedLocalRef: preservation.value } : result;
 }
 
 async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExecPort,
-  preservation: { value?: PreservedProvisionRef }, signal?: AbortSignal): Promise<PipelineGitResult> {
+  preservation: { value?: PreservedProvisionRef }, signal?: AbortSignal, checkoutReady?: () => void): Promise<PipelineGitResult> {
   if (!pipeline.baseBranch || !/^[0-9a-f]{40}$/i.test(pipeline.baseRef)) return { ok: false, error: "the pipeline base is unresolved" };
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
   const legacy = await exec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${pipeline.branch}`], pipeline.repoDir, signal);
@@ -486,6 +486,7 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
   // The worktree sweep removes only checkouts with a record of who made them.
   // The pipeline's own record names this path too, so a failed write keeps it sweepable.
   recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
+  checkoutReady?.();
   try {
     await prepareStageToolchain(pipeline,
       (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs, inheritFd: options?.inheritFd, additionalInheritedFds: options?.additionalInheritedFds }), signal);
@@ -2004,15 +2005,15 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (previous?.state === "pending" && ((previous.fence && previous.fence !== pipelinePublicationFence(current))
         || (!previous.fence && current.state === "paused"))) {
         const error = "publication admission superseded before execution";
-        current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error } };
+        current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error, outcome: "superseded" } };
         deliveryJournal(current, "recovery", error); tx.put(current);
-        return { error };
+        return { error, superseded: true };
       }
       if (current.state === "closed" || current.closedAt || current.hiddenAt) {
         const error = "publication superseded by lane closure";
-        if (previous?.state === "pending") current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error } };
+        if (previous?.state === "pending") current.delivery.operation = { ...previous, state: "settled", result: { ok: false, error, outcome: "superseded" } };
         deliveryJournal(current, "recovery", error); tx.put(current);
-        return { error };
+        return { error, superseded: true };
       }
       // Reservations written before the deadline field still carry the
       // automatic retry's attempt counter and per-head refusal observation.
@@ -2033,7 +2034,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       return { pipeline: current, operationId: current.delivery.operation.id };
     });
     if (reservation.waiting) return reservation.waiting;
-    if (!reservation.pipeline) return { ok: false, error: reservation.error! };
+    if (!reservation.pipeline) return { ok: false, error: reservation.error!, ...(reservation.superseded ? { outcome: "superseded" as const } : {}) };
     reserved = true;
     const fence = pipelinePublicationFence(reservation.pipeline);
     const abort = new AbortController();

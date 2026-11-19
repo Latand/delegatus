@@ -22,10 +22,11 @@ import type { MessageOrigin } from "./messageOrigin";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
-import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
+import { bindCodexHostPersistence, reconcileDeadStructuredRegistryHostOffLoop, stopOrphanedStructuredHost, type StructuredOrphanStopDependencies } from "./registry";
+import { forgetOrphanedHostGrace, ORPHANED_HOST_IN_FLIGHT_GRACE_MS, ORPHANED_HOST_STOP_REFUSED_HOLD_MS, structuredHostOrphaned } from "./orphanedHost";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
-import { stageGitEnvironment } from "./stageGitEnvironment";
+import { assertStageAttemptNotSettled, StageAttemptSettledError, stageGitEnvironment } from "./stageGitEnvironment";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -202,6 +203,8 @@ export interface StructuredRecoveryDependencies {
   failStagedLaunch?: typeof failStagedResume;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** Termination ladder seams for an orphan whose owner process is gone. */
+  orphanStop?: StructuredOrphanStopDependencies;
 }
 
 /** A resume whose publication ended in failure (#2046), including an immediate
@@ -299,6 +302,34 @@ export class StructuredRecoverySynchronizingError extends Error {
   }
 }
 
+/** The host's recorded owner process is gone while its engine still has work
+    in flight; recovery stops it once the grace ends. The
+    caller keeps its message held and asks again. */
+export class StructuredOrphanGraceError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "StructuredOrphanGraceError";
+  }
+}
+
+/** The host's recorded owner process is gone, and its stop was refused: a
+    pending action owns the row, the engine's identity cannot be verified, or
+    processes survived the ladder. While `holding`, the caller keeps its
+    message held and asks again; past `until` it fails the message with this
+    reason. The row's seat holds an alarm naming the conversation. */
+export class StructuredOrphanStopRefusedError extends Error {
+  readonly until: number;
+  readonly holding: boolean;
+  constructor(detail: string, until: number, holding: boolean) {
+    super(holding
+      ? `the orphaned host could not be stopped (${detail}); the send is held until ${new Date(until).toISOString()} and the seat is alerted`
+      : `the orphaned host could not be stopped (${detail}); its seat is alerted to stop or rotate it`);
+    this.name = "StructuredOrphanStopRefusedError";
+    this.until = until;
+    this.holding = holding;
+  }
+}
+
 class StructuredRecoverySupersededError extends Error {
   constructor() {
     super("structured recovery operation is superseded");
@@ -321,6 +352,10 @@ interface RecoveryCandidate {
       unverifiable, so recovery must not issue a successor spawn while the
       durable row is unsettled. */
   hostProcessLive: boolean;
+  /** The engine process is alive, but its recorded claim owner is proven
+      gone: nobody can reach it, so ordinary recovery never hands it back as
+      live. An explicit ownership takeover still releases it as before. */
+  ownerOrphaned: boolean;
   /** The registered host is process-alive, claim-owned and not terminal. */
   hostLive: boolean;
   /** The provider limit parking that live host's account, if any. */
@@ -367,6 +402,7 @@ function candidateFor(
   const terminal = entry?.status === "dead" || entry?.status === "unhosted";
   const hostProcessLive = Boolean(!terminal
     && structuredHostProcessAlive(entry?.structuredHost?.process ?? null));
+  const ownerOrphaned = hostProcessLive && structuredHostOrphaned(entry);
   const hostLive = Boolean(hostProcessLive
     && entry?.claimOwner
     && entry.pendingAction === null
@@ -431,6 +467,7 @@ function candidateFor(
       launchProfile: profile,
     },
     hostProcessLive,
+    ownerOrphaned,
     hostLive,
     park: hostPark,
     publishReady,
@@ -564,6 +601,16 @@ async function recoverCandidate(
               await publishStructuredDeliveryHost({ key: current.key, host, writerEpoch: claim.claimEpoch }, owns);
               const reconnected = structuredDeliveryHostForConversation(current.conversationId) === host;
               if (!reconnected) await releaseConnection();
+              else {
+                /* The host is claimed again: an orphan alarm raised before the
+                   reconnect no longer holds. */
+                try {
+                  const { closeOrphanedHostAlarm } = await import("./orphanedHostAlarm");
+                  await closeOrphanedHostAlarm(registry, current.key);
+                } catch (error) {
+                  console.error("[structured recovery] orphaned host alarm closure deferred", { key: sessionKeyId(current.key), error: String(error) });
+                }
+              }
               dependencies.requestDeliveryDrain?.();
               return { ...liveHostResult(current), reconnected, ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}) };
             } catch (error) {
@@ -574,6 +621,58 @@ async function recoverCandidate(
           }
         }
       }
+    }
+    /* A settled stage attempt is never rehosted (stageGitEnvironment.ts). Say
+       so before a parked fence is settled, a dead claim is retired or a resume
+       is reserved, so the send that asked ends now instead of waiting on a
+       host that cannot come back. */
+    if (!ownership && !current.hostLive) {
+      await assertStageAttemptNotSettled(registry, current.conversationId, current.spec.cwd);
+    }
+    /* A live engine whose recorded owner process is gone, typically one
+       that outlived a release handover. A Codex socket that could be reconnected was reconnected above;
+       anything else is stopped through the identity-fenced orphan ladder, after
+       a bounded grace when it still has work in flight, and then resumed
+       below. A host whose owner may still run never reaches this. */
+    if (current.ownerOrphaned && !ownership) {
+      request.admissionGuard?.();
+      const operationAdmittedAt = request.operationId ? registry.deliveryAdmissionAtForOperation(request.operationId) : null;
+      const orphanKey = current.key;
+      const now = dependencies.now ?? Date.now;
+      const stop = await stopOrphanedStructuredHost(registry, orphanKey, {
+        admittedAt: operationAdmittedAt ?? request.admittedAt ?? null,
+        now,
+        graceMs: ORPHANED_HOST_IN_FLIGHT_GRACE_MS,
+        refusedHoldMs: ORPHANED_HOST_STOP_REFUSED_HOLD_MS,
+        recheck: () => {
+          request.admissionGuard?.();
+          request.authorityGuard?.();
+          assertRestartCutEvidenceDecided(orphanKey);
+        },
+      }, dependencies.orphanStop);
+      if (stop.state === "grace") throw new StructuredOrphanGraceError(stop.detail);
+      if (stop.state === "refused") {
+        const holding = now() < stop.until;
+        /* The seat hears of it once, when the refusal is first seen, and again
+           when the held send gives up, so a lost first card is replaced. */
+        if (stop.firstObserved || !holding) {
+          try {
+            const { raiseOrphanedHostAlarm } = await import("./orphanedHostAlarm");
+            await raiseOrphanedHostAlarm(registry, orphanKey, stop.detail);
+          } catch (error) {
+            console.error("[structured recovery] orphaned host alarm publication deferred", { key: sessionKeyId(orphanKey), error: String(error) });
+          }
+        }
+        throw new StructuredOrphanStopRefusedError(stop.detail, stop.until, holding);
+      }
+      await assertOwnership();
+      current = candidateFor(registry, request, Boolean(ownership), park);
+      if (!current) return null;
+    } else if (!current.ownerOrphaned) {
+      /* An orphan that exited on its own, or was claimed again, leaves its
+         grace and refusal records behind; a later orphan of the same row
+         would replace them, but nothing else reads them. */
+      await forgetOrphanedHostGrace(registry.filename, sessionKeyId(current.key));
     }
     if (current.hostProcessLive && !current.hostLive
       && await settleParkedResumeFence(registry, current.key, client, dependencies)) {
@@ -779,6 +878,8 @@ async function recoverCandidate(
         && (!entry?.structuredHostOperationId || entry.structuredHostOperationId === launchId || entry.structuredHostOperationId === predecessorOperation)
         && !entry?.host && !entry?.claimOwner && !entry?.structuredHost?.process
         && !entry?.pendingAction && !(entry?.structuredTerminationSurvivors?.length)) {
+        /* The attempt settled after the check above: the same answer, by name. */
+        if (error instanceof StageAttemptSettledError) throw error;
         throw new StructuredResumeUnpublishedError(receipt.error ?? (error instanceof Error ? error.message : "host resume did not publish"));
       }
       throw error;
@@ -887,7 +988,7 @@ export async function recoverDeadStructuredConversation(
       },
     });
   }
-  if (candidate.hostLive && !dependencies.ownership && !admittedRequest.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
+  if (candidate.hostLive && !candidate.ownerOrphaned && !dependencies.ownership && !admittedRequest.reconnectLiveHost) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
   const recovery = recoverCandidate(admittedRequest, dependencies, registry, candidate);
   recoveries.set(recoveryKey, recovery);
   try {

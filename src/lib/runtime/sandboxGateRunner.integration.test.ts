@@ -127,7 +127,9 @@ kernelTest("host and namespace clients share FIFO tickets and one kernel slot", 
     protectedChild.stderr!.on("data", chunk => { errors += chunk; });
     const queue = new Database(path.join(env.LLV_GATE_LOCK_DIR!, "admission.sqlite"), { readonly: true });
     try {
-      const owners = () => queue.query<{ owner: string }, []>("SELECT owner FROM tickets WHERE owner IS NOT NULL ORDER BY seq").all();
+      const owners = () => queue.query<{ owner: string }, []>(
+        "SELECT owner FROM tickets WHERE owner IS NOT NULL AND key NOT GLOB 'command:gate-active:*' ORDER BY seq",
+      ).all();
       await waitFor(() => owners().length === 1);
       const firstOwner = JSON.parse(owners()[0]!.owner);
       expect(firstOwner.pid).toBe(signalDomain(protectedChild)!.native.pid);

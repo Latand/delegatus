@@ -68,7 +68,8 @@ test("urgent preference lasts until aging; earlier high tickets and FIFO ties ke
   expect(f.check("urgent")?.position).toBe(4);
   f.at(2 * T);
   const order = ["earlier", "normal", "normal-two", "low", "low-two", "urgent"];
-  for (const key of [...order].reverse()) expect(f.check(key)?.position).toBe(order.indexOf(key) + 1);
+  for (const key of order.slice(1).reverse()) expect(f.check(key)?.position).toBe(order.indexOf(key) + 1);
+  expect(f.check("earlier")).toBeNull(); // ready without consuming
   for (const [index, key] of order.entries()) { f.at(2 * T + index * GAP); expect(f.check(key, true, true)).toBeNull(); }
 });
 
@@ -85,7 +86,7 @@ test("dynamic task ranks recompute classes without rewriting wait age, FIFO or s
   f.at(15 * 60_000); f.priority("normal", "normal"); f.check("normal");
   expect(f.check("normal")?.position).toBe(3); // aged low ties new normal, first in FIFO
   f.at(20 * 60_000);
-  expect(f.check("changed")?.position).toBe(1);
+  expect(f.check("changed")).toBeNull();
 });
 
 test("starts pass slot-waiting commands but retain their pressure bound and shared spacing", () => {
@@ -98,14 +99,13 @@ test("starts pass slot-waiting commands but retain their pressure bound and shar
   expect(f.q.check("stage:one", false)).toBeNull(); // unchanged stage pressure escape
   expect(f.check("heavy", true, true)).toMatchObject({ position: 1, heldBy: "queue" });
   f.at(T + GAP);
-  expect(f.check("heavy", false, true)).toMatchObject({ position: 1, heldBy: "pressure" });
-  expect(f.check("heavy", true, true)).toBeNull();
+  expect(f.check("heavy", false, true)).toBeNull();
   expect(f.q.check("workflow:two", true)).toMatchObject({ position: 1, heldBy: "queue" });
   f.at(T + 2 * GAP);
   expect(f.q.check("workflow:two", true)).toBeNull();
 });
 
-test("an owned publication at its bound still passes a pressure-held check in the command lane", () => {
+test("an owned publication at its bound still passes a check waiting for a slot in the command lane", () => {
   const f = fixture();
   f.priority("heavy", "high"); f.check("heavy");
   f.at(1);
@@ -116,7 +116,7 @@ test("an owned publication at its bound still passes a pressure-held check in th
   expect(f.q.check("command:publication", false, f.owner)).toBeNull();
   expect(f.check("heavy", false, true)).toMatchObject({ position: 1, heldBy: "queue" });
   f.at(T + 1 + GAP);
-  expect(f.check("heavy", false, true)).toMatchObject({ position: 1, heldBy: "pressure" });
+  expect(f.check("heavy", false, true)).toBeNull();
 });
 
 test("cancellation resets age; suspension and an unpolled stage keep their own durable age", () => {
@@ -253,7 +253,7 @@ test.each([false, true])("legacy and aged current heads serialize their own clai
   expect(f.rows()).toEqual([]);
 });
 
-test("fresh checker processes recover aging from durable wait timestamps and keep pressure mandatory", () => {
+test("fresh checker processes recover aging and the pressure bound from durable wait timestamps", () => {
   const f = fixture();
   f.priority("normal", "normal"); f.check("normal");
   const script = `const { CpuAdmissionQueue } = await import(process.argv[1]);
@@ -268,8 +268,7 @@ test("fresh checker processes recover aging from durable wait timestamps and kee
   f.priority("urgent", "high");
   expect(check("urgent", T - 1, false, false)).toMatchObject({ position: 1, heldBy: "pressure" });
   expect(check("urgent", T, true, false)).toMatchObject({ position: 2 });
-  expect(check("normal", T, false, true)).toMatchObject({ position: 1, since: 0, waitedMs: T, heldBy: "pressure" });
-  expect(check("normal", T, true, true)).toBeNull();
+  expect(check("normal", T, false, true)).toBeNull();
   expect(check("urgent", T, true, true)).toMatchObject({ position: 1, heldBy: "queue" });
   expect(check("urgent", T + GAP, true, true)).toBeNull();
 });
