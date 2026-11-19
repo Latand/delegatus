@@ -333,8 +333,8 @@ New table `copies` in `attempt-temp.sqlite` (§5.5).
   participate in the source-change fence through dispatch.
 - **Accounting.** `manifest.json` keeps a bounded `skippedTracked` count and
   byte total before its final `files` array. The sweep reports the same totals
-  in the root outcome even when every selected file is omitted and no copy
-  directory is created. A fallback reason is recorded when one applies.
+  by root in `evidenceSelections` even when every selected file is omitted
+  and no copy directory is created. A fallback reason is recorded when one applies.
   The policy applies to new copies. Existing retained files keep their expiry.
 - **Registration.** Before `preserveAttemptEvidence` copies its first file,
   the sweep inserts `copies(destination, pipelineId, launchId, kind, createdAt,

@@ -265,8 +265,8 @@ test.each([false, true])("the sweep reports skipped files and checks them at dis
     expect(report.outcomes).toContainEqual(expect.objectContaining({
       directory: f.directory, disposition: edit ? "evidence" : "removed",
       reason: edit ? "evidence changed before dispatch" : "retirement completed",
-      evidenceSelection: { skippedTracked: { count: 1, bytes: tracked.length } },
     }));
+    expect(report.evidenceSelections[f.directory]).toEqual({ skippedTracked: { count: 1, bytes: tracked.length } });
     expect(fs.existsSync(f.directory)).toBe(edit);
     if (edit) expect(fs.readFileSync(file, "utf8")).toBe(tracked + "late edit");
     expect(fs.existsSync(statePath("evidence", "attempt-temp", createHash("sha256")

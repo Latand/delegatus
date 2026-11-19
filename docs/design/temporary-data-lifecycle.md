@@ -221,8 +221,8 @@ Summary (each row condenses the labelled section below it; line numbers are on `
   archives and shared-clone exports and preserves generated or edited output
   with different bytes. A lookup with uncertain provenance falls back to
   copying. If the preservation deadline runs out, the root stays for retry.
-  The manifest and root outcome record omitted file counts and bytes. An
-  all-omitted root produces only the outcome.
+  The manifest and sweep report record omitted file counts and bytes. When
+  all selected files are omitted, only the sweep report records the totals.
 - **Lifetime [O].** Since #3845 a copy of a lane root expires with the lane
   (`attemptTempRetention.ts:427`, `:446-449`); an agent copy seven days after creation.
   Older copies are adopted page by page; a copy whose manifest names no lane is registered

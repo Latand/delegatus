@@ -395,22 +395,20 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const pressure = lowSpace || store.bytes() > capBytes;
   type Outcome = { directory: string; disposition: "deferred" | "live" | "evidence" | "held" | "operator" | "failed" | "removed"; bytes: number; reason: string;
     /** Part of the tree could not be read; `bytes` counts the rest. */
-    unreadable?: true; evidenceSelection?: AttemptEvidenceSelection };
+    unreadable?: true };
   const report = { adopted: adoption.adopted, checked: 0, removed: 0, removedBytes: 0,
     deferred: 0, deferredBytes: 0, held: 0, liveHeld: 0, liveHeldBytes: 0,
     evidenceHeld: 0, evidenceHeldBytes: 0, operatorHeld: 0, operatorHeldBytes: 0, otherHeldBytes: 0,
     errors: adoption.errors, failedBytes: 0, unexaminedBytes: 0,
+    evidenceSelections: {} as Record<string, AttemptEvidenceSelection>,
     bytes: store.bytes(), capBytes, configuredCapBytes, overCapBytes: 0, inventoryWalks: 0, outcomes: [] as Outcome[],
     pressure, lowSpace, freeBytes, lowSpaceThresholdBytes: ATTEMPT_TEMP_LOW_SPACE_BYTES, spaceError,
     rootBudgetMs: pressure ? ATTEMPT_TEMP_ROOT_BUDGET_MS : null,
     /** Every root the ledger holds for the operator, not only this page's. */
     blocked: { roots: 0, bytes: 0, listed: [] as BlockedRoot[] } };
   const partiallyRead = new Set<string>();
-  const evidenceSelections = new Map<string, AttemptEvidenceSelection>();
   const outcome = (directory: string, disposition: Outcome["disposition"], bytes: number, reason: string) => {
-    const evidenceSelection = evidenceSelections.get(directory);
-    report.outcomes.push({ directory, disposition, bytes, reason, ...(partiallyRead.has(directory) ? { unreadable: true as const } : {}),
-      ...(evidenceSelection ? { evidenceSelection } : {}) });
+    report.outcomes.push({ directory, disposition, bytes, reason, ...(partiallyRead.has(directory) ? { unreadable: true as const } : {}) });
     if (disposition === "deferred") { report.deferred++; report.deferredBytes += bytes; }
     else if (disposition === "failed") { report.failedBytes += bytes; }
     else if (disposition !== "removed") {
@@ -655,7 +653,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
                 checkedAt: expiresAt ?? now() + 3600000, bytes: prior?.bytes ?? 0 });
             },
           });
-        if (evidence.selection?.skippedTracked.count || evidence.selection?.selectionFallback) evidenceSelections.set(owner.directory, evidence.selection);
+        if (evidence.selection?.skippedTracked.count || evidence.selection?.selectionFallback)
+          report.evidenceSelections[owner.directory] = evidence.selection;
         if (evidence.destination) {
           const copy = store.copy(evidence.destination)!;
           store.registerCopy({ ...copy, bytes: await allocatedAttemptBytes(evidence.destination) });
