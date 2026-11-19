@@ -364,17 +364,19 @@ test("an attended timeout cannot deny a replacement request with the same id", a
   guard.adopt("claude:fixture", host, "conversation_fixture", pending);
   expect(callbacks).toHaveLength(1);
   request = {};
+  guard.adopt("claude:fixture", host, "conversation_fixture", pending);
+  expect(callbacks).toHaveLength(2);
+  expect(guard.pendingTimers()).toBe(1);
   callbacks[0]!();
   await Promise.resolve();
   expect(denied).toEqual([]);
   expect(recorded).toEqual([]);
-
-  guard.adopt("claude:fixture", host, "conversation_fixture", pending);
-  expect(callbacks).toHaveLength(2);
+  expect(guard.pendingTimers()).toBe(1);
   callbacks[1]!();
   await Promise.resolve();
   expect(denied).toEqual(["reused-request"]);
   expect(recorded).toHaveLength(1);
+  expect(guard.pendingTimers()).toBe(0);
 });
 
 test("a denial the pipeline lease refuses is retried onto the attempt, and the journal names the stage regardless", async () => {

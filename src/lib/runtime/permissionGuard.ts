@@ -106,8 +106,8 @@ function factsOf(attention: unknown): RequestFacts {
 }
 
 export class PermissionRequestGuard {
-  private readonly timers = new Map<string, unknown>();
-  private readonly settled = new Set<string>();
+  private readonly timers = new Map<string, { request: object | undefined; timer: unknown }>();
+  private readonly settled = new Map<string, object | undefined>();
   private readonly now: () => number;
   private readonly timeoutMs: number;
   private readonly setTimer: (callback: () => void, delayMs: number) => unknown;
@@ -177,9 +177,15 @@ export class PermissionRequestGuard {
     raisedAt: number,
   ): void {
     const key = `${hostKey}\u0000${requestId}`;
-    if (this.settled.has(key) || this.timers.has(key)) return;
     const request = host.agentAttentionRequest?.(requestId);
     if (host.agentAttentionRequest && !request) return;
+    if (this.wasSettled(key, request)) return;
+    const active = this.timers.get(key);
+    if (active?.request === request) return;
+    if (active) {
+      this.clearTimer(active.timer);
+      this.timers.delete(key);
+    }
     const current = () => !host.agentAttentionRequest || host.agentAttentionRequest(requestId) === request;
     let attendance: PermissionAttendance;
     try {
@@ -196,24 +202,30 @@ export class PermissionRequestGuard {
        as long as they need; only a permission runs out. */
     if (!permission) return;
     const delay = Math.max(0, raisedAt + this.timeoutMs - this.now());
-    this.timers.set(key, this.setTimer(() => {
-      this.timers.delete(key);
+    const timer = this.setTimer(() => {
+      if (this.timers.get(key)?.request === request) this.timers.delete(key);
       void this.deny(key, host, conversationId, requestId, facts, "timeout", current);
-    }, delay));
+    }, delay);
+    this.timers.set(key, { request, timer });
   }
 
   private cancel(hostKey: string, requestId: string): void {
     const key = `${hostKey}\u0000${requestId}`;
-    const timer = this.timers.get(key);
-    if (timer === undefined) return;
-    this.clearTimer(timer);
+    const active = this.timers.get(key);
+    if (!active) return;
+    this.clearTimer(active.timer);
     this.timers.delete(key);
   }
 
-  private remember(key: string): void {
-    this.settled.add(key);
+  private wasSettled(key: string, request: object | undefined): boolean {
+    return this.settled.has(key) && this.settled.get(key) === request;
+  }
+
+  private remember(key: string, request: object | undefined): void {
+    this.settled.delete(key);
+    this.settled.set(key, request);
     if (this.settled.size <= SETTLED_CAPACITY) return;
-    const oldest = this.settled.values().next().value;
+    const oldest = this.settled.keys().next().value;
     if (oldest !== undefined) this.settled.delete(oldest);
   }
 
@@ -226,8 +238,9 @@ export class PermissionRequestGuard {
     mode: PermissionDenialMode,
     current: () => boolean,
   ): Promise<void> {
-    if (this.settled.has(key) || !current()) return;
-    this.remember(key);
+    const request = host.agentAttentionRequest?.(requestId);
+    if (this.wasSettled(key, request) || !current()) return;
+    this.remember(key, request);
     try {
       await host.answer(requestId, permissionDenyResolution(permissionDenyMessage(facts.reason)));
     } catch (error) {

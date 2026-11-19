@@ -69,6 +69,23 @@ export class NativeQueueExecutor {
   ): Promise<void | false> {
     const { client } = this.port;
     if (!client.nativeQueueRead || !client.nativeQueueTransition) throw new Error("native queue journal is unavailable");
+    /* Remember the authority that admitted this attempt before any journal
+       read can yield. The reads below describe work; they cannot choose a new
+       host or writer for it. A committed account succession is the sole
+       explicitly verified route to a successor authority. */
+    const attempted = {
+      binding: this.port.binding(command.conversationId),
+      host: this.port.resolveHost(command.conversationId),
+      writer: this.port.writerClaim?.(command.conversationId),
+    };
+    if (attempted.binding) attempted.binding = { ...attempted.binding };
+    const attemptedAuthorityCurrent = () => {
+      const currentBinding = this.port.binding(command.conversationId);
+      const sameBinding = currentBinding === null ? attempted.binding === null
+        : attempted.binding !== null && sameNativeQueueBinding(currentBinding, attempted.binding);
+      return sameBinding && this.port.resolveHost(command.conversationId) === attempted.host
+        && (!this.port.writerClaim || this.port.writerClaim(command.conversationId) === attempted.writer);
+    };
     const transition = (change: Parameters<NonNullable<RuntimeHostClient["nativeQueueTransition"]>>[1]) => client.nativeQueueTransition!(command.operationId, change);
     const prior = await step("reading the delivery journal status", () => client.operationStatus(command.operationId));
     if (!prior || (prior.receipt.status !== "queued" && prior.receipt.status !== "pending")) return;
@@ -90,6 +107,11 @@ export class NativeQueueExecutor {
       return false;
     }
     const rebinding = succession?.status === "committed" && !sameNativeQueueBinding(binding, succession.binding);
+    if ((!rebinding && !attemptedAuthorityCurrent())
+      || (rebinding && !sameNativeQueueBinding(this.port.binding(command.conversationId) ?? command.binding, succession.binding))) {
+      await transition({ phase: "refused", reason: "native queue writer changed during journal reads" });
+      return;
+    }
     if (rebinding) {
       if (command.action !== "add" || entry?.state !== "admitted" || version?.input || entry.nativeSubmissionId || entry.proof) {
         await transition({ phase: "refused", reason: "native queue submitted input belongs to the previous runtime" });

@@ -222,6 +222,33 @@ test("lost add reply survives restart and account change without a second native
   next.journal.close();
 });
 
+test("native queue refuses a writer replacement during its initial journal reads", async () => {
+  const f = fixture();
+  try {
+    const add = command("op-read-replacement");
+    f.journal.executeOperation(add);
+    let readStarted!: () => void;
+    const started = new Promise<void>(resolve => { readStarted = resolve; });
+    let finishRead!: () => void;
+    const held = new Promise<void>(resolve => { finishRead = resolve; });
+    const read = f.client.nativeQueueRead!;
+    f.client.nativeQueueRead = async (id) => {
+      readStarted();
+      await held;
+      return read(id);
+    };
+    const executing = f.executor.execute(add);
+    await started;
+    f.switchAccount();
+    finishRead();
+    await executing;
+
+    expect(f.calls).toEqual([]);
+    expect(f.journal.nativeQueueRead(conversationId)[0]).toMatchObject({ state: "refused", nativeSubmissionId: null });
+    expect(f.journal.operationResult(add.operationId)?.receipt.status).not.toBe("applied");
+  } finally { f.journal.close(); }
+});
+
 test.each(["hostless", "unreadable", "refused"])("a committed proof retries failed sender settlement without engine access (%s)", async scenario => {
   const hostless = scenario === "hostless";
   const f = fixture();

@@ -30,7 +30,7 @@ import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, s
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
 import { StringDecoder } from "node:string_decoder";
-import { NativeCodexQueue, NativeQueueProtocolRefusal } from "./nativeCodexQueue";
+import { NativeCodexQueue, NativeQueueNotSubmittedError, NativeQueueProtocolRefusal } from "./nativeCodexQueue";
 import { readCodexDeliveryHistory, findCodexHistoryDelivery, type CodexDeliveryHistoryResult } from "./codexHistoryReader";
 import type { NativeQueueHost } from "./nativeQueueExecutor";
 import type { NativeQueueRecord } from "./nativeQueueContracts";
@@ -2089,10 +2089,16 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const queue = this.nativeQueue?.queue;
     const snapshot = queue?.read();
     const head = snapshot && !snapshot.stale ? snapshot.items?.[0] : null;
-    if (!queue || !head || this.engineStatus !== "idle" || this.activeTurnId || this.hasBlockingAttention()) return;
+    if (!queue || !head || !this.idleQueueRecoveryAllowed()) return;
     try {
-      await queue.start(head.id);
+      await queue.start(head.id, () => {
+        /* NativeCodexQueue invokes this synchronously in its final microtask,
+           immediately before calling the transport. Recheck facts that may
+           have changed since the observed head and idle snapshot. */
+        if (!this.idleQueueRecoveryAllowed()) throw new NativeQueueNotSubmittedError("thread/queue/start", queue.threadId);
+      });
     } catch (error) {
+      if (error instanceof NativeQueueNotSubmittedError) return;
       // Auto-dispatch may win after the snapshot. An authoritative refusal
       // needs a fresh observation of that race; other faults fail adoption.
       // An uncertain write is never retried.
@@ -2102,6 +2108,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       }
       throw error;
     }
+  }
+
+  private idleQueueRecoveryAllowed(): boolean {
+    const facts = this.agentControlState();
+    return facts.status === "idle" && facts.idle && facts.turnId === null && !this.hasBlockingAttention();
   }
 
   private async readDeliveryHistory(clientIds: string[], timeoutMs = this.requestTimeoutMs,
