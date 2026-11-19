@@ -1202,7 +1202,7 @@ class CheckoutIntegration(unittest.TestCase):
         switch.active = True
         switch.unit = "synthetic-viewer.service"
         recoveries, fresh_witnesses = [], []
-        def recover_start(attempts=deploy.START_ATTEMPTS, settle_timeout=deploy.STOP_SETTLE):
+        def recover_start(attempts=deploy.START_ATTEMPTS, settle_timeout=deploy.STOP_SETTLE, command_deadline=None):
             if not switch.active:
                 switch.relocation["startAttempts"] += 1
                 switch.active = True
@@ -1227,6 +1227,22 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertTrue(fresh_witnesses)
         self.assertGreaterEqual(fresh_witnesses[0], recoveries[0])
         self.assertEqual(result["verdict"], "pass", result)
+
+    def test_owner_recovery_bounds_all_systemctl_calls_to_its_deadline(self):
+        binary = self.root / "slow-systemctl"
+        binary.mkdir()
+        systemctl = binary / "systemctl"
+        systemctl.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(2)\n")
+        systemctl.chmod(0o700)
+        self.adapter.command = deploy.command
+        self.adapter.relocation = {"stopSubmitted": True, "started": False, "startAttempts": 0,
+                                   "outcome": None, "diagnostics": []}
+        started = time.monotonic()
+        with patch.dict(os.environ, {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}):
+            self.adapter.recover_start(settle_timeout=0.25, command_deadline=started + 0.8)
+        self.assertLess(time.monotonic() - started, 1.2)
+        self.assertFalse(self.adapter.relocation["started"])
+        self.assertEqual(self.adapter.relocation["startAttempts"], 1)
 
     def test_an_incomplete_interruption_record_keeps_a_healthy_switch_from_passing(self):
         directory = self.state / "interruption-obligations"

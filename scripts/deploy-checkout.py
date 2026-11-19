@@ -255,7 +255,7 @@ def observe_switch(adapter, target, samples, interval, timeout):
             # Only the lock owner can recover a start. Recovery has its own
             # job-settlement bounds and is outside the read-only sample.
             recovered_during_sample = False
-            def owner_check():
+            def owner_check(cutoff=None):
                 nonlocal recovered_during_sample, last_owner_start
                 if not relocation or not relocation["stopSubmitted"]:
                     return False
@@ -265,7 +265,9 @@ def observe_switch(adapter, target, samples, interval, timeout):
                     return False
                 attempts = relocation.get("startAttempts", 0)
                 try:
-                    adapter.recover_start(settle_timeout=0.5)
+                    now_wall = time.monotonic()
+                    recovery_deadline = min(cutoff, now_wall + 0.8) if cutoff is not None else now_wall + 0.8
+                    adapter.recover_start(settle_timeout=0.25, command_deadline=recovery_deadline)
                 except Exception as error:
                     diagnostics.append("sample-recovery:" + type(error).__name__)
                 changed = relocation.get("startAttempts", 0) != attempts
@@ -471,7 +473,7 @@ def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
             while (incoming.get_map() or eof_pending) and time.monotonic() < limit:
                 if owner_check and time.monotonic() >= next_owner_check:
                     try:
-                        owner_check()
+                        owner_check(limit)
                     except Exception as error:
                         sample.unavailable(("owner", []), "owner-recovery:" + type(error).__name__)
                     next_owner_check = time.monotonic() + 1
@@ -566,9 +568,9 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
     deadline = adapter.clock.now() + timeout
     sample = EvidenceSample(hosts)
     recovered = False
-    def check_owner():
+    def check_owner(cutoff=None):
         nonlocal recovered
-        if owner_check and owner_check():
+        if owner_check and owner_check(cutoff):
             recovered = True
     inventory_reserve = min(5, timeout / 10) if since else 0
     protected_cutoff = deadline - timeout / 3
@@ -584,12 +586,12 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
     # one bounded batch prevents slow stage reads from starving serving proof.
     lanes.append(("serving", [old, target], serving_cutoff))
     collect(adapter, lanes, sample, serving_cutoff, owner_check=check_owner)
-    check_owner()
+    check_owner(deadline)
     # Read the cut inventory after the final serving observation. Boot can
     # still record cuts while the serving checks are waiting for readiness.
     if since:
         collect(adapter, [("interrupted", [since, hosts])], sample, deadline, owner_check=check_owner)
-        check_owner()
+        check_owner(deadline)
     if recovered:
         collect(adapter, [("serving", [old, target])], sample, deadline, owner_check=check_owner)
     return sample
@@ -1270,6 +1272,25 @@ class Checkout:
 
     def close(self):
         self.mcp.close()
+
+    @contextlib.contextmanager
+    def bounded_command_scope(self, deadline):
+        execute = self.command
+        if deadline is None or execute is not command:
+            yield
+            return
+
+        def bounded(args, cwd=None):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("owner recovery command deadline")
+            return command(args, cwd, timeout=min(0.15, remaining))
+
+        self.command = bounded
+        try:
+            yield
+        finally:
+            self.command = execute
 
     def census(self, timeout=30):
         return self.census_adapter(self.release, self.plan["bun"], self.state, self.target, timeout)
@@ -2039,20 +2060,21 @@ class Checkout:
         relocation["started"] = False
         relocation["outcome"] = "start-failed"
 
-    def recover_start(self, attempts=1, settle_timeout=STOP_SETTLE):
-        relocation = self.relocation
-        try:
-            if not self.jobs() and self.active_state() == "active":
-                relocation["started"] = True
-                relocation["outcome"] = relocation["stopOutcome"]
-                return
-        except Exception:
-            pass
-        self.start(relocation, attempts, settle_timeout)
-        with contextlib.suppress(Exception):
-            observed = self.placement()
-            relocation["placement"] = "placed" if observed["actual"] == observed["expected"] else "failed"
-            relocation["to"] = observed["actual"]
+    def recover_start(self, attempts=1, settle_timeout=STOP_SETTLE, command_deadline=None):
+        with self.bounded_command_scope(command_deadline):
+            relocation = self.relocation
+            try:
+                if not self.jobs() and self.active_state() == "active":
+                    relocation["started"] = True
+                    relocation["outcome"] = relocation["stopOutcome"]
+                    return
+            except Exception:
+                pass
+            self.start(relocation, attempts, settle_timeout)
+            with contextlib.suppress(Exception):
+                observed = self.placement()
+                relocation["placement"] = "placed" if observed["actual"] == observed["expected"] else "failed"
+                relocation["to"] = observed["actual"]
 
     def restart(self):
         """Stop, wait for the old cgroup to empty and be released, then start.
