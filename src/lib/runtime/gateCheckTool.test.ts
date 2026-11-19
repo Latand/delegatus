@@ -116,6 +116,17 @@ test("recorder pins the launch root across a nested TMPDIR and refuses altered p
   })).toThrow("gate launch root proof is incomplete");
 });
 
+test("recorder refuses an existing log symlink outside its root before creating a ticket", () => {
+  const f = fixture(), outside = fixture(), nested = path.join(f.root, "nested");
+  fs.mkdirSync(nested);
+  const log = path.join(nested, "check.log");
+  fs.symlinkSync(outside.log, log);
+  const env = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  expect(() => recorderGatePaths(log, nested, env)).toThrow(`resolvedRoot=${JSON.stringify(f.root)}`);
+  expect(fs.existsSync(`${log}.gate`)).toBe(false);
+  expect(fs.existsSync(path.join(f.root, ".gate-runs"))).toBe(false);
+});
+
 test("recorder refuses a moved launch root even when its original path aliases the same directory", () => {
   const f = fixture(), retained = `${f.root}.retained`;
   const env = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };

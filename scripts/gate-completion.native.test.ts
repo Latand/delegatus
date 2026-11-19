@@ -29,8 +29,8 @@ const cases = [
   { mode: "keyed filters", exit: 37 },
 ] as const;
 for (const { mode, exit } of cases) test.skipIf(!binary)(`native stage uses one exec and one completion wait (exit ${exit}, ${mode})`, async () => {
-  const delayedStartup = mode === "delayed recorder";
   const filtered = mode === "include_only" || mode === "keyed filters";
+  const delayedStartup = mode === "delayed recorder" || filtered;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-"));
   const env = withoutInheritedGate(isolatedEnvironment(root, checkEnvironment(process.env)));
   for (const key of [GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV]) env[key] = undefined;
@@ -162,8 +162,8 @@ process.exit(await child.exited);
     const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
     const record = ["/bin/bash", path.join(import.meta.dir, "gate-slot.sh"), "--record", log, process.execPath, fixture, root];
     const gateOptions = ["LLV_GATE_BUN", "LLV_GATE_RUNNER", "DELEGATUS_AGENT_CPU", "DELEGATUS_CPU_PRESSURE", "LLV_GATE_LOCK_DIR", "LLV_STATE_DIR", "XDG_CONFIG_HOME"];
-    const launch = filtered ? ["/usr/bin/env", `TMPDIR=${nested}`, ...gateOptions.map(key => `${key}=${env[key]}`), ...record]
-      : delayedStartup ? [process.execPath, launcher, root, ...record] : record;
+    const recordedCommand = filtered ? ["/usr/bin/env", `TMPDIR=${nested}`, ...gateOptions.map(key => `${key}=${env[key]}`), ...record] : record;
+    const launch = delayedStartup ? [process.execPath, launcher, root, ...recordedCommand] : recordedCommand;
     const cmd = (filtered ? 'test -z "${PRIVATE_SETTING+x}" && ' : "") + launch.map(quote).join(" ");
     const item = { id: "one-check", type: "function_call", call_id: "one-check", name: "exec_command", arguments: JSON.stringify({ cmd, yield_time_ms: filtered ? 3000 : 1 }) };
     response.write(`event: response.output_item.done\ndata: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item })}\n\n`);
@@ -171,8 +171,8 @@ process.exit(await child.exited);
     const yielded = await bounded(second.promise);
     const output = JSON.parse(yielded.body).input.find((item: { type: string }) => item.type === "function_call_output");
     expect(output.output).toContain("Process running with session ID");
-    const runId = filtered ? output.output.match(/runId=([a-f0-9]{64})/)?.[1] : undefined;
-    if (filtered) expect(runId).toHaveLength(64);
+    let runId = filtered ? output.output.match(/runId=([a-f0-9]{64})/)?.[1] : undefined;
+    if (filtered) expect(runId).toBeUndefined();
     if (delayedStartup) {
       expect(fs.existsSync(path.join(`${log}.gate`, "completion.json"))).toBe(false);
       fs.writeFileSync(path.join(root, "start-recorder"), "start");
@@ -181,6 +181,11 @@ process.exit(await child.exited);
       const check = () => { if (fs.existsSync(path.join(root, "ready"))) { readyWatcher?.close(); resolve(); } };
       readyWatcher = fs.watch(root, check); check();
     }));
+    if (filtered) {
+      const completion = JSON.parse(fs.readFileSync(path.join(`${log}.gate`, "completion.json"), "utf8"));
+      runId = completion.runId;
+      expect(runId).toMatch(/^[a-f0-9]{64}$/);
+    }
     expect(fs.existsSync(path.join(`${log}.gate`, "completion.json"))).toBe(true);
     const waitItem = { id: "one-wait", type: "function_call", call_id: "one-wait", name: gateCheckTool.name,
       arguments: JSON.stringify({ ...(filtered ? { runId } : { log }), reason: "fixture comparator" }) };

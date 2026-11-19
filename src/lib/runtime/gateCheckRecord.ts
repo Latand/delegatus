@@ -15,9 +15,22 @@ function gateRunLog(log: string, root: string): string {
     throw new Error(`gate log parent cannot be resolved (resolvedRoot=${JSON.stringify(root)}): ${error instanceof Error ? error.message : String(error)}`);
   }
   const resolvedLog = path.join(parent, path.basename(log));
-  const relative = path.relative(root, resolvedLog);
-  if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
+  const withinRoot = (candidate: string) => {
+    const relative = path.relative(root, candidate);
+    return Boolean(relative) && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
+  };
+  if (!withinRoot(resolvedLog))
     throw new Error(`gate log is outside the recorder's temporary root (resolvedRoot=${JSON.stringify(root)})`);
+  // The log is created with an exclusive open after its ticket directory. A
+  // pre-existing symlink would redirect that open outside the checked parent.
+  try {
+    if (fs.lstatSync(resolvedLog).isSymbolicLink() && !withinRoot(fs.realpathSync(resolvedLog)))
+      throw new Error(`gate log is outside the recorder's temporary root (resolvedRoot=${JSON.stringify(root)})`);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("resolvedRoot=")) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+      throw new Error(`gate log target cannot be resolved (resolvedRoot=${JSON.stringify(root)}): ${error instanceof Error ? error.message : String(error)}`);
+  }
   return resolvedLog;
 }
 
