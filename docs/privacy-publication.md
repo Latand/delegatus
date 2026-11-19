@@ -7,7 +7,9 @@ runtime or test dependencies, the fingerprint catalog, or either privacy
 workflow also run the self-tests. A trusted baseline failure produces a warning
 so a repair PR can proceed. The candidate suite runs last, with a 130-second
 deadline, and its failure blocks publication. The complete protected suite
-runs nightly on the default branch at 02:31 UTC and reports failures.
+runs nightly on the default branch at 02:31 UTC and reports failures. On a
+push to main, the publication scan checks the range from the previous tip to
+the new one. That push also reports the tracker check used by release verification.
 
 Privacy fixtures are released by the final serial test, after every concurrent
 CLI check has returned. Cleanup has its own 30-second timeout inside the unchanged
