@@ -44,6 +44,16 @@ const FILE_BUDGET_MS = 5 * 60 * 1000;
 // confirmations after a slow full-file baseline. Bound head work to eight owned
 // runners in the shared CPU work slice; baseline and retries retain three.
 const HEAD_FILE_WORKERS = 8;
+
+/** Gate fixtures start their own suites and supervisors. Eight such files in
+ * one real publication exhausted the 768-task service limit before any verdict.
+ * Source-only selections keep their head parallelism and confirmation budget. */
+export function comparisonFileWorkers(files: readonly string[], ceiling: number): number {
+  const nested = files.some(file => /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/")));
+  const workers = nested ? Math.min(2, ceiling) : ceiling;
+  return Math.min(files.length, workers);
+}
+
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
 export class BudgetExhausted extends Error {}
@@ -311,7 +321,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const results: TestRun[] = new Array(files.length);
   let next = 0;
-  const workers = await Promise.allSettled(Array.from({ length: Math.min(options.workers ?? 3, files.length) }, async () => {
+  const workers = await Promise.allSettled(Array.from({ length: comparisonFileWorkers(files, options.workers ?? 3) }, async () => {
   while (next < files.length) {
     const index = next++, file = files[index]!;
     const fileStarted = performance.now();
