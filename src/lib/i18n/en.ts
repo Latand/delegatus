@@ -563,6 +563,7 @@ export const en = {
   "externalRelay.target.answeredHere": "Answered by this install",
   "externalRelay.target.answeredElsewhere": "Answered by another install",
   "externalRelay.target.releaseElsewhere": "Switching on moves it here from the other install.",
+  "externalRelay.target.moveRefused": "Not moved. Switch off “Answered by this install” on the other install first, then switch it on here.",
   "externalRelay.target.answeredService": "Answered by the service",
   "externalRelay.target.confirmMove": "Move “{name}” from the other install to this install? The other install will stop answering this clone.",
   "externalRelay.target.moveAria": "Confirm move of {name}",

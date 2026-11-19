@@ -562,6 +562,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.target.answeredHere": "Відповідає ця інсталяція",
   "externalRelay.target.answeredElsewhere": "Відповідає інша інсталяція",
   "externalRelay.target.releaseElsewhere": "Увімкнення перенесе його сюди з іншої інсталяції.",
+  "externalRelay.target.moveRefused": "Не перенесено. Спочатку вимкніть «Відповідає ця інсталяція» на іншій інсталяції, потім увімкніть тут.",
   "externalRelay.target.answeredService": "Відповідає сервіс",
   "externalRelay.target.confirmMove": "Перенести «{name}» з іншої інсталяції до цієї? Інша інсталяція припинить відповідати цьому клону.",
   "externalRelay.target.moveAria": "Підтвердження перенесення «{name}»",
