@@ -23,6 +23,11 @@ export function witnessAdmissions<T>(witness: AdmissionWitness, work: () => T): 
   return witnessed.run(witness, work);
 }
 
+/** True only inside a witnessed operation before any writer entered. */
+export function noWriterAdmitted(): boolean {
+  return witnessed.getStore()?.entered === 0;
+}
+
 /** A store admitted a writer: from here its callback owns effects. */
 export function noteWriterAdmitted(): void {
   const witness = witnessed.getStore();

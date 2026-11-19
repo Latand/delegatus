@@ -203,18 +203,18 @@ test("a settled retryable bot refusal retains the receipt key and reconciles onc
   expect(store.readBridgeReportLog().reports).toHaveLength(1);
 });
 
-test("a refusal before storing has zero effects and a new request stores the report once", async () => {
+test("a proven refusal before storing allows the same request to store the report once", async () => {
   const p = await protocol();
   const fault = spyOn(store, "appendBridgeReports").mockImplementation(() => { throw busy(); });
   restores.push(() => fault.mockRestore());
-  expect(await p.call()).toMatchObject({ ok: false, retryable: true });
+  expect(await p.call()).toMatchObject({ ok: false, code: "store_busy", retryable: true,
+    details: { outcome: "not-executed", nextAction: "retry-same-key" } });
   expect(store.readBridgeReportLog().reports).toHaveLength(0);
   expect(sends).toHaveLength(0);
   fault.mockRestore();
-  // Preserve the existing pre-write refusal receipt behaviour (#2151).
-  expect(await p.call()).toMatchObject({ ok: false, replayed: true });
-  expect(await p.call({ clientRequestId: "report-new-call" })).toMatchObject({ ok: true, recorded: true, seq: 1 });
-  await p.call({ clientRequestId: "report-new-call" });
+  const recorded = await p.call();
+  expect(recorded).toMatchObject({ ok: true, recorded: true, seq: 1, replayed: false });
+  expect(await p.call()).toEqual({ ...recorded, replayed: true });
   expect(store.readBridgeReportLog().reports).toHaveLength(1);
   expect(sends).toHaveLength(1);
 });
