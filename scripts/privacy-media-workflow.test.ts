@@ -21,8 +21,8 @@ const workflows = names.map((name) => {
   const source = readFileSync(join(import.meta.dir, "..", ".github/workflows", `${name}.yml`), "utf8");
   return Bun.YAML.parse(source) as {
     // Bun 1.3's YAML 1.1 parser resolves unquoted `on` to `true`; Bun 1.4 keeps it as a string.
-    on?: { schedule?: { cron: string }[] };
-    true?: { schedule?: { cron: string }[] };
+    on?: { schedule?: { cron: string }[]; push?: { branches: string[] } };
+    true?: { schedule?: { cron: string }[]; push?: { branches: string[] } };
     jobs: Record<string, Job>;
   };
 });
@@ -175,7 +175,9 @@ test("nightly runs the complete default-branch suite and propagates its exit sta
   expect(nightly.if).toBe("github.event_name == 'schedule'");
   expect(nightly.steps.at(-1)?.run).toBe("bun test scripts/privacy-*.test.ts");
   expect(nightly.steps.at(-1)?.["continue-on-error"]).toBeUndefined();
-  expect(step(jobs[1]!, "Audit public tracker surfaces").if).toBeUndefined();
+  const tracker = workflows[1]!;
+  expect((tracker.on ?? tracker.true)?.push?.branches).toEqual(["main"]);
+  expect(step(jobs[1]!, "Audit public tracker surfaces").if).toBe("github.event_name != 'push'");
   expect(step(jobs[0]!, "Check out candidate as inspection input").with?.ref)
     .toBe("${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}");
 });

@@ -1,6 +1,8 @@
 name: Privacy tracker audit
 
 on:
+  push:
+    branches: [main]
   issues:
     types: [opened, edited]
   issue_comment:
@@ -79,6 +81,8 @@ jobs:
           '
 
       - name: Audit public tracker surfaces
+        # The release checks the job on main. A push has no tracker item to read.
+        if: github.event_name != 'push'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: scripts/privacy-known-value-fingerprints.json
