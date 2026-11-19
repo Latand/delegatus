@@ -1,3 +1,4 @@
+import type { LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { sessionOriginFor } from "./pluginAllowlist";
 /**
@@ -72,7 +73,7 @@ export interface AttachLaunchProfile {
   omitSkillsInstructions?: boolean;
   readOnly?: boolean | null;
   permissionMode?: string | null;
-  sandbox?: "full" | "restricted" | null;
+  sandbox?: LaunchProfile["sandbox"];
   cwd?: string | null;
   model?: string | null;
   effort?: string | null;
@@ -168,7 +169,7 @@ export interface LaunchAttachReceipt {
   accountId: string | null;
   agentRole?: string | null;
   key: { engine: AgentEngine; sessionId: string } | null;
-  launchProfile: { omitSkillsInstructions?: boolean; readOnly?: boolean | null; permissionMode?: string | null; sandbox?: "full" | "restricted" | null; model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
+  launchProfile: { omitSkillsInstructions?: boolean; readOnly?: boolean | null; permissionMode?: string | null; sandbox?: LaunchProfile["sandbox"]; model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
   transport: SpawnReceipt["transport"];
   state: SpawnReceipt["state"];
   purpose: SpawnReceipt["purpose"];

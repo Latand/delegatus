@@ -21,6 +21,7 @@ type SpawnRoleResolution = {
     scaffold: string;
     role: RoleId;
     params: RoleParamValues;
+    readOnly: boolean;
     /** The request's engine or model moved the runtime off the role's row. */
     explicitRuntime: boolean;
   } | null;
@@ -250,5 +251,6 @@ export function resolveSpawnRole(body: { role?: unknown; roleParams?: unknown; c
     return { ok: false, error: "deployer requires confirm: deploy" };
   }
   const explicitRuntime = resolved.value.config.engine !== base.value.config.engine || resolved.value.config.model !== base.value.config.model;
-  return { ok: true, value: { config: resolved.value.config, scaffold: resolved.value.prompt, role: resolved.value.definition.id, params: resolved.value.params, explicitRuntime } };
+  return { ok: true, value: { config: resolved.value.config, scaffold: resolved.value.prompt, role: resolved.value.definition.id, params: resolved.value.params,
+    readOnly: resolved.value.definition.capabilities.includes("read-only"), explicitRuntime } };
 }

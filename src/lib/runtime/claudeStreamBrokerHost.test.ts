@@ -401,6 +401,50 @@ test.each([
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test.each(["start", "resume", "unavailable"] as const)("Claude standalone read-only tools %s", async scenario => {
+  const { claudeStructuredHostOptions, materializeStructuredHostAccess } = await import("./structuredSpawn");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-role-"));
+  const policy = { readOnly: true, sandbox: "read-only" } as const;
+  const access = materializeStructuredHostAccess(policy, process.env, null, directory);
+  const child = new FakeClaude(new RecordingDeliveryLedger());
+  const captured: { args?: string[] } = {};
+  let host: ClaudeStreamBrokerHost | undefined;
+  try {
+    const options = {
+      ...await claudeStructuredHostOptions({
+        spec: { engine: "claude", command: "claude", windowName: "role", cwd: directory,
+          launchProfile: emptyLaunchProfile({ cwd: directory, ...policy, mcpServers: ["viewer"] }) },
+        account: { engine: "claude", accountId: "account-a", kind: "managed", home: directory,
+          transcriptRoot: directory, env: access.env },
+      }, access),
+      permissionMode: "bypassPermissions", tools: ["Bash"],
+      sessionId: ["00000000", "0000", "4000", "8000", "000000000019"].join("-"),
+      eventStore: new MemoryEventStore(), readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: scenario === "unavailable" ? () => { throw new Error("fixture CLI cannot launch restricted mode"); } : fakeSpawn(child, captured),
+    };
+    if (scenario === "unavailable") {
+      await expect(ClaudeStreamBrokerHost.start(options)).rejects.toThrow("fixture CLI cannot launch restricted mode");
+      expect(child.inputs).toEqual([]);
+      return;
+    }
+    host = scenario === "resume" ? await ClaudeStreamBrokerHost.adopt(options.sessionId, options) : await ClaudeStreamBrokerHost.start(options);
+    const args = captured.args!;
+    expect(args).toContain("--restricted");
+    expect(args[args.indexOf("--permission-mode") + 1]).toBe("default");
+    expect(args.filter(arg => arg === "--tools")).toHaveLength(1);
+    expect(args[args.indexOf("--tools") + 1]).toBe("Read,Glob,Grep,WebSearch");
+    expect(args[args.indexOf("--allowedTools") + 1]).toBe("mcp__viewer__*");
+    expect(args).toContain("--strict-mcp-config");
+    const config = JSON.parse(fs.readFileSync(args[args.indexOf("--mcp-config") + 1]!, "utf8"));
+    expect(Object.keys(config.mcpServers)).toEqual(["viewer"]);
+  } finally {
+    await host?.release();
+    access.cleanup();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 describe("root container Claude launches (#3205)", () => {
   const sessionId = ["00000000", "0000", "4000", "8000", "000000003205"].join("-");
   const refusal = "--dangerously-skip-permissions cannot be used with root/sudo privileges";
