@@ -622,7 +622,8 @@ test("get_orchestrator distinguishes seats on linked installs with the same mach
 
 test("get_orchestrator advertises a full install ID when a peer label collides with here", async () => {
   const peers = readPeers();
-  writePeers({ ...peers, peers: peers.peers.map(peer => peer.install === install ? { ...peer, label: "Here" } : peer) });
+  const peer = peers.peers.find(candidate => candidate.install === install)!;
+  writePeers({ ...peers, peers: [{ ...peer, label: "Here" }] });
   try {
     const bindings = viewerMcpBindings(undefined, { post: async () => ({}) }, domain);
     expect(await bindings.get_orchestrator!({ project: project.project })).toMatchObject({ linkedSeats: [{ machine: install, install }] });
