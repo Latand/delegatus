@@ -7,7 +7,6 @@ import { tailRecordsResult } from "./activity";
 import type { FileEntry, ProjectCatalogEntry } from "../types";
 import { agentRegistry, RegistryReadError, resolveConversationAlias } from "../agent/registry";
 import { registryRowProjection, type RegistryRowProjector } from "../agent/sqliteRegistryStore";
-import { registryRowProjection, type RegistryRowProjector } from "../agent/sqliteRegistryStore";
 import type { ViewerConversationId } from "../accounts/migration/contracts";
 import { forEachCooperatively, yieldToRuntime } from "../cooperative";
 import { tickPipelines } from "../pipelines/engine";
