@@ -1760,6 +1760,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     ...(turboShown ? { turboShown } : {}),
     ...(verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-ended") ? { autonomySummaryFor: pendingAutonomyReports(input.settings, input.now)[0]?.startedAt } : {}),
     bridgeReports: input.reports?.bridgeReports === true,
+    reportCoverage: input.reports,
     frozenText: text,
   });
   return { text, commit: commit!, renderedVerdict };

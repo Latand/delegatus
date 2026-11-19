@@ -22,6 +22,7 @@ import {
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickActivity,
   type SeatTickReportOwed,
+  type SeatTickReportsInput,
   type SeatTickCard,
   type SeatTickCheckInput,
   type SeatTickChildInput,
@@ -1727,6 +1728,14 @@ function instant(value: string | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
+type ReportCoverage = Pick<SeatTickReportsInput, "reportedIds" | "reportIdsFor">;
+
+function outcomeReported(reports: ReportCoverage | undefined): (key: string) => boolean {
+  if (!reports) return () => false;
+  const ids = new Set(reports.reportedIds);
+  return (key) => reports.reportIdsFor(key).some((id) => ids.has(id));
+}
+
 /**
  * One check's bookkeeping of what the report log owes. Pure: it reads the
  * report log as the gather saw it.
@@ -1741,8 +1750,7 @@ function instant(value: string | null | undefined): number {
 function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): SeatTickProjectState {
   const reports = input.reports;
   if (!reports) return state;
-  const ids = new Set(reports.reportedIds);
-  const reported = (key: string) => reports.reportIdsFor(key).some((id) => ids.has(id));
+  const reported = outcomeReported(reports);
   const coveredThrough = instant(reports.latestCoversOwedAt);
   const owed = (state.reportsOwed ?? []).filter((entry) => !reported(entry.key)
     && !(Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));
@@ -1851,8 +1859,9 @@ export function seatTickReportLines(
   const language = reports.operatorLocale ? `, in ${LANGUAGE_NAME[reports.operatorLocale]}` : "";
   const lines: string[] = [];
   const owed: { key: string; label: string }[] = [...(state.reportsOwed ?? [])];
+  const reported = outcomeReported(reports);
   for (const outcome of seatTickOwedOutcomes(items)) {
-    if (!owed.some((entry) => entry.key === outcome.key)) owed.push(outcome);
+    if (!reported(outcome.key) && !owed.some((entry) => entry.key === outcome.key)) owed.push(outcome);
   }
   if (owed.length > 0) {
     const labels = owed.slice(0, OWED_NAMED_LIMIT).map((entry) => entry.label).join(", ");
@@ -2163,6 +2172,8 @@ export function seatTickWakeCommitPlan(
     /** The project's Bridge reports setting: off, the landing records no
         owed outcome (docs/design/orchestrator-reports.md §5.1). */
     bridgeReports?: boolean;
+    /** Report coverage observed by the decision that composed this wake. */
+    reportCoverage?: ReportCoverage;
     /** Exact rendered payload, before reserving any outcome acknowledgments. */
     frozenText?: string;
   },
@@ -2214,9 +2225,11 @@ export function seatTickWakeCommitPlan(
     .map(item => item.occurredAt!).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
   /* The outcomes the report log is owed once this wake lands (§5.1). */
   const catchUp = verdict.catchUp && items.length === verdict.items.length ? verdict.catchUp : undefined;
+  const reported = outcomeReported(context.reportCoverage);
   const reportsOwed = context.bridgeReports ? catchUp?.pending ? [] : catchUp
     ? [{ key: catchUp.key, label: `catch-up ${catchUp.from} through ${catchUp.through}` }]
-    : seatTickOwedOutcomes(items) : [];
+    : seatTickOwedOutcomes(items).filter(outcome => !reported(outcome.key)) : [];
+  const owedKeys = new Set(reportsOwed.map(outcome => outcome.key));
   /* The stalls the wake actually names, never the check's whole stall list:
      one the per-wake bound cut was not reported. */
   const reportedStalls = items.flatMap((item) => item.stallToken ? [item.stallToken] : []);
@@ -2231,7 +2244,7 @@ export function seatTickWakeCommitPlan(
       ...(item.maintenance ? [`maintenance:${item.maintenance.runId}`] : []),
       ...(item.kind === "deploy" ? [`deploy:${item.id}`] : []),
       ...(item.stallToken ? [`stall:${item.stallToken}`] : []),
-      ...(context.bridgeReports ? seatTickOwedOutcomes([item]).map(outcome => `report:${outcome.key}`) : []),
+      ...seatTickOwedOutcomes([item]).filter(outcome => owedKeys.has(outcome.key)).map(outcome => `report:${outcome.key}`),
     ];
     return keys.map(key => ({ key, line: redactMonitorText(item.manifestLine ?? seatTickBullet(item)) }));
   });
