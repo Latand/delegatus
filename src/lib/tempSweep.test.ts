@@ -291,7 +291,7 @@ test.skipIf(process.platform === "win32")("root discovery agrees with a full sca
     expect(discoverSweepRoots(roots, proc)).toEqual(full);
     expect(full).toHaveLength(3);
     expect(full[1]?.anchor?.namespace).toBe("mnt:[2]");
-    expect([21, 22]).toContain(full[1]?.anchor?.pid);
+    expect([21, 22]).toContain(full[1]!.anchor!.pid);
     expect(full[2]?.anchor).toEqual(full[1]?.anchor);
     expect(read.mock.calls.every(args => String(args[0]).endsWith("/environ"))).toBe(true);
     expect(read.mock.calls.some(args => String(args[0]) === path.join(proc, "10/environ"))).toBe(false);
