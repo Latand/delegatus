@@ -290,7 +290,7 @@ function receiptOf(active: Fixture, operationId: string) {
 
 /** Stable native and conversation identities, scoped to synchronous fixture
  * creation so asynchronous delivery work keeps the ordinary runtime. */
-function completionFixture(name: string, options: Parameters<typeof fixture>[1] = {}) {
+function completionFixture(name: string, options: Parameters<typeof fixture>[1] = {}, childProject?: string) {
   let sequence = 0;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() => {
     const hex = crypto.createHash("sha256").update(`${name}:${++sequence}`).digest("hex");
@@ -298,7 +298,7 @@ function completionFixture(name: string, options: Parameters<typeof fixture>[1] 
   });
   try {
     const active = fixture(name, options);
-    return { active, child: secondConversation(active, `${name}-child`) };
+    return { active, child: secondConversation(active, `${name}-child`, childProject) };
   } finally { ids.mockRestore(); }
 }
 
@@ -411,7 +411,9 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
   process.env.LLV_STATE_DIR = alarmState;
   let clock = Date.parse("2026-11-14T09:10:00Z");
   setSystemTime(clock);
-  const { active, child } = completionFixture(`legacy-completion-alarm-${state}-${recovery}`, { sqlite: true, engine: "claude", now: () => clock });
+  const { active, child } = completionFixture(`legacy-completion-alarm-${state}-${recovery}`, {
+    sqlite: true, engine: "claude", now: () => clock,
+  }, "repo-warning-original");
   try {
     const { recordSendFailureNotice, readSendFailureNotice, decodeSendFailureNotice } = await import("./sendFailureNotice");
     const { spawnNoticeMessageId } = await import("@/lib/spawnNotice/sweep");
@@ -425,6 +427,7 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
       text: recorded.text.replaceAll(deliberate.operationId, automatic.operationId),
       clientMessageId: `send_failure_${crypto.createHash("sha256").update(automatic.operationId).digest("hex")}`, state,
       recipientConversationId: recovery === "unadmitted" ? null : child.conversationId };
+    delete legacy.deliberate;
     expect(decodeSendFailureNotice(legacy)).toEqual(legacy);
     const store = new SqliteStateCollection<import("./sendFailureNotice").SendFailureNotice>(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), {
       collection: "send_failure_notices", schemaVersion: 1, busyMessage: "fixture notices busy",
@@ -435,9 +438,10 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
     // A real prior-version persisted alarm; the current writer must also be
     // safe, but writer suppression alone cannot repair this outstanding row.
     store.boundedPatch(2, tx => tx.put(legacy));
-    const warning = recovery === "unadmitted" ? null : acceptSend(child, {
+    let warning = recovery === "unadmitted" ? null : acceptSend(child, {
       text: legacy.text, clientMessageId: legacy.clientMessageId, origin: { kind: "agent", role: "delivery" },
     });
+    let warningGeneration = child.generationId;
     if (warning && recovery === "delivered") {
       active.journal.transitionOperation(warning.operationId, "delivered", { turnId: "prior-warning-turn" });
     }
@@ -468,6 +472,9 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
       expect(readSendFailureNotice(automatic.operationId)?.suppressSenderWake).toBeUndefined();
     }
     if (recovery === "recipient-adoption") {
+      // Warm the original alias and alarm reads before the owner changes.
+      expect(active.registry.canonicalConversationId(child.conversationId)).toBe(child.conversationId);
+      expect(failureNotices.sendFailureWarningSuppressed(active.registry, warning!.operationId)).toBe(true);
       const canonical = secondConversation(active, "canonical-child");
       const migration = active.registry.beginSpawnRequest({ engine: "codex", cwd: path.dirname(child.transcriptPath),
         conversationId: canonical.conversationId, purpose: "migration-successor",
@@ -481,10 +488,19 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
       expect(active.registry.deliverySnapshotForOperation(warning!.operationId).deliveryOperationOwners[warning!.operationId]?.conversationId)
         .toBe(canonical.conversationId);
       expect(readSendFailureNotice(automatic.operationId)?.recipientConversationId).toBe(child.conversationId);
+      expect(active.registry.canonicalConversationId(child.conversationId)).toBe(canonical.conversationId);
+      expect(failureNotices.sendFailureWarningSuppressed(active.registry, warning!.operationId)).toBe(true);
     }
     if (recovery === "different-recipient") {
-      // Even an explicit suppression flag grants nothing to a different target.
-      store.boundedPatch(2, tx => tx.put({ ...legacy, recipientConversationId: active.conversationId, suppressSenderWake: true }));
+      const foreign = secondConversation(active, "foreign-warning-sender", "repo-warning-foreign");
+      expect(active.registry.conversation(child.conversationId)?.generations.at(-1)?.launchProfile.project).toBe("repo-warning-original");
+      expect(active.registry.conversation(foreign.conversationId)?.generations.at(-1)?.launchProfile.project).toBe("repo-warning-foreign");
+      store.boundedPatch(2, tx => tx.put({ ...legacy, suppressSenderWake: true }));
+      expect(failureNotices.sendFailureWarningSuppressed(active.registry, warning!.operationId)).toBe(true);
+      warning = acceptSend(foreign, { operationId: "op_foreign_warning", clientMessageId: legacy.clientMessageId,
+        text: legacy.text, origin: { kind: "agent", role: "delivery" } });
+      warningGeneration = foreign.generationId;
+      expect(failureNotices.sendFailureWarningSuppressed(active.registry, warning.operationId)).toBe(false);
     }
     store.close();
     const modulePath = new URL("./sendFailureNotice.ts", import.meta.url).pathname;
@@ -513,7 +529,7 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
           await sweep();
         }
         if (warning) {
-          const host = { health: async () => (${JSON.stringify(idleState(child.generationId))}),
+          const host = { health: async () => (${JSON.stringify(idleState(warningGeneration))}),
             send: async () => { started++; return { outcome: "turn-started", turnId: "warning-turn" }; },
             interrupt: async () => {}, answer: async () => {}, release: async () => {} };
           const queue = new StructuredDeliveryQueue({
@@ -557,9 +573,9 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
   }
 });
 
-for (const kind of ["automatic", "deliberate"] as const)
-for (const recovery of ["retained", "before-sweep", "after-sweep"] as const)
-test(`legacy real-writer pending warning survives failed-owner retention: ${kind} ${recovery}`, async () => {
+for (const kind of ["automatic", "deliberate", "legacy-deliberate"] as const)
+for (const recovery of kind === "legacy-deliberate" ? ["retained"] : ["retained", "before-sweep", "after-sweep"])
+test(`real-writer pending warning across failed-owner retention: ${kind} ${recovery}`, async () => {
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(isolated, `lost-owner-${kind}-${recovery}`);
   fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
@@ -572,35 +588,50 @@ test(`legacy real-writer pending warning survives failed-owner retention: ${kind
     const original = acceptSend(active, { text: "completed report",
       clientMessageId: kind === "automatic" ? spawnNoticeMessageId(child.conversationId, "work-turn") : "deliberate-work-message",
       origin: { kind: "agent", role: "reviewer", conversationId: child.conversationId } });
-    // Emulate the pre-exclusion reader's namespace view only while the real
-    // writer and sweep create/admit the legacy alarm. No alarm rows are
-    // fabricated; the stored owner retains its automatic identity throughout.
+    // Reproduce a legacy automatic alarm through the real writer. The
+    // original operation keeps its automatic key in the registry.
     const snapshotForOperation = active.registry.deliverySnapshotForOperation.bind(active.registry);
-    const legacyReader = spyOn(active.registry, "deliverySnapshotForOperation").mockImplementation(id => {
+    const legacyReader = kind === "automatic" ? spyOn(active.registry, "deliverySnapshotForOperation").mockImplementation(id => {
       const snapshot = snapshotForOperation(id);
       const owner = snapshot.deliveryOperationOwners[original.operationId];
       if (owner) owner.clientMessageId = "legacy-writer-message";
       return snapshot;
-    });
+    }) : null;
     let warning: ReturnType<typeof acceptSend> | null = null;
     try {
+      const host = recordingHost(active.generationId).host;
+      host.send = async () => { throw Error("Claude delivery confirmation timed out; outcome is uncertain"); };
+      const owner = snapshotForOperation(original.operationId).deliveryOperationOwners[original.operationId]!;
+      await new StructuredDeliveryQueue(stalePortFor(active, original.operationId, owner.clientMessageId!, "completed report"), () => host).drain();
       expect(await resolveSendReceipt(original.operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW }))
-        .toMatchObject({ state: "failed", resend: "safe", reason: SEND_LOST_REASON });
+        .toMatchObject({ state: "failed", resend: "verify-first", reason: SEND_UNVERIFIED_REASON });
       await m.sweepSendFailureNotices({ registry: active.registry, assertActive: () => {},
         receipt: id => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
         recipient: () => ({ kind: "deliver", conversationId: child.conversationId, path: child.transcriptPath }),
         deliver: async request => { warning = acceptSend(child, request); return { ok: true }; } });
-    } finally { legacyReader.mockRestore(); }
+    } finally { legacyReader?.mockRestore(); }
     expect(warning).not.toBeNull();
     const alarm = m.readSendFailureNotice(original.operationId)!;
-    expect(alarm).toMatchObject({ state: "pending", recipientConversationId: child.conversationId, reason: SEND_LOST_REASON });
+    if (kind !== "deliberate") {
+      delete alarm.deliberate;
+      const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+      const store = new SqliteStateCollection(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), {
+        collection: "send_failure_notices", schemaVersion: 1, busyMessage: "fixture notices busy",
+        key: (row: import("./sendFailureNotice").SendFailureNotice) => row.operationId,
+        decode: m.decodeSendFailureNotice, clone: structuredClone,
+        controllerActive: row => row.state === "pending" || row.state === "failed",
+      });
+      try { store.boundedPatch(2, tx => tx.put(alarm)); }
+      finally { store.close(); }
+    }
+    expect(alarm).toMatchObject({ state: "pending", recipientConversationId: child.conversationId, reason: SEND_UNVERIFIED_REASON });
     expect(alarm.suppressSenderWake).toBeUndefined();
     if (recovery !== "retained") {
       for (let i = 0; i < 205; i++) {
         clock += 1_000; setSystemTime(clock);
         const newer = acceptSend(active, { clientMessageId: `newer-failed-${i}` });
-        active.journal.transitionOperation(newer.operationId, "failed", { reason: SEND_LOST_REASON });
-        active.registry.recordDeliveryOutcome(newer.deliveryId, "failed", SEND_LOST_REASON, "lost");
+        active.journal.transitionOperation(newer.operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+        active.registry.recordDeliveryOutcome(newer.deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
       }
       active.registry.compactDeliveryReservations();
     }
@@ -610,22 +641,23 @@ test(`legacy real-writer pending warning survives failed-owner retention: ${kind
       const { AgentRegistry } = await import(${JSON.stringify(new URL("../agent/registry.ts", import.meta.url).pathname)});
       const { RuntimeJournal } = await import(${JSON.stringify(new URL("../../runtime-host/journal.ts", import.meta.url).pathname)});
       const { StructuredDeliveryQueue } = await import(${JSON.stringify(new URL("./structuredDeliveryQueue.ts", import.meta.url).pathname)});
-      const { sendIsSettled, sendReceiptFor } = await import(${JSON.stringify(new URL("./sendSettlement.ts", import.meta.url).pathname)});
+      const { sendIsSettled, resolveSendReceipt } = await import(${JSON.stringify(new URL("./sendSettlement.ts", import.meta.url).pathname)});
       const m = await import(${JSON.stringify(new URL("./sendFailureNotice.ts", import.meta.url).pathname)});
       const registry = new AgentRegistry(${JSON.stringify(active.registryPath)}, undefined, undefined,
         { sqliteMode: "sqlite", sqliteFilename: ${JSON.stringify(active.registryPath.replace(/\.json$/, ".sqlite"))} });
       const journal = new RuntimeJournal(${JSON.stringify(path.join(path.dirname(active.registryPath), "runtime.sqlite"))}, { structuredHosts: true });
-      let started = 0;
+        const started = [];
       const sweep = () => m.sweepSendFailureNotices({ registry, assertActive: () => {},
-        receipt: async id => sendReceiptFor(registry.deliverySnapshotForOperation(id), id),
-        recipient: () => { throw Error("an admitted warning resolved another recipient"); },
+        receipt: id => resolveSendReceipt(id, { registry, progress: null,
+          client: { operationStatus: async operationId => journal.operationResult(operationId) } }),
+        recipient: () => ({ kind: "deliver", conversationId: ${JSON.stringify(child.conversationId)}, path: ${JSON.stringify(child.transcriptPath)} }),
         fallback: () => ({ kind: "deliver", conversationId: ${JSON.stringify(active.conversationId)} }),
         deliver: async () => { throw Error("an admitted warning was resent"); } });
       try {
         if (${JSON.stringify(recovery)} !== "before-sweep") await sweep();
         const operationId = ${JSON.stringify(warning!.operationId)};
         const host = { health: async () => (${JSON.stringify(idleState(child.generationId))}),
-          send: async () => { started++; return { outcome: "turn-started", turnId: "warning-turn" }; },
+          send: async entry => { started.push(entry.text); return { outcome: "turn-started", turnId: "warning-turn" }; },
           interrupt: async () => {}, answer: async () => {}, release: async () => {} };
         const queue = new StructuredDeliveryQueue({
           effects: async () => journal.effectBatch(100).filter(effect => effect.payload.operationId === operationId),
@@ -634,8 +666,9 @@ test(`legacy real-writer pending warning survives failed-owner retention: ${kind
           transition: async (id, status, details) => journal.transitionOperation(id, status, details),
         }, () => host);
         await queue.drain();
-        await sweep(); await sweep();
-        console.log(JSON.stringify({ started, alarm: m.readSendFailureNotice(${JSON.stringify(original.operationId)}),
+        await sweep(); await queue.drain(); await sweep(); await queue.drain();
+        console.log(JSON.stringify({ started, warningStatus: journal.operationResult(operationId)?.receipt.status,
+          alarm: m.readSendFailureNotice(${JSON.stringify(original.operationId)}),
           senderSignals: m.sendFailureSignals(${JSON.stringify(child.conversationId)}),
           launcherSignals: m.sendFailureSignals(${JSON.stringify(active.conversationId)}) }));
       } finally { registry.close(); journal.close(); }
@@ -643,14 +676,17 @@ test(`legacy real-writer pending warning survives failed-owner retention: ${kind
     const [stdout, stderr, exit] = await Promise.all([new Response(childProcess.stdout).text(), new Response(childProcess.stderr).text(), childProcess.exited]);
     expect(exit, stderr).toBe(0);
     const observed = JSON.parse(stdout);
-    expect(observed.started).toBe(kind === "deliberate" && recovery === "retained" ? 1 : 0);
-    if (recovery !== "retained") {
+    expect(observed.started).toEqual(kind === "automatic" ? [] : [alarm.text]);
+    expect(observed.warningStatus).toBe(kind === "automatic" ? "uncertain" : "delivered");
+    if (kind !== "automatic") {
+      expect(observed.alarm).toMatchObject({ state: "sent", operationId: original.operationId, clientMessageId: alarm.clientMessageId });
+    } else if (recovery !== "retained") {
       expect(observed.alarm).toMatchObject({ state: "failed", suppressSenderWake: true, text: alarm.text });
-      expect(observed.alarm.reason).toContain(SEND_LOST_REASON);
+      expect(observed.alarm.reason).toContain(SEND_UNVERIFIED_REASON);
       expect(observed.alarm.reason).toContain("delivery record unavailable");
       expect(observed.senderSignals).toHaveLength(1);
       expect(observed.launcherSignals).toHaveLength(1);
-    } else if (kind === "automatic") expect(observed.alarm.state).toBe("cancelled");
+    } else expect(observed.alarm.state).toBe("cancelled");
   } finally {
     active.registry.close(); active.close(); setSystemTime();
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
@@ -658,39 +694,55 @@ test(`legacy real-writer pending warning survives failed-owner retention: ${kind
   }
 });
 
-test("retention during an awaited warning receipt surfaces the alarm without admission", async () => {
+for (const timing of ["before", "during"] as const)
+test(`retention ${timing} the original receipt read preserves an unadmitted warning`, async () => {
   const previousState = process.env.LLV_STATE_DIR;
-  process.env.LLV_STATE_DIR = path.join(isolated, "warning-receipt-retention-race");
+  process.env.LLV_STATE_DIR = path.join(isolated, `warning-receipt-retention-${timing}`);
   fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
   let clock = Date.parse("2026-11-14T09:18:00Z");
   setSystemTime(clock);
-  const { active, child } = completionFixture("warning-receipt-retention-race", { sqlite: true, now: () => clock });
+  const { active, child } = completionFixture(`warning-receipt-retention-${timing}`, { sqlite: true, now: () => clock });
   try {
     const m = await import("./sendFailureNotice");
     const original = acceptSend(active, { clientMessageId: "deliberate-before-retention",
       origin: { kind: "agent", role: "reviewer", conversationId: child.conversationId } });
     const receipt = await resolveSendReceipt(original.operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
     expect(receipt).toMatchObject({ state: "failed", reason: SEND_LOST_REASON });
-    let reads = 0;
-    await m.sweepSendFailureNotices({ registry: active.registry, assertActive: () => {},
+    const compact = () => {
+      for (let i = 0; i < 205; i++) {
+        clock += 1_000; setSystemTime(clock);
+        const newer = acceptSend(active, { clientMessageId: `race-newer-failed-${i}` });
+        active.journal.transitionOperation(newer.operationId, "failed", { reason: SEND_LOST_REASON });
+        active.registry.recordDeliveryOutcome(newer.deliveryId, "failed", SEND_LOST_REASON, "lost");
+      }
+      active.registry.compactDeliveryReservations();
+      expect(active.registry.deliverySnapshotForOperation(original.operationId).deliveryOperationOwners[original.operationId]).toBeUndefined();
+    };
+    const target = recordingHost(child.generationId);
+    let reads = 0, admissions = 0;
+    const ports: import("./sendFailureNotice").SendFailureNoticePorts = { registry: active.registry, assertActive: () => {},
       receipt: async () => {
         reads++;
-        await Promise.resolve();
-        for (let i = 0; i < 205; i++) {
-          clock += 1_000; setSystemTime(clock);
-          const newer = acceptSend(active, { clientMessageId: `race-newer-failed-${i}` });
-          active.journal.transitionOperation(newer.operationId, "failed", { reason: SEND_LOST_REASON });
-          active.registry.recordDeliveryOutcome(newer.deliveryId, "failed", SEND_LOST_REASON, "lost");
-        }
-        active.registry.compactDeliveryReservations();
-        expect(active.registry.deliverySnapshotForOperation(original.operationId).deliveryOperationOwners[original.operationId]).toBeUndefined();
-        return receipt;
+        if (timing === "during") { await Promise.resolve(); compact(); return receipt; }
+        return resolveSendReceipt(original.operationId, { registry: active.registry, client: active.client });
       },
-      recipient: () => { throw Error("retained snapshot allowed recipient lookup"); },
-      deliver: async () => { throw Error("retained snapshot admitted a warning"); } });
+      recipient: () => ({ kind: "deliver", conversationId: child.conversationId, path: child.transcriptPath }),
+      deliver: async request => {
+        admissions++;
+        const warning = acceptSend(child, request);
+        await new StructuredDeliveryQueue(stalePortFor(child, warning.operationId, request.clientMessageId, request.text), () => target.host).drain();
+        return { ok: true };
+      },
+    };
+    if (timing === "before") compact();
+    const alarm = m.readSendFailureNotice(original.operationId)!;
+    await m.sweepSendFailureNotices(ports);
+    await m.sweepSendFailureNotices({ ...ports,
+      receipt: id => resolveSendReceipt(id, { registry: active.registry, client: active.client }) });
     expect(reads).toBe(1);
-    expect(m.readSendFailureNotice(original.operationId)).toMatchObject({ state: "failed", suppressSenderWake: true });
-    expect(m.sendFailureSignals(child.conversationId)).toHaveLength(1);
+    expect(admissions).toBe(1);
+    expect(target.received).toEqual([alarm.text]);
+    expect(m.readSendFailureNotice(original.operationId)).toMatchObject({ state: "sent", clientMessageId: alarm.clientMessageId });
   } finally {
     active.registry.close(); active.close(); setSystemTime();
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
@@ -943,9 +995,9 @@ test("with no reader asking, the background deadline ends a dropped send and the
 });
 
 /** A second hosted conversation in the same registry and journal. */
-function secondConversation(active: Fixture, name: string): Fixture {
+function secondConversation(active: Fixture, name: string, project: string | null = null): Fixture {
   const transcriptPath = path.join(path.dirname(active.transcriptPath), `${name}.jsonl`);
-  const launchProfile = emptyLaunchProfile({ cwd: path.dirname(active.transcriptPath) });
+  const launchProfile = emptyLaunchProfile({ cwd: path.dirname(active.transcriptPath), project });
   active.registry.reconcileConversations([{
     engine: "codex",
     path: transcriptPath,

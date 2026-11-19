@@ -25,6 +25,8 @@ export interface SendFailureNotice {
   attempts?: number;
   fallbackConversationId?: string | null;
   suppressSenderWake?: boolean;
+  /** Set by the warning writer after checking the original admitted send. */
+  deliberate?: true;
 }
 const COLLECTION = "send_failure_notices";
 const HARVEST_COLLECTION = "send_failure_notice_harvest_cursors";
@@ -53,6 +55,7 @@ export function decodeSendFailureNotice(value: unknown): SendFailureNotice | nul
     && (row.attemptedAt === undefined || (typeof row.attemptedAt === "string" && Number.isFinite(Date.parse(row.attemptedAt))))
     && (row.attempts === undefined || (Number.isSafeInteger(row.attempts) && row.attempts >= 0))
     && (row.suppressSenderWake === undefined || typeof row.suppressSenderWake === "boolean")
+    && (row.deliberate === undefined || row.deliberate === true)
     && (row.fallbackConversationId === undefined || row.fallbackConversationId === null || row.fallbackConversationId.startsWith("conversation_"))
     && (row.settledAt === null || (typeof row.settledAt === "string" && Number.isFinite(Date.parse(row.settledAt))))
     ? row as SendFailureNotice : null;
@@ -104,7 +107,7 @@ export function recordSendFailureNotice(registry: AgentRegistry, operationId: st
   collection(true)!.boundedPatch(2, tx => {
     if (tx.get(operationId)) return;
     tx.put({ operationId, senderConversationId: origin.conversationId!, targetConversationId: owner.conversationId,
-      reason: detail, resend, createdAt: new Date().toISOString(), state: "pending", recipientConversationId: null,
+      reason: detail, resend, deliberate: true, createdAt: new Date().toISOString(), state: "pending", recipientConversationId: null,
       clientMessageId: `send_failure_${createHash("sha256").update(operationId).digest("hex")}`, text, settledAt: null });
   });
 }
@@ -135,7 +138,7 @@ export function sendFailureWarningSuppressed(registry: AgentRegistry, operationI
   // Legacy alarms carry no independent automatic-notice provenance. Once
   // retention removes the owner, surface the unresolved alarm rather than
   // allowing its already-admitted warning to start a finished child's turn.
-  return !original || !!original.clientMessageId?.startsWith(seatMessageKeys.spawn);
+  return original ? !!original.clientMessageId?.startsWith(seatMessageKeys.spawn) : alarm.deliberate !== true;
 }
 
 /** A canonical arrival retires only this operation's alarm. No input is written. */
@@ -271,7 +274,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     resolveFallback(row);
   };
   const surfaceMissingOwner = (row: SendFailureNotice, snapshot: ReturnType<AgentRegistry["deliverySnapshotForOperation"]>) => {
-    if (snapshot.deliveryOperationOwners[row.operationId]) return false;
+    if (row.deliberate || snapshot.deliveryOperationOwners[row.operationId]) return false;
     if (!row.suppressSenderWake) {
       update(row, { state: "failed", suppressSenderWake: true, settledAt: new Date().toISOString(),
         reason: `Original delivery record unavailable; warning held for review; original failure: ${row.reason}`.slice(0, 500) });
@@ -330,15 +333,22 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     catch (error) { ports.assertActive(); receiptFailure(row, error); return; }
     ports.assertActive();
     if (receipt?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
-    if (!receipt || receipt.state !== "failed") return;
+    if (receipt && receipt.state !== "failed") return;
+    // The receipt read can race cancellation and ordinary owner retention.
+    // A persisted deliberate warning can proceed when the original receipt
+    // is gone. Its own admitted operation still owns dispatch and replay.
     let latest: SendReceipt | null;
     try {
+      const currentRow = dispatchStore?.get(row.operationId);
+      if (currentRow?.state !== "pending" || currentRow.suppressSenderWake) return;
+      row = currentRow;
       const current = ports.registry.deliverySnapshotForOperation(row.operationId);
       if (surfaceMissingOwner(row, current)) return;
       latest = sendReceiptFor(current, row.operationId);
     }
     catch (error) { receiptFailure(row, error, "registry projection"); return; }
     if (latest?.state === "delivered") { update(row, { state: "cancelled", settledAt: new Date().toISOString() }); return; }
+    if (!receipt && latest) return;
     let recipient: ReturnType<SendFailureNoticePorts["recipient"]>;
     try { recipient = ports.recipient(row.recipientConversationId ?? row.senderConversationId); }
     catch (error) { receiptFailure(row, error, "recipient lookup"); return; }
