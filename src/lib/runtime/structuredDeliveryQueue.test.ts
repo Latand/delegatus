@@ -68,13 +68,14 @@ function host(send: (entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, a
   };
 }
 
-test.each(["current", "turn", "writer", "attention"] as const)(
+test.each(["current", "turn", "writer", "generation", "attention"] as const)(
   "delivery rechecks %s at the journal-to-host boundary",
   async replacement => {
     const writes: string[] = [];
     const statuses: string[] = [];
     let turn = "turn-one";
     let writer = "writer:1";
+    let engine: "codex" | "claude" = "codex";
     let request = {};
     const adapter = host(async (_entry, _dispatch, authorize) => {
       authorize?.();
@@ -93,14 +94,17 @@ test.each(["current", "turn", "writer", "attention"] as const)(
     const queue = new StructuredDeliveryQueue({
       effects: async () => [{ id: "effect:control", kind: `runtime.${kind}`, eventSeq: 1,
         payload: { operationId: "control", conversationId: "conversation-one",
+          controlBinding: { engine: "codex", sessionId: "session-one", writerClaim: "writer:1" },
           ...(answer ? { attentionId: "request-one", resolution: { behavior: "allow" } } : { turnId: turn }) } }],
       status: async () => ({ status: "pending", revision: 1 }),
       currentHostClaim: () => writer,
+      currentHostSessionKey: () => ({ engine, sessionId: "session-one" }),
       transition: async (_id, status) => {
         statuses.push(status);
         if (status !== "delivering") return;
         if (replacement === "turn") turn = "turn-two";
         if (replacement === "writer") writer = "writer:2";
+        if (replacement === "generation") engine = "claude";
         if (replacement === "attention") request = {};
       },
     }, () => adapter);

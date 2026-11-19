@@ -177,14 +177,23 @@ export class NativeQueueExecutor {
         await transition({ phase: "deferred", reason: "waiting for guarded idle dispatch" });
         return false;
       }
+      let wireAuthorized = false;
       const authorizeWrite = () => {
-        assertCurrent();
-        if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId);
-        if (command.action === "add" && !guardedAdd && this.port.requiresDispatchGuard?.(command.conversationId)) {
-          throw new StructuredDispatchDeferredError("native queue requires guarded idle dispatch");
+        try {
+          assertCurrent();
+          if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId);
+          if (command.action === "add" && !guardedAdd && this.port.requiresDispatchGuard?.(command.conversationId)) {
+            throw new StructuredDispatchDeferredError("native queue requires guarded idle dispatch");
+          }
+        } catch (error) {
+          actuated = wireAuthorized;
+          throw error;
         }
-        actuated = true;
+        wireAuthorized = true;
       };
+      // An adapter that loses its reply may already have written. Only a
+      // refusal from the pre-write callback establishes that it did not.
+      actuated = true;
       if (command.action === "add") {
         if (guardedAdd) {
           // The host checks the actual idle turn synchronously before turn/start.
@@ -238,6 +247,7 @@ export class NativeQueueExecutor {
           await transition({ phase: "uncertain", reason: "native entry was not withdrawn; canonical verification required" });
           return;
         }
+        wireAuthorized = true;
         await transition({ phase: "withdrawn" });
         authorizeWrite();
         const result = await native.sendWithdrawn({ ...entry!, state: "withdrawn" }, command.turnId!);

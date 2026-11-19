@@ -855,7 +855,7 @@ export class RuntimeJournal {
       const controlSession = command.kind === "answer" || command.kind === "interrupt"
         ? this.entity<RuntimeSession>("session", command.conversationId) : null;
       const controlBinding = controlSession?.writerClaim
-        ? { sessionId: controlSession.sessionKey.sessionId, writerClaim: controlSession.writerClaim } : null;
+        ? { ...controlSession.sessionKey, writerClaim: controlSession.writerClaim } : null;
       const effectPayload = command.kind === "answer"
         ? { ...command, operationId, controlBinding, resolution: this.encryptSecret(command.resolution) }
         : {

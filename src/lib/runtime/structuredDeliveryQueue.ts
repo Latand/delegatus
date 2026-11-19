@@ -141,6 +141,7 @@ export interface StructuredDeliveryQueuePort {
       with the executor that holds it rather than ending its send. */
   hostClaim?(conversationId: string): string | null | Promise<string | null>;
   currentHostClaim?(conversationId: string): string | null;
+  currentHostSessionKey?(conversationId: string): import("./contracts").RuntimeSession["sessionKey"] | null;
   /** Carries the outcome of a transition whose ACKNOWLEDGEMENT was lost into
       the durable delivery record (#1612).
    *
@@ -339,7 +340,7 @@ interface ControlEffect {
   operationId: string;
   conversationId: string;
   kind: "answer" | "interrupt" | "kill";
-  binding?: { sessionId: string; writerClaim: string };
+  binding?: { engine?: import("./contracts").RuntimeSession["sessionKey"]["engine"]; sessionId: string; writerClaim: string };
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef;
   attentionId?: string;
@@ -564,6 +565,7 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
   if (!operationId || !conversationId) return null;
   const value = effect.payload.controlBinding as Partial<NonNullable<ControlEffect["binding"]>> | null | undefined;
   if (value != null && (typeof value.sessionId !== "string" || typeof value.writerClaim !== "string")) return null;
+  if (value?.engine !== undefined && value.engine !== "codex" && value.engine !== "claude" && value.engine !== "copilot") return null;
   const binding = value as ControlEffect["binding"];
   if (effect.kind === "runtime.answer") {
     const attentionId = typeof effect.payload.attentionId === "string" ? effect.payload.attentionId : "";
@@ -823,11 +825,10 @@ async function sendWithReadRetry(host: EngineHost, entry: QueueEntry, firstDispa
       observeTiming?.("host-send");
       return await host.send(entry, attempt === 1 ? firstDispatch : undefined, authorize, observeTiming);
     } catch (error) {
-      if (attempt > 1 && (error instanceof StructuredSendRefusedError || error instanceof StructuredDispatchDeferredError
-        || error instanceof RoleMemoryRefusal && error.message === ROLE_MEMORY_CHANGED_MESSAGE)) {
+      if (attempt > 1 && error instanceof RoleMemoryRefusal && error.message === ROLE_MEMORY_CHANGED_MESSAGE) {
         // An earlier call may have written before its confirmation read failed.
         // This authorization refusal proves only that the retry did not write.
-        throw new Error(`${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${failureReason(error)}`);
+        throw new Error(`${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${ROLE_MEMORY_CHANGED_MESSAGE}`);
       }
       if (attempt === THREAD_READ_ATTEMPTS || !isThreadReadTimeout(error)) throw error;
     }
@@ -3219,8 +3220,11 @@ export class StructuredDeliveryQueue {
 
   private captureHostOwner(conversationId: string, host: EngineHost): () => void {
     const claim = this.port.currentHostClaim?.(conversationId);
+    const key = this.port.currentHostSessionKey?.(conversationId);
     return () => {
+      const currentKey = this.port.currentHostSessionKey?.(conversationId);
       if (this.retirementExecutor.retired || ((host.agentControlState || this.port.currentHostClaim) && this.resolveHost(conversationId) !== host)
+        || key?.engine !== currentKey?.engine || key?.sessionId !== currentKey?.sessionId
         || (this.port.currentHostClaim && claim !== this.port.currentHostClaim(conversationId))) {
         throw new StructuredDispatchDeferredError("structured host writer changed before dispatch");
       }
@@ -3919,10 +3923,21 @@ export class StructuredDeliveryQueue {
       await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" });
       return { blocked: true, terminated: false };
     }
-    if (effect.binding && (health.sessionKey !== effect.binding.sessionId
-      || this.port.currentHostClaim?.(effect.conversationId) !== effect.binding.writerClaim)) {
-      await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-generation" });
-      return { blocked: false, terminated: false };
+    if (effect.binding) {
+      const key = this.port.currentHostSessionKey?.(effect.conversationId);
+      const writer = this.port.currentHostClaim
+        ? { readable: true as const, value: this.port.currentHostClaim(effect.conversationId) }
+        : await this.readHostClaim(effect.conversationId);
+      if (!writer.readable) {
+        this.retrySoon();
+        return { blocked: true, terminated: false };
+      }
+      if ((key?.sessionId ?? health.sessionKey) !== effect.binding.sessionId
+        || (key && effect.binding.engine && key.engine !== effect.binding.engine)
+        || writer.value !== effect.binding.writerClaim) {
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-generation" });
+        return { blocked: false, terminated: false };
+      }
     }
     if (!await this.transitionUnlessSettled(effect.operationId, "delivering", {
       ...(effect.kind === "interrupt" ? { turnId: effect.turnId ?? health.turnId } : {}),

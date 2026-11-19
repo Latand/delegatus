@@ -1201,6 +1201,11 @@ export async function bindStructuredDeliveryQueue(
          abandoned, so a send another live executor is actuating is left to it. */
       hostClaim: currentHostClaim,
       currentHostClaim,
+      currentHostSessionKey: conversationId => {
+        const conversation = registry.conversation(conversationId as ViewerConversationId);
+        const generation = conversation?.generations.at(-1);
+        return conversation && generation ? { engine: conversation.engine, sessionId: generation.id } : null;
+      },
       /* The repair for a lost terminal acknowledgement (#1612). Reading the
          journal is what settles it, so a socket that cannot answer settles
          nothing and says so — the queue keeps the operation and asks again on
