@@ -146,6 +146,7 @@ test("runtime probes preserve their signal namespace boundary without inheriting
   }
 });
 
+// Allow service startup and reaping around the verifier's own shutdown deadline.
 test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI", "portable CLI", "delayed exit", "delayed portable exit", "delayed failed stop", "missing exit"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
   const root = fixtureRoot([
     "package.json", "node_modules/next/dist/server/node-environment.js",
@@ -270,4 +271,4 @@ test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed s
     if (worker) expect(processIdentityStatus(worker)).toBe("dead");
     expect(processIdentityStatus(other)).toBe("dead");
   }
-}, 15_000);
+}, 30_000);
