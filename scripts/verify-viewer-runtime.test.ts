@@ -146,9 +146,6 @@ test("runtime probes preserve their signal namespace boundary without inheriting
   }
 });
 
-// The probe may spend seven seconds waiting for TERM and ten more after KILL.
-// Allow for startup, shutdown confirmation and fixture cleanup in the outer
-// test timeout so the verifier's own deadlines decide the verdict.
 test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI", "portable CLI", "delayed exit", "delayed portable exit", "delayed failed stop", "missing exit"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
   const root = fixtureRoot([
     "package.json", "node_modules/next/dist/server/node-environment.js",
@@ -273,4 +270,4 @@ test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed s
     if (worker) expect(processIdentityStatus(worker)).toBe("dead");
     expect(processIdentityStatus(other)).toBe("dead");
   }
-}, 60_000);
+}, 15_000);
