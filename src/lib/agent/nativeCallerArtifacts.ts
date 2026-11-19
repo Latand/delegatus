@@ -187,7 +187,7 @@ export class NativeCallerArtifacts {
       this.delete(spelling);
       this.add(spelling);
     }
-    if (this.library.symbols.poll(this.pointer(this.mountPoll), 1n, 0) !== 0) throw new Error("native caller mount namespace changed");
+    if (this.library.symbols.poll(this.pointer(this.mountPoll), BigInt(1), 0) !== 0) throw new Error("native caller mount namespace changed");
     // A nonblocking inotify read stops at an empty queue or when the next
     // complete event will not fit. Spare space rules out the latter. Unrelated
     // events therefore need no second read merely to observe EAGAIN.
