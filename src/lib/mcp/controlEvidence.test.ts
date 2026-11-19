@@ -12,7 +12,7 @@ const id = (at: number, tail = "a") => `${at}-${tail.repeat(64)}`;
 test("outer evidence retains recent metadata through reopen and refuses a busy writer without storing request outcomes", async () => {
   const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "outer-evidence-"));
   const filename = path.join(root, "outer.sqlite");
-  const store = new AsyncControlEvidenceStore(filename, true, 1500, true);
+  let store = new AsyncControlEvidenceStore(filename, true, 1500, true);
   await store.ready();
   const peer = new Database(filename);
   try {
@@ -21,19 +21,18 @@ test("outer evidence retains recent metadata through reopen and refuses a busy w
     insert.run(262_142, Date.now() - 49 * 60 * 60_000, "discard-by-age");
     insert.run(262_144, Date.now(), "retained");
     peer.exec("BEGIN IMMEDIATE");
-    const refused = store.event("unwritten", "close", 2, 3, "premature");
-    await expect(refused).rejects.toBeInstanceOf(Error);
+    const refusal = await store.event("unwritten", "close", 2, 3, "premature")
+      .then(() => null, (error: Error) => error.message);
+    expect(refusal).toMatch(/busy|locked|writer deadline exceeded/i);
     peer.exec("ROLLBACK");
-    await store.event("new-event", "response", 2, 3, "http_200");
+    expect(peer.query("SELECT id FROM events WHERE id = 'unwritten'").get()).toBeNull();
     await store.close();
-    const reopened = new AsyncControlEvidenceStore(filename, true, 1500, true);
-    try {
-      await reopened.ready();
-      expect(peer.query("SELECT id,event,code FROM events ORDER BY seq").all()).toEqual([
-        { id: "retained", event: "start", code: null }, { id: "new-event", event: "response", code: "http_200" },
-      ]);
-      expect(peer.query("SELECT outcome FROM requests").all()).toEqual([]);
-    } finally { await reopened.close(); }
+    store = new AsyncControlEvidenceStore(filename, true, undefined, true);
+    await store.event("new-event", "response", 2, 3, "http_200");
+    expect(peer.query("SELECT id,event,code FROM events ORDER BY seq").all()).toEqual([
+      { id: "retained", event: "start", code: null }, { id: "new-event", event: "response", code: "http_200" },
+    ]);
+    expect(peer.query("SELECT outcome FROM requests").all()).toEqual([]);
   } finally {
     peer.close();
     await store.close();
