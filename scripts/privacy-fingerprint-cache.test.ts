@@ -37,7 +37,6 @@ async function runGateCli(repository: string, cacheDirectory: string | undefined
   const env: Record<string, string> = { ...process.env as Record<string, string>,
     LLV_PRIVACY_KNOWN_VALUES: "",
     LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: join(import.meta.dir, "privacy-known-value-fingerprints.json"),
-    LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
   };
   if (cacheDirectory) env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR = cacheDirectory;
   else delete env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR;
