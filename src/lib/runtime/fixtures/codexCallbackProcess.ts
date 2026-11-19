@@ -57,6 +57,8 @@ if (mode === "engine-socket") {
           if (connection === 2 && config.reconnectFailure) {
             if (config.reconnectFailure === "disconnect") socket.terminate();
             else send({ id: message.id, error: { code: -32000, message: "fixture transient config failure" } });
+          } else if (config.policy?.drift === "missing-config") {
+            reply(null);
           } else reply({ ...config.policy?.configRead, config: {
             mcp_servers: { viewer: { command: "bun", args: ["fixture-viewer"] } }, ...config.policy?.configRead.config,
           } });
@@ -65,7 +67,11 @@ if (mode === "engine-socket") {
         case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { fixture_read: {} } }], nextCursor: null }); break;
         case "thread/read":
           reply({ thread: { id: thread, path: config.transcriptPath ?? null, turns: [] } }); break;
-        case "thread/loaded/list": reply({ data: config.policy?.loaded === false ? [] : [thread] }); break;
+        case "thread/loaded/list":
+          if (config.policy?.drift === "unsupported-load-state") {
+            send({ id: message.id, error: { code: -32601, message: "fixture method unavailable" } });
+          } else reply({ data: config.policy?.loaded === false ? [] : [thread] });
+          break;
         case "turn/start": {
           if (!config.recipient) { send({ id: message.id, error: { code: -32601, message: "fixture method unavailable" } }); break; }
           fs.appendFileSync(config.transcriptPath, JSON.stringify({ type: "event_msg", timestamp: "2026-11-09T00:00:00Z",
@@ -89,7 +95,7 @@ if (mode === "engine-socket") {
             }
             const selected = policy.loaded || Object.entries(policy.selection).every(([key, value]) => message.params[key] === value);
             const active = selected ? policy.effective : policy.defaults;
-            reply({ ...active, ...policy.drift, thread: { id: thread, path: config.transcriptPath, turns: [], status: { type: "idle" } } });
+            reply({ ...active, ...policy.responseDrift, thread: { id: thread, path: config.transcriptPath, turns: [], status: { type: "idle" } } });
             break;
           }
           if (Object.keys(message.params).some(key => key !== "threadId" && key !== "config")) throw new Error("reconnect changed the existing thread policy");

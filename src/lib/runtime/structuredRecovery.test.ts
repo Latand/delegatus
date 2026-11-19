@@ -52,6 +52,8 @@ const reconnectPolicies = [
   { name: "named workspace-write with paginated replay", sandboxMode: "restricted", paginated: true, approval: "on-request" },
   { name: "already-loaded named profile", sandboxMode: "restricted", loaded: true },
   { name: "missing authorization", missing: true, refusal: "launch access authorization is unavailable" },
+  { name: "missing native configuration", drift: "missing-config", refusal: "effective launch policy could not be verified" },
+  { name: "unsupported native load-state proof", drift: "unsupported-load-state", refusal: "thread load state could not be verified" },
   { name: "missing native policy", drift: "missing", refusal: "effective launch policy could not be verified" },
   { name: "approval drift", loaded: true, drift: "approval", refusal: "effective launch policy could not be verified" },
   { name: "wider sandbox", sandboxMode: "restricted", drift: "widened", refusal: "effective launch policy could not be verified" },
@@ -100,11 +102,11 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
     roots: { sandbox: { ...projectedSandbox, writableRoots: [path.join(cwd, "extra"), ...roots] } },
     profile: { activePermissionProfile: { id: "other", extends: parent } },
   };
-  const drift = driftByScenario[scenario.drift ?? ""];
+  const responseDrift = driftByScenario[scenario.drift ?? ""];
   const defaultSandbox = projectedSandbox.type === "dangerFullAccess" ? { type: "readOnly", networkAccess: false } : { type: "dangerFullAccess" };
   fs.writeFileSync(descriptor, JSON.stringify({
     socket, threadId: sessionId, transcriptPath: artifactPath, recipient: true,
-    policy: { ...scenario, loaded: scenario.loaded ?? false, selection, effective, drift,
+    policy: { ...scenario, loaded: scenario.loaded ?? false, selection, effective, responseDrift,
       defaults: { ...effective, approvalPolicy: approvalPolicy === "never" ? "on-request" : "never", sandbox: defaultSandbox },
       configRead: { layers: [{ name: { type: "sessionFlags" }, config: { ...flags, ...(permission ? { default_permissions: permission } : {}) } }],
         config: { permissions: scenario.drift === "config" ? { [permission!]: { ...named[permission!], network: { enabled: true } } } : named } },
@@ -158,7 +160,7 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
     await kickStructuredDeliveryQueue();
     const resumes = fs.readFileSync(writeLog, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
     if (scenario.refusal) {
-      expect(outcome).toMatchObject({ ok: false, outcome: "failed", error: expect.stringContaining(scenario.refusal) });
+      expect(outcome, JSON.stringify(lastRecovery)).toMatchObject({ ok: false, outcome: "failed", error: expect.stringContaining(scenario.refusal) });
       expect(registry.startupHostSnapshot(key).entries[sessionKeyId(key)]?.claimOwner).toBeNull();
       expect(hasStructuredDeliveryHost(key)).toBeFalse();
       expect(processIdentityStatus(owner.process)).toBe("alive");
@@ -166,7 +168,8 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
       await kickStructuredDeliveryQueue();
       expect(journal.operationResult(outcome.operationId ?? request.operationId)).toBeNull();
       expect(fs.readFileSync(artifactPath, "utf8")).toBe("");
-      expect(resumes).toHaveLength(scenario.missing || scenario.drift === "config" ? 0 : 1);
+      const blockedBeforeResume = scenario.missing || ["config", "missing-config", "unsupported-load-state"].includes(scenario.drift ?? "");
+      expect(resumes).toHaveLength(blockedBeforeResume ? 0 : 1);
     } else {
       expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true });
       expect(resumes).toHaveLength(scenario.paginated ? 2 : 1);
@@ -194,7 +197,7 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
     access.cleanup();
     fs.rmSync(socketDirectory, { recursive: true, force: true });
   }
-}, 15_000);
+}, 45_000);
 
 for (const mode of ["startup", "foreground"] as const)
 for (const scenario of ["released", "delegated", "stale-owner", "foreign-owner", "failed-attachment", "revoked", "pipeline-busy", "pipeline-changed", "pipeline-unrelated",

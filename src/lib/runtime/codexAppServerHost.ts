@@ -1771,6 +1771,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         includeLayers: !!reconnectAccess && "permissionProfile" in reconnectAccess,
       }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
       options.assertCurrent?.();
+      if (reconnectAccess && !record(record(configRead)?.config)) throw new CodexReconnectPolicyError();
       const config = headlessCodexThreadConfig(
         configRead,
         options.allowSubagents === true,
@@ -2510,13 +2511,22 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private async isThreadLoaded(threadId: string): Promise<boolean> {
+    const method = "thread/loaded/list";
+    const unavailable = () => new CodexReconnectPolicyError("Codex reconnect thread load state could not be verified");
+    if (!this.protocol.hasMethod("ClientRequest", method)) throw unavailable();
     const deadline = Date.now() + this.requestTimeoutMs;
     let cursor: string | undefined;
     const seen = new Set<string>();
     for (let page = 0; page < 32; page++) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
-      const reply = record(await this.rpc("thread/loaded/list", { limit: 100, ...(cursor ? { cursor } : {}) }, remaining));
+      let reply: ReturnType<typeof record>;
+      try {
+        reply = record(await this.rpc(method, { limit: 100, ...(cursor ? { cursor } : {}) }, remaining));
+      } catch (error) {
+        if (error instanceof NativeQueueProtocolRefusal && error.code === -32601) throw unavailable();
+        throw error;
+      }
       if (!Array.isArray(reply?.data) || reply.data.some(id => typeof id !== "string")) break;
       if (reply.data.includes(threadId)) return true;
       if (reply.nextCursor == null) return false;
@@ -2524,7 +2534,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       cursor = reply.nextCursor;
       seen.add(cursor);
     }
-    throw new CodexReconnectPolicyError("Codex reconnect thread load state could not be verified");
+    throw unavailable();
   }
 
   /** Delivery-scoped native evidence, with the established legacy hydration
