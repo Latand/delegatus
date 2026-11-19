@@ -85,7 +85,13 @@ if (scenario === "hang" || scenario === "resist") {
       return { status, text: stdout + stderr, calls: lines("calls").map(line => JSON.parse(line) as string[]), sleeps: lines("sleeps"), deadlines: lines("deadlines") };
     } };
   };
-  return { root, start };
+  // These cases exercise the wrapper's classification of fixed CLI output.
+  // Real HTTP, signal and hung-child cases above still execute the Bun binary.
+  const diagnostic = (text: string) => {
+    writeFileSync(join(root, "diagnostic"), text + "\n");
+    shim("bun", 'if [[ "$1" != audit ]]; then exec "$AUDIT_TEST_BUN" "$@"; fi\ncat "$AUDIT_TEST_ROOT/diagnostic" >&2\nexit 1');
+  };
+  return { root, start, diagnostic };
 }
 
 for (const sequence of [["success"], ["timeout", "success"], ["timeout", "503", "success"]]) {
@@ -147,7 +153,7 @@ for (const statuses of [[503, 200], [503, 503, 503], [403]]) {
 for (const status of [408, 429, 500, 502, 503, 504]) {
   test(`Bun 1.4 advisory HTTP ${status} retries as unavailable`, async () => {
     const f = fixture([]);
-    writeFileSync(join(f.root, "fake.ts"), `console.error("bun audit v1.4.0 (fixture)"); console.error("error: POST https://registry.example/-/npm/v1/security/advisories/bulk - ${status}"); process.exit(1);`);
+    f.diagnostic(`bun audit v1.4.0 (fixture)\nerror: POST https://registry.example/-/npm/v1/security/advisories/bulk - ${status}`);
     const result = await f.start().result();
     expect(result.status).toBe(1);
     expect(result.sleeps).toEqual(["5", "10"]);
@@ -163,7 +169,7 @@ for (const diagnostic of [
 ]) {
   test(`Bun 1.4 refuses non-transient or mixed diagnostics: ${JSON.stringify(diagnostic)}`, async () => {
     const f = fixture([]);
-    writeFileSync(join(f.root, "fake.ts"), `console.error("bun audit v1.4.0 (fixture)"); console.error(${JSON.stringify(diagnostic)}); process.exit(1);`);
+    f.diagnostic(`bun audit v1.4.0 (fixture)\n${diagnostic}`);
     const result = await f.start().result();
     expect(result.status).toBe(1);
     expect(result.sleeps).toEqual([]);
@@ -253,7 +259,7 @@ for (const workflow of ["supply-chain.yml", "publish.yml"]) {
 for (const diagnostic of ["ConnectionRefused", "ConnectionReset", "ConnectionClosed", "FailedToOpenSocket"]) {
   test(`${diagnostic} is retried only as a standalone request failure`, async () => {
     const f = fixture(["success"]);
-    writeFileSync(join(f.root, "fake.ts"), `console.error("bun audit v1.3.3 (fixture)"); console.error("${diagnostic}: audit request failed"); process.exit(1);`);
+    f.diagnostic(`bun audit v1.3.3 (fixture)\n${diagnostic}: audit request failed`);
     const result = await f.start().result();
     expect(result.status).toBe(1);
     expect(result.deadlines).toHaveLength(3);
@@ -282,7 +288,7 @@ test("exhausted HTTP service errors are classified as unavailable", async () => 
 
 test("Bun 1.4 HTTP retries require the complete endpoint diagnostic", async () => {
   const f = fixture(["success"]);
-  writeFileSync(join(f.root, "fake.ts"), `console.error("error: POST https://registry.example.invalid/-/npm/v1/security/advisories/bulk - 503"); console.error("error: invalid lockfile"); process.exit(1);`);
+  f.diagnostic("error: POST https://registry.example.invalid/-/npm/v1/security/advisories/bulk - 503\nerror: invalid lockfile");
   const result = await f.start().result();
   expect(result.status).toBe(1);
   expect(result.sleeps).toEqual([]);

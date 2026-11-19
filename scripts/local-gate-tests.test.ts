@@ -363,6 +363,7 @@ test("gate harness selections limit nested workers while ordinary head and basel
   for (const nested of ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"]) {
     expect(comparisonFileWorkers([...regular, nested], 8)).toBe(2);
     expect(comparisonFileWorkers([nested], 8)).toBe(1);
+    expect(comparisonFileWorkers([...regular, nested], 8, true)).toBe(1);
     expect(comparisonFileWorkers([...regular, nested], 1)).toBe(1);
   }
 });

@@ -383,7 +383,7 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests run the branch first, up to eight explicit head files at once, each
+Touched tests run the branch first. Selections with gate-harness or privacy suites use at most two file workers, or one when Linux portable runners share their parent service. Other selections use up to eight explicit head files, each
 in its own owned process and isolated roots. A green branch skips the baseline
 entirely. For a red branch, only failing files run on the merge base, filtered
 to failing assertions; runner diagnostics need the whole file. Both kinds share
