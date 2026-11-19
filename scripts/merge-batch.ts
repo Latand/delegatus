@@ -13,6 +13,7 @@ import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
 import { parseReport, testNameFilter, type TestRun, type TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
 import { isDeclaredRepository } from "../bin/forge-app-token.mjs";
+import { deliveryPullRequestRepository } from "../src/lib/forge/workLinks";
 
 // A between-test error, a runner disagreement and a file that produced no
 // usable report are one file-level fault: their messages vary between runs,
@@ -199,6 +200,7 @@ export async function attributeBatchTests(base: BatchTestRun, candidate: TestRun
 
 export type ReviewedPr = { number: number; reviewed: string };
 export type Candidate = { main: string; prs: { number: number; head: string }[] };
+type LandingAdmission = (repository: string, members: readonly { number: number }[], land: () => Promise<void>) => Promise<void>;
 export function candidateOf(state: Pick<RunState, "base" | "rows">): Candidate {
   return { main: state.base, prs: state.rows.filter(row => row.status === "clean").map(row => ({ number: row.number, head: row.head })) };
 }
@@ -475,7 +477,7 @@ export class MergeBatch {
   readonly gh: GithubRunner;
   constructor(readonly repo: string, readonly stateFile: string, readonly run: CommandRunner = commandRunner, gh?: GithubRunner,
     readonly sleep: () => Promise<void> = () => new Promise((done) => setTimeout(done, 10_000)),
-    readonly now: () => string = () => new Date().toISOString()) {
+    readonly now: () => string = () => new Date().toISOString(), readonly landingAdmission?: LandingAdmission) {
     this.gh = gh ?? (async (args) => {
       const result = await this.run(repo, ["gh", ...args]);
       if (result.code) throw new Error("GitHub command failed; no merge verdict can be established");
@@ -1408,12 +1410,20 @@ export class MergeBatch {
         // Last read of originals immediately precedes the exact-head merge.
         await this.assertMachineForgePrincipal(repository);
         if (await this.stale(state)) { state = await this.refresh(state); continue; }
-        this.assertValidated(state);
-        state.mergeIntent = state.tip; this.save(state);
-        try { await this.gh(["pr", "merge", String(state.batch!.number), "--repo", `https://github.com/${repository}`, "--rebase", "--match-head-commit", state.tip]); }
-        catch (error) {
-          const outcome = JSON.parse(await this.gh(["pr", "view", String(state.batch!.number), "--json", BATCH_FIELDS])) as { state: string; headRefOid: string };
-          if (outcome.state === "MERGED" && outcome.headRefOid === state.tip) return this.recordLanding(state);
+        const landingAdmission = this.landingAdmission ?? await defaultLandingAdmission();
+        try {
+          await landingAdmission(repository, clean, async () => {
+            this.assertValidated(state);
+            state.mergeIntent = state.tip; this.save(state);
+            try {
+              await this.gh(["pr", "merge", String(state.batch!.number), "--repo", `https://github.com/${repository}`, "--rebase", "--match-head-commit", state.tip]);
+            } catch (error) {
+              const outcome = JSON.parse(await this.gh(["pr", "view", String(state.batch!.number), "--json", BATCH_FIELDS])) as { state: string; headRefOid: string };
+              if (outcome.state === "MERGED" && outcome.headRefOid === state.tip) return;
+              throw error;
+            }
+          });
+        } catch (error) {
           git(state.work, ["fetch", "origin", "main"]);
           if (git(state.work, ["rev-parse", "origin/main"]) !== state.base) { state = await this.refresh(state); continue; }
           throw error;
@@ -1554,6 +1564,19 @@ export class MergeBatch {
     this.save(state);
     return state;
   }
+}
+
+async function defaultLandingAdmission(): Promise<LandingAdmission> {
+  await import("../src/lib/state/owner/tool");
+  const { withDeliveryAdmissionFence } = await import("../src/lib/pipelines/store");
+  return (repository, members, land) => withDeliveryAdmissionFence(async mutate => {
+    for (const member of members) {
+      const owner = mutate(tx => tx.activeDeliveryOwnerForPullRequest(member.number, pipeline =>
+        deliveryPullRequestRepository(pipeline.delivery?.target) === repository.toLowerCase()));
+      if (owner) throw new Error(`Batch held: PR #${member.number} has active delivery owner lane ${owner.id}`);
+    }
+    await land();
+  });
 }
 
 function testDecisionReport(decisions: BatchTestDecision[], log: AttributionRecord[]): string[] {

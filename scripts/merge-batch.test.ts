@@ -907,7 +907,8 @@ test("(e) full browser campaigns are opt-in and are named as skipped by default"
 });
 
 function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green", runOverride?: CommandRunner,
-  setupRun?: (data: ReturnType<typeof fixture>) => CommandRunner) {
+  setupRun?: (data: ReturnType<typeof fixture>) => CommandRunner,
+  landingAdmission?: (repository: string, members: readonly { number: number }[], land: () => Promise<void>) => Promise<void>) {
   const f = fixture();
   const stateFile = join(f.root, "merge-batch.json");
   const calls: string[][] = [];
@@ -1012,9 +1013,26 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
     throw new Error(`Unexpected GH call ${args.slice(0, 2).join(" ")}`);
   };
   git(f.repo, ["config", `url.${join(f.root, "origin.git")}.insteadOf`, "https://github.com/example/fixture.git"]);
-  const batch = new MergeBatch(f.repo, stateFile, run, gh, async () => {});
+  const batch = new MergeBatch(f.repo, stateFile, run, gh, async () => {}, undefined, landingAdmission);
   return { ...f, batch, calls, commands, forge };
 }
+
+test("batch landing holds an active member lane and proceeds after its release", async () => {
+  let owner: string | null = "refresh-lane";
+  const admission = async (_repository: string, members: readonly { number: number }[], land: () => Promise<void>) => {
+    if (owner && members.some(member => member.number === 12)) throw new Error(`Batch held: PR #12 has active delivery owner lane ${owner}`);
+    await land();
+  };
+  const f = landingFixture("green", undefined, undefined, admission);
+  const head = f.addPr(12, "held.txt", "member patch");
+  await f.batch.build(`12@${head}`);
+  await f.batch.gate();
+  await expect(f.batch.land()).rejects.toThrow("Batch held: PR #12 has active delivery owner lane refresh-lane");
+  expect(f.calls.some(args => args[0] === "pr" && args[1] === "merge")).toBe(false);
+  owner = null;
+  expect((await f.batch.land()).rows[0]!.status).toBe("merged");
+  expect(f.calls.some(args => args[0] === "pr" && args[1] === "merge")).toBe(true);
+});
 
 test("one run lands healthy PRs in order and reports the unchanged culprit with test evidence", async () => {
   const f = landingFixture("green", undefined, fixture => {

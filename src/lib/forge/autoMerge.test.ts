@@ -76,6 +76,8 @@ type PullRequest = {
   number: number;
   state: string;
   head: string;
+  branch?: string;
+  forkOwner?: string;
   base: string;
   mergeable: string | null;
   mergeStateStatus: string;
@@ -123,6 +125,10 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
         state: pr.state,
         isDraft: pr.isDraft ?? false,
         headRefOid: pr.head,
+        headRefName: pr.branch,
+        headRepository: pr.forkOwner && { name: "widgets" },
+        headRepositoryOwner: pr.forkOwner && { login: pr.forkOwner },
+        isCrossRepository: Boolean(pr.forkOwner),
         baseRefName: pr.base,
         mergeable: pr.mergeable,
         mergeStateStatus: pr.mergeStateStatus,
@@ -1266,6 +1272,94 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     expect(merge).toMatchObject({ state: "merged", by: "auto-merge", mergedHead: HEAD_A, method: "squash", prNumber: 11 });
     expect(merge.mergeCommit).toBe("f".repeat(40));
     expect(merge.chain).toEqual([HEAD_A]);
+  });
+
+  test("a moved head after gh preflight refusal clears the old check clock and checks the new SHA", async () => {
+    const h = harness({ required: ["ci"], lanes: [lane("head-moved-at-preflight")], prs: [openPr(11)] });
+    await h.sweep();
+    h.advance(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    let attempts = 0;
+    h.ports.write = async (_args, _repository, beforeDispatch) => {
+      attempts++;
+      beforeDispatch?.();
+      Object.assign(h.prs.get(11)!, { head: HEAD_B, checks: [pending("ci")] });
+      throw new Error("the base branch policy prohibits the merge");
+    };
+    await h.sweep();
+    expect(h.merge("head-moved-at-preflight")).toMatchObject({
+      state: "checking", reason: "PR head moved during merge admission; checking again",
+      head: null, headSeenAt: null, lastChecks: null, nextReadAt: iso(h.now() + MERGE_POLL_MS),
+    });
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+    expect(h.merge("head-moved-at-preflight")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+    expect(attempts).toBe(1);
+  });
+
+  test.each(["already running", "while preparing the forge write", "with a linked PR", "on a fork"] as const)(
+    "a refresh %s holds its branch even when the queued lane predates delivery claims", async (timing) => {
+      const refresh = lane("refresh-owner");
+      refresh.state = "running";
+      refresh.refreshOf = { pipelineId: "older-legacy-lane", base: MAIN_1 };
+      refresh.delivery = { ...completedDelivery(refresh), epoch: 3, active: timing !== "while preparing the forge write", publish: "enabled" };
+      if (timing !== "with a linked PR") delete refresh.delivery.target.pr;
+      const forkOwner = timing === "on a fork" ? "fork-owner" : undefined;
+      if (forkOwner) refresh.delivery.target.remote = `https://github.com/${forkOwner}/widgets.git`;
+      const h = harness({ lanes: [lane("older-legacy-lane"), refresh], prs: [openPr(11, { branch: "delivery", forkOwner }), openPr(12, { isDraft: true })] });
+      const write = h.ports.write;
+      h.ports.write = async (args, repository, beforeDispatch) => {
+        if (h.pipeline(refresh.id).state === "running") h.pipeline(refresh.id).delivery!.active = true;
+        return write(args, repository, beforeDispatch);
+      };
+      await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+      expect(h.writes).toEqual([]);
+      expect(h.merge("older-legacy-lane")).toMatchObject({ state: "queued", reason: "Waiting for delivery lane refresh-owner to finish" });
+
+      h.pipeline(refresh.id).state = "completed";
+      h.pipeline(refresh.id).delivery!.active = false;
+      await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS, () => h.merges().length > 0);
+      expect(h.merge("older-legacy-lane")).toMatchObject({ state: "merged", mergedHead: HEAD_A });
+      expect(h.merges()).toHaveLength(1);
+    });
+
+  test("a blocked delivery leaves another PR's readiness slot free", async () => {
+    const refresh = lane("refresh-owner");
+    refresh.state = "running";
+    refresh.delivery = { ...completedDelivery(refresh), active: true, publish: "enabled" };
+    delete refresh.delivery.target.pr;
+    const h = harness({ lanes: [lane("a-held"), lane("b-ready"), refresh], prs: [
+      openPr(11, { branch: "delivery" }), openPr(12, { branch: "other-delivery" }), openPr(13),
+    ] });
+    await h.run(MERGE_SETTLE_MS * 3, () => h.merges().length > 0);
+    expect(h.merges().map(args => args[2])).toEqual(["12"]);
+    expect(h.merge("a-held")).toMatchObject({ state: "queued", reason: "Waiting for delivery lane refresh-owner to finish" });
+  });
+
+  test.each(["readable", "unavailable"] as const)("a head move at merge dispatch requeues the check with %s immediate readback", async (readback) => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
+    const write = h.ports.write;
+    const run = h.ports.run;
+    let failReadback = false;
+    h.ports.run = async args => {
+      if (failReadback && args[0] === "pr" && args[1] === "view") {
+        failReadback = false;
+        throw new Error("readback unavailable");
+      }
+      return run(args);
+    };
+    h.ports.write = async (args, repository, beforeDispatch) => {
+      h.prs.get(11)!.head = HEAD_B;
+      failReadback = readback === "unavailable";
+      return write(args, repository, beforeDispatch);
+    };
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS, () => h.writes.length > 0);
+    expect(h.writes).toHaveLength(1);
+    expect(h.writes[0]!.args.at(-1)).toBe(HEAD_A);
+    expect(h.merge("L1")).toMatchObject({ state: "checking", head: null, headSeenAt: null, lastChecks: null });
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+    expect(h.writes).toHaveLength(1);
+    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
   });
 
   test("an empty rollup with CLEAN does not merge, and blocks after 3 min with no checks reported", async () => {
