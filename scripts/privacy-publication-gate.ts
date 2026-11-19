@@ -1731,6 +1731,24 @@ function inspectMediaMetadata(path: string, kind: MediaKind | undefined): Set<Fi
       return findings;
     }
     if (bytes.length > 32 * 1024 * 1024) return new Set(["inspection_error"]);
+    if (kind === "animated") {
+      // Container tags can be UTF-8 even when adjacent frame bytes are binary.
+      const strings = bytes.toString("utf8").match(/[^\x00-\x1f\x7f-\x9f\ufffd]{4,}/gu) ?? [];
+      // ISO-BMFF metadata data boxes declare their encoding and byte extent.
+      // Type 2 stores UTF-16. Scan both alignments and byte orders just as
+      // for PNG metadata, without decoding any frame or launching a tool.
+      if (bytes.toString("ascii", 4, 8) === "ftyp") {
+        for (let pos = bytes.indexOf("data", 4); pos !== -1; pos = bytes.indexOf("data", pos + 4)) {
+          if (pos + 12 > bytes.length || bytes.readUInt32BE(pos + 4) !== 2) continue;
+          const size = bytes.readUInt32BE(pos - 4);
+          if (size < 16 || size > bytes.length - pos + 4) continue;
+          const end = pos - 4 + size;
+          for (const text of metadataStrings(bytes.subarray(pos + 12, end))) strings.push(text);
+          pos = end - 4;
+        }
+      }
+      return sensitiveClasses(strings.join("\n"));
+    }
     const printableMetadata = bytes.toString("latin1").match(/[\x20-\x7e]{4,}/g)?.join("\n") ?? "";
     return sensitiveClasses(printableMetadata);
   } catch {

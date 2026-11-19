@@ -2902,6 +2902,32 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   }, 18000);
 
+  test.serial("reads metadata from multiple video tracks without external tools", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "privacy-video-tags-"));
+    temporaryDirectories.push(directory);
+    const atom = (tag: string, payload: Buffer): Buffer => {
+      const header = Buffer.alloc(8);
+      header.writeUInt32BE(8 + payload.length); header.write(tag, 4, 4, "latin1");
+      return Buffer.concat([header, payload]);
+    };
+    const tag = (type: number, bytes: Buffer) => {
+      const header = Buffer.alloc(8); header.writeUInt32BE(type);
+      return atom("trak", atom("udta", atom("name", atom("data", Buffer.concat([header, bytes])))));
+    };
+    const mailbox = ["fixture", "private.internal"].join("@");
+    const privatePath = ["", "Users", "fixture-person", "metadata"].join("/");
+    const contents = Buffer.concat([atom("ftyp", Buffer.from("isom\0\0\0\0isom")),
+      atom("moov", Buffer.concat([tag(1, Buffer.from(mailbox)), tag(2, Buffer.from(privatePath, "utf16le").swap16())]))]);
+    const video = join(directory, "capture.mp4"); writeFileSync(video, contents);
+    const result = await runGate([video]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("email_address: 1");
+    expect(result.stdout.toString()).toContain("home_path: 1");
+    expect(result.stdout.toString()).toContain("provenance_missing: 1");
+    expect(result.stdout.toString()).not.toContain(privatePath);
+    expect(result.stdout.toString()).not.toContain(mailbox);
+  }, 18000);
+
   test.serial("detects video media renamed with a text extension", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
