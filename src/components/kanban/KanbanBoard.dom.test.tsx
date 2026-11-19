@@ -141,6 +141,30 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
   } finally { dom.localStorage.removeItem(timelineStorageKey("fixture")); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("a working card the projection found no lane or turn for says who works and carries the live mark", async () => {
+  const { BoardTimeline } = await import("./BoardTimeline");
+  const { getLocale, translate } = await import("@/lib/i18n");
+  const owner = task("bare", "assigned", "Agent with no recorded turn");
+  const card = { id: "task:bare", project: "fixture", task: owner, working: 2, motion: { key: "working" } } as never;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  roots.push(root);
+  flushSync(() => root.render(<BoardTimeline project="fixture" cards={[card]} pipelines={[]} members={[]} nowMs={1_800_000_000_000}
+    preference={{ view: "timeline", hours: 24, expanded: {} }} onPreference={() => {}} />));
+  const locale = getLocale();
+  const row = host.querySelector('[data-timeline-task="bare"]')!;
+  const words = row.querySelector(".bt-label")!.textContent!;
+  expect(words).toContain(translate(locale, "timeline.startUnknown"));
+  expect(words).toContain(translate(locale, "mobile2.kanban.agents", { count: 2 }));
+  expect(words).toContain(translate(locale, "kanban.graphState.running"));
+  expect(words).not.toContain(translate(locale, "timeline.waiting"));
+  expect(words).not.toContain(translate(locale, "timeline.stages", { count: 0 }));
+  expect(row.querySelectorAll("[data-timeline-live]")).toHaveLength(1);
+  expect(row.querySelectorAll("[data-timeline-segment]")).toHaveLength(0);
+  expect(row.querySelectorAll("[data-timeline-line]")).toHaveLength(0);
+});
+
 test("the layout mode follows the board's own width, tabbed from 640 px up to 767 px", () => {
   expect(kanbanLayoutMode(640)).toBe("tabs");
   expect(kanbanLayoutMode(767)).toBe("tabs");
