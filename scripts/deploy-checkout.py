@@ -340,7 +340,7 @@ class EvidenceSample:
                 self.diagnostics.append(value)
 
     def unavailable(self, lane, reason):
-        kind, inputs = lane
+        kind, inputs = lane[:2]
         self.accept(("diagnostic", kind + ":" + reason))
         self.incomplete = True
         if kind == "protected":
@@ -427,8 +427,10 @@ def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
         try:
             for lane in lanes:
                 try:
+                    kind, inputs = lane[:2]
+                    worker_cutoff = min(limit, lane[2]) if len(lane) > 2 else limit
                     with tempfile.TemporaryFile() as request:
-                        request.write(json.dumps([*lane, limit, adapter.plan]).encode())
+                        request.write(json.dumps([kind, inputs, worker_cutoff, adapter.plan]).encode())
                         request.seek(0)
                         if time.monotonic() >= limit:
                             sample.unavailable(lane, "sample-deadline")
@@ -517,8 +519,11 @@ def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
                     eof_pending.pop(child_pid)
                     exit_code = status.si_status if status is not True and status.si_code == os.CLD_EXITED else None
                     exit_signal = status.si_status if status is not True and status.si_code in [os.CLD_KILLED, os.CLD_DUMPED] else None
+                    lane_cutoff = min(limit, lane[2]) if len(lane) > 2 else limit
                     if buffer or child_pid not in completed or exit_code != 0:
-                        if exit_code is not None:
+                        if child_pid not in completed and time.monotonic() >= lane_cutoff:
+                            cause = "sample-deadline"
+                        elif exit_code is not None:
                             cause = "worker-exit:" + str(exit_code)
                         elif exit_signal is not None:
                             cause = "worker-signal:" + signal.Signals(exit_signal).name
@@ -565,21 +570,23 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
         nonlocal recovered
         if owner_check and owner_check():
             recovered = True
+    inventory_reserve = min(5, timeout / 10) if since else 0
+    protected_cutoff = deadline - timeout / 3
+    serving_cutoff = deadline - inventory_reserve
+    lanes = []
     if hosts:
-        # Reserve a serving read after stage reconciliation. A slow stage
-        # cannot use that time, and an early finish leaves it for serving.
         numbered = list(enumerate(hosts))
         offset = index % len(numbered)
         numbered = numbered[offset:] + numbered[:offset]
-        lanes = [("protected", numbered[i::PROTECTED_READERS])
-                 for i in range(min(len(hosts), PROTECTED_READERS))]
-        collect(adapter, lanes, sample, deadline - timeout / 3, owner_check=check_owner)
-        check_owner()
+        lanes.extend(("protected", numbered[i::PROTECTED_READERS], protected_cutoff)
+                     for i in range(min(len(hosts), PROTECTED_READERS)))
+    # Serving and protected evidence share the sample cutoff. Running them in
+    # one bounded batch prevents slow stage reads from starving serving proof.
+    lanes.append(("serving", [old, target], serving_cutoff))
+    collect(adapter, lanes, sample, serving_cutoff, owner_check=check_owner)
+    check_owner()
     # Read the cut inventory after the final serving observation. Boot can
     # still record cuts while the serving checks are waiting for readiness.
-    inventory_reserve = min(5, timeout / 10) if since else 0
-    collect(adapter, [("serving", [old, target])], sample, deadline - inventory_reserve, owner_check=check_owner)
-    check_owner()
     if since:
         collect(adapter, [("interrupted", [since, hosts])], sample, deadline, owner_check=check_owner)
         check_owner()

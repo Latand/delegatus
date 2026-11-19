@@ -36,12 +36,14 @@ def inline_evidence(adapter, lanes, sample, cutoff, owner_check=None):
     # Stateful relocation fixtures use a fake clock in one process. The
     # worker tests below exercise the actual subprocess supervisor and pipes.
     start = finish = adapter.clock.now()
-    for kind, inputs in lanes:
+    for lane in lanes:
+        kind, inputs = lane[:2]
+        lane_cutoff = min(cutoff, lane[2]) if len(lane) > 2 else cutoff
         if owner_check:
             owner_check()
         adapter.clock.value = start
-        for frame in deploy.evidence_frames(adapter, kind, inputs, cutoff):
-            if adapter.clock.now() < cutoff:
+        for frame in deploy.evidence_frames(adapter, kind, inputs, lane_cutoff):
+            if adapter.clock.now() < lane_cutoff:
                 sample.accept(frame)
             if owner_check:
                 owner_check()
@@ -2608,7 +2610,7 @@ for line in sys.stdin:
         if name.startswith("late-") or name.startswith("stalled-"):
             child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
             record("descendant", name, child.pid)
-            time.sleep(1.8 if name.startswith("late-") else 60)
+            time.sleep(6 if name.startswith("late-") else 60)
             record("late-reply", name, os.getpid())
         if tool == "get_pipeline":
             state = "running" if name.startswith(("dead-", "pending-")) else "passed"
@@ -2731,8 +2733,8 @@ sys.exit(deploy.evidence_worker(sys.argv[2]))
     def test_mixed_finishes_while_late_transport_and_descendant_are_stopped(self):
         names = ["pending-0", "dead-1", "unavailable-2", "dead-3",
                  "unavailable-4", "late-5", "stalled-6", "complete-7"]
-        result = self.run_sample(names)
-        self.assertEqual(result["verdict"], "needs_decision")
+        result = self.run_sample(names, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision", result)
         self.assertTrue(deploy.ready(result["serving"], TARGET))
         self.assertEqual([row.get("reason") for row in result["protected"]], [
             "stage-conversation-pending", "replacement-host-unconfirmed", "pipeline-unavailable:RuntimeError",
