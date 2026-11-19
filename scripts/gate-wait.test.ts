@@ -290,13 +290,17 @@ test.skipIf(process.platform !== "linux")("nested check TMPDIR publishes its run
   expect((await runGateCheckTool({ runId, reason: "foreign nested run" }, bindGateCheckRoot(foreign.root), new AbortController().signal)).success).toBe(false);
 }, 30_000);
 
-test.each(["outside", "indirect", "missing-parent", "standalone", "index-link"])("a recorder refuses %s before starting the command", async fault => {
+test.each(["outside", "indirect", "linked-file", "missing-parent", "standalone", "index-link"])("a recorder refuses %s before starting the command", async fault => {
   const f = fixture(), other = fixture(), env = portableEnvironment(f);
   const marker = path.join(f.root, "command-started");
   let log = f.log;
   if (fault === "outside" || fault === "standalone") log = other.log;
   if (fault === "missing-parent") log = path.join(other.root, "absent/check.log");
   if (fault === "indirect") { fs.symlinkSync(other.root, path.join(f.root, "indirect"), "dir"); log = path.join(f.root, "indirect/check.log"); }
+  if (fault === "linked-file") {
+    const nested = path.join(f.root, "nested"); fs.mkdirSync(nested);
+    log = path.join(nested, "check.log"); fs.symlinkSync(other.log, log);
+  }
   if (fault === "index-link") fs.symlinkSync(other.root, path.join(f.root, ".gate-runs"), "dir");
   if (fault === "standalone") {
     const alias = path.join(other.root, "allowed");
@@ -310,9 +314,10 @@ test.each(["outside", "indirect", "missing-parent", "standalone", "index-link"])
   expect(fs.existsSync(marker)).toBe(false);
   if (fault !== "index-link") {
     expect(recording.output().stderr).toContain(`resolvedRoot=${JSON.stringify(fs.realpathSync(f.root))}`);
-    for (const entry of [log, `${log}.gate`, path.join(f.root, ".gate-runs"), path.join(other.root, ".gate-runs")]) {
+    for (const entry of [`${log}.gate`, path.join(f.root, ".gate-runs"), path.join(other.root, ".gate-runs")]) {
       expect(fs.existsSync(entry)).toBe(false);
     }
+    if (fault === "linked-file") expect(fs.readlinkSync(log)).toBe(other.log);
   }
 });
 
