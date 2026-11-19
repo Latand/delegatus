@@ -299,6 +299,7 @@ test.each(["outside", "indirect", "linked-file", "missing-parent", "standalone",
   if (fault === "indirect") { fs.symlinkSync(other.root, path.join(f.root, "indirect"), "dir"); log = path.join(f.root, "indirect/check.log"); }
   if (fault === "linked-file") {
     const nested = path.join(f.root, "nested"); fs.mkdirSync(nested);
+    fs.writeFileSync(other.log, "existing external target\n");
     log = path.join(nested, "check.log"); fs.symlinkSync(other.log, log);
   }
   if (fault === "index-link") fs.symlinkSync(other.root, path.join(f.root, ".gate-runs"), "dir");
