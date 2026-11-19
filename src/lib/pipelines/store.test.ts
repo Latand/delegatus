@@ -183,14 +183,17 @@ test.each([
 ])("$name", async ({ contendedRelease }) => isolatedDelivery(async (root) => {
   savePipelines([]);
   const modulePath = path.join(import.meta.dir, "store.ts");
+  const operationId = "pipeline-store-delivery";
   const script = `import { createPipelineWithDelivery } from ${JSON.stringify(modulePath)};
+    import { withWaitCorrelation } from ${JSON.stringify(path.join(import.meta.dir, "../blockingWaits.ts"))};
     import { injectStateWriteFaultForTests, stateLeaseHoldsInFlight } from ${JSON.stringify(path.join(import.meta.dir, "../state/sqliteStateStore.ts"))};
     if (process.env.CONTENDED_RELEASE === "1") injectStateWriteFaultForTests({
       site: "release", collection: "pipelines", times: 1,
       error: Object.assign(new Error("database is locked"), { name: "SQLiteError", code: "SQLITE_BUSY" }),
     });
     const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
-    console.log(JSON.stringify(await createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET))));
+    console.log(JSON.stringify(await withWaitCorrelation({ operationId: ${JSON.stringify(operationId)} }, () =>
+      createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET)))));
     if (process.env.CONTENDED_RELEASE === "1") {
       const deadline = Date.now() + 10000;
       while (stateLeaseHoldsInFlight().some(hold => hold.collection === "pipelines")) {
@@ -209,15 +212,17 @@ test.each([
   const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked";
   const admissionWarning = "[state lease] abandoned pipelines: StateLockDeferredError: state admission is busy at state.lease.release";
   const clearedLease = /^\[state lease\] cleared abandoned pipelines after \d+ ms$/;
+  // Bun prints the lease-hold timing object as a multiline console warning.
+  const leaseHold = /^\[state lease-hold\] \{\r?\n  collection: "pipelines",\r?\n  operation: "pipelines\.mutation",\r?\n  heldMs: [1-9]\d{3,},\r?\n(?:  inFlight: true,\r?\n)?\}(?:\r?\n|$)/gm;
   const parseResult = ({ exit, stdout, stderr }: Awaited<ReturnType<typeof run>>) => {
     const leaseWarnings: string[] = [];
-    const diagnostics = stderr.split(/(?<=\n)/).filter(line => {
+    const diagnostics = stderr.replace(leaseHold, "").split(/(?<=\n)/).filter(line => {
       const warning = line.replace(/\r?\n$/, "");
       if (warning !== releaseWarning && warning !== admissionWarning && !clearedLease.test(warning)) return true;
       leaseWarnings.push(warning);
       return false;
     }).join("");
-    assertStateChildSuccess(exit, diagnostics);
+    assertStateChildSuccess(exit, diagnostics, { correlatedOperationId: operationId });
     return { record: JSON.parse(stdout) as Pipeline, leaseWarnings };
   };
   // Join both contenders before parsing either result or removing the fixture state.
