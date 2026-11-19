@@ -303,6 +303,79 @@ test.each(["sqlite", "off"] as const)("scanner tiers agree with the full walk ac
   };
   try {
     await compare(["default", "priority", "priority", "priority", "ultrafast", null]);
+    if (peer) {
+      const migration = {
+        intentId: "tier-continuity",
+        phase: "successor-starting" as const,
+        targetId: "account-b",
+        revision: 1,
+        error: null,
+        updatedAt: at,
+      };
+      registry.setConversationMigration("conversation_primary", migration);
+      registry.transitionConversationMigration("conversation_primary", 1, ["successor-starting"], {
+        phase: "verifying",
+        providerReceipt: {
+          operationId: "tier-continuity-operation",
+          nativeId: "tier-successor",
+          path: "/fixture/provider-receipt.jsonl",
+          continuityPaths: ["/fixture/provider-alias.jsonl"],
+          historyHash: "tier-history",
+          host: { kind: "codex-app-server", identity: "tier-host", epoch: 1, verifiedAt: at },
+        },
+      });
+      const providerAlias = "/fixture/provider-alias.jsonl";
+      expect((await durableServiceTierIndex([...paths, providerAlias], registry)).get(providerAlias)).toBe("priority");
+
+      // Legacy rows can hold migration continuity paths only inside their
+      // nested migration/provider receipt. Remove the normalized mirror to
+      // exercise both SQL sources and their startup backfill directly.
+      const legacyAlias = "/fixture/legacy-migration-alias.jsonl";
+      const nestedProviderAlias = "/fixture/nested-provider-alias.jsonl";
+      const primary = peer!.readOnlySnapshot().file.conversations.conversation_primary!;
+      registry.close();
+      const legacyRows = new Database(sqlite);
+      try {
+        const nested = structuredClone(primary);
+        nested.id = "conversation_nested_migration";
+        nested.generations = [{ ...nested.generations.at(-1)!, id: "nested-current", path: "/fixture/nested-current.jsonl" }];
+        nested.migration = {
+          ...nested.migration!,
+          providerReceipt: { ...nested.migration!.providerReceipt!, continuityPaths: [nestedProviderAlias] },
+        };
+        const nestedOnly = Object.fromEntries(Object.entries(nested).filter(([key]) => key !== "continuityPaths"));
+        legacyRows.query(`INSERT INTO registry_rows(collection, row_key, value_json, row_order)
+          SELECT 'conversations', ?, json_set(json_remove(?, '$.continuityPaths'), '$.migration.continuityPaths', json(?)), COALESCE(MAX(row_order), -1) + 1
+          FROM registry_rows WHERE collection='conversations'`).run(nested.id, JSON.stringify(nestedOnly), JSON.stringify([legacyAlias]));
+        expect(legacyRows.query("SELECT count(*) AS count FROM registry_conversation_paths WHERE conversation_id='conversation_nested_migration'").get())
+          .toEqual({ count: 3 });
+        legacyRows.query("DELETE FROM registry_conversation_paths WHERE conversation_id='conversation_nested_migration'").run();
+        legacyRows.query("UPDATE registry_meta SET value='2' WHERE key='conversation_paths_ready'").run();
+      } finally { legacyRows.close(); }
+      registry = open();
+      expect((await durableServiceTierIndex([...paths, nestedProviderAlias], registry)).get(nestedProviderAlias)).toBe("priority");
+      expect((await durableServiceTierIndex([...paths, legacyAlias], registry)).get(legacyAlias)).toBe("priority");
+
+      registry.transitionConversationMigration("conversation_primary", 1, ["verifying"], {
+        providerReceipt: {
+          operationId: "tier-continuity-operation",
+          nativeId: "tier-successor",
+          path: "/fixture/provider-receipt.jsonl",
+          continuityPaths: [],
+          historyHash: "tier-history",
+          host: { kind: "codex-app-server", identity: "tier-host", epoch: 1, verifiedAt: at },
+        },
+      });
+      peer!.mutate(file => {
+        const row = file.conversations.conversation_primary!;
+        row.continuityPaths = row.continuityPaths.filter(pathname => pathname !== providerAlias);
+        row.migration!.providerReceipt!.continuityPaths = [];
+      }, false);
+      expect((await durableServiceTierIndex([...paths, providerAlias], registry)).get(providerAlias)).toBeNull();
+      registry.close();
+      registry = open();
+      expect((await durableServiceTierIndex([...paths, providerAlias], registry)).get(providerAlias)).toBeNull();
+    }
     edit(file => {
       file.conversations.conversation_primary!.generations.at(-1)!.launchProfile = {
         ...file.conversations.conversation_primary!.generations.at(-1)!.launchProfile, serviceTier: null, fast: false,
@@ -316,6 +389,36 @@ test.each(["sqlite", "off"] as const)("scanner tiers agree with the full walk ac
     await compare(["ultrafast", null, null, "default", null, null]);
     edit(file => { delete file.receipts.first; });
     await compare(["default", null, null, "default", null, null]);
+    if (peer) {
+      const movedReceiptPath = "/fixture/receipt-current.jsonl";
+      const obsoleteReceiptPath = "/fixture/unknown.jsonl";
+      peer.mutate(file => { file.receipts.unknown!.artifactPath = movedReceiptPath; }, false);
+      while (peer.archiveInactive(250)) { /* Keep the moved receipt in its current cold mapping. */ }
+      const history = new Database(sqlite);
+      try {
+        const obsolete = history.query<{ id: number }, []>("SELECT archive_id AS id FROM registry_cold WHERE collection='receipts' AND row_key='unknown'").get()!.id;
+        history.query("INSERT INTO registry_archive(collection,row_key,value_json,row_order) VALUES ('receipts','unknown',?,?)").run(
+          JSON.stringify({ launchId: "unknown", conversationId: "conversation_receipt", engine: "codex", createdAt: at,
+            state: "completed", artifactPath: obsoleteReceiptPath, launchProfile: { serviceTier: "priority" } }), 1);
+        for (let n = 0; n < 4095; n++) history.query(
+          "INSERT INTO registry_archive(collection,row_key,value_json,row_order) VALUES ('receipts','unknown',?,?)").run(
+          JSON.stringify({ launchId: "unknown", conversationId: "conversation_receipt", engine: "codex", createdAt: at,
+            state: "completed", artifactPath: obsoleteReceiptPath, launchProfile: { serviceTier: "priority" } }), n + 2);
+        expect(obsolete).toBeGreaterThan(0);
+        const plan = history.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT p.receipt_id FROM registry_receipt_paths p
+          JOIN registry_rows r ON r.collection='receipts' AND r.row_key=p.receipt_id
+          WHERE p.path=? ORDER BY r.row_order LIMIT 1`).all(movedReceiptPath).map(row => row.detail).join(" ");
+        expect(plan).toContain("registry_receipt_paths");
+        expect(plan).not.toContain("registry_archive");
+      } finally { history.close(); }
+      registry.close();
+      registry = open();
+      loads = conversationReads = receiptReads = 0;
+      expect((await durableServiceTierIndex([obsoleteReceiptPath], registry)).get(obsoleteReceiptPath)).toBeNull();
+      expect(receiptReads).toBe(0);
+      expect((await durableServiceTierIndex([movedReceiptPath], registry)).get(movedReceiptPath)).toBe("priority");
+      expect(receiptReads).toBe(1);
+    }
     registry.close();
     registry = open();
     await compare(["default", null, null, "default", null, null]);

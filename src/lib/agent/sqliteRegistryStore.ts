@@ -1701,12 +1701,16 @@ export class SqliteAgentRegistryStore {
       CREATE TABLE IF NOT EXISTS registry_conversation_paths (
         path TEXT NOT NULL, conversation_id TEXT NOT NULL, PRIMARY KEY(path, conversation_id)
       );
+      CREATE TABLE IF NOT EXISTS registry_receipt_paths (
+        path TEXT NOT NULL, receipt_id TEXT NOT NULL, PRIMARY KEY(path, receipt_id)
+      );
+      CREATE INDEX IF NOT EXISTS registry_receipt_paths_owner ON registry_receipt_paths(receipt_id);
     `);
     registryConversationPathIndexes.install(this.db, path.dirname(filename));
     // The outer UPSERT's conflict policy overrides a trigger's OR IGNORE.
     // Explicit UPSERT clauses keep overlapping generation/continuity paths
     // harmless, including writes from a predecessor release during handover.
-    if (this.meta("conversation_paths_trigger_version") !== "2") {
+    if (this.meta("conversation_paths_trigger_version") !== "3") {
       this.runAtomically([
         "DROP TRIGGER IF EXISTS registry_paths_insert",
         "DROP TRIGGER IF EXISTS registry_paths_update",
@@ -1714,24 +1718,43 @@ export class SqliteAgentRegistryStore {
         `CREATE TRIGGER registry_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
           INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
           INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+          INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.migration.providerReceipt.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+          INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.migration.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
         END`,
         `CREATE TRIGGER registry_paths_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
           DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
           INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
           INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+          INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.migration.providerReceipt.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+          INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.migration.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
         END`,
         `CREATE TRIGGER registry_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'conversations' BEGIN
           DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
         END`,
-        `INSERT INTO registry_meta(key, value) VALUES ('conversation_paths_trigger_version', '2')
+        `CREATE TRIGGER registry_receipt_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'receipts' BEGIN
+          INSERT INTO registry_receipt_paths SELECT json_extract(NEW.value_json, '$.artifactPath'), NEW.row_key
+            WHERE json_type(NEW.value_json, '$.artifactPath')='text' ON CONFLICT(path, receipt_id) DO NOTHING;
+        END`,
+        `CREATE TRIGGER registry_receipt_paths_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'receipts' BEGIN
+          DELETE FROM registry_receipt_paths WHERE receipt_id = OLD.row_key;
+          INSERT INTO registry_receipt_paths SELECT json_extract(NEW.value_json, '$.artifactPath'), NEW.row_key
+            WHERE json_type(NEW.value_json, '$.artifactPath')='text' ON CONFLICT(path, receipt_id) DO NOTHING;
+        END`,
+        `CREATE TRIGGER registry_receipt_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'receipts' BEGIN
+          DELETE FROM registry_receipt_paths WHERE receipt_id = OLD.row_key;
+        END`,
+        `INSERT INTO registry_meta(key, value) VALUES ('conversation_paths_trigger_version', '3')
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       ]);
     }
-    if (this.meta("conversation_paths_ready") !== "1") {
+    if (this.meta("conversation_paths_ready") !== "3") {
       this.runAtomically([
         "INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(g.value, '$.path'), r.row_key FROM registry_rows r, json_each(r.value_json, '$.generations') g WHERE r.collection = 'conversations' AND json_extract(g.value, '$.path') IS NOT NULL",
         "INSERT OR IGNORE INTO registry_conversation_paths SELECT p.value, r.row_key FROM registry_rows r, json_each(r.value_json, '$.continuityPaths') p WHERE r.collection = 'conversations'",
-        "INSERT OR REPLACE INTO registry_meta(key, value) VALUES ('conversation_paths_ready', '1')",
+        "INSERT OR IGNORE INTO registry_conversation_paths SELECT p.value, r.row_key FROM registry_rows r, json_each(r.value_json, '$.migration.providerReceipt.continuityPaths') p WHERE r.collection = 'conversations'",
+        "INSERT OR IGNORE INTO registry_conversation_paths SELECT p.value, r.row_key FROM registry_rows r, json_each(r.value_json, '$.migration.continuityPaths') p WHERE r.collection = 'conversations'",
+        "INSERT OR IGNORE INTO registry_receipt_paths SELECT json_extract(value_json, '$.artifactPath'), row_key FROM registry_rows WHERE collection='receipts' AND json_type(value_json, '$.artifactPath')='text'",
+        "INSERT OR REPLACE INTO registry_meta(key, value) VALUES ('conversation_paths_ready', '3')",
       ]);
     }
     // Each generation's entry identity and path, so a grant decision finds the
@@ -4582,7 +4605,9 @@ export class SqliteAgentRegistryStore {
           if (profile) break;
         }
         if (!profile) {
-          const [key] = this.matchingRowKeys("receipts", "artifactPath", [pathname]);
+          const key = this.db.query<{ receipt_id: string }, [string]>(`SELECT p.receipt_id FROM registry_receipt_paths p
+            JOIN registry_rows r ON r.collection='receipts' AND r.row_key=p.receipt_id
+            WHERE p.path=? ORDER BY r.row_order LIMIT 1`).get(pathname)?.receipt_id;
           if (key !== undefined) profile = read("receipts", key)?.launchProfile ?? null;
         }
         result.set(pathname, profile ? launchTierProfile(profile) : null);
