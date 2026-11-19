@@ -1,3 +1,4 @@
+import { CODEX_GPT62_SOL_MODEL } from "@/lib/agent/models";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -567,7 +568,7 @@ export function newTargetSettings(
     fallback: target.fallback,
     enabled: true,
     engine: "codex-cloud",
-    model: "gpt-6.1-sol",
+    model: CODEX_GPT62_SOL_MODEL,
     effort: null,
     project: null,
     concurrency: 1,

@@ -1,3 +1,4 @@
+import { modelForLaunch } from "@/lib/agent/models";
 import { safeRelayHttpReason } from "./httpDiagnostics";
 import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
@@ -556,6 +557,7 @@ export async function runClaimedRequest(
   const configuredTarget = relay.targets.find((item) => item.id === request.target_id);
   const cloud = configuredTarget?.engine === "codex-cloud";
   const target = configuredTarget ? { ...configuredTarget, engine: configuredTarget.engine === "codex-cloud" ? "codex" as const : configuredTarget.engine } : undefined;
+  if (target?.engine) target.model = modelForLaunch(target.engine, target.model);
   activeTarget = target ?? null;
   if (!target || !target.engine || !target.model)
     return finish(declined(leaseId, "not_configured"));

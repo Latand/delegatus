@@ -716,7 +716,9 @@ test("dead Codex structured recovery retains ownership and starts a pane-less re
   const reviewed = registry.ensureConversation("codex", path.join(cwd, "reviewed.jsonl"), "retained-account");
   const profile = emptyLaunchProfile({
     cwd,
-    model: "gpt-5.6-luna",
+    model: "gpt-6.1-sol",
+    fast: true,
+    serviceTier: "priority",
     effort: "high",
     readOnly: true,
     permissionMode: "never",
@@ -833,7 +835,7 @@ test("dead Codex structured recovery retains ownership and starts a pane-less re
         cwd,
         engine: "codex",
         ["transcript"]: artifactPath,
-        launchProfile: { ...profile, title: "recovery · Restore Codex review session" },
+        launchProfile: { ...profile, model: "gpt-6.2-sol", title: "recovery · Restore Codex review session" },
       });
       return {
         ok: true,

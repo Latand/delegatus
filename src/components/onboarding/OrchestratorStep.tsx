@@ -10,7 +10,7 @@ import { replaceRoleCatalog } from "@/components/DraftAgentPane";
 import { runsOnValue } from "@/components/orchestrator/RunsOnRow";
 import { useOrchestratorSeat } from "@/components/orchestrator/useOrchestratorSeat";
 import { tokenRate } from "@/lib/activity/tokenPrices";
-import { CLAUDE_ALIAS_RELEASES, CODEX_GPT61_SOL_MODEL, defaultModelFor, ENGINE_MODELS, modelDisplayName } from "@/lib/agent/models";
+import { CLAUDE_ALIAS_RELEASES, CODEX_GPT62_SOL_MODEL, defaultModelFor, ENGINE_MODELS, modelDisplayName } from "@/lib/agent/models";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { RoleConfig } from "@/lib/roles/types";
 
@@ -183,7 +183,7 @@ function StepBody({ project, connected, checkMinutes, onGoEngines, onGoProject, 
   const cost = estimate(launch.model);
   const costFormat = new Intl.NumberFormat(locale === "uk" ? "uk-UA" : "en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   /* One cheaper step from the Claude default; once on Codex nothing further is offered. */
-  const cheaperModel = CODEX_GPT61_SOL_MODEL;
+  const cheaperModel = CODEX_GPT62_SOL_MODEL;
   const cheaperCost = engine === "claude" ? estimate(cheaperModel, "codex") : null;
 
   const fact = (label: string, value: React.ReactNode, onChange: () => void, testId: string, expanded?: boolean) => (

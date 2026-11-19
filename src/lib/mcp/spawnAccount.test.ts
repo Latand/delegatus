@@ -119,7 +119,7 @@ async function withClient(run: (client: Client, fixture: ReturnType<typeof harne
 function requestId() { return `spawn-account-fixture-${testNumber}`; }
 
 function args(account?: string | null) {
-  return { clientRequestId: requestId(), cwd: sandbox, title: "Inspect account routing", ["prompt"]: "Inspect routing", engine: "codex", model: "gpt-6.1-sol", ...(account === undefined ? {} : { account }) };
+  return { clientRequestId: requestId(), cwd: sandbox, title: "Inspect account routing", ["prompt"]: "Inspect routing", engine: "codex", model: "gpt-6.2-sol", ...(account === undefined ? {} : { account }) };
 }
 
 test("an MCP account pin reaches the spawn route and its durable launch receipt", async () => {
@@ -354,7 +354,7 @@ test("an automatic launch by a member with no account list reveals no account in
   const ownerCookie = mintSession(team, owner.id, "claim", { surface: "desktop", browser: "chrome" }).value;
   const hidden = createManagedCodexAccount("Hidden Account Label");
   fs.writeFileSync(path.join(hidden.home, "auth.json"), "{}");
-  fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [] }] }));
+  fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.2-sol", service_tiers: [] }] }));
   try {
     const { routeDependencies } = harness();
     /* The real resolver: its tier refusal is the one that lists accounts. */
@@ -362,12 +362,12 @@ test("an automatic launch by a member with no account list reveals no account in
     const launch = async (clientAttemptId: string, cookie: string) => {
       const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
         method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json", cookie: `llv_member=${cookie}` },
-        body: JSON.stringify({ ...args(), clientAttemptId, model: "gpt-6.1-sol", effort: "high", serviceTier: "ultrafast" }),
+        body: JSON.stringify({ ...args(), clientAttemptId, model: "gpt-6.2-sol", effort: "high", serviceTier: "ultrafast" }),
       }), routeDependencies);
       return { status: response.status, body: await response.json() as { error: string; code: string } };
     };
     const member = await launch("tier-member", memberCookie);
-    expect(member).toEqual({ status: 409, body: { code: "service_tier_unavailable", error: "no account offers serviceTier ultrafast for model gpt-6.1-sol" } });
+    expect(member).toEqual({ status: 409, body: { code: "service_tier_unavailable", error: "no account offers serviceTier ultrafast for model gpt-6.2-sol" } });
     expect(JSON.stringify(member.body)).not.toContain(hidden.label);
     expect(JSON.stringify(member.body)).not.toContain(hidden.id);
     expect(registry.spawnReceiptForClientAttempt("tier-member")).toBeNull();
@@ -396,7 +396,7 @@ test("a member's automatic launch refused for capacity names no account and no l
   const ownerCookie = mintSession(team, owner.id, "claim", { surface: "desktop", browser: "chrome" }).value;
   const hidden = createManagedCodexAccount("Hidden Account Label");
   fs.writeFileSync(path.join(hidden.home, "auth.json"), "{}");
-  fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [] }] }));
+  fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.2-sol", service_tiers: [] }] }));
   try {
     const { routeDependencies } = harness();
     /* The real resolver: its tier refusal is the one that lists accounts. */
@@ -404,7 +404,7 @@ test("a member's automatic launch refused for capacity names no account and no l
     const launch = async (clientAttemptId: string, cookie: string) => {
       const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
         method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json", cookie: `llv_member=${cookie}` },
-        body: JSON.stringify({ ...args(), clientAttemptId, model: "gpt-6.1-sol", effort: "high", serviceTier: "ultrafast" }),
+        body: JSON.stringify({ ...args(), clientAttemptId, model: "gpt-6.2-sol", effort: "high", serviceTier: "ultrafast" }),
       }), routeDependencies);
       return { status: response.status, body: await response.json() as { error: string; code: string } };
     };
@@ -439,7 +439,7 @@ test("a member's automatic launch refused by the real selection with every accou
   const ownerCookie = mintSession(team, owner.id, "claim", { surface: "desktop", browser: "chrome" }).value;
   const hidden = createManagedCodexAccount("Hidden Account Label");
   fs.writeFileSync(path.join(hidden.home, "auth.json"), "{}");
-  fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [] }] }));
+  fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.2-sol", service_tiers: [] }] }));
   try {
     const { routeDependencies } = harness();
     /* The real resolver: its tier refusal is the one that lists accounts. */
@@ -454,7 +454,7 @@ test("a member's automatic launch refused by the real selection with every accou
     const launch = async (clientAttemptId: string, cookie: string) => {
       const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
         method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json", cookie: `llv_member=${cookie}` },
-        body: JSON.stringify({ ...args(), clientAttemptId, model: "gpt-6.1-sol", effort: "high" }),
+        body: JSON.stringify({ ...args(), clientAttemptId, model: "gpt-6.2-sol", effort: "high" }),
       }), routeDependencies);
       return { status: response.status, body: await response.json() as { error: string; code: string } };
     };

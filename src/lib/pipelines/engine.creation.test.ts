@@ -2,6 +2,17 @@ import { startAutoAndSettle } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, spawn, spawnSync, fs, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, realExec, engineModule, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pipelineAttemptTargetForSource, setPipelineDismissal, tickPipelines, AgentRegistry, setAgentRegistryForTests, rawCreatePipelineFromRequest, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, saveTasks, loadTasks, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, realWorktreeLane, create, boardTask, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, LauncherRecord, PipelinePorts, BoardTask, Pipeline } from "./engine.fixture";
 
+test.each([undefined, "gpt-6.1-sol", "gpt-6.2-astra"])("fresh builder dispatch resolves the registry and preserves explicit runtime (%s)", async model => {
+  const h = harness();
+  h.ports.roleLookup = (await import("./roles")).pipelineRoleLookup;
+  await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, model, account: "default", prompt: "Build", next: null }] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(h.spawnInputs[0]).toMatchObject({ requestedAccountId: "default", role: { engine: "codex",
+    model: model === "gpt-6.2-astra" ? model : "gpt-6.2-sol", effort: "high" } });
+});
+
 test.each([[true, "master", false], [false, "master", false], [false, "master", true], [false, "heads/master", true]] as const)("a remote-less creation defaults to its checked-out branch (draft %s, branch %s, tag %s)", async (draft, branch, tag) => {
   savePipelines([]);
   const f = await realProvisioningRepo("local-base");
@@ -1406,7 +1417,7 @@ test("a merger stage resolves through production role lookup during pipeline nor
     effectiveRole: {
       roleId: "merger",
       engine: "codex",
-      model: "gpt-6.1-sol",
+      model: "gpt-6.2-sol",
       effort: "high",
       access: "read-write",
     },

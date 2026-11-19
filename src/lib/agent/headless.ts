@@ -1,3 +1,4 @@
+import { defaultModelFor, modelForLaunch } from "@/lib/agent/models";
 import { REPOSITORY_IDENTITY, repositoryPublicationSource } from "@/lib/git/repositoryCommitIdentity";
 import { withoutOperatorCredentials } from "./operatorCredentials";
 import { agentMemoryScopes } from "@/lib/runtime/agentMemorySettings";
@@ -402,7 +403,7 @@ export function reviewerCommand(
   args.push(...codexProcessCleanupArgs(codexAccount?.home));
   args.push(...agentCodexPublicationArgs({}, baseEnv));
   if (codexAccount?.managed) args.push("-c", "cli_auth_credentials_store=file");
-  if (role.model) args.push("-m", role.model);
+  args.push("-m", modelForLaunch("codex", role.model ?? defaultModelFor("codex")));
   if (role.effort) args.push("-c", `model_reasoning_effort=${role.effort}`);
   if (role.serviceTier) args.push("-c", `service_tier=${role.serviceTier === "standard" ? "default" : role.serviceTier}`);
   return {

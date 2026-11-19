@@ -1,5 +1,5 @@
 import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
-import { CODEX_GPT61_SOL_MODEL } from "@/lib/agent/models";
+import { CODEX_GPT62_SOL_MODEL } from "@/lib/agent/models";
 
 import type { RoleDefinition, RoleParameter } from "./types";
 
@@ -268,7 +268,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "reviewer",
     name: "Reviewer",
     description: "Reviews a code diff and returns severity-ranked evidence-backed findings. High per lane for risky backend diffs.",
-    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "xhigh" },
+    config: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "xhigh" },
     parameters: [
       { key: "diffSource", label: "Diff source", description: "Pull request, branch range or commit to review; a pipeline stage reviews its own worktree when this is empty.", kind: "text", required: true },
       { key: "lens", label: "Lens", description: "Review lens.", kind: "select", options: ["correctness", "over-engineering", "silent-failure", "test-coverage", "scope", "prod-ops", "standards+spec", "code-smells", "all"] },
@@ -284,7 +284,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "verifier",
     name: "Verifier",
     description: "Tests supplied hypotheses and returns a per-claim evidence verdict.",
-    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    config: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "high" },
     parameters: [
       { key: "claims", label: "Claims", description: "Hypotheses to confirm or refute.", kind: "text", required: true },
     ],
@@ -296,7 +296,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "builder",
     name: "Builder",
     description: "Writes product code for a scoped brief.",
-    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    config: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "high" },
     parameters: [
       { key: "mode", label: "Mode", description: "Implementation discipline. apply-fixes: a fix round, whose brief is a list of findings.", kind: "select", options: ["plain", "apply-fixes", "tdd", "diagnose", "prototype", "merge-resolve"] },
       { key: "domain", label: "Domain", description: "Product domain for the implementation. docs is README, docs and public text, which stays on Claude.", kind: "select", options: ["general", "frontend", "docs"] },
@@ -322,7 +322,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "cleaner",
     name: "Cleaner",
     description: "Backup/recover dirty checkout; disk: purge proven dead temps.",
-    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    config: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "high" },
     parameters: [
       { key: "mode", label: "Mode", description: "Checkout recovery or guarded temporary-work cleanup.", kind: "select", options: ["checkout", "disk"], default: "checkout" },
     ],
@@ -334,7 +334,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     id: "prod-auditor",
     name: "Prod-auditor",
     description: "Performs a read-only evidence-backed production investigation.",
-    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "xhigh" },
+    config: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "xhigh" },
     parameters: [
       { key: "questions", label: "Questions", description: "Production questions to investigate.", kind: "text", required: true },
     ],
@@ -349,7 +349,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
        project may have no second instance to switch to. A project's own
        switch procedure lives in its instruction files (Delegatus: AGENTS.md). */
     description: "Plans a production release and stops for approval before each mutating step.",
-    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "medium" },
+    config: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "medium" },
     parameters: [
       { key: "sha", label: "Merged SHA", description: "Merged commit SHA to deploy.", kind: "text", required: true },
       { key: "mode", label: "Mode", description: "Release publication validates and asks before a tag; it never deploys production.", kind: "select", options: ["deploy", "release"], default: "deploy" },
@@ -362,7 +362,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "merger", name: "Merger",
     description: "Batches reviewed PRs; sends resolutions for review.",
-    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    config: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "high" },
     parameters: [{ key: "prs", label: "Reviewed PRs", description: "Comma-separated N@reviewedSha pairs.", kind: "text", required: true }],
     /* The operator, 2026-10-15: a project without a batch procedure gets a
        plain squash of each exact reviewed head, and the batch's receipt, URL
@@ -379,7 +379,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "maintainer", name: "Maintainer",
     description: "Maintains board and inbox on the seat tick.",
-    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "medium" },
+    config: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "medium" },
     parameters: [], promptScaffold: `${MAINTAINER_BODY}\n\n${WORKING_RULES}`,
     safetyFences: ["Files stay untouched: no edits, staging, commits or pushes in any repository; git and the forge's command-line tool are for reading.", "Write the board only through create_task and update_task. Never delete or overwrite details, or mark done a task with an open pipeline or live agent. Hide only a confirmed retired orchestrator seat card as done history; preserve its transcript and details."],
     capabilities: ["read-only"],
@@ -387,7 +387,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {
     id: "curator", name: "Curator",
     description: "Curates role memory.",
-    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    config: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "high" },
     parameters: [],
     promptScaffold: `You are a Curator. Read the repository and its instructions, and judge the currency and readers of each rule. Follow the pass brief and checklist. Write and rewrite learned rules as plain sentences a fresh agent reads one way. Use complete verbs, articles and ordinary spacing; avoid slash lists, arrow chains, dropped words and invented abbreviations. Rewrite existing compressed rules during the pass. When a scope exceeds its bound, archive its least valuable rules with reason budget instead of compressing wording. Never quote rule text outside the local tool calls. End with counts and rule ids.\n\nFor a shipped-prompt duplicate, first establish the effective deployed guidance for the affected audience. Use the serving process's curation scope scaffold, current role_presets overrides, and get_orchestrator full:true for the seat's actual mandate; retain the release and composition evidence. Proposed or merged source alone is insufficient. Compare the complete trigger, audience, action, conditions and exceptions, including custom mandates and overrides. Keep local additions and uncertain or conflicting coverage. When equivalence and supported repository evidence are proved, reversibly archive only redundant active injection, preserving lineage and the deployment evidence. Otherwise retain it and name the missing proof or supported evidence route. Project instruction files keep their existing evidence path.\n\n${WORKING_RULES}`,
     safetyFences: ["Files stay untouched: no edits, staging, commits or pushes; git and gh are for reading.", "Change role memory through curate_rules; use leave_lesson correction:true for an operator correction of your own work.", "Never start a child agent or pipeline."],

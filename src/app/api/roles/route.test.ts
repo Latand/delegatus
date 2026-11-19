@@ -66,7 +66,7 @@ test("roles route returns all merged role definitions with scaffold previews and
     "orchestrator", "reviewer", "verifier", "builder", "architect",
     "cleaner", "prod-auditor", "deployer", "merger", "maintainer", "curator", "issue-reporter", "visual-critic",
   ]);
-  expect(body.roles.find((role) => role.id === "maintainer")?.config).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "medium" });
+  expect(body.roles.find((role) => role.id === "maintainer")?.config).toEqual({ engine: "codex", model: "gpt-6.2-sol", effort: "medium" });
   expect(body.roles[0]).toMatchObject({ id: "orchestrator" });
   expect(body.roles.find((role) => role.id === "deployer")?.shipped.promptScaffold).toBe(body.roles.find((role) => role.id === "deployer")?.promptScaffold);
   const builder = body.roles.find((role) => role.id === "builder")!;
@@ -113,7 +113,7 @@ test("PUT refuses Sonnet on the reviewer, the architect and the orchestrator, an
 
 /* Visual judgement runs on Claude, never Codex: the row keeps its editable Claude runtime. */
 test("PUT refuses a Codex row for the visual critic and saves an edited Claude one", async () => {
-  const refused = await put({ overrides: { "visual-critic": { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } } } });
+  const refused = await put({ overrides: { "visual-critic": { config: { engine: "codex", model: "gpt-6.2-sol", effort: "high" } } } });
   expect(refused.status).toBe(400);
   expect((await refused.json() as { error: string }).error).toBe("visual-critic runs on claude only");
   expect(hasRoleOverrides()).toBe(false);
@@ -228,7 +228,7 @@ test("a stored fix row writes the file at schema 4", async () => {
 
 
 test("role memory caps round trip through the mapping route and invalid writes preserve the row", async () => {
-  const base = { engine: "codex", model: "gpt-6.1-sol", effort: "high" };
+  const base = { engine: "codex", model: "gpt-6.2-sol", effort: "high" };
   const update = (cap: unknown) => put({ overrides: { builder: { config: { ...base, agentMemoryMaxBytes: cap } } } });
   expect((await update(6 * 2 ** 30)).status).toBe(200);
   const before = JSON.stringify(loadRoleOverrides());

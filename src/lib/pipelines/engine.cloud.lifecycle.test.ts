@@ -176,7 +176,7 @@ test("a required Cloud failure keeps the role and definition bound before a futu
   await submitted(h);
   const role = structuredClone(attempt().effectiveRole), definition = structuredClone(attempt().definition);
   expect((await patchPipeline(lane().id, { action: "override-stage", stageId: "review", model: "gpt-6-sol", prompt: "Future instruction" }, h.ports)).error).toBeUndefined();
-  h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.1-sol", error: "Cloud limit reached" });
+  h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.2-sol", error: "Cloud limit reached" });
   await step(h); await step(h); await step(h);
   expect(h.spawnInputs).toHaveLength(0);
   expect(attempt().effectiveRole).toEqual(role);
@@ -252,8 +252,8 @@ test.each(["poll", "readFinalMessage", "readDiff"] as const)("transient %s failu
   expect(attempt().cloud?.error).toBe("Cloud unavailable");
   expect(attempt().cloud?.fallbackEligible).toBe(false);
   const receipt = attempt().cloud!.taskId, n = attempt().n;
-  if (operation === "poll") h.ports.cloudClient!.poll = async () => ({ state: "completed", model: "gpt-6.1-sol" });
-  else if (operation === "readFinalMessage") h.ports.cloudClient!.readFinalMessage = async () => ({ message: pass, model: "gpt-6.1-sol" });
+  if (operation === "poll") h.ports.cloudClient!.poll = async () => ({ state: "completed", model: "gpt-6.2-sol" });
+  else if (operation === "readFinalMessage") h.ports.cloudClient!.readFinalMessage = async () => ({ message: pass, model: "gpt-6.2-sol" });
   // A diff retry is exercised against real Git by the builder checks below.
   if (operation !== "readDiff") {
     const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
@@ -733,7 +733,7 @@ for (const pendingSource of [false, true]) test(pendingSource
   savePipelines([]);
   setPipelineStageRuntime(project, "codex-cloud");
   try {
-    const params = { repoDir: "/repo", engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", srcPath: "/codex/creator.jsonl" };
+    const params = { repoDir: "/repo", engine: "codex" as const, model: "gpt-6.2-sol", effort: "high", srcPath: "/codex/creator.jsonl" };
     const created = pendingSource
       ? await ensureTaskPipelineForAssignment(boardTask, { ...params, srcPath: null, launchId: "launch-assignment-cloud", conversationId: "conversation_creator" }, h.ports)
       : await rawCreate(ensurePipelineForTask(boardTask, [], params)!, h.ports);
@@ -767,7 +767,7 @@ test("role-only Codex Cloud stages freeze the resolved role model", () => {
 
 for (const source of ["explicit", "role", "project-default"] as const) {
   for (const autoStart of [false, true]) {
-    test.each(["gpt-6-luna", "gpt-6.1-sol"])(`Cloud model admission resolves ${source} before effects (autoStart: ${autoStart}, %s)`, async model => {
+    test.each(["gpt-6-luna", "gpt-6.2-sol"])(`Cloud model admission resolves ${source} before effects (autoStart: ${autoStart}, %s)`, async model => {
       const { rawCreatePipelineFromRequest } = await import("./engine.fixture");
       const h = harness();
       savePipelines([]);

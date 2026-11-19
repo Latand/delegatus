@@ -1,3 +1,4 @@
+import { CODEX_GPT62_SOL_MODEL } from "../src/lib/agent/models";
 import path from "node:path";
 import type { AccountContext, ProjectSpawnResolution } from "../src/lib/accounts/contracts";
 import type { Pipeline } from "../src/lib/pipelines/types";
@@ -67,6 +68,6 @@ export async function cloudCheckConfig(root: string, laneId?: string, stageId?: 
       if (choice.environmentId) return choice.environmentId;
       return environments.readCloudEnvironmentBindings(project, { accountId }).bindings.find(row => row.state === "ready" && row.kind === "automatic")?.environmentId ?? "";
     },
-    account: (project, requestedId) => accountManager.resolveProjectSpawn("codex", { project, requestedId, model: "gpt-6.1-sol", requireCapacity: false }),
+    account: (project, requestedId) => accountManager.resolveProjectSpawn("codex", { project, requestedId, model: CODEX_GPT62_SOL_MODEL, requireCapacity: false }),
   });
 }

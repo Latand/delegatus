@@ -172,7 +172,7 @@ test("a saved role memory cap survives model and engine edits and the bulk move,
   const { mergeRoleDefinitions } = await import("@/lib/roles/store");
   const { AgentMappingTable } = await import("./AgentMappingTable");
   const cap = 6 * 2 ** 30;
-  const roles = mergeRoleDefinitions({ builder: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high", agentMemoryMaxBytes: cap } } })
+  const roles = mergeRoleDefinitions({ builder: { config: { engine: "codex", model: "gpt-6.2-sol", effort: "high", agentMemoryMaxBytes: cap } } })
     .map((role) => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: mergeRoleDefinitions({}).find((row) => row.id === role.id)!.config } }));
   expect(roles.find((role) => role.id === "builder")!.config.agentMemoryMaxBytes).toBe(cap);
   rolesBody = { roles };
@@ -190,11 +190,11 @@ test("a saved role memory cap survives model and engine edits and the bulk move,
     expect(host.querySelector("[data-mapping-reset='builder']")).not.toBeNull();
 
     const model = host.querySelectorAll("[data-mapping-row='builder'] select")[0] as HTMLSelectElement;
-    const other = [...model.options].map((option) => option.value).find((value) => value !== "gpt-6.1-sol")!;
+    const other = [...model.options].map((option) => option.value).find((value) => value !== "gpt-6.2-sol")!;
     flushSync(() => { model.value = other; model.dispatchEvent(new Event("change", { bubbles: true })); });
     await until(() => writes() === 1);
     expect(lastRolesWrite()!.overrides.builder!.config).toMatchObject({ engine: "codex", model: other, agentMemoryMaxBytes: cap });
-    await until(() => (host.querySelectorAll("[data-mapping-row='builder'] select")[0] as HTMLSelectElement).value === "gpt-6.1-sol");
+    await until(() => (host.querySelectorAll("[data-mapping-row='builder'] select")[0] as HTMLSelectElement).value === "gpt-6.2-sol");
 
     flushSync(() => (host.querySelector("[data-mapping-row='builder'] [data-engine-segment='claude']") as HTMLButtonElement).click());
     await until(() => writes() === 2);
@@ -1184,7 +1184,7 @@ test("the mapping keeps a role saved on a retired model, under its label, beside
   const { mergeRoleDefinitions } = await import("@/lib/roles/store");
   const { listedModels } = await import("@/lib/agent/models");
   const saved = { engine: "codex" as const, model: "gpt-5.6-terra", effort: "ultra" };
-  const current = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high" };
+  const current = { engine: "codex" as const, model: "gpt-6.2-sol", effort: "high" };
   const roles = mergeRoleDefinitions({ reviewer: { config: saved }, architect: { config: current } }).map((role) => ({ ...role, promptPreview: role.promptScaffold }));
   rolesBody = { schemaVersion: 5, roles };
   requests.length = 0;
@@ -1201,7 +1201,7 @@ test("the mapping keeps a role saved on a retired model, under its label, beside
     expect([...model!.options].map((option) => option.value)).toEqual(listedModels("codex", "gpt-5.6-terra").map((option) => option.id));
     expect(effort!.value).toBe("ultra");
     // A row on a current model offers the fresh choices alone.
-    expect([...selects("architect")[0]!.options].map((option) => option.value)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]);
+    expect([...selects("architect")[0]!.options].map((option) => option.value)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-terra", "gpt-6-luna"]);
     expect(requests.filter((request) => request.method === "PUT")).toEqual([]);
   } finally {
     flushSync(() => root.unmount());
@@ -1366,7 +1366,7 @@ test("a new install can choose the cheaper orchestrator without changing saved r
   expect(host.querySelector("[data-onboarding-cost]")?.textContent).toContain("$0.60 for 100k uncached input + 10k output tokens");
   expect(host.querySelector("[data-onboarding-permissions]")?.textContent).toContain("without per-action confirmations by default");
 
-  expect(host.querySelector("[data-onboarding-cheaper]")?.textContent).toBe("Use cheaper Codex · GPT-6.1-Sol");
+  expect(host.querySelector("[data-onboarding-cheaper]")?.textContent).toBe("Use cheaper Codex · GPT-6.2-Sol");
   const writesBefore = requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles")).length;
   flushSync(() => (host.querySelector("[data-onboarding-cheaper]") as HTMLElement).click());
   expect(host.querySelector("[data-onboarding-cost]")?.textContent).toContain("$0.30");
@@ -1374,7 +1374,7 @@ test("a new install can choose the cheaper orchestrator without changing saved r
   expect(requests.filter((request) => request.method === "PUT" && request.url.includes("/api/roles"))).toHaveLength(writesBefore);
   flushSync(() => (host.querySelector("[data-onboarding-orchestrator-create]") as HTMLElement).click());
   off();
-  expect(launches).toEqual([{ project: "repo-todo", launch: { engine: "codex", model: "gpt-6.1-sol", effort: "high", account: "default" }, confirm: true }]);
+  expect(launches).toEqual([{ project: "repo-todo", launch: { engine: "codex", model: "gpt-6.2-sol", effort: "high", account: "default" }, confirm: true }]);
   expect(closes).toEqual([{ outcome: "completed", steps: { project: "done", orchestrator: "done" } }]);
   expect(takePendingSeatConfirm("repo-todo")).toMatchObject({ project: "repo-todo", launch: { account: "default" } });
   flushSync(() => root.unmount());
@@ -1421,7 +1421,7 @@ test("a first run still in progress keeps the cost estimate and the cheaper choi
   chooseProject(host, "orchestrator");
   await until(() => Boolean(host.querySelector<HTMLButtonElement>("[data-onboarding-orchestrator-create]:not([disabled])")) && (host.querySelector("[data-onboarding-orchestrator-runs-on]")?.textContent ?? "").includes("account Main"));
   expect(host.querySelector("[data-onboarding-cost]")?.textContent).toContain("$0.60 for 100k uncached input + 10k output tokens");
-  expect(host.querySelector("[data-onboarding-cheaper]")?.textContent).toBe("Use cheaper Codex · GPT-6.1-Sol");
+  expect(host.querySelector("[data-onboarding-cheaper]")?.textContent).toBe("Use cheaper Codex · GPT-6.2-Sol");
   flushSync(() => root.unmount());
   host.remove();
 });
@@ -1707,7 +1707,7 @@ test("only Codex: 7 roles move, the orchestrator runs on Codex Sol, and the advi
   try {
     await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-roles]")));
     expect(host.querySelector("[data-onboarding-orchestrator-roles]")!.textContent).toBe("7 that default to Claude will also run on Codex");
-    expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")!.textContent).toContain("Codex · GPT-6.1-Sol · high effort");
+    expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")!.textContent).toContain("Codex · GPT-6.2-Sol · high effort");
     const advice = host.querySelector("[data-onboarding-orchestrator-advice]")!;
     expect(advice.textContent).toContain("Claude is recommended for the orchestrator.");
     expect(advice.querySelector("button")!.textContent).toBe("Connect Claude");

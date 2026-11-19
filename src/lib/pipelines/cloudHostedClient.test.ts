@@ -9,7 +9,7 @@ import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { deadlineChild, deadlineReport, heldCloudAcknowledgement, superviseCloudDeadline } from "./fixtures/cloudDeadline";
 
 type Frame = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: unknown };
-const model = "gpt-6.1-sol", environmentId = "asenvcfg_fixture", headSha = "a".repeat(40);
+const model = "gpt-6.2-sol", environmentId = "asenvcfg_fixture", headSha = "a".repeat(40);
 const environment = { environmentId: "ccarenv_fixture", environmentConfigId: environmentId, cwd: "/workspace/project" };
 const thread = { id: "00000000-0000-0000-0000-000000000000", ephemeral: false, environments: [environment] };
 const turn = { id: "turn-fixture", model, status: "completed" };
@@ -65,6 +65,15 @@ function fixture(overrides: Partial<HostedCloudDependencies> = {}) {
     authCalls: () => authCalls, supersede: () => { current = false; },
     respond: (fn: typeof handle) => { handle = fn; } };
 }
+
+test("an old model selection reaches both hosted RPCs as current Sol", async () => {
+  const f = fixture();
+  const result = await f.client.submit({ ...f.input, model: "gpt-6.1-sol" });
+  expect(result.thread?.hosted?.model).toBe("gpt-6.2-sol");
+  for (const method of ["thread/start", "turn/start"]) {
+    expect(f.frames.find(frame => frame.method === method)?.params).toMatchObject({ model: "gpt-6.2-sol", allowProviderModelFallback: false });
+  }
+});
 
 test("a principal change after environment preparation refuses before thread or turn submission", async () => {
   const f = fixture();

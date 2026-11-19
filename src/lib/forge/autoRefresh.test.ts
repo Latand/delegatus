@@ -3226,7 +3226,7 @@ test("refresh stages defer tier and account selection to live launch capacity", 
   value.merge = { prNumber: 11, refresh: { base: MAIN_1, head: HEAD_A } } as PipelineMerge;
   const request = refreshRequest(value);
   for (const stage of request.stages) {
-    expect(stage).toMatchObject({ preferredServiceTier: "ultrafast", engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+    expect(stage).toMatchObject({ preferredServiceTier: "ultrafast", engine: "codex", model: "gpt-6.2-sol", effort: "high" });
     expect(stage.account).toBeUndefined();
     expect(stage.serviceTier).toBeUndefined();
   }

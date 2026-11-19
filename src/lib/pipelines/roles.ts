@@ -3,7 +3,7 @@ import { OPERATOR_CORRECTION_RULE, ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "@/
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { codexLaunchTier } from "@/lib/accounts/codexServiceTiers";
 import { effortScale } from "@/lib/agent/efforts";
-import { validateLaunchModel } from "@/lib/agent/models";
+import { modelForLaunch, validateLaunchModel } from "@/lib/agent/models";
 import { isReadOnlyLockedRole, roleEngineRefusal } from "@/lib/roles/locks";
 import { defaultRoleParameterValue } from "@/lib/roles/parameters";
 
@@ -164,12 +164,12 @@ export function resolvePipelineRole(
   if (stage.preferredServiceTier !== undefined && engine !== "codex") {
     return { error: "preferredServiceTier is Codex only", field: "preferredServiceTier" };
   }
-  const model = value(stage.model, registered?.model ?? builder.model);
+  const model = modelForLaunch(engine, value(stage.model, registered?.model ?? builder.model));
   const effort = value(stage.effort, registered?.effort ?? builder.effort);
   const row = registered ?? builder;
   const tier = codexLaunchTier({ engine, model, fast: undefined, serviceTier: stage.serviceTier,
     roleDefault: stage.preferredServiceTier ?? row.serviceTier,
-    roleDefaultApplies: stage.preferredServiceTier !== undefined || (engine === row.engine && model === row.model) });
+    roleDefaultApplies: stage.preferredServiceTier !== undefined || (engine === row.engine && model === modelForLaunch(engine, row.model)) });
   if ("error" in tier) return { error: tier.error, field: "serviceTier" };
   if (model) {
     const validation = validateLaunchModel(engine, model);

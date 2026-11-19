@@ -53,12 +53,12 @@ const CAPABILITY = "c".repeat(43);
 
 /* The reviewer row carries a Codex default tier, as an operator override
    does on the merger row. */
-saveRoleMapping({ reviewer: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "xhigh", serviceTier: "priority" } } });
+saveRoleMapping({ reviewer: { config: { engine: "codex", model: "gpt-6.2-sol", effort: "xhigh", serviceTier: "priority" } } });
 
 /* The default Codex account's catalog offers both tiers, so an explicit
    tier is admitted and only the engine rule decides. */
 for (const home of [process.env.CODEX_HOME!, process.env.LLV_CODEX_HOME!]) {
-  fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [{ id: "priority" }, { id: "ultrafast" }] }] }));
+  fs.writeFileSync(path.join(home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.2-sol", service_tiers: [{ id: "priority" }, { id: "ultrafast" }] }] }));
 }
 
 const ports: PipelinePorts = {
@@ -119,8 +119,8 @@ const TO_CLAUDE = { engine: "claude", model: "opus", effort: "high" };
 
 test("a refresh-lane preferred tier is dropped when the stage moves to Claude, with and without serviceTier null", async () => {
   const lane = await draftLane([
-    { id: "review", role: { roleId: "reviewer" }, engine: "codex", model: "gpt-6.1-sol", effort: "high", preferredServiceTier: "ultrafast" },
-    { id: "recheck", role: { roleId: "reviewer" }, engine: "codex", model: "gpt-6.1-sol", effort: "high", preferredServiceTier: "ultrafast" },
+    { id: "review", role: { roleId: "reviewer" }, engine: "codex", model: "gpt-6.2-sol", effort: "high", preferredServiceTier: "ultrafast" },
+    { id: "recheck", role: { roleId: "reviewer" }, engine: "codex", model: "gpt-6.2-sol", effort: "high", preferredServiceTier: "ultrafast" },
   ]);
   expect(stored(lane.id, "review").effectiveRole).toMatchObject({ serviceTier: "ultrafast", serviceTierSource: "role-default", preferredServiceTier: "ultrafast" });
   const override = await connect();
@@ -147,15 +147,15 @@ test("a role-default tier is dropped on the move to Claude and comes back when t
   expect(String((moved.answer.graphEdit as { summary: string }).summary)).toContain("dropped Codex service tier priority");
   expect(stored(lane.id, "review").effectiveRole.serviceTier).toBeUndefined();
 
-  const back = await override({ pipelineId: lane.id, stageId: "review", engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" });
+  const back = await override({ pipelineId: lane.id, stageId: "review", engine: "codex", model: "gpt-6.2-sol", effort: "xhigh" });
   expect(back.isError, back.raw).toBe(false);
   expect(String((back.answer.graphEdit as { summary: string }).summary)).not.toContain("dropped");
-  expect(stored(lane.id, "review").effectiveRole).toMatchObject({ engine: "codex", model: "gpt-6.1-sol", serviceTier: "priority", serviceTierSource: "role-default" });
+  expect(stored(lane.id, "review").effectiveRole).toMatchObject({ engine: "codex", model: "gpt-6.2-sol", serviceTier: "priority", serviceTierSource: "role-default" });
 });
 
 test("an explicit Codex tier still needs serviceTier null before the stage moves to Claude", async () => {
   const lane = await draftLane([
-    { id: "pinned", role: { roleId: "reviewer" }, engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "priority" },
+    { id: "pinned", role: { roleId: "reviewer" }, engine: "codex", model: "gpt-6.2-sol", effort: "high", serviceTier: "priority" },
     { id: "review", role: { roleId: "reviewer" } },
   ]);
   const override = await connect();

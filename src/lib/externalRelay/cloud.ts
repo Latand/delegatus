@@ -1,10 +1,10 @@
-import { CODEX_CLOUD_MODEL_IDS } from "@/lib/agent/models";
+import { CODEX_CLOUD_MODEL_IDS, CODEX_GPT62_SOL_MODEL, modelForLaunch } from "@/lib/agent/models";
 import { collectProviderOpen, providerOpen, type ProviderOpen } from "./providerOpens";
 import WebSocket from "ws";
 import type { EphemeralAgentRun, EphemeralAgentResult } from "@/lib/agent/ephemeral";
 import { resolveHostedCloudEnvironment } from "@/lib/pipelines/cloudHostedClient";
 
-export const CLOUD_MODEL = "gpt-6.1-sol";
+export const CLOUD_MODEL = CODEX_GPT62_SOL_MODEL;
 export type CloudRequest = {
   model?: string | null;
   ["prompt"]: string;
@@ -39,7 +39,7 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
   resolveEnvironment: (request: CloudRequest) => Promise<string> = request => resolveHostedCloudEnvironment(request.environmentId,
     { token: process.env.LLV_CODEX_CLOUD_TOKEN ?? "" }, { signal: request.signal, assertCurrent: () => request.signal.throwIfAborted() })): CloudTransport {
   return async request => {
-    const model = request.model ?? CLOUD_MODEL;
+    const model = modelForLaunch("codex", request.model ?? CLOUD_MODEL);
     if (!CODEX_CLOUD_MODEL_IDS.includes(model)) throw new CloudFailure(true);
     const endpoint = process.env.LLV_CODEX_CLOUD_URL;
     if (!request.environmentId || !endpoint || !/^wss:\/\//.test(endpoint)) throw new CloudFailure(true);
@@ -112,7 +112,7 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
           if (!cwd.startsWith("/") || cwd.includes("\0")) throw new CloudFailure(true);
           const response = await rpc("thread/start", {
             ...(request.privateContext ? { ephemeral: true } : {}),
-            model, approvalPolicy: "never", serviceTier: "ultrafast",
+            model, allowProviderModelFallback: false, approvalPolicy: "never", serviceTier: "ultrafast",
             environments: [{ environmentConfigId: request.environmentId, cwd }], deferredEnvironment: true,
             sandbox: request.fullAccess ? "danger-full-access" : "read-only",
             config: { ...(request.effort ? { model_reasoning_effort: request.effort } : {}), ...(request.fullAccess ? {} : {
@@ -124,6 +124,7 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
             }) },
           });
           const thread = response.thread as { id?: string; ephemeral?: boolean; environments?: { environmentConfigId?: string; environmentId?: string; cwd?: string }[] } | undefined;
+          if (response.model != null && response.model !== model) throw new CloudFailure(true);
           threadId = thread?.id;
           const environment = Array.isArray(thread?.environments) ? thread.environments[0] : undefined;
           if (request.privateContext && thread?.ephemeral !== true) throw new CloudFailure(true);

@@ -3931,6 +3931,17 @@ for (const { tier, fast, expected } of [
   });
 }
 
+test("resume remaps a retired Codex profile after inheritance and preserves its source generation", () => {
+  const store = registry();
+  const conversation = store.ensureConversation("codex", "/sessions/retired-sol.jsonl", "saved-account");
+  const original = { model: "gpt-6.1-sol", effort: "xhigh", fast: true, serviceTier: "priority" };
+  store.updateConversationLaunchProfile(conversation.id, original);
+  const { receipt } = store.beginSpawnRequest({ engine: "codex", cwd: "/repo", accountId: "saved-account",
+    conversationId: conversation.id, purpose: "resume-successor", transport: "structured" });
+  expect(receipt).toMatchObject({ accountId: "saved-account", launchProfile: { ...original, model: "gpt-6.2-sol" } });
+  expect(store.conversation(conversation.id)!.generations.at(-1)!.launchProfile).toMatchObject(original);
+});
+
 test("a completed same-path resume replay preserves a later service-tier reconfiguration", () => {
   const store = registry();
   const pathname = `/sessions/${crypto.randomUUID()}.jsonl`;

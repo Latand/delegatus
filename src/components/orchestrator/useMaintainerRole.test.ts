@@ -31,7 +31,7 @@ test("the maintainer picker offers what the shared catalogue lists from the serv
   for (const engine of ["claude", "codex"] as const) {
     expect(offeredModels(choices, engine, null).map((model) => model.id)).toEqual(listedModels(engine).map((model) => model.id));
   }
-  expect(offeredModels(choices, "codex", null).map((model) => model.id)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]);
+  expect(offeredModels(choices, "codex", null).map((model) => model.id)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-terra", "gpt-6-luna"]);
   expect(offeredModels(choices, "claude", null).filter((model) => model.label === "Haiku 5.5").map((model) => model.id)).toEqual(["claude-haiku-5-5"]);
 });
 

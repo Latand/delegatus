@@ -1,3 +1,4 @@
+import { CODEX_GPT62_SOL_MODEL } from "@/lib/agent/models";
 import { createHash } from "node:crypto";
 import type { CreatePipelineRequest, Pipeline, PipelineRefresh } from "@/lib/pipelines/types";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
@@ -64,7 +65,7 @@ export function refreshRequest(lane: Pipeline, legacyBase = "main"): CreatePipel
   const target = lane.delivery!.target;
   const base = refresh.baseBranch ?? legacyBase;
   const facts = `PR #${merge.prNumber}; finished lane ${lane.id}; base ${base} at ${refresh.base}; reviewed head ${refresh.head}; delivery ${target.branch}.`;
-  const runtime = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", preferredServiceTier: "ultrafast" };
+  const runtime = { engine: "codex" as const, model: CODEX_GPT62_SOL_MODEL, effort: "high", preferredServiceTier: "ultrafast" };
   const merger = { roleId: "merger" as const, params: { prs: `${merge.prNumber}@${refresh.head}` } };
   return {
     task: `#${merge.prNumber} ${lane.task.split("\n")[0]!.slice(0, 60)}: merge current ${base}, review the merge resolution only`,

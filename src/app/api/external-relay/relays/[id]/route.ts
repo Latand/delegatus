@@ -1,6 +1,6 @@
 import { revokeOwnerRuns } from "@/lib/externalRelay/ownerRun";
 import { NextRequest, NextResponse } from "next/server";
-import { CODEX_CLOUD_MODEL_IDS, validateLaunchModel } from "@/lib/agent/models";
+import { CODEX_CLOUD_MODEL_IDS, modelForLaunch, validateLaunchModel } from "@/lib/agent/models";
 import { effortScale } from "@/lib/agent/efforts";
 import {
   guardRelayRoute,
@@ -68,6 +68,7 @@ export async function PATCH(req: NextRequest, context: Context) {
           targets = targets.map((target) => {
             if (target.id !== patch.id) return target;
             const next = { ...target, ...patch };
+            if (next.engine && typeof next.model === "string") next.model = modelForLaunch(next.engine, next.model);
             if (
               (next.engine !== null &&
                 next.engine !== "claude" &&

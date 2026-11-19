@@ -26,12 +26,12 @@ export const CODEX_TERRA_MODEL = "gpt-5.6-terra";
 export const CODEX_LUNA_MODEL = "gpt-5.6-luna";
 
 // Wire admission remains stable when a picker retires an older choice.
-const CODEX_LAUNCH_MODEL_IDS = [CODEX_GPT62_SOL_MODEL, CODEX_GPT62_ASTRA_MODEL, CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL,
+const CODEX_LAUNCH_MODEL_IDS = [CODEX_GPT62_SOL_MODEL, CODEX_GPT62_ASTRA_MODEL, CODEX_ASTRA_MODEL,
   CODEX_GPT6_SOL_MODEL, CODEX_GPT6_LUNA_MODEL, CODEX_SOL_MODEL,
   CODEX_TERRA_MODEL, CODEX_LUNA_MODEL, CODEX_GPT61_TERRA_MODEL] as const;
 
-/** Models offered by Codex Cloud transports; the existing default stays Sol 6.1. */
-export const CODEX_CLOUD_MODEL_IDS: readonly string[] = [CODEX_GPT62_SOL_MODEL, CODEX_GPT62_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL];
+/** Models offered by Codex Cloud transports for new launches. */
+export const CODEX_CLOUD_MODEL_IDS: readonly string[] = [CODEX_GPT62_SOL_MODEL, CODEX_GPT62_ASTRA_MODEL];
 
 const CODEX_IMAGE_INPUT_MODELS = new Set([
   CODEX_GPT62_SOL_MODEL,
@@ -92,7 +92,7 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     { id: CODEX_GPT62_SOL_MODEL, label: "GPT-6.2-Sol", shortLabel: "6.2-Sol", use: "review" },
     { id: CODEX_GPT62_ASTRA_MODEL, label: "GPT-6.2-Astra", shortLabel: "6.2-Astra", use: "review" },
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
-    { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review" },
+    { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review", retired: true },
     { id: CODEX_GPT61_TERRA_MODEL, label: "GPT-6.1-Terra", shortLabel: "6.1-Terra", use: "implement" },
     { id: CODEX_GPT6_LUNA_MODEL, label: "GPT-6-Luna", shortLabel: "6-Luna", use: "general" },
     { id: CODEX_GPT6_SOL_MODEL, label: "GPT-6-Sol", shortLabel: "6-Sol", use: "review", retired: true },
@@ -134,6 +134,12 @@ export function listedModels(
   return rows.filter((option) => kept.has(option.id) || (!option.duplicateOf && !option.retired && option.id !== alias?.duplicateOf));
 }
 
+/** Resolve saved selections only when preparing new work. History keeps its original id. */
+export function modelForLaunch<T extends string | null | undefined>(engine: string, model: T): string | T {
+  return (engine === "codex" || engine === "codex-cloud") && model?.trim() === CODEX_GPT61_SOL_MODEL
+    ? CODEX_GPT62_SOL_MODEL : model;
+}
+
 export type LaunchModelValidation = { model: string } | { error: string };
 
 /** Accepted wire ids, including reviewed models awaiting catalogue presentation.
@@ -145,7 +151,7 @@ export function launchModelIds(engine: "claude" | "codex" | "copilot"): string[]
 /** Validate a fresh-launch model against the reviewed launch ids.
     Resume and migration paths deliberately do not call this helper. */
 export function validateLaunchModel(engine: "claude" | "codex" | "copilot", model: string): LaunchModelValidation {
-  const requested = model.trim();
+  const requested = modelForLaunch(engine, model.trim());
   const validIds = launchModelIds(engine);
   if (validIds.includes(requested)) return { model: requested };
   if (engine === "copilot" && requested.length <= 128 && COPILOT_MODEL_ID.test(requested)) return { model: requested };
@@ -157,7 +163,7 @@ export function validateLaunchModel(engine: "claude" | "codex" | "copilot", mode
 /** The shipped fresh-launch fallback; explicit catalogue selections stay available. */
 export function defaultModelFor(engine: "claude" | "codex" | "copilot"): string {
   if (engine === "copilot") return COPILOT_AUTO_MODEL;
-  return engine === "codex" ? CODEX_GPT61_SOL_MODEL : "opus";
+  return engine === "codex" ? CODEX_GPT62_SOL_MODEL : "opus";
 }
 
 const CLAUDE_MODEL_FAMILIES = ["fable", "opus", "sonnet", "haiku"] as const;

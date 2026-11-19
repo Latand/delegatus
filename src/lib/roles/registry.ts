@@ -1,7 +1,7 @@
 import { effortScale } from "@/lib/agent/efforts";
 import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { projectForCwd } from "@/lib/scanner/describe";
-import { validateLaunchModel } from "@/lib/agent/models";
+import { modelForLaunch, validateLaunchModel } from "@/lib/agent/models";
 
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
 
@@ -189,7 +189,8 @@ function promptWithFences(definition: RoleDefinition, params: RoleParamValues, p
 /** The runtime a role runs on for these parameters. A variant row
     (`variantForParams`) reads the install's mapping (#1876) over its shipped value. */
 export function configForParams(definition: RoleDefinition, params: RoleParamValues): RoleConfig {
-  return configForVariant(definition, params);
+  const config = configForVariant(definition, params);
+  return { ...config, model: modelForLaunch(config.engine, config.model) };
 }
 
 function resolveConfig(definition: RoleDefinition, params: RoleParamValues, explicit: ExplicitRoleConfig): { ok: true; value: RoleConfig } | { ok: false; error: string } {

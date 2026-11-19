@@ -19,7 +19,7 @@ export async function fixture(name: string, cloud = false, repoDir = "/repo", pr
     // Admission needs capabilities before creation. Each Cloud scenario installs
     // its execution fake before ticking; this guard keeps provider effects fake.
     const unexpected = async () => { throw new Error("Configure the Cloud execution fake before ticking"); };
-    h.ports.cloudClient = { supportsModel: model => model === "gpt-6.1-sol",
+    h.ports.cloudClient = { supportsModel: model => model === "gpt-6.2-sol",
       hasEnvironment: unexpected, submit: unexpected, poll: unexpected,
       readFinalMessage: unexpected, readDiff: unexpected };
   }
@@ -40,7 +40,7 @@ export async function fixture(name: string, cloud = false, repoDir = "/repo", pr
   agentRegistry().recordQuotaObservation(proactiveObservation());
   const inputContext = ensurePipelineForTask(task, [], { repoDir, engine: "codex", model: null, effort: null, srcPath: "/codex/creator.jsonl" })!.inputContext;
   const request = { task: task.text, spec: "Retain the useful filter", inputContext, repoDir, taskIds: [task.id], publication: cloud ? "remote-branch" as const : "internal" as const,
-    stages: structuredClone(graph).map(stage => cloud && stage.id === "build" ? { ...stage, runtime: "codex-cloud", engine: "codex", model: "gpt-6.1-sol" } : stage) as never };
+    stages: structuredClone(graph).map(stage => cloud && stage.id === "build" ? { ...stage, runtime: "codex-cloud", engine: "codex", model: "gpt-6.2-sol" } : stage) as never };
   const made = await createPipelineFromRequest(request, h.ports);
   if (!made.pipeline) throw new Error(made.error);
   const id = made.pipeline.id;

@@ -1,4 +1,4 @@
-import { CODEX_CLOUD_MODEL_IDS, CODEX_GPT61_SOL_MODEL } from "@/lib/agent/models";
+import { CODEX_CLOUD_MODEL_IDS, CODEX_GPT61_SOL_MODEL, modelForLaunch } from "@/lib/agent/models";
 import { effortScale } from "@/lib/agent/efforts";
 import { setTimeout as delay } from "node:timers/promises";
 import { cloudInputTurn, splitCloudInput } from "./cloudStageInput";
@@ -382,7 +382,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
   }
   async function status(client: HostedConnection, input: CloudTaskAccess) {
     const model = input.thread?.hosted?.model;
-    requireCloud(typeof model === "string" && CODEX_CLOUD_MODEL_IDS.includes(model) && validCloudThreadReference(input.thread) && input.taskId === input.thread.threadId
+    requireCloud(typeof model === "string" && (CODEX_CLOUD_MODEL_IDS.includes(model) || model === CODEX_GPT61_SOL_MODEL) && validCloudThreadReference(input.thread) && input.taskId === input.thread.threadId
       && /^[a-f0-9]{40}$/i.test(input.headSha), "thread receipt missing");
     const threadId = input.thread.threadId;
     client.watch(threadId);
@@ -429,9 +429,12 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
         throw error;
       }
     },
-    supportsModel: (model, effort) => CODEX_CLOUD_MODEL_IDS.includes(model) && (effort === null ||
-      (model === CODEX_GPT61_SOL_MODEL ? ["none", "minimal", "low", "medium", "high", "xhigh"] : effortScale("codex", model)!).includes(effort)),
+    supportsModel: (model, effort) => {
+      const selected = modelForLaunch("codex", model);
+      return CODEX_CLOUD_MODEL_IDS.includes(selected) && (effort === null || effortScale("codex", selected)!.includes(effort));
+    },
     submit: input => {
+      input = { ...input, model: modelForLaunch("codex", input.model) };
       if (input.serviceTier != null) return Promise.reject(new CloudSubmissionNotStartedError("Codex Cloud explicit service tier unsupported", "invalid"));
       let turnRequested = false;
       return using(input, async (client, auth, scope) => {

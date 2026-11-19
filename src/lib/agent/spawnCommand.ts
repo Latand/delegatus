@@ -506,7 +506,10 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   if (body.model !== undefined && body.model !== null && selectedModel.model) {
     const validation = validateLaunchModel(engine, selectedModel.model);
     if ("error" in validation) return NextResponse.json({ error: validation.error }, { status: 400 });
+    selectedModel.model = validation.model;
   }
+
+  if (engine === "codex") selectedModel.model ??= defaultModelFor(engine);
 
   const tierResolution = codexLaunchTier({ engine, model: selectedModel.model, fast: body.fast, serviceTier: body.serviceTier, inheritedServiceTier: body.inheritedServiceTier,
     roleDefault: role.value?.config.serviceTier, roleDefaultApplies: !!role.value && !role.value.explicitRuntime });

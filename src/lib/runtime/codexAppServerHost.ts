@@ -1,3 +1,4 @@
+import { CODEX_GPT61_SOL_MODEL, modelForLaunch } from "@/lib/agent/models";
 import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { clearEngineHostText, createEngineHostLedgerProjection } from "./engineHostEvents";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
@@ -1624,6 +1625,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private static async openWithCliGuard(options: CodexAppServerHostOptions, threadId: string | null): Promise<CodexAppServerHost> {
+    const model = modelForLaunch("codex", options.model);
+    const threadModel = model ? { model } : {};
     let memoryHook: ReturnType<typeof installCodexMemoryHook> = null;
     try { if (!options.socketOwner && options.codexHome && !options.cleanMemory) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
     catch { /* optional memory must never stop a launch */ }
@@ -1737,12 +1740,12 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const accountType = stringField(account, "type");
       if (accountType !== "chatgpt") throw new Error("Codex app-server requires a ChatGPT subscription login");
       provisional.account = { type: accountType, planType: stringField(account, "planType") };
-      provisional.requestedModel = options.model;
+      provisional.requestedModel = model;
       try {
         provisional.modelCatalog = await provisional.rpc("model/list", {});
         provisional.imageInputSupport = modelSupportsImageInput(
           provisional.modelCatalog,
-          options.model,
+          model,
         ) ? "supported" : "unsupported";
       } catch {
         /* A probe fault leaves capability unknown and admission fail-closed.
@@ -1759,7 +1762,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         } catch { /* A missing receipt remains unknown, never a capability grant. */ }
       }
       options.assertCurrent?.();
-      if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier, provisional.tierAccountHome);
+      if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, model, options.serviceTier, provisional.tierAccountHome);
       const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
       options.assertCurrent?.();
       const config = headlessCodexThreadConfig(
@@ -1823,8 +1826,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         ...(options.omitSkillsInstructions ? { skills: config.skills } : {}),
       };
       const result = threadId
-        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...(Object.keys(reconnectConfig).length ? { config: reconnectConfig } : {}) } : {
+        ? await provisional.resumeThreadTolerantly(options.socketOwner ? { threadId, ...threadModel, ...(Object.keys(reconnectConfig).length ? { config: reconnectConfig } : {}) } : {
           threadId,
+          ...threadModel,
           ...(options.cleanerDiskWorkspace ? { cwd: options.cwd } : {}),
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
@@ -1835,7 +1839,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           cwd: options.cwd,
           ...(protocol.hasRequestField("thread/start", "dynamicTools") ? { dynamicTools: [gateCheckTool] } : {}),
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
-          ...(options.model ? { model: options.model } : {}),
+          ...threadModel,
           ...launchAccess,
           ...runInstructions,
           config,
@@ -1851,7 +1855,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       }
       provisional.identity.threadId = identity.threadId;
       provisional.identity.path = identity.path;
-      provisional.requestedModel = stringField(result, "model") ?? provisional.requestedModel;
+      const resolvedModel = stringField(result, "model");
+      if (resolvedModel === CODEX_GPT61_SOL_MODEL) throw new Error("Codex resolved the retired launch model");
+      provisional.requestedModel = resolvedModel ?? provisional.requestedModel;
       if (granted.length > 0) await provisional.verifyPluginGrant(granted, config);
       options.assertCurrent?.();
       provisional.rememberConfirmedDeliveries(result);
@@ -2256,6 +2262,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private prepareDelivery(normalized: ReturnType<typeof normalizeQueueEntry>): QueueEntry {
+    if (normalized.runtime?.model) {
+      normalized = { ...normalized, runtime: { ...normalized.runtime, model: modelForLaunch("codex", normalized.runtime.model) } };
+    }
     if (normalized.content.images.length) {
       const support = !this.activeTurnId && normalized.runtime?.model && this.modelCatalog !== null
         ? modelSupportsImageInput(this.modelCatalog, normalized.runtime.model) ? "supported" : "unsupported"

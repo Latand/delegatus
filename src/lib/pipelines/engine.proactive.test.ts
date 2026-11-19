@@ -141,7 +141,7 @@ test.each(["eligible-first", "eligible-last", "all-reserved", "stale", "missing"
     },
     submit: async input => { input.assertCurrent(); submitted.push(input.account.accountId!);
       return { taskId: "pool-model", taskUrl: "https://example.com/cloud/pool-model" }; },
-    poll: async () => ({ state: "pending", model: "gpt-6.1-sol" }),
+    poll: async () => ({ state: "pending", model: "gpt-6.2-sol" }),
     readFinalMessage: async () => { throw new Error("unexpected final read"); }, readDiff: async () => "",
   };
   await f.tick();
@@ -160,8 +160,8 @@ test("an unadopted Cloud continuation reconciles the running model receipt after
   f.h.ports.cloudClient = {
     supportsModel: () => true, hasEnvironment: async () => true,
     submit: async input => { input.assertCurrent(); submits++; return { taskId: "proactive-cloud-model", taskUrl: "https://example.com/cloud/proactive-cloud-model" }; },
-    poll: async () => { polls++; return { state: completed ? "completed" : "pending", model: "gpt-6.1-sol" }; },
-    readFinalMessage: async () => ({ message: '```json\n{"status":"pass","findings":[]}\n```', model: "gpt-6.1-sol" }),
+    poll: async () => { polls++; return { state: completed ? "completed" : "pending", model: "gpt-6.2-sol" }; },
+    readFinalMessage: async () => ({ message: '```json\n{"status":"pass","findings":[]}\n```', model: "gpt-6.2-sol" }),
     readDiff: async () => "",
   };
   await f.tick(); await f.pass();

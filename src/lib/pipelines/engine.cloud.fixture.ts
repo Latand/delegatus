@@ -54,7 +54,7 @@ export async function fixture(options: { accountId?: string; enabled?: boolean; 
   const submits: Parameters<CloudStageClient["submit"]>[0][] = [];
   const reads: Parameters<CloudStageClient["poll"]>[0][] = [];
   const runtime = options.stages?.[0]?.runtime ?? "codex-cloud";
-  const model = runtime === "claude-cloud" ? "opus" : "gpt-6.1-sol";
+  const model = runtime === "claude-cloud" ? "opus" : "gpt-6.2-sol";
   h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available", account: {
     engine, accountId: request.requestedId ?? options.accountId ?? "cloud-account", kind: "managed", home: path.resolve("fixture-account"), transcriptRoot: path.resolve("fixture-account"), env: { NODE_ENV: "test" },
   } });

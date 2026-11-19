@@ -684,7 +684,7 @@ for (const edit of ["model", "effort", "account", "standard", "priority"] as con
     const targetAccount = createManagedCodexAccount(`Tier account ${edit}`);
     for (const account of listCodexAccounts()) {
       fs.mkdirSync(account.home, { recursive: true });
-      fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: ["gpt-6-astra", "gpt-6.1-sol"].map(slug => ({ slug, service_tiers: [{ id: "priority" }, { id: "ultrafast" }] })) }));
+      fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: ["gpt-6-astra", "gpt-6.2-sol"].map(slug => ({ slug, service_tiers: [{ id: "priority" }, { id: "ultrafast" }] })) }));
     }
     const h = switchHarness();
     h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast", access: "read-only", promptScaffold: "Stage guidance" });
@@ -745,7 +745,7 @@ for (const edit of ["model", "effort", "account", "standard", "priority"] as con
       });
     };
     const tier = edit === "standard" ? "standard" : edit === "priority" ? "priority" : "ultrafast";
-    const body = { action: "override-stage" as const, stageId: "plan", engine: "codex" as const, model: edit === "model" ? "gpt-6.1-sol" : "gpt-6-astra",
+    const body = { action: "override-stage" as const, stageId: "plan", engine: "codex" as const, model: edit === "model" ? "gpt-6.2-sol" : "gpt-6-astra",
       effort: edit === "effort" ? "xhigh" : "high", serviceTier: tier, ...(edit === "account" ? { account: targetAccount.id } : {}), applyNow: true };
     const result = await patchPipeline(lane.id, body, h.ports, { kind: "operator" });
     expect(result.error).toBeUndefined();
@@ -1119,7 +1119,7 @@ test("engine change stops before spawning and keeps the slot, access and attempt
   h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "default", kind: "default", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: {} } } as never);
   h.ports.stopStageAgent = async () => { calls.push("stop"); return { outcome: "stopped" }; };
   h.ports.spawnAgent = async (value, reserved) => { calls.push("spawn"); input = value; await reserved({ launchId: "launch-new", conversationId: "conversation_new", accountId: "default" }); return { launchId: "launch-new", conversationId: "conversation_new", accountId: "default", sessionId: "session-new", transcript: "/codex/new.jsonl", paneId: null }; };
-  const request = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.1-sol", effort: "high", applyNow: true }, h.ports);
+  const request = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.2-sol", effort: "high", applyNow: true }, h.ports);
   expect(request.error).toBeUndefined();
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.stateDetail).not.toContain("waiting:");
@@ -1183,7 +1183,7 @@ test("switch-owned teardown preserves a failed operator stop through compaction"
     return { launchId: "launch-switch-successor", conversationId: "conversation_switch_successor", accountId: "default", sessionId: "switch-successor", transcript: "/codex/switch-successor.jsonl", paneId: null };
   };
   try {
-    expect((await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.1-sol", applyNow: true }, h.ports)).error).toBeUndefined();
+    expect((await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.2-sol", applyNow: true }, h.ports)).error).toBeUndefined();
     await tickPipelines([], h.ports);
     const record = loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!;
     expect(record.phase).toBe("committed");
@@ -1361,7 +1361,7 @@ test.each(["completed", "failed", "killed"] as const)("stage projection keeps re
   const { pipelineStageRead } = await import("@/lib/mcp/compactAnswers");
   const h = switchHarness();
   h.ports.resolveProjectSpawn = engine => ({ kind: "available", account: { accountId: engine === "codex" ? "target-account" : "default" } } as never);
-  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol" });
   expect(requested.error).toBeUndefined();
   const read = () => pipelineStageRead(loadPipelines()[0]!, "plan").attempt!;
   expect(read().runtime).toEqual({ engine: "claude", model: "fable", effort: "high", serviceTier: null, accountId: "default", serviceTierSource: null });
@@ -1396,13 +1396,13 @@ test.each(["completed", "failed", "killed"] as const)("stage projection keeps re
   }
   receipt = { state: outcome, launchId: "projection-launch", conversationId: "conversation_projection", accountId: "target-account",
     sessionId: "projection-session", transcript: "/codex/projection.jsonl", paneId: null, ...(outcome === "failed" ? { error: "launch refused" } : {}) } as never;
-  if (outcome === "completed") h.setSeat({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: null,
+  if (outcome === "completed") h.setSeat({ engine: "codex", model: "gpt-6.2-sol", effort: "high", serviceTier: null,
     accountId: "target-account", sessionId: "projection-session", agentPath: "/codex/projection.jsonl" });
   await restarted.tickPipelines([], h.ports);
   await restarted.tickPipelines([], h.ports);
   expect(read().runtimeSwitch?.phase).toBe(outcome === "completed" ? "committed" : "rolled-back");
   expect(read().runtime).toEqual(outcome === "completed"
-    ? { engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: null, accountId: "target-account", serviceTierSource: null }
+    ? { engine: "codex", model: "gpt-6.2-sol", effort: "high", serviceTier: null, accountId: "target-account", serviceTierSource: null }
     : { engine: "claude", model: "fable", effort: "high", serviceTier: null, accountId: "default", serviceTierSource: null });
   expect(launches).toBe(1);
 });
@@ -1410,7 +1410,7 @@ test.each(["completed", "failed", "killed"] as const)("stage projection keeps re
 test("a completed parked handoff receipt settles its successor after engine restart", async () => {
   const h = switchHarness();
   h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
-  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol" });
   let receipt: ReturnType<PipelinePorts["spawnReceipt"]> = null;
   let handoffCalls = 0;
   h.ports.spawnReceipt = () => receipt;
@@ -1482,7 +1482,7 @@ test("a late failed reconfigure restores the authorized source continuation and 
 test("a parked handoff resumes after the original stop is confirmed", async () => {
   const h = switchHarness();
   h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
-  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol" });
   let stopConfirmed = false;
   let handoffCalls = 0;
   h.ports.stopStageAgent = async () => stopConfirmed
@@ -1514,7 +1514,7 @@ test("a parked handoff resumes after the original stop is confirmed", async () =
 test("a late failed handoff receipt restores the authorized source conversation", async () => {
   const h = switchHarness();
   h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
-  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol" });
   let receipt: ReturnType<PipelinePorts["spawnReceipt"]> = null;
   h.ports.spawnReceipt = () => receipt;
   h.ports.spawnAgent = async (_input, reserved) => {
@@ -1556,7 +1556,7 @@ test("a parked handoff rollback with no successor launch settles on the source's
     }
     return true;
   };
-  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  const requested = await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol" });
   let handoffCalls = 0;
   h.ports.spawnAgent = async () => { handoffCalls++; throw new Error("target unavailable"); };
   await tickPipelines([], h.ports);
@@ -1611,7 +1611,7 @@ test("a parked handoff rollback stays fenced when the project dropped the source
     }
     return true;
   };
-  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol" });
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol" });
   h.ports.spawnAgent = async () => { throw new Error("target unavailable"); };
   await tickPipelines([], h.ports);
   h.advance(10 * 60_000);
@@ -1667,7 +1667,7 @@ test("an unconfirmed handoff stop never spawns a second agent", async () => {
   h.ports.allowedAccountIds = () => ["default"];
   h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "default", kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
   h.ports.stopStageAgent = async () => ({ outcome: "failed", error: "identity changed" });
-  const result = await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.1-sol", applyNow: true }, h.ports);
+  const result = await patchPipeline(lane.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.2-sol", applyNow: true }, h.ports);
   expect(result.error).toBeUndefined(); await tickPipelines([], h.ports);
   expect(h.spawnCount()).toBe(1);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!).toMatchObject({ conversationId: STAGE_CONVERSATION, runtimeSwitches: [{ phase: "failed" }] });
@@ -1699,7 +1699,7 @@ test("switch admission uses project selection with continuity and known exhauste
 });
 test("a handoff stop's own kill boundary cannot cancel reconciliation after spawn fails before reservation", async () => {
   const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
-  const request = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" }); expect(request.error).toBeUndefined();
+  const request = await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol", effort: "high" }); expect(request.error).toBeUndefined();
   let ownKillAt = 0;
   h.ports.stopStageAgent = async () => { h.advance(1000); ownKillAt = h.wallClock(); h.advance(1); return { outcome: "stopped" }; };
   h.ports.runtimeSwitchKilled = async (_id, since, ignored) => ownKillAt > Date.parse(since) && !ignored?.some(key => key.endsWith("-stop"));
@@ -1742,7 +1742,7 @@ test("rollback reuses a pending held continuation that cancellation rearms", asy
 });
 test("a crash after the owned stop replays that stop and excludes only its kill boundary", async () => {
   const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
-  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol", effort: "high" });
   let ownKey: string | undefined; let calls = 0;
   h.ports.runtimeSwitchKilled = async (_id, _since, ignored) => !!ownKey && !ignored?.includes(ownKey);
   h.ports.stopStageAgent = async (_target, options) => { ownKey = options?.operationId; calls++; if (calls === 1) throw new Error("crash after accepted stop"); return { outcome: "stopped" }; };
@@ -1754,7 +1754,7 @@ test("a crash after the owned stop replays that stop and excludes only its kill 
 
 test("a handoff whose stop landed while its answer was lost still starts its target (#3797)", async () => {
   const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
-  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol", effort: "high" });
   let stopped = false; let calls = 0; let spawned = 0;
   // The runtime ended the source and the answer timed out; from then on the source reads as gone.
   h.ports.stopStageAgent = async () => { calls++; if (!stopped) { stopped = true; throw new Error("runtime host request timed out"); } return { outcome: "not-running" }; };
@@ -1771,7 +1771,7 @@ test("a handoff whose stop landed while its answer was lost still starts its tar
 
 test("handoff accepts an early successor verdict and rejects the former conversation's report", async () => {
   const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
-  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol", effort: "high" });
   const cut = h.wallClock();
   h.ports.spawnAgent = async (_input, reserved) => { await reserved({ launchId: "launch-new", conversationId: "conversation_new", accountId: "default" }); h.advance(1000); return { launchId: "launch-new", conversationId: "conversation_new", accountId: "default", sessionId: "new", transcript: "/codex/new.jsonl", paneId: null }; };
   await tickPipelines([], h.ports);
@@ -1810,7 +1810,7 @@ for (const pinned of [true, false]) test(`an already-current runtime updates its
 
 for (const action of ["pause", "close"] as const) test(`a held handoff launch leaves ${action} admission free and cannot overwrite it`, async () => {
   const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
-  const request = await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  const request = await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol", effort: "high" });
   let enter!: () => void; let release!: () => void; let dispatched = false;
   const entered = new Promise<void>(resolve => { enter = resolve; });
   const held = new Promise<void>(resolve => { release = resolve; });
@@ -1835,8 +1835,8 @@ for (const action of ["pause", "close"] as const) test(`a held handoff launch le
 
 test("a Codex tier fallback can hand off to Claude and persist the successor runtime", async () => {
   const h = switchHarness();
-  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-only", promptScaffold: "Architect guidance" });
-  h.setSeat({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: null, accountId: "default", sessionId: "session-1", agentPath: STAGE_TRANSCRIPT } as never);
+  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.2-sol", effort: "high", access: "read-only", promptScaffold: "Architect guidance" });
+  h.setSeat({ engine: "codex", model: "gpt-6.2-sol", effort: "high", serviceTier: null, accountId: "default", sessionId: "session-1", agentPath: STAGE_TRANSCRIPT } as never);
   const pipeline = await runningStage(h); const rows = loadPipelines();
   rows[0]!.runs[0]!.attempts[0]!.effectiveRole.preferredServiceTier = "priority";
   rows[0]!.runs[0]!.attempts[0]!.effectiveRole.serviceTierSource = "role-default";
@@ -1879,7 +1879,7 @@ for (const handoff of [false, true]) test(`operator kill in the switch milliseco
     h.ports.stopStageAgent = async () => ({ outcome: "stopped" });
   }
   const requested = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", applyNow: true,
-    ...(handoff ? { engine: "codex", model: "gpt-6.1-sol", effort: "high" } : { model: "opus" }) }, h.ports);
+    ...(handoff ? { engine: "codex", model: "gpt-6.2-sol", effort: "high" } : { model: "opus" }) }, h.ports);
   expect(requested.error).toBeUndefined();
   const since = requested.runtimeSwitch!.requestedAt;
   const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, `same-millisecond-${handoff}.sqlite`), { structuredHosts: true, now: () => Date.parse(since) });
@@ -2022,7 +2022,7 @@ test("the verdict evidence boundary survives bounded switch-history eviction", a
 
 test("a handoff successor report waits for its completed launch receipt", async () => {
   const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
-  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol", effort: "high" });
   let receipt: ReturnType<PipelinePorts["spawnReceipt"]> = null;
   h.ports.spawnReceipt = () => receipt;
   h.ports.spawnAgent = async (_input, reserved) => {
@@ -2045,7 +2045,7 @@ test("a handoff successor report waits for its completed launch receipt", async 
 
 test("a stopped unpublished handoff rolls back through its own switch driver", async () => {
   const h = switchHarness(); h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { accountId: "default" } } as never);
-  await requestSwitch(h, { engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  await requestSwitch(h, { engine: "codex", model: "gpt-6.2-sol", effort: "high" });
   h.ports.spawnAgent = async (_input, reserved) => { await reserved({ launchId: "launch-new", conversationId: "conversation_new", accountId: "default" }); throw new Error("launch acknowledgement unavailable"); };
   await tickPipelines([], h.ports);
   h.ports.spawnReceipt = id => id === "launch-new" ? { launchId: id, conversationId: "conversation_new", sessionId: null, transcript: null, paneId: null, accountId: "default", state: "path-pending", staged: true, error: "structured launch recovery: " + JSON.stringify({ phase: "unpublished", startedAt: h.wallClock(), checks: 3, nextTryAt: h.wallClock(), reason: "first delivery refused", stopped: true }) } : null;
@@ -2255,7 +2255,7 @@ test("a choice made on an earlier attempt or conversation is refused before anyt
 
 test("the pill's own engine moves the running attempt after the next attempt was set to another engine", async () => {
   const h = switchHarness(); const pipeline = await runningStage(h);
-  const future = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.1-sol", effort: "high" }, h.ports, { kind: "operator" });
+  const future = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "plan", engine: "codex", model: "gpt-6.2-sol", effort: "high" }, h.ports, { kind: "operator" });
   expect(future.error).toBeUndefined();
   expect(loadPipelines()[0]!.stages[0]!.effectiveRole.engine).toBe("codex");
   /* The next attempt also carries a Codex speed, which Claude has no place for. */
@@ -2565,11 +2565,11 @@ async function inPlaceHarness() {
   const { listCodexAccounts } = await import("@/lib/accounts/codex");
   for (const account of listCodexAccounts()) {
     fs.mkdirSync(account.home, { recursive: true });
-    fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: ["gpt-6.1-sol", "gpt-6-astra"].map(slug => ({ slug, service_tiers: [{ id: "priority" }, { id: "ultrafast" }] })) }));
+    fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: ["gpt-6.2-sol", "gpt-6-astra"].map(slug => ({ slug, service_tiers: [{ id: "priority" }, { id: "ultrafast" }] })) }));
   }
   const h = switchHarness();
-  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-only", promptScaffold: "Stage guidance" });
-  let seat = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", serviceTier: null as string | null, accountId: "default", sessionId: "session-1", agentPath: STAGE_TRANSCRIPT };
+  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.2-sol", effort: "high", access: "read-only", promptScaffold: "Stage guidance" });
+  let seat = { engine: "codex" as const, model: "gpt-6.2-sol", effort: "high", serviceTier: null as string | null, accountId: "default", sessionId: "session-1", agentPath: STAGE_TRANSCRIPT };
   h.ports.conversationGeneration = () => seat;
   const tierCalls: Array<{ conversationId: string; operationId: string; serviceTier: string | null; cut: string }> = [];
   let answer: "cut" | "armed" | "none" = "none";
@@ -2668,7 +2668,7 @@ test("in-place: Turbo clears the thread tier on revert even when the role now de
   const h = await inPlaceHarness();
   expect((await h.request({ turbo: "turbo:2026-10-21T12:00:00.000Z", applyNowCut: "boundary" })).error).toBeUndefined();
   await tickPipelines([], h.ports);
-  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "priority", access: "read-only", promptScaffold: "Stage guidance" });
+  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.2-sol", effort: "high", serviceTier: "priority", access: "read-only", promptScaffold: "Stage guidance" });
   h.ports.resolveProjectSpawn = () => { throw new Error("paid-credit approval ended; no capacity remains"); };
   const returned = await h.request({ serviceTier: null, applyNowCut: "none", turbo: "turbo:2026-10-21T12:00:00.000Z" });
   expect(returned.error).toBeUndefined();
