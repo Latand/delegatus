@@ -47,7 +47,7 @@ import { queryLifecycleEvents, readLifecycleJournal } from "@/lib/lifecycle/jour
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 
-import { defaultMcpSpawnRoleParams, spawnDispatchBody, viewerMcpBindings, type ViewerMcpDomainDependencies } from "./bindings";
+import { defaultMcpSpawnRoleParams, spawnDispatchBody, viewerMcpBindings } from "./bindings";
 import type { SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import { spawnAdmissionBodyDigest } from "@/lib/agent/spawnIdentity";
 import { SEAT_TICK_PROMPT_LIMIT } from "@/lib/monitor/seatTickSettings";
@@ -1641,20 +1641,8 @@ test("board_snapshot returns an inert bounded board projection with durable line
   expect(rawScans).toBe(0);
 });
 
-// Board reads resolve retained project membership and capture caller authority
-// before reading rows. Keep these sources explicit in the projection fixtures.
-function boardReadSources(...projects: string[]): Pick<ViewerMcpDomainDependencies,
-  "lastCompletedCatalog" | "callerAttribution" | "attentionAuthority"> {
-  return {
-    lastCompletedCatalog: () => ({ files: [], projectCatalog: projects.map(project => ({ project, smt: 1, conversations: 1 })) }),
-    callerAttribution: () => ({ kind: "agent", conversationId: "conversation_seat", role: "builder" }),
-    attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_seat", role: "builder" }),
-  };
-}
-
 test("list_pipelines applies project, state, and closed filters to the durable registry", async () => {
   const bindings = viewerMcpBindings(undefined, undefined, {
-    ...boardReadSources("viewer", "other"),
     getPipelines: () => ({ pipelines: [
       { id: "pipeline_live", project: "viewer", state: "running" },
       { id: "pipeline_paused", project: "viewer", state: "paused" },
@@ -1681,7 +1669,6 @@ test.each([false, true])("list_pipelines resolves archived ids with the same fil
   ];
   const read = (id: string) => rows.find(row => row.id === id) ?? null;
   const bindings = viewerMcpBindings(undefined, undefined, {
-    ...boardReadSources("viewer", "other"),
     getPipelines: () => { throw new Error("explicit ids traversed the hot registry"); },
     listPipelineRecords: () => { throw new Error("explicit ids traversed the hot registry"); },
     ...(indexed ? { pipelineSelectionSource: () => ({ filename: "unused-for-keyed-reads", read: () => null }) } : {}),
@@ -1714,7 +1701,6 @@ test.each([false, true])("list_pipelines filters archived ids by PR query before
   ];
   const reads: string[] = [];
   const bindings = viewerMcpBindings(undefined, undefined, {
-    ...boardReadSources("viewer", "other"),
     getPipelines: () => { throw new Error("explicit PR query traversed the hot registry"); },
     listPipelineRecords: () => { throw new Error("explicit PR query traversed the hot registry"); },
     ...(indexed ? { pipelineSelectionSource: () => ({ filename: "unused-for-keyed-pr-reads", read: () => { throw new Error("explicit PR query read the hot source"); } }) } : {}),
@@ -1754,7 +1740,6 @@ test("list_pipelines returns bounded rows and leaves prompts, specs and transcri
     stateDetail: "waiting on review",
   };
   const bindings = viewerMcpBindings(undefined, undefined, {
-    ...boardReadSources("viewer", "other"),
     getPipelines: () => ({ pipelines: [pipeline] }),
   } as never);
 
@@ -1774,7 +1759,6 @@ test("list_pipelines returns bounded rows and leaves prompts, specs and transcri
 
 test("list_pipelines abandons the read when the caller's deadline has already passed", async () => {
   const bindings = viewerMcpBindings(undefined, undefined, {
-    ...boardReadSources("viewer", "other"),
     getPipelines: () => ({ pipelines: pipelineCorpus(1) }),
   } as never);
 
@@ -1790,7 +1774,6 @@ test("task read tools expose the pipeline-linked durable read model", async () =
     { id: "task_other", project: "other", status: "inbox", placement: "unplaced", text: "Other" },
   ];
   const bindings = viewerMcpBindings(undefined, undefined, {
-    ...boardReadSources("viewer", "other"),
     loadTasks: () => tasks,
     getPipelines: () => ({ pipelines: [{ id: "pipeline_608", taskIds: ["task_viewer"] }] }),
   } as never);
@@ -4898,9 +4881,38 @@ test("seat_tick_settings acknowledges auto-rotation and records the server-deriv
 test("list_pipelines names the successor carrying an automatic refresh", async () => {
   const pipeline = { ...pipelineCorpus(1)[0]!, id: "refresh-parent", project: "fixture", state: "completed",
     merge: { state: "refreshing", reason: null, by: null, prNumber: 11, refresh: { pipelineId: "refresh-successor" } } } as Pipeline;
-  const bindings = viewerMcpBindings(undefined, undefined, { ...boardReadSources("fixture"), getPipelines: () => ({ pipelines: [pipeline] }) } as never);
+  const bindings = viewerMcpBindings(undefined, undefined, { getPipelines: () => ({ pipelines: [pipeline] }) } as never);
   const answer = await bindings.list_pipelines({ clientRequestId: "list-refresh-successor", compact: false, project: "fixture" });
   expect(answer.pipelines).toMatchObject([{ id: "refresh-parent", merge: { state: "refreshing", refresh: "refresh-successor" } }]);
+});
+
+test("board reads keep main's exact-key selection only for a domain without a catalog source", async () => {
+  const tasks = [{ id: "task_unlisted", project: "unlisted-key", status: "inbox", placement: "unplaced", text: "Unlisted" }];
+  const pipelines = [{ id: "pipeline_unlisted", project: "unlisted-key", state: "running" }];
+  let rowReads = 0;
+  const bindings = (extra: Record<string, unknown> = {}) => viewerMcpBindings(undefined, undefined, {
+    listTaskRecords: () => { rowReads++; return tasks; }, loadTasks: () => tasks,
+    listPipelineRecords: () => { rowReads++; return pipelines; }, getPipelines: () => ({ pipelines }),
+    ...extra,
+  } as never);
+  const seat = { callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat" }),
+    authorizedSeats: () => [{ conversationId: "conversation_seat", project: "viewer" }] };
+  const catalog = { lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project: "viewer", smt: 1, conversations: 1 }] }) };
+
+  // No catalog source: a key the resolver cannot name reads exactly, as on main.
+  await expect(bindings().list_tasks({ project: "unlisted-key" })).resolves.toMatchObject({ count: 1, tasks: [{ id: "task_unlisted" }] });
+  await expect(bindings().list_pipelines({ project: "unlisted-key" })).resolves.toMatchObject({ count: 1, pipelines: [{ id: "pipeline_unlisted" }] });
+
+  rowReads = 0;
+  for (const tool of ["list_tasks", "list_pipelines"] as const) {
+    // The seat fence still compares that key before any row is read.
+    await expect((async () => bindings(seat)[tool]({ project: "unlisted-key" }))()).rejects.toMatchObject({ details: { code: "cross_project_refused", retryable: false } });
+    // A catalog source keeps the unknown-name refusal, also before any row is read.
+    for (const extra of [catalog, { ...catalog, ...seat }]) {
+      await expect((async () => bindings(extra)[tool]({ project: "unlisted-key" }))()).rejects.toMatchObject({ details: { code: "unknown_project", retryable: false } });
+    }
+  }
+  expect(rowReads).toBe(0);
 });
 
 for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) {

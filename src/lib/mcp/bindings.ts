@@ -6522,6 +6522,19 @@ export function resolveBoardSelection(named: string, dependencies: ViewerMcpDoma
   }
 }
 
+/** A domain that supplies no catalog source has no project directory of its
+ * own. A project the shared resolver cannot name is then read as an exact key,
+ * as on main, and the seat fence still compares it before any row is read. A
+ * domain with a catalog source (production) keeps the unknown-name refusal. */
+function boardSelectionOrKey(named: string, dependencies: ViewerMcpDomainDependencies): { project: string; directory?: NamedProjectDirectory } {
+  try { return resolveBoardSelection(named, dependencies); }
+  catch (error) {
+    if (typeof dependencies.lastCompletedCatalog === "function"
+      || !(error instanceof McpToolRefusal) || error.details.code !== "unknown_project") throw error;
+    return { project: canonicalProject(named) };
+  }
+}
+
 export function resolveBoardProject(named: string, dependencies: ViewerMcpDomainDependencies): string {
   return resolveBoardSelection(named, dependencies).project;
 }
@@ -6660,7 +6673,7 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   }
   const aliasSnapshot = projectAliasSnapshot({ strict: true });
   const aliases = aliasSnapshot.aliases;
-  const selection = operatorProject === undefined && resolved === undefined && named ? resolveBoardSelection(named, dependencies) : undefined;
+  const selection = operatorProject === undefined && resolved === undefined && named ? boardSelectionOrKey(named, dependencies) : undefined;
   const requested = operatorProject !== undefined ? canonicalProject(operatorProject)
     : resolved !== undefined ? resolved : selection?.project ?? "";
   const project = boardReadProject(requested, dependencies);
