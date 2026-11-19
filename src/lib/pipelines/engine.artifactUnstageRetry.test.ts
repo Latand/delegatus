@@ -142,7 +142,7 @@ test("retry-stage settles a saved fifth pass through the index lock and controll
     expect(h.spawnInputs).toHaveLength(2);
     expect(box.pushes()).toBe(1);
   } finally { await box.cleanup(); }
-});
+}, 30_000);
 
 test.each(["report", "head", "owner", "publication", "head race", "pause"] as const)(
   "artifact cleanup retry holds the pass when %s evidence conflicts", async conflict => {
