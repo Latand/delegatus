@@ -840,7 +840,7 @@ test("releases racing to open an older queue describe it once and keep its live 
   // Every racer queued behind the command in its lane, none in its place.
   expect(waits.sort()).toEqual([2, 3, 4, 5, 6, 7]);
   expect(m.row(LIVE)).toEqual(first);
-  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 7 }]);
+  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 8 }]);
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
 });
 
@@ -858,7 +858,7 @@ test("a queue the first cut of this change left half-described keeps its live ti
   expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
   expect(m.row(LIVE)).toEqual(first);
   expect(m.read("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")).toEqual(
-    ["suspended_hold", "suspended_keep", "suspended_release", "tickets_fifo", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
+    ["legacy_gate_retired", "suspended_hold", "suspended_keep", "suspended_release", "tickets_fifo", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
   m.at(2 * CPU_QUEUE_ABANDONED_MS + CPU_QUEUE_UNPOLLED_MS + 1);
   expect(q.check("stage:later", true)).toBeNull();
 });
