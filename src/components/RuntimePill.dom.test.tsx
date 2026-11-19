@@ -486,7 +486,7 @@ test("a conversation on a retired model can move to Terra 6.1 and back, and a cu
   ]);
   await act(async () => root.unmount());
 
-  const current = await renderPill(<RuntimePill file={{ ...codexFile, model: "gpt-6.1-sol" }} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
+  const current = await renderPill(<RuntimePill file={{ ...codexFile, model: "gpt-6.2-sol" }} surface="structured" runtimeSettings={CODEX_STRUCTURED} />);
   await click(current.host.querySelector("[data-runtime-pill]")!);
   await click([...current.host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')].find((row) => row.getAttribute("data-runtime-value") === "model")!);
   expect([...current.host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')].map((row) => row.textContent))
@@ -596,7 +596,7 @@ test("on the resume surface a selection saves the concrete :resume profile — a
 
 test("a resume profile saved on a retired model stays listed and checked while the transcript runs a current one", async () => {
   localStorage.setItem(key + ":resume", JSON.stringify({ model: "gpt-5.6-terra", effort: "ultra", fast: false }));
-  const { host, root } = await renderPill(<RuntimePill file={{ ...codexFile, model: "gpt-6.1-sol" }} surface="resume" />);
+  const { host, root } = await renderPill(<RuntimePill file={{ ...codexFile, model: "gpt-6.2-sol" }} surface="resume" />);
   expect(faceOf(host)).toContain("5.6-Terra");
   await click(host.querySelector("[data-runtime-pill]")!);
   await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')].find((row) => row.getAttribute("data-runtime-value") === "model")!);
