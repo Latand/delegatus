@@ -178,6 +178,17 @@ export async function applyConversationAction(
   return { status: 409, body: { ok: false, outcome: "failed", code: NO_STRUCTURED_HOST_CODE, error: NO_STRUCTURED_HOST_ERROR } };
 }
 
+/** The controller has already recorded custody and owns the receipt budget. */
+export async function applyOwnedStageStop(request: ConversationActionRequest): Promise<ConversationActionResult> {
+  if (request.action !== "kill" || !request.operationId || !request.onlyIfIdle) {
+    return failure("an owned stage stop requires its idle fence and operation identity", 400);
+  }
+  return applyConversationAction(request, {
+    ...productionDependencies,
+    dispatchStructuredControl: input => dispatchStructuredControl(input, { recoverTransportReceipt: false }),
+  });
+}
+
 /**
  * Answers the conversation's pending native question or plan, named by its
  * id: the seat answers a worker's question this way, on the exact request its
