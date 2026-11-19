@@ -34,7 +34,7 @@ test("maintainer picker catalogue choices write the shared row and resolve for l
   const catalog = await (await GET()).json() as Catalog & { launchChoices: { engine: "claude" | "codex"; models: { id: string; efforts: string[] }[] }[] };
   expect(catalog.launchChoices.map(c => c.engine)).toEqual(["claude", "codex"]);
   for (const choice of catalog.launchChoices) {
-    expect(choice.models.map(m => m.id)).toEqual(ENGINE_MODELS[choice.engine].map(m => m.id));
+    expect(choice.models.map(m => m.id)).toEqual(ENGINE_MODELS[choice.engine].map(m => m.id).filter(id => id !== "gpt-6.1-sol"));
     for (const model of choice.models) {
       expect(model.efforts).toEqual([...effortScale(choice.engine, model.id)!]);
       for (const effort of model.efforts) {
@@ -46,6 +46,10 @@ test("maintainer picker catalogue choices write the shared row and resolve for l
       }
     }
   }
+  const legacy = await put({ overrides: { maintainer: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } } } });
+  expect(legacy.status).toBe(200);
+  expect((await legacy.json() as Catalog).roles.find(r => r.id === "maintainer")?.config)
+    .toEqual({ engine: "codex", model: "gpt-6.2-sol", effort: "high" });
   const before = JSON.stringify(loadRoleOverrides());
   for (const config of [
     { engine: "codex", model: "gpt-unknown", effort: "high" },
