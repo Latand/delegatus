@@ -4893,13 +4893,29 @@ describe("mergeBoundaryReview", () => {
   const canonicalIdentity = { email: [`4242+${owner}`, forgeAccountDomain].join("@"), name: "Fixture Maintainer" };
   let fixtureFile = 0;
 
-  async function gitRepo(remote = `https://github.com/${owner}/fixture-repository.git`): Promise<string> {
-    const repo = mkdtempSync(join(tmpdir(), "llv-privacy-merge-"));
+  async function createMergeFixture(remote: string): Promise<string> {
+    const repo = mkdtempSync(join(tmpdir(), "llv-privacy-merge-template-"));
     temporaryDirectories.push(repo);
-    await runGit(repo, ["init", "--quiet", "-b", "main", "."]);
+    await runGit(repo, ["init", "--template=", "--quiet", "-b", "main", "."]);
     if (remote) await runGit(repo, ["remote", "add", "origin", remote]);
     await commit(repo, "chore: baseline", canonicalIdentity);
     await runGit(repo, ["checkout", "--quiet", "-b", "feature"]);
+    return repo;
+  }
+
+  // Each case mutates its own index, refs and objects. Only the identical
+  // repository bootstrap is shared, including whether it has an origin.
+  const mergeFixtures = new Map<string, Promise<string>>();
+  async function gitRepo(remote = `https://github.com/${owner}/fixture-repository.git`): Promise<string> {
+    let ready = mergeFixtures.get(remote);
+    if (!ready) {
+      ready = createMergeFixture(remote);
+      mergeFixtures.set(remote, ready);
+    }
+    const template = await ready;
+    const repo = mkdtempSync(join(tmpdir(), "llv-privacy-merge-"));
+    temporaryDirectories.push(repo);
+    cpSync(template, repo, { recursive: true });
     return repo;
   }
 
