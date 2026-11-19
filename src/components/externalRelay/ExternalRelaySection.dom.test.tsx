@@ -959,10 +959,20 @@ for (const locale of ["en", "uk"] as const) {
     const clones = [target({ id: "elsewhere", name: "Shared clone", engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: true }), target({ id: "service" })];
     answers.relay = { relays: [relay({ targets: clones })], pending: [], status: [] };
     route((url, init) => init?.method === "PATCH" && url.endsWith("/targets/elsewhere") ? jsonResponse({ error: "answered_elsewhere" }, 409) : undefined);
+    // The section re-reads the relay list on an interval. Hold every interval the section starts and fire them by hand,
+    // so the refresh that sees the release happens at a chosen step, whatever the period is.
+    const realSetInterval = window.setInterval.bind(window);
+    const originalSetInterval = window.setInterval;
+    const intervals: Array<() => void> = [];
+    window.setInterval = ((handler: () => void) => {
+      intervals.push(handler);
+      return realSetInterval(() => {}, 2 ** 31 - 1);
+    }) as unknown as typeof window.setInterval;
     try {
       const host = await mount(<ExternalRelaySection />);
       const row = () => host.querySelector<HTMLElement>('[data-external-relay-target="elsewhere"]')!;
       const notice = () => row().querySelector<HTMLElement>("[data-external-relay-move-refused]");
+      const relayReads = () => harness.calls.filter(c => c.url === "/api/external-relay" && c.method === "GET").length;
       const dialog = () => row().querySelector<HTMLElement>("[data-external-relay-move-confirm]");
       const control = switchOf(row());
       await click(control);
@@ -980,10 +990,16 @@ for (const locale of ["en", "uk"] as const) {
       expect(host.querySelector("[data-external-relay-release-elsewhere]")).toBeNull();
       expect(notice()!.closest("[data-external-relay-target-fold]")).toBeNull();
       if (locale === "uk") return;
-      // The other install lets go. The settings read it on their next refresh (every 5 s): the notice goes and a plain switch-on is one unconfirmed write.
+      // The other install lets go. Until the settings read that, the notice stays.
       Object.assign(clones[0]!, { answered_elsewhere: false });
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5200)); });
       await act(async () => settle());
+      expect(notice()).not.toBeNull();
+      // Their next refresh reads the release: the notice goes and a plain switch-on is one unconfirmed write.
+      expect(intervals.length).toBeGreaterThan(0);
+      const readsBefore = relayReads();
+      await act(async () => { for (const fire of intervals) fire(); });
+      await act(async () => settle());
+      expect(relayReads()).toBeGreaterThan(readsBefore);
       expect(notice()).toBeNull();
       route((url, init) => {
         if (init?.method !== "PATCH" || !url.endsWith("/targets/elsewhere")) return undefined;
@@ -993,7 +1009,7 @@ for (const locale of ["en", "uk"] as const) {
       await click(control);
       expect(dialog()).toBeNull();
       expect(harness.calls.filter(c => c.method === "PATCH").map(c => c.body)).toEqual([{ answered_by: "install" }]);
-    } finally { setLocale("en"); }
+    } finally { window.setInterval = originalSetInterval; setLocale("en"); }
   });
 }
 
