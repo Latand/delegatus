@@ -55,6 +55,7 @@ type EngineHost = import("./engineHost").EngineHost;
 type HostState = import("./engineHost").HostState;
 type QueueEntry = import("./engineHost").QueueEntry;
 type DeliveryReceipt = import("./engineHost").DeliveryReceipt;
+type SendFailureNotice = import("./sendFailureNotice").SendFailureNotice;
 type ViewerConversationId = `conversation_${string}`;
 
 afterAll(() => {
@@ -629,9 +630,9 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
     if (kind !== "deliberate") {
       delete alarm.deliberate;
       const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
-      const store = new SqliteStateCollection(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), {
+      const store = new SqliteStateCollection<SendFailureNotice>(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), {
         collection: "send_failure_notices", schemaVersion: 1, busyMessage: "fixture notices busy",
-        key: (row: import("./sendFailureNotice").SendFailureNotice) => row.operationId,
+        key: row => row.operationId,
         decode: m.decodeSendFailureNotice, clone: structuredClone,
         controllerActive: row => row.state === "pending" || row.state === "failed",
       });
