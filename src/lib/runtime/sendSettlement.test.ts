@@ -288,6 +288,26 @@ function receiptOf(active: Fixture, operationId: string) {
   return sendReceiptFor(active.registry.readOnlySnapshot(), operationId);
 }
 
+/** Fill normal owner retention using the controller's batched projection. */
+function compactAfterNewerSends(active: Fixture, advance: () => void, outcome: "delivered" | "unverified" | "lost") {
+  const state = outcome === "delivered" ? "delivered" : "failed";
+  const reason = outcome === "unverified" ? SEND_UNVERIFIED_REASON : outcome === "lost" ? SEND_LOST_REASON : null;
+  const journalState = outcome === "unverified" ? "uncertain" : state;
+  // Keep each page below the registry's per-conversation in-flight limit.
+  for (let start = 0; start < 205; start += 32) {
+    const page = Array.from({ length: Math.min(32, 205 - start) }, (_, offset): Parameters<AgentRegistry["recordDeliveryOutcomesForOperations"]>[0][number] => {
+      advance();
+      const index = start + offset;
+      const newer = acceptSend(active, { clientMessageId: `newer-${outcome}-${index}` });
+      active.journal.transitionOperation(newer.operationId, journalState, reason ? { reason } : { turnId: `newer-turn-${index}` });
+      return { operationId: newer.operationId, conversationId: active.conversationId, state, error: reason, disposition: outcome };
+    });
+    const settled = active.registry.recordDeliveryOutcomesForOperations(page);
+    expect(settled.map(row => row?.state)).toEqual(page.map(row => row.state));
+  }
+  active.registry.compactDeliveryReservations();
+}
+
 /** Stable native and conversation identities, scoped to synchronous fixture
  * creation so asynchronous delivery work keeps the ordinary runtime. */
 function completionFixture(name: string, options: Parameters<typeof fixture>[1] = {}, childProject?: string) {
@@ -460,13 +480,7 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
       ledger.confirmDelivered(active.generationId, automatic.operationId, "late-arrival");
       expect(await resolveSendReceipt(automatic.operationId, { registry: active.registry, client: active.client }))
         .toMatchObject({ state: "delivered" });
-      for (let i = 0; i < 205; i++) {
-        clock += 1_000; setSystemTime(clock);
-        const newer = acceptSend(active, { clientMessageId: `newer-delivered-${i}` });
-        active.journal.transitionOperation(newer.operationId, "delivered", { turnId: `newer-turn-${i}` });
-        active.registry.recordDeliveryOutcome(newer.deliveryId, "delivered");
-      }
-      active.registry.compactDeliveryReservations();
+      compactAfterNewerSends(active, () => { clock += 1_000; setSystemTime(clock); }, "delivered");
       expect(active.registry.deliverySnapshotForOperation(automatic.operationId).deliveryOperationOwners[automatic.operationId]).toBeUndefined();
       expect(readSendFailureNotice(automatic.operationId)).toMatchObject({ state: "cancelled" });
       expect(readSendFailureNotice(automatic.operationId)?.suppressSenderWake).toBeUndefined();
@@ -627,13 +641,7 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
     expect(alarm).toMatchObject({ state: "pending", recipientConversationId: child.conversationId, reason: SEND_UNVERIFIED_REASON });
     expect(alarm.suppressSenderWake).toBeUndefined();
     if (recovery !== "retained") {
-      for (let i = 0; i < 205; i++) {
-        clock += 1_000; setSystemTime(clock);
-        const newer = acceptSend(active, { clientMessageId: `newer-failed-${i}` });
-        active.journal.transitionOperation(newer.operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
-        active.registry.recordDeliveryOutcome(newer.deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
-      }
-      active.registry.compactDeliveryReservations();
+      compactAfterNewerSends(active, () => { clock += 1_000; setSystemTime(clock); }, "unverified");
     }
     expect(!!snapshotForOperation(original.operationId).deliveryOperationOwners[original.operationId]).toBe(recovery === "retained");
     const childProcess = Bun.spawn([process.execPath, "--eval", `
@@ -709,13 +717,7 @@ test(`retention ${timing} the original receipt read preserves an unadmitted warn
     const receipt = await resolveSendReceipt(original.operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
     expect(receipt).toMatchObject({ state: "failed", reason: SEND_LOST_REASON });
     const compact = () => {
-      for (let i = 0; i < 205; i++) {
-        clock += 1_000; setSystemTime(clock);
-        const newer = acceptSend(active, { clientMessageId: `race-newer-failed-${i}` });
-        active.journal.transitionOperation(newer.operationId, "failed", { reason: SEND_LOST_REASON });
-        active.registry.recordDeliveryOutcome(newer.deliveryId, "failed", SEND_LOST_REASON, "lost");
-      }
-      active.registry.compactDeliveryReservations();
+      compactAfterNewerSends(active, () => { clock += 1_000; setSystemTime(clock); }, "lost");
       expect(active.registry.deliverySnapshotForOperation(original.operationId).deliveryOperationOwners[original.operationId]).toBeUndefined();
     };
     const target = recordingHost(child.generationId);
