@@ -44,6 +44,16 @@ jobs:
           key: bun-nightly-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.version }}-${{ hashFiles('bun.lock') }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Install the privacy fixture generator runtime
+        id: privacy-generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(bun -e 'import { PRIVACY_GENERATOR_BUN_VERSION } from "./scripts/privacy-generator-runtime"; console.log(PRIVACY_GENERATOR_BUN_VERSION)')
+          prefix="$RUNNER_TEMP/privacy-generator"
+          npm install --prefix "$prefix" --no-save --no-package-lock --no-audit --no-fund "bun@$version"
+          executable=$(LLV_PRIVACY_GENERATOR_BUN="$prefix/node_modules/.bin/bun" bun -e 'import { privacyGeneratorRuntime } from "./scripts/privacy-generator-runtime"; console.log(privacyGeneratorRuntime())')
+          printf 'executable=%s\n' "$executable" >> "$GITHUB_OUTPUT"
       - name: Run shard
         shell: bash
         env:
@@ -55,6 +65,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}/nightly-${{ matrix.shard }}/tmp
           LLV_STATE_DIR: ${{ runner.temp }}/nightly-${{ matrix.shard }}/state
           LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+          LLV_PRIVACY_GENERATOR_BUN: ${{ steps.privacy-generator.outputs.executable }}
         run: |
           set -euo pipefail
           SECONDS=0
