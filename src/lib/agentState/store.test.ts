@@ -9,6 +9,8 @@ import { AgentStateService } from "./service";
 import { readAgentProjection, readAgentStateMetrics, readAgentStatePage, subjectId } from "./store";
 import { cachedAgentObservation } from "./projectionCache";
 import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords } from "./testFixture";
+import { readControlProjection } from "./controlStore";
+import { settlementDeadlineForRow } from "@/lib/runtime/sendSettlement";
 
 const roots: string[] = [], registries: AgentRegistry[] = [];
 afterEach(() => { for (const registry of registries.splice(0)) registry.close(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -93,4 +95,38 @@ test("legacy snapshots start without a fabricated idle projection", () => {
   expect(legacy.agentStates).toEqual({});
   expect(legacy.agentStateJournal).toEqual({});
   expect(legacy.agentStateMetrics).toEqual({});
+});
+
+test("delivery reads the settled incident turn across restart and keeps equal subjects in their own registries", async () => {
+  const f = fixture("sqlite");
+  const registry = f.open();
+  const held = registry.holdDelivery(FIXTURE_CONVERSATION, "accepted fixture work", "fixture-message");
+  const delivery = registry.readOnlySnapshot().heldDeliveries[held.id]!;
+  expect(settlementDeadlineForRow(registry, { delivery })?.policy).toBe("in-turn-ceiling");
+
+  const service = f.service(registry);
+  await service.request();
+  const entry = registry.hostEntry({ engine: "codex", sessionId: FIXTURE_SESSION })!;
+  expect(cachedAgentObservation(subjectId(entry))).not.toBeNull();
+  expect(readControlProjection(registry, entry, FIXTURE_CONVERSATION)?.facts.turn)
+    .toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(settlementDeadlineForRow(registry, { delivery })?.policy).toBe("settlement-window");
+
+  const foreignPath = path.join(f.root, "other-registry.json");
+  const foreignSource = structuredClone(f.source);
+  foreignSource.entries[`codex:${FIXTURE_SESSION}`] = entry;
+  fs.writeFileSync(foreignPath, JSON.stringify(foreignSource));
+  const foreign = new AgentRegistry(foreignPath, undefined, undefined, { sqliteMode: "off" });
+  registries.push(foreign);
+  expect(foreign.hostEntry(entry.key)).toEqual(entry);
+  expect(readControlProjection(foreign, entry, FIXTURE_CONVERSATION)).toBeNull();
+  expect(readControlProjection(registry, entry, "conversation_other")).toBeNull();
+
+  service.stop();
+  registry.close();
+  fs.unlinkSync(path.join(f.root, "native.jsonl"));
+  const successor = f.open();
+  expect(readControlProjection(successor, entry, FIXTURE_CONVERSATION)?.facts.turn)
+    .toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(settlementDeadlineForRow(successor, { delivery })?.policy).toBe("settlement-window");
 });

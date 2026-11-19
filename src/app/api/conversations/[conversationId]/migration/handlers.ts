@@ -1,3 +1,4 @@
+import { checkpointControlFacts, hostControlFactsFromHealth } from "@/lib/agentState/control";
 import { NextRequest, NextResponse } from "next/server";
 
 import { applyConversationMigration } from "@/lib/accounts/migration/conversationCommand";
@@ -39,7 +40,7 @@ export function createConversationMigrationGET(dependencies: MigrationReadDepend
     const conversation = registry.conversation(conversationId as `conversation_${string}`);
     if (!conversation) return NextResponse.json({ error: "viewer conversation is unknown" }, { status: 404 });
     const generation = conversation.generations.at(-1);
-    const entry = generation ? registry.readOnlySnapshot().entries[`${conversation.engine}:${generation.id}`] : null;
+    const entry = generation ? registry.hostEntry({ engine: conversation.engine, sessionId: generation.id }) : null;
     const client = dependencies.client();
     const host = dependencies.host(conversation.id);
     // At most three keyed journal reads. No event scan or full runtime snapshot.
@@ -61,11 +62,14 @@ export function createConversationMigrationGET(dependencies: MigrationReadDepend
     if (host) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const health = await Promise.race([
-          host.health(),
+        const facts = host.agentControlState?.() ?? await Promise.race([
+          host.health().then(hostControlFactsFromHealth),
           new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("bounded host read")), 1_000); }),
         ]);
-        hostRead = { read: "observed", status: health.status, activeTurnRef: boundedReference(health.activeTurnRef), observedAt: new Date().toISOString() };
+        if (dependencies.host(conversation.id) === host && facts.sessionKey === generation?.id) {
+          hostRead = { read: "observed", source: "host-memory", status: facts.status, activeTurnRef: boundedReference(facts.turnId),
+            observedAt: new Date().toISOString() };
+        } else hostRead = { read: "unavailable" };
       } catch { hostRead = { read: "unavailable" }; }
       finally { clearTimeout(timer); }
     }
@@ -75,7 +79,7 @@ export function createConversationMigrationGET(dependencies: MigrationReadDepend
       host: hostRead,
       registry: { updatedAt: conversation.updatedAt, turn: conversation.turn.state,
         turnObservedAt: conversation.turn.observedAt, terminalAt: conversation.turn.terminalAt,
-        hostStatus: entry?.status ?? null, activeTurnRef: boundedReference(entry?.structuredHost?.activeTurnRef),
+        hostStatus: entry?.status ?? null, activeTurnRef: boundedReference(checkpointControlFacts(entry?.structuredHost).turnId),
         claimPresent: Boolean(entry?.claimOwner), claimEpoch: entry?.claimEpoch ?? null,
         writerClaimEpoch: entry?.structuredHost?.writerClaimEpoch ?? null,
         hostUpdatedAt: entry?.updatedAt ?? null },

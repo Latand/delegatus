@@ -1,3 +1,4 @@
+import { runtimeControlFacts } from "@/lib/agentState/control";
 import { createHash, randomUUID } from "node:crypto";
 
 import type { Flow } from "@/lib/flows/types";
@@ -480,8 +481,9 @@ export function runtimeIdleKillMatches(
   key: RuntimeKillCommand["sessionKey"],
   fence: RuntimeIdleKillFence,
 ): boolean {
-  return !!session && session.host === "hosted" && session.turn === "idle"
-    && session.activeTurnId === null && session.attentionIds.length === 0
+  if (!session || session.host !== "hosted") return false;
+  const control = runtimeControlFacts(session);
+  return control.idle && !control.attentionPending
     && session.sessionKey.engine === key.engine && session.sessionKey.sessionId === key.sessionId
     && session.revision === fence.revision && session.writerClaim === fence.writerClaim
     && session.retirementBlocked !== true;

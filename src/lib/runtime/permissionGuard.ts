@@ -75,7 +75,7 @@ export interface PermissionGuardDependencies {
   log?(message: string, error?: unknown): void;
 }
 
-type AnsweringHost = Pick<EngineHost, "answer">;
+type AnsweringHost = Pick<EngineHost, "answer" | "agentAttentionRequest">;
 
 interface RequestFacts {
   tool: string | null;
@@ -178,6 +178,9 @@ export class PermissionRequestGuard {
   ): void {
     const key = `${hostKey}\u0000${requestId}`;
     if (this.settled.has(key) || this.timers.has(key)) return;
+    const request = host.agentAttentionRequest?.(requestId);
+    if (host.agentAttentionRequest && !request) return;
+    const current = () => !host.agentAttentionRequest || host.agentAttentionRequest(requestId) === request;
     let attendance: PermissionAttendance;
     try {
       attendance = this.dependencies.attendance(conversationId);
@@ -186,7 +189,7 @@ export class PermissionRequestGuard {
       attendance = "attended";
     }
     if (attendance === "unattended") {
-      void this.deny(key, host, conversationId, requestId, facts, "unattended");
+      void this.deny(key, host, conversationId, requestId, facts, "unattended", current);
       return;
     }
     /* A question for the operator (AskUserQuestion, a plan) is theirs to take
@@ -195,7 +198,7 @@ export class PermissionRequestGuard {
     const delay = Math.max(0, raisedAt + this.timeoutMs - this.now());
     this.timers.set(key, this.setTimer(() => {
       this.timers.delete(key);
-      void this.deny(key, host, conversationId, requestId, facts, "timeout");
+      void this.deny(key, host, conversationId, requestId, facts, "timeout", current);
     }, delay));
   }
 
@@ -221,8 +224,9 @@ export class PermissionRequestGuard {
     requestId: string,
     facts: RequestFacts,
     mode: PermissionDenialMode,
+    current: () => boolean,
   ): Promise<void> {
-    if (this.settled.has(key)) return;
+    if (this.settled.has(key) || !current()) return;
     this.remember(key);
     try {
       await host.answer(requestId, permissionDenyResolution(permissionDenyMessage(facts.reason)));

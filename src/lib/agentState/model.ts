@@ -28,6 +28,10 @@ export interface NativeTurn {
   modelReady?: boolean;
   ancestry?: string[];
 }
+
+export function hostMemoryTurn(localRef: string | null): Pick<NativeTurn, "state" | "localRef"> {
+  return { state: localRef === null ? "closed" : "open", localRef };
+}
 export interface NativePromptAnchor {
   device: string | null;
   inode: string | null;

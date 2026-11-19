@@ -1,3 +1,4 @@
+import { controlProjectionForEntry } from "@/lib/agentState/controlStore";
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
 import { projectAgentStateDisplay } from "@/lib/agentState/model";
 import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
@@ -8,7 +9,7 @@ import fs from "node:fs";
 import { recordedOwnerHeld } from "@/lib/recordedChecks/store";
 import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
 
-import { agentRegistry, type ProcessIdentity, type RegistryFile, type StructuredHostCustody } from "@/lib/agent/registry";
+import { agentRegistry, structuredClaimIdentity, type ProcessIdentity, type RegistryFile, type StructuredHostCustody } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { hotRegistryRows, registryConversationsForEntryKey, registryHasEntryKeyIndex } from "@/lib/agent/sqliteRegistryStore";
@@ -121,23 +122,6 @@ export interface StructuredHostOwnerGeneration {
   status: ProcessIdentityStatus | "unrecorded";
 }
 
-const STRUCTURED_CLAIM_OWNER_PREFIX = "structured-host:";
-
-function structuredClaimOwnerIdentity(owner: string | null): ProcessIdentity | null {
-  if (!owner?.startsWith(STRUCTURED_CLAIM_OWNER_PREFIX)) return null;
-  try {
-    const parsed = JSON.parse(owner.slice(STRUCTURED_CLAIM_OWNER_PREFIX.length)) as Partial<ProcessIdentity>;
-    if (!Number.isInteger(parsed.pid) || parsed.pid! <= 0) return null;
-    return {
-      pid: parsed.pid!,
-      startIdentity: typeof parsed.startIdentity === "string" ? parsed.startIdentity : null,
-      ...(typeof parsed.bootEpoch === "string" ? { bootEpoch: parsed.bootEpoch } : {}),
-    };
-  } catch {
-    return null;
-  }
-}
-
 /** One line for a report: which generation started the host and whether it
     is still there. */
 export function describeStructuredHostOwnerGeneration(owner: StructuredHostOwnerGeneration): string {
@@ -178,7 +162,7 @@ export function structuredHostKillRefFromRegistry(
 ): StructuredHostRegistryRef {
   const file = (dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot()))();
   const entry = file.entries[sessionKeyId(key)] ?? null;
-  const ownerIdentity = structuredClaimOwnerIdentity(entry?.claimOwner ?? null);
+  const ownerIdentity = entry?.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
   const owner: StructuredHostOwnerGeneration = {
     identity: ownerIdentity,
     status: ownerIdentity ? processIdentityStatus(ownerIdentity, dependencies.identityProbe) : "unrecorded",
@@ -258,16 +242,19 @@ function currentStructuredHostState(
   const entry = file.entries[sessionKeyId(key)] ?? null;
   const process = entry?.structuredHost?.process ?? null;
   if (process === null || !sameRecordedProcessIdentity(process, expected)) return null;
-  const conversation = Object.values(file.conversations)
-    .find((candidate) => candidate.generations.some((generation) => generation.id === key.sessionId)) ?? null;
+  const candidates = registryConversationsForEntryKey(file, sessionKeyId(key));
+  const conversation = candidates.find(candidate => candidate.generations.at(-1)?.id === key.sessionId) ?? candidates[0] ?? null;
   if (!entry && !conversation) return null;
   const memberships = conversation ? file.memberships[conversation.id] ?? [] : [];
   const artifactPath = entry?.artifactPath || null;
+  const projection = entry ? controlProjectionForEntry(file, entry, conversation?.id ?? null) : null;
+  const turnBusy = projection
+    ? projection.facts.turn.determined ? projection.facts.turn.value.state === "open" : null
+    : conversation === null || conversation.turn.state === "unknown" ? null : conversation.turn.state === "busy";
+
   return {
     seat: conversation === null ? null : memberships.some((membership) => membership.kind === "orchestrator"),
-    turnBusy: conversation === null || conversation.turn.state === "unknown"
-      ? null
-      : conversation.turn.state === "busy",
+    turnBusy,
     lastActiveMs: artifactPath ? (dependencies.transcriptMtimeMs ?? transcriptMtimeMs)(artifactPath) : null,
   };
 }

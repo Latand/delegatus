@@ -1,3 +1,5 @@
+import { checkpointControlFacts, hostControlFactsFromHealth } from "@/lib/agentState/control";
+import { readControlProjection } from "@/lib/agentState/controlStore";
 import { viewerMcpOwnerForEntry, type SeatTickConversation } from "@/lib/agent/registry";
 import { boardFor } from "@/lib/board/store";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
@@ -355,8 +357,7 @@ function structuredHostClaim(
     const conversation = registry.conversation(conversationId as `conversation_${string}`);
     const generation = conversation?.generations.at(-1);
     if (!conversation || !generation) return null;
-    const entry = registry.readOnlySnapshot()
-      .entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
+    const entry = registry.hostEntry({ engine: conversation.engine, sessionId: generation.id });
     if (!entry?.claimOwner || !entry.structuredHost) return null;
     return `${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}`;
   };
@@ -697,9 +698,10 @@ async function publishHostState(
      to the projected active turn, and it runs in the process that holds the
      ledger, so the running-to-idle transition is observed rather than guessed
      at from elapsed time. */
-  noteVoiceWorkBoundary(conversationId, state.activeTurnRef);
+  const { turnId } = hostControlFactsFromHealth(state);
+  noteVoiceWorkBoundary(conversationId, turnId);
   const host = state.status === "dead" ? "dead" : state.status === "unhosted" ? "unhosted" : "hosted";
-  const turn = state.activeTurnRef ? "running" : "idle";
+  const turn = turnId ? "running" : "idle";
   /* A host with no active turn is the turn-end evidence a pending account
      switch has been promised (issue #1028), and for a pane-less structured
      session nothing else will ever produce it. The queue's own drain already
@@ -719,7 +721,7 @@ async function publishHostState(
         entry.claimEpoch,
         state.eventCursor,
         state.status,
-        state.activeTurnRef ?? "idle",
+        turnId ?? "idle",
         state.pendingAttention.join(","),
         ...(projectionKey ? [projectionKey] : []),
       ].join(":"),
@@ -752,7 +754,7 @@ async function publishHostState(
         ),
         runtimeSettings: runtimeSettingsCapability(adopted.key.engine, state.activeFlags.includes(NATIVE_TURN_PROFILE_CAPABILITY)),
       },
-      activeTurnId: state.activeTurnRef,
+      activeTurnId: turnId,
       diagnostics: state.diagnostics,
     },
   });
@@ -875,8 +877,10 @@ export async function bindStructuredDeliveryQueue(
     }
   };
   setSeatChannelNativeWithdrawal((conversationId, operationId) => withdrawNativeSeatMessage(conversationId, operationId, client, nativeQueueExecutor));
+  const currentHostClaim = structuredHostClaim(registry);
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
+    writerClaim: currentHostClaim,
     requiresDispatchGuard: conversationId => pipelineRequiresReaderUpgrade(conversationId, registry)
       || proactiveTasksRequireDispatchGuard(proactiveConversationTaskIds([conversationId], registry)),
     authorizeDispatch: conversationId => {
@@ -1195,7 +1199,13 @@ export async function bindStructuredDeliveryQueue(
       /* Who may write to this conversation's engine right now (#1131): the
          evidence a `delivering` row is compared against before it is called
          abandoned, so a send another live executor is actuating is left to it. */
-      hostClaim: structuredHostClaim(registry),
+      hostClaim: currentHostClaim,
+      currentHostClaim,
+      currentHostSessionKey: conversationId => {
+        const conversation = registry.conversation(conversationId as ViewerConversationId);
+        const generation = conversation?.generations.at(-1);
+        return conversation && generation ? { engine: conversation.engine, sessionId: generation.id } : null;
+      },
       /* The repair for a lost terminal acknowledgement (#1612). Reading the
          journal is what settles it, so a socket that cannot answer settles
          nothing and says so — the queue keeps the operation and asks again on
@@ -1391,7 +1401,7 @@ export async function bindStructuredDeliveryQueue(
           && (entry.structuredTerminationSurvivors ?? []).some(identity => identity.pid === captured.root.pid
             && identity.startIdentity === captured.root.startIdentity && identity.bootEpoch === captured.root.bootEpoch);
         return !!entry?.structuredHost && generation?.id === expectedKey.sessionId
-          && !entry.host && entry.status === "idle" && entry.structuredHost.activeTurnRef === null
+          && !entry.host && entry.status === "idle" && checkpointControlFacts(entry.structuredHost).turnId === null
           && entry.structuredHost.pendingAttention.length === 0 && blockingHostActivityFlags(entry.structuredHost.activeFlags).length === 0
           && (`${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` === onlyIfIdle.writerClaim || releasedCapturedWriter);
       };
@@ -1567,8 +1577,21 @@ export async function bindStructuredDeliveryQueue(
       ...(ownership.carriedSends ? { carriedSends: ownership.carriedSends } : {}),
     }),
     async (conversationId) => {
-      const liveness = await conversationTurnLiveness(registry, conversationId, dependencies.liveness ?? {});
-      return liveness?.state === "severed" ? liveness.reason : null;
+      if (dependencies.liveness) {
+        const liveness = await conversationTurnLiveness(registry, conversationId, dependencies.liveness);
+        return liveness?.state === "severed" ? liveness.reason : null;
+      }
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
+      const generation = conversation?.generations.at(-1);
+      if (!conversation || !generation) return null;
+      const entry = registry.hostEntry({ engine: conversation.engine, sessionId: generation.id });
+      if (!entry) return null;
+      const projection = readControlProjection(registry, entry, conversation.id);
+      if (projection?.facts.process.determined && projection.facts.process.value.status === "dead"
+        && projection.facts.turn.determined) {
+        return projection.facts.turn.value.state === "open" ? "the process owning the open turn ended" : "the recorded host ended after its turn settled";
+      }
+      return null;
     },
     (conversationId) => conversationId.startsWith("conversation_")
       && branchSharesRootHost(registry, registry.conversation(conversationId as `conversation_${string}`))
@@ -2824,7 +2847,7 @@ export async function recordDemotionInterruption(
      a Copilot turn cut the same way is resumed by the operator (slice 1). */
   if (conversation.engine === "copilot") return true;
   const engine = conversation.engine;
-  const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
+  const turnRef = hostControlFactsFromHealth(current).turnId;
   if (turnRef === null && conversation.turn.state !== "busy" && backgroundTasks.length === 0 && !selfStartedWork) return true;
   const conversationId = registry.canonicalConversationId(conversation.id);
   const generation = conversation.generations.at(-1)!;

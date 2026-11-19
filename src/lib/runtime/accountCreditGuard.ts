@@ -1,3 +1,4 @@
+import { checkpointControlFacts, hostControlFactsFromHealth } from "@/lib/agentState/control";
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { accountManager } from "@/lib/accounts/manager";
@@ -116,8 +117,9 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     const health = await item.host.health().catch(() => null);
     const stillBlocked = () => accountCreditGuardBlock("codex", generation.accountId, registry.quotaObservations("codex").find(row => row.accountId === generation.accountId)?.limits);
     if (!stillBlocked()) return;
-    const turnRef = health?.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
-    if (!turnRef && (health ? health.status !== "active" && health.status !== "attention" : entry.status !== "live")) return;
+    const facts = item.host.agentControlState?.() ?? (health && hostControlFactsFromHealth(health));
+    const turnRef = facts ? facts.turnId : checkpointControlFacts(entry.structuredHost).turnId;
+    if (!turnRef && (facts ? facts.status !== "active" && facts.status !== "attention" : entry.status !== "live")) return;
     const { obligation: currentCut } = await store.record({ conversationId: conversation.id, engine: "codex", hostKey: sessionKeyId(item.key), path: generation.path,
       owner: health?.pid ? { pid: health.pid, startIdentity: health.processStartIdentity } : entry.structuredHost?.process ?? null,
       claimEpoch: entry.claimEpoch, turnRef, boundary: "paid-credit-guard", reason: "account-guard",

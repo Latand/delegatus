@@ -1,3 +1,4 @@
+import { runtimeControlFacts } from "@/lib/agentState/control";
 import { basename, dirname } from "node:path";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { IncompatibleSchemaError, schemaCompileFailure } from "@/lib/state/schemaCompatibility";
@@ -851,11 +852,16 @@ export class RuntimeJournal {
         const entry = this.nativeQueue.admit(nativeCommand, operationId);
         if (entry) receipt.nativeQueue = nativeQueueReceipt(entry);
       }
+      const controlSession = command.kind === "answer" || command.kind === "interrupt"
+        ? this.entity<RuntimeSession>("session", command.conversationId) : null;
+      const controlBinding = controlSession?.writerClaim
+        ? { ...controlSession.sessionKey, writerClaim: controlSession.writerClaim } : null;
       const effectPayload = command.kind === "answer"
-        ? { ...command, operationId, resolution: this.encryptSecret(command.resolution) }
+        ? { ...command, operationId, controlBinding, resolution: this.encryptSecret(command.resolution) }
         : {
             ...command,
             operationId,
+            ...(command.kind === "interrupt" ? { controlBinding, turnId: receipt.turnId } : {}),
             ...(command.kind === "inject" ? { binding: this.injectionBindingAtAdmission(command.conversationId) } : {}),
             ...(this.structuredHosts
               && (command.kind === "send" || command.kind === "steer")
@@ -2730,9 +2736,10 @@ export class RuntimeJournal {
     retryParent: RuntimeOperationReceipt | null = null,
   ): RuntimeOperationReceipt {
     const session = this.entity<RuntimeSession>("session", command.conversationId);
+    const control = session && runtimeControlFacts(session);
     let status: RuntimeReceiptStatus;
     let reason: string | null = null;
-    let turnId = "turnId" in command && typeof command.turnId === "string" ? command.turnId : session?.activeTurnId ?? null;
+    let turnId = "turnId" in command && typeof command.turnId === "string" ? command.turnId : control?.turnId ?? null;
     let queuePosition: number | null = null;
     if (command.kind !== "kill" && this.retirementInProgress(command.conversationId)) {
       status = "rejected";
@@ -2751,7 +2758,7 @@ export class RuntimeJournal {
         status = "rejected"; reason = "unsupported-capability";
       } else if (session.sessionKey.sessionId !== command.binding.threadId || session.accountId !== command.binding.accountId) {
         status = "rejected"; reason = "stale-generation";
-      } else if (command.turnId !== undefined && command.turnId !== session.activeTurnId) {
+      } else if (command.turnId !== undefined && command.turnId !== control?.turnId) {
         status = "rejected"; reason = "stale-turn";
       } else {
         status = "queued";
@@ -2771,7 +2778,7 @@ export class RuntimeJournal {
          commands are where it means "only while idle", and they are fenced in
          their own branch above. Reading it as a fence here rejected sends the
          Viewer has always delivered against a busy host. */
-      } else if (command.turnId && command.turnId !== session.activeTurnId) {
+      } else if (command.turnId && command.turnId !== control?.turnId) {
         status = "rejected";
         reason = "stale-turn";
       } else {
@@ -2800,36 +2807,36 @@ export class RuntimeJournal {
       /* Unlike an ordinary send, an explicit `null` here IS a fence: it is the
          caller saying "only into an idle thread", which is the one way to ask
          for the history placement and be sure of getting it. */
-      } else if (command.turnId !== undefined && command.turnId !== session.activeTurnId) {
+      } else if (command.turnId !== undefined && command.turnId !== control?.turnId) {
         status = "rejected";
         reason = "stale-turn";
       } else {
         status = "queued";
-        turnId = session.activeTurnId;
+        turnId = control?.turnId ?? null;
       }
     } else if (command.kind === "send" || command.kind === "steer") {
       if (!session || session.host !== "hosted") {
         status = "rejected";
         reason = session?.host === "dead" || session?.host === "unhosted" ? "dead-host" : "no-claim";
-      } else if (command.turnId && command.turnId !== session.activeTurnId) {
+      } else if (command.turnId && command.turnId !== control?.turnId) {
         status = "rejected";
         reason = "stale-turn";
-      } else if ((command.kind === "steer" || command.policy !== "queue") && session.turn === "running" && session.capabilities.steer) {
+      } else if ((command.kind === "steer" || command.policy !== "queue") && control?.turn === "running" && session.capabilities.steer) {
         status = "pending";
-        turnId = session.activeTurnId;
-      } else if (command.kind === "steer" && session.capabilities.steerMode === "interrupt" && (session.turn === "running" || session.turn === "idle")) {
+        turnId = control?.turnId ?? null;
+      } else if (command.kind === "steer" && session.capabilities.steerMode === "interrupt" && (control?.turn === "running" || control?.idle)) {
         /* No steer on this engine (Copilot): the delivery queue interrupts the
            running turn and sends the message as the next one, and a turn that
            already ended leaves it a plain new turn (docs/design/copilot-engine.md 3.4). */
         status = "pending";
-        turnId = session.turn === "running" ? session.activeTurnId : null;
+        turnId = control?.turn === "running" ? control.turnId : null;
       } else if (command.kind === "steer") {
         status = "rejected";
         reason = "stale-turn";
-      } else if (session.turn === "running") {
+      } else if (control?.turn === "running") {
         status = "queued";
         queuePosition = 1;
-      } else if (session.turn === "idle") {
+      } else if (control?.idle) {
         status = "pending";
         turnId = null;
       } else {
@@ -2840,15 +2847,15 @@ export class RuntimeJournal {
       if (!session || session.host !== "hosted") {
         status = "rejected";
         reason = session?.host === "dead" || session?.host === "unhosted" ? "dead-host" : "no-claim";
-      } else if (command.turnId && command.turnId !== session.activeTurnId) {
+      } else if (command.turnId && command.turnId !== control?.turnId) {
         status = "rejected";
         reason = "stale-turn";
-      } else if (session.turn !== "running" && session.turn !== "interrupt_requested") {
+      } else if (!control?.open) {
         status = "interrupted";
         turnId = command.turnId ?? null;
       } else {
         status = "pending";
-        turnId = session.activeTurnId;
+        turnId = control?.turnId ?? null;
       }
     } else if (command.kind === "compact") {
       /* #862: admission is the race-safe fence. It is evaluated inside the
@@ -2872,7 +2879,7 @@ export class RuntimeJournal {
         || session.sessionKey.sessionId !== command.sessionKey.sessionId) {
         status = "rejected";
         reason = "stale-generation";
-      } else if (session.turn === "running" || session.turn === "interrupt_requested" || session.activeTurnId) {
+      } else if (control?.open || control?.turnId) {
         status = "rejected";
         reason = "busy-turn";
       } else {

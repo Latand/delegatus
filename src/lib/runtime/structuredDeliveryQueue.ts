@@ -1,3 +1,4 @@
+import { hostControlFactsFromHealth, sameHostControlRoute, type HostControlFacts } from "@/lib/agentState/control";
 import type { ConfirmedSendEvidence } from "./confirmedSend";
 import { SEND_SETTLEMENT_WINDOW_MS } from "./sendSettlement";
 import { DELIVERY_UNVERIFIED_AFTER_ACTUATION, INJECTION_UNVERIFIED_AFTER_ACTUATION } from "./unverifiedDeliveryReasons";
@@ -19,7 +20,7 @@ import { SEAT_QUOTA_RECOVERY_ROLE } from "./recoveryNotices";
 import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readEvidenceWithin, readOptionalEvidence, type Evidence } from "./evidence";
-import type { CompactCapableHost, DeliveryReceipt, DeliveryTimingMark, DeliveryTimingObserver, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
+import type { CompactCapableHost, DeliveryReceipt, DeliveryTimingMark, DeliveryTimingObserver, EngineHost, FirstDispatchEvidence, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
 import { NATIVE_INJECT_CAPABILITY } from "./codexCapabilityFlags";
 import { hostSupportsCompact, hostSupportsInject, StructuredDispatchDeferredError, StructuredAnswerError, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import {
@@ -139,6 +140,8 @@ export interface StructuredDeliveryQueuePort {
       claim, or a read that throws: no evidence either way, which leaves the row
       with the executor that holds it rather than ending its send. */
   hostClaim?(conversationId: string): string | null | Promise<string | null>;
+  currentHostClaim?(conversationId: string): string | null;
+  currentHostSessionKey?(conversationId: string): import("./contracts").RuntimeSession["sessionKey"] | null;
   /** Carries the outcome of a transition whose ACKNOWLEDGEMENT was lost into
       the durable delivery record (#1612).
    *
@@ -337,6 +340,7 @@ interface ControlEffect {
   operationId: string;
   conversationId: string;
   kind: "answer" | "interrupt" | "kill";
+  binding?: { engine?: import("./contracts").RuntimeSession["sessionKey"]["engine"]; sessionId: string; writerClaim: string };
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef;
   attentionId?: string;
@@ -559,10 +563,14 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
   const operationId = typeof effect.payload.operationId === "string" ? effect.payload.operationId : "";
   const conversationId = typeof effect.payload.conversationId === "string" ? effect.payload.conversationId : "";
   if (!operationId || !conversationId) return null;
+  const value = effect.payload.controlBinding as Partial<NonNullable<ControlEffect["binding"]>> | null | undefined;
+  if (value != null && (typeof value.sessionId !== "string" || typeof value.writerClaim !== "string")) return null;
+  if (value?.engine !== undefined && value.engine !== "codex" && value.engine !== "claude" && value.engine !== "copilot") return null;
+  const binding = value as ControlEffect["binding"];
   if (effect.kind === "runtime.answer") {
     const attentionId = typeof effect.payload.attentionId === "string" ? effect.payload.attentionId : "";
     if (!attentionId || !("resolution" in effect.payload)) return null;
-    return { operationId, conversationId, kind: "answer", attentionId, resolution: effect.payload.resolution, eventSeq: effect.eventSeq };
+    return { operationId, conversationId, kind: "answer", attentionId, resolution: effect.payload.resolution, ...(binding ? { binding } : {}), eventSeq: effect.eventSeq };
   }
   if (effect.kind === "runtime.kill") {
     if (effect.payload.providerRecovery !== undefined && effect.payload.onlyIfIdle === undefined) return null;
@@ -585,7 +593,7 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
   const turnId = typeof effect.payload.turnId === "string" || effect.payload.turnId === null
     ? effect.payload.turnId
     : undefined;
-  return { operationId, conversationId, kind: "interrupt", eventSeq: effect.eventSeq, ...(turnId !== undefined ? { turnId } : {}) };
+  return { operationId, conversationId, kind: "interrupt", eventSeq: effect.eventSeq, ...(binding ? { binding } : {}), ...(turnId !== undefined ? { turnId } : {}) };
 }
 
 function compactEffect(effect: StructuredDeliveryEffect): CompactEffect | null {
@@ -1916,7 +1924,7 @@ export class StructuredDeliveryQueue {
       });
       effects = effects.filter(effect => !coalescingIds.has(effect.operationId) || selectedIds.has(effect.operationId));
     }
-    type Prepared = { member: InboxMember; effect: SendEffect; host: EngineHost; context: SendSettlementContext; generationId: string };
+    type Prepared = { member: InboxMember; effect: SendEffect; host: EngineHost; context: SendSettlementContext; generationId: string; assertCurrent: () => void };
     let pendingBatch: Prepared[] = [];
     const releaseBatch = async (reason: string) => {
       const pending = pendingBatch; pendingBatch = [];
@@ -1978,6 +1986,7 @@ export class StructuredDeliveryQueue {
         const retired = this.port.conversationRetired?.(first.effect.conversationId);
         if (retired) throw new StructuredSendRefusedError(retired);
         for (const p of selected) {
+          p.assertCurrent();
           if (p.effect.roleMemoryRevision && roleMemoryRevisionToken() !== p.effect.roleMemoryRevision) {
             memberRefused = p;
             throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", ROLE_MEMORY_CHANGED_MESSAGE);
@@ -2316,13 +2325,14 @@ export class StructuredDeliveryQueue {
          may be handed over at all. Unreadable is not idle and not dead: it
          proves neither that the host can take the message nor that recovery is
          owed one, so the pass writes nothing and comes back. */
+      const assertOwner = this.captureHostOwner(effect.conversationId, host);
       const state = await this.checking(lane, effect, "reading the host state", () => this.readHealth(host));
       if (!state.readable) {
         this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "structured host state is unavailable" });
         blockRest("conversation-busy", "retry");
         return this.fenceUnavailable();
       }
-      const health = state.value;
+      let health = state.value;
       if (health.status === "dead" || health.status === "unhosted") {
         if (effect.kind === "send" && effect.onlyIfIdle) {
           await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
@@ -2359,7 +2369,7 @@ export class StructuredDeliveryQueue {
       }
       if (effect.kind === "send" && effect.policy === "context-or-queue"
         && effect.turnId === undefined && !effect.content.images.length && !effect.runtime
-        && health.status === "active" && health.activeTurnRef && health.activeFlags.includes(NATIVE_INJECT_CAPABILITY)
+        && health.status === "active" && health.turnId && health.activeFlags.includes(NATIVE_INJECT_CAPABILITY)
         && hostSupportsInject(host)) {
         const binding = await this.checking(lane, effect, "reading context injection ownership",
           () => readEvidence(() => this.port.injectionBinding?.(effect.conversationId) ?? null));
@@ -2369,8 +2379,9 @@ export class StructuredDeliveryQueue {
         }
         if (!await this.executeInjection({ kind: "inject", operationId: effect.operationId,
           conversationId: effect.conversationId, text: effect.content.text, contentDigest: effect.contentDigest,
-          binding: binding.value, turnId: health.activeTurnRef, eventSeq: effect.eventSeq,
+          binding: binding.value, turnId: health.turnId, eventSeq: effect.eventSeq,
           selectedContext: effect.selectedContext, origin: effect.origin }, host, health, lane, true, () => {
+          assertOwner();
           if (heldForUpdate() || this.port.handoffHeld?.()) throw new StructuredDispatchDeferredError("automatic-update-handoff");
           if (effect.roleMemoryRevision && roleMemoryRevisionToken() !== effect.roleMemoryRevision)
             throw new StructuredSendRefusedError(ROLE_MEMORY_CHANGED_MESSAGE);
@@ -2386,7 +2397,7 @@ export class StructuredDeliveryQueue {
       const steerRequested = effect.kind === "steer" || effect.policy === "steer-if-active"
         // An explicit next-turn fence queues until idle, including after recovery.
         || (steerOrQueue && effect.turnId !== null && host.supportsSteer === true
-          && this.refusedSteerTurns.get(effect.operationId) !== health.activeTurnRef);
+          && this.refusedSteerTurns.get(effect.operationId) !== health.turnId);
       const maySteer = health.status === "active" && steerRequested;
       /* A host without steer that DECLARED an interrupt fallback (Copilot over
          ACP) takes a steer the way `interrupt-active` takes a send: the running
@@ -2414,9 +2425,9 @@ export class StructuredDeliveryQueue {
       const replacesTurn = (effect.policy === "interrupt-active" && !waitsForTurn) || steerByInterrupt;
       const replacementIsActive = replacesTurn
         && (health.status === "active" || health.status === "attention")
-        && Boolean(health.activeTurnRef);
+        && Boolean(health.turnId);
       const shouldInterrupt = replacementIsActive
-        && (effect.turnId === undefined || effect.turnId === health.activeTurnRef)
+        && (effect.turnId === undefined || effect.turnId === health.turnId)
         && !this.interruptAcknowledged.has(effect.operationId);
       const steersIntoTurn = maySteer && !steerByInterrupt;
       /* An engine without steer (Copilot) reports a message that interrupted
@@ -2426,7 +2437,7 @@ export class StructuredDeliveryQueue {
          it back from the receipt; Claude and Codex receipts carry no route. */
       const recordsRoute = host.steerFallback === "interrupt";
       const clearedRoute: RuntimeTransitionDetails = recordsRoute ? { delivery: null, interruptedTurnId: null } : {};
-      if (effect.onlyIfIdle && (health.status !== "idle" || health.activeTurnRef !== null)) {
+      if (effect.onlyIfIdle && (!health.idle)) {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
         continue;
       }
@@ -2437,18 +2448,18 @@ export class StructuredDeliveryQueue {
          answer keeps the wait, and a seat keeps its combined inbox. */
       const nativeJoinsRunningTurn = host.supportsQueuedSend === true && host.coalescesQueuedInput === true
         && host.sendWaitsForRunningTurn === true && host.acceptsInputDuringTurn === true && effect.kind === "send"
-        && (effect.turnId === undefined || effect.turnId === health.activeTurnRef) && !effect.onlyIfIdle
+        && (effect.turnId === undefined || effect.turnId === health.turnId) && !effect.onlyIfIdle
         && (effect.policy === "queue" || steerOrQueue || waitsForTurn)
-        && health.status === "active" && Boolean(health.activeTurnRef);
+        && health.status === "active" && Boolean(health.turnId);
       const joinsRunningTurn = nativeJoinsRunningTurn || (waitsForTurn && host.acceptsInputDuringTurn === true && effect.kind === "send"
         && effect.origin?.kind === "operator" && effect.turnId === undefined && !effect.onlyIfIdle && !canCoalesce(effect)
-        && health.status === "active" && Boolean(health.activeTurnRef));
+        && health.status === "active" && Boolean(health.turnId));
       const queuesDuringTurn = joinsRunningTurn || (host.supportsQueuedSend === true && effect.kind === "send"
         && host.sendWaitsForRunningTurn !== true
         && (effect.policy === "queue" || steerOrQueue)
-        && (health.status === "active" || health.status === "attention") && Boolean(health.activeTurnRef));
+        && (health.status === "active" || health.status === "attention") && Boolean(health.turnId));
       if (host.supportsQueuedSend === true && host.coalescesQueuedInput === true && effect.kind === "send"
-        && typeof effect.turnId === "string" && effect.turnId !== health.activeTurnRef) {
+        && typeof effect.turnId === "string" && effect.turnId !== health.turnId) {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-turn" });
         continue;
       }
@@ -2468,8 +2479,8 @@ export class StructuredDeliveryQueue {
         this.noteWait(effect, "awaiting-turn");
         continue;
       }
-      if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt && !queuesDuringTurn) {
-        if (health.activeTurnRef) this.port.progress?.deadline(effect.operationId,
+      if (!health.idle && !steersIntoTurn && !shouldInterrupt && !queuesDuringTurn) {
+        if (health.turnId) this.port.progress?.deadline(effect.operationId,
           new Date(this.timing.now() + SEND_SETTLEMENT_WINDOW_MS).toISOString(), "turn-boundary");
         const interrupted = replacementIsActive && this.interruptAcknowledged.has(effect.operationId);
         const reconciled = interrupted ? await this.reconcileStalledInterrupt(effect) : "wait";
@@ -2481,21 +2492,21 @@ export class StructuredDeliveryQueue {
       if (!replacesTurn && [...this.activeSteers.values()].some(steer =>
         steer.conversationId === effect.conversationId
         && !(nativeJoinsRunningTurn && steer.nativeHost === host)
-        && (!steersIntoTurn || steer.turnId !== health.activeTurnRef))) {
+        && (!steersIntoTurn || steer.turnId !== health.turnId))) {
         this.noteWait(effect, "conversation-busy", { detail: "a message handed to the running turn is still settling" });
         blockRest("conversation-busy");
         return true;
       }
-      if (health.status === "idle") this.interruptAcknowledged.delete(effect.operationId);
+      if (health.idle) this.interruptAcknowledged.delete(effect.operationId);
       const deliveryFence = shouldInterrupt
-        ? effect.turnId ?? health.activeTurnRef
+        ? effect.turnId ?? health.turnId
         : joinsRunningTurn
-          ? health.activeTurnRef
+          ? health.turnId
         : replacesTurn || waitsForTurn
           ? effect.turnId ?? null
           : effect.turnId !== undefined
             ? effect.turnId
-            : health.activeTurnRef;
+            : health.turnId;
       // Native queued sends can follow the next turn after a pre-write refusal.
       // Keep an observed fence on this attempt; only caller fences are durable.
       const attemptTurnFenceOnly = (host.usesNativeInputIdentity === true && effect.turnId === undefined)
@@ -2509,7 +2520,7 @@ export class StructuredDeliveryQueue {
         images: effect.content.images,
         expectedTurnId: host.usesNativeInputIdentity === true || nativeJoinsRunningTurn ? effect.turnId
           : (replacesTurn || waitsForTurn) && !joinsRunningTurn ? null : deliveryFence,
-        ...(host.usesNativeInputIdentity === true || nativeJoinsRunningTurn ? { attemptTurnId: health.activeTurnRef } : {}),
+        ...(host.usesNativeInputIdentity === true || nativeJoinsRunningTurn ? { attemptTurnId: health.turnId } : {}),
         ...(effect.runtime ? { runtime: effect.runtime } : {}),
         ...(effect.selectedContext ? { selectedContext: effect.selectedContext } : {}),
         ...(effect.origin ? { origin: effect.origin } : {}),
@@ -2529,7 +2540,7 @@ export class StructuredDeliveryQueue {
         ? {operationId: effect.operationId, writerClaim: claim.value, firstDispatch: true}
         : undefined;
       if (!firstDispatch) this.firstDispatches.delete(effect.operationId);
-      const routedTurnId = recordsRoute && shouldInterrupt ? health.activeTurnRef! : null;
+      const routedTurnId = recordsRoute && shouldInterrupt ? health.turnId! : null;
       const priorDeliveryUnverified = durable?.deliveryUnverified === true || durable?.reason === "delivery-auto-retry"
         // Older receipts may already have lost their retry reason. Only a
         // pristine admission or explicit retained evidence proves no prior send.
@@ -2594,7 +2605,10 @@ export class StructuredDeliveryQueue {
       if (shouldInterrupt) {
         if (lane?.released) return true;
         try {
-          await host.interrupt(health.activeTurnRef!);
+          assertOwner();
+          this.assertHostRoute(host, health);
+          this.port.authorizeDispatch?.(effect.operationId, effect.conversationId, effect.origin);
+          await host.interrupt(health.turnId!);
           this.interruptAcknowledged.add(effect.operationId);
           this.interruptIssuedAt.set(effect.operationId, this.timing.now());
         } catch (error) {
@@ -2638,18 +2652,19 @@ export class StructuredDeliveryQueue {
           this.noteWait(effect, "awaiting-host");
           return true;
         }
-        if (afterInterrupt.status !== "idle") {
+        if (!afterInterrupt.idle) {
           await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "interrupt-requested" });
           this.noteWait(effect, "interrupting", { lane });
           return true;
         }
         this.interruptAcknowledged.delete(effect.operationId);
+        health = afterInterrupt;
       }
       /* The route this pass recorded, or the one an earlier pass or executor
          recorded before this message went back to the queue. */
       const settlement: SendSettlementContext = {
         priorDeliveryUnverified,
-        steerOrQueue, steersIntoTurn, steerByInterrupt, activeTurnRef: health.activeTurnRef, clearedRoute,
+        steerOrQueue, steersIntoTurn, steerByInterrupt, activeTurnRef: health.turnId, clearedRoute,
         interruptedTurnId: routedTurnId
           ?? (recordsRoute && durable?.delivery === "interrupt-then-turn-started" ? durable.interruptedTurnId ?? null : null),
       };
@@ -2671,8 +2686,13 @@ export class StructuredDeliveryQueue {
           continue;
         }
       }
+      const assertCurrent = () => {
+        assertOwner();
+        this.assertHostRoute(host, health);
+      };
       const authorize = () => {
         quotaGuard?.();
+        assertCurrent();
         if (host.coalescesQueuedInput === true && (lane?.released || this.retirementExecutor.retired
           || this.port.handoffHeld?.() || this.resolveHost(effect.conversationId) !== host)) {
           throw new StructuredDispatchDeferredError("native hand-over deferred");
@@ -2695,7 +2715,7 @@ export class StructuredDeliveryQueue {
           await releaseBatch("inbox member authorization refused");
           return true;
         }
-        pendingBatch.push({ effect, host, context: settlement, generationId: health.sessionKey,
+        pendingBatch.push({ effect, host, context: settlement, generationId: health.sessionKey, assertCurrent,
           member: { entry, admittedAt: durable?.admittedAt ?? durable?.at ?? "", eventSeq: effect.eventSeq,
             priority: effect.policy === "interrupt-active" && effect.origin?.kind === "operator" } });
         continue;
@@ -2743,7 +2763,7 @@ export class StructuredDeliveryQueue {
               this.activeSteers.delete(effect.operationId);
               this.retrySoon();
             });
-          this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: health.activeTurnRef ?? entry.id, settling,
+          this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: health.turnId ?? entry.id, settling,
             ...(nativeDetached ? { nativeHost: host } : {}),
             ...(joinsRunningTurn ? { awaitsToolBoundary: true } : {}) });
           if (joinsRunningTurn) this.port.progress?.deadline(effect.operationId,
@@ -3015,7 +3035,7 @@ export class StructuredDeliveryQueue {
     }
     /* Admission fenced the durable turn axis; this re-reads the live host, so a
        turn that started in between fails the control instead of racing it. */
-    if (health.status !== "idle" || health.activeTurnRef) {
+    if (!health.idle) {
       await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "busy-turn" });
       return { blocked: false, terminated: false };
     }
@@ -3193,8 +3213,29 @@ export class StructuredDeliveryQueue {
    * issued a second time, so that conversion was the same duplicate-actuation
    * hazard as an unreadable journal fence one step further along.
    */
-  private readHealth(host: EngineHost): Promise<Evidence<HostState>> {
-    return readEvidence(() => host.health(), "structured host state is unavailable");
+  private readHealth(host: EngineHost): Promise<Evidence<HostControlFacts>> {
+    return readEvidence(() => host.agentControlState?.() ?? host.health().then(hostControlFactsFromHealth),
+      "structured host state is unavailable");
+  }
+
+  private captureHostOwner(conversationId: string, host: EngineHost): () => void {
+    const claim = this.port.currentHostClaim?.(conversationId);
+    const key = this.port.currentHostSessionKey?.(conversationId);
+    return () => {
+      const currentKey = this.port.currentHostSessionKey?.(conversationId);
+      if (this.retirementExecutor.retired || ((host.agentControlState || this.port.currentHostClaim) && this.resolveHost(conversationId) !== host)
+        || key?.engine !== currentKey?.engine || key?.sessionId !== currentKey?.sessionId
+        || (this.port.currentHostClaim && claim !== this.port.currentHostClaim(conversationId))) {
+        throw new StructuredDispatchDeferredError("structured host writer changed before dispatch");
+      }
+    };
+  }
+
+  private assertHostRoute(host: EngineHost, observed: HostControlFacts): void {
+    const current = host.agentControlState?.();
+    if (current && !sameHostControlRoute(observed, current)) {
+      throw new StructuredSendRefusedError("stale-turn");
+    }
   }
 
   /**
@@ -3293,11 +3334,12 @@ export class StructuredDeliveryQueue {
    *   this operation's dedup marker before writing, and `uncertain` is a
    *   terminal the journal refuses to transition out of.
    */
-  private async executeInjection(effect: InjectEffect, host: EngineHost, health: HostState, lane?: DeliveryLane, wakeIfIdle = false, beforeWrite?: () => void): Promise<boolean> {
+  private async executeInjection(effect: InjectEffect, host: EngineHost, health: HostControlFacts, lane?: DeliveryLane, wakeIfIdle = false, beforeWrite?: () => void): Promise<boolean> {
     /* Its acknowledgement already came back and its evidence is still being
        read. Re-issuing here would be a second insertion, which the engine does
        not deduplicate. */
     if (this.activeInjections.has(effect.operationId)) return true;
+    const assertOwner = this.captureHostOwner(effect.conversationId, host);
     const binding = effect.binding;
     const current = await readEvidence(() => this.port.injectionBinding?.(effect.conversationId) ?? null);
     if (!current.readable) {
@@ -3319,7 +3361,7 @@ export class StructuredDeliveryQueue {
        pass. `null` asks for the idle placement and a running turn refuses it;
        a named turn must still be the one running. Refused BEFORE `delivering`,
        so a stale fence costs no durable actuation record at all. */
-    if (effect.turnId !== undefined && effect.turnId !== health.activeTurnRef) {
+    if (effect.turnId !== undefined && effect.turnId !== health.turnId) {
       await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-turn" });
       return true;
     }
@@ -3327,7 +3369,7 @@ export class StructuredDeliveryQueue {
        or a pass that let its lane go, may be handing this operation over now. */
     if (lane?.released || this.retirementExecutor.retired) return false;
     if (!await this.transitionUnlessSettled(effect.operationId, "delivering", {
-      turnId: health.activeTurnRef,
+      turnId: health.turnId,
       reason: deliveringOwnershipReason(wakeIfIdle ? `context:${this.executorId}` : this.executorId, { readable: true, value: binding.writerClaim }),
     },
     /* Only from a state nobody is delivering it in, as for a send: the journal
@@ -3346,6 +3388,13 @@ export class StructuredDeliveryQueue {
     }
     this.noteWait(effect, "dispatching", { lane, attempted: true, wake: "event" });
     const authorize = () => {
+      assertOwner();
+      const current = host.agentControlState?.();
+      if (current && !sameHostControlRoute(health, current)) {
+        const reason = current.status === "attention" && current.turnId === health.turnId
+          ? "blocking attention must be answered before injecting context" : "stale-turn";
+        throw new StructuredInjectError(reason, "refused");
+      }
       const seat = this.port.seatRecipient?.(effect.conversationId);
       if (seat?.kind === "unknown") throw new StructuredDispatchDeferredError(seat.reason);
       if (seat?.kind === "revoked") throw new StructuredSendRefusedError(seat.reason);
@@ -3548,7 +3597,7 @@ export class StructuredDeliveryQueue {
       const state = await this.readHealth(host);
       if (!state.readable) { retry.fail(); this.retrySoon(); return true; }
       const health = state.value;
-      if (health.status === "active" || health.status === "attention" || health.activeTurnRef) return true;
+      if (health.status === "active" || health.status === "attention" || health.turnId) return true;
     }
     if (!await this.transitionReconfigure(effect, "applying")) return false;
     let outcome: Awaited<ReturnType<typeof this.reconfigure>>;
@@ -3792,8 +3841,8 @@ export class StructuredDeliveryQueue {
       const host = this.resolveHost(effect.conversationId);
       if (effect.onlyIfIdle && host) {
         const state = await this.readHealth(host);
-        if (!state.readable || state.value.status !== "idle" || state.value.activeTurnRef !== null
-          || state.value.pendingAttention.length > 0 || blockingHostActivityFlags(state.value.activeFlags).length > 0) {
+        if (!state.readable || !state.value.idle
+          || state.value.attentionPending || blockingHostActivityFlags(state.value.activeFlags).length > 0) {
           await transition("failed", { reason: "idle-retirement-deferred" });
           return { blocked: false, terminated: false };
         }
@@ -3851,7 +3900,7 @@ export class StructuredDeliveryQueue {
         this.retrySoon();
         return { blocked: true, terminated: false };
       }
-      if (!severed.value) return { blocked: true, terminated: false };
+      if (!severed.value || this.resolveHost(effect.conversationId)) return { blocked: true, terminated: false };
       await this.transitionUnlessSettled(
         effect.operationId,
         effect.kind === "interrupt" ? "interrupted" : "failed",
@@ -3862,6 +3911,8 @@ export class StructuredDeliveryQueue {
     /* An answer and an interrupt are engine writes like a message, so the same
        rule holds one step earlier: a state that could not be read authorises
        neither the control nor the `dead-host` requeue that would reissue it. */
+    const assertOwner = this.captureHostOwner(effect.conversationId, host);
+    const request = effect.kind === "answer" ? host.agentAttentionRequest?.(effect.attentionId!) : undefined;
     const state = await this.readHealth(host);
     if (!state.readable) {
       this.retrySoon();
@@ -3872,16 +3923,38 @@ export class StructuredDeliveryQueue {
       await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" });
       return { blocked: true, terminated: false };
     }
+    if (effect.binding) {
+      const key = this.port.currentHostSessionKey?.(effect.conversationId);
+      const writer = this.port.currentHostClaim
+        ? { readable: true as const, value: this.port.currentHostClaim(effect.conversationId) }
+        : await this.readHostClaim(effect.conversationId);
+      if (!writer.readable) {
+        this.retrySoon();
+        return { blocked: true, terminated: false };
+      }
+      if ((key?.sessionId ?? health.sessionKey) !== effect.binding.sessionId
+        || (key && effect.binding.engine && key.engine !== effect.binding.engine)
+        || writer.value !== effect.binding.writerClaim) {
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-generation" });
+        return { blocked: false, terminated: false };
+      }
+    }
     if (!await this.transitionUnlessSettled(effect.operationId, "delivering", {
-      ...(effect.kind === "interrupt" ? { turnId: effect.turnId ?? health.activeTurnRef } : {}),
-    })) return { blocked: false, terminated: false };
+      ...(effect.kind === "interrupt" ? { turnId: effect.turnId ?? health.turnId } : {}),
+    }, { fromStatuses: ["pending", "queued"] })) return { blocked: false, terminated: false };
     try {
+      assertOwner();
+      this.assertHostRoute(host, health);
+      if (effect.kind === "answer" && host.agentAttentionRequest
+        && (!request || request !== host.agentAttentionRequest(effect.attentionId!))) {
+        throw new StructuredAnswerError("attention changed before dispatch", "unavailable");
+      }
       if (effect.kind === "answer") {
         await host.answer(effect.attentionId!, effect.resolution);
         await this.transitionUnlessSettled(effect.operationId, "answered");
       } else {
-        const turnId = effect.turnId ?? health.activeTurnRef;
-        if (!turnId || (health.activeTurnRef && health.activeTurnRef !== turnId)) {
+        const turnId = effect.turnId ?? health.turnId;
+        if (!turnId || (health.turnId && health.turnId !== turnId)) {
           await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-turn" });
           return { blocked: false, terminated: false };
         }
@@ -3891,6 +3964,10 @@ export class StructuredDeliveryQueue {
       return { blocked: false, terminated: false };
     } catch (error) {
       const reason = failureReason(error);
+      if (error instanceof StructuredSendRefusedError || error instanceof StructuredDispatchDeferredError) {
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        return { blocked: false, terminated: false };
+      }
       if (effect.kind === "answer" && error instanceof StructuredAnswerError) {
         await this.transitionUnlessSettled(effect.operationId, error.outcome === "uncertain" ? "uncertain" : "failed", { reason });
         return { blocked: false, terminated: false };
