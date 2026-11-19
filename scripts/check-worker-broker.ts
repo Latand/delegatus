@@ -122,42 +122,59 @@ async function supervise(socket: net.Socket, workerPid: number, hostPid: number 
     try { process.kill(pid, value); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
   };
-  function ancestor(parent: number, child: number): boolean {
-    const seen = new Set<number>();
-    while (child > 1 && !seen.has(child)) {
-      if (child === parent) return true;
-      seen.add(child);
-      try {
-        if (process.platform !== "linux") child = procBackend.readPpid(child) ?? 0;
-        else {
-          const stat = fs.readFileSync(`${root}/${child}/stat`, "utf8");
-          child = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
-        }
-      } catch { return false; }
-    }
-    return false;
-  }
-
   function nestedWaiter(queue: CheckAdmission): boolean {
-    const rows = queue.db.query<{ owner: string; held: number; lineage: string; capacity: number }, []>("SELECT owner, held, lineage, capacity FROM checks").all()
-      .map(row => {
-        const identity = JSON.parse(row.owner) as ProcessIdentity;
-        return { ...row, identity, status: queue.ownerStatus(identity) };
-      })
-      .filter(row => row.status !== "dead");
+    const tickets = queue.db.query<{ owner: string; held: number; lineage: string; capacity: number }, []>("SELECT owner, held, lineage, capacity FROM checks").all();
+    // Removing dead rows can only reduce the held count or raise the limit.
+    if (!tickets.some(ticket => !ticket.held) ||
+        tickets.filter(ticket => ticket.held).length < Math.min(capacity, ...tickets.map(ticket => ticket.capacity))) return false;
+    const rows = tickets.map(row => {
+      const identity = JSON.parse(row.owner) as ProcessIdentity;
+      return { ...row, identity, status: queue.ownerStatus(identity) };
+    }).filter(row => row.status !== "dead");
     // Related waiters need a lent turn only when all permits are reserved.
     // Match claim's owner classification for both held permits and policy.
     // The locked recheck repeats these probes after taking the writer lock;
     // unverified owners still count until positive death/exit proof exists.
     if (rows.filter(row => row.held).length < Math.min(capacity, ...rows.map(row => row.capacity))) return false;
+    // Several waiters can share both kernel parents and recorded launchers.
+    // Keep these reads within this decision. The locked recheck builds fresh maps.
+    const parents = new Map<number, number>();
+    function ancestor(parent: number, child: number): boolean {
+      const seen = new Set<number>();
+      while (child > 1 && !seen.has(child)) {
+        if (child === parent) return true;
+        seen.add(child);
+        let next = parents.get(child);
+        if (next === undefined) {
+          try {
+            if (process.platform !== "linux") next = procBackend.readPpid(child) ?? 0;
+            else {
+              const stat = fs.readFileSync(`${root}/${child}/stat`, "utf8");
+              next = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+            }
+          } catch { next = 0; }
+          parents.set(child, next);
+        }
+        child = next;
+      }
+      return false;
+    }
     const links = new Map(rows.map(row => [JSON.stringify(row.identity), JSON.parse(row.lineage) as ProcessIdentity[]]));
+    const liveLaunchers = new Map<string, boolean>();
     const causalAncestor = (parent: ProcessIdentity, child: ProcessIdentity, seen = new Set<string>()): boolean => {
-      if (ancestor(parent.pid, child.pid)) return true;
       const key = JSON.stringify(child);
       if (seen.has(key)) return false;
       seen.add(key);
-      return (links.get(key) ?? []).some(previous => cpuOwnerStatus(previous) === "alive"
-        && (JSON.stringify(parent) === JSON.stringify(previous) || causalAncestor(parent, previous, seen)));
+      if (ancestor(parent.pid, child.pid)) return true;
+      return (links.get(key) ?? []).some(previous => {
+        const launcher = JSON.stringify(previous);
+        let alive = liveLaunchers.get(launcher);
+        if (alive === undefined) {
+          alive = cpuOwnerStatus(previous) === "alive";
+          liveLaunchers.set(launcher, alive);
+        }
+        return alive && (JSON.stringify(parent) === launcher || causalAncestor(parent, previous, seen));
+      });
     };
     return rows.filter(row => row.held === 0).some(row => {
       const other = row.identity;
