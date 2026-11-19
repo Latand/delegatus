@@ -13,7 +13,7 @@ import { newTargetSettings } from "./store";
 
 test("new relay targets use Codex Cloud without local account admission", () => {
   expect(newTargetSettings({ target_id: "target", name: "Support", answered_by: "install", fallback: "service" })).toMatchObject({
-    engine: "codex-cloud", model: "gpt-6.1-sol",
+    engine: "codex-cloud", model: "gpt-6.2-sol",
   });
 });
 

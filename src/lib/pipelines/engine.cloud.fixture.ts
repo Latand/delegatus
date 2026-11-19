@@ -23,7 +23,7 @@ export const taskId = "current-review-1";
 export const taskUrl = `https://example.com/cloud/${taskId}`;
 
 export const stage: PipelineStageInput = { id: "review", kind: "run", runtime: "codex-cloud", role: { roleId: "reviewer" },
-  engine: "codex", model: "gpt-6.1-sol", effort: "xhigh", prompt: "Review {{task}}. {{prev.output}}", next: null };
+  engine: "codex", model: "gpt-6.2-sol", effort: "xhigh", prompt: "Review {{task}}. {{prev.output}}", next: null };
 
 export const pass = 'All checked.\n\n```json\n{"status":"pass","findings":[]}\n```';
 

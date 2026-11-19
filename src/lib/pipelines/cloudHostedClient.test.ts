@@ -836,7 +836,8 @@ for (const selectedModel of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
     expect(f.frames.find(frame => frame.method === "thread/start")?.params).toMatchObject({ model: selectedModel, allowProviderModelFallback: false, config: { model_reasoning_effort: "max" } });
     expect(f.frames.find(frame => frame.method === "turn/start")?.params).toMatchObject({ model: selectedModel, allowProviderModelFallback: false });
     // A different admitted model is still a reroute from this receipt.
-    f.respond((frame, socket) => frame.method === "thread/read" ? { model, thread } : f.original(frame, socket));
+    const rerouted = selectedModel === "gpt-6.2-sol" ? "gpt-6.2-astra" : "gpt-6.2-sol";
+    f.respond((frame, socket) => frame.method === "thread/read" ? { model: rerouted, thread } : f.original(frame, socket));
     await expect(f.client.poll(access)).rejects.toThrow("resolved model mismatch");
   });
 }

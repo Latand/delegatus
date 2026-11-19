@@ -241,7 +241,7 @@ test("Cloud builder setup enabled during catalog admission prevents submission",
 });
 
 test("cloud reviewers submit the role scaffold, relay and lane facts, settle through the local verdict path", async () => {
-  const { h, submits, reads } = await fixture();
+  const { h, submits, reads } = await fixture({ stages: [{ ...stage, model: "gpt-6.1-sol" }] });
   await submitted(h);
   expect(submits).toHaveLength(1);
   expect(submits[0]).toMatchObject({ environmentId: "env-fixture", branch: lane().branch, model: "gpt-6.2-sol", reasoningEffort: "xhigh", allowProviderModelFallback: false, account: { accountId: "cloud-account" } });
