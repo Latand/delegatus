@@ -186,6 +186,7 @@ test("PR self-tests use the trusted import closure and workflow changes while in
   const job = jobs[0]!;
   expect(step(job, "Verify privacy gate behavior").if).toBe("steps.privacy-scope.outputs.run == 'true'");
   const scope = step(job, "Scope candidate privacy self-tests with trusted code");
+  expect(scope.if).toBe("github.event_name != 'push'");
   expect(scope["working-directory"]).toBe("trusted");
   expect(job.steps.indexOf(scope)).toBeLessThan(job.steps.indexOf(step(job, "Verify privacy gate behavior")));
   expect(step(job, "Scan changed publication surfaces, commit messages and the merge boundary").if).toBeUndefined();
@@ -217,6 +218,19 @@ test("PR self-tests use the trusted import closure and workflow changes while in
     mkdirSync(join(root, "trusted/node_modules"));
     writeFileSync(join(root, "trusted/test-preload.ts"), 'import "./scripts/preload-helper";\n');
     writeFileSync(join(root, "trusted/scripts/preload-helper.ts"), "export const value = true;\n");
+    // A release sees the result on the main push. Its scan covers the commit
+    // that just landed even when the protected ref already points at that tip.
+    git("commit", "--allow-empty", "-m", "landed change");
+    const landed = git("rev-parse", "HEAD");
+    const resolveBase = step(job, "Resolve current protected base");
+    for (const [event, expected] of [["push", base], ["pull_request", landed]] as const) {
+      const environmentFile = join(root, "resolved-" + event);
+      const resolved = Bun.spawnSync(["bash", "-e", "-c", resolveBase.run!], {
+        cwd: join(root, "trusted"), env: { ...env, PRIVACY_BASE_REF: "main", PUSH_BEFORE: base, GITHUB_EVENT_NAME: event, GITHUB_ENV: environmentFile },
+      });
+      expect(resolved.exitCode, resolved.stderr.toString()).toBe(0);
+      expect(readFileSync(environmentFile, "utf8")).toBe("PRIVACY_BASE_SHA=" + expected + "\n");
+    }
     for (const [file, expected] of [["src/components/fixture.ts", false], ["scripts/fixture-rule.ts", true], ["scripts/privacy-new.test.ts", true], ["scripts/privacy-fixture.json", true], ["scripts/generate-privacy-sample.ts", true], [".github/workflows/privacy-tracker-audit.yml", true], [".github/workflows/privacy-publication.yml", true], ["test-preload.ts", true], ["scripts/preload-helper.ts", true], ["bunfig.toml", true], ["tsconfig.json", true], ["package.json", true], ["bun.lock", true]]) {
       git("checkout", "--detach", base);
       mkdirSync(join(root, "candidate", file as string, ".."), { recursive: true });
