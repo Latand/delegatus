@@ -480,8 +480,10 @@ import Foundation
                 let killDeadline = DispatchTime.now() + 2
                 while generationIsAlive() && DispatchTime.now() < killDeadline { Thread.sleep(forTimeInterval: 0.01) }
             }
-            guard !generationIsAlive() else {
-                throw LauncherError.message("detached fixture cleanup: process \(pid) survived SIGKILL")
+            let reapDeadline = DispatchTime.now() + 2
+            while kill(pid, 0) == 0 && DispatchTime.now() < reapDeadline { Thread.sleep(forTimeInterval: 0.01) }
+            guard kill(pid, 0) != 0 && errno == ESRCH else {
+                throw LauncherError.message("detached fixture cleanup: process \(pid) was not reaped after SIGKILL")
             }
         }
         try Data(#"{"name":"delegatus-cli","version":"2.0.0"}"#.utf8).write(to: root.appendingPathComponent("package.json"))
@@ -510,15 +512,17 @@ import Foundation
             "LLV_STATE_DIR": root.appendingPathComponent("state").path, "TMPDIR": fm.temporaryDirectory.path]
         let timeoutScript = root.appendingPathComponent("readiness-timeout.mjs")
         let timeoutReceipt = root.appendingPathComponent("readiness-timeout-pid")
+        let timeoutReady = root.appendingPathComponent("readiness-timeout-ready")
         try Data("""
         import {spawn} from 'node:child_process';
         import {writeFileSync} from 'node:fs';
-        const child=spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{detached:true,stdio:'ignore'});
-        writeFileSync(process.argv[2],String(child.pid));
+        const [receipt,ready]=process.argv.slice(2);
+        const child=spawn(process.execPath,['-e',`setTimeout(()=>{process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000)},Number(process.env.FIXTURE_START_DELAY||0))`],{detached:true,stdio:'ignore'});
+        writeFileSync(receipt,String(child.pid));
         process.stdin.resume();
         """.utf8).write(to: timeoutScript)
         let timeoutLauncher = Process(); timeoutLauncher.executableURL = bun
-        timeoutLauncher.arguments = [timeoutScript.path, timeoutReceipt.path]; timeoutLauncher.environment = env
+        timeoutLauncher.arguments = [timeoutScript.path, timeoutReceipt.path, timeoutReady.path]; timeoutLauncher.environment = env
         let timeoutOutput = Pipe(), timeoutInput = Pipe()
         timeoutLauncher.standardOutput = timeoutOutput; timeoutLauncher.standardInput = timeoutInput
         try timeoutLauncher.run()
@@ -527,14 +531,23 @@ import Foundation
             do { try stopDetachedViewer(timeoutReceipt) }
             catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
         }
+        let readinessDeadline = DispatchTime.now() + 10
+        while (!fm.fileExists(atPath: timeoutReceipt.path) || !fm.fileExists(atPath: timeoutReady.path)) && DispatchTime.now() < readinessDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        guard let detachedText = try? String(contentsOf: timeoutReceipt, encoding: .utf8),
+              let detachedPID = Int32(detachedText.trimmingCharacters(in: .whitespacesAndNewlines)), detachedPID > 1,
+              fm.fileExists(atPath: timeoutReady.path),
+              Server.listenerIdentity(Int(detachedPID), install: install, package: root) != nil else {
+            throw LauncherError.message("induced detached readiness failure: PID or TERM handler did not become ready")
+        }
         do {
             _ = try FixtureProcess.readyLine(timeoutOutput, named: "induced detached readiness failure", timeout: 0.2)
             throw LauncherError.message("induced detached readiness failure unexpectedly succeeded")
         } catch LauncherError.message(let message) where message == "induced detached readiness failure: timed out waiting for readiness line" {
-            let detachedPID = Int32(try String(contentsOf: timeoutReceipt, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines))!
             try stopDetachedViewer(timeoutReceipt)
             expect(kill(detachedPID, 0) != 0 && errno == ESRCH,
-                "induced readiness timeout leaves no live detached fixture")
+                "induced readiness timeout reaps the TERM-resistant detached generation")
         }
         try check(FixtureProcess.stop(timeoutLauncher), "timeout launcher exits after detached cleanup")
         let viewerPIDFile = root.appendingPathComponent("viewer-pid")
