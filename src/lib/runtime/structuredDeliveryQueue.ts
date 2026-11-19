@@ -3385,7 +3385,12 @@ export class StructuredDeliveryQueue {
     this.noteWait(effect, "dispatching", { lane, attempted: true, wake: "event" });
     const authorize = () => {
       assertOwner();
-      this.assertHostRoute(host, health);
+      const current = host.agentControlState?.();
+      if (current && !sameHostControlRoute(health, current)) {
+        const reason = current.status === "attention" && current.turnId === health.turnId
+          ? "blocking attention must be answered before injecting context" : "stale-turn";
+        throw new StructuredInjectError(reason, "refused");
+      }
       const seat = this.port.seatRecipient?.(effect.conversationId);
       if (seat?.kind === "unknown") throw new StructuredDispatchDeferredError(seat.reason);
       if (seat?.kind === "revoked") throw new StructuredSendRefusedError(seat.reason);
