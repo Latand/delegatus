@@ -259,6 +259,30 @@ serviceTest("service checkpoints are not consumed after switching to portable ex
   expect(portable.output).toContain("NEW b.test.ts");
 }, 60_000);
 
+serviceTest("recorded runs share green checkpoints across timing directories and bind the test input", () => {
+  const f = fixture();
+  for (const file of ["a", "b"]) writeFileSync(path.join(f.repo, `${file}.test.ts`), f.source(file).replace("expect(1).toBe(1);",
+    'expect(process.env.CHECKPOINT_TEST_MODE).toBe("green");'));
+  f.git("add", "."); f.git("commit", "-m", "Recorded comparison fixture");
+  const firstTiming = path.join(f.root, "first-recorder", "queue-timing");
+  const secondTiming = path.join(f.root, "second-recorder", "queue-timing");
+  for (const timing of [firstTiming, secondTiming]) mkdirSync(timing, { recursive: true });
+  const run = (timing: string, mode: string) => f.run({ LLV_RECORDED_CHECK_WAIT_ROOT: timing, CHECKPOINT_TEST_MODE: mode });
+  const first = run(firstTiming, "green");
+  expect(first.status, first.output).toBe(0);
+  const second = run(secondTiming, "green");
+  expect(second.status, second.output).toBe(0);
+  expect(second.output.match(/reused complete green head file/g)).toHaveLength(2);
+  expect(first.output).toContain("CPU admission;");
+  expect(second.output).toContain("CPU admission;");
+  expect(f.samples()).toEqual({ a: 1, b: 1 });
+  const changed = run(secondTiming, "red");
+  expect(changed.status, changed.output).toBe(1);
+  expect(changed.output).not.toContain("reused complete green head file");
+  expect(changed.output).toContain("NEW a.test.ts");
+  expect(changed.output).toContain("NEW b.test.ts");
+}, 60_000);
+
 serviceTest("declared transport inputs invalidate warm receipts like a fresh comparator", () => {
   const f = fixture();
   for (const file of ["a", "b"]) writeFileSync(path.join(f.repo, `${file}.test.ts`), f.source(file).replace("expect(1).toBe(1);",
