@@ -209,6 +209,7 @@ function runtimeJournalClient(journal: RuntimeJournal): RuntimeHostClient {
     producerCursor: async (producerKind, eventKeyPrefix) => journal.producerCursor(producerKind, eventKeyPrefix),
     effectBatch: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
     transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    acknowledgeTerminalProjection: async (operationIds) => journal.acknowledgeTerminalProjection(operationIds),
   } as RuntimeHostClient;
 }
 
@@ -719,6 +720,7 @@ test("the controller republishes a live host into a restarted runtime journal", 
     producerCursor: async (producerKind: string, eventKeyPrefix: string) => journal.producerCursor(producerKind, eventKeyPrefix),
     effectBatch: async (kinds?: readonly string[], afterEventSeq?: number) => journal.effectBatch(100, kinds, afterEventSeq),
     transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    acknowledgeTerminalProjection: async (operationIds: readonly string[]) => journal.acknowledgeTerminalProjection(operationIds),
   } as RuntimeHostClient;
   const host = observableFakeHost(new FakeEngineHost(createFakeDeliveryLedger()));
 
@@ -808,6 +810,7 @@ test("one host whose state cannot be read costs no other host its republish (#11
     producerCursor: async (producerKind: string, eventKeyPrefix: string) => journal.producerCursor(producerKind, eventKeyPrefix),
     effectBatch: async (kinds?: readonly string[], afterEventSeq?: number) => journal.effectBatch(100, kinds, afterEventSeq),
     transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    acknowledgeTerminalProjection: async (operationIds: readonly string[]) => journal.acknowledgeTerminalProjection(operationIds),
   } as RuntimeHostClient;
   /* Healthy while it is adopted, unreadable afterwards: the outage this covers
      opens after the host is already registered and published. */
