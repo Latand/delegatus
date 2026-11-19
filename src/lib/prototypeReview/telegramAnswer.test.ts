@@ -70,6 +70,20 @@ test("free text without an Answers segment covers every unanswered question", ()
   expect(input.answers).toEqual(round.questions!.map(q => ({ questionId: q.id, options: [], other: true })));
 });
 
+test.each([
+  "Show 2 GIF previews in the first video.",
+  "Show 2  GIF previews.\nKeep  the original captions.",
+  "2: Add a caption.",
+  "Use 2 examples, then 3 GIF previews.",
+])("numbered prose remains full custom text: %s", comment => {
+  const round = telegramRound();
+  const text = `${prototypeReference(round)} · ${comment}`;
+  expect(parsePrototypeAnswer(round, text).input).toMatchObject({
+    originalReply: text, comment,
+    answers: round.questions!.map(q => ({ questionId: q.id, options: [], other: true })),
+  });
+});
+
 test("mixed shorthand and words keep selected options and the addressed custom answer", () => {
   const round = telegramRound();
   const input = parsePrototypeAnswer(round, `${prototypeReference(round)} · Відповіді 1a 2 — свій варіант поверхонь\n3b`).input!;
@@ -264,7 +278,7 @@ test.each(["1b, 2", "1b 2", "1b; 2:", "1b\n2", "1b, 2m", "1b, 2: m", "1b, 2mn", 
   expect(parsePrototypeAnswer(telegramRound(), text, true)).toHaveProperty("error");
 });
 
-test.each(["1b, 2a", "1b, wait 2 days", "1b, 2 days should be enough", "1b · 2: Почнемо завтра."])("mixed shorthand preserves choices and ordinary comments: %s", text => {
+test.each(["1b, 2a", "1b, wait 2 days", "1b, 2 days should be enough", "1b, 2 GIF previews are enough", "1b · 2: Почнемо завтра."])("mixed shorthand preserves choices and ordinary comments: %s", text => {
   const input = parsePrototypeAnswer(telegramRound(), text, true).input!;
   expect(input.answers?.[0]).toMatchObject({ questionId: "place", options: [1] });
   if (text === "1b, 2a") expect(input.answers?.[1]).toMatchObject({ questionId: "scope", options: [0] });

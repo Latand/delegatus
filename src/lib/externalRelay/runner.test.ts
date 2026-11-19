@@ -250,7 +250,7 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
-test.each(["enabled", "disabled", "long-reservation"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
+test.each(["enabled", "disabled", "long-reservation", "numbered-prose"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
   const ownerTier = kind === "enabled";
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const completions: unknown[] = [];
@@ -264,7 +264,9 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
   const previous = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
   const copy = prototypeCopyLine(round);
-  const text = kind === "long-reservation" ? `${copy}, ${"я".repeat(20_000 - copy.length - 2)}` : `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
+  const prose = "Show 2  GIF previews.\nKeep  the captions.";
+  const text = kind === "long-reservation" ? `${copy}, ${"я".repeat(20_000 - copy.length - 2)}`
+    : kind === "numbered-prose" ? `${prototypeReference(round)} · ${prose}` : `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
   const request = { ...contextRequest, request_id: `prototype-owner-${kind}`, answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
     ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
     conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
@@ -277,13 +279,14 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
     if (duplicate !== null) expect(duplicate).toMatchObject({ outcome: "answered" });
     expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
     const task = loadTasks()[0]!, decision = task.prototypeReviews![0]!.decision!;
-    expect(decision).toMatchObject({ chosen: kind === "long-reservation" ? [] : [2], originalReply: text,
-      answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })) });
+    expect(decision).toMatchObject({ chosen: kind === "long-reservation" || kind === "numbered-prose" ? [] : [2], originalReply: text,
+      answers: round.questions!.map(q => kind === "numbered-prose"
+        ? { questionId: q.id, options: [], other: true } : { questionId: q.id, options: [0] }) });
     if (kind === "long-reservation") {
       expect(decision.recommendedWithReservation).toBe(true);
       expect(decision.comment).toBe(text.slice(copy.length));
       if (result?.outcome === "answered") expect(result.answer.text).toContain("рекомендовані з застереженням");
-    } else expect(decision.comment).toBe("Keep these controls.");
+    } else expect(decision.comment).toBe(kind === "numbered-prose" ? prose : "Keep these controls.");
     expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${round.id}`);
     if (kind === "long-reservation") {
       expect(Buffer.byteLength(decision.delivery.text)).toBeLessThanOrEqual(32_000);

@@ -70,9 +70,9 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string, 
       continue;
     }
     words = words.replace(/(?<![\p{L}\p{N}_])([1-9]\d*)(\s*(?::\s*)?)([a-z]+\+?|\+)(?![\p{L}\p{N}_])/giu, (token, number: string, gap: string, letters: string) => {
-      // Spaced words such as "2 days" and numbered custom prose stay notes.
-      // Compact choices and single option letters must name a declared option.
-      if (gap && letters.replace("+", "").length > 1 && /[m-z]/i.test(letters)) return token;
+      // Words after a separator stay notes. Compact bundles, single option
+      // letters and shorthand marked with "+" still go through choice validation.
+      if (gap && letters.length > 1 && !letters.endsWith("+")) return token;
       const q = questions[Number(number) - 1];
       const options = [...letters.replace("+", "").toLowerCase()].map(c => c.charCodeAt(0) - 97);
       const prior = q && selected.get(q.id);
