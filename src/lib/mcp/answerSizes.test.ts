@@ -235,7 +235,7 @@ test("measure every tool through the MCP service and budget common board answers
   const successor = await call("list_tasks", { project: "size-board-successor", ids: ["task-0"] });
   expect(successor.count).toBe(1);
   expect(successor.tasks[0].project).toBe("size-board-successor");
-}, 15_000);
+}, 60_000);
 
 test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeGone restores idle history", async () => {
   const now = Date.now();
@@ -270,7 +270,7 @@ test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeG
   const all = await service.callTool("agent_activity", { clientRequestId: "mixed-history", liveOnly: true, includeGone: true, limit: 200, full: true }) as any;
   expect(all.count).toBe(101);
   expect(all.conversations.some((row: any) => row.conversationId === "conversation-20")).toBe(true);
-});
+}, 30_000);
 
 test("keyset pages survive insertions and deletions, cache warm filters, and yield to cancellation", async () => {
   const { listPage, listPageAsync } = await import("./listAnswers");

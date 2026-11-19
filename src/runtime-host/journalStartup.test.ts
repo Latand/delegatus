@@ -13,7 +13,7 @@ let next = 0;
 const fixture = path.join(directory, "large.sqlite");
 // Give the 300,000-row seed its own setup budget under gate contention.
 // The startup tests retain their separate limits and the full history.
-beforeAll(() => largeJournal(fixture), 240_000);
+beforeAll(() => largeJournal(fixture), 300_000);
 afterAll(() => fs.rmSync(directory, { recursive: true, force: true }));
 function copy(source = fixture): string { const f = path.join(directory, `copy-${next++}.sqlite`); fs.copyFileSync(source, f); return f; }
 function meta(f: string, key: string): string | null { const db = new Database(f, { readonly: true }); try { return db.query<{ value: string }, [string]>("SELECT value FROM journal_meta WHERE key=?").get(key)?.value ?? null; } finally { db.close(); } }
