@@ -18,10 +18,19 @@ import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib
 // shell, helper and queue, including the legacy SQL used on final claim.
 const legacyRevision = "2c7e437a553f56d81afa39e71878f60a1e6d73a3";
 
-function legacyGateTree(directory: string) {
+function legacyGateTree(directory: string, revision = legacyRevision) {
   const tree = path.join(directory, "legacy");
   fs.mkdirSync(tree);
-  execFileSync("bash", ["-o", "pipefail", "-c", 'git archive "$1" | tar -xf - -C "$2"', "archive-legacy-gate", legacyRevision, tree]);
+  let source = process.cwd();
+  if (Bun.spawnSync(["git", "cat-file", "-e", revision], { stderr: "ignore" }).exitCode !== 0) {
+    // A shallow checkout may omit the historical producer. Fetch only its
+    // pinned object into a private fixture repository.
+    source = path.join(directory, "history.git");
+    const origin = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8" }).trim();
+    execFileSync("git", ["init", "--quiet", "--bare", source]);
+    execFileSync("git", ["-C", source, "fetch", "--no-tags", "--depth=1", origin, revision], { timeout: 30_000 });
+  }
+  execFileSync("bash", ["-o", "pipefail", "-c", 'git archive "$1" | tar -xf - -C "$2"', "archive-legacy-gate", revision, tree], { cwd: source });
   fs.symlinkSync(path.resolve("node_modules"), path.join(tree, "node_modules"), "dir");
   return tree;
 }
@@ -304,6 +313,17 @@ for (const legacyHolds of [true, false]) test.skipIf(process.platform !== "linux
   }
 }, 45_000);
 
+function pathWithoutFlock(directory: string) {
+  const bin = path.join(directory, "portable-bin");
+  fs.mkdirSync(bin);
+  for (const command of ["bash", "date", "dirname", "getconf", "mkdir", "mktemp", "realpath", "rm", "sleep", "systemctl", "systemd-notify", "systemd-run", "touch", "uname", "which"]) {
+    const executable = Bun.which(command);
+    if (executable) fs.symlinkSync(executable, path.join(bin, command));
+  }
+  fs.symlinkSync(process.execPath, path.join(bin, "bun"));
+  return bin;
+}
+
 for (const [kind, title] of [
   ["shell", "a portable legacy holder drains before a current cap-two entrant starts"],
   ["other", "a non-checkout publication lookalike still counts as a legacy holder"],
@@ -314,15 +334,13 @@ for (const [kind, title] of [
   const pending: ReturnType<typeof realExec>[] = [];
   const release = path.join(f.dir, "release"), holderPid = path.join(f.dir, "holder-pid"), stderr = path.join(f.dir, "entrant-stderr");
   const holderStderr = path.join(f.dir, "holder-stderr");
-  const bin = path.join(f.dir, "portable-bin");
-  fs.mkdirSync(bin);
-  for (const command of ["bash", "date", "dirname", "getconf", "mkdir", "mktemp", "realpath", "rm", "sleep", "systemctl", "systemd-notify", "systemd-run", "touch", "uname", "which"]) {
-    const executable = Bun.which(command);
-    if (executable) fs.symlinkSync(executable, path.join(bin, command));
-  }
-  fs.symlinkSync(process.execPath, path.join(bin, "bun"));
+  const bin = pathWithoutFlock(f.dir);
   const env = { ...f.env, PATH: bin, LLV_GATE_BUN: process.execPath, LLV_GATE_RUNNER: "off", DELEGATUS_CPU_PRESSURE: "off",
     CPU_SLOT_RELEASE: release, CPU_SLOT_HOLDER_PID: holderPid };
+  if (kind === "shell") {
+    withoutInheritedGate(env);
+    fs.rmSync(path.join(bin, "systemctl"), { force: true });
+  }
   const output = () => fs.existsSync(f.env.CPU_QUEUE_OUTPUT) ? fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8") : "";
   const log = () => fs.existsSync(stderr) ? fs.readFileSync(stderr, "utf8") : "";
   const last = () => f.db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last;
@@ -345,6 +363,10 @@ for (const [kind, title] of [
     });
     expect(f.count()).toBe(0);
     expect(fs.existsSync(path.join(f.dir, "llv-heavy-gate.slot1.lock"))).toBe(false);
+    if (kind === "shell") {
+      const pid = fs.readFileSync(holderPid, "utf8").trim();
+      expect(fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")).toContain("--portable");
+    }
     const holderAdmission = last()!;
     expect(holderAdmission).not.toBeNull();
     pending.push(realExec("/bin/bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "mixed-portable", "bash", "scripts/gate-slot.sh", "bash", "-c",
@@ -374,6 +396,68 @@ for (const [kind, title] of [
 
 const systemctl = process.platform === "linux" ? Bun.which("systemctl") : null;
 const hasUserManager = systemctl !== null && Bun.spawnSync([systemctl, "--user", "show-environment"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+test.skipIf(!hasUserManager)("a pre-exemption service holds its cap-one grant until the ordinary hook exits", async () => {
+  const f = fixture(), control = new AbortController(), pending: ReturnType<typeof realExec>[] = [];
+  const release = path.join(f.dir, "release"), entered = path.join(f.dir, "entered");
+  const finish = path.join(f.dir, "finish");
+  const env = { ...f.env, LLV_GATE_SLOTS: "1", DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_RUNNER: "off",
+    LLV_GATE_PUSH_DEADLINE: undefined, LLV_GATE_BUN: process.execPath };
+  const last = () => f.db.query<{ last: number }, []>("SELECT last FROM admission").get()!.last;
+  try {
+    const legacy = legacyGateTree(f.dir, "bf1c00247d496184b51c598a92e7cf4501185ae5");
+    execFileSync("git", ["init", "--quiet", legacy], { env: fixtureGitEnv() });
+    const bin = pathWithoutFlock(f.dir);
+    // Hold the real legacy hook in its fetch after it has consumed its ticket.
+    // The empty repository then ends the hook at merge-base.
+    fs.writeFileSync(path.join(bin, "git"), `#!/bin/bash
+if [[ $1 != fetch ]]; then command -p git "$@"; exit $?; fi
+echo "$PPID" > "$FIXTURE_ENTERED"
+while [[ ! -f "$FIXTURE_RELEASE" ]]; do sleep 0.02; done
+`, { mode: 0o755 });
+    const holderRun = realExec("bash", ["scripts/gate-slot.sh", "bun", "scripts/local-gate.ts", "pre-push"], legacy,
+      { ...env, PATH: bin, FIXTURE_ENTERED: entered, FIXTURE_RELEASE: release },
+      { timeoutMs: 25_000, signal: control.signal });
+    pending.push(holderRun);
+    await Promise.race([until(() => fs.existsSync(entered), 10_000), Promise.resolve(holderRun).then(result => {
+      throw new Error(`historical hook exited before fetch (${result.code}): ${redactBounded(result.stderr, 2000)}`);
+    })]);
+    const hook = fs.readFileSync(entered, "utf8").trim();
+    const parent = fs.readFileSync(`/proc/${hook}/stat`, "utf8").split(") ").at(-1)!.split(" ")[1];
+    const service = fs.readFileSync(`/proc/${parent}/cmdline`, "utf8").split("\0");
+    expect(service[2]).toBe("--service");
+    expect(fs.existsSync(service[3]!)).toBe(false);
+    expect(f.count()).toBe(0);
+    const held = last();
+    expect(held).toBeGreaterThan(0);
+    expect(fs.existsSync(path.join(f.dir, "llv-heavy-gate.slot1.lock"))).toBe(false);
+
+    // Count every subsequent grant, including one that exits between polls.
+    f.db.exec("CREATE TABLE grants (at INTEGER); CREATE TRIGGER count_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO grants VALUES (NEW.last); END");
+    pending.push(realExec("bash", ["scripts/gate-slot.sh", "bash", "-c",
+      'if read -r stat < "/proc/$FIXTURE_HOOK/stat" 2>/dev/null; then [[ ${stat##*) } == Z\\ * ]] || exit 23; fi; echo entrant >> "$CPU_QUEUE_OUTPUT"; while [[ ! -f "$FIXTURE_FINISH" ]]; do sleep 0.02; done'],
+      process.cwd(), { ...env, FIXTURE_HOOK: hook, FIXTURE_FINISH: finish }, { timeoutMs: 25_000, signal: control.signal }));
+    const polled = () => f.db.query<{ polled: number }, []>(`SELECT polled ${queuedTickets}`).get()?.polled ?? 0;
+    await until(() => last() !== held || polled() > held + CPU_QUEUE_SPACING_MS + 1000, 10_000);
+    expect(f.db.query("SELECT * FROM grants").all()).toEqual([]);
+    expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
+    fs.writeFileSync(release, "release");
+    await until(() => fs.existsSync(f.env.CPU_QUEUE_OUTPUT), 10_000);
+    expect(f.db.query("SELECT slot, cap FROM gate_slots").all()).toEqual([{ slot: 1, cap: 1 }]);
+    fs.writeFileSync(finish, "finish");
+    const [holder, entrant] = await Promise.all(pending);
+    expect(holder!.code).toBe(1);
+    expect(holder!.stderr).toContain("git merge-base failed");
+    expect(entrant!.code, entrant!.stderr).toBe(0);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("entrant\n");
+    expect(f.db.query("SELECT at FROM grants").all()).toEqual([{ at: last() }]);
+    expect(f.count()).toBe(0);
+  } finally {
+    fs.writeFileSync(release, "release"); fs.writeFileSync(finish, "finish"); control.abort();
+    await Promise.allSettled(pending);
+    f.close();
+  }
+}, 45_000);
+
 for (const mode of ["portable prepare", "service prepare", "service hooks"] as const) test.skipIf(
   process.platform !== "linux" || mode !== "portable prepare" && !hasUserManager
 )(`FIFO publication admits the first check while the peer waits (${mode})`, async () => {

@@ -138,8 +138,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
   const isHookParent = (command: string[], cwd: () => string) => {
     const argv = path.basename(command[0] ?? "") === "bash" && command[2] === "--in-cpu-scope" && path.basename(command[1] ?? "") === "gate-slot.sh"
       ? command.slice(3) : command;
-    // The legacy wrapper also kept exactly this pre-push parent outside
-    // admission. Its admitted half has a separate argv and takes a slot.
+    // This identifies the hook command. Older wrappers could admit it directly.
     const name = path.basename(argv[0] ?? "");
     const entry = name === "bun" && argv.length === 3 && argv[2] === "pre-push" && path.basename(argv[1] ?? "") === "local-gate.ts"
       ? argv[1] : (name === "bash" || name === "sh") && path.basename(argv[1] ?? "") === "pre-push" ? argv[1] : name === "pre-push" ? argv[0] : undefined;
@@ -188,14 +187,39 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const worker = path.join(path.dirname(runner), "check-worker-entry.py");
     return path.basename(argv[0] ?? "") === "python3" && argv[1] === "-I" && argv[2] === worker ? argv.slice(3) : argv;
   };
+  const childrenOf = (base: string) => new Set(fs.readdirSync(path.join(base, "task")).flatMap(thread =>
+    fs.readFileSync(path.join(base, "task", thread, "children"), "utf8").split(/\s+/).filter(child => /^[1-9]\d*$/.test(child))));
+  const workerHasQueuedHook = (member: string, membership: string) => {
+    // The worker forks the hook. Both the placed native hook and the direct
+    // Bun entry exec local-gate, which queues its own --admitted child.
+    for (const hookPid of childrenOf(member)) {
+      const hook = path.join(proc, hookPid);
+      const command = readArgv(hook);
+      if (path.basename(command[0] ?? "") !== "bun" || !isHookParent(command, readCwd(hook)) ||
+        readStat(hook)[1] !== path.basename(member) || fs.readFileSync(path.join(hook, "cgroup"), "utf8") !== membership) continue;
+      const script = fs.realpathSync(path.resolve(readCwd(hook)(), command[1]!));
+      for (const pid of childrenOf(hook)) {
+        const gate = path.join(proc, pid);
+        const stat = readStat(gate);
+        if (stat[1] !== hookPid || !waiting.has(`${pid}:${stat[19]}`)) continue;
+        const args = readArgv(gate);
+        const cwd = readCwd(gate)();
+        if (args.length === 6 && path.basename(args[0]!) === "bash" && path.basename(args[2]!) === "bun" &&
+          args[4] === "pre-push" && args[5] === "--admitted" &&
+          fs.realpathSync(path.resolve(cwd, args[3]!)) === script &&
+          path.resolve(cwd, args[1]!) === path.join(path.dirname(path.resolve(cwd, args[3]!)), "gate-slot.sh") &&
+          fs.readFileSync(path.join(gate, "cgroup"), "utf8") === membership) return true;
+      }
+    }
+    return false;
+  };
   const serviceCouldUsePool = (base: string, runner: string) => {
     // The service command inherits the launch environment and the supervisor
     // stamps its real cgroup. This can still establish scope when the launch
     // record's temporary directory has already been collected.
     const group = /^0::(\/.+\/delegatus-gate-[0-9a-f-]+\.service)$/m.exec(fs.readFileSync(path.join(base, "cgroup"), "utf8"))?.[1];
     if (!group) return true;
-    const children = new Set(fs.readdirSync(path.join(base, "task")).flatMap(thread =>
-      fs.readFileSync(path.join(base, "task", thread, "children"), "utf8").split(/\s+/).filter(child => /^[1-9]\d*$/.test(child))));
+    const children = childrenOf(base);
     if (!children.size) return true;
     return [...children].some(child => {
       const member = path.join(proc, child);
@@ -203,17 +227,22 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       if (env("LLV_OWNED_TEST_RUN_CGROUP") !== group) return true;
       // A worker moves into its own entry leaf before it starts the hook.
       // Require kernel membership as well as the supervisor's launch stamp.
-      const membership = fs.readFileSync(path.join(member, "cgroup"), "utf8").split("\n");
-      if (!membership.includes(`0::${group}`) && !membership.includes(`0::${group}/entry-${child}`)) return true;
+      const membership = fs.readFileSync(path.join(member, "cgroup"), "utf8");
+      const groups = membership.split("\n");
+      if (!groups.includes(`0::${group}`) && !groups.includes(`0::${group}/entry-${child}`)) return true;
       const cwd = readCwd(member);
       if (!samePool(env("LLV_GATE_LOCK_DIR"), cwd())) return false;
       if (env("LLV_GATE_SLOT_LEASE") !== undefined) return true;
-      const command = serviceCommand(readArgv(member), runner);
+      const argv = readArgv(member);
+      const command = serviceCommand(argv, runner);
       if (command[2] === "--in-cpu-scope") {
         const wrapper = fs.realpathSync(path.resolve(cwd(), command[1]!));
         if (fs.realpathSync(path.join(path.dirname(wrapper), "owned-runner.ts")) !== fs.realpathSync(runner)) return true;
       }
-      if (isHookParent(command, cwd)) return false;
+      // A pre-exemption service can have this exact hook argv after it
+      // consumed a slotless ticket. Only the identified worker and its live
+      // queued child establish that this service is waiting for admission.
+      if (isHookParent(command, cwd)) return command === argv || !workerHasQueuedHook(member, membership);
       const parent = env("LLV_OWNED_RUN_PARENT_IDENTITY");
       return !(parent && isPrepareSupervisor(command, cwd, () => recordedParent(JSON.parse(parent))));
     });
@@ -236,8 +265,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
         // parent which deliberately runs outside the gate pool.
         try {
           const launch = JSON.parse(fs.readFileSync(path.join(base, "root", argv[3]!), "utf8"));
-          if (isHookParent(launch.command, () => launch.cwd) ||
-            isPrepareSupervisor(serviceCommand(launch.command, argv[1]!), () => launch.cwd, () => recordedParent(launch.parent))) return false;
+          if (isPrepareSupervisor(serviceCommand(launch.command, argv[1]!), () => launch.cwd, () => recordedParent(launch.parent))) return false;
           return samePool(launch.env.LLV_GATE_LOCK_DIR, launch.cwd);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
