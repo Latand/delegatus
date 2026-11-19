@@ -189,6 +189,14 @@ export function controllerPipelineVersionNow(id: string): string {
 export async function controllerPipelineVersion(id: string): Promise<string> {
   return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-version", () => stateLockAttempt("pipelines.controller-version", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineControllerVersion(id)))));
 }
+export function pendingCpuStageRevision(id: string, stage: string, attempt: number): string | null {
+  return pipelineStore().pipelinePendingCpuStageRevision(id, stage, attempt);
+}
+export async function wakePipelineCpuStage(id: string, stage: string, attempt: number, revision: string, expiresAt: number): Promise<string | null> {
+  return waitForStateLock("pipelines.controller-cpu-wake", () => pipelineStore().wakePipelineCpuStage(id, stage, attempt, revision, expiresAt),
+    { waitMs: Math.max(0, expiresAt - Date.now()), subject: "pending-stage" });
+}
+
 export async function findControllerPipeline(id: string): Promise<Pipeline | null> {
   return waitForStateLock("pipelines.controller-candidate", () => stateLockAttempt("pipelines.controller-candidate", () => pipelineStore().pipelineControllerCandidate(id)));
 }
