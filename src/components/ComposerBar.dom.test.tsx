@@ -1,12 +1,13 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { act, useEffect, useRef } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
 import { useComposer } from "@/hooks/useComposer";
 import { setLocale, translate } from "@/lib/i18n";
+import { createFakeTimers } from "@/lib/audio/fakeTimers.fixture";
 import type { RuntimeImageCapability } from "@/lib/runtime/structuredContent";
 
 import { ComposerBar, RECEIPTS_FIRST_ROW_CLOSING, RECEIPTS_FIRST_ROW_CLOSING_PHONE } from "./ComposerBar";
@@ -658,32 +659,52 @@ test("Send with nothing to send swallows its click, and its hint still closes on
     </div>;
   }
   const hints = () => [...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent);
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+  const actEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+  actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+  const timers = createFakeTimers(0);
+  const timeout = spyOn(dom, "setTimeout").mockImplementation((callback, delay = 0, ...args) =>
+    timers.schedule(() => callback(...args), delay) as ReturnType<typeof dom.setTimeout>);
+  const clearTimeout = spyOn(dom, "clearTimeout").mockImplementation((id) => timers.cancel(id));
+  const settle = () => act(async () => { timers.advance(200); });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  flushSync(() => root.render(<MenuHarness />));
-  const sendButton = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
-  /* The send menu keeps the control enabled; it only says it cannot send. */
-  expect(sendButton.disabled).toBe(false);
-  expect(sendButton.getAttribute("aria-disabled")).toBe("true");
+  try {
+    await act(async () => { root.render(<MenuHarness />); });
+    const sendButton = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
+    /* The send menu keeps the control enabled; it only says it cannot send. */
+    expect(sendButton.disabled).toBe(false);
+    expect(sendButton.getAttribute("aria-disabled")).toBe("true");
 
-  for (const type of ["pointerover", "pointermove"]) sendButton.dispatchEvent(new dom.Event(type, { bubbles: true }) as unknown as Event);
-  await settle();
-  expect(hints()).toEqual(["Send"]);
+    await act(async () => {
+      for (const type of ["pointerover", "pointermove"]) sendButton.dispatchEvent(new dom.Event(type, { bubbles: true }) as unknown as Event);
+    });
+    await settle();
+    expect(hints()).toEqual(["Send"]);
 
-  /* The control stops the click's propagation; the pointer stays on it. */
-  flushSync(() => sendButton.click());
-  await settle();
-  expect(reachedAbove).toBe(false);
-  expect(hints()).toEqual([]);
+    /* The control stops the click's propagation; the pointer stays on it. */
+    await act(async () => { sendButton.click(); });
+    await settle();
+    expect(reachedAbove).toBe(false);
+    expect(hints()).toEqual([]);
 
-  /* Leaving and arriving anew shows it again. */
-  sendButton.dispatchEvent(new dom.Event("pointerout", { bubbles: true }) as unknown as Event);
-  for (const type of ["pointerover", "pointermove"]) sendButton.dispatchEvent(new dom.Event(type, { bubbles: true }) as unknown as Event);
-  await settle();
-  expect(hints()).toEqual(["Send"]);
-  flushSync(() => root.unmount());
+    /* Leaving and arriving anew shows it again. */
+    await act(async () => {
+      sendButton.dispatchEvent(new dom.Event("pointerout", { bubbles: true }) as unknown as Event);
+      for (const type of ["pointerover", "pointermove"]) sendButton.dispatchEvent(new dom.Event(type, { bubbles: true }) as unknown as Event);
+    });
+    await settle();
+    expect(hints()).toEqual(["Send"]);
+  } finally {
+    try { await act(async () => { root.unmount(); }); }
+    finally {
+      timeout.mockRestore();
+      clearTimeout.mockRestore();
+      if (previousActEnvironment === undefined) delete actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+      else actEnvironment.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+    }
+  }
 });
 
 test("a checked send-menu action is a checkbox that leaves the menu open, and a plain one still closes it", () => {
