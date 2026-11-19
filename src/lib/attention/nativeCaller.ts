@@ -109,6 +109,7 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
     if (!transcript || !relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)
       || path.basename(transcript) !== `${record.sessionId}.jsonl`) return refuse("transcript-outside-home");
     if (snapshot.nativeHostsIncomplete) return refuse("generation-hosted");
+    if (snapshot.nativeArtifact !== undefined && snapshot.nativeArtifact !== transcript) return refuse("session-changed");
     for (const entry of Object.values(snapshot.entries)) {
       if (!entry.structuredHost) continue;
       if (entry.artifactPath !== generation.path && sources.realpath(entry.artifactPath) !== transcript) continue;

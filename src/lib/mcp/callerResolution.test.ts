@@ -287,7 +287,7 @@ test.skipIf(process.platform !== "linux")("a shared transcript path gives neithe
   }
 });
 
-test.skipIf(process.platform !== "linux")("approved native generations read only their key and possible structured host aliases", () => {
+test.skipIf(process.platform !== "linux")("approved native generations read only their key and matching host artifacts", async () => {
   for (const history of [10, 1000]) {
     const f = fixture(history);
     const home = path.dirname(f.sqliteFilename);
@@ -350,15 +350,23 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
           structuredHost: { endpoint: "stdio:released", process: null, eventCursor: 1 } });
         expect(released.structuredHost.signalDomain).toBeUndefined();
 
+        const memory = { mechanism: "scope", limitBytes: 1024, unit: "delegatus-agent-fixture.scope", kills: 0, lastKill: null };
+        const exit = { pid: 42, startIdentity: "42:retained", bootEpoch: "fixture-boot" };
+        const profiles = [
+          { count: 1300, row: { ...retired, structuredHost: { ...retired.structuredHost, memory } } },
+          { count: 1050, row: { ...released, hostExitProcess: exit, structuredHost: { ...released.structuredHost, exitProcess: exit } } },
+          { count: 800, row: { ...retired, hostExitProcess: exit, structuredHost: { ...retired.structuredHost, memory } } },
+          { count: 450, row: { ...released, structuredHost: { ...released.structuredHost, memory } } },
+        ];
         const insert = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('entries',?,?,?)");
         db.transaction(() => {
-          for (let n = 1; n <= 256; n++) {
-            const sessionId = `retained-domain-${n}`;
-            insert.run(`codex:${sessionId}`, JSON.stringify({ ...retired, key: { ...key, sessionId }, artifactPath: `/fixture/retired/${n}.jsonl` }), history + 1 + n);
-          }
-          for (let n = 1; n < 1024; n++) {
-            const sessionId = `released-resume-${n}`;
-            insert.run(`codex:${sessionId}`, JSON.stringify({ ...released, key: { ...resumeKey, sessionId }, artifactPath: `/fixture/resume/${n}.jsonl` }), history + 257 + n);
+          let rowOrder = history + 10;
+          for (const [profile, { count, row }] of profiles.entries()) {
+            for (let n = 0; n < count; n++) {
+              const sessionId = `retained-profile-${profile}-${n}`;
+              insert.run(`codex:${sessionId}`, JSON.stringify({ ...row, key: { ...key, sessionId },
+                artifactPath: path.join(home, "retained", `${sessionId}.jsonl`) }), rowOrder++);
+            }
           }
         })();
       }
@@ -377,24 +385,37 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
         association: () => ({ status: "approved", proof: "fixture-approved" }), hostStatus: () => "alive",
       };
       const admitted = { kind: "admitted", conversationId: nativeId, proof: "fixture-approved" } as const;
+      await f.registry.prepareNativeCallerArtifacts();
       for (let run = 0; run < 2; run++) {
         f.reset(); realpaths = 0; checkedGenerations = 0;
         expect(resolveNativeCaller(sources)).toEqual(admitted);
-        expect(f.reads()).toBe(2);
-        expect(realpaths).toBe(5);
+        expect(f.reads()).toBe(1);
+        expect(realpaths).toBe(4);
         expect(checkedGenerations).toBe(3);
       }
       if (retiredKey && releasedResumeKey) {
-        expect(f.registry.archiveInactiveRows(4000)).toBeGreaterThanOrEqual(1281);
+        expect(f.registry.archiveInactiveRows(5000)).toBeGreaterThanOrEqual(3602);
         const archived = db.query<{ count: number }, [string]>(
           "SELECT COUNT(*) AS count FROM registry_cold WHERE collection='entries' AND row_key LIKE ?");
-        expect(archived.get("codex:retained-domain-%")?.count).toBe(257);
-        expect(archived.get("codex:released-resume-%")?.count).toBe(1023);
+        expect(archived.get("codex:retained-profile-%")?.count).toBe(3600);
         expect(archived.get(releasedResumeKey)?.count).toBe(1);
         f.reset(); realpaths = 0;
         expect(resolveNativeCaller(sources)).toEqual(admitted);
-        expect(f.reads()).toBe(2);
-        expect(realpaths).toBe(5);
+        expect(f.reads()).toBe(1);
+        expect(realpaths).toBe(4);
+        // A path indexed as missing can become a matching alias between calls.
+        // Only the filesystem changes here. The row stays archived.
+        const retained = path.join(home, "retained");
+        fs.mkdirSync(retained);
+        const committedAlias = path.join(retained, "retained-profile-1-0.jsonl");
+        const aliasTarget = path.join(home, "alias-target.jsonl");
+        fs.symlinkSync(nativePath, aliasTarget);
+        fs.symlinkSync("../alias-target.jsonl", committedAlias);
+        await f.registry.prepareNativeCallerArtifacts();
+        expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-hosted" });
+        fs.unlinkSync(aliasTarget);
+        fs.symlinkSync(unrelated, aliasTarget);
+        expect(resolveNativeCaller(sources)).toEqual(admitted);
         // A new claim or pending spawn makes either released row relevant.
         fs.symlinkSync(nativePath, alias);
         const claim = db.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.artifactPath',?,'$.claimOwner',?,'$.pendingAction',?)
@@ -442,8 +463,8 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
       db.query("DELETE FROM registry_rows WHERE collection='conversations' AND row_key=?").run(duplicate);
       expect(resolveNativeCaller(sources)).toEqual(admitted);
       if (history > 256) {
-        db.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.structuredHost',json(?))
-          WHERE collection='entries' AND row_key LIKE 'history:%'`).run(JSON.stringify(structuredHostFixture(null)));
+        db.query(`UPDATE registry_rows SET value_json=json_set(value_json,'$.structuredHost',json(?),'$.artifactPath',?)
+          WHERE collection='entries' AND row_key LIKE 'history:%'`).run(JSON.stringify(structuredHostFixture(null)), nativePath);
         realpaths = 0;
         expect(resolveNativeCaller(sources)).toMatchObject({ kind: "refused", reason: "generation-hosted" });
         expect(realpaths).toBe(4);
@@ -452,7 +473,7 @@ test.skipIf(process.platform !== "linux")("approved native generations read only
       db.close();
     }
   }
-}, 20_000);
+}, 30_000);
 
 test("ancestry attributes a retained scope's exit identity without crossing engine namespaces", () => {
   const f = fixture(10);

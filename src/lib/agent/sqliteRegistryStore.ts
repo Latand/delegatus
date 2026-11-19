@@ -25,6 +25,7 @@ import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantP
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { AgentRegistryEntry, ConversationAuthorityFacts, McpCallerRegistryRows, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
 import { sessionKeyId } from "./sessionKey";
+import { NativeCallerArtifacts } from "./nativeCallerArtifacts";
 import { drainRegistryEndingChanges, endingInstant, OWNER_ENDINGS_CURSOR, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared, RETIRED_ENDING_TRIGGERS } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 import { protectionConversation, protectionDelivery, protectionEntry, type WorktreeProtection } from "./worktreeProtection";
@@ -253,8 +254,8 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
 // resume can retain its event cursor without a domain. Neither released
 // record represents custody once the process, scope and claims are cleared.
 // A failed resume can still have a recorded process exit to reconcile.
-// A new name installs the revised predicate alongside any older reader's index.
-const nativeCallerHostIndex = "registry_caller_native_host_evidence_v2";
+const nativeCallerHostIndex = "registry_caller_native_host_artifact";
+const nativeCallerHostPath = "json_extract(value_json,'$.artifactPath')";
 const nativeCallerHost = `collection='entries'
   AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp')
   AND NOT COALESCE((
@@ -285,12 +286,47 @@ const registryCallerIndexes = declaredIndexes([
     WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid') IS NOT NULL
       AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
         OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)`,
-  `CREATE INDEX IF NOT EXISTS ${nativeCallerHostIndex} ON registry_rows(row_key) WHERE ${nativeCallerHost}`,
 ]);
 
 // An oversized identity cohort cannot establish the caller. Read one extra
 // candidate to distinguish a complete result from a truncated one.
 const MCP_CALLER_CANDIDATE_LIMIT = 256;
+const NATIVE_ARTIFACT_BATCH = 64;
+const NATIVE_ARTIFACT_JOURNAL_LIMIT = 32_768;
+
+function installNativeCallerArtifacts(db: BunDatabase): void {
+  const pathFrom = (row: "OLD" | "NEW") => `json_extract(${row}.value_json,'$.artifactPath')`;
+  const eligible = (row: "OLD" | "NEW") => `COALESCE((${nativeCallerHost
+    .replaceAll("collection", `${row}.collection`).replaceAll("value_json", `${row}.value_json`)}
+    AND json_type(${row}.value_json,'$.artifactPath')='text' AND ${pathFrom(row)}<>''),0)`;
+  const add = `INSERT INTO registry_native_host_paths(path)
+    SELECT ${pathFrom("NEW")} WHERE ${eligible("NEW")} ON CONFLICT(path) DO NOTHING;`;
+  const remove = `DELETE FROM registry_native_host_paths WHERE path=${pathFrom("OLD")} AND ${eligible("OLD")}
+    AND NOT EXISTS (SELECT 1 FROM registry_rows INDEXED BY ${nativeCallerHostIndex}
+      WHERE ${nativeCallerHost} AND ${nativeCallerHostPath}=${pathFrom("OLD")});`;
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS ${nativeCallerHostIndex} ON registry_rows(${nativeCallerHostPath}) WHERE ${nativeCallerHost};
+    CREATE TABLE registry_native_host_paths (path TEXT PRIMARY KEY) WITHOUT ROWID;
+    CREATE TABLE registry_native_host_path_changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL);
+    INSERT INTO registry_native_host_paths
+      SELECT DISTINCT ${nativeCallerHostPath} FROM registry_rows INDEXED BY ${nativeCallerHostIndex}
+      WHERE ${nativeCallerHost} AND json_type(value_json,'$.artifactPath')='text' AND ${nativeCallerHostPath}<>'';
+    CREATE TRIGGER registry_native_host_paths_insert AFTER INSERT ON registry_rows WHEN ${eligible("NEW")} BEGIN ${add} END;
+    CREATE TRIGGER registry_native_host_paths_delete AFTER DELETE ON registry_rows WHEN ${eligible("OLD")} BEGIN ${remove} END;
+    CREATE TRIGGER registry_native_host_paths_update AFTER UPDATE ON registry_rows
+      WHEN (${eligible("OLD")} OR ${eligible("NEW")})
+        AND (${pathFrom("OLD")} IS NOT ${pathFrom("NEW")} OR ${eligible("OLD")} IS NOT ${eligible("NEW")})
+      BEGIN ${remove} ${add} END;
+    ${["INSERT", "DELETE"].map(event => `CREATE TRIGGER registry_native_host_path_changes_${event.toLowerCase()}
+      AFTER ${event} ON registry_native_host_paths BEGIN
+        INSERT INTO registry_native_host_path_changes(path) VALUES (${event === "INSERT" ? "NEW" : "OLD"}.path);
+        DELETE FROM registry_native_host_path_changes WHERE seq <= last_insert_rowid()-${NATIVE_ARTIFACT_JOURNAL_LIMIT};
+      END;`).join("\n")}
+    INSERT INTO registry_meta(key,value) VALUES ('native_caller_artifacts_version','1');
+  `);
+}
+
+type NativeArtifactRead = { index: NativeCallerArtifacts; after: string | null; sequence: number };
 
 /** State and recipient are equality seeks before the keyset bound and LIMIT. */
 export function openDeliverySelection(conversationId: string, state: string, after: string, limit: number) {
@@ -1362,6 +1398,8 @@ function trackMutableJson<T>(
 
 export class SqliteAgentRegistryStore {
   private readonly db: BunDatabase;
+  private nativeArtifactRead: NativeArtifactRead | null = null;
+  private nativeArtifactPreparation: Promise<void> | null = null;
   /** One prepared snapshot owner, on its own read connection. The writer's
       keyed transactions remain available while it yields. */
   private preparedReader: SqliteAgentRegistryStore | null = null;
@@ -1821,7 +1859,15 @@ export class SqliteAgentRegistryStore {
     /* The import decides again under its own write lock; an imported
        registry never becomes unimported, so this read spares the lock. */
     if (!this.imported()) this.importFirstBoot(options.initialSnapshot, options.verifyImport);
-    if (options.allowArchiveMigration !== false) this.prepareCallerIndexes();
+    if (options.allowArchiveMigration !== false) {
+      this.prepareCallerIndexes();
+      if (this.meta("native_caller_artifacts_version") !== "1") {
+        assertStateStartupMutation(path.dirname(filename), "native MCP caller artifacts");
+        withStartupTransaction(this.db, () => {
+          if (this.meta("native_caller_artifacts_version") !== "1") installNativeCallerArtifacts(this.db);
+        });
+      }
+    }
     if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_caller_roots'").get()) {
       registryCallerIndexes.install(this.db, path.dirname(filename));
     }
@@ -1924,8 +1970,68 @@ export class SqliteAgentRegistryStore {
     });
   }
 
-  /** A native Claude generation is engine-qualified. Only structured hosts
-      can conflict with its transcript, including hosts recorded under aliases. */
+  private resetNativeArtifacts(): void {
+    const previous = this.nativeArtifactRead;
+    this.nativeArtifactRead = null;
+    previous?.index.close();
+  }
+
+  // Caller of each slice pins the SQL projection and its journal together.
+  private advanceNativeArtifacts(): boolean {
+    const { db } = this;
+    if (!this.nativeArtifactRead) {
+      const sequence = db.query<{ seq: number }, []>(
+        "SELECT COALESCE(MAX(seq),0) AS seq FROM registry_native_host_path_changes").get()!.seq;
+      this.nativeArtifactRead = { index: new NativeCallerArtifacts(), after: "", sequence };
+    }
+    const state = this.nativeArtifactRead;
+    if (state.after !== null) {
+      const paths = db.query<{ path: string }, [string, number]>(
+        "SELECT path FROM registry_native_host_paths WHERE path>? ORDER BY path LIMIT ?").all(state.after, NATIVE_ARTIFACT_BATCH);
+      for (const { path } of paths) state.index.add(path);
+      state.after = paths.length < NATIVE_ARTIFACT_BATCH ? null : paths.at(-1)!.path;
+    }
+    const first = db.query<{ seq: number }, []>(
+      "SELECT COALESCE(MIN(seq),0) AS seq FROM registry_native_host_path_changes").get()!.seq;
+    if (first > state.sequence + 1) throw new Error("native caller artifact journal no longer covers the lookup");
+    const changes = db.query<{ seq: number; path: string; present: number }, [number, number]>(`
+      SELECT c.seq,c.path,EXISTS(SELECT 1 FROM registry_native_host_paths p WHERE p.path=c.path) AS present
+      FROM registry_native_host_path_changes c WHERE seq>? ORDER BY seq LIMIT ?`).all(state.sequence, NATIVE_ARTIFACT_BATCH);
+    for (const { seq, path, present } of changes) {
+      if (present) state.index.add(path);
+      else state.index.delete(path);
+      state.sequence = seq;
+    }
+    const current = state.index.refresh(NATIVE_ARTIFACT_BATCH) || state.index.refresh(NATIVE_ARTIFACT_BATCH);
+    return state.after === null && changes.length < NATIVE_ARTIFACT_BATCH && current;
+  }
+
+  /** Preparation is shared by native calls and yields between fixed-size
+      batches. The synchronous selector always checks new changes itself. */
+  async prepareNativeCallerArtifacts(): Promise<void> {
+    if (process.platform !== "linux" || this.closed) return;
+    if (this.nativeArtifactPreparation) return this.nativeArtifactPreparation;
+    const work = async () => {
+      const deadline = performance.now() + 5_000;
+      let restarted = false;
+      while (!this.closed && performance.now() < deadline) {
+        try {
+          if (performanceSpans.sync("registry.prepare.slice", () => this.withCallerRead(() => this.advanceNativeArtifacts()))) return;
+        } catch {
+          this.resetNativeArtifacts();
+          if (restarted) return;
+          restarted = true;
+        }
+        await yieldToRuntime();
+      }
+    };
+    this.nativeArtifactPreparation = work();
+    try { await this.nativeArtifactPreparation; }
+    finally { this.nativeArtifactPreparation = null; }
+  }
+
+  /** A native Claude generation is engine-qualified. Seek the recorded and
+      canonical spellings, including structured reservations without a PID. */
   mcpNativeCallerSnapshot(sessionId: string, configuredRootId: string | null) {
     return this.readMcpCallerSnapshot(configuredRootId, () => {
       const claims = this.db.query<{ conversation_id: string }, [string]>(
@@ -1939,12 +2045,36 @@ export class SqliteAgentRegistryStore {
       if (!value) return snapshot;
       snapshot.conversations = this.normalizePartial({ version: 2, entries: {}, receipts: {}, conversations: { [id]: value } }).conversations;
 
-      // The archive preserves the same payload in registry_rows. A structured
-      // reservation is relevant even without a PID. Canonical path comparison
-      // must also see entries whose recorded path differs from the transcript.
-      const hosts = this.db.query<{ row_key: string; value_json: string }, [number]>(`
-        SELECT row_key,value_json FROM registry_rows INDEXED BY ${nativeCallerHostIndex}
-        WHERE ${nativeCallerHost} LIMIT ?`).all(MCP_CALLER_CANDIDATE_LIMIT + 1);
+      const artifact = snapshot.conversations[id]?.generations.find(row => row.id === sessionId)?.path;
+      if (!artifact) return snapshot;
+      let canonical: string;
+      try { canonical = fs.realpathSync(artifact); }
+      catch {
+        snapshot.nativeHostsIncomplete = true;
+        return snapshot;
+      }
+      try {
+        if (!this.advanceNativeArtifacts()) {
+          snapshot.nativeHostsIncomplete = true;
+          return snapshot;
+        }
+      } catch {
+        this.resetNativeArtifacts();
+        snapshot.nativeHostsIncomplete = true;
+        return snapshot;
+      }
+      const aliases = this.nativeArtifactRead!.index.aliases(canonical);
+      if (aliases && aliases.size > MCP_CALLER_CANDIDATE_LIMIT) {
+        snapshot.nativeHostsIncomplete = true;
+        return snapshot;
+      }
+      const spellings = new Set([artifact, canonical, ...(aliases ?? [])]);
+      // registry_rows retains the current version of every archived entry.
+      const hosts = this.db.query<{ row_key: string; value_json: string }, [string, number]>(`
+        SELECT row_key,value_json FROM json_each(?) AS alias
+        CROSS JOIN registry_rows INDEXED BY ${nativeCallerHostIndex}
+        WHERE ${nativeCallerHost} AND ${nativeCallerHostPath}=alias.value
+        LIMIT ?`).all(JSON.stringify([...spellings]), MCP_CALLER_CANDIDATE_LIMIT + 1);
       this.onRowPayloadRead?.("entries", hosts.length);
       if (hosts.length > MCP_CALLER_CANDIDATE_LIMIT) {
         snapshot.nativeHostsIncomplete = true;
@@ -1952,6 +2082,7 @@ export class SqliteAgentRegistryStore {
       }
       const entries = Object.fromEntries(hosts.map(row => [row.row_key, this.parseRow("entries", row.row_key, row.value_json, true)]));
       snapshot.entries = this.normalizePartial({ version: 2, receipts: {}, entries }).entries;
+      snapshot.nativeArtifact = canonical;
       return snapshot;
     });
   }
@@ -1966,15 +2097,22 @@ export class SqliteAgentRegistryStore {
   private readMcpCallerSnapshot(configuredRootId: string | null, select: () => McpCallerRegistryRows | null): {
     snapshot: McpCallerRegistryRows | null; rootConversationId: string | null;
   } {
-    this.db.exec("BEGIN");
-    try {
+    return this.withCallerRead(() => {
       const snapshot = select();
       const configured = snapshot && configuredRootId
         && this.db.query("SELECT 1 FROM registry_rows WHERE collection='conversations' AND row_key=?").get(configuredRootId);
       const rootConversationId = !snapshot ? null : configured ? configuredRootId : this.db.query<{ conversation_id: string }, []>(
         "SELECT conversation_id FROM registry_caller_roots ORDER BY updated_at DESC,row_order DESC LIMIT 1").get()?.conversation_id ?? null;
-      this.db.exec("COMMIT");
       return { snapshot, rootConversationId };
+    });
+  }
+
+  private withCallerRead<T>(read: () => T): T {
+    this.db.exec("BEGIN");
+    try {
+      const value = read();
+      this.db.exec("COMMIT");
+      return value;
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
@@ -2016,6 +2154,7 @@ export class SqliteAgentRegistryStore {
       this.preserveIssuedSnapshots();
     } finally {
       this.closed = true;
+      this.resetNativeArtifacts();
       this.writerSnapshotCache = null;
       this.writerSnapshotStarted = false;
       try { this.preparedReader?.close(); }
@@ -2047,6 +2186,7 @@ export class SqliteAgentRegistryStore {
   }
 
   private onDatabaseReopened(db: BunDatabase, previousDb?: BunDatabase): void {
+    this.resetNativeArtifacts();
     if (previousDb) {
       this.snapshotReadDatabase = previousDb;
       try { this.preserveIssuedSnapshots(); }

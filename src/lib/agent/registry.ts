@@ -1058,6 +1058,7 @@ export interface RegistryFile {
 export type McpCallerRegistryRows = Pick<RegistryFile, "conversations" | "entries"> & {
   nativeGenerationAmbiguous?: true;
   nativeHostsIncomplete?: true;
+  nativeArtifact?: string;
 };
 
 /** Compact read model for resolving the bounded `spawn:<launchId>` paths that
@@ -7290,6 +7291,12 @@ export class AgentRegistry {
     }
     const snapshot = this.readOnlySnapshot();
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
+  }
+
+  async prepareNativeCallerArtifacts(): Promise<void> {
+    if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
+      await this.sqliteStore?.prepareNativeCallerArtifacts();
+    }
   }
 
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
