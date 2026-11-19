@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Heavy commands wait for low CPU pressure and a free shared machine slot in
-# the same pass, then run in their own scope in the CPU work slice
+# Heavy commands wait for CPU queue readiness and a free shared machine slot,
+# then run in their own scope in the CPU work slice
 # (docs/design/cpu-placement.md). The slot lock files are the ones the installed
 # /var/tmp/llv-gate uses, so both gates count against one set of slots.
 set -euo pipefail
@@ -203,24 +203,66 @@ fi
 # Propagate helper failures; only a lost slot race retries.
 claim() {
   local code=0
-  "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid" || code=$?
+  "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid" "$@" || code=$?
   if [[ $code != 0 && $code != 75 ]]; then exit "$code"; fi
   return "$code"
 }
-queue_key="command:$$:$RANDOM:$RANDOM"
-queued_at=$(date +%s)
+try_lock() {
+  local code=0
+  if command -v flock >/dev/null; then flock -n "$1" || code=$?
+  else "${LLV_GATE_BUN:-bun}" "$admission" --lock-fd "$1" || code=$?; fi
+  if [[ $code != 0 && $code != 1 ]]; then exit "$code"; fi
+  return "$code"
+}
+# Keep the claim across the owned runner's execution and cleanup, even where
+# exec cannot preserve the shell's native PID. The runner inherits the Unix
+# lock descriptors for its own lifetime and for nested-slot proof.
+run_claimed() {
+  local runner="" signal="" result
+  trap 'signal=TERM; if [[ -n $runner ]]; then kill -TERM "$runner" 2>/dev/null || true; fi' TERM
+  trap 'signal=INT; if [[ -n $runner ]]; then kill -INT "$runner" 2>/dev/null || true; fi' INT
+  end_cpu_wait
+  run "$@" <&0 &
+  runner=$!
+  if [[ -n $signal ]]; then kill -s "$signal" "$runner" 2>/dev/null || true; fi
+  while :; do
+    result=0; wait "$runner" || result=$?
+    kill -0 "$runner" 2>/dev/null || break
+  done
+  runner=""
+  "${LLV_GATE_BUN:-bun}" "$admission" --release-slot "$queue_key" "$owner_pid" || {
+    echo "gate-slot: could not release the completed command's slot" >&2
+    if [[ $result == 0 ]]; then result=1; fi
+  }
+  exit "$result"
+}
+queue_key="command:bounded:drained:$$:$RANDOM:$RANDOM"
 while :; do
-  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid" "$queued_at"
-  if ! command -v flock >/dev/null; then
-    if claim; then end_cpu_wait; run "$@"; fi
+  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
+  if [[ $OSTYPE == msys || $OSTYPE == cygwin ]]; then
+    # Native Windows uses the shared queue's atomic claim and the native
+    # wrapper PID as its slot proof.
+    if claim portable; then run_claimed "$@"; fi
   else
-    for ((i=1; i<=slots; i++)); do
-      exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
-      if flock -n 9; then
-        if claim; then end_cpu_wait; run "$@"; fi
-      fi
-      exec 9>&-
-    done
+    # Serialize current final claims. The cap lock identifies this particular
+    # slot's protocol and stays held alongside fd 9 for the runner's lifetime.
+    exec 8>"$lock_dir/llv-heavy-gate.claim.lock"
+    if try_lock 8; then
+      for ((i=1; i<=slots; i++)); do
+        exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
+        if try_lock 9; then
+          exec 7>"$lock_dir/llv-heavy-gate.slot$i.cap$slots.lock"
+          if try_lock 7 && claim "$i"; then
+            exec 8>&-
+            run_claimed "$@"
+          fi
+          exec 9>&- 7>&-
+          break
+        fi
+        exec 9>&-
+      done
+    fi
+    exec 8>&-
   fi
   sleep "$poll"
 done
