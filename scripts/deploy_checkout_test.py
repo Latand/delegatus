@@ -159,6 +159,87 @@ class LoggedFailures(unittest.TestCase):
         self.assertTrue(deploy.ready(result["serving"], TARGET))
         self.assertTrue(switch.published)
 
+    def test_delayed_start_settlement_invalidates_a_pre_settlement_serving_witness(self):
+        switch = Switch()
+        switch.relocation = {"released": True, "placement": "placed", "started": False,
+                             "stopSubmitted": True, "startAttempts": 1, "diagnostics": []}
+        switch.unit = "synthetic-viewer.service"
+        seen_serving = False
+        recovery_owners = []
+
+        def serving():
+            nonlocal seen_serving
+            switch.samples.append(switch.clock.now())
+            if switch.relocation["started"]:
+                return {"launcher": {"sha": OLD}, "viewer": {"sha": OLD}, "runtimeHost": {"sha": OLD},
+                        "checks": dict.fromkeys(["http", "runtimeSocket", "mcp", "service", "placement"], True)}
+            seen_serving = True
+            return {**{role: {"sha": TARGET, "since": "2026-01-01T00:00:00Z", "healthy": True}
+                       for role in ["launcher", "viewer", "runtimeHost"]},
+                    "checks": dict.fromkeys(["http", "runtimeSocket", "mcp", "service", "placement"], True)}
+
+        def recover_start(**_kwargs):
+            recovery_owners.append(os.getpid())
+            if seen_serving:
+                # A submitted no-block start settles without another submission.
+                switch.relocation["started"] = True
+
+        switch.serving = serving
+        switch.recover_start = recover_start
+        result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=5)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertTrue(recovery_owners)
+        self.assertEqual(set(recovery_owners), {os.getpid()})
+        self.assertEqual(switch.relocation["startAttempts"], 1)
+        self.assertEqual(result.get("recovery", {}).get("state"), "complete")
+        self.assertEqual(result["serving"]["viewer"]["sha"], OLD)
+
+    def test_inventory_is_reread_after_recovery_during_its_read(self):
+        switch = Switch()
+        events = []
+        recovery_done = False
+        cut = [{"conversationId": "cut-after-recovery", "stage": {"pipelineId": "synthetic", "stageId": "build", "attempt": 1}}]
+
+        def owner_check(_cutoff=None):
+            nonlocal recovery_done
+            if "interrupted:first" in events and not recovery_done:
+                recovery_done = True
+                switch.cut = cut
+                events.append("owner-recovery")
+                return True
+            return False
+
+        def collect(_adapter, lanes, result, _cutoff, owner_check=None):
+            for kind, _inputs, *_rest in lanes:
+                events.append(kind + (":final" if recovery_done else ":first"))
+                if kind == "serving":
+                    result.accept(("serving", switch.serving()))
+                elif kind == "interrupted":
+                    result.accept(("interrupted", (list(switch.cut), [])))
+                    if not recovery_done:
+                        owner_check(_cutoff)
+
+        sample = deploy.collect_sample(switch, [], [], TARGET, "cut-boundary", 0, 8,
+                                       collect=collect, owner_check=owner_check)
+        recovery_at = events.index("owner-recovery")
+        self.assertEqual(events[recovery_at + 1:], ["serving:final", "interrupted:final"])
+        self.assertEqual(sample.interrupted, cut)
+        self.assertEqual(sample.unreadable, [])
+        self.assertFalse(sample.incomplete)
+
+    def test_cut_inventory_that_overruns_the_sample_deadline_keeps_its_reason(self):
+        switch = Switch()
+        def overdue_inventory(_since, _hosts):
+            switch.clock.sleep(6)
+            return [], []
+        switch.interrupted = overdue_inventory
+        result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertIsNone(result["interrupted"])
+        self.assertEqual(result["interruptedUnreadable"], ["interrupted:sample-deadline"])
+        self.assertTrue(deploy.ready(result["serving"], TARGET))
+
     def test_exited_old_process_after_pointer_publication_still_samples_and_passes(self):
         switch = Switch()
         switch.process_error = FileNotFoundError("old process exited during restart")
@@ -348,6 +429,27 @@ class AdapterContracts(unittest.TestCase):
             rows = deploy.complete_census(deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3))
             self.assertEqual(len(rows), 1)
             self.assertIsNone(rows[0]["pipeline"])
+
+    def test_legacy_target_census_without_lifecycle_remains_usable_for_preflight(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
+        with tempfile.TemporaryDirectory(prefix="census-legacy-lifecycle-") as root:
+            release = pathlib.Path(root)
+            (release / "scripts").mkdir()
+            # Shape emitted by the pre-lifecycle target producer: a complete,
+            # nonempty transcript-backed busy row with no lifecycle property.
+            answer = {"targetRevision": TARGET, "registryRevision": 3, "observedAt": "2026-01-01T00:00:00Z",
+                      "conversations": [{"conversationId": "conversation_legacy", "host": {"state": "alive", "kind": "structured", "pid": 104},
+                                         "turnState": "busy", "evidenceSource": "transcript", "pipeline": None}],
+                      "unselectedCount": 0, "undescribedHostCount": 0,
+                      "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                                    "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}
+            (release / "scripts/protected-host-census.ts").write_text(
+                "console.log(" + json.dumps(json.dumps(answer)) + ");")
+            captured = deploy.protected_host_census(release, CENSUS_BUN, release, TARGET, 3)
+            rows = deploy.complete_census(captured)
+            self.assertEqual(rows, answer["conversations"])
+            host = {"stageId": "build", "attempt": 1}
+            self.assertEqual(deploy.stage_outcome(host, [{"n": 1, "state": "running"}], rows[0])["outcome"], "unknown")
 
     def test_census_custody_fields_validate_real_child_output_and_allow_older_releases(self):
         with tempfile.TemporaryDirectory(prefix="census-custody-") as root:

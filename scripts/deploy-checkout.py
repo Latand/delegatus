@@ -114,7 +114,7 @@ def protected_host_census(release, bun, state, target, timeout):
                     or host.get("kind") not in ["structured", "tmux", "headless", "none"]
                     or (host.get("state") == "alive" and (type(host.get("pid")) is not int or host["pid"] <= 0))
                     or row.get("turnState") not in ["busy", "idle", "unknown"]
-                    or row.get("lifecycle") not in ["starting", "running", "waiting", "stalled", "completed", "failed", "blocked", "gone"]
+                    or ("lifecycle" in row and row.get("lifecycle") not in ["starting", "running", "waiting", "stalled", "completed", "failed", "blocked", "gone"])
                     or row.get("evidenceSource") not in ["transcript", "projection", "unreadable"]
                     or (row.get("conversationId") is not None and not isinstance(row["conversationId"], str))
                     or (pipeline is not None and (not isinstance(pipeline, dict)
@@ -264,6 +264,7 @@ def observe_switch(adapter, target, samples, interval, timeout):
                         and now - last_owner_start < 5):
                     return False
                 attempts = relocation.get("startAttempts", 0)
+                was_started = relocation.get("started") is True
                 try:
                     now_wall = time.monotonic()
                     recovery_deadline = min(cutoff, now_wall + 0.8) if cutoff is not None else now_wall + 0.8
@@ -271,9 +272,10 @@ def observe_switch(adapter, target, samples, interval, timeout):
                 except Exception as error:
                     diagnostics.append("sample-recovery:" + type(error).__name__)
                 changed = relocation.get("startAttempts", 0) != attempts
-                if changed:
+                settled = not was_started and relocation.get("started") is True
+                if changed or settled:
                     last_owner_start = adapter.clock.now()
-                recovered = changed and relocation.get("started") is True
+                recovered = (changed or settled) and relocation.get("started") is True
                 recovered_during_sample |= recovered
                 return recovered
             owner_check()
@@ -567,11 +569,11 @@ def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
 def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collect=run_evidence_workers, owner_check=None):
     deadline = adapter.clock.now() + timeout
     sample = EvidenceSample(hosts)
-    recovered = False
+    recoveries = 0
     def check_owner(cutoff=None):
-        nonlocal recovered
+        nonlocal recoveries
         if owner_check and owner_check(cutoff):
-            recovered = True
+            recoveries += 1
     inventory_reserve = min(5, timeout / 10) if since else 0
     protected_cutoff = deadline - timeout / 3
     serving_cutoff = deadline - inventory_reserve
@@ -587,13 +589,54 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
     lanes.append(("serving", [old, target], serving_cutoff))
     collect(adapter, lanes, sample, serving_cutoff, owner_check=check_owner)
     check_owner(deadline)
-    # Read the cut inventory after the final serving observation. Boot can
-    # still record cuts while the serving checks are waiting for readiness.
     if since:
-        collect(adapter, [("interrupted", [since, hosts])], sample, deadline, owner_check=check_owner)
-        check_owner(deadline)
-    if recovered:
-        collect(adapter, [("serving", [old, target])], sample, deadline, owner_check=check_owner)
+        # A recovery can happen while either the serving check or inventory is
+        # in flight. Each inventory must follow a healthy serving witness for
+        # the latest settled generation; if recovery races the inventory, read
+        # both again under the same sample deadline.
+        witness_generation = recoveries if recoveries == 0 and ready(sample.serving, target) else -1
+        while adapter.clock.now() < deadline:
+            if witness_generation != recoveries:
+                before = recoveries
+                collect(adapter, [("serving", [old, target])], sample, deadline, owner_check=check_owner)
+                check_owner(deadline)
+                if not ready(sample.serving, target):
+                    sample.incomplete = True
+                    sample.unavailable(("interrupted", [since, hosts]), "serving-witness-unavailable")
+                    break
+                if recoveries != before:
+                    continue
+                witness_generation = recoveries
+            inventory_generation = recoveries
+            collect(adapter, [("interrupted", [since, hosts])], sample, deadline, owner_check=check_owner)
+            check_owner(deadline)
+            if recoveries == inventory_generation:
+                if sample.interrupted is None:
+                    sample.incomplete = True
+                    if sample.unreadable == ["interrupted:not-observed"]:
+                        sample.unavailable(("interrupted", [since, hosts]),
+                                           "sample-deadline" if adapter.clock.now() >= deadline else "inventory-incomplete")
+                elif sample.unreadable:
+                    sample.incomplete = True
+                break
+        else:
+            sample.incomplete = True
+            sample.unavailable(("interrupted", [since, hosts]), "sample-deadline")
+        if adapter.clock.now() >= deadline and (sample.interrupted is None or sample.unreadable):
+            sample.incomplete = True
+    elif recoveries:
+        witness_generation = -1
+        while adapter.clock.now() < deadline and witness_generation != recoveries:
+            before = recoveries
+            collect(adapter, [("serving", [old, target])], sample, deadline, owner_check=check_owner)
+            check_owner(deadline)
+            if not ready(sample.serving, target):
+                sample.incomplete = True
+                break
+            if recoveries == before:
+                witness_generation = recoveries
+        if witness_generation != recoveries:
+            sample.incomplete = True
     return sample
 
 
@@ -1053,9 +1096,9 @@ def complete_census(answer):
             or any(selection.get(key, 0) for key in ["projected", "unreadable"])
             or any(row.get("evidenceSource") != "transcript" for row in answer.get("conversations", []))):
         raise RuntimeError("protected activity capture incomplete")
-    if any(row.get("lifecycle") not in ["starting", "running", "waiting", "stalled", "completed", "failed", "blocked", "gone"]
+    if any("lifecycle" in row and row.get("lifecycle") not in ["starting", "running", "waiting", "stalled", "completed", "failed", "blocked", "gone"]
            for row in answer.get("conversations", [])):
-        raise RuntimeError("protected lifecycle evidence incomplete")
+        raise RuntimeError("protected activity capture incomplete")
     return answer["conversations"]
 
 
