@@ -69,7 +69,7 @@ test.skipIf(!managed).each([
   });
   const unit = `delegatus-publication-test-${randomUUID()}.service`;
   const slice = `llvpublicationtest${randomUUID().slice(0, 8)}.slice`;
-  const viewerEnv: NodeJS.ProcessEnv = {
+  const viewerEnv: Partial<NodeJS.ProcessEnv> = {
     // A fresh Viewer has its own inputs and no outer runner's receipt or slot.
     ...Object.fromEntries(Object.entries(env).filter(([name]) => /^(?:HOOK_.+|LLV_GATE_PUBLICATION_.+|LLV_GATE_(?:BUN|CHECK_ENV|CHECK_ADMISSION_FILE|EXECUTION|LOCK_DIR|PUSH_HEAD)|PATH|HOME|XDG_CONFIG_HOME|TMPDIR|LLV_STATE_DIR|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS)$/.test(name))),
     DELEGATUS_AGENT_CPU: mode, DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_SLICE: slice, LLV_GATE_RUNNER: "off",
