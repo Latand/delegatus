@@ -450,7 +450,6 @@ export interface StructuredHostRetirementSubject {
   structuredHostOperationReceiptState: SpawnReceipt["state"] | null;
   structuredHostOperationReceiptAbandoned: boolean;
   settledOperation?: SettledRetirementOperation;
-  operationRefusal?: string;
   nativeTurnSettled?: boolean;
   abandonedTurn?: boolean;
   /** Undetermined when the handoff queue could not be read: an unreadable
@@ -619,14 +618,17 @@ const CLAUSE_CHECKS: Record<
     (count) => (count > 0 ? `${count} undelivered handoff entr(ies) name this key` : null)),
 
   "no-open-operation": (subject) => {
-    if (subject.pendingAction !== null && !subject.settledOperation) return refuses(`a ${subject.pendingAction} action is pending`);
+    if (subject.pendingAction !== null && !subject.settledOperation) {
+      const stamp = subject.structuredHostOperationId ? ` for operation ${subject.structuredHostOperationId}` : "";
+      return refuses(`a ${subject.pendingAction} action is pending${stamp}`);
+    }
     if (subject.structuredHostOperationId !== null
       && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState ?? "")
       && !subject.settledOperation
       && (seatWasRevoked(subject) && (subject.key.engine === "claude" || subject.key.engine === "codex")
         || !subject.structuredHostOperationReceiptAbandoned
         && !(subject.nativeTurnSettled && subject.structuredHostOperationReceiptState === null))) {
-      return refuses(subject.operationRefusal ?? `operation ${subject.structuredHostOperationId} has no settlement proof (registry: ${subject.structuredHostOperationReceiptState ?? "absent"})`);
+      return refuses(`operation ${subject.structuredHostOperationId} has no settlement proof (registry: ${subject.structuredHostOperationReceiptState ?? "absent"})`);
     }
     return subject.openOperations > 0
       ? refuses(`${subject.openOperations} spawn receipt(s) are pending or non-terminal`)

@@ -21,7 +21,7 @@ const idleMs = 3_600_000;
 
 for (const engine of ["claude", "codex"] as const) {
   test.skipIf(process.platform !== "linux").each([
-    "dead-row", "absent-row", "live-row", "other-live-row", "ambiguous-owner", "open-journal",
+    "dead-row", "absent-row", "live-row", "other-live-row", "ambiguous-owner", "open-journal", "probe-limit",
     "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission", "missing-launch-proof",
   ] as const)(`${engine} unregistered process reconciliation: %s`, async condition => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-orphan-"));
@@ -78,10 +78,24 @@ for (const engine of ["claude", "codex"] as const) {
           entry.claimOwner = `structured-host:${JSON.stringify({ pid: waiter.pid, startIdentity: waiter.startIdentity })}`;
         }
       }
+      if (condition === "probe-limit") {
+        for (let index = 0; index < 64; index++) {
+          const sessionId = `fixture-unrelated-${index}`;
+          file.entries[`${engine}:${sessionId}`] = { ...entry, key: { engine, sessionId },
+            artifactPath: path.join(root, `${sessionId}.jsonl`), hostExitProcess: undefined };
+        }
+      }
       const filename = path.join(root, "registry.json");
-      const options = { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") } as const;
+      let entryReads = 0;
+      const options = { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite"),
+        onSqliteRowPayloadRead: (collection: string, count: number) => {
+          if (collection === "entries") entryReads += count;
+        },
+      } as const;
       fs.writeFileSync(filename, JSON.stringify(file));
       registry = new AgentRegistry(filename, undefined, undefined, options);
+      registry.agentStateRead(() => undefined);
+      entryReads = 0;
       journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true, now: () => now });
       journal.append({ scope: { type: "session", id: FIXTURE_CONVERSATION }, kind: "session-status", payload: {
         conversationId: FIXTURE_CONVERSATION, sessionKey: key, artifactPath, cwd: root,
@@ -89,7 +103,7 @@ for (const engine of ["claude", "codex"] as const) {
         host: condition === "other-runtime-work" ? "hosted" : "unhosted",
         turn: "idle", activeTurnId: null, provenance: "structured",
       } });
-      if (condition === "open-journal") journal.executeOperation({ kind: "spawn", operationId: launchId, idempotencyKey: launchId,
+      if (condition === "open-journal" || condition === "probe-limit") journal.executeOperation({ kind: "spawn", operationId: launchId, idempotencyKey: launchId,
         conversationId: FIXTURE_CONVERSATION, engine, cwd: root, prompt: "fixture" });
       if (condition === "other-runtime-work") {
         journal.executeOperation({ kind: "send", operationId: "fixture-pending-send",
@@ -110,11 +124,24 @@ for (const engine of ["claude", "codex"] as const) {
       }
       let ready = true;
       let sessionReads = 0;
+      let pulled = 0;
+      let operationReads = 0;
       const ports = {
         registry, idleMs, now: () => now, ready: () => ready, noLocalWork: () => true, treeIdle: treeHasOnlyMcpChildren,
-        pids: (async function* () { yield peerIdentity.pid; yield identity.pid; })(),
+        pids: (async function* () {
+          const candidates = condition === "probe-limit"
+            ? Array<number>(5).fill(identity.pid)
+            : [peerIdentity.pid, identity.pid];
+          for (const pid of candidates) {
+            pulled++;
+            yield pid;
+          }
+        })(),
         client: {
-          operationStatus: async (id: string) => journal!.currentRetryResult(id),
+          operationStatus: async (id: string) => {
+            operationReads++;
+            return journal!.currentRetryResult(id);
+          },
           readSession: async (request: { conversationId?: string; artifactPath?: string }) => {
             if (++sessionReads === 1) {
               if (condition === "replacement-owner") activeRegistry.upsert({ ...entry, status: "live",
@@ -129,6 +156,11 @@ for (const engine of ["claude", "codex"] as const) {
         },
       };
       const outcomes = await reconcileUnregisteredAgentProcesses(ports);
+      if (condition === "probe-limit") {
+        expect(operationReads).toBe(4);
+        expect(pulled).toBe(4);
+        expect(entryReads).toBeLessThan(32);
+      }
       if (["dead-row", "absent-row", "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission"].includes(condition)) {
         expect(sessionReads).toBeGreaterThan(0);
       }

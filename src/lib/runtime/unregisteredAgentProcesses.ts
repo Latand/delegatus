@@ -44,6 +44,21 @@ async function* procPage(): AsyncGenerator<number> {
   }
 }
 
+async function* admittedPids(source: AsyncIterable<number>, admit: () => boolean): AsyncGenerator<number> {
+  const iterator = source[Symbol.asyncIterator]();
+  try {
+    // Check before pulling a PID. Dropping the next PID after exhausting
+    // probes can skip the same process every time the directory wraps.
+    while (admit()) {
+      const next = await iterator.next();
+      if (next.done || !admit()) return;
+      yield next.value;
+    }
+  } finally {
+    await iterator.return?.();
+  }
+}
+
 function executableSignature(pid: number): string | null {
   try {
     return fileSignature(fs.statSync(`/proc/${pid}/exe`, { bigint: true }));
@@ -217,8 +232,8 @@ export async function reconcileUnregisteredAgentProcesses(ports: OrphanSweepPort
   }
   if (ancestor !== null) return [];
   let probes = 0;
-  for await (const pid of ports.pids ?? procPage()) {
-    if (!ports.ready() || probes >= PROBE_LIMIT) break;
+  for await (const pid of admittedPids(ports.pids ?? procPage(), () => ports.ready() && probes < PROBE_LIMIT)) {
+    if (!ports.ready()) break;
     if (!Number.isSafeInteger(pid) || pid <= 1 || protectedPids.has(pid)) continue;
     const native = captureProcessIdentity(pid);
     const binding = readHostExitWriterBinding(native);

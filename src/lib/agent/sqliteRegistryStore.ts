@@ -511,13 +511,9 @@ const structuredProcessReaders = fileReaders.structuredProcess ??= new WeakMap()
 /** An extant process slot, including scope custody on a terminal row, belongs
  * to registered host recovery. Never seize it through orphan discovery. */
 export function registryHasStructuredProcess(file: RegistryFile, pids: readonly number[]): boolean {
-  const read = structuredProcessReaders.get(file);
-  if (read) return read(pids);
-  return Object.values(file.entries).some(entry => {
-    const host = entry.structuredHost;
-    return !!host && (pids.includes(host.process?.pid ?? -1)
-      || !!(host.scope || host.memory?.unit) && pids.includes(host.exitProcess?.pid ?? -1));
-  });
+  // A caller without a keyed view cannot prove vacancy within the sweep's
+  // bound. Leave custody with the registry until an indexed read is available.
+  return structuredProcessReaders.get(file)?.(pids) ?? true;
 }
 
 /**
@@ -4260,18 +4256,6 @@ export class SqliteAgentRegistryStore {
     const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;
     const pinnedOwners = this.changesReady ? this.pinnedRowKeys(file, "deliveryOperationOwners", coldGrantChangeId, identity) : null;
     const pinnedEntries = this.changesReady ? this.pinnedRowKeys(file, "entries", coldGrantChangeId, identity) : null;
-    structuredProcessReaders.set(file, pids => {
-      const occupied = this.db.query<{ present: number }, [number, number]>(`
-        SELECT 1 AS present FROM registry_rows
-          WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.process.pid')=?
-        UNION ALL
-        SELECT 1 AS present FROM registry_rows
-          WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid')=?
-            AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
-              OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)
-        LIMIT 1`);
-      return pids.some(pid => occupied.get(pid, pid) !== null);
-    });
     pageReaders.set(file, (collection, after, limit, filter) => {
       if (this.changeId() !== coldGrantChangeId || databaseFileIdentity(this.filename) !== identity)
         throw new DatabaseReplacedError("registry page needs a fresh snapshot");
@@ -5874,6 +5858,21 @@ export class SqliteAgentRegistryStore {
         } finally { statement.finalize(); }
       }
       return false;
+    });
+    structuredProcessReaders.set(file, pids => {
+      // A writer may already have installed another process in this view.
+      // Refuse vacancy while entry changes have yet to reach the index.
+      if (dirtyRows.get("entries")?.size || reorderedCollections.has("entries")) return true;
+      const occupied = this.db.query<{ present: number }, [number, number]>(`
+        SELECT 1 AS present FROM registry_rows
+          WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.process.pid')=?
+        UNION ALL
+        SELECT 1 AS present FROM registry_rows
+          WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid')=?
+            AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
+              OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)
+        LIMIT 1`);
+      return pids.some(pid => occupied.get(pid, pid) !== null);
     });
     boundedReaders.set(file, (collection, filters, limit) => this.matchingRowKeysBounded(collection, filters, limit));
     keyedReaders.set(file, (collection, field, value) => {
