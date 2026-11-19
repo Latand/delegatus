@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { LOAD_PROBE, localAdmission, parseLoad, queueReady, saturationReason, type LocalAdmission } from "./load";
 import { makeHarness, testFile, type Harness } from "./harness.fixture";
+import { CPU_QUEUE_SPACING_MS, CpuAdmissionQueue } from "../../src/lib/runtime/cpuAdmission";
+import { cpuOwnerIdentity } from "../../src/lib/runtime/signalSandboxContext";
 
 const headroom: LocalAdmission = { load: 11, cpus: 24, pressureReady: true, queueReady: true, slotReady: true };
 
@@ -64,6 +66,19 @@ test("admission snapshot respects waiting tickets and spacing without changing t
     expect(queueReady(file, 11_000)).toBeTrue();
     expect(db.query("SELECT last FROM admission").get()).toEqual({ last: 9000 });
   } finally { db.close(); }
+});
+
+test("an active gate fence leaves the routing queue empty after spacing", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-load-fence-")); roots.push(root);
+  const file = path.join(root, "admission.sqlite"), now = 10_000;
+  const queue = new CpuAdmissionQueue(file, () => now);
+  try {
+    expect(queue.check("command:bounded:holder", true, cpuOwnerIdentity(process.pid), true, undefined, true, { lastBeforeProbe: null, slot: 1, cap: 1 })).toBeNull();
+    expect(queueReady(file, now + CPU_QUEUE_SPACING_MS - 1)).toBeFalse();
+    expect(queueReady(file, now + CPU_QUEUE_SPACING_MS)).toBeTrue();
+    queue.check("command:bounded:waiting", false, cpuOwnerIdentity(process.pid), false, undefined, true);
+    expect(queueReady(file, now + CPU_QUEUE_SPACING_MS)).toBeFalse();
+  } finally { queue.close(); }
 });
 
 test.skipIf(process.platform !== "linux")("local sampling requires readable pressure, queue and slot signals", async () => {
