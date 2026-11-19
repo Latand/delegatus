@@ -287,26 +287,39 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
   let reseal = (Number(root.mode) & 0o222) !== 0;
   const actualExecutables = new Set<string>();
   const actualCliLinks = new Map<string, string>();
-  const inventory = async (directory: string): Promise<void> => {
-    check();
-    for (const name of await fs.readdir(directory)) {
+  const inventory = async (): Promise<void> => {
+    const directories = [modules];
+    while (directories.length) {
+      const current = directories.splice(0, 32);
+      const listings = await Promise.all(current.map(async directory => ({
+        directory, names: await fs.readdir(directory),
+      })));
       check();
-      const filename = path.join(directory, name), entry = await reads.read(filename);
-      if (!entry) throw new Error("dependency graph changed during validation");
-      const mode = Number(entry.mode) & 0o777;
-      if (entry.isSymbolicLink()) {
-        if (path.basename(path.dirname(filename)) === ".bin") actualCliLinks.set(path.relative(modules, filename), await fs.readlink(filename));
-        continue;
+      const filenames = listings.flatMap(({ directory, names }) => names.map(name => path.join(directory, name)));
+      const entries: { filename: string; entry: BigIntStats }[] = [];
+      await inBatches(filenames, async filename => {
+        check();
+        const entry = await reads.read(filename);
+        if (!entry) throw new Error("dependency graph changed during validation");
+        entries.push({ filename, entry });
+      });
+      for (const { filename, entry } of entries) {
+        check();
+        const mode = Number(entry.mode) & 0o777;
+        if (entry.isSymbolicLink()) {
+          if (path.basename(path.dirname(filename)) === ".bin") actualCliLinks.set(path.relative(modules, filename), await fs.readlink(filename));
+          continue;
+        }
+        if (!entry.isFile() && !entry.isDirectory()) throw new Error("unsupported dependency graph entry");
+        const allowedBinWrite = entry.isDirectory() && path.basename(filename) === ".bin"
+          && path.basename(path.dirname(filename)) === "node_modules" && (mode & 0o022) === 0 && (mode & 0o200) !== 0;
+        if ((mode & 0o222) !== 0 && !allowedBinWrite) reseal = true;
+        if (entry.isFile() && (mode & 0o111) !== 0) actualExecutables.add(path.relative(modules, filename));
+        if (entry.isDirectory()) directories.push(filename);
       }
-      if (!entry.isFile() && !entry.isDirectory()) throw new Error("unsupported dependency graph entry");
-      const allowedBinWrite = entry.isDirectory() && path.basename(filename) === ".bin"
-        && path.basename(path.dirname(filename)) === "node_modules" && (mode & 0o022) === 0 && (mode & 0o200) !== 0;
-      if ((mode & 0o222) !== 0 && !allowedBinWrite) reseal = true;
-      if (entry.isFile() && (mode & 0o111) !== 0) actualExecutables.add(path.relative(modules, filename));
-      if (entry.isDirectory()) await inventory(filename);
     }
   };
-  await inventory(modules);
+  await inventory();
   const recordedExecutables = new Set(executables as string[]);
   const recordedLinks = new Map((cliLinks as CliLink[]).map(link => [link.file, link.target]));
   const writable: { filename: string; entry: BigIntStats }[] = [];
