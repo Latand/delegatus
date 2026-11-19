@@ -13,7 +13,7 @@ const prefix = ${JSON.stringify(marker)} + "-" + process.env.GATE_CONFIRMATION_F
 const counter = prefix + "-" + side;
 const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
 writeFileSync(counter, String(run));
-if (run === 2 && side === "head" && process.env.GATE_CONFIRMATION_FIXTURE_RUN === "0" && ${JSON.stringify(mode)} !== "missing-peer") await Bun.sleep(31000);
+if (run === 2 && side === "head" && process.env.GATE_CONFIRMATION_FIXTURE_RUN === "0" && ${JSON.stringify(mode)} === "recovers") await Bun.sleep(31000);
 if (run > 1) {
   await new Promise<void>((resolve, reject) => {
     const socket = createConnection({ host: "127.0.0.1", port: Number(process.env.GATE_RENDEZVOUS_PORT) });
@@ -78,7 +78,9 @@ test("paired target", () => expect(side === "base" || (${JSON.stringify(mode)} =
         if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGTERM");
         else child.kill("SIGTERM");
       };
-      watchdog = setTimeout(halt, 45000);
+      // Keep the long-wait control, with room for both services to start
+      // under load before spending its deliberate 31 seconds at the barrier.
+      watchdog = setTimeout(halt, mode === "recovers" && attempt === 0 ? 80_000 : 45_000);
       // Start the missing-peer window after a real retry reaches the barrier.
       // Toolchain fingerprinting and baseline setup precede that observation.
       missingPeerReady = () => {
@@ -106,4 +108,4 @@ test("paired target", () => expect(side === "base" || (${JSON.stringify(mode)} =
     expect(ready.size).toBe(0);
     for (const side of ["base", "head"]) expect(readFileSync(`${marker}-${attempt}-${side}`, "utf8")).toBe(mode === "recovers" ? "2" : "4");
   }
-});
+}, 135_000);

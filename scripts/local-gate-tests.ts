@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
-import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
+import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment, SUPERVISOR_MARGIN_MS } from "./local-gate";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
@@ -341,11 +341,12 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     let taskPeak: string | null = null;
     let survivors: string | undefined;
     try {
-      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
-        // Keep the independent five-second cleanup allowance, measured as
-        // execution time by the outer guard. A fixed wall timeout here would
-        // kill a healthy supervisor during a nested CPU queue wait.
-        cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(Math.min(budgets.fileMs, remaining)) }, stdio: ["ignore", fd, fd],
+      const fileMs = Math.min(budgets.fileMs, remaining);
+      // The outer clock starts before systemd starts the inner service. Give
+      // that service time to enforce its own deadline and drain its cgroup.
+      // Both clocks still exclude independently observed CPU queue waits.
+      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(fileMs + SUPERVISOR_MARGIN_MS), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+        cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(fileMs) }, stdio: ["ignore", fd, fd],
       });
       exitCode = await result.exited;
     } finally { closeSync(fd); }
