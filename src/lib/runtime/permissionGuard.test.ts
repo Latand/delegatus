@@ -379,6 +379,31 @@ test("an attended timeout cannot deny a replacement request with the same id", a
   expect(guard.pendingTimers()).toBe(0);
 });
 
+test("forget clears only the host's active permission timers", () => {
+  const callbacks: Array<() => void> = [];
+  const cleared: unknown[] = [];
+  const request = {};
+  const host = { agentAttentionRequest: () => request, answer: async () => {} };
+  const guard = new PermissionRequestGuard({
+    attendance: () => "attended",
+    record: () => {},
+    now: () => NOW,
+    setTimer: callback => { callbacks.push(callback); return callback; },
+    clearTimer: timer => { cleared.push(timer); },
+  });
+  const pending = { pendingPermissions: [{ id: "same", tool: "Bash", command: null, reason: null, reasonType: null, since: new Date(NOW).toISOString() }] };
+  guard.adopt("claude:first", host, "conversation_first", pending);
+  const firstTimer = callbacks[0];
+  guard.adopt("claude:second", host, "conversation_second", pending);
+  const secondTimer = callbacks[1];
+
+  guard.forget("claude:first");
+
+  expect(cleared).toEqual([firstTimer]);
+  expect(guard.pendingTimers()).toBe(1);
+  secondTimer!();
+});
+
 test("a denial the pipeline lease refuses is retried onto the attempt, and the journal names the stage regardless", async () => {
   const conversationId = "conversation_busy";
   const denial: PermissionDenialRecord = {

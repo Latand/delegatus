@@ -155,9 +155,9 @@ export class PermissionRequestGuard {
   /** Drops every timer a released host left behind. */
   forget(hostKey: string): void {
     const prefix = `${hostKey}\u0000`;
-    for (const [key, timer] of this.timers) {
+    for (const [key, active] of this.timers) {
       if (!key.startsWith(prefix)) continue;
-      this.clearTimer(timer);
+      this.clearTimer(active.timer);
       this.timers.delete(key);
     }
   }
@@ -202,11 +202,12 @@ export class PermissionRequestGuard {
        as long as they need; only a permission runs out. */
     if (!permission) return;
     const delay = Math.max(0, raisedAt + this.timeoutMs - this.now());
-    const timer = this.setTimer(() => {
-      if (this.timers.get(key)?.request === request) this.timers.delete(key);
+    const activeTimer = { request, timer: undefined as unknown };
+    this.timers.set(key, activeTimer);
+    activeTimer.timer = this.setTimer(() => {
+      if (this.timers.get(key) === activeTimer) this.timers.delete(key);
       void this.deny(key, host, conversationId, requestId, facts, "timeout", current);
     }, delay);
-    this.timers.set(key, { request, timer });
   }
 
   private cancel(hostKey: string, requestId: string): void {
