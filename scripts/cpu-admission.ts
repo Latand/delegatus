@@ -239,7 +239,6 @@ function fullSlotLimit(queue: CpuAdmissionQueue, ownSlot?: string): number | "le
   }
   const markedSlots = new Set<string>();
   const heldMarkers = new Set<string>();
-  const occupiedSlots = new Set<string>();
   const files = fs.readdirSync(dir);
   for (const file of files) {
     const match = /^llv-heavy-gate\.slot([1-9]\d*)\.cap([1-9]\d*)\.lock$/.exec(file);
@@ -258,14 +257,14 @@ function fullSlotLimit(queue: CpuAdmissionQueue, ownSlot?: string): number | "le
     const match = /^llv-heavy-gate\.slot([1-9]\d*)\.lock$/.exec(file);
     if (match && match[1] !== ownSlot && locked(file)) {
       if (!markedSlots.has(match[1]!)) return 1;
-      occupiedSlots.add(match[1]!);
       if (++busy >= cap) return cap;
     }
   }
-  // A current holder admitted after a drain proves there has been no opening
-  // for an old claim since the drain. The legacy queue sees its live fence.
+  // The held cap lock is the lifetime proof for a current holder's queue
+  // fence. An old claim cannot slip in while that fence is visible.
+  // A final claimant's provisional marker is excluded by ownSlot above.
   const transitioned = gates.some(gate => gate.slot !== null && gate.key.startsWith(transitionedGatePrefix) &&
-    occupiedSlots.has(String(gate.slot)) && heldMarkers.has(capLock(gate.slot, gate.cap)));
+    heldMarkers.has(capLock(gate.slot, gate.cap)));
   if (!transitioned && process.platform === "linux" && queue.lastAdmission() !== null && legacyLinuxGateRunning(queue)) return "legacy-drain";
   return undefined;
 }
