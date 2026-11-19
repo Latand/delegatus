@@ -22,7 +22,7 @@ const launch = () => spawn(process.execPath, ["--eval", "setInterval(() => {}, 1
 
 for (const engine of ["claude", "codex"] as const) {
   test.each([
-    "missing-receipt", "settled-journal", "live-owner", "unverified-owner",
+    "missing-receipt", "settled-journal", "terminal-receipt", "live-owner", "unverified-owner",
     "open-journal", "first-message", "journal-unavailable", "foreign-operation", "other-receipt",
     "owner-changed-during-read", "work-arrived-before-signal", "seat-restored",
   ] as const)(`${engine} retired seat operation: %s`, async condition => {
@@ -64,8 +64,9 @@ for (const engine of ["claude", "codex"] as const) {
         launchId: id, key, engine, transport: "structured", state: "path-pending", conversationId: FIXTURE_CONVERSATION,
         artifactPath, cwd: root, createdAt: at(0), admissionOwner: priorOwner,
       }) as SpawnReceipt;
-      if (condition === "settled-journal" || condition === "other-receipt") {
-        file.receipts[operationId] = receipt(operationId);
+      const deliveredSpawn = condition === "settled-journal" || condition === "terminal-receipt";
+      if (deliveredSpawn || condition === "other-receipt") {
+        file.receipts[operationId] = { ...receipt(operationId), state: condition === "terminal-receipt" ? "completed" : "path-pending" };
         entry.pendingAction = "spawn";
       }
       if (condition === "other-receipt") file.receipts["fixture-another-launch"] = receipt("fixture-another-launch");
@@ -74,7 +75,7 @@ for (const engine of ["claude", "codex"] as const) {
       fs.writeFileSync(filename, JSON.stringify(file));
       registry = new AgentRegistry(filename, undefined, undefined, options);
       setAgentRegistryForTests(registry);
-      if (condition === "missing-receipt" || condition === "settled-journal") {
+      if (condition === "missing-receipt" || deliveredSpawn) {
         agentState = new AgentStateService({ registry, now: () => now, owns: () => true,
           process: observeAgentProcess, memory: () => null, release: "fixture", publish: async () => true });
         await agentState.request();
@@ -94,7 +95,7 @@ for (const engine of ["claude", "codex"] as const) {
         kind: "send", operationId: `spawn_message_${operationId}`, idempotencyKey: `spawn_message_${operationId}`,
         conversationId: FIXTURE_CONVERSATION, text: "fixture",
       });
-      if (condition === "settled-journal") {
+      if (deliveredSpawn) {
         admitSpawn(FIXTURE_CONVERSATION);
         journal.transitionOperation(operationId, "delivered");
         publishIdleSession();
@@ -134,12 +135,12 @@ for (const engine of ["claude", "codex"] as const) {
       });
       if (condition === "work-arrived-before-signal") expect(readCount).toBeGreaterThanOrEqual(3);
       if (condition === "owner-changed-during-read" || condition === "seat-restored") expect(readCount).toBeGreaterThan(0);
-      if (condition === "missing-receipt" || condition === "settled-journal") {
+      if (condition === "missing-receipt" || deliveredSpawn) {
         expect(report.failed).toEqual([]);
         expect(report.retired).toHaveLength(1);
         const settlement = { operationId, ownerPid: ownerIdentity.pid,
-          registryState: condition === "settled-journal" ? "path-pending" : "absent",
-          journal: { settled: true, operation: condition === "settled-journal" ? "delivered" : "absent", firstMessage: "absent" } } as const;
+          registryState: file.receipts[operationId]?.state ?? "absent",
+          journal: { settled: true, operation: deliveredSpawn ? "delivered" : "absent", firstMessage: "absent" } } as const;
         expect(structuredHostRetirementJournalRecord(report).retired[0]!.settledOperation).toEqual(settlement);
         expect(activeRegistry.hostEntry(key)).toMatchObject({ status: "dead", pendingAction: null, claimOwner: null });
         expect(observeAgentProcess(nativeIdentity)).toBe("dead");

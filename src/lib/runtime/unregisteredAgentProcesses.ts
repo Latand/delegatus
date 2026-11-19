@@ -85,6 +85,11 @@ interface NativeCustody {
   scopeEngine: "claude" | "codex" | null;
 }
 
+export function agentScopeEngine(cgroup: string): "claude" | "codex" | null {
+  const engine = /^0::\/(?:[^\n]*\/)?delegatus-agents\.slice\/(?:delegatus-agents-work\.slice\/)?delegatus-agent-(claude|codex)-[a-f0-9]{12}\.scope$/.exec(cgroup)?.[1];
+  return engine === "claude" || engine === "codex" ? engine : null;
+}
+
 /** Read a bounded chain and then verify every link against the recorded
  * waiter and the captured process identities. No name or cwd grants custody. */
 function nativeAncestry(native: ProcessIdentity, waiter: ProcessIdentity): NativeCustody | null {
@@ -106,9 +111,8 @@ function nativeAncestry(native: ProcessIdentity, waiter: ProcessIdentity): Nativ
     if (observeAgentProcess(waiter) !== "alive") return null;
     const cgroup = (pid: number) => fs.readFileSync(`/proc/${pid}/cgroup`, "utf8").trim();
     const group = cgroup(native.pid);
-    const engine = /^0::\/.*\/delegatus-agents\.slice\/delegatus-agent-(claude|codex)-[a-f0-9]{12}\.scope$/.exec(group)?.[1];
-    if ((engine !== "claude" && engine !== "codex")
-      || cgroup(waiter.pid) !== group || observeAgentProcess(waiter) !== "alive") return null;
+    const engine = agentScopeEngine(group);
+    if (!engine || cgroup(waiter.pid) !== group || observeAgentProcess(waiter) !== "alive") return null;
     return { identities: [...chain, waiter], scopeEngine: engine };
   } catch { return null; }
 }

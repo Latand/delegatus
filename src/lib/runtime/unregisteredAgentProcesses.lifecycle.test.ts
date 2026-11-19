@@ -13,11 +13,19 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { readHostExit } from "./hostExit";
 import { spawnNativeWaitOwner } from "./nativeWaitOwner";
 import { treeHasOnlyMcpChildren } from "./structuredHostRetirement";
-import { reconcileUnregisteredAgentProcesses } from "./unregisteredAgentProcesses";
+import { agentScopeEngine, reconcileUnregisteredAgentProcesses } from "./unregisteredAgentProcesses";
 
 const launchId = "fixture-orphan-launch";
 const now = FIXTURE_NOW + 2 * 3_600_000;
 const idleMs = 3_600_000;
+
+test("orphan custody recognizes native scopes in both agent slices", () => {
+  const prefix = "0::/user.slice/delegatus-agents.slice";
+  const stamp = "a".repeat(12);
+  expect(agentScopeEngine(`${prefix}/delegatus-agent-claude-${stamp}.scope`)).toBe("claude");
+  expect(agentScopeEngine(`${prefix}/delegatus-agents-work.slice/delegatus-agent-codex-${stamp}.scope`)).toBe("codex");
+  expect(agentScopeEngine(`0::/user.slice/independent.slice/delegatus-agent-codex-${stamp}.scope`)).toBeNull();
+});
 
 for (const engine of ["claude", "codex"] as const) {
   test.skipIf(process.platform !== "linux").each([

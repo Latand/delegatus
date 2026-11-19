@@ -372,7 +372,6 @@ function receiptAbandoned(createdAt: string, nowMs: number): boolean {
   const created = Date.parse(createdAt);
   return Number.isFinite(created) && nowMs - created > RETIREMENT_ABANDONED_RECEIPT_MS;
 }
-/** Held-delivery states that have not reached the conversation yet. */
 /** The only two host states the predicate admits. Every other one — starting,
     live, handoff, unhosted — is either working or mid-transition. */
 const RETIRABLE_HOST_STATUSES = new Set<AgentHostStatus>(["idle", "dead"]);
@@ -1305,8 +1304,7 @@ function obsoleteOperation(
     || !inputs.seatConversations.determined || inputs.seatConversations.value.has(conversation.id)
     || (entry.key.engine !== "codex" && entry.key.engine !== "claude")) return null;
   const receipt = inputs.file.receipts[operationId] ?? null;
-  if (receipt && (TERMINAL_RECEIPT_STATES.has(receipt.state)
-    || receipt.launchId !== operationId || receipt.transport !== "structured"
+  if (receipt && (receipt.launchId !== operationId || receipt.transport !== "structured"
     || !receipt.key || sessionKeyId(receipt.key) !== keyId || receipt.artifactPath !== entry.artifactPath
     || receipt.engine !== entry.key.engine || resolveConversationAlias(inputs.file, receipt.conversationId) !== conversation.id
     || receipt.queuedPinnedSpawn || receipt.pendingSpawnCapability
@@ -1328,7 +1326,8 @@ function withSettledOperation(
 ): StructuredHostRetirementSubject {
   // The exact matched nonterminal receipt contributed one unit to this
   // index. Other launches, messages and handoffs retain their own fences.
-  const discount = candidate.receipt && !subject.structuredHostOperationReceiptAbandoned ? 1 : 0;
+  const discount = candidate.receipt && !TERMINAL_RECEIPT_STATES.has(candidate.receipt.state)
+    && !subject.structuredHostOperationReceiptAbandoned ? 1 : 0;
   return {
     ...subject,
     openOperations: subject.openOperations - discount,
