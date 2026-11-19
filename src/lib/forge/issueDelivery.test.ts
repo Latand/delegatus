@@ -136,7 +136,19 @@ test.each(["cached", "receipt"])("batch %s closes both carried lanes, naming the
     cached(f, 4000, "merged", f.primary.title, f.primary.head.ref);
   } else {
     for (const p of f.lanes) p.merge!.mergeCommit = "a".repeat(40);
-    const run = f.ports.run; f.ports.run = args => args[1]!.includes("/commits/") ? Promise.resolve(JSON.stringify([f.primary])) : /\/pulls\/39/.test(args[1]!) ? Promise.resolve(JSON.stringify({ merged_at: null })) : run(args);
+    const run = f.ports.run;
+    f.ports.run = async args => {
+      const route = args[1]!;
+      const work = /\/pulls\/(3909|3910)$/.exec(route);
+      if (work) return JSON.stringify({ ...f.primary, number: Number(work[1]), base: { ref: "integration/widgets", repo: { default_branch: "main" } } });
+      if (route.includes("/commits/")) return JSON.stringify([f.primary]);
+      return run(args);
+    };
+    f.ports.carriedLanding = async (_lane, _repo, pr, _base, _head, hint) => {
+      expect([3909, 3910]).toContain(pr);
+      expect(hint).toMatchObject({ commit: "a".repeat(40), carrier: { number: 4000 } });
+      return { state: "landed", batch: 4000, mergedAt: AT, commit: "a".repeat(40) };
+    };
   }
   // Separate issue states while keeping the shared forge fixture compact.
   const run = f.ports.run; f.ports.run = args => /\/issues\/\d+$/.test(args[1]!) ? Promise.resolve(JSON.stringify({ state: f.writes.some(a => a[1] === args[1] && a.includes("state=closed")) ? "closed" : "open", state_reason: "completed" })) : run(args);
@@ -506,7 +518,7 @@ test("task-only issue links keep a completed lane hot until delivery is settled"
 });
 
 
-test("an ordinary default-branch carrier uses its landing time and retains carrier identity", async () => {
+test.each(["delivered", "head-changed", "carrier-changed"] as const)("an ordinary default-branch carrier binds its proof through settlement (%s)", async mode => {
   const f = fixture(), p = f.lanes[0]!; p.merge = undefined;
   cached(f, 3909, "merged");
   f.data.repositories[REPO]!.prs["3909"]!.mergedAt = "2026-10-31T13:00:00.000Z";
@@ -515,9 +527,11 @@ test("an ordinary default-branch carrier uses its landing time and retains carri
   f.lanes[0]!.workLinks = [link(3900, true)];
   f.issue.state = "closed";
   const original = f.ports.run;
+  let carrierTip = "d".repeat(40);
   f.ports.run = async args => {
     const route = args[1]!;
     if (route.endsWith("/pulls/4000")) return JSON.stringify({ ...f.primary, number: 4000, merged_at: AT,
+      merge_commit_sha: carrierTip,
       base: { ref: "main", repo: { default_branch: "main" } }, head: { ref: "integration/widgets" }, title: "Widget integration" });
     if (route.includes("/commits/") && route.endsWith("/pulls?per_page=100")) return JSON.stringify([
       { ...f.primary, number: 4000, merged_at: AT, base: { ref: "main", repo: { default_branch: "main" } },
@@ -525,11 +539,27 @@ test("an ordinary default-branch carrier uses its landing time and retains carri
     ]);
     return original(args);
   };
+  let proofs = 0;
+  f.ports.carriedLanding = async (_lane, repository, pr, base, head, hint) => {
+    proofs++;
+    expect({ repository, pr, base, head }).toEqual({ repository: REPO, pr: 3909, base: "main", head: f.primary.head.sha });
+    expect(hint).toMatchObject({ commit: f.primary.merge_commit_sha, carrier: { number: 4000, merge_commit_sha: carrierTip } });
+    if (mode === "head-changed") p.lastPassedCommit = "e".repeat(40);
+    if (mode === "carrier-changed") carrierTip = "f".repeat(40);
+    return { state: "landed", batch: 4000, mergedAt: AT, commit: f.primary.merge_commit_sha };
+  };
   f.closer(4000);
   await f.sweep();
-  expect(f.issue.state).toBe("open");
-  expect(f.writes.filter(args => args.includes("state=open"))).toHaveLength(1);
-  expect(p.issueDelivery).toMatchObject([{ state: "reopened", batch: 4000 }]);
+  expect(proofs).toBe(1);
+  if (mode === "delivered") {
+    expect(f.issue.state).toBe("open");
+    expect(f.writes.filter(args => args.includes("state=open"))).toHaveLength(1);
+    expect(p.issueDelivery).toMatchObject([{ state: "reopened", batch: 4000 }]);
+  } else {
+    expect(f.issue.state).toBe("closed");
+    expect(f.writes).toEqual([]);
+    expect(p.issueDelivery).toMatchObject([{ state: "pending" }]);
+  }
 });
 
 test("an integration merge stays pending until its default-branch carrier lands", async () => {
@@ -549,11 +579,18 @@ test("an integration merge stays pending until its default-branch carrier lands"
     ]);
     return run(args);
   };
+  let proofs = 0;
+  f.ports.carriedLanding = async () => {
+    proofs++;
+    return { state: "landed", batch: 4000, mergedAt: AT, commit: f.primary.merge_commit_sha };
+  };
   await f.sweep();
+  expect(proofs).toBe(0);
   expect(p.issueDelivery).toMatchObject([{ state: "pending" }]);
   expect(f.writes).toEqual([]);
   carrierMergedAt = AT; f.advance();
   await f.sweep();
+  expect(proofs).toBe(1);
   expect(p.issueDelivery).toMatchObject([{ state: "closed", batch: 4000 }]);
   expect(f.writes.filter(args => args.includes("state=closed"))).toHaveLength(1);
 });

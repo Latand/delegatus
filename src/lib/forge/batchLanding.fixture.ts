@@ -45,15 +45,24 @@ export function batchLandingFixture(root: string, kind = "rebased") {
   let head = git("rev-parse", "HEAD");
   git("checkout", "main");
   commit("before", "another lane\n");
+  const carrier = kind.startsWith("carrier-");
+  if (carrier) git("checkout", "-b", "integration/widgets");
   if (kind === "nearby-rebase") commit("feature", String(before).replace("line 17", "updated line 17"));
   if (kind === "offset-rebase") commit("feature", "main inserted a line\n" + before);
   if (kind === "wrong-occurrence") commit("feature", section + section.replace("disabled", "enabled"));
   else if (kind === "wrong-sha") commit("unrelated", "different patch\n");
   else git("cherry-pick", head);
   const landing = git("rev-parse", "HEAD");
-  const tip = commit("after", "last lane in batch\n");
+  if (["carrier-reverted-before", "carrier-restored-later"].includes(kind)) git("revert", "--no-edit", landing);
+  commit("after", "last lane in batch\n");
+  if (carrier) {
+    git("checkout", "main");
+    git("merge", "--no-ff", "-m", "Land integration branch", "integration/widgets");
+  }
+  const tip = git("rev-parse", "HEAD");
   commit("later", "main advanced after the batch\n");
-  if (kind.startsWith("reverted")) git("revert", "--no-edit", landing);
+  if (kind === "carrier-restored-later") git("cherry-pick", landing);
+  if (kind.startsWith("reverted") || kind === "carrier-reverted-after") git("revert", "--no-edit", landing);
   if (kind === "partial-revert") commit("feature", before);
   if (kind === "followup") commit("feature", String(after).replace("line 0", "updated line 0"));
   if (kind === "new-head" || kind === "whitespace") {

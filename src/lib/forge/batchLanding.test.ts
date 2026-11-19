@@ -159,7 +159,7 @@ test.each([{ association: "NONE" }, { quoted: true }])("a comment is only a hint
     .toMatchObject({ state: "waiting" });
 });
 
-for (const kind of ["wrong-sha", "wrong-occurrence", "reverted", "new-head", "partial-revert"] as const) {
+for (const kind of ["wrong-sha", "wrong-occurrence", "reverted", "carrier-restored-later", "new-head", "partial-revert"] as const) {
   test(`a collaborator hint with ${kind} Git evidence cannot close an issue`, async () => {
     const g = batchLandingFixture(scratch, kind), gh = carriedGithub(g);
     expect(await readCarriedBranchLanding(REPO, 7, "main", { head: g.head, repoDir: g.directory }, gh.issueRead, gh.contentsRead))
