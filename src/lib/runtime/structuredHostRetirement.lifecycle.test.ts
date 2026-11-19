@@ -55,6 +55,13 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
       }
       identities.push(...tree.filter(value => value.pid !== identity.pid));
       expect(tree.length).toBeGreaterThanOrEqual(2);
+      const stopAndWaitForExit = async (member: ProcessIdentity) => {
+        await stopFixtureIdentity(member);
+        // A zombie is terminal for fixture cleanup. Reconciliation also needs
+        // the recorded PID to have been reaped in this test's signal domain.
+        for (let attempt = 0; attempt < 200 && procBackend.pidAlive(member.pid); attempt++) await Bun.sleep(10);
+        expect(procBackend.pidAlive(member.pid)).toBe(false);
+      };
       const file = fixtureRegistry(root, engine, identity,
         { pid: 2_147_483_647, startIdentity: "fixture-owner", bootEpoch: identity.bootEpoch });
       const entry = file.entries[`${engine}:${FIXTURE_SESSION}`]!;
@@ -88,7 +95,7 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
         if (correlation.label === "registry.idle-stop-capture" && change.startsWith("capture-")) {
           // Exit and release while the capture waits for writer admission.
           await Promise.resolve();
-          for (const member of [...tree].reverse()) await stopFixtureIdentity(member);
+          for (const member of [...tree].reverse()) await stopAndWaitForExit(member);
           expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
           if (change !== "capture-release") registry.agentStateWrite(state => {
             const current = state.entries[`${engine}:${FIXTURE_SESSION}`]!;
@@ -115,9 +122,7 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
             expect(accepted).toBe(true);
             expect(captured).toHaveLength(tree.length);
             for (const member of tree.filter(value => !["live-child", "empty-diagnostics-live-child"].includes(change) || value.pid === identity.pid).reverse()) {
-              await stopFixtureIdentity(member);
-              for (let attempt = 0; attempt < 200 && procBackend.pidAlive(member.pid); attempt++) await Bun.sleep(10);
-              expect(procBackend.pidAlive(member.pid)).toBe(false);
+              await stopAndWaitForExit(member);
             }
             expect(procBackend.pidAlive(identity.pid)).toBe(false);
             closed = true;
@@ -373,7 +378,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
             },
             stopScope: async (_scope, options) => {
               await options.authorizeAsync?.();
-            if (boundary === "scope" && change !== "late-cas") { mutate(); await refresh(); }
+              if (boundary === "scope" && change !== "late-cas") { mutate(); await refresh(); }
               if (change === "closed-event-tail") {
                 expect(registry.terminateStructuredHost(entry.key, identity, [identity, descendant], undefined,
                   entry.structuredHost!.scope!)).toBe(true);
