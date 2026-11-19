@@ -104,6 +104,13 @@ removes the export after that command and its owned descendants finish. Reuse
 this procedure for repeated builds and focused checks; leave retained evidence
 in `LLV_EVIDENCE_DIR` and avoid accumulating a new full checkout per retry.
 
+When the stage brief calls for standalone full types, run
+`bun scripts/local-gate.ts check-step types` from the candidate checkout.
+It uses the publication plan, CPU admission and isolated check environment.
+On an unchanged clean head the subsequent push reuses that exact passing step.
+The same command accepts `eslint`, `touched tests`, `Linux backend` and
+`Linux tests` when the plan includes them. Quote names containing spaces.
+
 For a manual privacy check, run
 `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main`.
 The command defaults to the committed `scripts/privacy-known-value-fingerprints.json`

@@ -995,9 +995,13 @@ function publicationPrivacyFiles(env: NodeJS.ProcessEnv): Record<string, string>
     }));
 }
 
-async function main(mode: Mode, admitted = false, publicationPrepare = false): Promise<void> {
+const independentSteps = ["types", "eslint", "touched tests", "Linux backend", "Linux tests"];
+
+async function main(mode: Mode, admitted = false, publicationPrepare = false, requestedStep?: string): Promise<void> {
+  if (requestedStep && (!independentSteps.includes(requestedStep) || publicationPrepare || process.env.LLV_GATE_PUBLICATION_RECEIPT || process.env.LLV_SKIP_HOOKS === "1"))
+    throw new Error("check-step requires an independent publication step and cannot authorize transport");
   if (process.env.LLV_SKIP_HOOKS === "1") return;
-  if (publicationPrepare) {
+  if (publicationPrepare || requestedStep) {
     // Match the native hook's Git isolation before discovery, planning or
     // fingerprinting. The transport's App rewrites never reach a check.
     for (const name of ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR"]) delete process.env[name];
@@ -1013,10 +1017,11 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     }
   };
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
-  if (publicationPrepare && process.env.LLV_GATE_SANDBOX_RECORD) {
+  if ((publicationPrepare || requestedStep) && process.env.LLV_GATE_SANDBOX_RECORD) {
     // Git prepends its exec directory before invoking native hooks. Match it
     // once the cleanup owner is present; the bootstrap re-enters below.
-    process.env.PATH = `${git(root, ["--exec-path"])}${path.delimiter}${process.env.PATH ?? ""}`;
+    const prefix = git(root, ["--exec-path"]) + path.delimiter;
+    if (publicationPrepare || !process.env.PATH?.startsWith(prefix)) process.env.PATH = prefix + (process.env.PATH ?? "");
   }
   let publishedTree: string | undefined;
   if (mode === "pre-push" && process.env.LLV_GATE_PUSH_HEAD && process.env.LLV_GATE_PUSH_HEAD !== git(root, ["rev-parse", "HEAD"])) {
@@ -1056,6 +1061,13 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
   if (mode === "pre-push" && !deadline) {
     const startedAt = Date.now();
     deadline = { startedAt, at: publicationHookDeadline(publicationPushBudgetMs(files), startedAt) };
+  }
+  const selected = requestedStep && steps.find(step => step.name === requestedStep);
+  if (requestedStep && !selected) throw new Error(`the publication plan has no independent "${requestedStep}" step for these changes`);
+  if (requestedStep && !admitted) {
+    await runAdmittedChecks(["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "check-step", requestedStep, "--admitted"],
+      root, { ...process.env, LLV_GATE_RUNNER: "off" }, deadline);
+    return;
   }
   if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
   if (mode === "pre-push" && files.length && files.every(proseOnly)) console.error("pre-push: prose-only diff; types, lint and touched tests skipped because no compiler or executable source input changed");
@@ -1199,6 +1211,12 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
     const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error) : undefined;
     const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
+    if (selected) {
+      // The normal runner owns cleanup and records exactly this step's pass.
+      // A later push still runs privacy and validates every step in the plan.
+      await runSteps(mode, [selected], options);
+      return;
+    }
     if (transport) {
       // A lesson refresh must not change the data this scan actually uses.
       // Missing inputs stay missing so the scanner retains its own refusal.
@@ -1279,6 +1297,12 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false): P
 
 if (import.meta.main) {
   const mode = process.argv[2];
-  if (mode !== "pre-commit" && mode !== "pre-push") throw new Error("usage: local-gate.ts pre-commit|pre-push");
-  try { await main(mode, process.argv[3] === "--admitted", process.argv[3] === "--publication-prepare"); } catch (error) { endHook(mode, error); }
+  if (mode === "check-step") {
+    const step = process.argv[3];
+    if (!step || (process.argv.length !== 4 && !(process.argv.length === 5 && process.argv[4] === "--admitted"))) throw new Error("usage: local-gate.ts check-step <step name>");
+    try { await main("pre-push", process.argv[4] === "--admitted", false, step); } catch (error) { endHook("pre-push", error); }
+  } else {
+    if (mode !== "pre-commit" && mode !== "pre-push") throw new Error("usage: local-gate.ts pre-commit|pre-push|check-step");
+    try { await main(mode, process.argv[3] === "--admitted", process.argv[3] === "--publication-prepare"); } catch (error) { endHook(mode, error); }
+  }
 }
