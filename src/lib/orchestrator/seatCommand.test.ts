@@ -2996,7 +2996,7 @@ for (const lastAuthor of ["member", "owner"] as const) test(`automatic rotation 
 test("tier roundtrip: create and rotate forward an explicit tier", async () => {
   const { deps, recorded } = dependencies();
   await executeOrchestratorSeatRequest({ ...spawnRequest(), engine: "codex", model: "gpt-6.1-sol", serviceTier: "ultrafast" }, deps);
-  expect(recorded.spawns[0]).toMatchObject({ serviceTier: "ultrafast" });
+  expect(recorded.spawns[0]).toMatchObject({ model: "gpt-6.2-sol", serviceTier: "ultrafast" });
   const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "tier-rotation", serviceTier: "priority" }, deps);
   expect(result.status).toBe(200);
   expect(recorded.spawns[1]).toMatchObject({ serviceTier: "priority" });
@@ -3045,7 +3045,7 @@ for (const offline of [false, true]) test.each([
       launchProfile: { ...generation.launchProfile, title: "Resume selected speed" },
     });
     // The host replaces its input with this receipt before forwarding the tier.
-    expect(resumed.receipt.launchProfile).toMatchObject({ serviceTier: applied, fast });
+    expect(resumed.receipt.launchProfile).toMatchObject({ model: "gpt-6.2-sol", effort: "high", serviceTier: applied, fast });
     expect(registry.settleSpawn(resumed.receipt.launchId, {
       key: { engine: "codex", sessionId: generation.id }, artifactPath: transcript, cwd: sandbox,
       accountId: "account-a", status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
@@ -3079,9 +3079,9 @@ test.each([false, true])("tier roundtrip: rotation inherits the explicit profile
       credits: { approved: false, accounts: [], approvedAt: null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null },
       switches: [{ conversationId: conversation.id, accountId: "account-a", model: "gpt-6.1-sol", from: "priority", to: "ultrafast", state: "switched", at: AT }],
     } });
-    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "tier-inherited" }, deps);
+    const result = await executeOrchestratorRotation({ project: "proj-a", clientRequestId: "tier-inherited", model: "gpt-6.1-sol" }, deps);
     expect(result.status).toBe(200);
-    expect(recorded.spawns[1]).toMatchObject({ inheritedServiceTier: turbo ? "priority" : "ultrafast" });
+    expect(recorded.spawns[1]).toMatchObject({ model: "gpt-6.2-sol", inheritedServiceTier: turbo ? "priority" : "ultrafast" });
     expect(recorded.spawns[1]).not.toHaveProperty("serviceTier");
     expect(recorded.spawns[1]).not.toHaveProperty("fast");
   } finally { registry.close(); }
