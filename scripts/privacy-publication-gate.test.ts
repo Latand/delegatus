@@ -5309,6 +5309,19 @@ describe("mergeBoundaryReview", () => {
     expect(result.stdout.toString()).not.toContain(forgeWebFlowIdentity.email);
   }, 15000);
 
+  test("signed landed-tip evidence applies only to the exact forge committer", async () => {
+    const repo = await gitRepo();
+    await commitWithIdentities(repo, "fixture change", canonicalIdentity, forgeWebFlowIdentity);
+    const landed = await head(repo);
+    expect(mergeBoundaryReview(repo, "main").findings.get("email_address")).toBe(1);
+    expect(mergeBoundaryReview(repo, "main", landed).findings.size).toBe(0);
+    expect(mergeBoundaryReview(repo, "main", "a".repeat(40)).findings.get("email_address")).toBe(1);
+    const person = ["fixture", "private.dev"].join("@");
+    await commitWithIdentities(repo, "fixture change", { name: "Fixture", email: person }, forgeWebFlowIdentity);
+    const next = await head(repo);
+    expect(mergeBoundaryReview(repo, landed, next).findings.get("email_address")).toBe(1);
+  });
+
   test.concurrent("a message with a real-looking address still fails behind a forge merge, and is named", async () => {
     /* The narrowed range and the forge exemptions must not carry a person
        across with them: this commit is the branch's own, and the merge that
