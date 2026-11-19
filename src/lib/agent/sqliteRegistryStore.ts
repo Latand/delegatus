@@ -1715,6 +1715,9 @@ export class SqliteAgentRegistryStore {
         "DROP TRIGGER IF EXISTS registry_paths_insert",
         "DROP TRIGGER IF EXISTS registry_paths_update",
         "DROP TRIGGER IF EXISTS registry_paths_delete",
+        "DROP TRIGGER IF EXISTS registry_receipt_paths_insert",
+        "DROP TRIGGER IF EXISTS registry_receipt_paths_update",
+        "DROP TRIGGER IF EXISTS registry_receipt_paths_delete",
         `CREATE TRIGGER registry_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
           INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
           INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
