@@ -41,7 +41,6 @@ export type FindingClass =
   | "provenance_invalid"
   | "provenance_missing"
   | "resource_identifier"
-  | "tool_unavailable"
   | "transcript_content"
   | "unsafe_path";
 
@@ -82,7 +81,6 @@ const textExtensions = new Set([
 ]);
 const textBasenames = new Set(["CODEOWNERS", "Dockerfile", "LICENSE", "Makefile", "README"]);
 const maxPublicationBytes = 32 * 1024 * 1024;
-const maxVideoStreams = 16;
 const supportedGeneratorRuntime = "bun-1.3.3";
 // Reviewed public forms, stored without publication-sensitive literals.
 // Identity normalization preserves case, punctuation and every raw code point.
@@ -1103,11 +1101,6 @@ const knownValues = loadKnownValues();
 // config-specific match so fingerprint windows are not hashed twice.
 const knownValueMatches = new WeakMap<object, boolean>();
 
-function configuredOcrLanguages(): string | undefined {
-  const languages = (process.env.LLV_PRIVACY_OCR_LANGUAGES ?? "eng").trim();
-  return /^[a-z0-9_]+(?:\+[a-z0-9_]+)*$/i.test(languages) ? languages : undefined;
-}
-
 function extensionMediaKind(path: string): MediaKind | undefined {
   const extension = extname(path).toLowerCase();
   if (extension === ".png") return "png";
@@ -1725,8 +1718,8 @@ function pngMetadata(bytes: Buffer): { animated?: boolean; error: boolean; liveS
   return { animated, error: false, liveSource, text: values.join("\n") };
 }
 
-function inspectRasterMetadata(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "png" && kind !== "raster") return new Set();
+function inspectMediaMetadata(path: string, kind: MediaKind | undefined): Set<FindingClass> {
+  if (kind !== "png" && kind !== "raster" && kind !== "animated") return new Set();
   try {
     const bytes = readFileSync(path);
     if (kind === "png") {
@@ -2046,135 +2039,6 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
   }
 }
 
-function inspectRaster(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "png" && kind !== "raster") return new Set();
-  if (!Bun.which("tesseract")) return new Set(["tool_unavailable"]);
-  const languages = configuredOcrLanguages();
-  if (!languages) return new Set(["configuration_error"]);
-  const result = Bun.spawnSync({
-    cmd: ["tesseract", path, "stdout", "-l", languages],
-    env: withoutUnsupportedApiCredentials(process.env),
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  if (result.exitCode !== 0) return new Set(["inspection_error"]);
-  return sensitiveClasses(result.stdout.toString());
-}
-
-function inspectAnimated(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "animated") return new Set();
-  if (!Bun.which("ffprobe") || !Bun.which("ffmpeg") || !Bun.which("tesseract")) {
-    return new Set(["tool_unavailable"]);
-  }
-  const languages = configuredOcrLanguages();
-  if (!languages) return new Set(["configuration_error"]);
-  const probe = Bun.spawnSync({
-    cmd: [
-      "ffprobe",
-      "-v",
-      "error",
-      "-count_frames",
-      "-select_streams",
-      "v",
-      "-show_entries",
-      "format=duration:format_tags:stream=duration,nb_frames,nb_read_frames:stream_tags",
-      "-of",
-      "json",
-      path,
-    ],
-    env: withoutUnsupportedApiCredentials(process.env),
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  if (probe.exitCode !== 0) return new Set(["inspection_error"]);
-  const findings = sensitiveClasses(probe.stdout.toString());
-  let formatDuration = 0;
-  let streams: Array<{ duration?: unknown; nb_frames?: unknown; nb_read_frames?: unknown }>;
-  try {
-    const metadata = JSON.parse(probe.stdout.toString()) as {
-      format?: { duration?: unknown };
-      streams?: unknown;
-    };
-    formatDuration = Number(metadata.format?.duration);
-    if (!Number.isFinite(formatDuration) || formatDuration < 0) formatDuration = 0;
-    if (!Array.isArray(metadata.streams) || metadata.streams.length === 0 || metadata.streams.length > maxVideoStreams
-      || metadata.streams.some((stream) => typeof stream !== "object" || stream === null || Array.isArray(stream))) {
-      findings.add("inspection_error");
-      return findings;
-    }
-    streams = metadata.streams as Array<{ duration?: unknown; nb_frames?: unknown; nb_read_frames?: unknown }>;
-  } catch {
-    return new Set([...findings, "inspection_error"]);
-  }
-  const fractions = [0, 0.25, 0.5, 0.75, 0.95];
-  for (const [streamOrdinal, stream] of streams.entries()) {
-    let duration = Number(stream.duration);
-    if (!Number.isFinite(duration) || duration < 0) duration = formatDuration;
-    let frameCount = 0;
-    for (const candidate of [stream.nb_read_frames, stream.nb_frames]) {
-      const count = Number(candidate);
-      if (!Number.isSafeInteger(count) || count < 1) continue;
-      frameCount = count;
-      break;
-    }
-    if (duration === 0 && frameCount === 0) {
-      findings.add("inspection_error");
-      continue;
-    }
-    const samples = duration > 0
-      ? fractions.map((fraction) => ({ kind: "time" as const, value: (duration * fraction).toFixed(3) }))
-      : fractions.map((fraction) => ({
-        kind: "frame" as const,
-        value: Math.floor((frameCount - 1) * fraction).toString(),
-      }));
-    const uniqueSamples = new Map(samples.map((sample) => [`${sample.kind}:${sample.value}`, sample]));
-    for (const sample of uniqueSamples.values()) {
-      const inputArguments = sample.kind === "time"
-        ? ["-ss", sample.value, "-i", path]
-        : ["-i", path];
-      const filterArguments = sample.kind === "frame" ? ["-vf", `select=eq(n\\,${sample.value})`] : [];
-      const frame = Bun.spawnSync({
-        cmd: [
-          "ffmpeg",
-          "-v",
-          "error",
-          ...inputArguments,
-          "-map",
-          `0:v:${streamOrdinal}`,
-          ...filterArguments,
-          "-frames:v",
-          "1",
-          "-f",
-          "image2pipe",
-          "-vcodec",
-          "png",
-          "pipe:1",
-        ],
-        env: withoutUnsupportedApiCredentials(process.env),
-        stderr: "pipe",
-        stdout: "pipe",
-      });
-      if (frame.exitCode !== 0 || frame.stdout.length === 0) {
-        findings.add("inspection_error");
-        continue;
-      }
-      const ocr = Bun.spawnSync({
-        cmd: ["tesseract", "stdin", "stdout", "-l", languages],
-        env: withoutUnsupportedApiCredentials(process.env),
-        stdin: frame.stdout,
-        stderr: "pipe",
-        stdout: "pipe",
-      });
-      if (ocr.exitCode !== 0) {
-        findings.add("inspection_error");
-        continue;
-      }
-      for (const finding of sensitiveClasses(ocr.stdout.toString())) findings.add(finding);
-    }
-  }
-  return findings;
-}
-
 type ProvenanceResult = {
   expectedFindingClasses: Set<FindingClass>;
   status: "invalid" | "missing" | "valid";
@@ -2484,8 +2348,7 @@ function trustedVendorExemptions(path: string, inspectionRoot: string | undefine
 
 function inspectFileContents(path: string, kind: MediaKind | undefined): Set<FindingClass> {
   return new Set([
-    ...inspectRasterMetadata(path, kind), ...inspectRaster(path, kind),
-    ...inspectAnimated(path, kind), ...inspectText(path, kind),
+    ...inspectMediaMetadata(path, kind), ...inspectText(path, kind),
   ]);
 }
 
@@ -2557,7 +2420,7 @@ export function inspectPaths(
   return findings;
 }
 
-function inspectCommitAdditions(repository: string, base: string, requireKnownValues: boolean, notices: string[], deferMedia: boolean): Map<FindingClass, number> {
+function inspectCommitAdditions(repository: string, base: string, requireKnownValues: boolean, notices: string[]): Map<FindingClass, number> {
   const findings = inspectPaths([], false, requireKnownValues, repository, base, notices);
   let scratch: string | undefined, snapshot: string | undefined, snapshotCommit: string | undefined;
   // Cache detector results, never provenance: a copied blob still needs the
@@ -2614,7 +2477,6 @@ function inspectCommitAdditions(repository: string, base: string, requireKnownVa
         if (!result) { result = inspectFileContents(path, kind); content.set(key, result); }
         return result;
       });
-      if (deferMedia && detected.delete("tool_unavailable")) notices.push(`${location} media OCR deferred to required hosted check (tool unavailable)`);
       for (const [finding, count] of detected) {
         findings.set(finding, (findings.get(finding) ?? 0) + count); notices.push(`${location} ${finding}`);
       }
@@ -3115,7 +2977,7 @@ if (import.meta.main) {
     };
   const notices: string[] = [...range.notices];
   const pathFindings = addedLines && !range.error && !repositoryError
-    ? inspectCommitAdditions(inspectionRoot, trustedBase, arguments_.includes("--require-known-values"), notices, arguments_.includes("--defer-unavailable-media"))
+    ? inspectCommitAdditions(inspectionRoot, trustedBase, arguments_.includes("--require-known-values"), notices)
     : inspectPaths(
     selection.paths,
     false,
