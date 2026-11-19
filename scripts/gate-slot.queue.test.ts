@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { redactBounded } from "../src/lib/monitor/redact";
 import { cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
 import { cpuOwnerIdentity, cpuOwnerStatus } from "../src/lib/runtime/signalSandboxContext";
 import { realExec } from "../src/lib/workflows/provision";
@@ -25,9 +26,9 @@ function legacyGateTree(directory: string) {
   return tree;
 }
 
-async function until(check: () => boolean, timeoutMs = 5_000) {
+async function until(check: () => boolean, timeoutMs = 5_000, failure = () => new Error("queue fixture did not reach its barrier")) {
   const ends = Date.now() + timeoutMs;
-  while (!check()) { if (Date.now() > ends) throw new Error("queue fixture did not reach its barrier"); await Bun.sleep(10); }
+  while (!check()) { if (Date.now() > ends) throw failure(); await Bun.sleep(10); }
 }
 const queuedTickets = "FROM tickets WHERE key NOT GLOB 'command:gate-active:*'";
 function fixture() {
@@ -380,14 +381,37 @@ for (const useService of [false, true]) test.skipIf(process.platform !== "linux"
     const log = (name: string) => path.join(f.dir, `${name}.stderr`);
     const stderr = (name: string) => fs.existsSync(log(name)) ? fs.readFileSync(log(name), "utf8") : "";
     const launch = (publication: ReturnType<typeof publicationFixture>, name: string) => {
+      // realExec merges process.env back in. Explicitly mask the enclosing
+      // publication deadline so this private publication gets its own budget.
       const env = { ...publication.env, LLV_GATE_LOCK_DIR: f.dir, LLV_GATE_SLOTS: "1", LLV_GATE_RUNNER: "off",
         LLV_GATE_PSI_FILE: f.env.LLV_GATE_PSI_FILE, LLV_GATE_POLL_SECONDS: f.env.LLV_GATE_POLL_SECONDS,
         LLV_GATE_PSI_RELEASE_SECONDS: "0", DELEGATUS_CPU_PRESSURE: "on", DELEGATUS_AGENT_CPU: "off", CPU_SLOT_STDERR: log(name),
-        LLV_GATE_PUBLICATION_ID: name, LLV_OWNED_RUN_TIMEOUT_MS: "25000", LLV_GATE_SANDBOX_RECORD: undefined };
+        LLV_GATE_PUBLICATION_ID: name, LLV_OWNED_RUN_TIMEOUT_MS: "25000", LLV_GATE_SANDBOX_RECORD: undefined, LLV_GATE_PUSH_DEADLINE: undefined };
       withoutInheritedGate(env, { keepSandbox: useService });
-      pending.push(realExec("bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "publication-fixture",
-        "bun", "scripts/local-gate.ts", "pre-push", "--publication-prepare"], publication.dir, env, { timeoutMs: 30_000, signal: control.signal }));
-      return env;
+      let outcome: Awaited<ReturnType<typeof realExec>> | undefined;
+      // Reproduce an exhausted comparator's enclosing deadline on every run.
+      // realExec snapshots the environment synchronously when spawning.
+      const enclosingDeadline = process.env.LLV_GATE_PUSH_DEADLINE;
+      process.env.LLV_GATE_PUSH_DEADLINE = "1";
+      try {
+        pending.push(Promise.resolve(realExec("bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "publication-fixture",
+          "bun", "scripts/local-gate.ts", "pre-push", "--publication-prepare"], publication.dir, env, { timeoutMs: 30_000, signal: control.signal }))
+          .then(result => { outcome = result; return result; }));
+      } finally {
+        if (enclosingDeadline === undefined) delete process.env.LLV_GATE_PUSH_DEADLINE;
+        else process.env.LLV_GATE_PUSH_DEADLINE = enclosingDeadline;
+      }
+      const waitFor = (barrier: string, reached: () => boolean) => {
+        const failure = () => {
+          const status = outcome ? `exited (code=${outcome.code}, signal=${outcome.signal ?? "none"})` : "still running";
+          return new Error(`${name} ${status} at ${barrier}\n${redactBounded([stderr(name), outcome?.stderr].filter(Boolean).join("\n"), 2_000)}`);
+        };
+        return until(() => {
+          if (outcome) throw failure();
+          return reached();
+        }, 10_000, failure);
+      };
+      return { env, waitFor };
     };
     try {
       const first = publicationFixture(), peer = publicationFixture();
@@ -404,13 +428,13 @@ for (const useService of [false, true]) test.skipIf(process.platform !== "linux"
       if (!useService) commitFixtureInputs(peer);
       const previous = Date.now() - CPU_QUEUE_SPACING_MS;
       f.db.query("UPDATE admission SET last = ?").run(previous);
-      const firstEnv = launch(first, "first-prepare");
-      await until(() => f.count() === 1, 10_000);
-      const peerEnv = launch(peer, "peer-prepare");
-      await until(() => f.count() === 2, 10_000);
+      const firstRun = launch(first, "first-prepare");
+      await firstRun.waitFor("its first private ticket", () => f.count() === 1);
+      const peerRun = launch(peer, "peer-prepare");
+      await peerRun.waitFor("its private ticket behind the first preparer", () => f.count() === 2);
       expect(last()).toBe(previous);
       fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
-      await until(() => fs.existsSync(started), 10_000).catch(() => { throw new Error(stderr("first-prepare") + stderr("peer-prepare")); });
+      await firstRun.waitFor("the admitted check starting", () => fs.existsSync(started));
       const admitted = last()!;
       expect(admitted).toBeGreaterThan(previous);
       expect(f.count()).toBe(1);
@@ -419,11 +443,11 @@ for (const useService of [false, true]) test.skipIf(process.platform !== "linux"
       expect(fs.existsSync(peer.receipt)).toBe(false);
       fs.writeFileSync(release, "release");
       const results = await Promise.all(pending);
-      expect(results.map(result => result.code), stderr("first-prepare") + stderr("peer-prepare")).toEqual([0, 0]);
+      expect(results.map(result => result.code), redactBounded(stderr("first-prepare") + stderr("peer-prepare"), 4_000)).toEqual([0, 0]);
       if (useService) expect(stderr("first-prepare")).toMatch(/gate-slot: delegatus-gate-[\da-f-]+\.service:/);
       else expect(stderr("first-prepare")).toContain("using the documented portable cleanup fallback");
       expect(last()).toBeGreaterThan(admitted);
-      for (const [publication, env] of [[first, firstEnv], [peer, peerEnv]] as const) {
+      for (const [publication, { env }] of [[first, firstRun], [peer, peerRun]] as const) {
         expect(readPublicationCheckReceipt(publication.receipt, publicationCheckBinding(env)).completedAt).toBeGreaterThanOrEqual(admitted);
       }
       expect(f.count()).toBe(0);
