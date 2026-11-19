@@ -135,9 +135,16 @@ jobs:
       # prevented rather than found afterwards in the public history.
       - name: Scan changed publication surfaces, commit messages and the merge boundary
         env:
+          PRIVACY_PUSH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
+          PRIVACY_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: ${{ github.workspace }}/trusted/scripts/privacy-known-value-fingerprints.json
         working-directory: trusted
-        run: bun scripts/privacy-publication-gate.ts --repository ../candidate --require-known-values --check-commits --base "$PRIVACY_BASE_SHA"
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            bun scripts/privacy-landed-publication.ts
+          else
+            bun scripts/privacy-publication-gate.ts --repository ../candidate --require-known-values --check-commits --base "$PRIVACY_BASE_SHA"
+          fi
 
       # Candidate code runs last, after trusted inspection.
       # It receives no credentials and cannot alter a later trusted verdict.

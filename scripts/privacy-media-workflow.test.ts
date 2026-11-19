@@ -72,7 +72,7 @@ esac
       if (entry === baseline) command.unshift("timeout", "--kill-after=5s", budget === "130s" ? `${entry["timeout-minutes"]}m` : budget);
       const result = Bun.spawnSync(command, {
         cwd: join(root, entry["working-directory"]!),
-        env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALL_LOG: log, BASELINE_EXIT: "1", SCAN_EXIT: "0", CANDIDATE_EXIT: "0", STALL_DIRECTORY: "", ...extra },
+        env: { ...process.env, PATH: `${root}:${process.env.PATH}`, GITHUB_EVENT_NAME: "pull_request", CALL_LOG: log, BASELINE_EXIT: "1", SCAN_EXIT: "0", CANDIDATE_EXIT: "0", STALL_DIRECTORY: "", ...extra },
         stdout: "pipe", stderr: "pipe",
       });
       text += result.stdout.toString() + result.stderr.toString();
