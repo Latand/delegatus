@@ -632,6 +632,18 @@ test("receipt inventory omissions refuse, and permission drift is repaired under
   } finally { f.close(); }
 }, 30_000);
 
+test("a sealed graph with no CLI links admits from its complete empty inventory", async () => {
+  const f = await lockedFixture({ registry: true, cli: false });
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const receipt = JSON.parse(fs.readFileSync(path.join(path.dirname(modules), "installed.json"), "utf8"));
+    expect(receipt.cliLinks).toEqual([]);
+    expect(await prepareLockedDependencies(f.worktreeDir)).toBe(true);
+    expect(fs.realpathSync(path.join(f.worktreeDir, "node_modules"))).toBe(modules);
+  } finally { f.close(); }
+}, 30_000);
+
 test("two linked hooks pass a held writer while a first link waits and performs no warm prune", async () => {
   const f = await lockedFixture();
   const hook = path.resolve("scripts/prepare-stage-dependencies.ts");

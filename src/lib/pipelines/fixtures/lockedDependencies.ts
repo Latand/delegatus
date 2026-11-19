@@ -19,7 +19,7 @@ function removeFixture(root: string): void {
 
 // Read dependency plans through the production builder; the installer, lockfile
 // and package payload are real. A loopback registry keeps these cases offline.
-export async function lockedFixture(options: { registry?: boolean } = {}) {
+export async function lockedFixture(options: { registry?: boolean; cli?: boolean } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "locked-dependencies-"));
   const repoDir = path.join(root, "repo");
   const pipeline = buildPipeline({ id: "12345678", task: "locked dependency fixture", project: "fixture", repoDir,
@@ -28,8 +28,9 @@ export async function lockedFixture(options: { registry?: boolean } = {}) {
     srcPath: null, srcConversationId: null, now: "2026-10-29T00:00:00.000Z" });
   const { worktreeDir } = pipeline;
   fs.mkdirSync(repoDir); fs.mkdirSync(worktreeDir);
+  const cli = options.cli !== false;
   const archive = async (version: string) => await new Bun.Archive({
-    "package/package.json": JSON.stringify({ name: "fixture-tool", version, bin: { "fixture-tool": "cli.js" } }),
+    "package/package.json": JSON.stringify({ name: "fixture-tool", version, ...(cli ? { bin: { "fixture-tool": "cli.js" } } : {}) }),
     "package/index.js": `module.exports = ${JSON.stringify(version)};\n`,
     "package/cli.js": "#!/usr/bin/env node\nprocess.exit(0);\n",
   }, { compress: "gzip" }).bytes();
@@ -42,7 +43,7 @@ export async function lockedFixture(options: { registry?: boolean } = {}) {
     if (url.pathname === "/fixture-tool") return Response.json({ name: "fixture-tool", "dist-tags": { latest: "3.0.0" },
       versions: Object.fromEntries((["previous", "current", "next"] as const).map((name, index) => {
         const version = `${index + 1}.0.0`;
-        return [version, { name: "fixture-tool", version, bin: { "fixture-tool": "cli.js" }, dist: dist(name, payloads[name]) }];
+        return [version, { name: "fixture-tool", version, ...(cli ? { bin: { "fixture-tool": "cli.js" } } : {}), dist: dist(name, payloads[name]) }];
       })) });
     if (url.pathname === "/fixture-parent") return Response.json({ name: parent.name, "dist-tags": { latest: parent.version },
       versions: { [parent.version]: { ...parent, dist: dist("parent", parentPayload) } } });
