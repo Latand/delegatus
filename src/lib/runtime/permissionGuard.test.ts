@@ -346,6 +346,37 @@ test("a request the host already holds when the guard attaches is answered from 
   expect(answered).toEqual([["held", { behavior: "deny", message: `flagged\n${NO_APPROVER_LINE}` }]]);
 });
 
+test("an attended timeout cannot deny a replacement request with the same id", async () => {
+  const callbacks: Array<() => void> = [];
+  const denied: string[] = [];
+  const recorded: PermissionDenialRecord[] = [];
+  const guard = new PermissionRequestGuard({
+    attendance: () => "attended",
+    now: () => NOW,
+    setTimer: (callback) => { callbacks.push(callback); return callback; },
+    record: (denial) => { recorded.push(denial); },
+  });
+  let request = {};
+  const host = { agentAttentionRequest: () => request, answer: async (id: string) => { denied.push(id); } };
+  const pending = { pendingPermissions: [{
+    id: "reused-request", tool: "Bash", command: null, reason: null, reasonType: null, since: new Date(NOW).toISOString(),
+  }] };
+  guard.adopt("claude:fixture", host, "conversation_fixture", pending);
+  expect(callbacks).toHaveLength(1);
+  request = {};
+  callbacks[0]!();
+  await Promise.resolve();
+  expect(denied).toEqual([]);
+  expect(recorded).toEqual([]);
+
+  guard.adopt("claude:fixture", host, "conversation_fixture", pending);
+  expect(callbacks).toHaveLength(2);
+  callbacks[1]!();
+  await Promise.resolve();
+  expect(denied).toEqual(["reused-request"]);
+  expect(recorded).toHaveLength(1);
+});
+
 test("a denial the pipeline lease refuses is retried onto the attempt, and the journal names the stage regardless", async () => {
   const conversationId = "conversation_busy";
   const denial: PermissionDenialRecord = {

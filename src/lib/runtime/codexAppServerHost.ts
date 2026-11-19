@@ -2252,8 +2252,26 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     return null;
   }
 
+  private readonly blockingAttentions = new Set<string>();
+
+  private setAttention(id: string, attention: PendingAttention): void {
+    this.attentions.set(id, attention);
+    if (attention.isBlocking === false) this.blockingAttentions.delete(id);
+    else this.blockingAttentions.add(id);
+  }
+
+  private deleteAttention(id: string): void {
+    this.attentions.delete(id);
+    this.blockingAttentions.delete(id);
+  }
+
+  private clearAttentions(): void {
+    this.attentions.clear();
+    this.blockingAttentions.clear();
+  }
+
   private hasBlockingAttention(): boolean {
-    return [...this.attentions.values()].some(attention => attention.isBlocking !== false);
+    return this.blockingAttentions.size > 0;
   }
 
   private prepareDelivery(normalized: ReturnType<typeof normalizeQueueEntry>): QueueEntry {
@@ -3666,7 +3684,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
 
   agentStateMemory() {
     return { activeTurnRef: this.activeTurnId,
-      pendingAttention: [...this.attentions].filter(([, attention]) => attention.isBlocking !== false).map(([id]) => id),
+      pendingAttention: [...this.blockingAttentions],
       attentionUnverified: [...this.attentions.values()].some(attention => attention.isBlocking !== false && attention.origin === "restored"), eventCursor: this.cursor };
   }
 
@@ -3889,7 +3907,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.released = true;
     this.releasing = false;
     this.activeTurnId = null;
-    this.attentions.clear();
+    this.clearAttentions();
     this.setSessionStatus("unhosted", []);
     if (this.ledgerFailed || !this.eventLedgerRestored) this.notifyStateListeners();
     this.closeSubscribers();
@@ -4108,7 +4126,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private restoreEvents(): number {
     const stored = this.storedEvents();
     const currentAttentions = new Map([...this.attentions].filter(([, attention]) => attention.origin === "current"));
-    this.attentions.clear();
+    this.clearAttentions();
     this.clearVoiceStreamTimers();
     this.voiceStreams.clear();
     this.pendingVoiceChunks.clear();
@@ -4186,10 +4204,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         if (event.status !== "completed") this.cancelledVoiceTurns.add(event.turnId);
       }
       if (event.kind === "attention") {
-        this.attentions.set(event.id, { rpcId: event.codexReceipt?.identity.requestId ?? "restored", method: event.method, origin: "restored", params: record(event.attention) ?? {}, receipt: event.codexReceipt, isBlocking: !event.codexReceipt?.gateWait && !isNonblockingCodexQuestion(event.method, event.attention) });
+        this.setAttention(event.id, { rpcId: event.codexReceipt?.identity.requestId ?? "restored", method: event.method, origin: "restored", params: record(event.attention) ?? {}, receipt: event.codexReceipt, isBlocking: !event.codexReceipt?.gateWait && !isNonblockingCodexQuestion(event.method, event.attention) });
       }
       if ((event.kind === "attention" || event.kind === "attention-resolved") && event.codexReceipt) this.callbackReceipts.set(event.id, event.codexReceipt);
-      if (event.kind === "attention-resolved") this.attentions.delete(event.id);
+      if (event.kind === "attention-resolved") this.deleteAttention(event.id);
       if (event.kind === "realtime-delivery-progress") {
         this.realtimeDeliveries.set(event.deliveryId, {
           digest: event.digest,
@@ -4216,7 +4234,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         }
       }
     }
-    for (const [id, attention] of currentAttentions) this.attentions.set(id, attention);
+    for (const [id, attention] of currentAttentions) this.setAttention(id, attention);
     boundMap(this.callbackReceipts, SETTLED_CALLBACK_RECEIPT_MEMORY, settledCallbackReceipt);
     boundMap(this.realtimeDeliveries, ACKNOWLEDGED_REALTIME_DELIVERY_MEMORY, delivery => delivery.acknowledged);
     this.eventLedgerRestored = true;
@@ -4854,7 +4872,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const attentionId = `item/tool/call:${String(id)}:${codexRequestDigest(identity)}`;
     const attention: PendingAttention = { rpcId: id, method: "item/tool/call", origin: "current", params, isBlocking: false,
       receipt: { identity, requestDigest, receivedAt: receivedAt ?? new Date().toISOString(), gateWait } };
-    this.attentions.set(attentionId, attention);
+    this.setAttention(attentionId, attention);
     this.persistAttention(attentionId, attention);
     if (!this.ledgerFailed) this.startGateCheck(attentionId, attention);
   }
@@ -4907,7 +4925,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       ? { ...attention.receipt, recovery: attention.receipt.recovery ?? recovery }
       : { ...attention.receipt, serverResolution: { at: new Date().toISOString(), outcome: "answered" } };
     attention.receipt = receipt;
-    this.attentions.delete(attentionId);
+    this.deleteAttention(attentionId);
     this.emit({ kind: "attention-resolved", id: attentionId, resolution: recovery ? "host-restarted" : "answered", codexReceipt: receipt });
     if (!this.ledgerFailed) this.rememberCallbackReceipt(attentionId, receipt);
   }
@@ -4983,7 +5001,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const attention: PendingAttention = { rpcId: id, method, origin: "current", params, isBlocking: !isNonblockingCodexQuestion(method, params), receipt: {
         identity, requestDigest, receivedAt: receivedAt ?? new Date().toISOString(), ...(protocolError ? { protocolError } : {}),
       } };
-      this.attentions.set(attentionId, attention);
+      this.setAttention(attentionId, attention);
       this.persistAttention(attentionId, attention);
       return;
     }
@@ -5105,7 +5123,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       const previous = resolved[1].receipt;
       const resolution = previous?.dispatch ? "answered" : "server-resolved";
       const receipt: CodexRequestReceipt | undefined = previous ? { ...previous, serverResolution: { at: receivedAt ?? new Date().toISOString(), outcome: resolution } } : undefined;
-      this.attentions.delete(resolved[0]);
+      this.deleteAttention(resolved[0]);
       this.emit({ kind: "attention-resolved", id: resolved[0], resolution, ...(receipt ? { codexReceipt: receipt } : {}) });
       if (this.ledgerFailed) {
         if (answer) { clearTimeout(answer.timer); answer.reject(new StructuredAnswerError("Codex resolution could not be persisted; delivery is uncertain", "uncertain")); }
@@ -5287,7 +5305,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.rejectPendingDeliveries(error);
     this.rejectPendingCompactions(error);
     this.settleArmedTierCut("host-gone");
-    this.attentions.clear();
+    this.clearAttentions();
     for (const request of this.pending.values()) {
       clearTimeout(request.timer);
       request.reject(new Error(safeError(error)));
@@ -5309,7 +5327,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     this.rejectPendingAnswers(error);
     this.rejectPendingDeliveries(error);
     this.rejectPendingCompactions(error);
-    this.attentions.clear();
+    this.clearAttentions();
     for (const request of this.pending.values()) {
       clearTimeout(request.timer);
       request.reject(new Error(safeError(error)));
