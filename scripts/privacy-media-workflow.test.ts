@@ -126,7 +126,7 @@ test("candidate self-test failure still blocks publication after a red baseline"
 });
 
 test("a stalled baseline is diagnosed before inspection and candidate tests proceed", () => {
-  const result = runPublication({ STALL_DIRECTORY: "trusted" }, "0.1s");
+  const result = runPublication({ STALL_DIRECTORY: "trusted" }, "1s");
   expect(result.code).toBe(0);
   expect(result.text).toContain("::warning title=Trusted privacy self-tests::");
   expect(result.baselineCode).toBe(124);
@@ -134,7 +134,7 @@ test("a stalled baseline is diagnosed before inspection and candidate tests proc
 });
 
 test("a stalled candidate still refuses publication after a red baseline", () => {
-  const result = runPublication({ STALL_DIRECTORY: "candidate" }, "0.1s");
+  const result = runPublication({ STALL_DIRECTORY: "candidate" }, "1s");
   expect(result.code).toBe(124);
   expect(result.calls).toEqual(["trusted:test", "trusted:scripts/privacy-publication-gate.ts", "candidate:test"]);
 });

@@ -41,6 +41,7 @@ export type FindingClass =
   | "provenance_invalid"
   | "provenance_missing"
   | "resource_identifier"
+  | "tool_unavailable"
   | "transcript_content"
   | "unsafe_path";
 
@@ -1733,7 +1734,7 @@ function inspectMediaMetadata(path: string, kind: MediaKind | undefined): Set<Fi
     if (bytes.length > 32 * 1024 * 1024) return new Set(["inspection_error"]);
     if (kind === "animated") {
       // Container tags can be UTF-8 even when adjacent frame bytes are binary.
-      const strings = bytes.toString("utf8").match(/[^\x00-\x1f\x7f-\x9f\ufffd]{4,}/gu) ?? [];
+      const strings: string[] = bytes.toString("utf8").match(/[^\x00-\x1f\x7f-\x9f\ufffd]{4,}/gu) ?? [];
       // ISO-BMFF metadata data boxes declare their encoding and byte extent.
       // Type 2 stores UTF-16. Scan both alignments and byte orders just as
       // for PNG metadata, without decoding any frame or launching a tool.
