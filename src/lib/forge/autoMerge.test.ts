@@ -1274,6 +1274,28 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     expect(merge.chain).toEqual([HEAD_A]);
   });
 
+  test("a moved head after gh preflight refusal clears the old check clock and checks the new SHA", async () => {
+    const h = harness({ required: ["ci"], lanes: [lane("head-moved-at-preflight")], prs: [openPr(11)] });
+    await h.sweep();
+    h.advance(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    let attempts = 0;
+    h.ports.write = async (_args, _repository, beforeDispatch) => {
+      attempts++;
+      beforeDispatch?.();
+      Object.assign(h.prs.get(11)!, { head: HEAD_B, checks: [pending("ci")] });
+      throw new Error("the base branch policy prohibits the merge");
+    };
+    await h.sweep();
+    expect(h.merge("head-moved-at-preflight")).toMatchObject({
+      state: "checking", reason: "PR head moved during merge admission; checking again",
+      head: null, headSeenAt: null, lastChecks: null, nextReadAt: iso(h.now() + MERGE_POLL_MS),
+    });
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+    expect(h.merge("head-moved-at-preflight")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+    expect(attempts).toBe(1);
+  });
+
   test.each(["already running", "while preparing the forge write", "with a linked PR", "on a fork"] as const)(
     "a refresh %s holds its branch even when the queued lane predates delivery claims", async (timing) => {
       const refresh = lane("refresh-owner");

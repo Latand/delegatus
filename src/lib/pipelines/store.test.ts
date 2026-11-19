@@ -7,7 +7,8 @@ import path from "node:path";
 
 import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission, pipelineTaskBindingSource } from "./store";
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "./types";
-import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
+import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryAdmissionFence, withDeliveryMutation } from "./store";
+import { deliveryPullRequestRepository } from "@/lib/forge/workLinks";
 import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
@@ -98,6 +99,41 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+test("a batch landing fence finds active PR owners and holds new claims until its receipt", async () => isolatedDelivery(async () => {
+  const target = { ...deliveryTarget, remote: "https://github.com/acme/widgets.git", prRepository: "acme/widgets" };
+  const owner = await createPipelineWithDelivery(deliveryFixture("batch-owner"), target);
+  const findOwner = () => withDeliveryAdmissionFence(mutate => mutate(tx =>
+    tx.activeDeliveryOwnerForPullRequest(637, pipeline =>
+      deliveryPullRequestRepository(pipeline.delivery?.target) === "acme/widgets")));
+  expect(await findOwner()).toMatchObject({ id: owner.id, delivery: { active: true, disposition: "owner" } });
+
+  withDeliveryMutation(tx => {
+    const live = tx.get(owner.id)!;
+    live.state = "closed";
+    live.cursor = null;
+    live.closedAt = "2026-07-02T00:00:00.000Z";
+    tx.put(live);
+  });
+  expect(await findOwner()).toBeNull();
+
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const landing = withDeliveryAdmissionFence(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  let claimSettled = false;
+  const nextTarget = { ...target, branch: "refs/heads/next-review-target" };
+  const claim = createPipelineWithDelivery(deliveryFixture("claim-after-landing"), nextTarget, false, { requireOwner: true })
+    .finally(() => { claimSettled = true; });
+  await new Promise<void>(resolve => setTimeout(resolve, 0));
+  expect(claimSettled).toBe(false);
+  release.resolve();
+  await landing;
+  await expect(claim).resolves.toMatchObject({ id: "claim-after-landing", delivery: { active: true, disposition: "owner" } });
+}));
 
 test.each([false, true])("a closed stageless draft round-trips and archives (pinned base: %s)", async (pinned) => isolatedDelivery(async () => {
   const pipeline = buildPipeline({ id: "empty-closed", task: "Discard empty draft", project: "fixture", repoDir: "/repo",

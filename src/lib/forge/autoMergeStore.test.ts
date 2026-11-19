@@ -20,7 +20,7 @@ const { MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, merg
 const { refreshRequest, refreshReservation } = await import("./autoRefresh");
 const { defaultPipelinePorts, normalizeStages, patchPipeline } = await import("@/lib/pipelines/engine");
 const { pipelineRoleLookup } = await import("@/lib/pipelines/roles");
-const { takeoverPipelineDelivery, assignPipelineDelivery, buildPipeline, archiveSettledPipelines, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
+const { takeoverPipelineDelivery, assignPipelineDelivery, buildPipeline, archiveSettledPipelines, createPipelineWithDelivery, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
 const { laneNeed } = await import("@/components/attention/needReason");
 const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
@@ -68,6 +68,32 @@ const T0 = Date.parse("2026-09-25T10:00:00Z");
 const iso = (ms: number) => new Date(ms).toISOString();
 const BUILDER = { engine: "claude", model: null, effort: null, roleId: null, access: "read-write", promptScaffold: null };
 const REVIEWER = { ...BUILDER, access: "read-only" };
+
+test("an in-flight merge reservation fences a new refresh claim until its receipt settles", async () => {
+  const reservation = completedLane("merge-reservation");
+  const admission = mergeAdmission(reservation, T0, {
+    setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+    pullRequestOf: () => ({ repository: REPO, number: 637 }), hasPublishedPrototype: () => false,
+  });
+  if (!("merge" in admission)) throw new Error(admission.reason);
+  reservation.merge = admission.merge;
+  reservation.merge.state = "merging";
+  savePipelines([reservation]);
+
+  const refresh = buildPipeline({ id: "refresh-during-merge", task: "Refresh the pull request", project: PROJECT, repoDir: "/repo",
+    stages: [], srcPath: null, srcConversationId: null, now: iso(T0), state: "draft" });
+  const target = { repository: PROJECT, remote: `https://github.com/${REPO}.git`, branch: "refs/heads/review-target", pr: 637, prRepository: REPO };
+  await expect(createPipelineWithDelivery(refresh, target, false, { requireOwner: true }))
+    .rejects.toThrow("PR merge is in flight in lane merge-reservation");
+
+  reservation.merge.state = "blocked";
+  savePipelines([reservation]);
+  const released = buildPipeline({ id: "refresh-after-merge", task: "Refresh the pull request", project: PROJECT, repoDir: "/repo",
+    stages: [], srcPath: null, srcConversationId: null, now: iso(T0), state: "draft" });
+  await expect(createPipelineWithDelivery(released, target, false, { requireOwner: true })).resolves.toMatchObject({
+    id: "refresh-after-merge", delivery: { active: true, disposition: "owner" },
+  });
+});
 
 function markedTask(lane: Pipeline): string {
   const task = mutateTasks((tasks) => {

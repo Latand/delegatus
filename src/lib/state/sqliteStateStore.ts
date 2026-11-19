@@ -296,6 +296,8 @@ export interface StateBoundedTransaction<T> {
   /** Indexed task evidence; each project seek and returned row spends budget. */
   taskProjectRows(projects: readonly string[]): T[];
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
+  activeMergeForPullRequest(repository: string, prNumber: number): T | null;
+  activeDeliveryOwnerForPullRequest(prNumber: number, matches: (pipeline: T) => boolean): T | null;
   hasUnfinishedPipeline(query: {
     repository: string;
     branch: string;
@@ -2870,6 +2872,38 @@ export class SqliteStateCollection<T> {
               consume();
               return this.lookupPipeline(db, query);
             },
+            activeMergeForPullRequest: (repository, prNumber) => {
+              consume();
+              if (this.options.collection !== "pipelines") throw new Error("merge reservation lookup requires the pipeline collection");
+              const row = db.query<{ value_json: string }, [string, number]>(`
+                SELECT value_json FROM state_rows WHERE collection='pipelines' AND json_valid(value_json)
+                  AND json_extract(value_json,'$.merge.state')='merging'
+                  AND lower(json_extract(value_json,'$.merge.repository'))=lower(?)
+                  AND json_extract(value_json,'$.merge.prNumber')=? ORDER BY row_key LIMIT 1
+              `).get(repository, prNumber);
+              if (!row) return null;
+              const value = this.decodeRow(row.value_json, db);
+              if (!value) throw new Error("invalid merge reservation row");
+              return this.options.clone(value);
+            },
+            activeDeliveryOwnerForPullRequest: (prNumber, matches) => {
+              if (this.options.collection !== "pipelines") throw new Error("delivery owner lookup requires the pipeline collection");
+              const rows = db.query<{ value_json: string }, [number, number]>(`
+                SELECT value_json FROM state_rows WHERE collection='pipelines' AND json_valid(value_json)
+                  AND json_extract(value_json,'$.delivery.active')=1
+                  AND json_extract(value_json,'$.delivery.disposition')='owner'
+                  AND json_extract(value_json,'$.delivery.target.pr')=?
+                  AND json_extract(value_json,'$.state') NOT IN ('completed','closed')
+                ORDER BY row_key LIMIT ?
+              `).all(prNumber, remaining + 1);
+              for (const row of rows) {
+                consume();
+                const value = this.decodeRow(row.value_json, db);
+                if (!value) throw new Error("invalid active delivery owner row");
+                if (matches(value)) return this.options.clone(value);
+              }
+              return null;
+            },
             hasUnfinishedPipeline: (query) => {
               consume();
               if (this.options.collection !== "pipelines") throw new Error("unfinished pipeline lookup requires the pipeline collection");
@@ -2975,6 +3009,10 @@ export class SqliteStateCollection<T> {
   private admissionTail: Promise<unknown> = Promise.resolve();
   private waitingAdmissions = 0;
   async admit<R>(operation: () => Promise<R> | R, lockWaitMs?: number, observeHold?: (heldMs: number) => void): Promise<R> {
+    return this.admitWithLease(() => operation(), lockWaitMs, observeHold);
+  }
+
+  async admitWithLease<R>(operation: (heldLease: string) => Promise<R> | R, lockWaitMs?: number, observeHold?: (heldMs: number) => void): Promise<R> {
     if (lockWaitMs === 0 && this.waitingAdmissions > 0) throw new FileTransactionBusyError(this.options.busyMessage);
     this.waitingAdmissions++;
     const deadline = lockWaitMs === undefined ? null : Date.now() + lockWaitMs;
@@ -2986,7 +3024,7 @@ export class SqliteStateCollection<T> {
       assertSqliteWriteAuthority(this.filename);
       const lease = await this.acquireLease(deadline === null ? undefined : Math.max(0, deadline - Date.now()));
       const acquiredAt = durableHolds.get(lease)!.start;
-      try { assertSqliteWriteAuthority(this.filename); return await operation(); }
+      try { assertSqliteWriteAuthority(this.filename); return await operation(lease); }
       finally { await this.releaseLease(lease); observeHold?.(performance.now() - acquiredAt); }
     });
     this.admissionTail = turn.then(() => undefined, () => undefined);

@@ -1125,6 +1125,16 @@ export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedT
   }, remaining()));
 }
 
+/** Holds the cross-process delivery lease while a short external landing is
+ * reconciled. Each state read or write uses the already-held lease; delivery
+ * claims cannot enter between the final ownership check and the receipt. */
+export async function withDeliveryAdmissionFence<R>(
+  operation: (mutate: <T>(change: (tx: StateBoundedTransaction<Pipeline>) => T, limit?: number) => T) => Promise<R>,
+): Promise<R> {
+  const store = pipelineStore();
+  return store.admitWithLease(async heldLease => operation((change, limit = 4096) => store.boundedPatch(limit, change, heldLease)), pipelineLockWaitMs());
+}
+
 /** A short state admission publishes the durable fence. The sweep owns its
  * lifetime outside this lease and re-reads authority before removing data. */
 export async function claimAttemptRetirement(pipelineId: string, directory: string, waitMs?: number) {
@@ -1186,13 +1196,17 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
     if (preparationFailure) throw preparationFailure.error;
     options.admit?.();
     const pullRequestRepository = target.pr ? deliveryPullRequestRepository(target) : null;
-    if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
+    const mergeReservation = options.requireOwner && target.pr && pullRequestRepository
+      ? tx.activeMergeForPullRequest(pullRequestRepository, target.pr) : null;
+    if (options.requireOwner && (comparison || mergeReservation || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
         ...(target.pr && pullRequestRepository ? { pullRequestRepository, prNumber: target.pr,
           pullRequestMatches: (candidate, repository, number) => pipelineHasPullRequest(candidate as Pipeline, repository, number),
         } : {}),
       }))) {
-      throw new Error("target already owned or has unfinished PR work; Delegatus could not claim the refresh delivery branch");
+      throw new Error(mergeReservation
+        ? `PR merge is in flight in lane ${mergeReservation.id}; Delegatus could not claim the refresh delivery branch`
+        : "target already owned or has unfinished PR work; Delegatus could not claim the refresh delivery branch");
     }
     assignPipelineDelivery(pipeline, target, comparison, tx.pipelineLookup);
     tx.put(pipeline);

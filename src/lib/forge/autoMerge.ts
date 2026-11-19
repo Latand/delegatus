@@ -1448,7 +1448,8 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       block(live, MERGE_REASONS.closed, ports.now());
       return;
     }
-    if (headMismatch && (!after || (after.state === "OPEN" && after.headRefOid !== view!.headRefOid))) {
+    if ((headMismatch && (!after || (after.state === "OPEN" && after.headRefOid !== view!.headRefOid)))
+      || (failure !== null && after?.state === "OPEN" && after.headRefOid !== view!.headRefOid)) {
       delete live.effectUncertain;
       live.state = "checking";
       live.reason = "PR head moved during merge admission; checking again";
