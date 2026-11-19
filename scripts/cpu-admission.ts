@@ -10,6 +10,7 @@ import { ACTIVE_GATE_PREFIX, inheritedCpuSlot, cpuAdmissionFile, CpuAdmissionQue
 import { reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuQueueDetail, ordinal } from "../src/lib/runtime/cpuQueueText";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
+import type { ProcessIdentity } from "../src/lib/processIdentity";
 
 const policy = cpuPressurePolicy();
 const pressure = new GateCpuPressure(policy ? { ...policy, releaseAfterMs: Number(process.env.LLV_GATE_PSI_RELEASE_SECONDS ?? 10) * 1000 } : null);
@@ -126,6 +127,14 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     return identity.bootEpoch === epoch ? [identity.startIdentity] : [];
   }));
   const readArgv = (base: string) => fs.readFileSync(path.join(base, "cmdline")).subarray(0, -1).toString().split("\0");
+  const readCwd = (base: string) => () => fs.readlinkSync(path.join(base, "cwd"));
+  const checkoutEntry = (entry: string, directoryName: string, cwd: () => string) => {
+    const script = path.isAbsolute(entry) ? entry : path.resolve(cwd(), entry);
+    const directory = fs.realpathSync(path.dirname(script));
+    const root = path.dirname(directory);
+    if (path.basename(directory) === directoryName && fs.existsSync(path.join(root, ".git")) &&
+      fs.existsSync(path.join(root, "scripts", "gate-runner")) && fs.existsSync(script)) return path.join(directory, path.basename(script));
+  };
   const isHookParent = (command: string[], cwd: () => string) => {
     const argv = command[2] === "--in-cpu-scope" && path.basename(command[1] ?? "") === "gate-slot.sh"
       ? command.slice(3) : command;
@@ -134,12 +143,33 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const name = path.basename(argv[0] ?? "");
     const entry = name === "bun" && argv.length === 3 && argv[2] === "pre-push" && path.basename(argv[1] ?? "") === "local-gate.ts"
       ? argv[1] : (name === "bash" || name === "sh") && path.basename(argv[1] ?? "") === "pre-push" ? argv[1] : name === "pre-push" ? argv[0] : undefined;
-    if (!entry) return false;
-    const script = path.isAbsolute(entry) ? entry : path.resolve(cwd(), entry);
-    const directory = fs.realpathSync(path.dirname(script));
-    const root = path.dirname(directory);
-    return path.basename(directory) === (name === "bun" ? "scripts" : ".githooks") &&
-      fs.existsSync(path.join(root, ".git")) && fs.existsSync(path.join(root, "scripts", "gate-runner")) && fs.existsSync(script);
+    return entry !== undefined && checkoutEntry(entry, name === "bun" ? "scripts" : ".githooks", cwd) !== undefined;
+  };
+  const publicationPrepare = (argv: string[], cwd: () => string) => {
+    if (argv.length === 4 && path.basename(argv[0]!) === "bun" && path.basename(argv[1]!) === "local-gate.ts" &&
+      argv[2] === "pre-push" && argv[3] === "--publication-prepare") {
+      const entry = checkoutEntry(argv[1]!, "scripts", cwd);
+      if (entry) return fs.realpathSync(entry);
+    }
+  };
+  const isPrepareSupervisor = (command: string[], cwd: () => string, readParent: () => string | undefined) => {
+    // local-gate bootstraps an owned copy of itself before dispatching the
+    // admitted child. The same argv sent through a legacy gate can take a slot.
+    const script = publicationPrepare(command, cwd);
+    if (script === undefined) return false;
+    const parent = readParent();
+    return parent !== undefined && script === publicationPrepare(readArgv(parent), readCwd(parent));
+  };
+  const recordedParent = (identity: ProcessIdentity | undefined) => identity && identity.bootEpoch === epoch &&
+    cpuOwnerStatus(identity) === "alive" ? path.join(proc, String(identity.pid)) : undefined;
+  const readStat = (base: string) => {
+    const stat = fs.readFileSync(path.join(base, "stat"), "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+  };
+  const isHookRunner = (argv: string[], base: string, parentPid: string | undefined) => {
+    const command = argv.slice(argv[2] === "--portable" || argv[2] === "--namespace" ? 3 : 2);
+    const cwd = readCwd(base);
+    return isHookParent(command, cwd) || isPrepareSupervisor(command, cwd, () => parentPid ? path.join(proc, parentPid) : undefined);
   };
   const samePool = (candidate: string | undefined, cwd: string): boolean => {
     try { return fs.realpathSync(path.resolve(cwd, candidate || "/var/tmp")) === pool; }
@@ -152,7 +182,13 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const fields = fs.readFileSync(path.join(base, "environ"), "utf8").split("\0");
     return (key: string) => fields.find(value => value.startsWith(key + "="))?.slice(key.length + 1);
   };
-  const serviceCouldUsePool = (base: string) => {
+  const serviceCommand = (argv: string[], runner: string) => {
+    // The service's Linux check worker keeps its own argv while it supervises
+    // the command. Accept the entry beside this exact owned runner.
+    const worker = path.join(path.dirname(runner), "check-worker-entry.py");
+    return path.basename(argv[0] ?? "") === "python3" && argv[1] === "-I" && argv[2] === worker ? argv.slice(3) : argv;
+  };
+  const serviceCouldUsePool = (base: string, runner: string) => {
     // The service command inherits the launch environment and the supervisor
     // stamps its real cgroup. This can still establish scope when the launch
     // record's temporary directory has already been collected.
@@ -164,8 +200,11 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     return [...children].some(child => {
       const member = path.join(proc, child);
       const env = readEnvironment(member);
-      return env("LLV_OWNED_TEST_RUN_CGROUP") !== group ||
-        samePool(env("LLV_GATE_LOCK_DIR"), fs.readlinkSync(path.join(member, "cwd")));
+      if (env("LLV_OWNED_TEST_RUN_CGROUP") !== group) return true;
+      const parent = env("LLV_OWNED_RUN_PARENT_IDENTITY");
+      const cwd = readCwd(member);
+      if (parent && isPrepareSupervisor(serviceCommand(readArgv(member), runner), cwd, () => recordedParent(JSON.parse(parent)))) return false;
+      return samePool(env("LLV_GATE_LOCK_DIR"), cwd());
     });
   };
   const readCandidate = (entry: string) => {
@@ -174,12 +213,11 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       const argv = readArgv(base);
       const script = path.basename(argv[1] ?? "");
       if (!["gate-slot.sh", "owned-runner.ts", "test-child-guardian.ts"].includes(script)) return false;
-      const stat = fs.readFileSync(path.join(base, "stat"), "utf8");
-      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      const fields = readStat(base);
       if (["Z", "X", "x"].includes(fields[0]!)) return false;
       if (script === "gate-slot.sh" && argv[2] !== "--in-cpu-scope" &&
         (Number(entry) === owner.pid || waiting.has(`${entry}:${fields[19]}`))) return false;
-      const cwd = () => fs.readlinkSync(path.join(base, "cwd"));
+      const cwd = readCwd(base);
       if (script === "gate-slot.sh" && isHookParent(argv.slice(2), cwd)) return false;
       if (script === "owned-runner.ts" && argv[2] === "--service") {
         // The user manager's supervisor has a clean environment. Its private
@@ -187,23 +225,22 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
         // parent which deliberately runs outside the gate pool.
         try {
           const launch = JSON.parse(fs.readFileSync(path.join(base, "root", argv[3]!), "utf8"));
-          if (isHookParent(launch.command, () => launch.cwd)) return false;
+          if (isHookParent(launch.command, () => launch.cwd) ||
+            isPrepareSupervisor(serviceCommand(launch.command, argv[1]!), () => launch.cwd, () => recordedParent(launch.parent))) return false;
           return samePool(launch.env.LLV_GATE_LOCK_DIR, launch.cwd);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-          return serviceCouldUsePool(base);
+          return serviceCouldUsePool(base, argv[1]!);
         }
       }
-      const isHookRunner = (argv: string[], cwd: () => string) => isHookParent(argv.slice(
-        argv[2] === "--portable" || argv[2] === "--namespace" ? 3 : 2), cwd);
-      if (script === "owned-runner.ts" && isHookRunner(argv, cwd)) return false;
+      if (script === "owned-runner.ts" && isHookRunner(argv, base, fields[1])) return false;
       if (script === "test-child-guardian.ts") {
         const runner = JSON.parse(argv[3]!);
         if (runner.bootEpoch === epoch && cpuOwnerStatus(runner) === "alive") {
           const runnerBase = path.join(proc, String(runner.pid));
           const launch = readArgv(runnerBase);
           if (path.basename(launch[1] ?? "") === "owned-runner.ts" &&
-            isHookRunner(launch, () => fs.readlinkSync(path.join(runnerBase, "cwd")))) return false;
+            isHookRunner(launch, runnerBase, readStat(runnerBase)[1])) return false;
         }
       }
       const candidate = readEnvironment(base)("LLV_GATE_LOCK_DIR");
