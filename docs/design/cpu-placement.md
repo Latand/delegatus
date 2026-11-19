@@ -723,6 +723,16 @@ fences current claims because the older holder's cap is unknown. Native
 Windows records the cap and wrapper owner in the shared queue and checks
 capacity inside the claim transaction.
 
+On Linux, a pre-cap wrapper launched without the flock CLI runs without a
+slot lock. The new wrapper waits for that pool to drain before its first
+claim. It checks the kernel's process view for wrappers that have consumed
+their tickets, owned runners and their cleanup supervisors. Signal-sandboxed
+callers use the verified host process view. A waiting shell still has its
+ticket and does not keep the pool from draining. A held slot whose admission
+already passed the drain check carries that proof forward. The same final
+claim transaction rejects a drain observation if another caller admitted
+work during the check.
+
 Older installed and checkout wrappers can keep polling during the transition.
 After reaching the wait bound, a current ticket can pass older pressure-only
 tickets, even if the two wrappers use different pressure settings. Current

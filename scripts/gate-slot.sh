@@ -236,7 +236,7 @@ run_claimed() {
   }
   exit "$result"
 }
-queue_key="command:bounded:$$:$RANDOM:$RANDOM"
+queue_key="command:bounded:drained:$$:$RANDOM:$RANDOM"
 while :; do
   "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
   if [[ $OSTYPE == msys || $OSTYPE == cygwin ]]; then

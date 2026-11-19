@@ -284,6 +284,10 @@ export class CpuAdmissionQueue {
   lastAdmission(): number | null {
     return this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
   }
+  waitingGateOwners(): string[] {
+    return this.db.query<{ owner: string }, []>(`SELECT DISTINCT owner FROM tickets
+      WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all().map(row => row.owner);
+  }
   activeGateSlots(): ActiveGateSlot[] {
     if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gate_slots'").get()) return [];
     return this.db.query<ActiveGateSlot, []>("SELECT tickets.key, owner, slot, cap FROM gate_slots JOIN tickets USING (key)").all();

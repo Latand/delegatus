@@ -300,6 +300,60 @@ for (const legacyHolds of [true, false]) test.skipIf(process.platform !== "linux
   }
 }, 45_000);
 
+test.skipIf(process.platform !== "linux")("a portable legacy holder drains before a current cap-two entrant starts", async () => {
+  const f = fixture(), control = new AbortController();
+  const pending: ReturnType<typeof realExec>[] = [];
+  const release = path.join(f.dir, "release"), holderPid = path.join(f.dir, "holder-pid"), stderr = path.join(f.dir, "entrant-stderr");
+  const holderStderr = path.join(f.dir, "holder-stderr");
+  const bin = path.join(f.dir, "portable-bin");
+  fs.mkdirSync(bin);
+  for (const command of ["bash", "date", "dirname", "getconf", "mkdir", "mktemp", "realpath", "rm", "sleep", "systemctl", "systemd-notify", "systemd-run", "touch", "uname", "which"]) {
+    const executable = Bun.which(command);
+    if (executable) fs.symlinkSync(executable, path.join(bin, command));
+  }
+  const env = { ...f.env, PATH: bin, LLV_GATE_BUN: process.execPath, LLV_GATE_RUNNER: "off", DELEGATUS_CPU_PRESSURE: "off",
+    CPU_SLOT_RELEASE: release, CPU_SLOT_HOLDER_PID: holderPid };
+  const output = () => fs.existsSync(f.env.CPU_QUEUE_OUTPUT) ? fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8") : "";
+  const log = () => fs.existsSync(stderr) ? fs.readFileSync(stderr, "utf8") : "";
+  const last = () => f.db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last;
+  try {
+    const legacy = legacyGateTree(f.dir);
+    pending.push(realExec("/bin/bash", ["-c", 'printf "%s\n" "$$" > "$CPU_SLOT_HOLDER_PID"; exec /bin/bash "$@" 2>"$CPU_SLOT_STDERR"',
+      "legacy-portable", "scripts/gate-slot.sh", "bash", "-c",
+      'echo holder >> "$CPU_QUEUE_OUTPUT"; while [[ ! -f "$CPU_SLOT_RELEASE" ]]; do sleep 0.02; done; echo released >> "$CPU_QUEUE_OUTPUT"'],
+      legacy, { ...env, LLV_GATE_SLOTS: "1", CPU_SLOT_STDERR: holderStderr }, { timeoutMs: 25_000, signal: control.signal }));
+    await until(() => output() === "holder\n", 10_000).catch(() => {
+      throw new Error("legacy holder did not start: " + fs.readFileSync(holderStderr, "utf8"));
+    });
+    expect(f.count()).toBe(0);
+    expect(fs.existsSync(path.join(f.dir, "llv-heavy-gate.slot1.lock"))).toBe(false);
+    const holderAdmission = last()!;
+    expect(holderAdmission).not.toBeNull();
+    pending.push(realExec("/bin/bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "mixed-portable", "bash", "scripts/gate-slot.sh", "bash", "-c",
+      'read -r pid < "$CPU_SLOT_HOLDER_PID"; if [[ -r /proc/$pid/stat ]] && read -r stat < "/proc/$pid/stat"; then [[ ${stat##*) } == Z\\ * ]] || exit 23; fi; echo entrant >> "$CPU_QUEUE_OUTPUT"'],
+      process.cwd(), { ...env, LLV_GATE_SLOTS: "2", CPU_SLOT_STDERR: stderr }, { timeoutMs: 25_000, signal: control.signal }));
+    await until(() => last() !== holderAdmission || (
+      log().includes("Waiting for legacy heavy commands to drain")
+      && (f.db.query<{ polled: number }, []>(`SELECT polled ${queuedTickets}`).get()?.polled ?? 0) > holderAdmission + CPU_QUEUE_SPACING_MS + 250
+    ), 10_000);
+    expect(last(), log()).toBe(holderAdmission);
+    expect(output()).toBe("holder\n");
+    fs.writeFileSync(release, "release");
+    await until(() => output().includes("entrant\n"), 12_000).catch(() => {
+      throw new Error("entrant did not start after release: " + log() + "\nlegacy holder: " + fs.readFileSync(holderStderr, "utf8"));
+    });
+    const results = await Promise.all(pending);
+    expect(results.map(result => result.code), JSON.stringify(results)).toEqual([0, 0]);
+    expect(output()).toBe("holder\nreleased\nentrant\n");
+    expect(f.count()).toBe(0);
+  } finally {
+    fs.writeFileSync(release, "release");
+    control.abort();
+    await Promise.allSettled(pending);
+    f.close();
+  }
+}, 40_000);
+
 test.skipIf(process.platform !== "linux")("an aged gate respects the strictest active cap under sustained pressure", async () => {
   const f = fixture(), control = new AbortController();
   const pending: ReturnType<typeof realExec>[] = [];

@@ -97,6 +97,7 @@ if (claimSlot && (portable ? claimSlot !== "portable" : !/^[1-9]\d*$/.test(claim
 const flock = Bun.which("flock");
 const dir = process.env.LLV_GATE_LOCK_DIR ?? "/var/tmp";
 const capLock = (slot: number, cap: number) => `llv-heavy-gate.slot${slot}.cap${cap}.lock`;
+const transitionedGatePrefix = ACTIVE_GATE_PREFIX + "command:bounded:drained:";
 let lockFd: ReturnType<typeof nativeSlotLock> | undefined;
 function locked(file: string): boolean {
   const filename = path.join(dir, file);
@@ -110,9 +111,121 @@ function locked(file: string): boolean {
   const fd = fs.openSync(filename, "a");
   try { return !lockFd(fd); } finally { fs.closeSync(fd); }
 }
+
+// The pre-cap Linux wrapper can consume its ticket and exec the owned
+// runner without opening a slot file. Observe both sides of that exec and
+// the runner's cleanup supervisors when establishing a drained pool.
+function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
+  const sandbox = signalSandboxContext();
+  const proc = sandbox?.hostProc ?? "/proc";
+  const uid = fs.statSync(path.join(proc, "self")).uid;
+  const pool = fs.realpathSync(dir);
+  const epoch = sandbox?.hostEpoch ?? owner.bootEpoch;
+  const waiting = new Set(queue.waitingGateOwners().flatMap(data => {
+    const identity = JSON.parse(data);
+    return identity.bootEpoch === epoch ? [identity.startIdentity] : [];
+  }));
+  const readArgv = (base: string) => fs.readFileSync(path.join(base, "cmdline")).subarray(0, -1).toString().split("\0");
+  const isHookParent = (command: string[], cwd: () => string) => {
+    const argv = command[2] === "--in-cpu-scope" && path.basename(command[1] ?? "") === "gate-slot.sh"
+      ? command.slice(3) : command;
+    // The legacy wrapper also kept exactly this pre-push parent outside
+    // admission. Its admitted half has a separate argv and takes a slot.
+    const name = path.basename(argv[0] ?? "");
+    const entry = name === "bun" && argv.length === 3 && argv[2] === "pre-push" && path.basename(argv[1] ?? "") === "local-gate.ts"
+      ? argv[1] : (name === "bash" || name === "sh") && path.basename(argv[1] ?? "") === "pre-push" ? argv[1] : name === "pre-push" ? argv[0] : undefined;
+    if (!entry) return false;
+    const script = path.isAbsolute(entry) ? entry : path.resolve(cwd(), entry);
+    const directory = fs.realpathSync(path.dirname(script));
+    const root = path.dirname(directory);
+    return path.basename(directory) === (name === "bun" ? "scripts" : ".githooks") &&
+      fs.existsSync(path.join(root, ".git")) && fs.existsSync(path.join(root, "scripts", "gate-runner")) && fs.existsSync(script);
+  };
+  const samePool = (candidate: string | undefined, cwd: string): boolean => {
+    try { return fs.realpathSync(path.resolve(cwd, candidate || "/var/tmp")) === pool; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  };
+  const readEnvironment = (base: string) => {
+    const fields = fs.readFileSync(path.join(base, "environ"), "utf8").split("\0");
+    return (key: string) => fields.find(value => value.startsWith(key + "="))?.slice(key.length + 1);
+  };
+  const serviceCouldUsePool = (base: string) => {
+    // The service command inherits the launch environment and the supervisor
+    // stamps its real cgroup. This can still establish scope when the launch
+    // record's temporary directory has already been collected.
+    const group = /^0::(\/.+\/delegatus-gate-[0-9a-f-]+\.service)$/m.exec(fs.readFileSync(path.join(base, "cgroup"), "utf8"))?.[1];
+    if (!group) return true;
+    const children = new Set(fs.readdirSync(path.join(base, "task")).flatMap(thread =>
+      fs.readFileSync(path.join(base, "task", thread, "children"), "utf8").split(/\s+/).filter(child => /^[1-9]\d*$/.test(child))));
+    if (!children.size) return true;
+    return [...children].some(child => {
+      const member = path.join(proc, child);
+      const env = readEnvironment(member);
+      return env("LLV_OWNED_TEST_RUN_CGROUP") !== group ||
+        samePool(env("LLV_GATE_LOCK_DIR"), fs.readlinkSync(path.join(member, "cwd")));
+    });
+  };
+  const readCandidate = (entry: string) => {
+    const base = path.join(proc, entry);
+    try {
+      const argv = readArgv(base);
+      const script = path.basename(argv[1] ?? "");
+      if (!["gate-slot.sh", "owned-runner.ts", "test-child-guardian.ts"].includes(script)) return false;
+      const stat = fs.readFileSync(path.join(base, "stat"), "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (["Z", "X", "x"].includes(fields[0]!)) return false;
+      if (script === "gate-slot.sh" && argv[2] !== "--in-cpu-scope" &&
+        (Number(entry) === owner.pid || waiting.has(`${entry}:${fields[19]}`))) return false;
+      const cwd = () => fs.readlinkSync(path.join(base, "cwd"));
+      if (script === "gate-slot.sh" && isHookParent(argv.slice(2), cwd)) return false;
+      if (script === "owned-runner.ts" && argv[2] === "--service") {
+        // The user manager's supervisor has a clean environment. Its private
+        // launch record carries the caller's pool and whether it is a hook
+        // parent which deliberately runs outside the gate pool.
+        try {
+          const launch = JSON.parse(fs.readFileSync(path.join(base, "root", argv[3]!), "utf8"));
+          if (isHookParent(launch.command, () => launch.cwd)) return false;
+          return samePool(launch.env.LLV_GATE_LOCK_DIR, launch.cwd);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          return serviceCouldUsePool(base);
+        }
+      }
+      const isHookRunner = (argv: string[], cwd: () => string) => isHookParent(argv.slice(
+        argv[2] === "--portable" || argv[2] === "--namespace" ? 3 : 2), cwd);
+      if (script === "owned-runner.ts" && isHookRunner(argv, cwd)) return false;
+      if (script === "test-child-guardian.ts") {
+        const runner = JSON.parse(argv[3]!);
+        if (runner.bootEpoch === epoch && cpuOwnerStatus(runner) === "alive") {
+          const runnerBase = path.join(proc, String(runner.pid));
+          const launch = readArgv(runnerBase);
+          if (path.basename(launch[1] ?? "") === "owned-runner.ts" &&
+            isHookRunner(launch, () => fs.readlinkSync(path.join(runnerBase, "cwd")))) return false;
+        }
+      }
+      const candidate = readEnvironment(base)("LLV_GATE_LOCK_DIR");
+      return samePool(candidate, candidate && !path.isAbsolute(candidate) ? cwd() : "/");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true;
+      // A live supervisor whose metadata cannot be read is uncertain.
+      return fs.existsSync(path.join(base, "stat"));
+    }
+  };
+  const occupied = () => fs.readdirSync(proc).some(entry => {
+    if (!/^[1-9]\d*$/.test(entry)) return false;
+    try { return fs.statSync(path.join(proc, entry)).uid === uid && readCandidate(entry); }
+    catch (error) { return (error as NodeJS.ErrnoException).code !== "ENOENT"; }
+  });
+  // Re-list after inspecting the original processes: cleanup can pass to a
+  // newly spawned supervisor while an older process is exiting.
+  return occupied() || occupied();
+}
 /** A held slot without a matching cap lock belongs to the older protocol
  * (or to the hand-run gate). Let it finish before sharing the pool. */
-function fullSlotLimit(queue: CpuAdmissionQueue, ownSlot?: string): number | undefined {
+function fullSlotLimit(queue: CpuAdmissionQueue, ownSlot?: string): number | "legacy-drain" | undefined {
   let cap = configuredSlots;
   let busy = 0;
   const gates = queue.activeGateSlots();
@@ -126,6 +239,7 @@ function fullSlotLimit(queue: CpuAdmissionQueue, ownSlot?: string): number | und
   }
   const markedSlots = new Set<string>();
   const heldMarkers = new Set<string>();
+  const occupiedSlots = new Set<string>();
   const files = fs.readdirSync(dir);
   for (const file of files) {
     const match = /^llv-heavy-gate\.slot([1-9]\d*)\.cap([1-9]\d*)\.lock$/.exec(file);
@@ -144,9 +258,15 @@ function fullSlotLimit(queue: CpuAdmissionQueue, ownSlot?: string): number | und
     const match = /^llv-heavy-gate\.slot([1-9]\d*)\.lock$/.exec(file);
     if (match && match[1] !== ownSlot && locked(file)) {
       if (!markedSlots.has(match[1]!)) return 1;
+      occupiedSlots.add(match[1]!);
       if (++busy >= cap) return cap;
     }
   }
+  // A current holder admitted after a drain proves there has been no opening
+  // for an old claim since the drain. The legacy queue sees its live fence.
+  const transitioned = gates.some(gate => gate.slot !== null && gate.key.startsWith(transitionedGatePrefix) &&
+    occupiedSlots.has(String(gate.slot)) && heldMarkers.has(capLock(gate.slot, gate.cap)));
+  if (!transitioned && process.platform === "linux" && queue.lastAdmission() !== null && legacyLinuxGateRunning(queue)) return "legacy-drain";
   return undefined;
 }
 const cancel = () => {
@@ -198,7 +318,8 @@ async function serveQueue(queue: CpuAdmissionQueue) {
         if (cap === undefined) break;
         const { waitedMs, stalledMs } = queue.slotWait(key!);
         const duration = stalledMs === undefined ? `waited ${Math.floor(waitedMs / 60_000)}` : `stalled for ${Math.floor(stalledMs / 60_000)}`;
-        text = `Waiting for a heavy command slot · all ${cap} busy · ${duration} min`;
+        text = cap === "legacy-drain" ? `Waiting for legacy heavy commands to drain · ${duration} min`
+          : `Waiting for a heavy command slot · all ${cap} busy · ${duration} min`;
       }
       if (text !== shown) { console.error(`gate-slot: ${text}`); shown = text; }
       await Bun.sleep(Number(process.env.LLV_GATE_POLL_SECONDS ?? 2) * 1000);
