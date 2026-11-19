@@ -458,10 +458,11 @@ while [[ ! -f "$FIXTURE_RELEASE" ]]; do sleep 0.02; done
   }
 }, 45_000);
 
-for (const mode of ["portable prepare", "service prepare", "service hooks"] as const) test.skipIf(
+for (const mode of ["portable prepare", "service prepare", "service hooks", "historical service hook"] as const) test.skipIf(
   process.platform !== "linux" || mode !== "portable prepare" && !hasUserManager
 )(`FIFO publication admits the first check while the peer waits (${mode})`, async () => {
-    const useService = mode !== "portable prepare", ordinary = mode === "service hooks";
+    const useService = mode !== "portable prepare";
+    const historical = mode === "historical service hook", ordinary = mode === "service hooks" || historical;
     const f = fixture(), control = new AbortController(), roots: string[] = [];
     const pending: ReturnType<typeof realExec>[] = [];
     const { fixture: publicationFixture, commitFixtureInputs } = createPublicationFixtures(process.cwd(), roots);
@@ -481,7 +482,9 @@ for (const mode of ["portable prepare", "service prepare", "service hooks"] as c
       if (ordinary) {
         env.LLV_GATE_PUBLICATION_RECEIPT = undefined;
         command = ["bun", "scripts/local-gate.ts", "pre-push"];
-        if (name === "peer") {
+        if (name === "peer" && historical) {
+          command = ["bash", "scripts/gate-slot.sh", ".githooks/pre-push"];
+        } else if (name === "peer") {
           // Enter the service exactly as gate-slot's placed native hook does.
           // Supply its quota readback privately, without configuring a host slice.
           const group = "/fixture.slice/gate.service";
@@ -518,7 +521,10 @@ for (const mode of ["portable prepare", "service prepare", "service hooks"] as c
       return { env, waitFor };
     };
     try {
-      const first = publicationFixture(), peer = publicationFixture();
+      const first = publicationFixture();
+      const peer = historical
+        ? createPublicationFixtures(legacyGateTree(f.dir, "c0ceb7ff5eb064b1d9d29a9aef2540edd15d5dd1"), roots).fixture()
+        : publicationFixture();
       for (const publication of [first, peer]) {
         if (!useService) fs.writeFileSync(path.join(publication.dir, "shims/systemctl"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
         fs.mkdirSync(path.join(publication.dir, "scripts/gate-runner"));
@@ -532,6 +538,8 @@ for (const mode of ["portable prepare", "service prepare", "service hooks"] as c
       if (!useService) commitFixtureInputs(peer);
       const previous = Date.now() - CPU_QUEUE_SPACING_MS;
       f.db.query("UPDATE admission SET last = ?").run(previous);
+      f.db.exec("CREATE TABLE grants (at INTEGER); CREATE TRIGGER count_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO grants VALUES (NEW.last); END");
+      const grants = () => f.db.query("SELECT at FROM grants ORDER BY rowid").all();
       const firstRun = launch(first, "first");
       await firstRun.waitFor("its first private ticket", () => f.count() === 1);
       const firstTicket = f.db.query<{ owner: string }, []>(`SELECT owner ${queuedTickets}`).get()!;
@@ -542,6 +550,7 @@ for (const mode of ["portable prepare", "service prepare", "service hooks"] as c
       await firstRun.waitFor("the admitted check starting", () => fs.existsSync(started));
       const admitted = last()!;
       expect(admitted).toBeGreaterThan(previous);
+      expect(grants()).toEqual([{ at: admitted }]);
       expect(f.count()).toBe(1);
       expect(f.db.query(`SELECT owner ${queuedTickets}`).get()).not.toEqual(firstTicket);
       expect(f.db.query("SELECT slot, cap, owner FROM gate_slots JOIN tickets USING (key)").all()).toEqual([{ slot: 1, cap: 1, ...firstTicket }]);
@@ -554,6 +563,7 @@ for (const mode of ["portable prepare", "service prepare", "service hooks"] as c
       if (useService) expect(stderr("first")).toMatch(/gate-slot: delegatus-gate-[\da-f-]+\.service:/);
       else expect(stderr("first")).toContain("using the documented portable cleanup fallback");
       expect(last()).toBeGreaterThan(admitted);
+      expect(grants()).toEqual([{ at: admitted }, { at: last() }]);
       for (const [publication, { env }] of [[first, firstRun], [peer, peerRun]] as const) {
         if (ordinary) expect(publication.calls().filter(call => call.args[0] === "tsc")).toHaveLength(1);
         else expect(readPublicationCheckReceipt(publication.receipt, publicationCheckBinding(env)).completedAt).toBeGreaterThanOrEqual(admitted);

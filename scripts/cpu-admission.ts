@@ -124,7 +124,9 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
   const epoch = sandbox?.hostEpoch ?? owner.bootEpoch;
   const waiting = new Set(queue.waitingGateOwners().flatMap(data => {
     const identity = JSON.parse(data);
-    return identity.bootEpoch === epoch ? [identity.startIdentity] : [];
+    return epoch && identity.bootEpoch === epoch && Number.isSafeInteger(identity.pid) &&
+      typeof identity.startIdentity === "string" && identity.startIdentity.startsWith(`${identity.pid}:`)
+      ? [identity.startIdentity] : [];
   }));
   const readArgv = (base: string) => fs.readFileSync(path.join(base, "cmdline")).subarray(0, -1).toString().split("\0");
   const readCwd = (base: string) => () => fs.readlinkSync(path.join(base, "cwd"));
@@ -189,27 +191,22 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
   };
   const childrenOf = (base: string) => new Set(fs.readdirSync(path.join(base, "task")).flatMap(thread =>
     fs.readFileSync(path.join(base, "task", thread, "children"), "utf8").split(/\s+/).filter(child => /^[1-9]\d*$/.test(child))));
-  const workerHasQueuedHook = (member: string, membership: string) => {
-    // The worker forks the hook. Both the placed native hook and the direct
-    // Bun entry exec local-gate, which queues its own --admitted child.
-    for (const hookPid of childrenOf(member)) {
-      const hook = path.join(proc, hookPid);
-      const command = readArgv(hook);
-      if (path.basename(command[0] ?? "") !== "bun" || !isHookParent(command, readCwd(hook)) ||
-        readStat(hook)[1] !== path.basename(member) || fs.readFileSync(path.join(hook, "cgroup"), "utf8") !== membership) continue;
-      const script = fs.realpathSync(path.resolve(readCwd(hook)(), command[1]!));
-      for (const pid of childrenOf(hook)) {
-        const gate = path.join(proc, pid);
-        const stat = readStat(gate);
-        if (stat[1] !== hookPid || !waiting.has(`${pid}:${stat[19]}`)) continue;
-        const args = readArgv(gate);
-        const cwd = readCwd(gate)();
-        if (args.length === 6 && path.basename(args[0]!) === "bash" && path.basename(args[2]!) === "bun" &&
-          args[4] === "pre-push" && args[5] === "--admitted" &&
-          fs.realpathSync(path.resolve(cwd, args[3]!)) === script &&
-          path.resolve(cwd, args[1]!) === path.join(path.dirname(path.resolve(cwd, args[3]!)), "gate-slot.sh") &&
-          fs.readFileSync(path.join(gate, "cgroup"), "utf8") === membership) return true;
-      }
+  const hookHasQueuedGate = (hook: string, parent: string, membership: string) => {
+    const command = readArgv(hook);
+    if (path.basename(command[0] ?? "") !== "bun" || !isHookParent(command, readCwd(hook)) ||
+      readStat(hook)[1] !== path.basename(parent) || fs.readFileSync(path.join(hook, "cgroup"), "utf8") !== membership) return false;
+    const script = fs.realpathSync(path.resolve(readCwd(hook)(), command[1]!));
+    for (const pid of childrenOf(hook)) {
+      const gate = path.join(proc, pid);
+      const stat = readStat(gate);
+      if (stat[1] !== path.basename(hook) || !waiting.has(`${pid}:${stat[19]}`)) continue;
+      const args = readArgv(gate);
+      const cwd = readCwd(gate)();
+      if (args.length === 6 && path.basename(args[0]!) === "bash" && path.basename(args[2]!) === "bun" &&
+        args[4] === "pre-push" && args[5] === "--admitted" &&
+        fs.realpathSync(path.resolve(cwd, args[3]!)) === script &&
+        path.resolve(cwd, args[1]!) === path.join(path.dirname(path.resolve(cwd, args[3]!)), "gate-slot.sh") &&
+        fs.readFileSync(path.join(gate, "cgroup"), "utf8") === membership) return true;
     }
     return false;
   };
@@ -239,10 +236,15 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
         const wrapper = fs.realpathSync(path.resolve(cwd(), command[1]!));
         if (fs.realpathSync(path.join(path.dirname(wrapper), "owned-runner.ts")) !== fs.realpathSync(runner)) return true;
       }
-      // A pre-exemption service can have this exact hook argv after it
-      // consumed a slotless ticket. Only the identified worker and its live
-      // queued child establish that this service is waiting for admission.
-      if (isHookParent(command, cwd)) return command === argv || !workerHasQueuedHook(member, membership);
+      if (isHookParent(command, cwd)) {
+        if (command !== argv) return ![...childrenOf(member)].some(pid => hookHasQueuedGate(path.join(proc, pid), member, membership));
+        // The direct-Bun runner stamps its own systemd invocation on the hook.
+        // Pre-exemption holders forward the caller's environment, even when
+        // their hook queues a nested gate after consuming its slotless ticket.
+        const invocation = env("INVOCATION_ID");
+        return !invocation || !/^[0-9a-f]{32}$/.test(invocation) || invocation !== readEnvironment(base)("INVOCATION_ID") ||
+          !hookHasQueuedGate(member, base, membership);
+      }
       const parent = env("LLV_OWNED_RUN_PARENT_IDENTITY");
       return !(parent && isPrepareSupervisor(command, cwd, () => recordedParent(JSON.parse(parent))));
     });
