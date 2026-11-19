@@ -265,7 +265,7 @@ export function writableRoots(roots: string[], check: (root: string) => void = (
 /** The roots one sweep visits: this process's temp dirs and scratch directory,
     and `/tmp` and `/var/tmp` of every other mount namespace a Delegatus agent
     runs in. */
-export function sweepRoots(scan: ProcessScan, ownRoots: string[], procRoot = "/proc"): TempSweepRoot[] {
+export function sweepRoots(scan: { ownNamespace: string | null; processes: Iterable<Pick<ScannedProcess, "pid" | "namespace" | "stamped">> }, ownRoots: string[], procRoot = "/proc"): TempSweepRoot[] {
   const roots: TempSweepRoot[] = ownRoots.map((root) => ({ path: root, via: "" }));
   const seen = new Set<string>();
   for (const process of scan.processes) {
@@ -278,6 +278,30 @@ export function sweepRoots(scan: ProcessScan, ownRoots: string[], procRoot = "/p
     }
   }
   return roots;
+}
+
+/** Discover mount anchors without enumerating open files or memory maps.
+ * The separate reference scan at retirement still inspects every process. */
+export function discoverSweepRoots(ownRoots: string[], procRoot = "/proc"): TempSweepRoot[] {
+  const ownNamespace = readLink(path.join(procRoot, "self", "ns", "mnt"));
+  function* mounts() {
+    let entries: string[];
+    try { entries = fs.readdirSync(procRoot); }
+    catch { return; } // Without proc there are no foreign namespace anchors.
+    for (const name of entries) {
+      if (!/^\d+$/.test(name)) continue;
+      const base = path.join(procRoot, name);
+      const namespace = readLink(path.join(base, "ns", "mnt"));
+      if (!namespace || namespace === ownNamespace) continue;
+      try {
+        const env = fs.readFileSync(path.join(base, "environ"), "utf8");
+        if (env.split("\0").some(field => field.startsWith(STRUCTURED_HOST_STAMP_ENV + "="))) {
+          yield { pid: Number(name), namespace, stamped: true };
+        }
+      } catch { /* The process exited or its environment is inaccessible. */ }
+    }
+  }
+  return sweepRoots({ ownNamespace, processes: mounts() }, ownRoots, procRoot);
 }
 
 function inside(candidate: string, directory: string): boolean {
@@ -1007,7 +1031,7 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
     return null;
   }
   const scratch = realDirectory(statePath("scratch"));
-  const candidates = ports.roots ?? sweepRoots(scanProcesses(), [...ownTempRoots(env), ...(scratch ? [scratch] : [])]);
+  const candidates = ports.roots ?? discoverSweepRoots([...ownTempRoots(env), ...(scratch ? [scratch] : [])]);
   const writable = new Set(writableRoots(candidates.filter(root => !root.via).map(root => root.path)));
   const view = await openHostTempRoots(candidates, env);
   const roots = view.roots.filter(root => root.via || writable.has(root.path));

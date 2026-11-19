@@ -1,3 +1,4 @@
+import { STRUCTURED_HOST_STAMP_ENV } from "@/lib/scanner/process";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import * as attemptRemoval from "./runtime/attemptTempRemoval";
@@ -14,6 +15,7 @@ import {
   recordTempSweep,
   runTempSweep,
   runTempSweepInHelper,
+  discoverSweepRoots,
   scanProcesses,
   startTempSweep,
   stopTempSweep,
@@ -251,6 +253,34 @@ test("a root read through another namespace is skipped once that namespace is no
   expect(report.removed).toEqual([]);
   expect(fs.existsSync(directory)).toBeTrue();
   expect(report.errors[0]).toContain("namespace");
+});
+
+test.skipIf(process.platform === "win32")("root discovery agrees with a full scan and only reads foreign mount stamps", () => {
+  const proc = tempRoot();
+  const mount = (name: string, namespace: string) => {
+    fs.mkdirSync(path.join(proc, name, "ns"), { recursive: true });
+    fs.symlinkSync(namespace, path.join(proc, name, "ns", "mnt"));
+  };
+  mount("self", "mnt:[1]");
+  for (const [pid, namespace, env] of [
+    ["10", "mnt:[1]", "tag"], ["20", "mnt:[2]", "near"], ["21", "mnt:[2]", "tag"],
+    ["22", "mnt:[2]", "tag"], ["30", "mnt:[3]", "missing"],
+  ] as const) {
+    mount(pid, namespace);
+    if (env !== "missing") fs.writeFileSync(path.join(proc, pid, "environ"),
+      env === "tag" ? "PATH=/bin\0" + STRUCTURED_HOST_STAMP_ENV + "=yes\0" : "X" + STRUCTURED_HOST_STAMP_ENV + "=yes\0");
+  }
+  const roots = [path.join(proc, "temp")];
+  const full = sweepRoots(scanProcesses(proc), roots, proc);
+  const read = spyOn(fs, "readFileSync"), dirs = spyOn(fs, "readdirSync");
+  try {
+    expect(discoverSweepRoots(roots, proc)).toEqual(full);
+    expect(full).toHaveLength(3);
+    expect(full[1]?.anchor).toEqual({ pid: 21, namespace: "mnt:[2]" });
+    expect(read.mock.calls.every(args => String(args[0]).endsWith("/environ"))).toBe(true);
+    expect(read.mock.calls.some(args => String(args[0]) === path.join(proc, "10/environ"))).toBe(false);
+    expect(dirs.mock.calls.map(args => String(args[0]))).toEqual([proc]);
+  } finally { dirs.mockRestore(); read.mockRestore(); }
 });
 
 test("the host temp roots are read through an agent process in another mount namespace, once per namespace", () => {
