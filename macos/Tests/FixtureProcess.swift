@@ -1,6 +1,22 @@
 import Foundation
 
 enum FixtureProcess {
+    struct Handshake: Decodable {
+        let pid: Int
+        let port: Int
+        let keeper: Int?
+    }
+
+    static func handshake(_ pipe: Pipe, named name: String) throws -> Handshake {
+        let line = try readyLine(pipe, named: name)
+        guard let result = try? JSONDecoder().decode(Handshake.self, from: line),
+              (2...Int(Int32.max)).contains(result.pid), (1...65535).contains(result.port),
+              result.keeper.map({ (2...Int(Int32.max)).contains($0) }) ?? true else {
+            throw LauncherError.message("\(name): invalid process handshake")
+        }
+        return result
+    }
+
     static func readyLine(_ pipe: Pipe, named name: String, timeout: Double = 10) throws -> Data {
         let fd = pipe.fileHandleForReading.fileDescriptor
         let deadline = DispatchTime.now() + timeout
@@ -38,7 +54,7 @@ enum FixtureProcess {
         return exited(child, within: 2)
     }
 
-    private static func exited(_ child: Process, within timeout: Double) -> Bool {
+    static func exited(_ child: Process, within timeout: Double) -> Bool {
         let deadline = DispatchTime.now() + timeout
         while child.isRunning && DispatchTime.now() < deadline { Thread.sleep(forTimeInterval: 0.01) }
         return !child.isRunning

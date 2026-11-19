@@ -6,8 +6,20 @@ import Foundation
         count += 1
         if !condition() { fputs("FAIL: \(reason)\n", stderr); exit(1) }
     }
-    static func main() async throws {
+    static func main() async {
         if await ListenerKeeper.runIfRequested() { return }
+        do {
+            try await run()
+        } catch LauncherError.message(let message) {
+            fputs("FAIL: \(message)\n", stderr)
+            exit(1)
+        } catch {
+            fputs("FAIL: \(error)\n", stderr)
+            exit(1)
+        }
+    }
+
+    static func run() async throws {
         try fixtureProcessChecks()
         if CommandLine.arguments.dropFirst().first == "--fixture-process-checks" {
             print("Swift fixture process checks: \(count) passed, 0 failed")
@@ -346,6 +358,23 @@ import Foundation
             let line = try FixtureProcess.readyLine(output, named: "split line")
             expect(line == Data(repeating: 48, count: 5000), "readiness reader assembles a complete line across reads")
         }
+        do {
+            let (child, output) = try launch(#"printf '%s\n' '{"pid":42,"port":12345}'"#)
+            defer { _ = FixtureProcess.stop(child) }
+            let handshake = try FixtureProcess.handshake(output, named: "complete handshake")
+            expect(handshake.pid == 42 && handshake.port == 12345, "a complete handshake preserves the process and port")
+        }
+        for line in [#"{"pid":42"#, #"{"pid":42,"port":0}"#] {
+            let (child, output) = try launch("printf '%s\\n' '\(line)'")
+            defer { _ = FixtureProcess.stop(child) }
+            do {
+                _ = try FixtureProcess.handshake(output, named: "invalid handshake")
+                expect(false, "a broken handshake must fail")
+            } catch LauncherError.message(let message) {
+                expect(message == "invalid handshake: invalid process handshake",
+                    "a broken handshake reports which fixture failed")
+            }
+        }
         for (script, failure) in [
             ("printf partial", "stdout closed before readiness line"),
             ("exec /bin/sleep 30", "timed out waiting for readiness line"),
@@ -360,6 +389,34 @@ import Foundation
                 expect(message == "incomplete fixture: \(failure)", "incomplete readiness names the fixture and cause")
             }
             expect(FixtureProcess.stop(child), "incomplete fixture exits")
+        }
+        do {
+            // The launcher can exit while a second process still holds its
+            // stdout open. EOF cannot signal failure in that topology.
+            let output = Pipe()
+            func launchWriter(_ command: String) throws -> Process {
+                let child = Process()
+                child.executableURL = URL(fileURLWithPath: "/bin/sh")
+                child.arguments = ["-c", command]
+                child.standardOutput = output.fileHandleForWriting
+                try child.run()
+                return child
+            }
+            let peer = try launchWriter("exec /bin/sleep 30")
+            defer { _ = FixtureProcess.stop(peer) }
+            let launcher = try launchWriter("exit 7")
+            defer { _ = FixtureProcess.stop(launcher) }
+            try output.fileHandleForWriting.close()
+            expect(FixtureProcess.exited(launcher, within: 2) && launcher.terminationStatus == 7,
+                "launcher exits before the readiness read")
+            do {
+                _ = try FixtureProcess.readyLine(output, named: "shared stdout", timeout: 1)
+                expect(false, "the remaining writer must not keep the readiness read open")
+            } catch LauncherError.message(let message) {
+                expect(message == "shared stdout: timed out waiting for readiness line" && peer.isRunning,
+                    "the read times out while a live peer still holds stdout")
+            }
+            expect(FixtureProcess.stop(peer), "the remaining writer exits")
         }
         let (child, output) = try launch("trap '' TERM; printf 'ready\\n'; exec /bin/sleep 30")
         defer { _ = FixtureProcess.stop(child) }
@@ -427,8 +484,9 @@ import Foundation
             _ = FixtureProcess.stop(launcher)
             stopDetachedViewer(viewerPIDFile)
         }
-        let handshake = try JSONSerialization.jsonObject(with: FixtureProcess.readyLine(output, named: "detached Viewer")) as! [String: Int]
-        let pid = handshake["pid"]!, port = handshake["port"]!
+        let handshake = try FixtureProcess.handshake(output, named: "detached Viewer")
+        let pid = handshake.pid, port = handshake.port
+        fputs("Swift relaunch: verify the live CLI and retain its Viewer\n", stderr)
         let install = Installation(bun: bun, cli: cli)
         try check(Server.ownsLauncher(Int(launcher.processIdentifier), parent: Int(getpid()), install: install), "retention recognises the CLI actually launched by this native process")
         try check(!Server.ownsLauncher(Int(launcher.processIdentifier), parent: Int(launcher.processIdentifier), install: install), "a CLI with a different kernel parent grants no retention authority")
@@ -442,6 +500,7 @@ import Foundation
         let stale = ListenerIdentity(pid: retained.pid, uid: retained.uid, birth: "stale", bun: retained.bun, cli: retained.cli, package: retained.package)
         try check((await ListenerKeeper.read(home: home, port: port, identities: [stale])).isEmpty, "a different process generation cannot inherit the keeper endpoint")
         try check(FixtureProcess.stop(launcher), "the original CLI exits while its Viewer remains alive")
+        fputs("Swift relaunch: rediscover the Viewer after CLI exit\n", stderr)
         // Without the kernel identity, this is the original CLI-ancestor
         // guard, driven by the real surviving process rather than canned rows.
         let prior = await Server.explainAncestry(listenerPID: pid, bun: bun.path, server: server.path, cli: cli.path) {
@@ -535,8 +594,10 @@ import Foundation
                 _ = FixtureProcess.stop(parent)
                 stopDetachedViewer(foreignPIDFile)
             }
-            let attack = try JSONSerialization.jsonObject(with: FixtureProcess.readyLine(parentOutput, named: "foreign bootstrap")) as! [String: Int]
-            let attackPID = attack["pid"]!, attackPort = attack["port"]!, helperPID = attack["keeper"]!
+            let attack = try FixtureProcess.handshake(parentOutput, named: "foreign bootstrap")
+            guard let helperPID = attack.keeper else { throw LauncherError.message("foreign bootstrap: missing keeper PID") }
+            let attackPID = attack.pid, attackPort = attack.port
+            fputs("Swift relaunch: check discovery and cleanup of the foreign bootstrap\n", stderr)
             defer {
                 if Server.executablePath(helperPID) == ListenerKeeper.executable { kill(Int32(helperPID), SIGTERM) }
             }
@@ -575,9 +636,9 @@ import Foundation
         let decoyOutput = Pipe(); decoy.standardOutput = decoyOutput
         try decoy.run()
         defer { _ = FixtureProcess.stop(decoy) }
-        let decoyHandshake = try JSONSerialization.jsonObject(with: FixtureProcess.readyLine(decoyOutput, named: "standalone foreign Viewer")) as! [String: Int]
-        let decoyPort = decoyHandshake["port"]!
-        let decoyPID = decoyHandshake["pid"]!
+        let decoyHandshake = try FixtureProcess.handshake(decoyOutput, named: "standalone foreign Viewer")
+        let decoyPort = decoyHandshake.port
+        let decoyPID = decoyHandshake.pid
         let copiedRow = await Server.processRow(decoyPID, environment: env)
         try check(copiedRow?.contains("\(bun.path) \(server.path)") == true, "standalone hostile fixture really copies the Viewer ps command")
         let forged = Server.listenerIdentity(decoyPID, install: install, package: root)!
