@@ -144,6 +144,11 @@ export function commandEnvironment(dir: string, manifest: Manifest, source: Node
   fs.mkdirSync(env.TMPDIR, { recursive: true });
   env.XDG_CACHE_HOME = path.join(home(), ".cache", "gate-runner");
   fs.mkdirSync(env.XDG_CACHE_HOME, { recursive: true });
+  // Nested local-gate samples replace XDG_CACHE_HOME again. Keep reusable
+  // artifacts on this machine even after that isolation, and never inherit
+  // a cache path from the client machine.
+  env.UV_CACHE_DIR ||= path.join(env.XDG_CACHE_HOME, "uv");
+  env.BUN_INSTALL_CACHE_DIR ||= path.join(env.XDG_CACHE_HOME, "bun");
   env.PLAYWRIGHT_BROWSERS_PATH = path.join(home(), ".cache", "ms-playwright");
   if (manifest.chrome) {
     const chrome = newestChromium(env.PLAYWRIGHT_BROWSERS_PATH);
@@ -243,7 +248,7 @@ function install(tree: string, log: number): void {
     return;
   }
   if (!fs.existsSync(path.join(tree, "package.json")) || !fs.existsSync(path.join(tree, "bun.lock"))) return;
-  sh(log, "install", [bunBin("bun"), "install", "--frozen-lockfile"], { cwd: tree, env: { ...process.env, PATH: `${path.join(home(), ".bun", "bin")}:${process.env.PATH ?? ""}` } });
+  sh(log, "install", [bunBin("bun"), "install", "--frozen-lockfile", "--backend=copyfile"], { cwd: tree, env: { ...process.env, PATH: `${path.join(home(), ".bun", "bin")}:${process.env.PATH ?? ""}` } });
 }
 
 /** Hashes the files as they are; write-tree alone would only serialize the

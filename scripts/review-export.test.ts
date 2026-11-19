@@ -33,6 +33,8 @@ test("an exact-head review export borrows matching dependencies without another 
   fs.writeFileSync(path.join(f.repository, "source.txt"), "uncommitted source");
   const exported = reviewExport(f.repository, head, f.scratch);
   expect(exported.head).toBe(head);
+  expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd: exported.directory, encoding: "utf8" }).trim()).toBe(head);
+  expect(fs.readFileSync(path.join(exported.directory, ".git/objects/info/alternates"), "utf8").trim()).toBe(path.join(f.repository, ".git/objects"));
   expect(path.dirname(path.dirname(exported.directory))).toBe(f.scratch);
   expect(fs.readFileSync(path.join(exported.directory, "source.txt"), "utf8")).toBe("committed source");
   expect(exported.dependencies).toBe("shared");
@@ -48,7 +50,7 @@ test("an exact-head review export borrows matching dependencies without another 
   expect(fs.readFileSync(path.join(f.repository, "node_modules/fixture/index.js"), "utf8")).toBe("export default 42");
 });
 
-test.each(["manifest", "lock", "patch", "missing"])("a review export keeps source readable without borrowing %s dependencies", change => {
+test.each(["manifest", "lock", "patch", "bunfig", "missing"])("a review export keeps source readable without borrowing %s dependencies", change => {
   const f = fixture();
   if (change === "patch") {
     fs.mkdirSync(path.join(f.repository, "patches"));
@@ -58,7 +60,7 @@ test.each(["manifest", "lock", "patch", "missing"])("a review export keeps sourc
   }
   const head = f.git("rev-parse", "HEAD");
   if (change === "missing") fs.rmSync(path.join(f.repository, "node_modules"), { recursive: true });
-  else fs.writeFileSync(path.join(f.repository, change === "manifest" ? "package.json" : change === "lock" ? "bun.lock" : "patches/fixture.patch"), change === "manifest" ? '{}' : "changed input");
+  else fs.writeFileSync(path.join(f.repository, change === "manifest" ? "package.json" : change === "lock" ? "bun.lock" : change === "bunfig" ? "bunfig.toml" : "patches/fixture.patch"), change === "manifest" ? '{}' : "changed input");
   const exported = reviewExport(f.repository, head, f.scratch);
   expect(exported.dependencies).toBe("unavailable");
   expect(fs.existsSync(path.join(exported.directory, "node_modules"))).toBeFalse();

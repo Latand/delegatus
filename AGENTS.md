@@ -99,10 +99,44 @@ isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
 
 For an intermediate source export, run
 `bash scripts/gate-slot.sh bun scripts/check-source.ts -- <command> [args...]`.
-It copies current inputs, shares installed dependencies, isolates state and
+It creates a detached clone sharing Git objects, overlays current inputs,
+links installed dependencies, isolates state and
 removes the export after that command and its owned descendants finish. Reuse
 this procedure for repeated builds and focused checks; leave retained evidence
 in `LLV_EVIDENCE_DIR` and avoid accumulating a new full checkout per retry.
+For a committed tree, `bun scripts/review-export.ts <commit>` creates a shared
+clone with private refs and index and links matching dependencies. Reuse that
+export for checks of the same tree. Never recursively copy the checkout or
+`node_modules`; fixtures needing writable dependencies use a private install
+or a copy-on-write filesystem clone. Shared dependencies are read-only.
+Never chmod through a dependency symlink or use recursive chmod on a borrowed
+installation. Private dependency copies must have owner-writable directories
+so their owner can remove them without repairing permissions first. Hardlinks
+share permission bits and are unsuitable for writable dependency fixtures.
+Private Bun installs use `--backend=copyfile` so writes and chmod cannot
+change another installation or the shared artifact cache.
+Keep the supplied `UV_CACHE_DIR` and `BUN_INSTALL_CACHE_DIR` when isolating
+HOME/XDG directories. They hold reusable package artifacts; never copy them
+into `review-uv-cache` or another attempt directory, or edit their contents
+directly. For Python checks, first reuse a verified existing environment with
+matching dependency inputs, interpreter and platform. Set
+`UV_PROJECT_ENVIRONMENT` to that environment, `UV_NO_SYNC=1`, `UV_OFFLINE=1`
+and `PYTHONDONTWRITEBYTECODE=1`; put the checked-out source first on `PYTHONPATH`
+and verify imports resolve there. Reject editable installs or path files that
+redirect imports into another checkout. Reuse one environment across checks
+of the same dependency graph. If dependencies must be installed or mutated,
+use one private venv per attempt with `UV_LINK_MODE=copy` (or filesystem
+copy-on-write), using the shared artifact cache; never sync, chmod or write
+through a borrowed environment. A changed graph needs its own verified setup.
+Gates and export helpers check the attempt's allocated tmp bytes against an
+8 GiB admission limit (`LLV_ATTEMPT_TMP_MAX_BYTES` overrides it). At 90% they
+warn; above the limit they refuse further checks/exports with measured bytes.
+Source checks also measure after creation and command completion. This is an
+admission guard: a running command can exceed it before the next measurement.
+Gate sandboxes outside the attempt's tmp are recorded with their device/inode
+in the attempt's allocation journal and included after nested HOME/TMPDIR
+isolation and process restarts. Existing owners still handle their cleanup.
+It never deletes another attempt or interrupts an existing consumer.
 
 For a manual privacy check, run
 `bun scripts/privacy-publication-gate.ts --require-known-values --check-commits --base origin/main`.

@@ -7,7 +7,8 @@ import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
-import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { currentCheckout } from "./source-checkout";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
@@ -83,7 +84,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
     // Install the candidate graph before any later checks execute against
     // node_modules. The supply-chain script repeats a lockfile-only frozen
     // check before it audits.
-    steps.splice(1, 0, { name: "frozen install", command: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"], capped: true });
+    steps.splice(1, 0, { name: "frozen install", command: ["bun", "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"], capped: true });
   }
   const lintFiles = files.filter(lintable).map(file => `./${file}`);
   if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: mode === "pre-push" || lintFiles.length > 40 });
@@ -228,11 +229,11 @@ export function createGateSandbox(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   try {
-    return recordGateSandbox(create(path.join(gateTemporaryRoot(platform, env), "delegatus-local-gate-")));
+    return recordGateSandbox(create(path.join(gateTemporaryRoot(platform, env), "delegatus-local-gate-")), env);
   } catch (error) {
     if (env.NODE_ENV === "test" && env.TMPDIR) throw error;
     if (platform === "win32" || !["EROFS", "EACCES", "ENOENT"].includes((error as NodeJS.ErrnoException)?.code ?? "")) throw error;
-    return recordGateSandbox(create(path.join("/tmp", "delegatus-local-gate-")));
+    return recordGateSandbox(create(path.join("/tmp", "delegatus-local-gate-")), env);
   }
 }
 
@@ -280,18 +281,8 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
  */
 export function createRuntimeCheckTree(root: string, sandbox: string): string {
   const tree = mkdtempSync(path.join(sandbox, "runtime-"));
-  const generated = new Set(["node_modules", ".next", "dist", "tsconfig.tsbuildinfo"]);
   try {
-    const files = new Set(git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean));
-    for (const file of files) {
-      if (generated.has(file.split("/")[0]!)) continue;
-      const source = path.join(root, file);
-      if (!existsSync(source)) continue; // A tracked deletion is a current input too.
-      const target = path.join(tree, file);
-      mkdirSync(path.dirname(target), { recursive: true });
-      cpSync(source, target, { recursive: true, verbatimSymlinks: true });
-    }
-    symlinkSync(path.join(root, "node_modules"), path.join(tree, "node_modules"), "dir");
+    currentCheckout(root, tree);
     return tree;
   } catch (error) {
     rmSync(tree, { recursive: true, force: true });

@@ -1779,7 +1779,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       provisional.viewerMcpTransport = viewer?.enabled === true
         ? typeof viewer.command === "string" ? "stdio" : typeof viewer.url === "string" ? "http" : null
         : null;
-      config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
+      // The child environment contains the sandbox's resolved attempt and
+      // artifact-cache bindings. Carry those exact values into Codex's shell
+      // policy so nested checks keep the same allowance after isolation.
+      config.shell_environment_policy = agentCodexPublicationPolicy(
+        configRead.config?.shell_environment_policy,
+        options.env ?? process.env,
+        childEnv,
+      );
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;
       Object.assign(config.features as Record<string, unknown>, cleanup.features);

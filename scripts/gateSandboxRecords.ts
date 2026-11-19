@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { recordAttemptTmpAllocation } from "./attempt-tmp-budget";
 
 type SandboxIdentity = { directory: string; dev: number; ino: number; generation?: string };
 const allocations = new Map<string, { identity: SandboxIdentity; journal: string }>();
@@ -9,7 +10,8 @@ const identityKey = (row: SandboxIdentity) => JSON.stringify([row.directory, row
 
 /** The creating process records the exact allocation before using it. The
  * outer owned runner consumes this journal only after its children stop. */
-export function recordGateSandbox(directory: string): string {
+export function recordGateSandbox(directory: string, env: NodeJS.ProcessEnv = process.env): string {
+  recordAttemptTmpAllocation(directory, env);
   const record = process.env.LLV_GATE_SANDBOX_RECORD;
   if (record) {
     const stat = fs.lstatSync(directory);
@@ -57,7 +59,7 @@ export function retainGateSandbox(directory: string) {
 
 export function ownGateSandboxes() {
   if (process.env.LLV_GATE_SANDBOX_RECORD) return;
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-gate-record-"));
+  const root = recordAttemptTmpAllocation(fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-gate-record-")));
   const record = path.join(root, "sandboxes.ndjson");
   fs.writeFileSync(record, "", { mode: 0o600, flag: "wx" });
   process.env.LLV_GATE_SANDBOX_RECORD = record;

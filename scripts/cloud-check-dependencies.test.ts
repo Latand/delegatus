@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { reuseCloudDependencies } from "./cloud-check-dependencies";
@@ -38,6 +38,62 @@ test("setup dependencies include dev and nested packages, omit optional platform
     writeFileSync(path.join(f.target, file), "changed by check");
     expect(JSON.parse(readFileSync(path.join(f.source, file), "utf8")).version).toBe("1.0.0");
   } finally { f.cleanup(); }
+});
+
+test("sealed dependencies produce deletable private copies with independent chmod and writes", () => {
+  const f = fixture();
+  const modules = path.join(f.source, "node_modules"), packageFile = path.join(modules, "probe/package.json");
+  const seal = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) seal(file);
+      else chmodSync(file, 0o444);
+    }
+    chmodSync(directory, 0o555);
+  };
+  const unseal = (directory: string) => {
+    chmodSync(directory, 0o755);
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) unseal(file);
+      else chmodSync(file, 0o644);
+    }
+  };
+  try {
+    seal(modules);
+    const bytes = readFileSync(packageFile), mode = statSync(packageFile).mode;
+    const second = path.join(f.root, "second"); mkdirSync(second);
+    for (const file of ["package.json", "bun.lock", "bunfig.toml", "patches"]) cpSync(path.join(f.target, file), path.join(second, file), { recursive: true });
+    reuseCloudDependencies(f.source, f.target);
+    reuseCloudDependencies(f.source, second);
+    const firstFile = path.join(f.target, "node_modules/probe/package.json"), secondFile = path.join(second, "node_modules/probe/package.json");
+    expect(statSync(firstFile).ino).not.toBe(statSync(packageFile).ino);
+    expect(statSync(secondFile).ino).not.toBe(statSync(firstFile).ino);
+    chmodSync(firstFile, 0o400);
+    expect(statSync(secondFile).mode & 0o200).toBe(0o200);
+    expect(statSync(packageFile).mode).toBe(mode);
+    // Read-only files can be unlinked from owner-writable directories.
+    rmSync(f.target, { recursive: true });
+    expect(readFileSync(secondFile)).toEqual(bytes);
+    writeFileSync(secondFile, "private change");
+    rmSync(second, { recursive: true });
+    expect(readFileSync(packageFile)).toEqual(bytes);
+    expect(statSync(packageFile).mode).toBe(mode);
+  } finally { unseal(modules); f.cleanup(); }
+});
+
+test("a partial copy from sealed dependencies is removed on refusal", () => {
+  const f = fixture(), modules = path.join(f.source, "node_modules"), probe = path.join(modules, "probe");
+  try {
+    // Validation accepts the locked package, but its broken payload link fails
+    // while copying, after private directories have already been created.
+    symlinkSync("missing-payload", path.join(probe, "broken"));
+    chmodSync(probe, 0o555); chmodSync(modules, 0o555);
+    expect(() => reuseCloudDependencies(f.source, f.target)).toThrow("DELEGATUS_ENVIRONMENT:");
+    expect(existsSync(path.join(f.target, "node_modules"))).toBe(false);
+    expect(statSync(probe).mode & 0o777).toBe(0o555);
+    expect(readFileSync(path.join(probe, "index.js"), "utf8")).toBe("module.exports = 2\n");
+  } finally { chmodSync(modules, 0o755); chmodSync(probe, 0o755); f.cleanup(); }
 });
 
 test("copied executable symlinks keep resolving inside the candidate installation", () => {

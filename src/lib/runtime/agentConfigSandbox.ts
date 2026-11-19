@@ -78,6 +78,20 @@ function sandboxTemporaryRoot(source: NodeJS.ProcessEnv): string {
   return os.tmpdir();
 }
 
+/** Keep package artifacts at their original machine-local locations before
+ * checks replace HOME/XDG dirs. Tools create caches lazily and own locking. */
+export function agentArtifactCacheEnv(source: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform) {
+  const join = platform === "win32" ? path.win32.join : path.join;
+  const home = source.HOME || (platform === "win32" ? source.USERPROFILE : undefined) || os.homedir();
+  const uv = platform === "win32"
+    ? join(source.LOCALAPPDATA || join(home, "AppData", "Local"), "uv", "cache")
+    : join(source.XDG_CACHE_HOME || join(home, ".cache"), "uv");
+  return {
+    UV_CACHE_DIR: source.UV_CACHE_DIR || uv,
+    BUN_INSTALL_CACHE_DIR: source.BUN_INSTALL_CACHE_DIR || join(source.BUN_INSTALL || join(home, ".bun"), "install", "cache"),
+  };
+}
+
 /**
  * Point a spawned agent's environment at its own config and state root.
  * Mutates and returns `env`, which the callers have already filtered down to
@@ -89,6 +103,13 @@ export function withAgentConfigSandbox(
   home?: string,
 ): NodeJS.ProcessEnv {
   Object.assign(env, agentPublicationIdentityEnv(source));
+  Object.assign(env, agentArtifactCacheEnv(source));
+  // All three host allowlists converge here. Keep the attempt's pinned root
+  // across shell isolation so nested gates charge the same disk allowance.
+  for (const name of ["LLV_ATTEMPT_TIMING_ROOT", "LLV_ATTEMPT_TIMING_ROOT_IDENTITY", "LLV_ATTEMPT_TMP_MAX_BYTES"]) {
+    if (source[name] !== undefined) env[name] = source[name];
+    else delete env[name];
+  }
   discardUnsupportedApiCredentials(env);
   const realConfigRoot = configRootFor(source);
   const root = agentConfigSandboxRoot(source, home);

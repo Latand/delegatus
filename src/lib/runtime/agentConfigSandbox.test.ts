@@ -6,7 +6,53 @@ import path from "node:path";
 import { QUIET_DIAGNOSTICS_ENV } from "@/lib/startupDiagnostics";
 import { STATE_OWNER_ENV, underOperatorRoot } from "@/lib/stateOwnership";
 
-import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSandbox";
+import { agentArtifactCacheEnv, agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSandbox";
+
+test("Windows preserves uv's existing local-app-data cache and explicit overrides", () => {
+  const source: NodeJS.ProcessEnv = { NODE_ENV: "test", USERPROFILE: "C:\\fixture", LOCALAPPDATA: "C:\\fixture\\local", XDG_CACHE_HOME: "C:\\unused" };
+  expect(agentArtifactCacheEnv(source, "win32").UV_CACHE_DIR).toBe("C:\\fixture\\local\\uv\\cache");
+  expect(agentArtifactCacheEnv({ ...source, LOCALAPPDATA: undefined }, "win32").UV_CACHE_DIR).toBe("C:\\fixture\\AppData\\Local\\uv\\cache");
+  expect(agentArtifactCacheEnv({ ...source, UV_CACHE_DIR: "C:\\shared", BUN_INSTALL_CACHE_DIR: "C:\\bun" }, "win32"))
+    .toEqual({ UV_CACHE_DIR: "C:\\shared", BUN_INSTALL_CACHE_DIR: "C:\\bun" });
+});
+
+test("fresh attempts reuse package artifact caches while their config and state stay private", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-artifacts-"));
+  try {
+    const source: NodeJS.ProcessEnv = { NODE_ENV: "test", HOME: path.join(root, "home"), XDG_CACHE_HOME: path.join(root, "cache"), LOCALAPPDATA: path.join(root, "local") };
+    const first = withAgentConfigSandbox({ NODE_ENV: "test" }, { ...source, TMPDIR: path.join(root, "first") });
+    const second = withAgentConfigSandbox({ NODE_ENV: "test" }, { ...source, TMPDIR: path.join(root, "second") });
+    expect(first.UV_CACHE_DIR).toBe(path.join(root, process.platform === "win32" ? "local/uv/cache" : "cache/uv"));
+    expect(second.UV_CACHE_DIR).toBe(first.UV_CACHE_DIR);
+    expect(second.BUN_INSTALL_CACHE_DIR).toBe(first.BUN_INSTALL_CACHE_DIR);
+    expect(first.BUN_INSTALL_CACHE_DIR).toBe(path.join(root, "home/.bun/install/cache"));
+    expect(first.LLV_STATE_DIR).not.toBe(second.LLV_STATE_DIR);
+    expect(first.UV_PROJECT_ENVIRONMENT).toBeUndefined();
+    expect(fs.existsSync(first.UV_CACHE_DIR!)).toBeFalse();
+    const configured = withAgentConfigSandbox({ NODE_ENV: "test" }, { ...source, TMPDIR: root,
+      UV_CACHE_DIR: path.join(root, "uv-custom"), BUN_INSTALL_CACHE_DIR: path.join(root, "bun-custom") });
+    expect(configured.UV_CACHE_DIR).toBe(path.join(root, "uv-custom"));
+    expect(configured.BUN_INSTALL_CACHE_DIR).toBe(path.join(root, "bun-custom"));
+    const defaults = withAgentConfigSandbox({ NODE_ENV: "test" }, { NODE_ENV: "test", HOME: source.HOME, TMPDIR: root, BUN_INSTALL: path.join(root, "bun") });
+    expect(defaults.UV_CACHE_DIR).toBe(path.join(root, process.platform === "win32" ? "home/AppData/Local/uv/cache" : "home/.cache/uv"));
+    expect(defaults.BUN_INSTALL_CACHE_DIR).toBe(path.join(root, "bun/install/cache"));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("attempt allocation identity and allowance cross the filtered host environment", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-budget-env-"));
+  try {
+    const stat = fs.statSync(root);
+    const source: NodeJS.ProcessEnv = { NODE_ENV: "test", HOME: root, TMPDIR: root, LLV_ATTEMPT_TIMING_ROOT: root,
+      LLV_ATTEMPT_TIMING_ROOT_IDENTITY: `${stat.dev}:${stat.ino}`, LLV_ATTEMPT_TMP_MAX_BYTES: "8388608" };
+    const child = withAgentConfigSandbox({ NODE_ENV: "test" }, source);
+    expect(child.LLV_ATTEMPT_TIMING_ROOT).toBe(root);
+    expect(child.LLV_ATTEMPT_TIMING_ROOT_IDENTITY).toBe(source.LLV_ATTEMPT_TIMING_ROOT_IDENTITY);
+    expect(child.LLV_ATTEMPT_TMP_MAX_BYTES).toBe("8388608");
+    withAgentConfigSandbox(child, { NODE_ENV: "test", TMPDIR: root });
+    expect(child.LLV_ATTEMPT_TIMING_ROOT).toBeUndefined();
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 /* The spawn boundary's half of #1905. The hosts' own suites assert the child
    command carries this; these cases pin what "isolated" means. */

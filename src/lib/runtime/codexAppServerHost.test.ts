@@ -2340,6 +2340,15 @@ describe("CodexAppServerHost", () => {
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
     const email = ["no-reply", "build.example.invalid"].join("@");
     const prioritySource = JSON.stringify({ database: path.join(metadataState, "tasks.sqlite"), taskIds: ["stage-task"] });
+    const attemptStat = fs.statSync(metadataState);
+    const attemptEnv = {
+      LLV_ATTEMPT_TIMING_ROOT: metadataState,
+      LLV_ATTEMPT_TIMING_ROOT_IDENTITY: `${attemptStat.dev}:${attemptStat.ino}`,
+      LLV_ATTEMPT_TMP_MAX_BYTES: "8388608",
+    };
+    const tmpDir = path.join(metadataState, "codex-shell-tmp");
+    const evidenceDir = path.join(metadataState, "codex-shell-evidence");
+    fs.mkdirSync(tmpDir); fs.mkdirSync(evidenceDir);
     const server = new FakeAppServer();
     server.shellPolicy = {
       inherit: "core", set: { GIT_AUTHOR_EMAIL: "unsafe", GIT_COMMITTER_EMAIL: "unsafe", OTHER: "kept" },
@@ -2347,7 +2356,7 @@ describe("CodexAppServerHost", () => {
     };
     const host = await CodexAppServerHost.start({
       cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email,
-        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource },
+        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource, TMPDIR: tmpDir, LLV_EVIDENCE_DIR: evidenceDir, ...attemptEnv },
       eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured),
     });
     try {
@@ -2355,13 +2364,26 @@ describe("CodexAppServerHost", () => {
         GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
         GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
         LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
+        ...attemptEnv,
       });
       const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email });
-      expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
-        shell_environment_policy: { set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource }, ...(keyedFilters
-          ? { filters: Object.fromEntries([...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"].map((key) => [key, "include"])) }
-          : { include_only: ["PATH", "HOME", ...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"] }) },
-      } });
+      const shellBindings = {
+        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
+        ...attemptEnv,
+        TMPDIR: captured.options?.env?.TMPDIR,
+        LLV_EVIDENCE_DIR: captured.options?.env?.LLV_EVIDENCE_DIR,
+        UV_CACHE_DIR: captured.options?.env?.UV_CACHE_DIR,
+        BUN_INSTALL_CACHE_DIR: captured.options?.env?.BUN_INSTALL_CACHE_DIR,
+      };
+      const shellKeys = [...Object.keys(git), ...Object.keys(shellBindings)];
+      const startParams = server.requests.find((request) => request.method === "thread/start")?.params as { config?: { shell_environment_policy?: Record<string, unknown> } };
+      const shellPolicy = startParams.config?.shell_environment_policy;
+      expect(shellPolicy?.set).toMatchObject({ ...git, ...shellBindings });
+      if (keyedFilters) {
+        expect(shellPolicy?.filters).toMatchObject(Object.fromEntries(shellKeys.map((key) => [key, "include"])));
+      } else {
+        expect(shellPolicy?.include_only).toEqual(expect.arrayContaining(["PATH", "HOME", ...shellKeys]));
+      }
     } finally { await host.release(); }
   });
 
@@ -2396,6 +2418,8 @@ describe("CodexAppServerHost", () => {
       env: {
         NODE_ENV: "test",
         PATH: process.env.PATH,
+        UV_CACHE_DIR: path.join(metadataState, "uv-cache"),
+        BUN_INSTALL_CACHE_DIR: path.join(metadataState, "bun-install-cache"),
         [["OPENAI", "API", "KEY"].join("_")]: blockedCredential,
         [["LLV", "TOKEN"].join("_")]: blockedCredential,
         [["ANTHROPIC", "AUTH", "TOKEN"].join("_")]: blockedCredential,
@@ -2421,6 +2445,9 @@ describe("CodexAppServerHost", () => {
       GIT_AUTHOR_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
       GIT_COMMITTER_NAME: "Delegatus",
       GIT_COMMITTER_EMAIL: ["noreply", "delegatus.invalid"].join("@"),
+      UV_CACHE_DIR: path.join(metadataState, "uv-cache"),
+      BUN_INSTALL_CACHE_DIR: path.join(metadataState, "bun-install-cache"),
+      LLV_PRIVACY_KNOWN_VALUES_FILE: path.join(metadataState, "role-memory", "known-values.txt"),
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),

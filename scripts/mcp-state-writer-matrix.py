@@ -40,11 +40,14 @@ def git(*args):
 def environment(root):
     env = {k: v for k, v in os.environ.items() if not k.startswith(
         ("LLV_", "DELEGATUS_", "MCP_SQL_", "MCP_BENCH_", "NEXT_PUBLIC_", "TMUX"))}
-    # The runner validates this inherited lease against its live kernel lock.
-    # Nested samples still receive their own owned runner and resource quota.
-    if "LLV_GATE_SLOT_LEASE" in os.environ:
-        env["LLV_GATE_SLOT_LEASE"] = os.environ["LLV_GATE_SLOT_LEASE"]
-    for key in ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR", "LLV_CODEX_HOME",
+    # Isolation must retain admission ownership and the attempt's shared
+    # on-disk allowance, including after a fresh sample runner starts.
+    for key in ["LLV_GATE_SLOT_LEASE", "LLV_ATTEMPT_TIMING_ROOT",
+                "LLV_ATTEMPT_TIMING_ROOT_IDENTITY", "LLV_ATTEMPT_TMP_MAX_BYTES"]:
+        if key in os.environ:
+            env[key] = os.environ[key]
+    for key in ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+                "XDG_RUNTIME_DIR", "TMPDIR", "LLV_STATE_DIR", "LLV_CODEX_HOME",
                 "LLV_CLAUDE_HOME", "COPILOT_HOME", "OPENCLAW_STATE_DIR", "GH_CONFIG_DIR", "TMUX_TMPDIR"]:
         folder = root / key
         folder.mkdir(parents=True, exist_ok=True)
@@ -54,6 +57,24 @@ def environment(root):
     env.update(CODEX_HOME=env["LLV_CODEX_HOME"], CLAUDE_CONFIG_DIR=env["LLV_CLAUDE_HOME"],
                LLV_VIEWER_CONTROL_URL="http://127.0.0.1:1", NODE_ENV="test", LLV_STRUCTURED_HOSTS="0")
     return env
+
+
+def shared_export(root, side, revision, bun, dependencies):
+    """Keep the matrix's frozen candidate dependency graph on every side.
+
+    Historical product inputs intentionally differ. Their dependencies stay
+    normalized to the candidate snapshot named in every manifest, as before.
+    """
+    target = root / side
+    subprocess.run([str(bun), "-e", """
+        import { sharedCheckout } from './scripts/source-checkout.ts';
+        import { checkAttemptTmpBudget } from './scripts/attempt-tmp-budget.ts';
+        checkAttemptTmpBudget();
+        sharedCheckout(process.cwd(), process.argv[1], process.argv[2]);
+        checkAttemptTmpBudget();
+    """, str(target), revision], cwd=REPO, check=True)
+    (target / "node_modules").symlink_to(dependencies, target_is_directory=True)
+    return target
 
 
 def quotas():
@@ -1090,11 +1111,9 @@ def main():
         shutil.copy2(args.capabilities.resolve(), capabilities)
     dependencies = root / "node_modules"
     if not dependencies.exists():
-        preparing = pathlib.Path(tempfile.mkdtemp(prefix="dependencies-", dir=root))
-        shutil.copytree(REPO / "node_modules", preparing / "node_modules", symlinks=True,
-                        ignore=shutil.ignore_patterns(".cache"))
-        (preparing / "node_modules").rename(dependencies)
-        preparing.rmdir()
+        dependencies.symlink_to((REPO / "node_modules").resolve(), target_is_directory=True)
+    if not dependencies.is_symlink() or dependencies.resolve() != (REPO / "node_modules").resolve():
+        raise RuntimeError("resume requires the same shared read-only dependency installation")
     dependency_hash_file = root / "dependencies.sha256"
     if not dependency_hash_file.exists():
         dependency_hash = hashlib.sha256()
@@ -1125,6 +1144,8 @@ def main():
     head = git("rev-parse", args.candidate)
     exports = {}
     for side, ref in [("audit", args.audit), ("main", args.baseline), ("candidate", head)]:
+        if side not in args.sides:
+            continue
         revision = git("rev-parse", ref)
         target = root / side
         manifest_path = root / (side + ".manifest.json")
@@ -1133,19 +1154,15 @@ def main():
             if manifest["sourceRevision"] != revision or manifest["harnessRevision"] != head:
                 raise RuntimeError("resume cannot replace an immutable export")
         else:
-            target.mkdir()
-            archive = root / (side + ".tar")
-            with archive.open("wb") as output:
-                subprocess.run(["git", "archive", revision], cwd=REPO, stdout=output, check=True)
-            subprocess.run(["tar", "-xf", str(archive), "-C", str(target)], check=True)
+            target = shared_export(root, side, revision, bun, dependencies)
             for filename in HARNESS:
                 shutil.copy2(REPO / filename, target / filename)
-            (target / "node_modules").symlink_to(dependencies, target_is_directory=True)
-            manifest = {"sourceRevision": revision, "sourceArchiveSha256": digest(archive),
+            manifest = {"sourceRevision": revision, "sourceTree": git("rev-parse", revision + "^{tree}"),
                         "harnessRevision": head, "harnessFiles": {f: digest(REPO / f) for f in HARNESS},
                         "observerSha256": digest(observer), "bunVersion": subprocess.check_output([str(bun), "--version"], text=True).strip(),
                         "bunSha256": digest(bun), "nodeVersion": subprocess.check_output([str(runtime / "node"), "--version"], text=True).strip(),
                         "nodeSha256": digest(runtime / "node"), "pythonVersion": platform.python_version(),
+                        "dependencySourceRevision": head,
                         "dependencyLockSha256": digest(REPO / "bun.lock"), "capabilitiesFileSha256": digest(capabilities),
                         "dependencySnapshotSha256": dependency_hash_file.read_text(),
                         "kernel": platform.release(), "quotaHierarchyLeafFirst": quotas(), "seedSha256": seed_hash}

@@ -16,8 +16,11 @@ const E2E_TIMEOUT = 240_000;
 const harnesses: Harness[] = [];
 afterEach(() => { for (const h of harnesses.splice(0)) h.cleanup(); });
 function harness(options?: Parameters<typeof makeHarness>[0]): Harness { const h = makeHarness(options); harnesses.push(h); return h; }
-// Timings and the local CPU queue's waiting lines differ between any two runs.
-const normalized = (text: string) => withoutRunnerLines(text).replace(/\[[\d.]+m?s\]/g, "[t]").replace(/^bun test v.*$/m, "").replace(/^gate-slot: Waiting for the CPU queue.*\n/gm, "");
+// Compare the test output after removing progress from either machine's admission queue.
+const normalized = (text: string) => withoutRunnerLines(text).replace(/\[[\d.]+m?s\]/g, "[t]").replace(/^bun test v.*$/m, "")
+  .replace(/^gate-slot: Waiting for (?:the CPU queue|a heavy command slot|measured CPU pressure).*\n/gm, "")
+  .replace(/^gate-slot: (?:waiting for CPU admission queue SQLite lock \(deadline \d+ ms\)|CPU admission queue lock acquired after \d+ ms)\n/gm, "")
+  .replace(/^gate-slot: .*\.service: pids\.peak=.*\n/gm, "");
 const RUNNING = /^gate-runner: running on the gate runner \(run [0-9a-f]{12}, tree [0-9a-f]{12}\)$/m;
 
 function treeHashes(root: string, skip: (relative: string) => boolean = () => false): Record<string, string> {
@@ -49,7 +52,7 @@ test.if(linux)("a tree holding a known private value is never uploaded and runs 
 }, E2E_TIMEOUT);
 
 // T19
-test.if(linux)("a review export runs remotely through its record; a copy without one stays here", () => {
+test.if(linux)("a shared review checkout runs remotely; a source-only copy without a record stays here", () => {
   const h = harness();
   const scratchDir = path.join(h.root, "exports");
   fs.mkdirSync(scratchDir);
@@ -71,7 +74,6 @@ import fs from "node:fs";
 test("export tree", () => {
   expect(fs.readFileSync("README.md", "utf8")).toEndWith("edited in the export\\n");
   expect(fs.existsSync("LICENSE")).toBe(false);
-  expect(fs.existsSync(".git")).toBe(false);
   expect(fs.readFileSync(${JSON.stringify(ignoredFixture)}, "utf8")).toBe("tracked under an ignore rule\\n");
 });`);
   const edited = treeHashes(path.dirname(exported.directory));
@@ -85,7 +87,8 @@ test("export tree", () => {
   expect(Object.keys(before)).toContain("export.json");
   // A copy of the same files without the record never contacts the runner.
   const copy = path.join(h.root, "copy");
-  fs.cpSync(exported.directory, copy, { recursive: true, verbatimSymlinks: true });
+  fs.cpSync(exported.directory, copy, { recursive: true, verbatimSymlinks: true,
+    filter: source => source !== path.join(exported.directory, ".git") });
   const calls = h.calls().length;
   expect(h.run(["bun", "test", "./gate-runner-fixture/export.test.ts"], { cwd: copy }).code).toBe(0);
   expect(h.calls()).toHaveLength(calls);

@@ -3,15 +3,42 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, s
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkEnvironment, checkInputEnvironment, environmentFingerprint, GateCache, gateToolFiles, fileFingerprint, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+
 import { agentEnvironments } from "./local-gate.fixture";
 import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
 import { foldDelegatusEnvironment } from "../bin/envAlias.mjs";
 import { systemBootEpoch } from "../src/lib/processIdentity";
+import { isolatedEnvironment } from "./local-gate";
+import { envClass } from "./gate-runner/env-classes";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
+
+test("artifact cache locations survive local isolation, bind receipts and stay off the remote wire", () => {
+  const root = fixture();
+  const source: NodeJS.ProcessEnv = { ...process.env, UV_CACHE_DIR: path.join(root, "uv"), BUN_INSTALL_CACHE_DIR: path.join(root, "bun") };
+  const checked = checkEnvironment(source);
+  const isolated = isolatedEnvironment(path.join(root, "attempt"), checked);
+  for (const name of ["UV_CACHE_DIR", "BUN_INSTALL_CACHE_DIR"]) {
+    expect(isolated[name]).toBe(source[name]);
+    expect(envClass(name)).toBe("isolated");
+    expect(environmentFingerprint(checkEnvironment({ ...source, [name]: path.join(root, "other") })))
+      .not.toBe(environmentFingerprint(checked));
+  }
+  expect(isolated.HOME).not.toBe(source.HOME);
+  expect(isolated.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
+});
+
+test("attempt disk admission metadata survives isolation without invalidating check reuse", () => {
+  const base = checkEnvironment(process.env);
+  const admitted = checkEnvironment({ ...process.env, LLV_ATTEMPT_TIMING_ROOT: "/scratch/attempt",
+    LLV_ATTEMPT_TIMING_ROOT_IDENTITY: "1:2", LLV_ATTEMPT_TMP_MAX_BYTES: "8388608" });
+  expect(admitted.LLV_ATTEMPT_TIMING_ROOT).toBe("/scratch/attempt");
+  expect(admitted.LLV_ATTEMPT_TMP_MAX_BYTES).toBe("8388608");
+  expect(environmentFingerprint(admitted)).toBe(environmentFingerprint(base));
+});
 
 for (const name of ["check-worker-client.mjs", "check-worker-entry.py"]) test(`${name} changes invalidate a cached gate verdict`, () => {
   const root = fixture();

@@ -1,4 +1,4 @@
-import { cpSync, existsSync, readlinkSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { chmodSync, constants, copyFileSync, existsSync, mkdirSync, readlinkSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
@@ -8,7 +8,8 @@ interface Lock { workspaces: Record<string, Record<string, unknown>>; packages: 
 
 /** The setup checkout is the dependency source. No resolver, lifecycle script
  * or package-manager network request runs in the agent phase. Copy rather than
- * link so checks cannot change the setup's installation. */
+ * link so checks cannot change the setup's installation. Prefer copy-on-write
+ * extents where supported; fs falls back to an independent copy otherwise. */
 export function reuseCloudDependencies(source: string, target = process.cwd()): void {
   let copiedModules: string | undefined;
   let copyStarted = false;
@@ -153,7 +154,22 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
     const destination = path.join(target, "node_modules");
     copiedModules = destination;
     copyStarted = true;
-    cpSync(modules, destination, { recursive: true, dereference: true });
+    // Sealed dependency stores have non-writable directories. Create private
+    // directories writable before descending, including on partial-copy failure.
+    // Reflinks share extents, never inodes: chmod and writes stay private.
+    const copyPrivate = (from: string, to: string) => {
+      const entry = statSync(from);
+      if (entry.isDirectory()) {
+        mkdirSync(to, { mode: (entry.mode & 0o777) | 0o700 });
+        // An inherited restrictive umask must not make the copy undeletable.
+        chmodSync(to, (entry.mode & 0o777) | 0o700);
+        for (const name of readdirSync(from)) copyPrivate(path.join(from, name), path.join(to, name));
+      } else if (entry.isFile()) {
+        copyFileSync(from, to, constants.COPYFILE_FICLONE);
+        chmodSync(to, (entry.mode & 0o777) | 0o600);
+      } else throw new Error();
+    };
+    copyPrivate(modules, destination);
     // Package-manager executable links are relative to .bin. Dereferencing
     // those links leaves a script whose relative imports resolve from .bin.
     // Recreate only links that resolve within the installed tree.

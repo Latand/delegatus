@@ -1,4 +1,5 @@
 import { ownGateSandboxes } from "./gateSandboxRecords";
+import { checkAttemptTmpBudget, recordAttemptTmpAllocation } from "./attempt-tmp-budget";
 import { timedCommand, observeCommandExecution } from "../src/lib/recordedChecks/commandTiming";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -38,7 +39,11 @@ function writeCompletionReceipt() {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST" || fs.readFileSync(filename, "utf8") !== token) throw error;
   }
 }
-if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) ownGateSandboxes();
+if (!["--service", "--namespace-guardian"].includes(args[0] ?? "")) {
+  ownGateSandboxes();
+  try { checkAttemptTmpBudget(); }
+  catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exit(73); }
+}
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
 
@@ -123,7 +128,7 @@ if (args[0] === "--namespace-guardian") {
     ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
   const parentAlive = () => !parent || (processIdentityStatus(parent) === "alive" && !procBackend.processExited(parent.pid));
   if (!parentAlive()) process.exit(137);
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));
+  const directory = recordAttemptTmpAllocation(fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-")));
   fs.chmodSync(directory, 0o700);
   const ledger = path.join(directory, "children.jsonl");
   fs.writeFileSync(ledger, "", { mode: 0o600 });
@@ -230,6 +235,11 @@ if (args[0] === "--namespace-guardian") {
   launch.env.LLV_CHECK_BROKER = broker.address;
   delete launch.env.DELEGATUS_CHECK_BROKER;
   const recorded = recordedSupervisorObligation();
+  // A receipt gates cleanup of the command's disposable inputs. Once the
+  // service starts the command, losing its waiting client must leave the
+  // bounded service in charge of the workload.
+  const receiptBacked = Boolean(launch.env.LLV_OWNED_RUN_COMPLETION_RECEIPT && launch.env.LLV_OWNED_RUN_COMPLETION_TOKEN);
+  const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
   const budget = cpuWaitBudget(launch.env);
   delete budget.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
   delete budget.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
@@ -260,7 +270,7 @@ if (args[0] === "--namespace-guardian") {
   }
   const serviceEvidence = { unit: launch.unit, invocation: process.env.INVOCATION_ID ?? "", cgroup };
   const refused = recordedSupervisorRefusal(recorded);
-  if (refused) {
+  if (refused || (receiptBacked && !alive(launch.owner))) {
     producerReport("service", null, { service: serviceEvidence, phase: "close", cleanup: "pending" });
     budget.close(); process.exit(refused === "deadline" ? 124 : 137);
   }
@@ -311,10 +321,9 @@ if (args[0] === "--namespace-guardian") {
     catch (error) { console.error(`GATE_TASK_OBSERVATION_FAILED: ${launch.unit}: ${(error as Error).message}`); void finish(1); }
   }, 50);
   setInterval(() => {
-    const alive = (owner: ProcessIdentity) => processIdentityStatus(owner) === "alive" && !procBackend.processExited(owner.pid);
     const refusal = recordedSupervisorRefusal(recorded);
     if (refusal) cancellation ??= supervisorCancellation(refusal);
-    if (refusal || !alive(launch.owner) || (launch.parent && !alive(launch.parent))) void finish(refusal === "deadline" ? 124 : 137);
+    if (refusal || (!receiptBacked && !alive(launch.owner)) || (launch.parent && !alive(launch.parent))) void finish(refusal === "deadline" ? 124 : 137);
   }, 100);
   stopExecutionTimer = cpuBudgetTimer(launch.timeoutMs, budget.elapsed, () => { console.error("owned runner: deadline expired"); void finish(124); });
   // A kernel watchdog bounds a hung supervisor while its execution timer
@@ -375,7 +384,7 @@ if (args[0] === "--namespace-guardian") {
   // The service checks both identities from the host PID namespace.
   const owner = sandbox ? cpuOwnerIdentity(process.pid) : captureProcessIdentity(process.pid);
   if (!owner.startIdentity || !owner.bootEpoch) throw new Error("owned runner has no verifiable start identity");
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));
+  const directory = recordAttemptTmpAllocation(fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-")));
   fs.chmodSync(directory, 0o700);
   const file = path.join(directory, "launch.json");
   let parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
