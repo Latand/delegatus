@@ -115,6 +115,24 @@ test("project view decoding is flat across tenfold retained passes and unrelated
   }
 });
 
+test("curation compares additions, merge targets and rewrites against the latest effective curator revision", () => {
+  const ids = Array.from({ length: 4 }, (_, n) => "r_" + String(n + 1).padStart(16, "0"));
+  const memory = seed(ids.map(id => rule(id, SCOPE, { curatedAt: AT })));
+  memory.boundedPatch(2, tx => {
+    const held = tx.get("s:" + SCOPE) as RoleMemoryScopeRow;
+    const base = { at: AT, added: [], merged: [], archived: [] };
+    tx.put({ ...held, history: [
+      { ...base, by: "agent", revision: 9, added: [ids[0]!] },
+      { ...base, by: "curator", revision: 7 },
+      { ...base, by: "agent", revision: 8, merged: [{ from: ids[3]!, into: ids[1]! }], rewritten: [{ id: ids[2]!, version: "prior" }] },
+      { ...base, by: "agent", revision: 2, added: [ids[0]!, ids[3]!] },
+      { ...base, by: "curator", revision: 12, revertedAt: AT },
+    ] });
+  });
+  const rules = projectView(PROJECT, NOW).scopes.find(row => row.scope === SCOPE)!.active;
+  expect(rules.map(row => row.awaitingCuration)).toEqual([true, true, true, false]);
+});
+
 test("memo hits decode nothing, preserve time fields and refuse mutation of shared nested data", () => {
   seed();
   const first = measuredView();
