@@ -17,6 +17,7 @@ import type { EngineHost } from "./engineHost";
 import * as control from "./structuredHostControl";
 import * as delivery from "./structuredDeliveryController";
 import { statePath } from "@/lib/configDir";
+import { buildPipeline, loadPipelinesForRetirement, savePipelines } from "@/lib/pipelines/store";
 import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
 import { runStructuredHostRetirementSweep, type StructuredHostRetirementDependencies } from "./structuredHostRetirement";
 
@@ -24,7 +25,10 @@ const identities: ProcessIdentity[] = [];
 const children: ChildProcess[] = [];
 const roots: string[] = [];
 const originalTerminate = control.terminateStructuredHostTree;
+const originalStateDirectory = process.env.LLV_STATE_DIR;
 afterEach(async () => {
+  if (originalStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = originalStateDirectory;
   for (const identity of identities.splice(0).reverse()) await stopFixtureIdentity(identity);
   // Kernel exit can precede the ChildProcess exit notification. Reap the
   // original handles before the file's ownership guardian judges teardown.
@@ -33,6 +37,85 @@ afterEach(async () => {
   setAgentRegistryForTests(null);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
+for (const engine of ["codex", "claude"] as const) {
+  for (const boundary of ["none", "measurement", "capture", "release", "open-turn"] as const) {
+    test(`${engine}: recent passed stage retirement, continuation at ${boundary}`, async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-host-lifecycle-"));
+      roots.push(root);
+      process.env.LLV_STATE_DIR = path.join(root, "state");
+      const child = ownFixtureTree(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" }));
+      children.push(child);
+      const identity = captureProcessIdentity(child.pid!);
+      identities.push(identity);
+      const file = fixtureRegistry(root, engine, identity, null);
+      const entry = file.entries[`${engine}:${FIXTURE_SESSION}`]!;
+      entry.status = "idle";
+      entry.structuredHostOperationId = null;
+      entry.structuredHost!.activeTurnRef = null;
+      const records = fixtureRecords(engine);
+      const openTurn = boundary === "open-turn";
+      const sweepAt = openTurn ? FIXTURE_NOW + 24 * 3_600_000 : FIXTURE_NOW;
+      const native = [...records.open, ...(openTurn ? [] : records.close)].map(row => JSON.stringify(row)).join("\n") + "\n";
+      fs.writeFileSync(entry.artifactPath!, native);
+      fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+      const filename = path.join(root, "registry.json");
+      fs.writeFileSync(filename, JSON.stringify(file));
+      const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
+      setAgentRegistryForTests(registry);
+      const conversation = Object.values(file.conversations)[0]!;
+      const lane = buildPipeline({ id: "stage-lifecycle", task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
+        now: new Date(FIXTURE_NOW - 1000).toISOString(), stages: [{ id: "review", kind: "run", prompt: "Review", next: null,
+          effectiveRole: { roleId: null, engine, model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+      lane.state = "running";
+      lane.runs[0]!.attempts = [{ n: 1, state: "passed", effectiveRole: lane.stages[0]!.effectiveRole, launchId: null, conversationId: conversation.id,
+        sessionId: FIXTURE_SESSION, agentPath: entry.artifactPath, paneId: null, flowId: null, startedAt: lane.createdAt,
+        completedAt: new Date(FIXTURE_NOW).toISOString(), input: null, activatedBy: null, output: null, error: null, verdict: { status: "pass", findings: [] } }];
+      savePipelines([lane]);
+      const resume = () => { lane.runs[0]!.attempts[0]!.state = "running"; savePipelines([lane]); };
+      const service = new AgentStateService({ registry, now: () => sweepAt, owns: () => !openTurn,
+        process: value => procBackend.pidAlive(value.pid) ? "alive" : "dead", memory: () => null, release: "fixture", publish: async () => true });
+      const holds = spyOn(delivery, "hasStructuredDeliveryHost").mockReturnValue(false);
+      await service.request();
+      let signals = 0;
+      const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation((ref, dependencies) => originalTerminate(ref, {
+        ...dependencies, graceMs: 50, deadlineMs: 2000,
+        persistCapturedTree: async captured => {
+          const result = await dependencies!.persistCapturedTree!(captured);
+          if (boundary === "capture") resume();
+          return result;
+        },
+        terminateOwnedHost: async () => { if (boundary === "release") resume(); return true; },
+        signal: (pid, signal) => { signals++; process.kill(pid, signal); },
+      }));
+      try {
+        const report = await runStructuredHostRetirementSweep({ snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
+          publicationState: () => "ready", now: () => sweepAt, handoffRows: () => determined([]), durableEventTail: () => determined(0),
+          realtimeBound: () => determined(false), orchestratorSeatConversations: () => determined(new Set()), revokedSeatConversations: () => determined(new Set()),
+          readCursor: () => null, writeCursor: () => {}, treePss: async () => {
+            await Promise.resolve();
+            if (boundary === "measurement") resume();
+            return { bytes: null, measuredProcesses: 0 };
+          } });
+        expect(fs.readFileSync(entry.artifactPath!, "utf8")).toBe(native);
+        expect(loadPipelinesForRetirement()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+        if (boundary === "none") {
+          expect(report.failed).toEqual([]);
+          expect(report.retired).toMatchObject([{ reason: "stage verdict", idleMs: 0 }]);
+          expect(signals).toBeGreaterThan(0);
+          expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", structuredHost: null });
+          expect(JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8")).retired[0].reason).toBe("stage verdict");
+          expect(JSON.parse(fs.readFileSync(statePath("host-retirement-journal.ndjson"), "utf8").trim().split("\n").at(-1)!).retired[0].reason).toBe("stage verdict");
+        } else {
+          expect(report.retired).toEqual([]);
+          if (openTurn) expect(report.refused).toMatchObject([{ clause: "turn-settled" }]);
+          expect(signals).toBe(0);
+          expect(procBackend.pidAlive(identity.pid)).toBe(true);
+        }
+      } finally { terminate.mockRestore(); holds.mockRestore(); service.stop(); registry.close(); }
+    });
+  }
+}
 
 for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex", true], ["claude", true]] as const) {
   for (const change of ["released-owner", "missing-identity", "already-reconciled", "live-owner", "new-generation", "reopened-turn",

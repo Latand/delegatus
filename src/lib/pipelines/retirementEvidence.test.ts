@@ -29,7 +29,7 @@ function setup() {
   savePipelines([lane]);
   return { root, lane, db: new Database(path.join(root, "state.sqlite")) };
 }
-const target = { conversations: ["conversation_owner"], sessionId: "session-owner", agentPath: "/fixture/owner.jsonl" };
+const target = { conversations: ["conversation_owner"], engine: "codex" as const, sessionId: "session-owner", agentPath: "/fixture/owner.jsonl" };
 function decodedRows() { return performanceSpans.snapshot().records.filter(row => performanceSites[row.site] === "state.json").reduce((n, row) => n + row.rows, 0); }
 
 test("retirement target reads match the full predicate and warm decoding stays flat across tenfold history", async () => {
@@ -92,6 +92,72 @@ test("a peer archive edit and deletion revoke old evidence and the next read ans
     f.db.query("DELETE FROM state_rows WHERE collection='pipelines_archive'").run();
     expect(() => archived(target)).toThrow("changed");
     expect((await pipelineRetirementReader())(target)).toBe(false);
+  } finally { f.db.close(); }
+});
+
+test("finished verdict reasons reuse compact evidence and disappear when the same attempt resumes", async () => {
+  const f = setup();
+  try {
+    const attempt = f.lane.runs[0]!.attempts[0]!;
+    attempt.state = "passed";
+    attempt.completedAt = f.lane.createdAt;
+    attempt.verdict = { status: "pass", findings: [] };
+    savePipelines([f.lane]);
+    const reader = await pipelineRetirementReader();
+    expect(reader(target)).toBe(false);
+    expect(reader.standing(target)).toBe("stage verdict");
+    expect(reader.standing({ conversations: [], engine: "codex", sessionId: target.sessionId })).toBe("stage verdict");
+    expect(reader.standing({ conversations: ["unrelated"] })).toBeNull();
+    performanceSpans.clear();
+    expect((await pipelineRetirementReader()).standing(target)).toBe("stage verdict");
+    expect(decodedRows()).toBe(0);
+    attempt.state = "running";
+    savePipelines([f.lane]);
+    expect(() => reader.standing(target)).toThrow("changed");
+    const resumed = await pipelineRetirementReader();
+    expect(resumed(target)).toBe(true);
+    expect(resumed.standing(target)).toBe("held");
+    attempt.state = "needs_decision";
+    attempt.verdict.status = "needs_decision";
+    savePipelines([f.lane]);
+    expect((await pipelineRetirementReader())(target)).toBe(true);
+    expect((await pipelineRetirementReader()).standing(target)).toBe("held");
+    // resolve-decision reserves a fresh attempt; the answered attempt's
+    // original needs_decision verdict remains in history without custody.
+    f.lane.runs[0]!.attempts.push({ ...attempt, n: 2, state: "running", verdict: null, completedAt: null,
+      conversationId: "conversation_successor", sessionId: "session-successor", agentPath: "/fixture/successor.jsonl" });
+    savePipelines([f.lane]);
+    expect((await pipelineRetirementReader())(target)).toBe(false);
+    expect((await pipelineRetirementReader()).standing(target)).toBe("stage verdict");
+  } finally { f.db.close(); }
+});
+
+test("a repair reservation on a later stage keeps its original producer", async () => {
+  const f = setup();
+  try {
+    const producer = f.lane.runs[0]!.attempts[0]!;
+    producer.state = "passed";
+    producer.completedAt = f.lane.createdAt;
+    producer.verdict = { status: "pass", findings: [] };
+    const repair = {
+      sha: "a".repeat(40), baseSha: "b".repeat(40), operationId: "fixture-push",
+      stageId: "build", attempt: producer.n, refusedAt: f.lane.createdAt,
+      detail: "Publication refused", paths: [], messageTs: null,
+    };
+    f.lane.stages.push({ ...f.lane.stages[0]!, id: "publish" });
+    f.lane.runs.push({ stageId: "publish", attempts: [{
+      ...producer, conversationId: null, agentPath: null, sessionId: null, launchId: null, publicationRepair: repair,
+    }] });
+    savePipelines([f.lane]);
+    expect(pipelineHostHasLiveWork([f.lane], producer)).toBe(true);
+    const reader = await pipelineRetirementReader();
+    expect(reader(target)).toBe(true);
+    expect(reader.standing(target)).toBe("held");
+
+    f.lane.runs[1]!.attempts[0]!.publicationRepair!.settledAt = f.lane.createdAt;
+    savePipelines([f.lane]);
+    expect(pipelineHostHasLiveWork([f.lane], producer)).toBe(false);
+    expect((await pipelineRetirementReader()).standing(target)).toBe("stage verdict");
   } finally { f.db.close(); }
 });
 

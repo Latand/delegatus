@@ -5,12 +5,12 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { readCompactPipelineEvidence, readStateCollectionRevisions, stateEvidenceVersion, type CompactEvidenceCache } from "@/lib/state/sqliteStateStore";
 import { isStoredPipeline } from "./store";
-import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelinePublicationHoldsHost } from "./hostRetirement";
-import type { RuntimeProviderRecoveryRef } from "@/lib/runtime/contracts";
+import { pipelineRetirementOwnership, type PipelineRetirementReason } from "./hostRetirement";
+import type { RuntimeEngine, RuntimeProviderRecoveryRef } from "@/lib/runtime/contracts";
 import type { Pipeline } from "./types";
 import { readRecorded, recordedHostHeld } from "@/lib/recordedChecks/store";
 
-type Claim = { pipeline: string; stage: string | null; attempt: number | null; publishing: boolean; recoverable: boolean; source: boolean; identities: string[] };
+type Claim = { pipeline: string; stage: string | null; attempt: number | null; publishing: boolean; recoverable: boolean; source: boolean; identities: string[]; reason?: PipelineRetirementReason };
 type Projection = { id: string; claims: Claim[]; releasedSources: string[] };
 type Evidence = { compact: CompactEvidenceCache<Projection>; index: Map<string, Claim[]>; releasedSources: Set<string>; version: string };
 type Slot = { value?: Evidence; pending?: Promise<Evidence> };
@@ -20,34 +20,32 @@ const owner = process as typeof process & { __llvRetirementEvidence?: Map<string
 const slots = owner.__llvRetirementEvidence ??= new Map<string, Slot>();
 const MAX_BYTES = 16 * 1024 * 1024;
 const identity = (kind: string, value: string) => JSON.stringify([kind, value]);
+const hostIdentity = (engine: string, sessionId: string) => ["engine-session", `${engine}:${sessionId}`] as const;
 function project(raw: unknown): Projection {
   if (!isStoredPipeline(raw)) throw new Error("pipeline retirement ownership is unknown");
   const pipeline: Pipeline = raw;
-  const publishing = pipelinePublicationHoldsHost(pipeline);
+  const { publishing, sourceHeld, attempts } = pipelineRetirementOwnership(pipeline);
   const claims: Claim[] = [];
   const releasedSources: string[] = [];
-  const add = (stage: string | null, attempt: number | null, values: Array<[string, string | null | undefined]>, recoverable = false) => {
+  const add = (stage: string | null, attempt: number | null, values: ReadonlyArray<readonly [string, string | null | undefined]>, recoverable = false, reason?: PipelineRetirementReason) => {
     const identities = values.flatMap(([kind, value]) => value ? [identity(kind, value)] : []);
-    if (identities.length) claims.push({ pipeline: pipeline.id, stage, attempt, publishing: !!publishing, recoverable, source: stage === null, identities });
+    if (identities.length) claims.push({ pipeline: pipeline.id, stage, attempt, publishing: !!publishing, recoverable, source: stage === null, identities, ...(reason ? { reason } : {}) });
   };
-  if (publishing || !["completed", "closed"].includes(pipeline.state)) {
+  if (sourceHeld) {
     add(null, null, [["conversation", pipeline.srcConversationId], ["path", pipeline.srcPath]]);
   }
-  for (const run of pipeline.runs) {
-    const latest = run.attempts.findLast(attempt => !attempt.historical);
-    for (const attempt of run.attempts) {
-      const activation = attempt.activation && attempt.activation.phase !== "settled";
-      const released = pipelineAttemptReleased(pipeline, attempt, latest);
-      if (!publishing && released && !activation) {
-        for (const [kind, value] of [["conversation", attempt.conversationId], ["path", attempt.agentPath]] as const) {
-          if (value) releasedSources.push(identity(kind, value));
-        }
+  for (const { stageId, attempt, identities, held, released, reason, recoverable } of attempts) {
+    if (released) {
+      for (const [kind, value] of [["conversation", attempt.conversationId], ["path", attempt.agentPath]] as const) {
+        if (value) releasedSources.push(identity(kind, value));
       }
-      if (!publishing && !activation && (released || !pipelineAttemptMayBeWorking(attempt))) continue;
-      add(run.stageId, attempt.n, [["conversation", attempt.conversationId], ["path", attempt.agentPath],
-        ["session", attempt.sessionId], ["pane", attempt.paneId], ["launch", attempt.launchId]],
-        run === pipeline.runs.find(candidate => candidate.stageId === run.stageId) && attempt === run.attempts.at(-1) && !attempt.historical);
     }
+    if (held) add(stageId, attempt.n, identities.flatMap(host => [["conversation", host.conversationId], ["path", host.agentPath],
+      ["session", host.sessionId], ["pane", host.paneId], ["launch", host.launchId]] as const), recoverable);
+    // A conversation alias can outlive the native generation. The fast path
+    // attaches to the recorded session, with legacy artifact/launch fallback.
+    if (reason) add(stageId, attempt.n, [attempt.sessionId ? hostIdentity(attempt.effectiveRole.engine, attempt.sessionId)
+      : attempt.agentPath ? ["path", attempt.agentPath] : ["launch", attempt.launchId]], false, reason);
   }
   return { id: pipeline.id, claims, releasedSources };
 }
@@ -92,10 +90,13 @@ function absent(filename: string): boolean {
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
 }
 
-export type RetirementTarget = { conversations: readonly string[]; sessionId?: string; agentPath?: string | null; paneId?: string | null; launchId?: string | null };
+export type RetirementTarget = { conversations: readonly string[]; engine?: RuntimeEngine; sessionId?: string; agentPath?: string | null; paneId?: string | null; launchId?: string | null };
+export type PipelineRetirementStanding = "held" | PipelineRetirementReason | null;
+export type PipelineRetirementReader = ((target: RetirementTarget, recovery?: RuntimeProviderRecoveryRef) => boolean)
+  & { standing(target: RetirementTarget): PipelineRetirementStanding };
 /** Async validation precedes admission. Each synchronous signal fence performs
  * only version checks and target lookups; any intervening write refuses. */
-export async function pipelineRetirementReader(): Promise<(target: RetirementTarget, recovery?: RuntimeProviderRecoveryRef) => boolean> {
+export async function pipelineRetirementReader(): Promise<PipelineRetirementReader> {
   return withViewerOperation("pipelines.retirement-evidence", async () => {
     const recordedVersion = readRecorded(store => store.version(), 0);
     const recorded = (target: RetirementTarget) => {
@@ -107,11 +108,12 @@ export async function pipelineRetirementReader(): Promise<(target: RetirementTar
       // Positively absent pre-migration stores are empty; legacy data is never
       // silently skipped. A new store appearing invalidates this evidence.
       if (!absent(path.join(path.dirname(filename), "pipelines.json")) || !absent(path.join(path.dirname(filename), "pipelines-archive.json"))) throw new Error("pipeline retirement requires migrated evidence");
-      return (target) => {
+      const held = (target: RetirementTarget) => {
         if (recorded(target)) return true;
         if (statePath("state.sqlite") !== filename || !absent(filename) || !absent(path.join(path.dirname(filename), "pipelines.json")) || !absent(path.join(path.dirname(filename), "pipelines-archive.json"))) throw new Error("pipeline retirement evidence changed");
         return false;
       };
+      return Object.assign(held, { standing: (target: RetirementTarget) => held(target) ? "held" as const : null });
     }
     let slot = slots.get(filename);
     if (!slot) { slot = {}; slots.set(filename, slot); }
@@ -123,8 +125,8 @@ export async function pipelineRetirementReader(): Promise<(target: RetirementTar
       finally { if (slot.pending === pending) slot.pending = undefined; }
     }
     const evidence = slot.value!;
-    return (target, recovery) => withViewerOperation("pipelines.retirement-check", () => performanceSpans.sync("controller.ownership", () => {
-      if (recorded(target)) return true;
+    const standing = (target: RetirementTarget, recovery?: RuntimeProviderRecoveryRef): PipelineRetirementStanding => withViewerOperation("pipelines.retirement-check", () => performanceSpans.sync("controller.ownership", () => {
+      if (recorded(target)) return "held";
       if (statePath("state.sqlite") !== filename || evidence.version !== stateEvidenceVersion(filename)) throw new Error("pipeline retirement evidence changed");
       // The caller supplies every alias of this conversation. A release through
       // one alias also ends source custody through another; path custody is
@@ -134,11 +136,19 @@ export async function pipelineRetirementReader(): Promise<(target: RetirementTar
         ...([["session", target.sessionId], ["path", target.agentPath], ["pane", target.paneId], ["launch", target.launchId]] as const)
           .flatMap(([kind, value]) => value ? [{ key: identity(kind, value),
             sourceReleased: kind === "path" && evidence.releasedSources.has(identity(kind, value)) }] : [])];
-      return keys.some(({ key, sourceReleased }) => evidence.index.get(key)?.some(claim => {
-        if (claim.source && !claim.publishing && sourceReleased) return false;
-        return !recovery || claim.publishing || !claim.recoverable
-          || claim.pipeline !== recovery.pipelineId || claim.stage !== recovery.stageId || claim.attempt !== recovery.attempt;
-      }));
+      if (target.engine && target.sessionId) keys.push({ key: identity(...hostIdentity(target.engine, target.sessionId)), sourceReleased: false });
+      let reason: PipelineRetirementReason | null = null;
+      for (const { key, sourceReleased } of keys) for (const claim of evidence.index.get(key) ?? []) {
+        if (claim.reason) {
+          if (!reason || claim.reason === "terminal lane") reason = claim.reason;
+          continue;
+        }
+        if (claim.source && !claim.publishing && sourceReleased) continue;
+        if (!recovery || claim.publishing || !claim.recoverable
+          || claim.pipeline !== recovery.pipelineId || claim.stage !== recovery.stageId || claim.attempt !== recovery.attempt) return "held";
+      }
+      return reason;
     }));
+    return Object.assign((target: RetirementTarget, recovery?: RuntimeProviderRecoveryRef) => standing(target, recovery) === "held", { standing });
   });
 }

@@ -12,6 +12,8 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests, type RegistryFile } from "@/lib/agent/registry";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
+import { buildPipeline, savePipelines, loadPipelinesForRetirement } from "@/lib/pipelines/store";
+import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import { systemBootEpoch } from "@/lib/processIdentity";
@@ -53,6 +55,7 @@ const TRANSCRIPT = `/home/user/.claude/projects/-repo/${SESSION}.jsonl`;
 const HOST_PID = 4_100;
 const HOST_IDENTITY = "4100:118820";
 const BOOT_EPOCH = systemBootEpoch();
+const originalStateDirectory = process.env.LLV_STATE_DIR;
 
 function entry(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -121,6 +124,7 @@ function snapshot(over: {
     memberships: over.memberships ?? {},
     receipts: over.receipts ?? {},
     heldDeliveries: over.heldDeliveries ?? {},
+    deliveryOperationOwners: {},
   } as unknown as RegistryFile;
 }
 
@@ -164,6 +168,87 @@ async function sweep(over: StructuredHostRetirementDependencies = {}): Promise<S
   });
   return { terminated, report };
 }
+
+function finishedStage(file = snapshot()) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-retirement-"));
+  scratchDirs.push(root);
+  process.env.LLV_STATE_DIR = root;
+  const lane = buildPipeline({ id: "finished-stage", task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
+    now: new Date(NOW - 60_000).toISOString(), stages: [{ id: "review", kind: "run", prompt: "Review", next: null,
+      effectiveRole: { roleId: null, engine: "claude", model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+  lane.state = "running";
+  lane.runs[0]!.attempts = Object.values(file.conversations).map((value, index) => ({
+    n: index + 1, state: "passed", effectiveRole: lane.stages[0]!.effectiveRole, launchId: null,
+    conversationId: value.id, sessionId: value.generations[0]!.id, agentPath: value.generations[0]!.path, paneId: null,
+    flowId: null, startedAt: lane.createdAt, completedAt: new Date(NOW).toISOString(), input: null, activatedBy: null,
+    output: null, error: null, verdict: { status: "pass", findings: [] },
+  } satisfies PipelineStageAttempt));
+  return lane;
+}
+
+test("a passed review retires on the next sweep with its reason and records intact", async () => {
+  const lane = finishedStage();
+  savePipelines([lane]);
+  const probe = await sweep({ transcriptStat: () => determined({ mtimeMs: NOW }) });
+  expect(probe.terminated).toHaveLength(1);
+  expect(probe.report.retired[0]).toMatchObject({ reason: "stage verdict", idleMs: 0 });
+  expect(structuredHostRetirementJournalRecord(probe.report).retired[0]).toMatchObject({ reason: "stage verdict" });
+  expect(lane.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  expect(loadPipelinesForRetirement()[0]!.runs[0]!.attempts[0]!.verdict).toEqual(lane.runs[0]!.attempts[0]!.verdict);
+});
+
+test.each(["needs-decision", "fix-running", "commit-repair", "runtime-switch", "undelivered", "assigned-to-runtime", "in-flight",
+  "attention", "busy", "no-verdict", "different-generation", "reopened-during-measurement"] as const)(
+  "a stage host is kept for %s", async kind => {
+    const lane = finishedStage();
+    const attempt = lane.runs[0]!.attempts[0]!;
+    if (kind === "needs-decision") { lane.state = "needs_decision"; attempt.state = "needs_decision"; attempt.verdict!.status = "needs_decision"; }
+    if (kind === "fix-running") attempt.state = "running";
+    if (kind === "commit-repair") attempt.commitRepair = { refusedAt: lane.createdAt, detail: "Repair required", paths: [], messageTs: NOW };
+    if (kind === "runtime-switch") attempt.runtimeSwitches = [{ id: "switch-fixture", seq: 1, requestedAt: lane.createdAt, actor: { kind: "operator" }, mode: "fork",
+      from: { engine: "claude", model: null, effort: null, serviceTier: null, accountId: null, conversationId: CONVERSATION, launchId: null, sessionId: SESSION, agentPath: TRANSCRIPT },
+      to: { engine: "claude", model: null, effort: null, serviceTier: null, accountId: "fixture-account", accountPinned: false }, phase: "continuing" }];
+    if (kind === "no-verdict") { attempt.verdict = null; attempt.completedAt = null; }
+    if (kind === "different-generation") { attempt.sessionId = "previous-session"; attempt.agentPath = "/fixture/previous.jsonl"; }
+    savePipelines([lane]);
+    const file = snapshot();
+    if (kind === "undelivered") file.heldDeliveries["delivery-1"] = { id: "delivery-1", conversationId: CONVERSATION, runtimeConversationId: CONVERSATION, state: "held" } as RegistryFile["heldDeliveries"][string];
+    if (kind === "assigned-to-runtime") file.heldDeliveries["delivery-1"] = { id: "delivery-1", conversationId: "conversation_previous", runtimeConversationId: CONVERSATION, state: "assigned" } as RegistryFile["heldDeliveries"][string];
+    if (kind === "in-flight") file.deliveryOperationOwners["operation-1"] = {
+      conversationId: CONVERSATION, runtimeConversationId: CONVERSATION, custodyState: "pending",
+    } as RegistryFile["deliveryOperationOwners"][string];
+    if (kind === "attention") file.entries[`claude:${SESSION}`]!.structuredHost!.pendingAttention = ["pending-question"];
+    if (kind === "busy") file.conversations[CONVERSATION]!.turn.state = "busy";
+    const continuing = ["needs-decision", "fix-running", "commit-repair", "runtime-switch"].includes(kind);
+    const probe = await sweep({ snapshot: () => file, transcriptStat: () => determined({ mtimeMs: continuing ? NOW - 2 * IDLE_MS : NOW }),
+      treePss: async () => {
+        await Promise.resolve();
+        if (kind === "reopened-during-measurement") { attempt.state = "running"; savePipelines([lane]); }
+        return { bytes: null, measuredProcesses: 0 };
+      } });
+    expect(probe.terminated).toEqual([]);
+    expect(probe.report.retired).toEqual([]);
+  });
+
+test.each(["completed", "closed", "merged"] as const)("a %s lane releases all three recent idle hosts", async state => {
+  const file = snapshot(manyCandidates(3));
+  const lane = finishedStage(file);
+  if (state === "merged") lane.merge = { state: "merged", by: "outside", repository: "fixture/project", prNumber: 1,
+    policyChangedAt: lane.createdAt, reviewedHead: "a".repeat(40), chain: [], updates: [], seenChecks: [],
+    head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null, requestedAt: lane.createdAt,
+    mergedHead: null, mergeCommit: null, method: "squash", mergedAt: lane.createdAt, attempts: 0, reason: null, blockedAt: null, updatedAt: lane.createdAt };
+  else lane.state = state;
+  const attempts = lane.runs[0]!.attempts;
+  lane.stages = attempts.map((_, index) => ({ ...lane.stages[0]!, id: `stage-${index}` }));
+  lane.runs = attempts.map((attempt, index) => ({ ...lane.runs[0]!, stageId: `stage-${index}`, attempts: [{ ...attempt, n: 1 }] }));
+  lane.cursor = null;
+  // Terminal lane ownership releases hosts even before old attempt stamps reconcile.
+  for (const run of lane.runs) for (const attempt of run.attempts) { attempt.state = "running"; attempt.verdict = null; attempt.completedAt = null; }
+  savePipelines([lane]);
+  const probe = await sweep({ snapshot: () => file, transcriptStat: () => determined({ mtimeMs: NOW }) });
+  expect(probe.terminated).toHaveLength(3);
+  expect(probe.report.retired.map(row => row.reason)).toEqual(["terminal lane", "terminal lane", "terminal lane"]);
+});
 
 /** N qualifying candidates, so a batch bound can be observed deferring. Ids are
     assembled from parts for the same reason the single fixture's are. */
@@ -263,6 +348,8 @@ function processGroupId(pid: number): number | null {
 }
 
 afterEach(async () => {
+  if (originalStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = originalStateDirectory;
   for (const identity of fixtureIdentities.splice(0).reverse()) await stopFixtureIdentity(identity);
   for (const directory of scratchDirs.splice(0)) {
     try { fs.rmSync(directory, { recursive: true, force: true }); } catch { /* scratch only */ }

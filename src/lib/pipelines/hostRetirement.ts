@@ -8,6 +8,12 @@ import { recordedHostHeld } from "@/lib/recordedChecks/store";
 
 type RecoveryTarget = { conversationId: string; sessionId: string; agentPath: string | null; engine: RuntimeEngine };
 
+export type PipelineRetirementReason = "stage verdict" | "terminal lane";
+
+export function pipelineLaneTerminal(pipeline: Pipeline): boolean {
+  return pipeline.state === "completed" || pipeline.state === "closed" || pipeline.merge?.state === "merged";
+}
+
 /** Terminal lanes and replaced attempts no longer own future work. Runtime
     idleness still has to be proved before any recorded host is stopped. */
 export function pipelineAttemptReleased(pipeline: Pipeline, attempt: PipelineStageAttempt, latest: PipelineStageAttempt | undefined): boolean {
@@ -15,6 +21,52 @@ export function pipelineAttemptReleased(pipeline: Pipeline, attempt: PipelineSta
   // settles it. Merely appending one never supersedes the operational stage.
   return !attempt.historical && (pipeline.state === "completed" || pipeline.state === "closed"
     || (!!latest && !latest.historical && latest.n !== attempt.n));
+}
+
+type HostIdentity = Pick<PipelineStageHostRef, "conversationId" | "agentPath" | "paneId" | "launchId"> & { sessionId?: string | null };
+
+/** A repair may be reserved by a later stage and dispatched to an earlier
+ * producer. The decision stays with the latest operational attempt until the
+ * engine reserves its successor. Switch custody also covers both endpoints
+ * until the switch or its retry settles. */
+export function pipelineRetirementOwnership(pipeline: Pipeline) {
+  const publishing = pipelinePublicationHoldsHost(pipeline);
+  const terminal = pipelineLaneTerminal(pipeline);
+  const runs = pipeline.runs.map(run => ({ run, latest: run.attempts.findLast(attempt => !attempt.historical) }));
+  const byStage = new Map(runs.map(({ run }) => [run.stageId, run]));
+  const producers = new Set<PipelineStageAttempt>();
+  if (!terminal) for (const { latest } of runs) {
+    const repair = latest?.publicationRepair;
+    if (!repair || repair.settledAt || repair.outcome) continue;
+    const worker = byStage.get(repair.stageId)?.attempts.find(attempt => attempt.n === repair.attempt && !attempt.historical);
+    if (worker) producers.add(worker);
+  }
+
+  const attempts = runs.flatMap(({ run, latest }) => run.attempts.map(attempt => {
+    const switches = attempt.runtimeSwitches?.filter(record =>
+      ["requested", "cutting", "switching", "continuing"].includes(record.phase) || record.retry && !record.retry.completedAt) ?? [];
+    const identities: HostIdentity[] = [attempt];
+    for (const record of switches) {
+      identities.push({ ...record.from, paneId: null });
+      if (record.launch) identities.push({ ...record.launch, paneId: null, agentPath: null });
+    }
+    const current = !terminal && attempt === latest;
+    const pendingDispatch = switches.length > 0 || producers.has(attempt)
+      || current && (attempt.commitRepair && !attempt.commitRepair.settledAt && !attempt.commitRepair.outcome
+        || attempt.publicationTextRepair?.state === "pending");
+    const decision = current && (attempt.state === "needs_decision" || attempt.verdict?.status === "needs_decision");
+    const working = pipelineAttemptMayBeWorking(attempt);
+    const fenced = publishing || pendingDispatch || decision || attempt.activation && attempt.activation.phase !== "settled";
+    const reason: PipelineRetirementReason | null = fenced || attempt.historical ? null
+      : terminal ? "terminal lane" : attempt.verdict && !working ? "stage verdict" : null;
+    const released = !fenced && (reason !== null || pipelineAttemptReleased(pipeline, attempt, latest));
+    return {
+      stageId: run.stageId, attempt, identities, reason, released,
+      held: fenced || !released && working,
+      recoverable: !pendingDispatch && byStage.get(run.stageId) === run && attempt === run.attempts.at(-1) && !attempt.historical,
+    };
+  }));
+  return { publishing, sourceHeld: publishing || !terminal, attempts };
 }
 
 // Dependency-free so the controller scope can share it without its imports.
@@ -72,7 +124,7 @@ export async function providerRecoveryTurnProven(attempt: PipelineStageAttempt, 
     can change one field while retaining the same host. */
 export function pipelineHostHasLiveWork(
   pipelines: readonly Pipeline[],
-  target: Pick<PipelineStageHostRef, "conversationId" | "agentPath" | "paneId" | "launchId"> & { sessionId?: string | null },
+  target: HostIdentity,
   resolveConversation: (id: string) => string = id => id,
   recoveryAttempt?: PipelineStageAttempt,
 ): boolean {
@@ -83,42 +135,20 @@ export function pipelineHostHasLiveWork(
   // Creating a successor does not keep a finished stage resident. Its live
   // runtime turn, accepted work, publication and any operational owner still
   // protect it independently. Proof is re-read on every actuation boundary.
-  let releasedConversation = false, releasedPath = false;
-  for (const pipeline of pipelines) {
-    if (pipelinePublicationHoldsHost(pipeline)) continue;
-    for (const run of pipeline.runs) {
-      const latest = run.attempts.findLast(attempt => !attempt.historical);
-      for (const attempt of run.attempts) {
-        if (!pipelineAttemptReleased(pipeline, attempt, latest)
-          || attempt.activation && attempt.activation.phase !== "settled") continue;
-        releasedConversation ||= sameConversation(attempt.conversationId);
-        releasedPath ||= samePath(attempt.agentPath);
-      }
-    }
-  }
-  for (const pipeline of pipelines) {
-    const publishing = pipelinePublicationHoldsHost(pipeline);
+  const ownership = pipelines.map(pipeline => ({ pipeline, ...pipelineRetirementOwnership(pipeline) }));
+  const released = ownership.flatMap(lane => lane.attempts.filter(stage => stage.released).map(stage => stage.attempt));
+  const releasedConversation = released.some(attempt => sameConversation(attempt.conversationId));
+  const releasedPath = released.some(attempt => samePath(attempt.agentPath));
+  for (const { pipeline, publishing, sourceHeld, attempts } of ownership) {
     const sourceConversation = sameConversation(pipeline.srcConversationId), sourcePath = samePath(pipeline.srcPath);
-    if ((publishing && (sourceConversation || sourcePath))
-      || (!["completed", "closed"].includes(pipeline.state)
-        && ((sourceConversation && !releasedConversation) || (sourcePath && !releasedPath)))) return true;
-    for (const run of pipeline.runs) {
-      const latest = run.attempts.findLast(attempt => !attempt.historical);
-      for (const attempt of run.attempts) {
-        const matches = sameConversation(attempt.conversationId) || samePath(attempt.agentPath)
-          || (!!target.paneId && attempt.paneId === target.paneId)
-          || (!!target.launchId && attempt.launchId === target.launchId)
-          || (!!target.sessionId && attempt.sessionId === target.sessionId);
-        if (!matches) continue;
-        // The production callback supplies this object only after proving the cut
-        // and re-reading the same pipeline snapshot. Publication keeps custody.
-        if (!publishing && attempt === recoveryAttempt) continue;
-        // Completion stamps can survive a restart/resume. A running owner still
-        // holds the host, even with an older verdict on the same attempt.
-        if (publishing || (!pipelineAttemptReleased(pipeline, attempt, latest) && pipelineAttemptMayBeWorking(attempt))
-          || (attempt.activation && attempt.activation.phase !== "settled")) return true;
-      }
-    }
+    if (sourceHeld && ((sourceConversation && (publishing || !releasedConversation))
+      || (sourcePath && (publishing || !releasedPath)))) return true;
+    if (attempts.some(stage => stage.held
+      && (publishing || !stage.recoverable || stage.attempt !== recoveryAttempt)
+      && stage.identities.some(host => sameConversation(host.conversationId) || samePath(host.agentPath)
+        || !!target.paneId && host.paneId === target.paneId
+        || !!target.launchId && host.launchId === target.launchId
+        || !!target.sessionId && host.sessionId === target.sessionId))) return true;
   }
   return false;
 }

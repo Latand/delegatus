@@ -147,6 +147,18 @@ test("a superseded operational attempt retires ahead of adopted historical work"
   for (const attempt of [current, helper]) expect(pipelineHostHasLiveWork([f.pipeline], attempt)).toBe(true);
 });
 
+test("the production idle callback releases a passed review before its lane completes", async () => {
+  const f = fixture();
+  f.attempt.state = "passed";
+  f.attempt.verdict = { status: "pass", findings: [] };
+  f.attempt.completedAt = new Date(cut).toISOString();
+  const successor: Pipeline = { ...f.pipeline, id: "successor-review", worktreeDir: "/fixture-pipeline-successor", branch: "pipeline/fixture-successor", state: "paused",
+    runs: f.pipeline.runs.map(run => ({ ...run, attempts: [] })), srcConversationId: f.attempt.conversationId, srcPath: f.transcript };
+  f.pipelines.push(successor);
+  expect(await f.retire()).toBe(true);
+  expect(f.signals).toEqual([987001, 987002]);
+});
+
 test.each([false, true])("terminal adopted work requires an idle turn at production actuation: %s", async resumed => {
   const f = fixture();
   f.pipeline.state = "completed";
