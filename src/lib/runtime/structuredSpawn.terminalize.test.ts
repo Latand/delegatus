@@ -564,7 +564,7 @@ test.each(["off", "sqlite"] as const)("a fresh loss stays handled when both repo
   expect(readSpawnNoticeTurn(receipt.conversationId, turn)).not.toBeNull();
   settleSpawnNotices(receipt.conversationId, [turn], { state: "sent", recipientConversationId: "conversation_current_launcher", clientMessageId: "notice-fixture", operationId: null }, new Date().toISOString());
   pruneSpawnNotices(new Date(Date.now() + 1_000).toISOString());
-  fs.rmSync(lifecycleJournalPath(), { force: true });
+  fs.rmSync(lifecycleJournalPath(), { recursive: true, force: true });
   expect(readSpawnNoticeTurn(receipt.conversationId, turn)).toBeNull();
   const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode });
   await terminalizeStaleStructuredSpawns(reopened, null);

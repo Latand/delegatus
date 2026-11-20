@@ -9,7 +9,7 @@ import { readBridgeReportLog } from "@/lib/bridge/store";
 import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { loadPrototypeTask, loadTasksForList } from "@/lib/tasks/store";
 import { cleanerCompletionIsOnTime, createCleanerController } from "./run";
-import { activeCleanerRun, claimCleanerRun, cleanerAttemptMayStart, pendingCleanerCard, readCleanerRun, recordCleanerCardAttempt, scheduledCleanerRunProvenance, updateActiveCleanerRun, type CleanerRun } from "./store";
+import { activeCleanerRun, claimCleanerRun, cleanerAttemptMayStart, pendingCleanerCard, readCleanerRun, recordCleanerCardAttempt, scheduledCleanerRunProvenance, updateActiveCleanerRun, type CleanerLaunchBody, type CleanerRun } from "./store";
 
 const start = Date.parse("2031-02-01T11:00:00.000Z");
 const minute = 60_000;
@@ -407,7 +407,7 @@ test("scheduled Cleaner provenance requires the exact active persisted launch sh
   const run = await claimCleanerRun({ project, cwd: state, now: () => start,
     episode: "scheduled-provenance", evidence: { volumes: [], categories: [] }, allowed: () => true });
   if (typeof run === "string") throw new Error(`failed to claim scheduled provenance fixture: ${run}`);
-  const body = { role: "cleaner" as const, roleParams: { mode: "disk" }, cwd: state, project,
+  const body: CleanerLaunchBody = { role: "cleaner", roleParams: { mode: "disk" }, cwd: state, project,
     taskId: run.taskId, clientAttemptId: run.runId, prompt: "Persisted Cleaner prompt.",
     mcpServers: ["viewer"], notifyLauncher: false };
   await updateActiveCleanerRun(run.runId, () => true, current => ({ ...current,
