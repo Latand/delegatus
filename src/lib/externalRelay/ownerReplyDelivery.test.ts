@@ -52,7 +52,7 @@ const targets = [
 const scenarios = ["immediate", "reconciliation before claim", "three minutes later", "running",
   "retired", "retirement claimed", "reply admitted first", "host exits before journal admission"] as const;
 
-for (const { engine, hostKind, nativeQueue } of targets) test.each(scenarios)(
+for (const { engine, hostKind, nativeQueue } of targets) test.each([...scenarios])(
   `${hostKind}, native queue ${nativeQueue}: owner reply reaches its conversation and answers once: %s`, async scenario => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-reply-"));
     const registry = new registries.AgentRegistry(path.join(root, "registry.json"));
