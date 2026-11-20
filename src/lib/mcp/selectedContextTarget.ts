@@ -366,9 +366,8 @@ export function selectedConversationTarget(
 /**
  * The bounded read: keyed identity, then a tail of the named transcript.
  *
- * Touches no scan of any kind — not the completed generation, not a pinned
- * walk, not `observeFiles()` — so it keeps answering while the corpus scan is
- * hung or failing, which is the degraded case #844 §6 is about.
+ * Runs independently of the scanner, so it keeps answering while the corpus
+ * scan is hung or failing (#844 §6).
  */
 export function selectedConversationTail(
   request: SelectedTailRequest,
