@@ -8,7 +8,7 @@ export { COMPANION_TOOLS } from "./tools";
 
 /** Verified 2026-10-06 against /api/docs/guides/live, /guides/live-delegation and the create schema. */
 export const LIVE_API_VERSION = "v1/live";
-export const LIVE_MODEL = "gpt-live-1";
+export const LIVE_MODEL = "gpt-live-1.1";
 export const LIVE_BACKEND_MODEL = "gpt-6-luna";
 /** Masculine / Natural in the official GPT-Live voice table, observed 2026-10-09.
  * https://developers.openai.com/api/docs/guides/live-conversations#voice-options */
