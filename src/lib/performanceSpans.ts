@@ -54,6 +54,9 @@ export function createPerformanceSpans(now = monotonicNow) {
   const requests = new Map<string, { id: string; method: "snapshot" | "append" | "wait" | "files" | "health" | "other";
     start: number; deadline: number | null; events: Array<{ site: number; at: number; bytes: number; failed: boolean }> }>();
   let droppedExpired = 0, droppedOverflow = 0;
+  const clearSpanRecords = () => {
+    records.length = 0; longest.length = 0; cursor = 0; dropped = 0; droppedMs = 0;
+  };
   const add = (record: Slice) => {
     const previous = records.length === capacity ? records[(cursor + capacity - 1) % capacity] : records.at(-1);
     // Aggregate only adjacent tiny slices. Preserve their occupied duration
@@ -137,8 +140,11 @@ export function createPerformanceSpans(now = monotonicNow) {
       return { dropped: droppedExpired + droppedOverflow, droppedExpired, droppedOverflow,
         omitted: Math.max(0, rows.length - 16), records: rows.slice(-16) };
     },
+    clearSpans() {
+      clearSpanRecords();
+    },
     clear() {
-      records.length = 0; longest.length = 0; cursor = 0; dropped = 0; droppedMs = 0;
+      clearSpanRecords();
       droppedExpired = 0; droppedOverflow = 0;
     },
   };
