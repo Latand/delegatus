@@ -159,30 +159,6 @@ export async function durableServiceTierIndexForPaths(paths: readonly string[], 
   return tiers;
 }
 
-/** One registry walk per scan, including misses. Conversation generations win
-    over continuity aliases and receipts in the same order as registry lookup. */
-export function durableServiceTierIndex(registry = agentRegistry()): ReadonlyMap<string, string | null> {
-  const tiers = new Map<string, string | null>();
-  try {
-    const snapshot = registry.readOnlySnapshot();
-    const put = (pathname: string, profile: { serviceTier?: string | null; fast?: boolean | null }) => {
-      if (!tiers.has(pathname)) tiers.set(pathname, normalizeServiceTier(profile.serviceTier)
-        ?? (profile.fast === true ? "priority" : profile.fast === false ? "default" : null));
-    };
-    for (const conversation of Object.values(snapshot.conversations)) {
-      for (const generation of conversation.generations) put(generation.path, generation.launchProfile);
-      const current = conversation.generations.at(-1);
-      if (current) for (const pathname of conversation.continuityPaths) put(pathname, current.launchProfile);
-    }
-    for (const receipt of Object.values(snapshot.receipts)) {
-      if (receipt.artifactPath) put(receipt.artifactPath, receipt.launchProfile);
-    }
-  } catch (error) {
-    if (!(error instanceof RegistryReadError)) throw error;
-  }
-  return tiers;
-}
-
 function durableServiceTier(entry: Pick<FileEntry, "path">, tiers?: ReadonlyMap<string, string | null>): string | null {
   if (tiers) return tiers.get(entry.path) ?? null;
   try {

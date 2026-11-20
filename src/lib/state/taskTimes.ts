@@ -34,40 +34,36 @@ export function installTaskTimes(db: Database): void {
 }
 
 export function taskTimesReady(db: Database): boolean {
-  const statement = db.prepare("SELECT 1 FROM task_time_pending LIMIT 1");
-  try { return !statement.get(); }
-  finally { statement.finalize(); }
+  return !db.query("SELECT 1 FROM task_time_pending LIMIT 1").get();
+}
+
+/** Current queue watermark for the task-time trigger table, or null when the
+ * database predates `task_time_pending`. Cached via `db.query` once present. */
+export function taskTimePendingCursor(db: Database): number | null {
+  if (!db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_time_pending'").get()) return null;
+  return db.query<{ rowid: number }, []>("SELECT COALESCE(MAX(rowid), 0) AS rowid FROM task_time_pending").get()!.rowid;
 }
 
 /** A key page is committed with its values. Interrupted preparation resumes
  * from the durable queue, without changing the task or its revision. */
 export function prepareTaskTimes(db: Database, limit = 128, afterRowid = 0): boolean {
-  const select = db.prepare<{ row_key: string; due: string | null; held: string | null; updated: string | null }, [number, number]>(`
+  const rows = db.query<{ row_key: string; due: string | null; held: string | null; updated: string | null }, [number, number]>(`
     SELECT p.row_key,
       CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json,'$.dueAt') END AS due,
       CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json,'$.hold.until') END AS held,
       CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json,'$.updatedAt') END AS updated
     FROM task_time_pending p LEFT JOIN state_rows r ON r.collection='tasks' AND r.row_key=p.row_key
-    WHERE p.rowid > ? ORDER BY p.rowid LIMIT ?`);
-  let rows;
-  try { rows = select.all(afterRowid, limit); }
-  finally { select.finalize(); }
+    WHERE p.rowid > ? ORDER BY p.rowid LIMIT ?`).all(afterRowid, limit);
   const instant = (text: unknown) => {
     const ms = typeof text === "string" ? Date.parse(text) : NaN;
     return Number.isFinite(ms) ? ms : null;
   };
-  const update = db.prepare("UPDATE state_rows SET task_due_ms=?,task_hold_ms=?,task_updated_ms=? WHERE collection='tasks' AND row_key=?");
-  try {
-    const done = db.prepare("DELETE FROM task_time_pending WHERE row_key=?");
-    try {
-      for (const row of rows) {
-        update.run(instant(row.due), instant(row.held), instant(row.updated), row.row_key);
-        done.run(row.row_key);
-      }
-    } finally { done.finalize(); }
-  } finally { update.finalize(); }
+  const update = db.query("UPDATE state_rows SET task_due_ms=?,task_hold_ms=?,task_updated_ms=? WHERE collection='tasks' AND row_key=?");
+  const done = db.query("DELETE FROM task_time_pending WHERE row_key=?");
+  for (const row of rows) {
+    update.run(instant(row.due), instant(row.held), instant(row.updated), row.row_key);
+    done.run(row.row_key);
+  }
   if (afterRowid === 0) return taskTimesReady(db);
-  const remaining = db.prepare<{ pending: number }, [number]>("SELECT 1 AS pending FROM task_time_pending WHERE rowid > ? LIMIT 1");
-  try { return !remaining.get(afterRowid); }
-  finally { remaining.finalize(); }
+  return !db.query<{ pending: number }, [number]>("SELECT 1 AS pending FROM task_time_pending WHERE rowid > ? LIMIT 1").get(afterRowid);
 }
