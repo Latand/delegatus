@@ -9,7 +9,7 @@ import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry"
 import { killedBackgroundWorkNotice } from "@/lib/pipelines/backgroundTasks";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
-import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, SqliteStateCollection, stateEvidenceVersion } from "@/lib/state/sqliteStateStore";
 import { writeJsonDurably, fsyncPath } from "@/lib/state/durableJson";
 import { withFileTransaction, withFileTransactionAsync, withFileTransactionAttempt, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
@@ -186,6 +186,31 @@ function cutRows(directory: string): SqliteStateCollection<InterruptionObligatio
 function withCutRows<T>(directory: string, read: (rows: SqliteStateCollection<InterruptionObligation>) => T): T {
   const rows = cutRows(directory);
   try { return read(rows); } finally { rows.close(); }
+}
+
+// Cache only complete list results. Each miss reads one SQLite snapshot and
+// closes its handle. A concurrent commit prevents publishing that snapshot
+// for reuse, while the current reader can still use its consistent rows.
+type CutListSnapshot = { version: string; records: InterruptionObligation[] };
+const cutListSnapshots = new Map<string, CutListSnapshot>();
+
+function sealedCutList(directory: string): InterruptionObligation[] {
+  const key = path.resolve(directory);
+  const database = cutDatabase(key);
+  const version = stateEvidenceVersion(database);
+  let cached = cutListSnapshots.get(key);
+  cutListSnapshots.delete(key);
+  if (!cached || cached.version !== version) {
+    const records = withCutRows(key, rows => rows.snapshot());
+    // The directory reader visits sorted filenames before its stable date sort.
+    records.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt)
+      || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    if (stateEvidenceVersion(database) !== version) return records;
+    cached = { version, records };
+  }
+  cutListSnapshots.set(key, cached);
+  if (cutListSnapshots.size > 16) cutListSnapshots.delete(cutListSnapshots.keys().next().value!);
+  return structuredClone(cached.records);
 }
 
 function fileStamp(filename: string): string | null {
@@ -771,13 +796,38 @@ function createInterruptionObligationStore(
   };
   const list = (page?: { after: string; limit: number; nextCursor: string | null; names?: string[] }): InterruptionObligation[] => {
     if (recipientRecords) return recipientRecords;
+    if (!guardOnly && !page && !held) {
+      const sealed = source();
+      if (sealed && sealed.pendingStamp === fileStamp(pendingFile) && activeClaims().length === 0) {
+        const now = Date.now();
+        const records = sealedCutList(directory);
+        const hasExpired = records.some((obligation) => {
+          const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;
+          return !interruptionObligationUnresolved(obligation) && now - resolvedAt > RESOLVED_RETENTION_MS;
+        });
+        if (!hasExpired) {
+          const current = source();
+          if (current && JSON.stringify(current) === JSON.stringify(sealed)
+            && fileStamp(pendingFile) === sealed.pendingStamp && activeClaims().length === 0) {
+            return records;
+          }
+        }
+      }
+    }
     importPending();
     return transaction(() => {
       let names: string[];
+      let snapshotByName: Map<string, InterruptionObligation> | null = null;
       try {
-        names = page?.names ?? (!guardOnly && source()
-          ? withCutRows(directory, rows => rows.snapshot().map(record => `${record.id}.json`))
-          : fs.readdirSync(guardOnly ? indexDirectory : directory));
+        if (page?.names) {
+          names = page.names;
+        } else if (!guardOnly && source()) {
+          const rows = withCutRows(directory, collection => collection.snapshot());
+          snapshotByName = new Map(rows.map(record => [`${record.id}.json`, record]));
+          names = [...snapshotByName.keys()];
+        } else {
+          names = fs.readdirSync(guardOnly ? indexDirectory : directory);
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         names = [];
@@ -795,7 +845,7 @@ function createInterruptionObligationStore(
       // Advance over inspected keys even when a record is temporarily unreadable.
       if (page) page.nextCursor = candidates.length > selected.length ? selected.at(-1)!.slice(0, -5) : null;
       for (const name of selected) {
-        const obligation = read(path.join(directory, name));
+        const obligation = snapshotByName ? (snapshotByName.get(name) ?? null) : read(path.join(directory, name));
         if (!obligation) {
           if (guardOnly && !pending.some(item => `${item.id}.json` === name)) {
             // A failed read can be temporary. Only a proven absent canonical
