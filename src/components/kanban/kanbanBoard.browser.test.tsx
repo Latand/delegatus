@@ -25273,15 +25273,17 @@ describe("chat pull requests on the board and in the project rail", () => {
           await cadence.evaluate(() => {
             let focused = true;
             Object.defineProperty(document, "hasFocus", { value: () => focused });
-            const callFetch = window.fetch;
             const counters = { reads: 0 };
             Object.defineProperty(window, "chatStatusEvidence", { value: counters });
             window.addEventListener("blur", () => { focused = false; });
             window.addEventListener("focus", () => { focused = true; });
-            window.fetch = (input, init) => {
-              if (typeof input === "string" && input.startsWith("/api/conversations/pull-requests?") && init?.method === "POST") counters.reads += 1;
-              return callFetch(input, init);
-            };
+            window.fetch = new Proxy(window.fetch, {
+              apply(target, receiver, args: Parameters<typeof fetch>) {
+                const [input, init] = args;
+                if (typeof input === "string" && input.startsWith("/api/conversations/pull-requests?") && init?.method === "POST") counters.reads += 1;
+                return Reflect.apply(target, receiver, args);
+              },
+            });
           });
           const statusReads = () => cadence.evaluate(() => Reflect.get(window, "chatStatusEvidence").reads as number);
           await cadenceBadge.press("Enter");

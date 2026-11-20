@@ -24,7 +24,7 @@ test("imports Desktop titles and recorded parentage, including a resumed parent"
     }));
     const parsed = new Map();
     const chats = loadClaudeDesktopChats(root, parsed);
-    const row = (id: string, project = "app") => ({
+    const row = (id: string, project = "app"): Parameters<typeof projectClaudeDesktopChats>[0][number] => ({
       path: `/projects/worktree/${id}.jsonl`, project, engine: "claude", kind: "session", mtime: 1,
     });
     const parent = row(parentCli);

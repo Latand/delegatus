@@ -222,8 +222,8 @@ test("the compact Chats list keeps its root and branch pages independent while a
     if (params.get("cursor")) return new Promise<Response>(resolve => { finishRoots = resolve; });
     return Response.json({ items: [parent], total: 2, projectTotal: 4, nextCursor: "roots-next" });
   }) as typeof fetch;
-  let opened: FileEntry | null = null;
-  const host = mount((file) => { opened = file; }, true);
+  const opened: FileEntry[] = [];
+  const host = mount((file) => { opened.push(file); }, true);
   await settle();
 
   expect(rowPaths(host)).toEqual([parent.path]);
@@ -263,7 +263,7 @@ test("the compact Chats list keeps its root and branch pages independent while a
   const dependent = Array.from(host.querySelectorAll("button")).find(button => button.textContent?.includes(fork.title))!;
   expect(document.activeElement).toBe(dependent);
   flushSync(() => dependent.click());
-  expect(opened).toEqual(fork);
+  expect(opened).toEqual([fork]);
   flushSync(() => toggle.click());
   expect(rowPaths(host)).toEqual([parent.path, other.path]);
   flushSync(() => toggle.click());

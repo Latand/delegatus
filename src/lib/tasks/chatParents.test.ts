@@ -17,12 +17,13 @@ test("a task link uses the recorded parent, keeps the originating card and ignor
   const linkedParent = assignment(mainPath, "main-chat");
   const parent = task("parent", "app", [linkedParent], "main-chat");
   const child = task("child", "app", [assignment(childPath, "child-chat")], "child-chat");
+  const blockedChild: BoardTask = { ...child, status: "blocked" };
   const mirror = task("mirror", "app", [linkedParent]);
   const foreign = task("foreign", "other", [assignment(childPath, "foreign-chat")], "foreign-chat");
   const parentFile = (pathname: string) => ({ engine: "codex" as const, parent: pathname === childPath ? mainPath : null, kind: "session", mtime: 1 });
 
   expect([...taskChatParents([mirror, parent, child, foreign], parentFile)]).toEqual([["child", "parent"]]);
-  expect([...taskChatParents([mirror, parent, { ...child, status: "blocked" }], parentFile)]).toEqual([["child", "parent"]]);
+  expect([...taskChatParents([mirror, parent, blockedChild], parentFile)]).toEqual([["child", "parent"]]);
   expect([...taskChatParents([parent, { ...mirror, origin: parent.origin }, child], parentFile)]).toEqual([]);
 });
 
@@ -33,8 +34,8 @@ test("Desktop parentage connects tasks even if neither transcript is in the boar
   const parent = task("parent", "app", [assignment(`/sessions/${pid}.jsonl`, "p", "claude")], "p");
   const child = task("child", "app", [assignment(`/sessions/${cid}.jsonl`, "c", "claude")], "c");
   const previousParent = { ...parent, assignments: [assignment(`/sessions/${prior}.jsonl`, "p", "claude")] };
-  const desktopParent = { key: "parent", currentId: pid, parentKey: null, title: "Planning" };
-  const desktop = new Map([
+  const desktopParent = { key: "parent", currentId: pid, parentKey: null as string | null, title: "Planning" };
+  const desktop = new Map<string, typeof desktopParent>([
     [pid, desktopParent], [prior, desktopParent],
     [cid, { key: "child", currentId: cid, parentKey: "parent", title: "Design" }],
   ]);
