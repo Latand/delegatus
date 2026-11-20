@@ -68,6 +68,9 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
       conversationReady = ready;
       conversations().set(conversationId, adapter);
     },
+    unbindConversation(conversationId: string) {
+      if (conversations().get(conversationId) === adapter) conversations().delete(conversationId);
+    },
     get readyForConversation() { return !conversationReady || conversationReady(); },
     async op(args: Args, waitMs: number) {
       await check();

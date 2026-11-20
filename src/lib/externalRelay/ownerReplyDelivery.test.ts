@@ -13,7 +13,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { observeOwnerContinuation, sendOwnerContinuation } from "./ownerRun";
 import { newTargetSettings } from "./store";
 
-test.each(["immediate", "three minutes later", "running", "retired", "retirement claimed", "reply admitted first"] as const)(
+test.each(["immediate", "reconciliation before claim", "three minutes later", "running", "retired", "retirement claimed", "reply admitted first"] as const)(
   "owner reply reaches its conversation and answers once: %s", async scenario => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-reply-"));
     const registry = new registries.AgentRegistry(path.join(root, "registry.json"));
@@ -44,12 +44,12 @@ test.each(["immediate", "three minutes later", "running", "retired", "retirement
     }
     const operationId = "fixture-reply";
     const turn = { conversationId, clientAttemptId: operationId, continuation: { operationId }, claimedAt: new Date(now).toISOString() };
-    const client = { command: async cmd => journal.executeOperation(cmd), readSession: async () => journal.readSession({ conversationId }),
-      operationStatus: async id => journal.operationResult(id) } as RuntimeHostClient;
+    const client: Partial<RuntimeHostClient> = { command: async cmd => journal.executeOperation(cmd), readSession: async () => journal.readSession({ conversationId }),
+      operationStatus: async id => journal.operationResult(id) };
     let recoveries = 0;
     const enqueue = delivery.enqueueStructuredMessage;
     const dispatch = spyOn(delivery, "enqueueStructuredMessage").mockImplementation((request, deps) => enqueue(request, {
-      ...deps, enabled: () => true, registry: () => registry, client: () => client, kick: () => {}, republish: async () => false,
+      ...deps, enabled: () => true, registry: () => registry, client: () => client as RuntimeHostClient, kick: () => {}, republish: async () => false,
       recover: async () => { recoveries++; publish(3); return { conversationId, path: transcript, target: null, spawned: true }; },
     }));
     const prepare = spyOn(registries, "prepareAgentRegistry").mockResolvedValue(registry);
@@ -63,9 +63,11 @@ test.each(["immediate", "three minutes later", "running", "retired", "retirement
         pid: 1, processStartIdentity: "1", eventCursor: 0, protocolVersion: "test", activeTurnRef: running ? "other-turn" : null,
         pendingAttention: [], activeFlags: [], account: null }),
       send: async entry => {
-        writes.push(entry.text);
+        const text = entry.content?.text ?? entry.text;
+        if (text === undefined) throw new Error("reply text missing");
+        writes.push(text);
         const timestamp = new Date(now + 1).toISOString();
-        fs.appendFileSync(transcript, [{ type: "user", message: { role: "user", content: entry.text }, timestamp },
+        fs.appendFileSync(transcript, [{ type: "user", message: { role: "user", content: text }, timestamp },
           { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Fixture answer" }] }, timestamp }]
           .map(row => JSON.stringify(row)).join("\n") + "\n");
         return { outcome: "turn-started", turnId: "reply-turn" };
@@ -76,6 +78,7 @@ test.each(["immediate", "three minutes later", "running", "retired", "retirement
       status: async id => journal.operationResult(id)?.receipt ?? null,
       hostClaim: () => "fixture:1",
       transition: async (id, status, details, options) => {
+        if (status === "delivering" && scenario === "reconciliation before claim") publish(4);
         journal.transitionOperation(id, status, details, options);
         if (status === "delivering" && scenario === "three minutes later") publish(4);
       },
