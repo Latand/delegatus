@@ -15,6 +15,7 @@ import { identityAlive, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile, SpawnReceipt } from "@/lib/agent/registry";
 import { resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
+import { registryRowProjection } from "@/lib/agent/sqliteRegistryStore";
 import type { Flow, Round } from "@/lib/flows/types";
 import { sameRecordedProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 
@@ -153,23 +154,56 @@ function canonical(registry: Pick<CensusRegistry, "conversationAliases">, id: st
 interface Bindings {
   byKey: Map<string, string>;
   byPath: Map<string, string>;
+  generationEngines: Map<string, RegistryFile["conversations"][string]["engine"]>;
+}
+
+const conversationPaths = {
+  id: "owner-census.conversation-paths.v1",
+  collection: "conversations" as const,
+  project: (row: RegistryFile["conversations"][string]) => ({
+    id: row.id, engine: row.engine, continuityPaths: row.continuityPaths,
+    generations: row.generations.map(({ id, path }) => ({ id, path })),
+  }),
+};
+
+const entryPath = {
+  id: "owner-census.entry-path.v1", collection: "entries" as const,
+  project: (row: AgentRegistryEntry) => ({ key: row.key, artifactPath: row.artifactPath }),
+};
+
+const receiptOwnership = {
+  id: "owner-census.receipt.v1",
+  collection: "receipts" as const,
+  project: (row: SpawnReceipt) => ({
+    launchId: row.launchId, conversationId: row.conversationId, engine: row.engine,
+    key: row.key, artifactPath: row.artifactPath, cwd: row.cwd, state: row.state,
+    admissionOwner: row.admissionOwner, queuedPinnedSpawn: Boolean(row.queuedPinnedSpawn),
+    agent: row.verifiedHost?.agent, panePid: row.pane?.panePid,
+  }),
+};
+
+function censusReceipts(registry: CensusRegistry) {
+  // Pass the original snapshot so its immutable archived row versions can be reused.
+  return registry.receipts ? registryRowProjection(registry as Pick<RegistryFile, "receipts">, receiptOwnership) : [];
 }
 
 function bindings(registry: CensusRegistry): Bindings {
   const byKey = new Map<string, string>();
   const byPath = new Map<string, string>();
-  for (const conversation of Object.values(registry.conversations)) {
+  const generationEngines: Bindings["generationEngines"] = new Map();
+  for (const [, conversation] of registryRowProjection(registry, conversationPaths)) {
     const id = canonical(registry, conversation.id);
     for (const generation of conversation.generations) {
       byKey.set(sessionKeyId({ engine: conversation.engine, sessionId: generation.id }), id);
       if (!byPath.has(generation.path)) byPath.set(generation.path, id);
+      generationEngines.set(generation.path, conversation.engine);
     }
     for (const path of conversation.continuityPaths ?? []) if (!byPath.has(path)) byPath.set(path, id);
   }
-  return { byKey, byPath };
+  return { byKey, byPath, generationEngines };
 }
 
-function entryBinding(map: Bindings, entry: AgentRegistryEntry): string | null {
+function entryBinding(map: Bindings, entry: Pick<AgentRegistryEntry, "key" | "artifactPath">): string | null {
   return map.byKey.get(sessionKeyId(entry.key)) ?? map.byPath.get(entry.artifactPath) ?? null;
 }
 
@@ -243,7 +277,10 @@ export function registryOwners(
   probe: LivenessProbe,
   viewer: CensusViewer | null = null,
 ): OwnerCensus {
-  const map = bindings(registry);
+  return collectOwners(registry, flows, probe, viewer, bindings(registry));
+}
+
+function collectOwners(registry: CensusRegistry, flows: readonly Flow[], probe: LivenessProbe, viewer: CensusViewer | null, map: Bindings): OwnerCensus {
   const owners: RecordedOwner[] = [];
   const ownerless: OwnerlessRecord[] = [];
   for (const entry of Object.values(registry.entries)) {
@@ -251,7 +288,15 @@ export function registryOwners(
     owners.push(...read.owners);
     if (read.ownerless) ownerless.push(read.ownerless);
   }
-  for (const receipt of Object.values(registry.receipts ?? {})) {
+  const entryOwnersByPid = new Map<number, RecordedOwner[]>();
+  for (const owner of owners) {
+    for (const pid of new Set(owner.identities.map(identity => identity.pid))) {
+      const group = entryOwnersByPid.get(pid);
+      if (group) group.push(owner);
+      else entryOwnersByPid.set(pid, [owner]);
+    }
+  }
+  for (const [, receipt] of censusReceipts(registry)) {
     const open = OPEN_RECEIPT.has(receipt.state);
     const base = {
       artifactPath: receipt.artifactPath, entry: null, entryKey: receipt.key ? sessionKeyId(receipt.key) : null,
@@ -268,7 +313,7 @@ export function registryOwners(
          started nothing, so it holds nothing (R2). */
       ownerless.push({ ...base, id: `open-receipt:${receipt.launchId}`, kind: "open-receipt", updatedAt: null });
     }
-    const launched = [receipt.verifiedHost?.agent, receipt.pane?.panePid].filter(usable);
+    const launched = [receipt.agent, receipt.panePid].filter(usable);
     /* An entry that records a launched process is that owner already (R1):
        the receipt adds the conversation it was launched for, and the
        artifact stays the entry's. A launched process no entry records is
@@ -276,7 +321,7 @@ export function registryOwners(
        agent cannot drop the pane the receipt also launched. */
     const unrecorded: ProcessIdentity[] = [];
     for (const identity of launched) {
-      const recorded = owners.filter((owner) => owner.entry && owner.identities.some((other) => sameRecordedProcessIdentity(other, { pid: identity.pid, startIdentity: identity.startIdentity })));
+      const recorded = (entryOwnersByPid.get(identity.pid) ?? []).filter((owner) => owner.identities.some((other) => sameRecordedProcessIdentity(other, { pid: identity.pid, startIdentity: identity.startIdentity })));
       for (const owner of recorded) addCustody(owner, base.binding);
       if (!recorded.length && !unrecorded.some((other) => sameRecordedProcessIdentity(other, { pid: identity.pid, startIdentity: identity.startIdentity }))) unrecorded.push(identity);
     }
@@ -313,8 +358,8 @@ export function registryOwners(
          (R4), so a reused pid an entry records cannot release it. A round
          that names no conversation reaches the entry at its own path only. */
       const identity = round.reviewerIdentity;
-      const recorded = !identity ? [] : owners.filter((owner) => owner.entry
-        && owner.identities.some((other) => other.pid === pid && other.startIdentity === identity)
+      const recorded = !identity ? [] : (entryOwnersByPid.get(pid) ?? []).filter((owner) =>
+        owner.identities.some((other) => other.pid === pid && other.startIdentity === identity)
         && (binding !== null || (!!round.reviewerPath && owner.artifactPath === round.reviewerPath)));
       if (binding !== null) for (const owner of recorded) addCustody(owner, binding);
       if (recorded.length) continue;
@@ -335,6 +380,7 @@ export interface OwnerReference {
 }
 
 export interface CensusIndex {
+  generationEngine(path: string): RegistryFile["conversations"][string]["engine"] | undefined;
   /** The conversation a reference resolves to: by id, then by key, then by
       path. An id the registry does not know is returned as it is. */
   conversation(reference: OwnerReference): string | null;
@@ -353,10 +399,19 @@ export interface CensusIndex {
   names(reference: OwnerReference): boolean;
 }
 
-export function censusIndex(registry: CensusRegistry): CensusIndex {
+/** One probe uses the same bindings for both recorded owners and their references. */
+export function readOwnerCensus(registry: CensusRegistry, flows: readonly Flow[], probe: LivenessProbe, viewer: CensusViewer | null) {
   const map = bindings(registry);
-  const receiptIds = new Set(Object.values(registry.receipts ?? {}).map((receipt) => canonical(registry, receipt.conversationId)));
-  const entryPaths = new Set(Object.values(registry.entries).map((entry) => entry.artifactPath));
+  return { census: collectOwners(registry, flows, probe, viewer, map), index: indexWithBindings(registry, map) };
+}
+
+export function censusIndex(registry: CensusRegistry): CensusIndex {
+  return indexWithBindings(registry, bindings(registry));
+}
+
+function indexWithBindings(registry: CensusRegistry, map: Bindings): CensusIndex {
+  const receiptIds = new Set<string>();
+  const entryPaths = new Set<AgentRegistryEntry["artifactPath"]>();
   /* The conversations the entries and receipts at a path are bound to. An
      entry whose artifact moved past its generation's path is found at its own
      path only, and its binding carries the rest of its conversation (R10). */
@@ -367,8 +422,15 @@ export function censusIndex(registry: CensusRegistry): CensusIndex {
     ids.add(id);
     pathBindings.set(path, ids);
   };
-  for (const entry of Object.values(registry.entries)) bindPath(entry.artifactPath, entryBinding(map, entry));
-  for (const receipt of Object.values(registry.receipts ?? {})) bindPath(receipt.artifactPath, canonical(registry, receipt.conversationId));
+  for (const [, entry] of registryRowProjection(registry, entryPath)) {
+    entryPaths.add(entry.artifactPath);
+    bindPath(entry.artifactPath, entryBinding(map, entry));
+  }
+  for (const [, receipt] of censusReceipts(registry)) {
+    const id = canonical(registry, receipt.conversationId);
+    receiptIds.add(id);
+    bindPath(receipt.artifactPath, id);
+  }
   const conversation = (reference: OwnerReference): string | null => {
     const byId = reference.conversationId ? canonical(registry, reference.conversationId) : null;
     if (byId && registry.conversations[byId]) return byId;
@@ -378,6 +440,7 @@ export function censusIndex(registry: CensusRegistry): CensusIndex {
   };
   return {
     conversation,
+    generationEngine: pathname => map.generationEngines.get(pathname),
     boundTo(items, reference) {
       const ids = new Set(reference.artifactPath ? pathBindings.get(reference.artifactPath) ?? [] : []);
       const id = conversation(reference);
