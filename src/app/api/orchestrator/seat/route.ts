@@ -174,7 +174,7 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<SeatStatus |
     project, displayName,
     seat: active,
     pending,
-    lastFailure: currentSeatFailure(failure, active, hostObservation),
+    lastFailure: currentSeatFailure(failure, active, hostObservation) ? failure : null,
     settledFailureRequestId: failure?.clientRequestId ?? null,
     hostObservation,
     exists: active !== null && (active.path === null || fs.existsSync(active.path)),
