@@ -7,10 +7,10 @@ import path from "node:path";
 import { AgentRegistry, setAgentRegistryForTests, structuredClaimIdentity } from "@/lib/agent/registry";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
 import { fixtureRecords, fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_TURN as FIXTURE_TURN_ID } from "@/lib/agentState/testFixture";
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { statePath } from "@/lib/configDir";
-import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { determined } from "./determinable";
 import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
 import type { HandoffRow } from "./handoffQueue";
@@ -18,6 +18,8 @@ import * as control from "./structuredHostControl";
 import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry } from "./structuredHostRetirement";
 
 const identities: ProcessIdentity[] = [], roots: string[] = [], registries: AgentRegistry[] = [];
+const children = new Map<ChildProcess, ProcessIdentity>();
+const identityKey = (identity: ProcessIdentity) => `${identity.pid}:${identity.startIdentity}`;
 const originalMcpRoot = process.env.LLV_MCP_RUNTIME_ROOT;
 // Provenance probes have a one-second deadline and can retry. Give recovery
 // more than one attempt before fixture teardown ends any remaining children.
@@ -25,12 +27,15 @@ const MCP_PROOF_WAIT_MS = 5_000;
 afterEach(async () => {
   if (originalMcpRoot === undefined) delete process.env.LLV_MCP_RUNTIME_ROOT;
   else process.env.LLV_MCP_RUNTIME_ROOT = originalMcpRoot;
-  const owned = new Map(identities.splice(0).map(identity => [`${identity.pid}:${identity.startIdentity}`, identity]));
+  const direct = new Map([...children].map(([child, identity]) => [identityKey(identity), child]));
+  const owned = new Map([...children.values(), ...identities.splice(0)].map(identity => [identityKey(identity), identity]));
+  children.clear();
   if (process.platform === "linux") {
-    const pending = [...owned.values()].map(identity => identity.pid), visited = new Set<number>();
+    const pending = [...owned.values()], visited = new Set<number>();
     while (pending.length && visited.size < 512) {
-      const pid = pending.shift()!;
-      if (visited.has(pid)) continue;
+      const parent = pending.shift()!;
+      const { pid } = parent;
+      if (visited.has(pid) || processIdentityStatus(parent) !== "alive") continue;
       visited.add(pid);
       let tids: string[];
       try { tids = fs.readdirSync(`/proc/${pid}/task`).filter(tid => /^\d+$/.test(tid)); } catch { continue; }
@@ -41,22 +46,31 @@ afterEach(async () => {
           const childPid = Number(child);
           if (!Number.isSafeInteger(childPid) || childPid <= 0 || visited.has(childPid)) continue;
           const identity = captureProcessIdentity(childPid);
-          owned.set(`${identity.pid}:${identity.startIdentity}`, identity);
-          pending.push(childPid);
+          if (procBackend.readPpid(childPid) !== pid || processIdentityStatus(parent) !== "alive") continue;
+          owned.set(identityKey(identity), identity);
+          pending.push(identity);
         }
       }
     }
   }
-  for (const identity of [...owned.values()].reverse()) await stopFixtureIdentity(identity);
+  const errors: unknown[] = [];
+  for (const [key, identity] of [...owned].reverse()) {
+    try {
+      const child = direct.get(key);
+      if (child) await stopFixtureProcess(child);
+      else await stopFixtureIdentity(identity);
+    } catch (error) { errors.push(error); }
+  }
   clearAgentObservations();
   setAgentRegistryForTests(null);
   for (const registry of registries.splice(0)) registry.close();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  if (errors.length) throw new AggregateError(errors, "abandoned host fixture cleanup failed");
 });
 
 function start(args: string[]): ChildProcess {
   const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"] });
-  identities.push(captureProcessIdentity(child.pid!));
+  children.set(child, captureProcessIdentity(child.pid!));
   return child;
 }
 async function ready(child: ChildProcess): Promise<number> {
@@ -64,8 +78,7 @@ async function ready(child: ChildProcess): Promise<number> {
     const timer = setTimeout(() => reject(new Error("fixture readiness deadline")), 4000);
       child.stdout!.once("data", chunk => { clearTimeout(timer); const value = String(chunk).trim();
         const pid = (() => { try { return JSON.parse(value).pid; } catch { return Number(value); } })();
-        const tracked = identities.findIndex(identity => identity.pid === child.pid);
-        if (tracked >= 0) identities[tracked] = captureProcessIdentity(child.pid!);
+        children.set(child, captureProcessIdentity(child.pid!));
         resolve(pid); });
     child.once("exit", code => { clearTimeout(timer); reject(new Error(`fixture exited before ready: ${code}`)); });
   });
@@ -200,13 +213,18 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
       const c=${spawnChild ? `spawn(process.execPath,${JSON.stringify(childArgs)},{detached:true,env:childEnv,stdio:${realMcp ? '["pipe","pipe","inherit"]' : '["ignore","pipe","inherit"]'}})` : "null"};
       ${realMcp ? `let pending=""; c.stdout.on("data", chunk => { pending += chunk; for (;;) { const end=pending.indexOf("\\n"); if(end<0) break; const line=pending.slice(0,end); pending=pending.slice(end+1); try { const msg=JSON.parse(line); if(msg.id===1 && msg.result) fs.writeFileSync(${JSON.stringify(mcpReady)},"ready"); } catch {} } });
       c.stdin.write(JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"retirement-fixture",version:"1"}}})+"\\n");` : ""}
+      process.on("SIGTERM", () => {
+        if (!c || c.exitCode !== null || c.signalCode !== null) process.exit(0);
+        // The retirement ladder signals the captured child tree. Stay
+        // alive to reap the direct child when that ladder ends it.
+        c.once("exit", () => process.exit(0));
+      });
       console.log(JSON.stringify({pid:c?.pid ?? process.pid}));
-      process.on("SIGTERM", () => { if (c?.stdin && !c.stdin.destroyed) c.stdin.end(); if (c) c.once("exit", () => process.exit(0)); else process.exit(0); });
       setInterval(()=>{},1000);`);
     const host = start([hostScript]);
     const mcpPid = await ready(host);
-    const identity = identities[identities.length - 1]!;
-    identities.push(captureProcessIdentity(mcpPid));
+    const identity = children.get(host)!;
+    if (mcpPid !== identity.pid) identities.push(captureProcessIdentity(mcpPid));
     if (scenario === "preload-tool") {
       const deadline = Date.now() + 4000;
       while (!fs.existsSync(mcpReady) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
@@ -228,13 +246,8 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     }
     const predecessor = start(["--eval", "console.log(process.pid); setInterval(()=>{},1000)"]);
     await ready(predecessor);
-    const owner = identities[identities.length - 1]!;
-    if (scenario !== "hidden-live-owner") {
-      await stopFixtureIdentity(owner);
-      if (predecessor.exitCode === null && predecessor.signalCode === null) {
-        await new Promise<void>(resolve => predecessor.once("exit", () => resolve()));
-      }
-    }
+    const owner = children.get(predecessor)!;
+    if (scenario !== "hidden-live-owner") await stopFixtureProcess(predecessor);
     const file = fixtureRegistry(root, "codex", identity, ["absent-owner", "oversized-stale-terminal-unheld"].includes(scenario) ? null
       : scenario === "hidden-live-owner" ? owner
         : ["legacy-dead-closed", "legacy-dead-open"].includes(scenario) ? { pid: owner.pid, startIdentity: owner.startIdentity }
@@ -308,7 +321,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           await ready(tool);
           // Enrol a fixture-owned tool as a newly retained member, exactly as
           // a child found during captured-tree expansion would be enrolled.
-          expect(registry.recordStructuredTerminationSurvivors(entry.key, identity, [...tree, identities[identities.length - 1]!])).toBe(true);
+          expect(registry.recordStructuredTerminationSurvivors(entry.key, identity, [...tree, children.get(tool)!])).toBe(true);
         }
         if (["capture-owner", "unflushed-capture-owner"].includes(scenario)) registry.agentStateWrite(rows => {
           rows.entries[`codex:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
@@ -344,10 +357,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         predecessorGeneration: null, successorGeneration: null, replayedDeliveryIds: [], interruptionOutcome: null,
         lastError: null, enqueuedAt: new Date(FIXTURE_NOW).toISOString(), updatedAt: new Date(FIXTURE_NOW).toISOString() };
       if (realMcp) expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
-      const exitHost = async () => {
-        await stopFixtureIdentity(identity);
-        if (host.exitCode === null && host.signalCode === null) await new Promise<void>(resolve => host.once("exit", () => resolve()));
-      };
+      const exitHost = () => stopFixtureProcess(host);
       if (scenario === "unflushed-already-gone") await exitHost();
       const report = await runStructuredHostRetirementSweep({ snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
         now: () => now, publicationState: () => "ready", handoffRows: () => determined(scenario === "delivery" ? [row] : []),
@@ -403,9 +413,9 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
             console.log(JSON.stringify([report.retired[0].unflushedEvents,
               JSON.parse(journal.at(-1)).retired[0].unflushedEvents]));
           `, statePath("host-retirement-report.json"), statePath("host-retirement-journal.ndjson")], { stdout: "pipe", stderr: "pipe" });
-          const replayed = await new Response(reader.stdout).json();
-          expect(await reader.exited).toBe(0);
-          expect(replayed).toEqual([report.retired[0]!.unflushedEvents, report.retired[0]!.unflushedEvents]);
+          const [readerExit, replayed] = await Promise.all([reader.exited, new Response(reader.stdout).text()]);
+          expect(readerExit).toBe(0);
+          expect(JSON.parse(replayed)).toEqual([report.retired[0]!.unflushedEvents, report.retired[0]!.unflushedEvents]);
         }
         if (!["closed-hour", "unflushed-dead-owner", "oversized-closed"].includes(scenario)) {
           expect(report.retired[0]!.reason).toBe("abandoned turn");
