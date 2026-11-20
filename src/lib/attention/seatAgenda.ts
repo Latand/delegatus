@@ -7,6 +7,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import { MERGE_REASON_PATTERNS, MERGE_REASONS } from "@/lib/forge/mergeReasons";
 import { laneStopKind } from "@/lib/pipelines/laneStop";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
+import { interruptedStageLaunch } from "@/lib/pipelines/interruptedLaunch";
 import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
@@ -103,6 +104,10 @@ function laneLine(pipeline: Pipeline): string {
         return `${kind}${title} —${stage} ${laneQuestion(pipeline)}; inspect the retained review and its findings; review budget is fixed; close the lane with pipeline_action close if work cannot continue; ${escalate}`;
       }
       const attempt = pipeline.cursor ? latestOperationalStageAttempt(pipeline, pipeline.cursor.stageId) : null;
+      if (attempt?.launchId && !attempt.verdict && !attempt.report && pipeline.cursor
+        && interruptedStageLaunch(attempt.error ?? pipeline.stateDetail ?? "")) {
+        return `${kind}${title} —${stage} ${laneQuestion(pipeline)}; pipeline_action retry-stage with stageId "${pipeline.cursor.stageId}" and launchId "${attempt.launchId}" checks the original launch and reserves a fresh attempt if it never started; ${escalate}`;
+      }
       if (stop?.kind !== "question" || (attempt?.verdict ?? attempt?.report?.verdict)?.status !== "needs_decision") {
         return `${kind}${title} —${stage} ${laneQuestion(pipeline)}; repair the stop, then pipeline_action retry-stage; ${escalate}`;
       }

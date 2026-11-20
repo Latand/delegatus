@@ -5,6 +5,7 @@ import { NextRequest } from "next/server";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { registryLockHolder, sqliteRegistryFixture } from "@/lib/agent/registryLockHolderFixture";
 import { REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { expect, test, spyOn, crypto, path, harness, create, frozenWallClock, REMOTE_BRANCH,
@@ -12,6 +13,7 @@ import { expect, test, spyOn, crypto, path, harness, create, frozenWallClock, RE
   setAgentRegistryForTests, defaultPipelinePorts } from "./engine.fixture";
 
 const FAILURE = `${REGISTRY_WRITER_BUSY} (spawn.setup-custody)`;
+const KILLED_SETUP = `${FAILURE}; exit: signal SIGKILL; bwrap: setting up uid map`;
 const NOW = "2026-11-12T12:00:00.000Z";
 beforeEach(() => setSystemTime(new Date(NOW)));
 afterEach(() => setSystemTime());
@@ -31,6 +33,7 @@ async function fixture(trigger: "resume" | "takeover" = "resume") {
     { structuredHosts: true, now: () => Date.parse(h.ports.now()) });
   const client = {
     operationStatus: async (id: string) => journal.operationResult(id),
+    readSession: async (identity: Parameters<RuntimeJournal["readSession"]>[0]) => journal.readSession(identity),
     snapshot: async () => journal.snapshot(), events: async (after: number) => journal.replay(after),
   } as RuntimeHostClient;
   const production = defaultPipelinePorts({ spawnRecoveryClient: () => client });
@@ -39,6 +42,7 @@ async function fixture(trigger: "resume" | "takeover" = "resume") {
   h.ports.stopStageAgent = production.stopStageAgent;
   h.ports.failStoppedStageLaunch = production.failStoppedStageLaunch;
   h.ports.unpublishedLaunchRetrySafe = production.unpublishedLaunchRetrySafe;
+  h.ports.retireInterruptedStageLaunch = production.retireInterruptedStageLaunch;
   const close = async () => {
     await holder.close(); journal.close(); registry.close(); setAgentRegistryForTests(null);
     storage.cleanup(); ids.mockRestore();
@@ -161,8 +165,18 @@ async function connect(f: Awaited<ReturnType<typeof fixture>>) {
   };
 }
 
-test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-down", "owner-change"].map(delivery => ({ explicit, delivery }))))
-("MCP retry-stage reconciles a stuck replacement: %j", async ({ explicit, delivery }) => {
+test.each([
+  ...[false, true].flatMap(explicit => ["absent", "uncertain", "journal-down", "owner-change"].map(delivery => ({ explicit, delivery, cut: "setup" }))),
+  { explicit: true, delivery: "absent", cut: "before-admission" },
+  { explicit: true, delivery: "absent", cut: "killed-setup" },
+  { explicit: true, delivery: "uncertain", cut: "before-admission" },
+  { explicit: true, delivery: "uncertain", cut: "killed-setup" },
+  { explicit: true, delivery: "cleanup-unproven", cut: "killed-setup" },
+  { explicit: true, delivery: "compacted", cut: "before-admission" },
+  { explicit: true, delivery: "native-session", cut: "killed-setup" },
+  { explicit: true, delivery: "pending-reservation", cut: "before-admission" },
+])
+("MCP retry-stage reconciles a stuck replacement: %j", async ({ explicit, delivery, cut }) => {
   const f = await fixture();
   let sdk: Awaited<ReturnType<typeof connect>> | undefined;
   try {
@@ -185,29 +199,48 @@ test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-dow
       memberships: [{ kind: "pipeline", containerId: lane.id, stageId: "plan", slot: "plan:2",
         round: 2, role: "architect", stageOrder: 0, parentConversationId: null }] });
     const active = replacement.receipt;
-    f.journal.executeOperation({ kind: "spawn", operationId: active.launchId, idempotencyKey: active.launchId,
-      conversationId: active.conversationId, engine: "codex", cwd: lane.worktreeDir!, prompt: "Review" });
-    f.registry.beginStructuredHostSetup(active.launchId, active.admissionOwner!, Date.parse(f.h.ports.now()));
-    f.journal.transitionOperation(active.launchId, "failed", { reason: FAILURE });
-    await f.registry.failStructuredSpawnOffLoop(active.launchId, FAILURE);
-    f.registry.confirmStructuredHostSetupCleanup(active.launchId, active.admissionOwner!);
+    const failure = cut === "before-admission" ? `structured spawn interrupted before runtime admission: ${active.launchId}`
+      : cut === "killed-setup" ? KILLED_SETUP : FAILURE;
+    if (cut !== "before-admission") {
+      f.journal.executeOperation({ kind: "spawn", operationId: active.launchId, idempotencyKey: active.launchId,
+        conversationId: active.conversationId, engine: "codex", cwd: lane.worktreeDir!, prompt: "Review" });
+      f.registry.beginStructuredHostSetup(active.launchId, active.admissionOwner!, Date.parse(f.h.ports.now()));
+      if (cut === "killed-setup") {
+        // The setup helper has no engine exec permit.
+        const helper = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
+        try { f.registry.recordStructuredHostSetup(active.launchId, active.admissionOwner!, captureProcessIdentity(helper.pid)); }
+        finally { helper.kill("SIGKILL"); await helper.exited; }
+        expect(helper.signalCode).toBe("SIGKILL");
+      }
+      f.journal.transitionOperation(active.launchId, "failed", { reason: failure });
+      if (delivery !== "cleanup-unproven") f.registry.confirmStructuredHostSetupCleanup(active.launchId, active.admissionOwner!);
+    }
+    if (delivery !== "pending-reservation") await f.registry.failStructuredSpawnOffLoop(active.launchId, failure);
     f.registry.releaseStructuredSpawnAdmissionOwner(active.launchId, active.admissionOwner!);
-    Object.assign(attempt, { launchId: active.launchId, conversationId: active.conversationId, spawnCalls: 1 });
+    Object.assign(attempt, { launchId: active.launchId, conversationId: active.conversationId, spawnCalls: 1, error: failure });
     lane.runs[0]!.attempts.push(attempt);
-    lane.state = "needs_decision"; lane.stateDetail = FAILURE; lane.cursor!.state = "spawning";
+    lane.state = "needs_decision"; lane.stateDetail = failure; lane.cursor!.state = "spawning";
     savePipelines([lane]);
     expect(f.registry.conversation(active.conversationId)).toBeNull();
     expect(receipt.state).toBe("failed");
-    if (delivery === "uncertain") {
+    if (delivery === "compacted") {
+      for (let n = 0; n < 4; n++) f.journal.append({ scope: { type: "operation", id: "compaction-fixture" },
+        kind: "fixture-marker", payload: { n } });
+      f.journal.compact(1);
+      expect(f.journal.snapshot().retentionFloorSeq).toBeGreaterThan(0);
+    }
+    if (delivery === "uncertain" || delivery === "native-session") {
       f.journal.append({ scope: { type: "session", id: active.conversationId }, kind: "session-status", payload: {
         conversationId: active.conversationId, sessionKey: { engine: "codex", sessionId: "uncertain-stage" },
         hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured",
         capabilities: { steer: true, structuredAttention: true },
       } });
-      f.journal.executeOperation({ kind: "send", operationId: `spawn_message_${active.launchId}`,
-        idempotencyKey: `spawn_${active.launchId}`, conversationId: active.conversationId, text: "Review", policy: "queue" });
-      f.journal.transitionOperation(`spawn_message_${active.launchId}`, "uncertain");
-      expect(f.journal.operationResult(`spawn_message_${active.launchId}`)?.receipt.status).toBe("uncertain");
+      if (delivery === "uncertain") {
+        f.journal.executeOperation({ kind: "send", operationId: `spawn_message_${active.launchId}`,
+          idempotencyKey: `spawn_${active.launchId}`, conversationId: active.conversationId, text: "Review", policy: "queue" });
+        f.journal.transitionOperation(`spawn_message_${active.launchId}`, "uncertain");
+        expect(f.journal.operationResult(`spawn_message_${active.launchId}`)?.receipt.status).toBe("uncertain");
+      }
     }
     if (delivery === "owner-change") {
       const events = f.client.events;
@@ -222,15 +255,18 @@ test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-dow
     f.h.ports.failStoppedStageLaunch = production.failStoppedStageLaunch;
     f.h.ports.unpublishedLaunchRetrySafe = production.unpublishedLaunchRetrySafe;
     // The SDK uses the current launch, including its explicit receipt selector.
-    expect(f.h.ports.spawnReceipt(active.launchId)).toMatchObject({ state: "failed", error: FAILURE });
+    expect(f.h.ports.spawnReceipt(active.launchId)).toMatchObject(delivery === "pending-reservation"
+      ? { state: "starting", error: null } : { state: "failed", error: failure });
+    if (delivery !== "uncertain") expect(f.journal.operationResult(`spawn_message_${active.launchId}`)).toBeNull();
     const current = { ...f, launch: () => active.launchId };
     sdk = await connect(current);
     const answer = await sdk.retry(explicit);
     expect(sdk.calls()).toBe(1);
-    if (delivery === "absent") {
+    if (delivery === "absent" || delivery === "pending-reservation") {
       expect(answer.isError, JSON.stringify(answer)).not.toBe(true);
       expect(f.row().cursor!.state).toBe("pending");
-      expect(f.row().runs[0]!.attempts.at(-1)).toMatchObject({ n: 2, state: "failed" });
+      expect(f.row().runs[0]!.attempts[1]).toMatchObject({ n: 2, state: "failed", launchId: active.launchId });
+      if (cut !== "setup") expect(f.row().runs[0]!.attempts.at(-1)).toMatchObject({ n: 3, state: "pending", launchId: null });
       expect(f.registry.spawnReceipt(active.launchId)?.retryClaim?.claimId).toBe(`${lane.id}:plan:${active.launchId}`);
       expect((await sdk.retry(explicit)).isError).not.toBe(true);
       expect(sdk.calls()).toBe(1);
@@ -246,6 +282,7 @@ test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-dow
         expect(f.registry.spawnReceipt(active.launchId)?.retryClaim?.claimId).toBe("replacement-owner");
       } else expect(f.registry.spawnReceipt(active.launchId)?.retryClaim).toBeUndefined();
       expect(f.tries()).toBe(1);
+      if (delivery === "cleanup-unproven") expect(JSON.stringify(answer)).toContain("admission owner");
       if (delivery === "journal-down") {
         const restored = defaultPipelinePorts({ spawnRecoveryClient: () => f.client });
         f.h.ports.spawnReceipt = restored.spawnReceipt;

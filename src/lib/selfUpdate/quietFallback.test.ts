@@ -96,6 +96,34 @@ function journalRow(overrides: Partial<RuntimeSession> = {}) {
       writerClaim: "fixture:0", ...overrides } });
 }
 
+test("automatic self-update waits for a failed launch's unreleased setup process", async () => {
+  await fallback("dead");
+  child.kill();
+  await child.exited;
+
+  const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "structured" });
+  const { launchId, admissionOwner, conversationId } = begun.receipt;
+  f.registry.beginStructuredHostSetup(launchId, admissionOwner!, Date.now());
+  const helper = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
+  try {
+    f.registry.recordStructuredHostSetup(launchId, admissionOwner!, captureProcessIdentity(helper.pid));
+    f.registry.failStructuredSpawn(launchId, "launch setup interrupted");
+    const p = ports(f.journal);
+    p.pipelines = () => [stage({ launchId, conversationId }, "needs_decision", "spawning")];
+    expect(await probeQuiet(snapshot, p, Date.now(), true, "live")).toMatchObject({
+      quiet: false, blockers: { turns: 1, turnList: [{ conversationId, reason: "setup" }] },
+    });
+    helper.kill("SIGKILL");
+    await helper.exited;
+    f.registry.confirmStructuredHostSetupCleanup(launchId, admissionOwner!);
+    f.registry.releaseStructuredSpawnAdmissionOwner(launchId, admissionOwner!);
+    expect(await probeQuiet(snapshot, p, Date.now(), true, "live")).toMatchObject({ quiet: true });
+  } finally {
+    if (helper.exitCode === null && helper.signalCode === null) helper.kill("SIGKILL");
+    await helper.exited;
+  }
+});
+
 async function fallback(status: "dead" | "unhosted" | "idle") {
   const entry = f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!;
   f.registry.upsert({ ...entry, status });

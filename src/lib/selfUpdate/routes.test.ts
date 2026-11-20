@@ -741,6 +741,31 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     await wait(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
   }
 
+  test("a checkout update holds fresh stage reservations while the original setup settles", async () => {
+    const h = harness({ relaunch: true, holdBuild: true });
+    const sawSetup = Promise.withResolvers<void>();
+    let pending = true;
+    h.deps.quiet = { runtimeSnapshot: async () => ({ sessions: [] }), pipelines: () => [], presence: () => [],
+      launchSetupPending: () => { sawSetup.resolve(); return pending; } };
+    setSelfUpdateServiceForTests(h.service);
+    const record = readLauncherRecord(h.recordFile)!;
+    try {
+      await postCheck(post("/check"));
+      await until(snapshot => snapshot.check.state === "update-available");
+      expect((await updatePost(post("/update", { key: "wait-for-stage-setup" }))).status).toBe(202);
+      await until(() => h.releaseBuild !== null);
+      h.releaseBuild!(); h.releaseBuild = null;
+      await sawSetup.promise;
+      const intent = JSON.parse(readFileSync(join(h.deps.dir, "apply.json"), "utf8"));
+      expect(intent.state).toBe("ready");
+      expect(JSON.parse(readFileSync(join(h.deps.dir, "auto-drain.json"), "utf8"))).toMatchObject({ id: intent.requestId });
+      expect(existsSync(record.requestFile)).toBe(false);
+      pending = false;
+      await until(() => existsSync(record.requestFile));
+      expect(JSON.parse(readFileSync(record.requestFile, "utf8"))).toMatchObject({ requestId: intent.requestId, role: "relaunch" });
+    } finally { pending = false; h.releaseBuild?.(); h.service.stop(); }
+  });
+
   test("exact admission reports target CI pending and retries while the equal-tree PR head remains red", async () => {
     const h = harness({ relaunch: true, holdBuild: true });
     const head = "a".repeat(40), tree = "b".repeat(40);
