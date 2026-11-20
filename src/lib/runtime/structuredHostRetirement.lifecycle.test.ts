@@ -186,12 +186,21 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
       let signals = 0;
       let closed = false;
       let admitted = false;
+      let captureAdmissionStarted = false;
+      const stopCapturedMember = async (member: ProcessIdentity) => {
+        await stopFixtureIdentity(member);
+        // Exit can be visible as a zombie before procfs stops reporting the
+        // PID. The fixture models a released claim with the tree already gone.
+        for (let attempt = 0; attempt < 200 && procBackend.pidAlive(member.pid); attempt++) await Bun.sleep(10);
+        expect(procBackend.pidAlive(member.pid)).toBe(false);
+      };
       const admit = registry.deliveryWriteOrBusy.bind(registry);
       const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, write) => {
         if (correlation.label === "registry.idle-stop-capture" && change.startsWith("capture-")) {
+          captureAdmissionStarted = true;
           // Exit and release while the capture waits for writer admission.
           await Promise.resolve();
-          for (const member of [...tree].reverse()) await stopFixtureIdentity(member);
+          for (const member of [...tree].reverse()) await stopCapturedMember(member);
           expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
           if (change !== "capture-release") registry.agentStateWrite(state => {
             const current = state.entries[`${engine}:${FIXTURE_SESSION}`]!;
@@ -213,14 +222,18 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
       const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation(async (ref, dependencies) => {
         const outcome = await originalTerminate(ref, { ...dependencies,
           persistCapturedTree: async captured => {
-            const accepted = await dependencies!.persistCapturedTree!(captured);
-            if (change.startsWith("capture-")) { expect(accepted).toBe(false); return false; }
+            const persistence = dependencies!.persistCapturedTree!(captured);
+            const started = captureAdmissionStarted;
+            const accepted = await persistence;
+            if (change.startsWith("capture-")) {
+              expect(started).toBe(true);
+              expect(accepted).toBe(false);
+              return false;
+            }
             expect(accepted).toBe(true);
             expect(captured).toHaveLength(tree.length);
             for (const member of tree.filter(value => !["live-child", "empty-diagnostics-live-child"].includes(change) || value.pid === identity.pid).reverse()) {
-              await stopFixtureIdentity(member);
-              for (let attempt = 0; attempt < 200 && procBackend.pidAlive(member.pid); attempt++) await Bun.sleep(10);
-              expect(procBackend.pidAlive(member.pid)).toBe(false);
+              await stopCapturedMember(member);
             }
             expect(procBackend.pidAlive(identity.pid)).toBe(false);
             closed = true;
