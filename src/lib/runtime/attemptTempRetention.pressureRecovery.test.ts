@@ -8,7 +8,7 @@ import { statePath } from "../configDir";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { allocatedAttemptBytes } from "./attemptTempFilesystem";
 
-import { cleanupPressureFixtures, NOW, fixture, realParentPass, restoreEnvironment, nativeFenceDeferrals } from "./attemptTempPressure.testSupport";
+import { cleanupPressureFixtures, NOW, fixture, realParentPass, restoreEnvironment, nativeFenceDeferrals, ledgerRoots } from "./attemptTempPressure.testSupport";
 
 afterEach(cleanupPressureFixtures);
 
@@ -21,7 +21,7 @@ test.each([
   process.env.LLV_STATE_DIR = state;
   const store = new AttemptTempStore(), config = path.join(f.root, "fixture.json");
   try {
-    savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+    savePipelines([finishedLane(f.root, new Date(NOW - 2 * 86400_000).toISOString())]);
     for (let n = 0; n < 33; n++) {
       const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`);
       fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
@@ -48,7 +48,7 @@ test.each([
         checked: report.checked, deferred: report.deferred, bytes: report.bytes, elapsed: clock.elapsed }));
     }
     for (let retry = 0; retry < 3 && store.bytes() > heldBytes; retry++) {
-      for (const owner of store.pressurePage(33).filter(row => !holdFirst || !row.directory.endsWith("000000")))
+      for (const owner of ledgerRoots(store, scratch).filter(row => !holdFirst || !row.directory.endsWith("000000")))
         expect(nativeRefused.has(owner.directory)).toBeTrue();
       fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12, slowProof: { phase, prefix: 33, requiredCost: 1500 } }));
       const report = await realParentPass(); expect(report.errors).toBe(0); removed += report.removed;
@@ -68,7 +68,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
     const directories: { directory: string; identity: string }[] = [];
     const finiteCount = timeoutPrefix === 1 ? 32 : 8, count = timeoutPrefix + finiteCount;
     try {
-      savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+      savePipelines([finishedLane(f.root, new Date(NOW - 2 * 86400_000).toISOString())]);
       for (let n = 0; n < count; n++) {
         const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`);
         fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
@@ -80,11 +80,13 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
       process.env.LLV_PRESSURE_FIXTURE = config;
       let removed = 0;
       let previousFirst: string | undefined;
-      for (let pass = 0; pass < 4; pass++) {
+      for (let pass = 0; pass < 8 && removed < finiteCount; pass++) {
         fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
           slowProof: { phase, prefix: count, timeoutPrefix, requiredCost: 1500 } }));
         const report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
-        if (removed < finiteCount) expect(report.removed).toBeGreaterThan(0);
+        // Fully unavailable roots get bounded visits and a durable cursor.
+        // A tick spent on that prefix need not repeat it on the next start.
+        expect(report.pass?.position).toBeGreaterThan(0);
         expect(report.errors).toBe(0); expect(report.checked).toBeLessThanOrEqual(count + 32);
         expect(clock.elapsed ?? 0).toBeLessThanOrEqual(40_001);
         expect(Math.max(...(clock.windows ?? [0]))).toBeLessThanOrEqual(5000);
@@ -103,7 +105,7 @@ for (const lowSpace of [false, true]) for (const timeoutPrefix of [1, 8, 32]) {
           checked: report.checked, removed: report.removed, removedBytes: report.removedBytes,
           deferred: report.deferred, bytes: report.bytes, elapsed: clock.elapsed }));
       }
-      if (timeoutPrefix === 1) expect(removed).toBe(finiteCount);
+      expect(removed).toBe(finiteCount);
       if (timeoutPrefix === 8) expect(fs.existsSync(directories[timeoutPrefix]!.directory)).toBeFalse();
       // A new helper with the same ledger recovers when the unavailable
       // proofs return. Timeout roots retained their bytes and inode above.
@@ -124,7 +126,7 @@ test.each(["timeout", "permission-denied"] as const)("real parent retains pressu
   process.env.LLV_STATE_DIR = state;
   const store = new AttemptTempStore(), config = path.join(f.root, "fixture.json"), directories: string[] = [];
   try {
-    savePipelines([finishedLane(f.root, new Date(NOW - 3600_000).toISOString())]);
+    savePipelines([finishedLane(f.root, new Date(NOW - 2 * 86400_000).toISOString())]);
     for (let n = 0; n < 2; n++) {
       const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`); directories.push(directory);
       fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
