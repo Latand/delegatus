@@ -530,11 +530,12 @@ command -p git "$@"
   }
 }, 50_000);
 
-for (const mode of ["portable prepare", "portable hooks", "service prepare", "service hooks", "historical service hook"] as const) test.skipIf(
+for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "service hooks", "historical service hook"] as const) test.skipIf(
   process.platform !== "linux" || !mode.startsWith("portable") && !hasUserManager
 )(`FIFO publication admits the first check while the peer waits (${mode})`, async () => {
     const useService = !mode.startsWith("portable");
-    const historical = mode === "historical service hook", ordinary = mode.endsWith("hooks") || historical;
+    const historical = mode === "historical service hook", ordinary = mode.includes("hooks") || historical;
+    const firstOpen = mode.endsWith("first-open");
     const f = fixture(), control = new AbortController(), roots: string[] = [];
     const pending: ReturnType<typeof realExec>[] = [];
     const { fixture: publicationFixture, commitFixtureInputs } = createPublicationFixtures(process.cwd(), roots);
@@ -610,9 +611,17 @@ for (const mode of ["portable prepare", "portable hooks", "service prepare", "se
       }\n`);
       commitFixtureInputs(first);
       if (!useService) commitFixtureInputs(peer);
-      const previous = Date.now() - CPU_QUEUE_SPACING_MS;
+      // The first-open supervisor must have a clear post-grant birth time;
+      // leave more than the procfs clock's conservative uncertainty window.
+      const previous = Date.now() - (firstOpen ? 5_000 : CPU_QUEUE_SPACING_MS);
       f.db.query("UPDATE admission SET last = ?").run(previous);
       f.db.exec("CREATE TABLE grants (at INTEGER); CREATE TRIGGER count_grant AFTER UPDATE OF last ON admission BEGIN INSERT INTO grants VALUES (NEW.last); END");
+      if (firstOpen) {
+        // Keep the old queue's prior-grant boundary while removing the new
+        // observer metadata. The first nested gate installs it with both
+        // ordinary hook supervisors already alive.
+        f.db.exec("DROP TRIGGER IF EXISTS legacy_gate_retired; DROP TABLE IF EXISTS legacy_gate_cutover; DROP TABLE IF EXISTS legacy_gate_retirements");
+      }
       const grants = () => f.db.query("SELECT at FROM grants ORDER BY rowid").all();
       const firstRun = launch(first, "first");
       await firstRun.waitFor("its first private ticket", () => f.count() === 1);
