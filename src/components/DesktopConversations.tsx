@@ -49,7 +49,7 @@ export function DesktopConversations({
   const { t } = useLocale();
   /* `scopeKey` keeps the accumulated pages across an update or a trip to the Board, and a return re-reads them. */
   const catalog = useConversationCatalog({ project, enabled, pageSize: DESKTOP_CONVERSATIONS_PAGE_SIZE, scopeKey: project, tree: true });
-  const pullRequests = useChatPullRequests(project, enabled && compact);
+  const pullRequests = useChatPullRequests(project, enabled);
   const sentinel = useRef<HTMLDivElement>(null);
   const lastAutomaticPage = useRef<{ project: string; visible: number } | null>(null);
   const { loadMore } = catalog;
@@ -156,7 +156,7 @@ function ChatBranch({ branch, onOpen, compact, pullRequests }: {
   ) : null;
   return (
     <li data-desktop-conversations-row={file.path}>
-      <div ref={compact ? rowRef : undefined} className="flex min-w-0 items-center gap-1">
+      <div ref={rowRef} className="flex min-w-0 items-center gap-1">
         {compact ? (
           <>
             <button
@@ -168,7 +168,6 @@ function ChatBranch({ branch, onOpen, compact, pullRequests }: {
               {title}
             </button>
             {toggle}
-            {prs?.items.length ? <ChatPullRequestBadge title={title} requests={prs} /> : null}
           </>
         ) : (
           <>
@@ -178,6 +177,7 @@ function ChatBranch({ branch, onOpen, compact, pullRequests }: {
             </div>
           </>
         )}
+        {prs?.items.length ? <ChatPullRequestBadge title={title} requests={prs} /> : null}
       </div>
       {expanded && children.length > 0 ? (
         <ul id={groupId} className={compact ? "ms-2 border-s border-border ps-2" : "mt-1.5 space-y-1.5 ms-2.5 border-s border-border ps-2.5"}>

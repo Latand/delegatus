@@ -1,6 +1,7 @@
 "use client";
 import type { ChatTaskLink, ChatTaskLinks } from "./CardChatLinks";
 import { useMaterializedCreationIds } from "@/hooks/useFiles";
+import { useChatPullRequests } from "@/hooks/useChatPullRequests";
 
 import { History, ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin, Workflow } from "lucide-react";
 import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
@@ -361,6 +362,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const timelineShown = !props.overview && timeline.preference.view === "timeline";
   const toggleTimeline = () => timeline.update({ view: timelineShown ? "board" : "timeline" });
   const workLinks = useWorkLinks();
+  const chatPullRequests = useChatPullRequests(project, loaded && !props.overview && !timelineShown);
   const boardPaneRef = useBoardPaneRef();
   /* The bar's word on the server (#2071 D7): a reconnect in progress is a
      quiet note, a long outage the red alert it always was. */
@@ -3052,6 +3054,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       newTask={status === "inbox" && composingTask && !props.overview ? <KanbanTaskComposer project={project} onCreated={taskCreated} onCancel={closeNewTask} /> : null}
       heldLaunches={heldLaunches}
       chatLinks={chatLinks}
+      chatPullRequests={props.overview ? undefined : chatPullRequests}
       openChatLinks={openChatLinks}
       onToggleChatLinks={toggleChatLinks}
       onJumpChatCard={jumpToChatCard}
@@ -3537,7 +3540,19 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
 > & { holdEditingId?: string | null };
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, draftsByCard, actingByCard, newTask, heldLaunches, chatLinks, openChatLinks, onToggleChatLinks, onJumpChatCard, onColumnMenu, cardProps }: {
+function cardChatTranscript(card: KanbanCardModel): string | null {
+  const conversations = [...card.members.map(member => member.file), ...card.mirrors.map(mirror => mirror.file), ...card.notLoadedRefs];
+  const origin = card.task?.origin;
+  if (origin?.kind === "conversation") {
+    const match = conversations.find(file => file.path && (file.path === origin.key || file.conversationId === origin.key));
+    if (match?.path) return match.path;
+    const assignment = card.task?.assignments.find(row => row.path && row.state !== "failed" && (row.path === origin.key || row.conversationId === origin.key));
+    if (assignment?.path) return assignment.path;
+  }
+  return card.conversations === 1 ? conversations.find(file => file.path)?.path ?? null : null;
+}
+
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, draftsByCard, actingByCard, newTask, heldLaunches, chatLinks, chatPullRequests, openChatLinks, onToggleChatLinks, onJumpChatCard, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
@@ -3547,6 +3562,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   /** Conversations of launches whose draft still stands for them. */
   heldLaunches: ReadonlySet<string>;
   chatLinks: ReadonlyMap<string, ChatTaskLinks>;
+  chatPullRequests?: ReturnType<typeof useChatPullRequests>;
   openChatLinks: ReadonlySet<string>;
   onToggleChatLinks: (id: string) => void;
   onJumpChatCard: (id: string) => void;
@@ -3583,30 +3599,36 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   const { holdEditingId, ...cardHandlers } = cardProps;
   const column = model.columns[status];
   const shown = column.shown;
-  const renderCard = (card: KanbanCardModel) => (
-    <KanbanCard
-      key={card.id}
-      card={card}
-      status={card.status}
-      pending={card.task ? pendingIds.pending(card.task.id) : false}
-      collapsed={collapsed.has(card.id)}
-      nowMs={nowMs}
-      remoteAgents={card.task ? remoteAgentsByTask.get(card.task.id) ?? NO_REMOTE_FOR_CARD : NO_REMOTE_FOR_CARD}
-      remote={card.task ? remoteCards.get(card.task.id) ?? null : null}
-      readerKeys={readerKeysByCard.get(card.id) ?? ""}
-      openDrafts={draftsByCard.get(card.id) ?? ""}
-      acting={actingByCard.get(card.id) ?? ""}
-      editing={editing.get(card.id) ?? null}
-      failedEdit={failedEdits.get(card.id) ?? null}
-      incomingEdit={incomingEdits.get(card.id) ?? null}
-      {...cardHandlers}
-      holdEditing={holdEditingId === card.id}
-      chatLinks={chatLinks.get(card.id)}
-      chatLinksOpen={openChatLinks.has(card.id)}
-      onToggleChatLinks={onToggleChatLinks}
-      onJumpChatCard={onJumpChatCard}
-    />
-  );
+  const renderCard = (card: KanbanCardModel) => {
+    const transcript = chatPullRequests ? cardChatTranscript(card) : null;
+    return (
+      <KanbanCard
+        key={card.id}
+        card={card}
+        status={card.status}
+        pending={card.task ? pendingIds.pending(card.task.id) : false}
+        collapsed={collapsed.has(card.id)}
+        nowMs={nowMs}
+        remoteAgents={card.task ? remoteAgentsByTask.get(card.task.id) ?? NO_REMOTE_FOR_CARD : NO_REMOTE_FOR_CARD}
+        remote={card.task ? remoteCards.get(card.task.id) ?? null : null}
+        readerKeys={readerKeysByCard.get(card.id) ?? ""}
+        openDrafts={draftsByCard.get(card.id) ?? ""}
+        acting={actingByCard.get(card.id) ?? ""}
+        editing={editing.get(card.id) ?? null}
+        failedEdit={failedEdits.get(card.id) ?? null}
+        incomingEdit={incomingEdits.get(card.id) ?? null}
+        {...cardHandlers}
+        holdEditing={holdEditingId === card.id}
+        chatLinks={chatLinks.get(card.id)}
+        chatTranscript={transcript}
+        watchChatPullRequests={chatPullRequests?.watch}
+        chatPullRequests={transcript ? chatPullRequests?.requests[transcript] : undefined}
+        chatLinksOpen={openChatLinks.has(card.id)}
+        onToggleChatLinks={onToggleChatLinks}
+        onJumpChatCard={onJumpChatCard}
+      />
+    );
+  };
   // The long-quiet stopped cards gather under the divider, in column order;
   // a card that stopped after recent work stays among the live ones.
   const parked = new Set(column.parked);

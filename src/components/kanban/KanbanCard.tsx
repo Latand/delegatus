@@ -5,7 +5,7 @@ import { rowStateWord } from "@/components/mobile/mobileBoardModel";
 import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 
 import { Bot, Flag } from "lucide-react";
-import { memo, useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -31,8 +31,11 @@ import { CardAlbumButton } from "@/components/taskAlbum/AlbumButton";
 import { CardPrototypeButton } from "@/components/prototypeReview/PrototypeReviewButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { TASK_COLOR_HEX } from "@/components/tasks/taskColorHex";
+import { ChatPullRequestBadge } from "@/components/workLinks/ChatPullRequestBadge";
 import { WorkLinkRow } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks, type WorkLinkTarget } from "@/components/workLinks/workLinksContext";
+import type { ChatPullRequests } from "@/lib/forge/chatPullRequests";
+import type { useChatPullRequests } from "@/hooks/useChatPullRequests";
 
 import { TaskHoldEditor } from "./TaskHoldEditor";
 import { TaskMotionLine } from "./TaskMotionLine";
@@ -194,6 +197,9 @@ export interface KanbanCardProps {
       look, draws that machine's lanes, and says where to manage it. */
   remote?: RemoteCard | null;
   card: KanbanCardModel;
+  chatTranscript?: string | null;
+  watchChatPullRequests?: ReturnType<typeof useChatPullRequests>["watch"];
+  chatPullRequests?: ChatPullRequests;
   status: TaskStatus;
   pending: boolean;
   collapsed: boolean;
@@ -455,6 +461,10 @@ function SeatTickNoticeButton({ project }: { project: string }) {
 
 export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const { card, status, pending, collapsed, nowMs, editing, failedEdit, incomingEdit } = props;
+  const { chatTranscript, watchChatPullRequests, chatPullRequests } = props;
+  const chatRef = useCallback((node: HTMLElement | null) => {
+    if (chatTranscript) return watchChatPullRequests?.(chatTranscript, node);
+  }, [chatTranscript, watchChatPullRequests]);
   /* The card holding the orchestrator's conversation stays on the board. */
   const protectedSeat = card.holdsSeat;
   const resurfaced = card.task && !card.hide.hidden ? card.hide.resurfaced : null;
@@ -597,6 +607,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const style = hex ? ({ "--label": hex, "--label-strong": hex } as React.CSSProperties) : undefined;
   return (
     <article
+      ref={chatTranscript ? chatRef : undefined}
       className={`card${status === "done" ? " done" : ""} ${workspace ? "work" : "shelf"}${collapsed ? " folded" : ""}${reading ? " has-reader" : ""}${remote ? " remote remote-surface" : ""}`}
       data-id={card.id}
       data-remote={remote ? remote.install : undefined}
@@ -676,6 +687,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           </h3>
         )}
         <div className="tools">
+          {chatPullRequests?.items.length ? <ChatPullRequestBadge title={title} requests={chatPullRequests} /> : null}
           <button
             type="button"
             className="icon-btn fold"

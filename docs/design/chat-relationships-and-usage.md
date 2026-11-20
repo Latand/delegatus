@@ -17,12 +17,14 @@ their linked conversation's name on read. A task card can link to its main
 chat's task and to dependent tasks in the same project. Moving a card between
 columns changes its task status independently of those relationships.
 
-## Pull requests in the project rail
+## Pull requests on chat cards and in Chats
 
-The PR badge opens a list beside the chat when there is room. Hover over the
-badge, or focus it and press Enter. Escape closes the panel. Each row opens
-the pull request on GitHub. The newest mention of each pull request determines
-its place in the list.
+The PR badge appears beside each matching chat in **Chats** and in the header
+of its task card, including collapsed cards. A card uses its originating chat
+or its sole linked conversation. Hover over the badge or focus it and press
+Enter. The list opens beside the badge when there is room. Escape closes it.
+Each row opens the pull request on GitHub. The newest mention of each pull
+request determines its place in the list.
 
 The list reads GitHub PR URLs in up to 384 recent indexed messages per visible
 chat, with up to 32 distinct links. A plus sign indicates partial history.

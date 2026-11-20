@@ -4,10 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { CHAT_PULL_REQUEST_BATCH, type ChatPullRequests } from "@/lib/forge/chatPullRequests";
 
+const EMPTY_REQUESTS: Record<string, ChatPullRequests> = {};
+
 /** Subscribe only to on-screen rows. Expanding or scrolling a branch sends a
  * small batch without rereading the conversation catalog or polling GitHub. */
 export function useChatPullRequests(project: string, enabled: boolean) {
-  const [requests, setRequests] = useState<Record<string, ChatPullRequests>>({});
+  const [snapshot, setSnapshot] = useState<{ project: string; requests: Record<string, ChatPullRequests> }>();
   const tracked = useRef(new Map<Element, string>());
   const observe = useRef<((node: Element) => void) | null>(null);
   const unobserve = useRef<((node: Element) => void) | null>(null);
@@ -45,13 +47,13 @@ export function useChatPullRequests(project: string, enabled: boolean) {
             const data = await response.json() as Record<string, ChatPullRequests>;
             if (abort.signal.aborted) continue;
             for (const path of paths) if (Object.hasOwn(data, path)) attempted.set(path, Infinity);
-            setRequests(current => {
-              const next = { ...current };
+            setSnapshot(current => {
+              const next = { ...(current?.project === project ? current.requests : EMPTY_REQUESTS) };
               for (const path of paths) {
                 if (Object.hasOwn(data, path)) next[path] = data[path]!;
                 else delete next[path];
               }
-              return next;
+              return { project, requests: next };
             });
           } catch {
             // A failed optional read leaves the chat row usable.
@@ -84,5 +86,5 @@ export function useChatPullRequests(project: string, enabled: boolean) {
     };
   }, [enabled, project]);
 
-  return { requests, watch };
+  return { requests: snapshot?.project === project ? snapshot.requests : EMPTY_REQUESTS, watch };
 }

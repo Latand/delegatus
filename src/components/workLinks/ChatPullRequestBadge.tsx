@@ -40,10 +40,14 @@ export function ChatPullRequestBadge({ title, requests }: { title: string; reque
     const measure = () => {
       const at = button.getBoundingClientRect();
       const width = surface.offsetWidth;
-      const right = at.right + 4;
-      const beside = right + width <= window.innerWidth - EDGE;
-      const left = beside ? right : Math.max(EDGE, Math.min(at.right - width, window.innerWidth - EDGE - width));
-      const top = Math.max(EDGE, Math.min(beside ? at.top : at.bottom + 4, window.innerHeight - EDGE - surface.offsetHeight));
+      const besideRight = at.right + 4;
+      const besideLeft = at.left - 4 - width;
+      const side = besideRight + width <= window.innerWidth - EDGE ? besideRight : besideLeft >= EDGE ? besideLeft : null;
+      const left = side ?? Math.max(EDGE, Math.min(at.right - width, window.innerWidth - EDGE - width));
+      const below = at.bottom + 4;
+      const above = at.top - 4 - surface.offsetHeight;
+      const idealTop = side !== null ? at.top : below + surface.offsetHeight <= window.innerHeight - EDGE ? below : above;
+      const top = Math.max(EDGE, Math.min(idealTop, window.innerHeight - EDGE - surface.offsetHeight));
       setPosition({ left, top });
     };
     measure();
@@ -78,7 +82,7 @@ export function ChatPullRequestBadge({ title, requests }: { title: string; reque
     <>
       <button
         ref={anchor} type="button" aria-label={label} aria-expanded={Boolean(mode)} aria-controls={mode ? id : undefined}
-        data-chat-pr-badge="" data-tone={tone} className="wl-chip"
+        data-chat-pr-badge="" data-no-drag="" data-tone={tone} className="wl-chip self-center"
         onPointerEnter={event => {
           if (event.pointerType !== "mouse") return;
           keepOpen();
@@ -92,7 +96,7 @@ export function ChatPullRequestBadge({ title, requests }: { title: string; reque
       </button>
       {mode ? createPortal(
         <div
-          id={id} ref={panel} role="region" aria-label={label} data-chat-pr-panel=""
+          id={id} ref={panel} role="region" aria-label={label} data-chat-pr-panel="" data-no-drag=""
           className={`fixed ${Z.popover} flex max-h-[min(58dvh,27rem)] w-[min(24rem,calc(100vw-16px))] flex-col rounded-[10px] border border-border bg-card p-2 shadow-2`}
           style={position ?? { left: 0, top: 0, visibility: "hidden" }}
           onPointerEnter={keepOpen} onPointerLeave={leave}

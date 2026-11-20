@@ -25156,8 +25156,8 @@ describe("state writes disk-full alert", () => {
  * `evidence/whole-card-drag/<label>-desktop.json`; the trace stays under
  * `.artifacts/whole-card-drag/`.
  */
-describe("chat pull requests in the project rail", () => {
-  browserTest("a chat badge opens an ordered PR panel by pointer and keyboard", async () => {
+describe("chat pull requests on the board and in the project rail", () => {
+  browserTest("chat badges open an ordered PR panel by pointer and keyboard", async () => {
     const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "chat-pull-requests");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -25165,10 +25165,24 @@ describe("chat pull requests in the project rail", () => {
     try {
       const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=chat-prs`, { width: 1440, height: 900 }, "dark", "en");
       try {
+        const panel = page.locator("[data-chat-pr-panel]");
+        const card = page.locator('.card[data-id="task:t-chat-pr"]');
+        const boardBadge = card.locator("[data-chat-pr-badge]");
+        expect(await card.getAttribute("data-collapsed")).toBe("1");
+        await boardBadge.hover({ timeout: 5000 });
+        await panel.waitFor();
+        expect(await panel.getByRole("link").count()).toBe(2);
+        await page.mouse.down();
+        const box = await panel.boundingBox();
+        await page.mouse.move(box!.x + 36, box!.y + 54, { steps: 8 });
+        expect(await page.locator(".kb .card.ghost").count()).toBe(0);
+        await page.mouse.up();
+        await page.keyboard.press("Escape");
+        await panel.waitFor({ state: "hidden" });
+
         await page.locator("[data-rail-chats] > button").click();
         const badge = page.locator("[data-rail-chats] [data-chat-pr-badge]");
         await badge.hover();
-        const panel = page.locator("[data-chat-pr-panel]");
         await panel.waitFor();
         const rows = panel.getByRole("link");
         expect(await rows.count()).toBe(2);

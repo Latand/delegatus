@@ -2065,7 +2065,9 @@ function task(id: string, status: TaskStatus, title: string, description: string
   } as BoardTask;
 }
 
+const chatWithPullRequests = SCENARIO === "chat-prs" ? add(conversation("report-chat", "Sort the reports", {})) : null;
 const tasks: BoardTask[] = [
+  ...(chatWithPullRequests ? [task("t-chat-pr", "blocked", "Sort the reports", "", 2 * MIN, [chatWithPullRequests])] : []),
   ...(SCENARIO === "finding-recurrence" ? [task("t-finding", "inbox", L("Investigate the recurring timeout", "Перевірити повторний тайм-аут"), L("The socket timed out again.", "Тайм-аут сокета повторився."), 2 * MIN, [], {
     findingKey: "socket-timeout", finding: { count: 3, lastSeenAt: iso(20 * MIN) },
   }), task("t-finding-held", "blocked", L("Review the recurring timeout", "Перевірити повторний тайм-аут у черзі"), L("The socket timed out again.", "Тайм-аут сокета повторився."), 45 * MIN, [], {
@@ -5269,16 +5271,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations/pull-requests" && SCENARIO === "chat-prs") {
-    const transcript = url.searchParams.getAll("transcript").find(path => path === orchestrator.path);
-    return json(transcript ? { [transcript]: { partial: false, items: [
+    const transcripts = url.searchParams.getAll("transcript").filter(path => path === chatWithPullRequests?.path);
+    return json(Object.fromEntries(transcripts.map(transcript => [transcript, { partial: false, items: [
       { repository: "sample/widget", number: 7, url: "https://github.com/sample/widget/pull/7", state: "open",
         title: "Add report sorting", additions: 21, deletions: 4 },
       { repository: "sample/widget", number: 5, url: "https://github.com/sample/widget/pull/5", state: "merged",
         title: "Prepare the report index" },
-    ] } } : {});
+    ] }])));
   }
   if (url.pathname === "/api/conversations") {
-    if (SCENARIO === "chat-prs") return json({ items: [orchestrator], total: 1, nextCursor: null });
+    if (chatWithPullRequests) return json({ items: [chatWithPullRequests], total: 1, nextCursor: null });
     const own = RAIL && url.searchParams.get("project") ? files.filter((file) => file.project === url.searchParams.get("project")) : files;
     return json({ items: own, total: own.length, nextCursor: null });
   }
