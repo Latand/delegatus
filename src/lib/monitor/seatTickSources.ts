@@ -15,7 +15,7 @@ import { deepFreeze } from "@/lib/deepFreeze";
 import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { shortId } from "@/lib/shortIds";
-import { seatTickCatchUp } from "./seatTick";
+import { seatTickCatchUp, seatTickSignalVersion } from "./seatTick";
 import { pendingAutonomyReports } from "./autonomy";
 import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
@@ -30,6 +30,7 @@ import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { memoryProblemSignals, prepareMemoryProblemRead } from "@/lib/memory/roleProblems";
+import { acknowledgeCurationNoAccountWarning, curationNoAccountWarning } from "@/lib/memory/curation/store";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
@@ -784,9 +785,16 @@ export async function settleRecordFromJournal(
   return sendReceiptFor(registry.readOnlySnapshot(), target.operationId);
 }
 
-function seatProjectResolver(): (project: string) => string {
-  const resolve = projectAliasResolver();
-  return project => resolve(project.trim());
+type SeatProjectResolver = ((project: string) => string) & { keys(project: string): string[] };
+function seatProjectResolver(): SeatProjectResolver {
+  const snapshot = projectAliasSnapshot();
+  const resolve = projectAliasResolver(snapshot);
+  const resolver = ((project: string) => resolve(project.trim())) as SeatProjectResolver;
+  resolver.keys = (project: string) => {
+    const canonical = resolve(project.trim());
+    return [canonical, ...Object.keys(snapshot.aliases).filter(key => key !== canonical && resolve(key) === canonical)];
+  };
+  return resolver;
 }
 
 export function defaultSeatTickSources(): SeatTickSources {
@@ -1602,8 +1610,21 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
   return { covered: false, sweeps };
 }
 
-function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
+function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources, shown: readonly string[] = [], projectKeys: readonly string[] = [project]): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
+  if (seat) {
+    try {
+      const warning = curationNoAccountWarning(projectKeys);
+      if (warning) {
+        const signal = {
+          id: "curator-no-account", episode: warning.episode, actionable: true,
+          label: "The role memory curator could not run because no account was available for this project (no-account).",
+        };
+        if (shown.includes(seatTickSignalVersion(signal, seat))) acknowledgeCurationNoAccountWarning(warning.project, warning.episode);
+        else found.push(signal);
+      }
+    } catch { /* An unreadable curation store leaves other wake evidence available. */ }
+  }
   for (const lane of projectRows(sources.pipelines(), project)) {
     const names = lane.merge?.optionalFailedChecks;
     if (lane.hiddenAt || !names?.length) continue;
@@ -2458,6 +2479,7 @@ interface ChildEvidence {
   children: SeatTickChildInput[];
   unavailable: SeatTickChildrenGap | null;
   catchUpPending: boolean;
+  ledgerWarnings: SeatTickSignalInput[];
 }
 
 /** The one token a check carries when several conditions stand: the first in
@@ -2512,8 +2534,8 @@ async function childWork(
   policy: SeatTickPolicy,
   sources: SeatTickSources,
 ): Promise<ChildEvidence> {
-  if (!seat) return { children: [], unavailable: null, catchUpPending: false };
-  if (!state.accounting) return { children: [], unavailable: "registry-unreadable", catchUpPending: false };
+  if (!seat) return { children: [], unavailable: null, catchUpPending: false, ledgerWarnings: [] };
+  if (!state.accounting) return { children: [], unavailable: "registry-unreadable", catchUpPending: false, ledgerWarnings: [] };
   assertSeatTickWork();
   const accounting = guardedSeatTickPort(new SeatTickAccounting(state.accounting.filename, project), "accounting.children");
   const registry = sources.registry();
@@ -2523,6 +2545,7 @@ async function childWork(
   const migration = accountingGap(state.accounting.gap);
   if (migration) gaps.add(migration);
   const children: SeatTickChildInput[] = [];
+  const ledgerWarnings = new Map<string, SeatTickSignalInput>();
   /* Enumerated once per check and handed to every projection (#1783): the
      roots decide whether a child's transcript is one this Viewer can read. */
   const roots = transcriptRoots();
@@ -2648,13 +2671,25 @@ async function childWork(
     } else if (retainedLatestSettlement) {
       child.input = { ...child.input, status: "terminal", outcome: previousInput.outcome, terminalAt: previousInput.terminalAt };
     }
-    unplaced();
     bytesLeft -= read.bytes;
     // A vanished host and both records gone have a named failure receipt.
     // Keep the cursor and every earlier outcome for a later recovery.
-    if (source.cursor.gap !== null && !lost) gaps.add("ledger-gap");
+    const ledgerGap = source.cursor.gap !== null && !lost;
+    if (ledgerGap && !read.cursor.atEnd && read.outcomes.length >= OUTCOME_LIMIT) readablePageLimited = true;
+    if (ledgerGap) {
+      if (child.input.status === "unknown") children.push(child.input);
+      const id = `child-ledger:${child.input.conversationId}:${generation.id}`;
+      ledgerWarnings.set(id, {
+        id, episode: JSON.stringify([source.cursor.identity, source.cursor.gap]), actionable: true,
+        label: `${child.input.title} — spawned child's event ledger has incomplete evidence (${source.cursor.gap})`,
+      });
+    } else unplaced();
     child.generationIndex = (child.generationIndex + 1) % generations.length;
-    /* A read the budget stopped short of the end resumes first next check. */
+    /* Resume budget-limited healthy reads first. A damaged ledger keeps its
+       cursor and rotates so it cannot repeatedly hold up healthy children. */
+    // A readable page of a damaged ledger still owes a bounded continuation.
+    // Keep that ticket ahead of the frozen catch-up cutoff until the readable
+    // prefix is exhausted; healthy children retain their independent tickets.
     const cut = !read.cursor.atEnd && (read.bytes >= budget || read.outcomes.length >= OUTCOME_LIMIT);
     if (child.input.status === "terminal" && read.bytes === 0 && read.outcomes.length === 0 && read.cursor.atEnd
       && child.generationIndex === previousGeneration && JSON.stringify(previousCursor) === JSON.stringify(read.cursor)
@@ -2664,6 +2699,7 @@ async function childWork(
   };
 
   let catchUpPending = false;
+  let readablePageLimited = false;
   try {
     const active = await seatTickMutation("owner", () => accounting.owner(seat.conversationId, seat.seatEpoch));
     if (await seatTickMutation("discoverRevokedOwners", () => accounting.discoverRevokedOwners(orchestratorSeatRevocationSource(), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project))) {
@@ -2754,8 +2790,8 @@ async function childWork(
       const next = accounting.page("poll", 1)[0];
       const pending = next?.kind === "poll" && (next.key.startsWith(`poll/${encodeURIComponent(project)}/!`)
         || Number(next.key.slice(next.key.lastIndexOf("/") + 1)) <= catchUpPollThrough);
-      catchUpPending = !!pending;
-      if (pending) gaps.add("ledger-pending");
+      catchUpPending = !!pending || readablePageLimited;
+      if (catchUpPending) gaps.add("ledger-pending");
       else await seatTickMutation("endCatchUpPoll", () => accounting.endCatchUpPoll());
     }
     // Page the persisted ready queue, yielding between pages. The cutoff is
@@ -2819,7 +2855,7 @@ async function childWork(
       });
     }
   } catch { gaps.add("registry-unreadable"); }
-  return { children, unavailable: worstChildrenGap(gaps), catchUpPending };
+  return { children, unavailable: worstChildrenGap(gaps), catchUpPending, ledgerWarnings: [...ledgerWarnings.values()] };
 }
 
 function stageAttempt(lane: Pipeline) {
@@ -3462,7 +3498,7 @@ async function gatherSeatTickInputWork(
   try {
     const release = readReleaseProject(canonical);
     for (const run of release.history) if (now - run.at <= policy.backlogAfterMs) releaseAlerts.push({ kind: "release-settled", id: `release-settled:${run.key}:${run.at}`, label: `Release ${run.outcome}; task ${run.taskId}, lane ${run.pipelineId}. Read its stage summaries for any product defect seen in the README pictures.` });
-    if (release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
+    if (settings.release?.enabled && release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
   } catch { /* The release controller journals store failures; other seat work still wakes. */ }
 
 
@@ -3480,7 +3516,7 @@ async function gatherSeatTickInputWork(
   }
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources, catchUp);
   await yieldToRuntime();
-  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending } = await withViewerOperation("seat-tick.children", () => childWork(canonical, seat, state, policy, sources));
+  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending, ledgerWarnings } = await withViewerOperation("seat-tick.children", () => childWork(canonical, seat, state, policy, sources));
   /* An unreadable board costs this check its routed asks, never the check:
      the waits stay routed and the next check reads them again. */
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
@@ -3545,7 +3581,7 @@ async function gatherSeatTickInputWork(
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...signals(canonical, seat, sources), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

@@ -85,16 +85,8 @@ export function createPerformanceSpans(now = monotonicNow) {
     ...(correlations.getStore() ? { correlation: correlations.getStore() } : {}),
   });
   const finish = (record: Slice) => { record.end = now(); record.totalMs = record.maxMs = record.end - record.start; add(record); };
-  return {
-    setEnabled(value: boolean) { enabled = value; },
-    observeSite(observer?: (site: number) => void) { observeSite = observer; },
-    request(id: string, method: string, timeoutMs?: number) {
-      if (!enabled || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return;
-      if (requests.size >= requestCapacity) { requests.delete(requests.keys().next().value!); requestsDropped++; }
-      requests.set(id, { id, method: method === "snapshot" || method === "append" || method === "wait" || method === "files" || method === "health" ? method : "other",
-        start: now(), deadline: timeoutMs === undefined ? null : now() + timeoutMs, events: [] });
-    },
-    sync<T>(site: PerformanceSite, work: () => T, rows = 0, bytes = 0): T {
+  const { delegatusPerformanceSync: sync } = {
+    delegatusPerformanceSync<T>(site: PerformanceSite, work: () => T, rows = 0, bytes = 0): T {
       if (!enabled) return work();
       const record = begin(site, "sync", rows, bytes);
       const parentSite = currentSite, parentSpan = currentSpan;
@@ -104,6 +96,17 @@ export function createPerformanceSpans(now = monotonicNow) {
       try { return readAttribution.sync(site, work, 0, site === "runtime.parse" ? bytes : 0, site !== "state.json" && site !== "runtime.parse"); } catch (error) { record.failed = true; throw error; }
       finally { finish(record); currentSpan = parentSpan; currentSite = parentSite; observeSite?.(currentSite); }
     },
+  };
+  const recorder = {
+    setEnabled(value: boolean) { enabled = value; },
+    observeSite(observer?: (site: number) => void) { observeSite = observer; },
+    request(id: string, method: string, timeoutMs?: number) {
+      if (!enabled || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return;
+      if (requests.size >= requestCapacity) { requests.delete(requests.keys().next().value!); requestsDropped++; }
+      requests.set(id, { id, method: method === "snapshot" || method === "append" || method === "wait" || method === "files" || method === "health" ? method : "other",
+        start: now(), deadline: timeoutMs === undefined ? null : now() + timeoutMs, events: [] });
+    },
+    sync,
     async wait<T>(site: PerformanceSite, work: () => Promise<T>): Promise<T> {
       if (!enabled) return work();
       const record = begin(site, "await"); pending++;
@@ -137,6 +140,7 @@ export function createPerformanceSpans(now = monotonicNow) {
     },
     clear() { records.length = 0; longest.length = 0; cursor = 0; dropped = 0; droppedMs = 0; },
   };
+  return recorder;
 }
 
 type ProcessIdentity = { pid: number; start: string; timeOrigin: number; revision: string | null };
