@@ -11,6 +11,7 @@ import type { FileEntry } from "@/lib/types";
 import { cleanTitle } from "@/lib/title";
 import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 
+import { EngineMark } from "./EngineMark";
 import { DeleteFileButton } from "./DeleteFileButton";
 import { OVERVIEW } from "./projectModel";
 import { activityDot, engineBadge, fmtAge } from "./utils";
@@ -99,12 +100,14 @@ export function QuietFileRow({
   file,
   activeSubtree,
   showProject = false,
+  showEngineMark = false,
   deletable = true,
   onOpen,
 }: {
   file: FileEntry;
   activeSubtree: boolean;
   showProject?: boolean;
+  showEngineMark?: boolean;
   /** False for a conversation the operator may read and never delete (a relay chat's). */
   deletable?: boolean;
   onOpen: (file: FileEntry) => void;
@@ -127,13 +130,16 @@ export function QuietFileRow({
       <button
         type="button"
         className={`flex min-w-0 flex-1 items-center gap-2 rounded-[6px] text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${isMobile ? "min-h-11" : "h-full"}`}
+        data-desktop-chat-open={showEngineMark || undefined}
         aria-label={t("trash.open", { title: cleanTitle(file.title, 60) })}
         onClick={() => onOpen(file)}
       >
         <span className={`h-2 w-2 shrink-0 rounded-full ${activityDot(file.activity)}`} />
-        <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-bold" style={badge.style}>
-          {badge.label}
-        </span>
+        {showEngineMark ? <EngineMark engine={file.engine} size={14} label={badge.label} /> : (
+          <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[9.5px] font-bold" style={badge.style}>
+            {badge.label}
+          </span>
+        )}
         <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold" title={file.path}>
           {cleanTitle(file.title, 90)}
         </span>

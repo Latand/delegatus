@@ -2,11 +2,18 @@
 
 ## Chat titles and relationships
 
-The desktop **Chats** list groups conversations by recorded parentage. Expand a
-parent to see its loaded children and open each conversation independently.
-Each page has a fixed row limit. Opening a branch or choosing **Load more**
-reveals older rows. Large collapsed branches pause automatic paging when a
-page adds no visible rows.
+The desktop **Chats** list pages main chats by recent activity in each family.
+The branch badge shows the full count of direct dependent chats in the scoped
+catalog. Each expanded branch has its own **Load more dependent chats**
+control. The rail uses **Load more main chats** for the top-level list. The
+larger Chats menu can also load its next page of main chats as you scroll.
+Paging keeps existing rows and counts in place. A folded branch keeps its
+loaded pages while the list is open. Each row shows the conversation engine
+and opens its own conversation.
+
+The tree uses the same project-scoped lineage for Claude Desktop chats,
+native Codex forks and registry-owned conversations. The flat catalog and
+conversation search retain their own pagination.
 
 Delegatus reads native session titles when available and preserves explicit
 Delegatus renames. An unnamed imported task can display the title of its
@@ -33,6 +40,11 @@ available. A referenced PR with no cached state remains a link with an
 unknown state. Team members receive cached metadata only for the project's
 recorded GitHub repository. The panel works from existing indexes and never
 requests a GitHub refresh of its own.
+
+On the board, including **In progress**, a badge appears when the card has an
+identifiable conversation and its indexed messages contain a PR link. The
+branch count in **Chats** counts dependent conversations. The PR badge counts
+links in that specific conversation.
 
 ## Token usage on task cards
 

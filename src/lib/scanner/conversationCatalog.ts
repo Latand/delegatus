@@ -17,6 +17,7 @@ export interface ConversationCatalogEntry {
   projectUnresolved?: true;
   worktree?: string;
   parent?: string;
+  directChildCount?: number;
   nativeParentThreadId?: string | null;
   nativeForkSourceThreadId?: string | null;
   title: string;
@@ -33,12 +34,14 @@ export interface ConversationCatalogPage {
   items: ConversationCatalogEntry[];
   nextCursor: string | null;
   total: number;
+  projectTotal?: number;
 }
 
 export interface ConversationListPage {
   items: FileEntry[];
   nextCursor: string | null;
   total: number;
+  projectTotal?: number;
 }
 
 export type ConversationStat = (pathname: string) => Promise<{ size: number; mtimeMs: number }>;
@@ -52,6 +55,8 @@ export interface ConversationCatalogQuery {
   /** A server-derived member and permission signature; never a query parameter. */
   authorityScope?: string;
   tree?: boolean;
+  /** One sibling list in the tree. A null parent selects the roots. */
+  branch?: { parent: string | null };
 }
 
 interface Cursor {
@@ -63,6 +68,7 @@ interface CatalogPaginationSnapshot {
   authorityScope: string;
   items: ConversationCatalogEntry[];
   total: number;
+  projectTotal?: number;
 }
 
 const DEFAULT_PAGE_SIZE = 40;
@@ -133,11 +139,11 @@ function decodeCursor(value: string | null | undefined): Cursor | null {
   }
 }
 
-function rememberPagination(items: ConversationCatalogEntry[], authorityScope = ""): number {
+function rememberPagination(items: ConversationCatalogEntry[], authorityScope: string, projectTotal?: number): number {
   const snapshots = paginationSnapshots();
   const snapshot = (catalogStore.__llvConversationPaginationSequence ?? 0) + 1;
   catalogStore.__llvConversationPaginationSequence = snapshot;
-  snapshots.set(snapshot, { items: [...items], total: items.length, authorityScope });
+  snapshots.set(snapshot, { items, total: items.length, authorityScope, projectTotal });
   let retainedRows = [...snapshots.values()].reduce((total, page) => total + page.items.length, 0);
   while ((snapshots.size > MAX_PAGINATION_SNAPSHOTS || retainedRows > MAX_PAGINATION_ROWS) && snapshots.size > 1) {
     const oldest = snapshots.keys().next().value!;
@@ -160,22 +166,41 @@ function matchesQuery(entry: ConversationCatalogEntry, query: string): boolean {
  * every matching conversation while hydrating filesystem metadata one page at
  * a time.
  */
-function groupedCatalog(items: ConversationCatalogEntry[]): ConversationCatalogEntry[] {
-  const byPath = new Map(items.map(entry => [entry.path, entry]));
-  const branches = conversationTree(items.map(entry => catalogEntryToFileEntry(entry)));
+function catalogFamilies(items: ConversationCatalogEntry[], branches: ConversationBranch[]) {
   const order = new Map(items.map((entry, index) => [entry.path, index]));
-  const families = branches.map(branch => {
-    const entries: ConversationCatalogEntry[] = [];
+  return branches.map(branch => {
+    const nodes: ConversationBranch[] = [];
     let newest = items.length;
-    const visit = (node: ConversationBranch) => {
-      entries.push(byPath.get(node.file.path)!);
+    const pending = [branch];
+    while (pending.length) {
+      const node = pending.pop()!;
+      nodes.push(node);
       newest = Math.min(newest, order.get(node.file.path)!);
-      for (const child of node.children) visit(child);
-    };
-    visit(branch);
-    return { entries, newest };
+      for (let index = node.children.length - 1; index >= 0; index -= 1) pending.push(node.children[index]!);
+    }
+    return { branch, nodes, newest };
   }).sort((a, b) => a.newest - b.newest);
-  return families.flatMap(family => family.entries);
+}
+
+function treeCatalog(items: ConversationCatalogEntry[], branch?: ConversationCatalogQuery["branch"]): ConversationCatalogEntry[] {
+  const byPath = new Map(items.map(entry => [entry.path, entry]));
+  const roots = conversationTree(items.map(entry => catalogEntryToFileEntry(entry)));
+  const parent = branch?.parent;
+  if (parent) {
+    const pending = [...roots];
+    while (pending.length) {
+      const node = pending.pop()!;
+      if (node.file.path === parent) return node.children.map(child => ({
+        ...byPath.get(child.file.path)!, parent, directChildCount: child.children.length,
+      }));
+      for (const child of node.children) pending.push(child);
+    }
+    return [];
+  }
+  const families = catalogFamilies(items, roots);
+  return branch
+    ? families.map(({ branch: root }) => ({ ...byPath.get(root.file.path)!, parent: undefined, directChildCount: root.children.length }))
+    : families.flatMap(({ nodes }) => nodes.map(node => byPath.get(node.file.path)!));
 }
 
 export function paginateConversationCatalog(
@@ -184,13 +209,16 @@ export function paginateConversationCatalog(
 ): ConversationCatalogPage {
   const limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Math.floor(options.limit ?? DEFAULT_PAGE_SIZE)));
   const cursor = decodeCursor(options.cursor);
+  const authority = options.branch
+    ? JSON.stringify([options.authorityScope ?? "", options.project ?? "", options.branch.parent])
+    : options.authorityScope ?? "";
   if (options.cursor && !cursor) throw new ExpiredConversationCatalogCursorError();
   let snapshotId: number;
   let offset: number;
   let snapshot: CatalogPaginationSnapshot;
   if (cursor) {
     const remembered = paginationSnapshots().get(cursor.snapshot);
-    if (remembered && remembered.authorityScope === (options.authorityScope ?? "")) {
+    if (remembered && remembered.authorityScope === authority) {
       snapshotId = cursor.snapshot;
       offset = cursor.offset;
       snapshot = remembered;
@@ -203,8 +231,13 @@ export function paginateConversationCatalog(
       .filter((entry) => matchesQuery(entry, options.query ?? ""))
       .sort((left, right) => right.mtime - left.mtime || left.path.localeCompare(right.path))
       .map((entry) => entry.firstPrompt ? { ...entry, firstPrompt: "" } : entry);
-    const grouped = options.tree ? groupedCatalog(matching) : null;
-    snapshotId = rememberPagination(grouped ?? matching, options.authorityScope);
+    const rows = options.tree || options.branch ? treeCatalog(matching, options.branch) : matching;
+    const projectTotal = options.branch ? matching.length : undefined;
+    // A single-page list needs no cursor and should leave active chains in the cache.
+    if (rows.length <= limit) {
+      return { items: rows, nextCursor: null, total: rows.length, ...(projectTotal !== undefined ? { projectTotal } : {}) };
+    }
+    snapshotId = rememberPagination(rows, authority, projectTotal);
     offset = 0;
     snapshot = paginationSnapshots().get(snapshotId)!;
   }
@@ -216,6 +249,7 @@ export function paginateConversationCatalog(
     items,
     nextCursor: hasMore ? encodeCursor({ snapshot: snapshotId, offset: nextOffset }) : null,
     total: snapshot.total,
+    ...(snapshot.projectTotal !== undefined ? { projectTotal: snapshot.projectTotal } : {}),
   };
 }
 
@@ -237,7 +271,8 @@ export function catalogEntryToFileEntry(entry: ConversationCatalogEntry, nowMs: 
     engine: entry.engine,
     kind: entry.kind,
     fmt: entry.fmt,
-    parent: entry.parent ?? (claudeParent && claudeRoot ? path.join(claudeRoot, claudeParent.parentName) : null),
+    parent: entry.parent ?? (entry.directChildCount === undefined && claudeParent && claudeRoot ? path.join(claudeRoot, claudeParent.parentName) : null),
+    directChildCount: entry.directChildCount,
     ...(entry.engine === "codex" ? {
       nativeThreadId: codexThreadIdFromPath(entry.path),
       nativeParentThreadId: entry.nativeParentThreadId,
@@ -282,6 +317,7 @@ export async function loadConversationCatalogPage(
     items: items.filter((item): item is FileEntry => item !== null),
     nextCursor: page.nextCursor,
     total: page.total,
+    ...(page.projectTotal !== undefined ? { projectTotal: page.projectTotal } : {}),
   };
 }
 

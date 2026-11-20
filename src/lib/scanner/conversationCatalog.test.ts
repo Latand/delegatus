@@ -223,3 +223,18 @@ test("chat pagination bounds large families and preserves every parent link acro
   expect(paths).toHaveLength(2_002);
   expect(new Set(paths).size).toBe(paths.length);
 });
+
+test("opening a branch that fits on one page keeps other active cursors", () => {
+  const parent = entry(1);
+  const child = { ...entry(2), parent: parent.path };
+  const catalog = [parent, child, entry(3), entry(4)];
+  const roots = { project: "viewer", tree: true, branch: { parent: null }, limit: 2 };
+  const first = paginateConversationCatalog(catalog, roots);
+  for (let index = 0; index < 15; index += 1) paginateConversationCatalog(catalog, roots);
+
+  const children = paginateConversationCatalog(catalog, { ...roots, branch: { parent: parent.path } });
+  expect(children.items.map(item => item.path)).toEqual([child.path]);
+  expect(children.nextCursor).toBeNull();
+  const second = paginateConversationCatalog([], { ...roots, cursor: first.nextCursor });
+  expect(second.items.map(item => item.path)).toEqual([parent.path]);
+});

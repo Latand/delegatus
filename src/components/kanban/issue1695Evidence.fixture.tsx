@@ -2065,7 +2065,10 @@ function task(id: string, status: TaskStatus, title: string, description: string
   } as BoardTask;
 }
 
-const chatWithPullRequests = SCENARIO === "chat-prs" ? add(conversation("report-chat", "Sort the reports", {})) : null;
+const chatWithPullRequests = SCENARIO === "chat-prs" ? add(conversation("report-chat", "Sort the reports", { directChildCount: 2 })) : null;
+const reportChild = chatWithPullRequests && conversation("report-child", "Review the report", { parent: chatWithPullRequests.path, directChildCount: 0 });
+const reportFork = chatWithPullRequests && conversation("report-fork", "Test the report export", { engine: "codex", parent: chatWithPullRequests.path, directChildCount: 0 });
+const otherMainChat = chatWithPullRequests && conversation("report-other", "Plan the next report", { engine: "codex", directChildCount: 0 });
 const tasks: BoardTask[] = [
   ...(chatWithPullRequests ? [task("t-chat-pr", "blocked", "Sort the reports", "", 2 * MIN, [chatWithPullRequests])] : []),
   ...(SCENARIO === "finding-recurrence" ? [task("t-finding", "inbox", L("Investigate the recurring timeout", "Перевірити повторний тайм-аут"), L("The socket timed out again.", "Тайм-аут сокета повторився."), 2 * MIN, [], {
@@ -5280,7 +5283,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     ] }])));
   }
   if (url.pathname === "/api/conversations") {
-    if (chatWithPullRequests) return json({ items: [chatWithPullRequests], total: 1, nextCursor: null });
+    if (chatWithPullRequests) {
+      const { searchParams } = url;
+      const children = searchParams.get("branch") === "children";
+      const more = searchParams.has("cursor");
+      const file = children ? (more ? reportFork : reportChild) : (more ? otherMainChat : chatWithPullRequests);
+      return json({ items: [file], total: 2, projectTotal: 4, nextCursor: more ? null : children ? "reports-children" : "reports-roots" });
+    }
     const own = RAIL && url.searchParams.get("project") ? files.filter((file) => file.project === url.searchParams.get("project")) : files;
     return json({ items: own, total: own.length, nextCursor: null });
   }

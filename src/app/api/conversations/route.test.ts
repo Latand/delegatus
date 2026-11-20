@@ -412,6 +412,46 @@ test("warm search beyond the old text-cache ceiling never reopens retained trans
   }
 });
 
+test("main chats and each branch have separate cursors and stable child totals", async () => {
+  const project = "branch-fixture";
+  const codexThread = (suffix: number) => ["0".repeat(8), "0".repeat(4), "4000", "8000", String(suffix).padStart(12, "0")].join("-");
+  const codexParent = codexThread(10);
+  const codexChild = codexThread(11);
+  const make = (name: string, mtime: number, extra: Partial<Parameters<typeof replaceConversationCatalog>[0][number]> = {}) => {
+    const pathname = path.join(sandbox, name + ".jsonl");
+    fs.writeFileSync(pathname, "{}\n");
+    return {
+      path: pathname, name: name + ".jsonl", root: "claude-projects" as const,
+      project, title: name, firstPrompt: "", engine: "claude" as const,
+      kind: "session", fmt: "claude" as const, mtime, size: 3, ...extra,
+    };
+  };
+  const main = make("main", 1);
+  const one = make("recent-branch", 10, { parent: main.path });
+  const two = make("older-branch", 2, { parent: main.path });
+  const nested = make("nested-branch", 3, { parent: one.path });
+  const codex = { engine: "codex", root: "codex-sessions", fmt: "codex" } as const;
+  const thread = make(`rollout-${codexParent}`, 4, codex);
+  const fork = make(`rollout-${codexChild}`, 6, { ...codex, nativeForkSourceThreadId: codexParent });
+  replaceConversationCatalog([main, one, two, nested, thread, fork, make("out-of-project", 12, { parent: main.path, project: "other" })]);
+  const base = `http://127.0.0.1/api/conversations?project=${project}&view=tree&limit=1`;
+  const roots = `${base}&branch=roots`;
+  const children = (parent: string) => `${base}&branch=children&parent=${encodeURIComponent(parent)}`;
+  const json = async (url: string) => (await GET(new Request(url))).json();
+  const firstRoot = await json(roots);
+  expect(firstRoot).toMatchObject({ items: [{ path: main.path, parent: null, directChildCount: 2 }], total: 2, projectTotal: 6 });
+  const firstChild = await json(children(main.path));
+  expect(firstChild).toMatchObject({ items: [{ path: one.path, parent: main.path, directChildCount: 1 }], total: 2, projectTotal: 6 });
+  const rootCursor = `&cursor=${firstRoot.nextCursor}`;
+  const childCursor = `&cursor=${firstChild.nextCursor}`;
+  expect((await GET(new Request(children(main.path) + rootCursor))).status).toBe(409);
+  expect((await GET(new Request(children(thread.path) + childCursor))).status).toBe(409);
+  expect(await json(roots + rootCursor)).toMatchObject({ items: [{ path: thread.path, engine: "codex", directChildCount: 1 }], nextCursor: null });
+  expect(await json(children(main.path) + childCursor)).toMatchObject({ items: [{ path: two.path, directChildCount: 0 }], nextCursor: null });
+  expect(await json(children(thread.path))).toMatchObject({ items: [{ path: fork.path, parent: thread.path, engine: "codex" }], total: 1 });
+  expect(await json(children(one.path))).toMatchObject({ items: [{ path: nested.path, parent: one.path }], total: 1 });
+  expect(await json(children("/absent/example.jsonl"))).toMatchObject({ items: [], nextCursor: null, total: 0 });
+});
 
 test("ordinary cursor pages still hydrate their own transcript titles", async () => {
   const entries = [1, 2].map(n => {

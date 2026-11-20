@@ -202,6 +202,8 @@ export interface FileEntry {
   fmt: Fmt;
   /** Absolute path of the parent node (tree link) or null for roots. */
   parent: string | null;
+  /** Direct descendants in the scoped catalog, before paginating a chat branch. */
+  directChildCount?: number;
   /** Durable lineage tombstone when the parent conversation transcript is gone. */
   parentRemoved?: { conversationId: string; path: string | null };
   /** How this conversation came to exist (issue #339 board provenance):

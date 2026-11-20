@@ -25209,6 +25209,25 @@ describe("chat pull requests on the board and in the project rail", () => {
         await page.keyboard.press("Escape");
         await panel.waitFor({ state: "hidden" });
         expect(await badge.evaluate(node => node === document.activeElement)).toBe(true);
+        const rail = page.locator("[data-rail-chats]");
+        const branch = rail.getByRole("button", { name: /Dependent chats for Sort the reports/ });
+        const branchLabel = await branch.getAttribute("aria-label");
+        expect(await rail.locator("[data-engine-mark=claude]").count()).toBe(1);
+        await branch.click();
+        await rail.getByText("Review the report").waitFor();
+        await rail.getByRole("button", { name: "Load more dependent chats" }).click();
+        await rail.getByText("Test the report export").waitFor();
+        expect(await rail.locator("[data-engine-mark=codex]").count()).toBe(1);
+        expect(await rail.getByRole("button", { name: "Load more main chats" }).isVisible()).toBe(true);
+        await branch.click();
+        expect(await rail.getByText("Test the report export").isVisible()).toBe(false);
+        await rail.getByRole("button", { name: "Load more main chats" }).click();
+        await rail.getByText("Plan the next report").waitFor();
+        await branch.click();
+        expect(await rail.getByText("Test the report export").isVisible()).toBe(true);
+        expect(await branch.getAttribute("aria-label")).toBe(branchLabel);
+        expect(await rail.locator("[data-chat-pr-badge]").textContent()).toBe("2");
+        await page.screenshot({ path: path.join(out, "chat-branches.png") });
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }

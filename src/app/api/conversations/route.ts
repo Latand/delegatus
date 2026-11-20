@@ -21,10 +21,6 @@ function pageLimit(value: string | null): number | undefined {
 
 async function workspaceGET(request: Request): Promise<Response> {
   const url = new URL(request.url);
-  if (!conversationCatalogReady()) await refreshConversationCatalog();
-  // Cursor pages keep their frozen ordering. New reads reconcile membership
-  // before selecting a page, without paying a full scan for transcript appends.
-  if (!url.searchParams.get("cursor")) await refreshFileCatalogMembership();
   const query = url.searchParams.get("q")?.trim() || undefined;
   /* The orchestrator's parallel selves leave nothing in the conversation lists
      (docs/design/ghost-seat.md §5): each is a fork of the seat in the seat's
@@ -32,10 +28,23 @@ async function workspaceGET(request: Request): Promise<Response> {
      id and searchable through search_transcripts. An unreadable deputy file
      hides nothing. */
   const tree = url.searchParams.get("view") === "tree" && !query;
+  const project = url.searchParams.get("project")?.trim() || undefined;
+  const branchMode = url.searchParams.get("branch");
+  const parent = url.searchParams.get("parent");
+  if (branchMode !== null && (!tree || !project || (branchMode === "roots" ? parent !== null
+    : branchMode !== "children" || !parent || parent.length > 2048))) {
+    return Response.json({ error: "invalid chat branch selection" }, { status: 400 });
+  }
+  const branch = branchMode === null ? undefined : { parent };
+  if (!conversationCatalogReady()) await refreshConversationCatalog();
+  // Cursor pages keep their frozen ordering. New reads reconcile membership
+  // before selecting a page, without paying a full scan for transcript appends.
+  if (!url.searchParams.get("cursor")) await refreshFileCatalogMembership();
   const deputies = deputyConversationRefs();
   const hiddenPaths = new Set(deputies?.paths ?? []);
   const hiddenIds = new Set(deputies?.conversationIds ?? []);
-  const source = filterWorkspaceRows(requestWorkspaceScope(request), conversationCatalogSnapshot()).filter((entry) => !hiddenPaths.has(entry.path));
+  const cursor = url.searchParams.get("cursor");
+  const source = cursor ? [] : filterWorkspaceRows(requestWorkspaceScope(request), conversationCatalogSnapshot()).filter((entry) => !hiddenPaths.has(entry.path));
   const hydrateSearchText = (entry: (typeof source)[number]) => {
     const text = searchTextForTranscript(entry.path, entry.size, entry.engine);
     return {
@@ -48,9 +57,10 @@ async function workspaceGET(request: Request): Promise<Response> {
   const options = {
     authorityScope: scope ? JSON.stringify([scope.memberId, scope.projectFilter, tree]) : tree ? "tree" : "",
     tree,
-    project: url.searchParams.get("project")?.trim() || undefined,
+    branch,
+    project,
     query,
-    cursor: url.searchParams.get("cursor"),
+    cursor,
     limit: pageLimit(url.searchParams.get("limit")),
   };
   try {
@@ -104,7 +114,8 @@ async function workspaceGET(request: Request): Promise<Response> {
        can be addressed by another path than the one the record holds: its
        conversation id catches both. */
     const currentScope = requestWorkspaceScope(request);
-    let shown = filterWorkspaceRows(currentScope, page.items).filter((item) => !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
+    let shown = filterWorkspaceRows(currentScope, page.items).filter((item) =>
+      (!branch || item.project === project) && !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
     if (tree && currentScope && !currentScope.owner) {
       const ownership = sessionProjectProjection().projectByPath;
       shown = shown.map(item => {
