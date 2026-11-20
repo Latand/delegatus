@@ -1039,6 +1039,7 @@ class CheckoutIntegration(unittest.TestCase):
             ("unknown", {"code": 143, "signal": None}, False, "fail", True, False),
             ("idle", {"code": 143, "signal": None}, True, "pass", False, False),
             ("idle", {"code": 0, "signal": None}, False, "pass", False, False),
+            ("idle", {"code": 0, "signal": 9}, False, "pass", False, False),
         ]:
             with self.subTest(turn_state=turn_state, exit_record=exit_record, has_receipt=has_receipt):
                 self.setUp()

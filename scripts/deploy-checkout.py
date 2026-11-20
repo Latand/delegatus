@@ -1917,7 +1917,7 @@ class Checkout:
                         # The cleanup is receipted, but its effect on work we
                         # could not classify is still uncertain.
                         evidence["custodyUnknown"] = True
-                if (detail["exit"]["signal"] and detail["exit"]["signal"].upper() != "EOF"
+                if (isinstance(detail["exit"]["signal"], str) and detail["exit"]["signal"].upper() != "EOF"
                         and not detail["exit"]["stopPath"]):
                     evidence["custodyChanged"] = True
                     if scope and evidence["unitLeftActive"] and scope not in evidence["scopeStopped"]:
