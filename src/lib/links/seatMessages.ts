@@ -58,17 +58,20 @@ function refuse(code: string, message: string): never { throw new SeatMessageRef
 export function seatMessageTextValid(text: string): boolean { return text.length <= 8_000 && !!text.trim() && !/<!--\s*llv:|\[bridge\b/i.test(text); }
 
 /** Resolve and refuse before binding a logical MCP request. `null` is local. */
-export function resolveSeatMessageMachine(machine: string, project: string): LinkedPeer | null {
+export function resolveSeatMessageMachine(machine: string, project: string, options: { exactInstallOnly?: boolean } = {}): LinkedPeer | null {
   const context = linkedContext();
   const wanted = machine.trim().toLowerCase();
-  if (wanted === "here" || wanted === context.self?.id) return null;
+  if (wanted === "here") return null;
   // Full install IDs disambiguate labels and prefixes.
   const exact = context.links.filter(link => wanted === link.install);
-  // A UUID-shaped selector is always an install ID. If that install vanished
-  // between MCP binding and HTTP admission, never reinterpret it as a label.
-  const byName = exact.length === 0 && !UUID.test(wanted);
+  // Fresh selectors may be UUID-shaped labels. A previously bound remote
+  // target opts into exact identity so a vanished install cannot resolve to a
+  // different peer whose label happens to equal that install ID.
+  const byName = exact.length === 0 && !options.exactInstallOnly;
   const matches = byName ? context.links.filter(link => wanted === link.label.trim().toLowerCase() || wanted === link.prefix) : exact;
-  const local = byName && (wanted === "this machine" || wanted === readSelf()?.label.trim().toLowerCase());
+  const self = context.self;
+  const selfLabel = readSelf()?.label.trim().toLowerCase();
+  const local = byName && (wanted === "this machine" || wanted === selfLabel || wanted === self?.id);
   if (!matches.length) {
     if (local) return null;
     const revoked = peerRows().some(peer => peer.state === "revoked" && [peer.id, peer.install, peer.install.slice(0, 8), peer.label.trim().toLowerCase()].includes(wanted));

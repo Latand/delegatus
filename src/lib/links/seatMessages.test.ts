@@ -16,6 +16,7 @@ let sequence = 0;
 const project = projectIdentityFromRemote("https://code.example.test/acme/widget", root)!;
 const selfId = ["11223344", "5566", "4777", "8899", "aabbccddeeff"].join("-");
 const peerId = ["00112233", "4455", "4677", "8899", "aabbccddeeff"].join("-");
+const uuidLabel = () => ["33333333", "3333", "4333", "8333", "333333333333"].join("-");
 const link: LinkedPeer = { key: "peer:fixture", side: "peer", id: "fixture", install: peerId, prefix: "00112233", label: "Other", projects: new Set([project.project]) };
 function labelSelf(label: string) {
   atomicWrite(path.join(process.env.LLV_STATE_DIR!, "links/self.json"), { v: 1, installId: selfId, label, publicUrl: null });
@@ -47,6 +48,35 @@ test("an unambiguous label or install prefix resolves to the linked peer", () =>
   for (const machine of [link.label, link.prefix]) {
     expect(resolveSeatMessageMachine(machine, project.project)).toMatchObject({ install: peerId });
   }
+});
+
+test("a fresh UUID-shaped peer label resolves when no installation owns that ID", () => {
+  const label = uuidLabel();
+  const peers = readPeers(); peers.peers[0]!.label = label; writePeers(peers);
+  expect(resolveSeatMessageMachine(label, project.project)).toMatchObject({ install: peerId });
+});
+
+test("a UUID-shaped label shared by self and peer is refused with both install IDs", () => {
+  const label = uuidLabel();
+  labelSelf(label);
+  const peers = readPeers(); peers.peers[0]!.label = label; writePeers(peers);
+  try {
+    resolveSeatMessageMachine(label, project.project);
+  } catch (error) {
+    expect(error).toBeInstanceOf(SeatMessageRefusal);
+    expect(error).toMatchObject({ code: "machine_ambiguous" });
+    expect((error as Error).message).toContain(selfId);
+    expect((error as Error).message).toContain(peerId);
+    return;
+  }
+  throw new Error("Expected machine_ambiguous for the shared UUID-shaped label");
+});
+
+test("a bound remote selector requires its exact install even when another peer label matches it", () => {
+  const vanishedId = uuidLabel();
+  const peers = readPeers(); peers.peers[0]!.label = vanishedId; writePeers(peers);
+  expect(() => resolveSeatMessageMachine(vanishedId, project.project, { exactInstallOnly: true }))
+    .toThrow(expect.objectContaining({ code: "machine_unknown" }));
 });
 
 test("here, the local install id and an unambiguous local label resolve locally", () => {
