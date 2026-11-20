@@ -210,6 +210,7 @@ describe("MCP tool service", () => {
         String(index),
       ],
       cwd: import.meta.dir,
+      // Keep all contenders inside the gate's task budget and isolate state.
       env: concurrentChildEnv(path.join(directory, "state", String(index))),
       stdout: "pipe",
       stderr: "pipe",
@@ -328,6 +329,7 @@ describe("MCP tool service", () => {
           path.join(directory, `${schema.name}-result-${index}.json`), String(index), key,
         ],
         cwd: import.meta.dir,
+        // Keep all contenders inside the gate's task budget and isolate state.
         env: concurrentChildEnv(path.join(directory, "state", schema.name, String(index))),
         stdout: "pipe",
         stderr: "pipe",

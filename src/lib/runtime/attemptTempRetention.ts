@@ -10,7 +10,7 @@ import { allocatedAttemptBytes, attemptReferencesClear, attemptProcessReferences
   privilegedCleanupUnavailable, snapshotAttemptProtection, closedAttemptProtection, removeAttemptTree, RepositoryLinkInventory, ledgerLinkedEvidence,
   type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
-import { preserveAttemptEvidence } from "./attemptTempEvidence";
+import { preserveAttemptEvidence, type AttemptEvidenceSelection } from "./attemptTempEvidence";
 import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
 import { trackSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
 import { AttemptRetentionReporting } from "./attemptRetentionReporting";
@@ -29,6 +29,15 @@ import { ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS } from "./attemptScratchPolicy";
 export type AttemptTempState = "live" | "settled" | "closed" | "expired" | "orphan" | "unknown";
 export type AttemptTempAuthority = { state: AttemptTempState; expiresAt?: number | null; revision: string; isCurrent: () => boolean };
 const authorityDisposition = (state: AttemptTempState): "live" | "held" => state === "live" ? "live" : "held";
+function attemptEvidenceLane(pipelineId: string | null) {
+  if (!pipelineId) return {};
+  try {
+    const reader = pipelineRecordReader(pipelineId), version = reader.version();
+    const repoDir = reader.read()?.repoDir;
+    return { repoDir, repoCurrent: () => reader.version() === version };
+  } catch { return {}; } // Repository provenance is optional for preservation.
+}
+
 export type AttemptTempOwner = {
   directory: string;
   pipelineId: string | null;
@@ -495,6 +504,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     deferred: 0, deferredBytes: 0, held: 0, liveHeld: 0, liveHeldBytes: 0,
     evidenceHeld: 0, evidenceHeldBytes: 0, operatorHeld: 0, operatorHeldBytes: 0, otherHeldBytes: 0,
     errors: adoption.errors, failedBytes: 0, unexaminedBytes: 0,
+    evidenceSelections: {} as Record<string, AttemptEvidenceSelection>,
     bytes: store.bytes(), capBytes, configuredCapBytes, overCapBytes: 0, inventoryWalks: 0, outcomes: [] as Outcome[],
     pressure, lowSpace, freeBytes, lowSpaceThresholdBytes: ATTEMPT_TEMP_LOW_SPACE_BYTES, spaceError,
     rootBudgetMs: pressure ? ATTEMPT_TEMP_ROOT_BUDGET_MS : null,
@@ -749,7 +759,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         catch (error) {
           const code = (error as NodeJS.ErrnoException).code;
           if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
-            disposition = "live";
+            disposition = "operator";
             // The detail names what vanished or refused: a process cwd or a
             // consumer checkout whose process is still alive.
             reason = `consumer checkout became unreadable during retirement: ${attemptTempFailureDetail(error)}`.slice(0, 512);
@@ -817,9 +827,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         checkBudget();
         if (!await observeReferences(directory)) return false;
         checkBudget();
-        const evidence = pressure || options.mode === "dry-run" || state === "expired" ? { current: protection.current, namespaceOnly: false, destination: undefined }
+        const evidence = pressure || options.mode === "dry-run" || state === "expired"
+          ? { current: protection.current, namespaceOnly: false, destination: undefined, selection: undefined }
           : await preserveAttemptEvidence(directory, owner.directory, owner.identity, {
-            pipelineId: owner.pipelineId, launchId: owner.launchId, register: destination => {
+            pipelineId: owner.pipelineId, launchId: owner.launchId, ...attemptEvidenceLane(owner.pipelineId), register: destination => {
               const prior = store.copy(destination);
               const createdAt = prior?.createdAt ?? now();
               const expiresAt = owner.pipelineId ? retentionExpiry : createdAt + retentionMs;
@@ -828,6 +839,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
                 checkedAt: expiresAt ?? now() + 3600000, bytes: prior?.bytes ?? 0 });
             },
           });
+        if (evidence.selection?.skippedTracked.count || evidence.selection?.selectionFallback)
+          report.evidenceSelections[owner.directory] = evidence.selection;
         if (evidence.destination) {
           const copy = store.copy(evidence.destination)!;
           store.registerCopy({ ...copy, bytes: await allocatedAttemptBytes(evidence.destination) });
