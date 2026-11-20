@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { BACKEND_INSTRUCTIONS, backendRequest, COMPANION_TOOLS, LIVE_API_VERSION, LIVE_BACKEND_MODEL, LIVE_MODEL, liveSessionConfiguration, PROTOTYPE_BACKEND_RULES, PROTOTYPE_LIVE_RULES } from "./sessionConfig";
+import { BACKEND_INSTRUCTIONS, backendRequest, COMPANION_TOOLS, LIVE_API_VERSION, LIVE_BACKEND_MODEL, liveSessionConfiguration, PROTOTYPE_BACKEND_RULES, PROTOTYPE_LIVE_RULES } from "./sessionConfig";
 import { z } from "zod";
 import { VOICE_ASK_MAX_CHARS } from "./liveGate";
 import { codexVoiceStart, codexVoiceThread } from "./codexProvider";
@@ -32,13 +32,13 @@ test("Live delegates to this server, which runs the backend itself with the regi
 
 test("the Live configuration exposes the explicit read allowlist and the delegation tools with calm speech instructions", () => {
   expect(LIVE_API_VERSION).toBe("v1/live");
-  expect(LIVE_MODEL).toBe("gpt-live-1");
   expect(COMPANION_TOOLS.map(tool => tool.name)).toEqual([
     "list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "orchestrator_actions", "search_transcripts", "read_prototype_review", "view_prototype_frame",
     "agent_fleet", "get_orchestrator", "list_projects", "show_orchestrator_message", "relay_owner_history", "call_clock", "orchestrator_reports", "reread_orchestrator_report", "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "timer", "end_conversation",
   ]);
   for (const locale of ["en", "uk"] as const) {
     const config = liveSessionConfiguration(locale);
+    expect(config.model).toBe("gpt-live-1.1");
     expect(config.store).toBe(false);
     expect(config.client.data_channel.allowed_client_events).toEqual([]);
     expect(backendRequest([]).tools.every(tool => tool.parameters.additionalProperties === false)).toBe(true);

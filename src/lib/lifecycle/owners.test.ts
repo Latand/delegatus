@@ -5,7 +5,7 @@ import { expect, test } from "bun:test";
 import type { AgentRegistryEntry, RegistryFile, SpawnReceipt } from "@/lib/agent/registry";
 import type { Flow } from "@/lib/flows/types";
 
-import { censusIndex, entryOwners, ownerProcessAlive, registryOwners, type CensusViewer } from "./owners";
+import { censusIndex, entryOwners, ownerProcessAlive, readOwnerCensus, registryOwners, type CensusViewer } from "./owners";
 
 const NOW = Date.parse("2026-07-26T08:40:00.000Z");
 const START = "start-token";
@@ -152,8 +152,9 @@ test("a reference reaches every owner bound to its conversation, path or key, an
     conversations: { conversation_host: conversation } as never,
     conversationAliases: { conversation_before: "conversation_host" } as never,
   });
-  const census = registryOwners(file, [], probe(true));
-  const index = censusIndex(file);
+  const { census, index } = readOwnerCensus(file, [], probe(true), null);
+  expect(index.generationEngine("/sessions/earlier.jsonl")).toBe("codex");
+  expect(index.generationEngine("/sessions/continuity.jsonl")).toBeUndefined();
   const pids = (reference: Parameters<typeof index.boundTo>[1]) => index.boundTo(census.owners, reference).map((owner) => owner.pid).sort();
   expect(pids({ conversationId: "conversation_host" })).toEqual([4241, 4242, 4244]);
   expect(pids({ conversationId: "conversation_before" })).toEqual([4241, 4242, 4244]);

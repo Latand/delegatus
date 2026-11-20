@@ -37,6 +37,28 @@ test("sandbox homes, state and gate locks cannot split the default machine pool"
   expect(checkAdmissionFile({ LLV_CHECK_ADMISSION_FILE: "fixture.sqlite" })).toBe("fixture.sqlite");
 });
 
+test("an unchanged saturated queue checks liveness without committing another database write", () => {
+  const f = fixture();
+  const queue = new CheckAdmission(f.file, { status: () => "alive", exited: () => false });
+  const reader = new Database(f.file, { readonly: true });
+  const counter = () => reader.query("SELECT seq FROM sqlite_sequence WHERE name='checks'").get();
+  const version = () => reader.query("PRAGMA data_version").get();
+  try {
+    const holder = identity(101), waiter = identity(102);
+    expect(queue.claim(holder, 1)).toBe(true);
+    expect(queue.claim(waiter, 1)).toBe(false);
+    const initialVersion = version(), initialSequence = counter();
+    for (let n = 0; n < 5; n++) expect(queue.claim(waiter, 1)).toBe(false);
+    expect(version()).toEqual(initialVersion);
+    expect(counter()).toEqual(initialSequence);
+    queue.cancel(holder);
+    expect(queue.claim(waiter, 1)).toBe(true);
+    expect(version()).not.toEqual(initialVersion);
+  } finally {
+    reader.close(); queue.close(); f.close();
+  }
+});
+
 test("FIFO persists through reopen; unknown holders stay and dead or reused owners are reclaimed", () => {
   const f = fixture();
   const state = new Map<string, ProcessIdentityStatus>();

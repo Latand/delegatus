@@ -437,7 +437,7 @@ function scanShipment(tree: Tree, shipment: Shipment, env: Env, until: number, b
       if (left <= 0) return unfinished();
       const result = spawnSync(process.execPath, [path.join(scan, "scripts", "privacy-publication-gate.ts"), ...args], {
         cwd: scan, encoding: "utf8", timeout: left, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024,
-        env: asProcessEnv({ ...gitEnvironment(env), LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(scan, "scripts", "privacy-known-value-fingerprints.json"), LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr", LLV_GATE_RUNNER: "off" }),
+        env: asProcessEnv({ ...gitEnvironment(env), LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(scan, "scripts", "privacy-known-value-fingerprints.json"), LLV_GATE_RUNNER: "off" }),
       });
       if (result.status === 0) return { ok: true };
       if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT" || Date.now() >= until) return unfinished();

@@ -1,11 +1,13 @@
 import { jsonObject } from "./provider";
 
-/** Standard global rates verified 2026-10-10. Configuration pins default
+/** GPT-Live active rate for the duration estimate, verified 2026-11-19.
+ * https://developers.openai.com/api/docs/pricing#audio */
+export const LIVE_USD_PER_SECOND = 0.05 / 60;
+
+/** Standard global backend rates verified 2026-10-10. Configuration pins default
  * service tier and exposes no hosted paid tools.
  * https://developers.openai.com/api/docs/pricing
- * https://developers.openai.com/api/docs/models/gpt-live-1
  * https://developers.openai.com/api/docs/models/gpt-6-luna */
-export const LIVE_USD_PER_SECOND = 0.05 / 60;
 export const BACKEND_MAX_OUTPUT_TOKENS = 2_048;
 /** The dearest one backend response can be: the model's whole context window
  * at the large-input rate for a cache write, plus every allowed output token. */
