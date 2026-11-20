@@ -474,12 +474,12 @@ interface RegistryFileReaders {
   openDelivery?: WeakMap<object, (conversationId: string, states: readonly string[], after: string, limit: number) => string[]>;
   page?: WeakMap<object, (collection: RowCollection, after: string, limit: number, filter?: RegistryKeyFilter) => string[]>;
   path: WeakMap<object, (path: string) => string[]>;
-  entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
+  entryKey: WeakMap<object, (entryKey: string) => string[]>;
   coldKey: WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>;
   endedOwner: WeakMap<RegistryFile, (since: string, page?: { limit: number; after?: string }) => string[]>;
   startupSelection: WeakMap<RegistryFile, () => boolean>;
   projection: WeakMap<object, ProjectionReader>;
-  liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
+  liveness: WeakMap<object, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
 }
 /* Next standalone evaluates instrumentation and route handlers in separate
    bundle realms, each with its own copy of this module, while the process
@@ -524,8 +524,18 @@ export interface RegistryRowProjector<C extends RowCollection, T> {
   project(row: RegistryFile[C][string]): T;
 }
 
+export type DeepReadonly<T> = T extends (...args: never[]) => unknown
+  ? T
+  : T extends readonly (infer U)[]
+    ? readonly DeepReadonly<U>[]
+    : T extends object
+      ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+      : T;
+
+export type ReadonlyRegistryFile = DeepReadonly<RegistryFile>;
+
 /** Bounded ordered keys. The SQLite path reads only primary-key cells. */
-export function registryCollectionPage(file: RegistryFile, collection: RowCollection, after = "", limit = 32, filter?: RegistryKeyFilter): string[] {
+export function registryCollectionPage(file: RegistryFile | ReadonlyRegistryFile, collection: RowCollection, after = "", limit = 32, filter?: RegistryKeyFilter): string[] {
   const bounded = Math.max(1, Math.min(256, limit));
   const reader = pageReaders.get(file);
   if (reader) return reader(collection, after, bounded, filter);
@@ -712,7 +722,9 @@ class RegistryReaderViews {
 }
 
 /** Indexed selection inside the same lazy transaction, including pending writes. */
-export function registryRowsMatching<C extends RowCollection>(file: Pick<RegistryFile, C>, collection: C, field: LookupField, value: LookupValue): RegistryFile[C][string][] {
+export function registryRowsMatching<C extends RowCollection>(file: Pick<RegistryFile, C>, collection: C, field: LookupField, value: LookupValue): RegistryFile[C][string][];
+export function registryRowsMatching<C extends RowCollection>(file: Pick<ReadonlyRegistryFile, C>, collection: C, field: LookupField, value: LookupValue): DeepReadonly<RegistryFile[C][string]>[];
+export function registryRowsMatching<C extends RowCollection>(file: Pick<RegistryFile, C> | Pick<ReadonlyRegistryFile, C>, collection: C, field: LookupField, value: LookupValue): RegistryFile[C][string][] | DeepReadonly<RegistryFile[C][string]>[] {
   const keys = registryKeysMatching(file, collection, field, value);
   const rows = (file[collection] ?? {}) as Record<string, RegistryFile[C][string]>;
   return keys.map(key => rows[key]!).filter(Boolean);
@@ -727,18 +739,23 @@ export function registryLivenessRows(file: RegistryFile): { entries: AgentRegist
   return read ? read() : { entries: Object.values(file.entries ?? {}), receipts: Object.values(file.receipts ?? {}) };
 }
 
+export function registryLivenessRowsReadonly(file: ReadonlyRegistryFile): { entries: readonly DeepReadonly<AgentRegistryEntry>[]; receipts: readonly DeepReadonly<RegistryFile["receipts"][string]>[] } {
+  const read = livenessReaders.get(file);
+  return read ? read() : { entries: Object.values(file.entries ?? {}), receipts: Object.values(file.receipts ?? {}) };
+}
+
 /** Whether this view can select rows without expanding the whole collection. */
 export function registryHasLookupIndex(file: object): boolean {
   return keyedReaders.has(file);
 }
 
-export function registryKeysMatching<C extends RowCollection>(file: Pick<RegistryFile, C>, collection: C, field: LookupField, value: LookupValue): string[] {
+export function registryKeysMatching<C extends RowCollection>(file: Pick<RegistryFile, C> | Pick<ReadonlyRegistryFile, C>, collection: C, field: LookupField, value: LookupValue): string[] {
   return keyedReaders.get(file)?.(collection, field, value) ?? Object.entries(file[collection] ?? {}).filter(([, row]) => (typeof value === "string" ? [value] : value).includes(lookupValue(row, field) as string)).map(([key]) => key);
 }
 
 /** A separate seek for each state keeps settled history outside the scan.
  * Each state contributes at most one page before the caller merges it. */
-export function registryOpenDeliveryKeys(file: RegistryFile, conversationId: string, states: readonly string[], after: string, limit: number): string[] {
+export function registryOpenDeliveryKeys(file: RegistryFile | ReadonlyRegistryFile, conversationId: string, states: readonly string[], after: string, limit: number): string[] {
   const reader = openDeliveryReaders.get(file);
   if (reader) return reader(conversationId, states, after, limit);
   return registryKeysMatching(file, "heldDeliveries", "conversationId", conversationId)
@@ -794,11 +811,13 @@ function lookupValue(row: unknown, field: LookupField): unknown {
 
 /** Whether path lookups on this file read the relational path index rather
     than enumerating every conversation, cold history included. */
-export function registryHasPathIndex(file: Pick<RegistryFile, "conversations">): boolean {
+export function registryHasPathIndex(file: Pick<RegistryFile, "conversations"> | Pick<ReadonlyRegistryFile, "conversations">): boolean {
   return pathReaders.has(file);
 }
 
-export function registryConversationsForPath(file: Pick<RegistryFile, "conversations">, path: string): RegistryFile["conversations"][string][] {
+export function registryConversationsForPath(file: Pick<RegistryFile, "conversations">, path: string): RegistryFile["conversations"][string][];
+export function registryConversationsForPath(file: Pick<ReadonlyRegistryFile, "conversations">, path: string): DeepReadonly<RegistryFile["conversations"][string]>[];
+export function registryConversationsForPath(file: Pick<RegistryFile, "conversations"> | Pick<ReadonlyRegistryFile, "conversations">, path: string): RegistryFile["conversations"][string][] | DeepReadonly<RegistryFile["conversations"][string]>[] {
   const keys = pathReaders.get(file)?.(path);
   return keys ? keys.map(key => file.conversations[key]!).filter(Boolean) : Object.values(file.conversations).filter(row =>
     row.generations.some(generation => generation.path === path) || row.continuityPaths.includes(path));
@@ -808,7 +827,9 @@ export function registryConversationsForPath(file: Pick<RegistryFile, "conversat
     (`engine:sessionId`), in collection order. Over SQLite this reads the
     generation identity index rather than enumerating every conversation, cold
     history included; a plain file is enumerated. */
-export function registryConversationsForEntryKey(file: RegistryFile, entryKey: string): RegistryFile["conversations"][string][] {
+export function registryConversationsForEntryKey(file: RegistryFile, entryKey: string): RegistryFile["conversations"][string][];
+export function registryConversationsForEntryKey(file: ReadonlyRegistryFile, entryKey: string): DeepReadonly<RegistryFile["conversations"][string]>[];
+export function registryConversationsForEntryKey(file: RegistryFile | ReadonlyRegistryFile, entryKey: string): RegistryFile["conversations"][string][] | DeepReadonly<RegistryFile["conversations"][string]>[] {
   const keys = entryKeyReaders.get(file)?.(entryKey);
   return keys ? keys.map(key => file.conversations[key]!).filter(Boolean) : Object.values(file.conversations).filter(row =>
     row.generations.some(generation => `${row.engine}:${generation.id}` === entryKey));
@@ -901,7 +922,8 @@ const PREPARED_REPLAY_CHANGES = 256;
 
 type StoredRow = { collection: string; row_key: string; value_json: string; row_order: number };
 type MetaRow = { key: string; value: string };
-type CachedRow = { valueJson: string; parsed: unknown };
+type NormalizedCachedRow = { has: false; claimsBeyondBaseline: false } | { has: true; value: unknown; claimsBeyondBaseline: boolean };
+type CachedRow = { valueJson: string; parsed: unknown; normalized?: NormalizedCachedRow };
 
 /** Per grant-bearing row, the stored JSON it was decided from and the MCP lists
     the assembled decision left on it: one for an entry or a receipt, one per
@@ -1430,6 +1452,8 @@ export class SqliteAgentRegistryStore {
   private onRowPayloadParse: ((collection: RowCollection, count: number) => void) | undefined;
   private onRevisionQuery: (() => void) | undefined;
   private readonly rowCache = new Map<RowCollection, Map<string, CachedRow>>();
+  private readonly metaCache = new Map<(typeof META_FIELDS)[number], { valueJson: string | null; value: unknown }>();
+  private emptyTemplateCache: RegistryFile | null = null;
   private revisionCache: { signature: string; revision: number } | null = null;
   /** Stamped like the grant record: a complete snapshot is only ever handed
       out again over exactly the database it was loaded from. */
@@ -2200,6 +2224,7 @@ export class SqliteAgentRegistryStore {
     // it replaced. No parsed row or assembled grant from the old inode holds.
     for (const rows of this.rowCache.values()) rows.clear();
     this.rowCache.clear();
+    this.metaCache.clear();
     this.revisionCache = null;
     this.readOnlyCache = null;
     this.writerSnapshotCache = null;
@@ -4813,8 +4838,26 @@ export class SqliteAgentRegistryStore {
     if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const skipColdKeyInitialization = options.skipColdKeyInitialization === true;
-      if (this.changesReady && !skipColdKeyInitialization) this.refreshColdKeys();
-      const result = reader(this.loadLazyInTransaction(true, !skipColdKeyInitialization, true, skipColdKeyInitialization).file);
+      const result = reader(this.loadLazyInTransaction(true, !skipColdKeyInitialization, true, skipColdKeyInitialization, false).file);
+      if (ownsTransaction) this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      throw error;
+    }
+  }
+
+  /** Explicitly immutable keyed read boundary for audited read-only consumers.
+      Enforces read-only access at the root file, every collection proxy, every
+      row and every meta field, allowing warm hot baseline rows to be reused
+      without deep cloning while preserving caller-owned mutable copies on
+      {@link read}. */
+  readImmutable<T>(reader: (file: ReadonlyRegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
+    try {
+      const skipColdKeyInitialization = options.skipColdKeyInitialization === true;
+      const result = reader(this.loadLazyInTransaction(true, !skipColdKeyInitialization, true, skipColdKeyInitialization, true).file as ReadonlyRegistryFile);
       if (ownsTransaction) this.db.exec("COMMIT");
       return result;
     } catch (error) {
@@ -5663,6 +5706,7 @@ export class SqliteAgentRegistryStore {
       this.secureFiles();
       for (const rows of this.rowCache.values()) rows.clear();
       this.rowCache.clear();
+      this.metaCache.clear();
       this.readOnlyCache = null;
       this.grantDecisions = null;
       this.rememberRevision(revision);
@@ -5713,13 +5757,17 @@ export class SqliteAgentRegistryStore {
     useRowCache = trackMutations,
     readOnly = false,
     skipColdKeyInitialization = false,
+    immutable = false,
   ): LazyRegistrySnapshot {
     if (this.changesReady && !skipColdKeyInitialization) this.refreshColdKeys();
+    const immutableRead = readOnly && immutable;
     /* Branded here because the row ACCESSORS below carry the guarantee: every
        row this file can hand out goes through `admitRow`, which runs the
        assembled decision before returning anything claiming more than the
        baseline. The brand is what lets `persistChanges` accept it. */
-    const file = this.markDecided(this.normalize({ version: 2, entries: {}, receipts: {} }));
+    const file = immutableRead
+      ? this.markDecided({ version: 2 } as RegistryFile)
+      : this.markDecided(this.normalize({ version: 2, entries: {}, receipts: {} }));
     /* The assembled origin re-decision is a PRECONDITION of observing a grant,
        not a step some paths reach later (#739). Rows are normalized one
        collection — one row, even — at a time, so a row loaded lazily has had
@@ -5735,7 +5783,8 @@ export class SqliteAgentRegistryStore {
        than a way around it, and a keyed mutation still reads exactly the one row
        it asked for. The first row that claims anything MORE runs the decision
        over the whole file before it is handed out. */
-    const revision = Number(this.meta("revision") ?? 0);
+    let cachedRevision: number | undefined = readOnly ? undefined : Number(this.meta("revision") ?? 0);
+    const currentRevision = () => cachedRevision ??= Number(this.meta("revision") ?? 0);
     const loadedCollections = new Map<RowCollection, RegistryFile[RowCollection]>();
     const baselineCollections = new Map<RowCollection, Map<string, string | null>>();
     const dirtyRows = new Map<RowCollection, Set<string>>();
@@ -5749,8 +5798,9 @@ export class SqliteAgentRegistryStore {
     let transactionStamp: string | undefined;
     const stamp = () => transactionStamp ??= this.storeStamp();
     const recordHolds = () => {
-      this.refreshGrantDecisions(revision, stamp());
-      return this.grantDecisions?.revision === revision && this.grantDecisions.stamp === stamp();
+      const rev = currentRevision();
+      this.refreshGrantDecisions(rev, stamp());
+      return this.grantDecisions?.revision === rev && this.grantDecisions.stamp === stamp();
     };
     let grantsDecided = false;
     let decidingGrants = false;
@@ -5762,7 +5812,7 @@ export class SqliteAgentRegistryStore {
         reboundAssembledMcpGrants(file, this.mcpGrantPolicy);
         grantsDecided = true;
         if (recordable && this.coldKeys.size === 0) {
-          this.grantDecisions = recordGrantDecisions(file, revision, stamp(), this.grantChangeId(), (collection, key) =>
+          this.grantDecisions = recordGrantDecisions(file, currentRevision(), stamp(), this.grantChangeId(), (collection, key) =>
             this.rowCache.get(collection)?.get(key)?.valueJson);
         }
       } finally {
@@ -5799,7 +5849,7 @@ export class SqliteAgentRegistryStore {
         || !rowClaimsBeyondBaselineGrant(row)) return row;
       // Read-only authority checks need the subject and its independent
       // attestors, including cold evidence, rather than every historical row.
-      if (readOnly && (this.coldKeys.size > 0 || skipColdKeyInitialization) && unchanged()) {
+      if (readOnly && (immutableRead || this.coldKeys.size > 0 || skipColdKeyInitialization) && unchanged()) {
         return this.decideStoredRow(collection,key,row) as T;
       }
       /* A mutation over a registry with cold history decides the same way, over
@@ -5832,8 +5882,9 @@ export class SqliteAgentRegistryStore {
              takes it: it decides the shared parsed rows in place, and a
              mutation persists the rows its decision rewrites. */
           const snapshot = this.loadInTransaction(true);
-          if (this.readOnlyCache?.revision !== revision || this.readOnlyCache.stamp !== stamp()) {
-            this.rememberReadOnly({ file: snapshot.file, revision, stamp: stamp() }, true);
+          const rev = currentRevision();
+          if (this.readOnlyCache?.revision !== rev || this.readOnlyCache.stamp !== stamp()) {
+            this.rememberReadOnly({ file: snapshot.file, revision: rev, stamp: stamp() }, true);
           }
         }
         recordedDecisions = unchanged() && recordHolds() ? this.grantDecisions : null;
@@ -5999,6 +6050,7 @@ export class SqliteAgentRegistryStore {
           let allRowsLoaded = false;
           let storedPayloadRows: Pick<StoredRow, "row_key" | "value_json">[] | null = null;
           const rowProxies = new Map<string, WeakMap<object, object>>();
+          const admittedImmutable = immutableRead ? new Set<string>() : null;
           rawRows.set(collection, key => deleted.has(key) || !Object.hasOwn(rows, key) ? undefined : rows[key]);
           const storedRow = this.db.query<Pick<StoredRow, "value_json">, [string, string]>(
             `SELECT value_json FROM ${this.recordsSource} WHERE collection = ? AND row_key = ?`,
@@ -6021,7 +6073,7 @@ export class SqliteAgentRegistryStore {
           const readBaseline = (key: string): string | null => {
             if (baseline.has(key)) return baseline.get(key)!;
             let stored = storedRow.get(collection, key)?.value_json ?? null;
-            if (stored === null && skipColdKeyInitialization && this.changesReady) {
+            if (stored === null && skipColdKeyInitialization && this.changesReady && this.recordsSource !== "registry_records") {
               stored = this.db.query<{ value_json: string }, [string, string]>(
                 `SELECT a.value_json FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id
                   WHERE c.collection=? AND c.row_key=?`,
@@ -6037,10 +6089,20 @@ export class SqliteAgentRegistryStore {
              the gate sits on the single exit rather than on the load, and no
              route to a row can arrive before the decision it needs. */
           const readRow = (key: string): unknown => {
+            if (admittedImmutable?.has(key)) return rows[key];
             if (!Object.hasOwn(rows, key)) {
               if (deleted.has(key)) return undefined;
               const stored = readBaseline(key);
               if (stored === null && collection !== "deliveryOperationOwners") return undefined;
+              if (immutableRead && stored !== null && collection !== "deliveryOperationOwners") {
+                const cached = this.normalizedImmutableRow(collection, key, stored, useRowCache);
+                if (cached && !cached.claimsBeyondBaseline) {
+                  if (!cached.has) return undefined;
+                  rows[key] = cached.value;
+                  admittedImmutable!.add(key);
+                  return cached.value;
+                }
+              }
               const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
               // Uncached parses already belong to this read; cached rows must stay isolated.
               const parsed = stored === null ? undefined : this.parseRow(collection, key, stored, useRowCache);
@@ -6061,14 +6123,31 @@ export class SqliteAgentRegistryStore {
             }
             /* The decision rewrites `rows[key]` in place where it denies, so the
                caller never holds the undecided object. */
-            return admitRow(collection, key, baseline.get(key), rows[key]);
+            const admitted = admitRow(collection, key, baseline.get(key), rows[key]);
+            if (immutableRead) {
+              rows[key] = deepFreeze(admitted);
+              admittedImmutable!.add(key);
+              return rows[key];
+            }
+            return admitted;
           };
           const loadAllRows = () => {
             if (allRowsLoaded) return;
             const stored = readAllStoredRows();
             const unloaded: Record<string, unknown> = {};
+            let hasUnloaded = false;
             for (const row of stored) {
               if (!Object.hasOwn(rows, row.row_key) && !deleted.has(row.row_key)) {
+                if (immutableRead && collection !== "deliveryOperationOwners") {
+                  const cached = this.normalizedImmutableRow(collection, row.row_key, row.value_json, useRowCache);
+                  if (cached && !cached.claimsBeyondBaseline) {
+                    if (cached.has) {
+                      rows[row.row_key] = cached.value;
+                      admittedImmutable!.add(row.row_key);
+                    }
+                    continue;
+                  }
+                }
                 const parsed = this.parseRow(
                   collection,
                   row.row_key,
@@ -6076,17 +6155,20 @@ export class SqliteAgentRegistryStore {
                   useRowCache,
                 );
                 unloaded[row.row_key] = useRowCache ? structuredClone(parsed) : parsed;
+                hasUnloaded = true;
               }
             }
-            const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
-            input[collection] = unloaded;
-            if (collection === "deliveryOperationOwners") input.heldDeliveries = file.heldDeliveries;
-            const normalized = this.normalizePartial(input)[collection] as Record<string, unknown>;
-            for (const [key, row] of Object.entries(normalized)) {
-              // Owner normalization can synthesize rows from held deliveries.
-              // Those defaults must preserve the transaction's loaded evidence
-              // and must never resurrect a row deleted in this transaction.
-              if (!Object.hasOwn(rows, key) && !deleted.has(key)) rows[key] = row;
+            if (hasUnloaded || collection === "deliveryOperationOwners") {
+              const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
+              input[collection] = unloaded;
+              if (collection === "deliveryOperationOwners") input.heldDeliveries = file.heldDeliveries;
+              const normalized = this.normalizePartial(input)[collection] as Record<string, unknown>;
+              for (const [key, row] of Object.entries(normalized)) {
+                // Owner normalization can synthesize rows from held deliveries.
+                // Those defaults must preserve the transaction's loaded evidence
+                // and must never resurrect a row deleted in this transaction.
+                if (!Object.hasOwn(rows, key) && !deleted.has(key)) rows[key] = row;
+              }
             }
             allRowsLoaded = true;
           };
@@ -6097,56 +6179,80 @@ export class SqliteAgentRegistryStore {
               ...Object.keys(rows).filter((key) => !storedKeySet!.has(key)),
             ];
           };
-          value = new Proxy(rows, {
-            get: (target, property, receiver) => {
-              if (typeof property !== "string") return Reflect.get(target, property, receiver);
-              const row = readRow(property);
-              if (row === undefined) return undefined;
-              let seen = rowProxies.get(property);
-              if (!seen) {
-                seen = new WeakMap<object, object>();
-                rowProxies.set(property, seen);
-              }
-              return trackMutableJson(row, () => dirty.add(property), seen);
-            },
-            set: (target, property, next) => {
-              if (typeof property === "string") {
-                readBaseline(property);
-                dirty.add(property);
-                deleted.delete(property);
-                rowProxies.delete(property);
-              }
-              return Reflect.set(target, property, writableJson(next));
-            },
-            deleteProperty: (target, property) => {
-              if (typeof property === "string") {
-                readBaseline(property);
-                dirty.add(property);
-                deleted.add(property);
-                rowProxies.delete(property);
-              }
-              return Reflect.deleteProperty(target, property);
-            },
-            defineProperty: (target, property, descriptor) => {
-              if (typeof property === "string") {
-                readBaseline(property);
-                dirty.add(property);
-                deleted.delete(property);
-                rowProxies.delete(property);
-              }
-              return Reflect.defineProperty(target, property, writableDescriptor(descriptor));
-            },
-            has: (_target, property) => typeof property === "string"
-              ? readRow(property) !== undefined
-              : Reflect.has(rows, property),
-            ownKeys: () => keys(),
-            getOwnPropertyDescriptor: (_target, property) => {
-              if (typeof property !== "string") return undefined;
-              const row = readRow(property);
-              if (row === undefined) return undefined;
-              return { configurable: true, enumerable: true, writable: true, value: row };
-            },
-          }) as typeof value;
+          const refuseCollectionMutation = (operation: string) => () => {
+            throw new TypeError(`cannot ${operation} immutable registry collection "${collection}"`);
+          };
+          value = immutableRead
+            ? new Proxy(rows, {
+              get: (target, property, receiver) => {
+                if (typeof property !== "string") return Reflect.get(target, property, receiver);
+                return readRow(property);
+              },
+              set: refuseCollectionMutation("assign to"),
+              deleteProperty: refuseCollectionMutation("delete from"),
+              defineProperty: refuseCollectionMutation("define a property on"),
+              setPrototypeOf: refuseCollectionMutation("change the prototype of"),
+              has: (_target, property) => typeof property === "string"
+                ? readRow(property) !== undefined
+                : Reflect.has(rows, property),
+              ownKeys: () => keys(),
+              getOwnPropertyDescriptor: (_target, property) => {
+                if (typeof property !== "string") return undefined;
+                const row = readRow(property);
+                if (row === undefined) return undefined;
+                return { configurable: true, enumerable: true, writable: false, value: row };
+              },
+            }) as typeof value
+            : new Proxy(rows, {
+              get: (target, property, receiver) => {
+                if (typeof property !== "string") return Reflect.get(target, property, receiver);
+                const row = readRow(property);
+                if (row === undefined) return undefined;
+                let seen = rowProxies.get(property);
+                if (!seen) {
+                  seen = new WeakMap<object, object>();
+                  rowProxies.set(property, seen);
+                }
+                return trackMutableJson(row, () => dirty.add(property), seen);
+              },
+              set: (target, property, next) => {
+                if (typeof property === "string") {
+                  readBaseline(property);
+                  dirty.add(property);
+                  deleted.delete(property);
+                  rowProxies.delete(property);
+                }
+                return Reflect.set(target, property, writableJson(next));
+              },
+              deleteProperty: (target, property) => {
+                if (typeof property === "string") {
+                  readBaseline(property);
+                  dirty.add(property);
+                  deleted.add(property);
+                  rowProxies.delete(property);
+                }
+                return Reflect.deleteProperty(target, property);
+              },
+              defineProperty: (target, property, descriptor) => {
+                if (typeof property === "string") {
+                  readBaseline(property);
+                  dirty.add(property);
+                  deleted.delete(property);
+                  rowProxies.delete(property);
+                }
+                return Reflect.defineProperty(target, property, writableDescriptor(descriptor));
+              },
+              has: (_target, property) => typeof property === "string"
+                ? readRow(property) !== undefined
+                : Reflect.has(rows, property),
+              ownKeys: () => keys(),
+              getOwnPropertyDescriptor: (_target, property) => {
+                if (typeof property !== "string") return undefined;
+                const row = readRow(property);
+                if (row === undefined) return undefined;
+                return { configurable: true, enumerable: true, writable: true, value: row };
+              },
+            }) as typeof value;
         }
         loaded = true;
         loadedCollections.set(collection, value);
@@ -6154,7 +6260,7 @@ export class SqliteAgentRegistryStore {
         dirtyRows.set(collection, dirty);
       };
       Object.defineProperty(file, collection, {
-        configurable: true,
+        configurable: !immutableRead,
         enumerable: true,
         get: () => {
           load();
@@ -6165,48 +6271,69 @@ export class SqliteAgentRegistryStore {
           if (!trackMutations && GRANT_COLLECTIONS.has(collection)) decideGrants();
           return value;
         },
-        set: (next: typeof value) => {
-          load();
-          loadAllBaseline();
-          value = writableJson(next);
-          loadedCollections.set(collection, value);
-          reorderedCollections.add(collection);
-        },
+        set: immutableRead
+          ? () => { throw new TypeError(`cannot reassign immutable registry collection "${collection}"`); }
+          : (next: typeof value) => {
+            load();
+            loadAllBaseline();
+            value = writableJson(next);
+            loadedCollections.set(collection, value);
+            reorderedCollections.add(collection);
+          },
       });
     }
     const loadedMeta = new Map<(typeof META_FIELDS)[number], RegistryFile[(typeof META_FIELDS)[number]]>();
     const baselineMeta = new Map<(typeof META_FIELDS)[number], RegistryFile[(typeof META_FIELDS)[number]]>();
     for (const field of META_FIELDS) {
       let loaded = false;
-      let value = file[field];
+      let value = immutableRead ? (undefined as unknown as RegistryFile[typeof field]) : file[field];
       const load = () => {
         if (loaded) return;
         const stored = this.meta(field);
         /* Through the registry's normalizer, as every row is: a meta value
            persisted before an engine existed has no key for it (#2045). */
-        if (stored !== null) value = this.normalize({ version: 2, entries: {}, receipts: {}, [field]: parseSqliteJson(stored, this.db) })[field] as typeof value;
+        if (immutableRead) {
+          const cached = this.metaCache.get(field);
+          if (cached && cached.valueJson === stored) {
+            value = cached.value as typeof value;
+          } else {
+            const computed = stored === null
+              ? this.emptyTemplate()[field]
+              : deepFreeze(this.normalizePartial({ version: 2, entries: {}, receipts: {}, [field]: parseSqliteJson(stored, this.db) })[field]);
+            this.metaCache.set(field, { valueJson: stored, value: computed });
+            value = computed as typeof value;
+          }
+        } else if (stored !== null) {
+          value = this.normalize({ version: 2, entries: {}, receipts: {}, [field]: parseSqliteJson(stored, this.db) })[field] as typeof value;
+        }
         loaded = true;
         loadedMeta.set(field, value);
         /* Only a mutation compares against the baseline. */
-        if (trackMutations) baselineMeta.set(field, structuredClone(value));
+        if (trackMutations && !readOnly) baselineMeta.set(field, structuredClone(value));
       };
       Object.defineProperty(file, field, {
-        configurable: true,
+        configurable: !immutableRead,
         enumerable: true,
         get: () => {
           load();
           return value;
         },
-        set: (next: typeof value) => {
-          load();
-          value = writableJson(next);
-          loadedMeta.set(field, value);
-        },
+        set: immutableRead
+          ? () => { throw new TypeError(`cannot reassign immutable registry meta field "${field}"`); }
+          : (next: typeof value) => {
+            load();
+            value = writableJson(next);
+            loadedMeta.set(field, value);
+          },
       });
+    }
+    if (immutableRead) {
+      Object.defineProperty(file, "version", { configurable: false, enumerable: true, writable: false, value: 2 });
+      Object.preventExtensions(file);
     }
     return {
       file,
-      revision,
+      get revision() { return currentRevision(); },
       changes: () => {
         const changes: RegistryChanges = { rows: new Map(), meta: new Set(), order: new Set() };
         for (const [collection, value] of loadedCollections) {
@@ -6231,6 +6358,53 @@ export class SqliteAgentRegistryStore {
         return changes;
       },
     };
+  }
+
+  private emptyTemplate(): RegistryFile {
+    return this.emptyTemplateCache ??= deepFreeze(this.normalize({ version: 2, entries: {}, receipts: {} }));
+  }
+
+  private normalizedImmutableRow(
+    collection: RowCollection,
+    key: string,
+    valueJson: string,
+    populateCache: boolean,
+  ): NormalizedCachedRow | null {
+    if (collection === "deliveryOperationOwners") return null;
+    let cached: CachedRow | undefined;
+    if (populateCache && !this.coldKeys.has(grantDecisionKey(collection, key))) {
+      let collectionCache = this.rowCache.get(collection);
+      if (!collectionCache) {
+        collectionCache = new MeasuredCache<string, CachedRow>(`rows.${collection}`, "agent/sqliteRegistryStore", entry => entry.valueJson.length * 2, "source-utf16");
+        this.rowCache.set(collection, collectionCache);
+      }
+      cached = collectionCache.get(key);
+      if (!cached || cached.valueJson !== valueJson) {
+        const parsed = parseSqliteJson(valueJson, this.db);
+        this.onRowPayloadParse?.(collection, 1);
+        cached = { valueJson, parsed };
+        collectionCache.set(key, cached);
+      }
+    } else {
+      const existing = this.rowCache.get(collection)?.get(key);
+      if (!existing || existing.valueJson !== valueJson) return null;
+      cached = existing;
+    }
+    if (!cached.normalized) {
+      const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
+      input[collection] = { [key]: structuredClone(cached.parsed) };
+      const normalized = this.normalizePartial(input)[collection] as Record<string, unknown>;
+      if (!Object.hasOwn(normalized, key)) {
+        cached.normalized = { has: false, claimsBeyondBaseline: false };
+      } else {
+        const value = normalized[key];
+        const claimsBeyondBaseline = GRANT_COLLECTIONS.has(collection) && rowClaimsBeyondBaselineGrant(value);
+        cached.normalized = claimsBeyondBaseline
+          ? { has: true, value: undefined, claimsBeyondBaseline: true }
+          : { has: true, value: deepFreeze(value), claimsBeyondBaseline: false };
+      }
+    }
+    return cached.normalized;
   }
 
   private parseRow(

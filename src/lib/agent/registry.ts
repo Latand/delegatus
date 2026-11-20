@@ -120,7 +120,8 @@ import {
   registryCollectionPage, type RowCollection,
   registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryOpenDeliveryKeys, registryHasDeliveryPredecessor, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
-  sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection,
+  sqliteRegistryStoreImported, registryLivenessRows, registryLivenessRowsReadonly, registryRowProjection,
+  type DeepReadonly, type ReadonlyRegistryFile,
   type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
@@ -1876,7 +1877,18 @@ function sweepStoppedMigrationIntentInFile(
  * its successor, or hands out the input it holds, however long the sweep
  * takes to arrive.
  */
-function stopOwingRollback(file: RegistryFile, conversation: RegistryConversation): MigrationIntent | null {
+function stopOwingRollback(
+  file: Pick<RegistryFile, "migrationIntents">,
+  conversation: RegistryConversation,
+): MigrationIntent | null;
+function stopOwingRollback(
+  file: Pick<ReadonlyRegistryFile, "migrationIntents">,
+  conversation: DeepReadonly<RegistryConversation>,
+): DeepReadonly<MigrationIntent> | null;
+function stopOwingRollback(
+  file: Pick<ReadonlyRegistryFile, "migrationIntents">,
+  conversation: DeepReadonly<RegistryConversation>,
+): DeepReadonly<MigrationIntent> | null {
   const migration = conversation.migration;
   if (!migration || migration.phase === "committed" || migration.phase === "rolled-back") return null;
   const intent = file.migrationIntents[migration.intentId];
@@ -1913,13 +1925,16 @@ function settleStoppedMigrationOf(file: RegistryFile, id: ViewerConversationId):
  * repeated after an await, a send choosing between delivery and a hold) acts
  * on the stop's decision while the stored phase still waits for the sweep.
  */
-function conversationAsStopped(file: RegistryFile, conversation: RegistryConversation): RegistryConversation {
-  const copy = clone(conversation);
+function conversationAsStopped(
+  file: Pick<ReadonlyRegistryFile, "migrationIntents">,
+  conversation: DeepReadonly<RegistryConversation>,
+): RegistryConversation {
+  const copy = clone<RegistryConversation>(conversation);
   const intent = stopOwingRollback(file, conversation);
   if (!intent) return copy;
   const sweep = intent.stopSweep!;
   copy.migration = { ...copy.migration!, phase: "rolled-back", error: null, errorCode: null, updatedAt: sweep.stampedAt };
-  copy.migrationOptOut = standingMigrationOptOut(copy, [intent]);
+  copy.migrationOptOut = standingMigrationOptOut(copy, [clone<MigrationIntent>(intent)]);
   return copy;
 }
 
@@ -2280,8 +2295,10 @@ function registryReceiptsReferencing(file: RegistryFile, id: string): SpawnRecei
 const CLAIMABLE_RECEIPT_STATES = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
 
 /** The same provisioning states in keyed reads and held startup views. */
-export function registryOpenSpawnReceipts(file: RegistryFile): SpawnReceipt[] {
-  return registryRowsMatching(file, "receipts", "state", [...CLAIMABLE_RECEIPT_STATES]);
+export function registryOpenSpawnReceipts(file: RegistryFile): SpawnReceipt[];
+export function registryOpenSpawnReceipts(file: ReadonlyRegistryFile): DeepReadonly<SpawnReceipt>[];
+export function registryOpenSpawnReceipts(file: RegistryFile | ReadonlyRegistryFile): SpawnReceipt[] | DeepReadonly<SpawnReceipt>[] {
+  return registryRowsMatching(file as RegistryFile, "receipts", "state", [...CLAIMABLE_RECEIPT_STATES]);
 }
 
 export function deliveryHasDurableClaimOwner(
@@ -2699,15 +2716,17 @@ function entryGrantAttestors(file: RegistryFile, key: SessionKey): ((entry: { ar
   };
 }
 
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+function clone<T>(value: T): T;
+function clone<T>(value: DeepReadonly<T>): T;
+function clone(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value));
 }
 
 /** A plain copy of a row read inside a keyed transaction. It keeps every own
     property, including one whose value is undefined, so a comparison over the
     copy answers as it does over the row a complete view holds. */
-function detachedRow<T>(value: T): T {
-  if (value === null || typeof value !== "object") return value;
+function detachedRow<T>(value: T | DeepReadonly<T>): T {
+  if (value === null || typeof value !== "object") return value as T;
   if (Array.isArray(value)) return value.map(detachedRow) as T;
   const copy: Record<string, unknown> = {};
   for (const key of Object.keys(value)) copy[key] = detachedRow((value as Record<string, unknown>)[key]);
@@ -4270,7 +4289,7 @@ export function conversationIdsResolvingTo(file: RegistryFile, conversationId: V
   return [...ids];
 }
 
-export function resolveConversationAlias(file: Pick<RegistryFile, "conversationAliases">, id: ViewerConversationId): ViewerConversationId {
+export function resolveConversationAlias(file: Pick<ReadonlyRegistryFile, "conversationAliases">, id: ViewerConversationId): ViewerConversationId {
   const seen = new Set<ViewerConversationId>();
   let current = id;
   while (!seen.has(current)) {
@@ -4322,7 +4341,7 @@ const SUPERSEDENCE_CHAIN_LIMIT = 64;
     malformed registry can never hang resolution. Exported for read-model
     projections that resolve primary navigation to the live chain end. */
 export function supersedenceChainTail(
-  file: Pick<RegistryFile, "conversations" | "conversationAliases">,
+  file: Pick<ReadonlyRegistryFile, "conversations" | "conversationAliases">,
   id: ViewerConversationId,
 ): ViewerConversationId {
   const seen = new Set<ViewerConversationId>();
@@ -6654,19 +6673,32 @@ export class AgentRegistry {
       ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot())));
   }
 
+  /** Explicitly immutable keyed read boundary for audited read-only consumers.
+      Callers must not mutate `file` or return frozen rows without cloning. */
+  private readKeyedImmutable<T>(reader: (file: ReadonlyRegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
+    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.readImmutable(reader, options) : reader(this.readOnlySnapshot())));
+  }
+
+  /** Public immutable keyed read boundary for audited consumers that only read
+      from `file` and copy or extract values before returning. */
+  readImmutable<T>(read: (file: ReadonlyRegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
+    return this.readKeyedImmutable(read, options);
+  }
+
   /** Ordered controller discovery, with predicates applied before payloads are
       decoded. Terminal delivery history stays available for keyed receipts. */
   migrationWorkPage<C extends "heldDeliveries" | "conversations" | "pendingSuccessorCleanups" | "migrationIntents">(
     collection: C, after = "", limit = 16, repairs = false,
   ): Array<[string, RegistryFile[C][string]]> {
-    return this.readKeyed(file => {
+    return this.readKeyedImmutable(file => {
       const filter = collection === "heldDeliveries" ? { field: "state" as const, value: ["held", "assigned", "delivery-uncertain"] }
         : collection === "conversations" ? { field: "migration.phase" as const,
           value: repairs ? ["committed"] : ["requested", "waiting-turn", "preparing", "successor-starting", "verifying"] }
         : collection === "migrationIntents" ? { field: "state" as const, value: "draining" } : undefined;
-      const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+      const rows = file[collection] as Record<string, DeepReadonly<RegistryFile[C][string]>>;
       return registryCollectionPage(file, collection as RowCollection, after, limit, filter)
-        .map((key): [string, RegistryFile[C][string]] => [key, clone(rows[key]!)]);
+        .map((key): [string, RegistryFile[C][string]] => [key, clone<RegistryFile[C][string]>(rows[key]!)]);
     }, { skipColdKeyInitialization: true });
   }
 
@@ -7039,7 +7071,7 @@ export class AgentRegistry {
 
   /** One keyed recipient row; no retained delivery history is hydrated. */
   incomingDeliveryHealth(conversationId: string): IncomingDeliveryHealth | null {
-    return this.readKeyed(file => normalizeIncomingDeliveryHealth(
+    return this.readKeyedImmutable(file => normalizeIncomingDeliveryHealth(
       file.conversations[resolveConversationAlias(file, conversationId as ViewerConversationId)]?.incomingDeliveryHealth) ?? null);
   }
 
@@ -7073,13 +7105,13 @@ export class AgentRegistry {
       container that reports it already. */
   spawnNoticeChild(id: string): { conversationId: ViewerConversationId; launcher: SpawnLauncher | null; contained: boolean } | null {
     if (!id.startsWith("conversation_")) return null;
-    return this.readKeyed((file) => {
+    return this.readKeyedImmutable((file) => {
       const conversationId = resolveConversationAlias(file, id as ViewerConversationId);
       const conversation = file.conversations[conversationId];
       if (!conversation) return null;
       return {
         conversationId,
-        launcher: conversation.launcher ? { ...conversation.launcher } : null,
+        launcher: conversation.launcher ? clone<SpawnLauncher>(conversation.launcher) : null,
         contained: (file.memberships[conversationId] ?? []).length > 0,
       };
     });
@@ -7112,7 +7144,7 @@ export class AgentRegistry {
   /** Memory planning selects active host rows through the existing status
       index, without decoding retained registry history. */
   liveStructuredHostCount(): number {
-    return this.readKeyed(file => registryRowsMatching(file, "entries", "status", [...LIVE_CHILD_HOST_STATES])
+    return this.readKeyedImmutable(file => registryRowsMatching(file, "entries", "status", [...LIVE_CHILD_HOST_STATES])
       .filter(entry => Boolean(entry.structuredHost)).length);
   }
 
@@ -7133,9 +7165,9 @@ export class AgentRegistry {
   hostEntry(key: SessionKey | string): AgentRegistryEntry | null {
     const id = typeof key === "string" ? key : sessionKeyId(key);
     if (!this.sqliteStore || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) return this.readOnlySnapshot().entries[id] ?? null;
-    return this.readKeyed(file => {
+    return this.readKeyedImmutable(file => {
       const entry = file.entries[id];
-      return entry ? detachedRow(entry) : null;
+      return entry ? detachedRow<AgentRegistryEntry>(entry) : null;
     });
   }
 
@@ -7170,9 +7202,9 @@ export class AgentRegistry {
   }
 
   spawnReceiptForClientAttempt(clientAttemptId: string): SpawnReceipt | null {
-    return this.readKeyed(file => {
+    return this.readKeyedImmutable(file => {
       const receipt = registryRowsMatching(file,"receipts","clientAttemptId",clientAttemptId)[0];
-      return receipt ? clone(receipt) : null;
+      return receipt ? clone<SpawnReceipt>(receipt) : null;
     });
   }
 
@@ -7180,7 +7212,7 @@ export class AgentRegistry {
       This is not a dispatch grant; the caller must validate every receipt. */
   pipelineSpawnHistory(base: string): SpawnReceipt[] {
     if (!/^pipeline_[A-Za-z0-9_-]+$/.test(base)) throw new Error("invalid pipeline spawn history identity");
-    return this.readKeyed(file => {
+    return this.readKeyedImmutable(file => {
       const keys = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
         ? this.sqliteStore.pipelineSpawnHistoryKeys(base)
         : (() => {
@@ -7193,12 +7225,12 @@ export class AgentRegistry {
           }
           return keys;
         })();
-      return keys.map(key => clone(file.receipts[key]!));
+      return keys.map(key => clone<SpawnReceipt>(file.receipts[key]!));
     });
   }
 
   spawnReceipt(launchId: string): SpawnReceipt | null {
-    return this.readKeyed(file => clone(file.receipts[launchId] ?? null));
+    return this.readKeyedImmutable(file => clone<SpawnReceipt | null>(file.receipts[launchId] ?? null));
   }
 
   /** Active disk cleaner host generations keep their source launch receipt
@@ -7379,26 +7411,26 @@ export class AgentRegistry {
   }
 
   openSpawnReceipts(): SpawnReceipt[] {
-    return this.readKeyed(file => clone(registryOpenSpawnReceipts(file)));
+    return this.readKeyedImmutable(file => clone<SpawnReceipt[]>(registryOpenSpawnReceipts(file)));
   }
 
   /** Includes terminal setup that still owns cleanup; the liveness index
       excludes retained history before loading any receipt payloads. */
   memberLaunchReceipts(memberId: string): SpawnReceipt[] {
-    return this.readKeyed(file => registryLivenessRows(file).receipts
+    return this.readKeyedImmutable(file => registryLivenessRowsReadonly(file).receipts
       .filter(receipt => !receipt.key && receipt.launchProfile.workspace?.memberId === memberId
-        && !receipt.launchProfile.workspace.fromMessage).map(receipt => clone(receipt)));
+        && !receipt.launchProfile.workspace.fromMessage).map(receipt => clone<SpawnReceipt>(receipt)));
   }
 
   /** The host operation is authoritative. Older settlement writers omitted
       it; their latest receipt for this exact native generation is indexed. */
   spawnReceiptForHost(key: SessionKey): SpawnReceipt | null {
-    return this.readKeyed(file => {
+    return this.readKeyedImmutable(file => {
       const entry = file.entries[sessionKeyId(key)];
       const receipt = entry?.structuredHostOperationId ? file.receipts[entry.structuredHostOperationId]
         : registryRowsMatching(file, "receipts", "key.sessionId", key.sessionId)
           .findLast(row => row.key?.engine === key.engine && row.artifactPath === entry?.artifactPath);
-      return receipt ? clone(receipt) : null;
+      return receipt ? clone<SpawnReceipt>(receipt) : null;
     });
   }
 
@@ -7412,9 +7444,9 @@ export class AgentRegistry {
 
   /** Revocation inspects current hosted rows without loading cold history. */
   memberHostEntries(memberId: string): AgentRegistryEntry[] {
-    return this.readKeyed(file => registryRowsMatching(file, "entries", "structuredHost.kind",
+    return this.readKeyedImmutable(file => registryRowsMatching(file, "entries", "structuredHost.kind",
       ["codex-app-server", "claude-broker", "copilot-acp"])
-      .filter(entry => !entry.launchProfile || entry.launchProfile.workspace?.memberId === memberId && !entry.launchProfile.workspace.fromMessage).map(entry => clone(entry)));
+      .filter(entry => !entry.launchProfile || entry.launchProfile.workspace?.memberId === memberId && !entry.launchProfile.workspace.fromMessage).map(entry => clone<AgentRegistryEntry>(entry)));
   }
 
   /** Structured ownership rows, including released rows needed by recovery. */
@@ -7495,8 +7527,8 @@ export class AgentRegistry {
       not enter the reaper's report lookups again. */
   failedSpawnReceipts(limit = 64): SpawnReceipt[] {
     const keys = this.sqliteStore?.failedLaunchRepairKeys(limit, false);
-    return this.readKeyed(file => (keys ? keys.map(key => file.receipts[key]!).filter(Boolean)
-      : Object.values(file.receipts).filter(row => row.state === "failed" && row.failureRepairState === "pending").slice(0, limit)).map(clone));
+    return this.readKeyedImmutable(file => (keys ? keys.map(key => file.receipts[key]!).filter(Boolean)
+      : Object.values(file.receipts).filter(row => row.state === "failed" && row.failureRepairState === "pending").slice(0, limit)).map(row => clone<SpawnReceipt>(row)));
   }
 
   /** A bounded, restartable backfill. Old failures have no announcement debt.
@@ -7531,7 +7563,7 @@ export class AgentRegistry {
 
   reportFailedLaunch(receipt: SpawnReceipt, options: { announce?: boolean; now?: number } = {}): void {
     const launcherId = receipt.launcher?.conversationId;
-    const launcher = launcherId ? this.readKeyed(file => {
+    const launcher = launcherId ? this.readKeyedImmutable(file => {
       const canonical = resolveConversationAlias(file, launcherId);
       return {
         project: file.memberships[canonical]?.find(membership => membership.kind === "orchestrator")?.containerId,
@@ -8507,7 +8539,7 @@ export class AgentRegistry {
   }
 
   conversationMemberships(conversationId: ViewerConversationId): DurableConversationMembership[] {
-    return this.readKeyed(file => clone(file.memberships[resolveConversationAlias(file, conversationId)] ?? []));
+    return this.readKeyedImmutable(file => clone<DurableConversationMembership[]>(file.memberships[resolveConversationAlias(file, conversationId)] ?? []));
   }
 
   runIdentityWaveMigration(input: IdentityWaveMigrationInput, validatePreparedState?: () => void): IdentityWaveMigrationResult {
@@ -10588,7 +10620,7 @@ export class AgentRegistry {
   }
 
   conversationForPath(artifactPath: string): RegistryConversation | null {
-    return this.readKeyed(file => {
+    return this.readKeyedImmutable(file => {
       const conversation = registryConversationsForPath(file, artifactPath)[0];
       return conversation ? conversationAsStopped(file, conversation) : null;
     });
@@ -10613,7 +10645,7 @@ export class AgentRegistry {
 
   /** Alias resolution needs no conversation payload or grant normalization. */
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
-    return this.readKeyed(file => resolveConversationAlias(file, id), { skipColdKeyInitialization: true });
+    return this.readKeyedImmutable(file => resolveConversationAlias(file, id), { skipColdKeyInitialization: true });
   }
 
   /** Records the terminal predecessor → successor edge (issue #383) outside
@@ -10639,7 +10671,7 @@ export class AgentRegistry {
   /** The alias-canonical end of a supersedence chain (the one conversation in
       the chain that is not itself superseded). */
   supersedenceChainTail(id: ViewerConversationId): ViewerConversationId {
-    return this.readKeyed(file => supersedenceChainTail(file, id));
+    return this.readKeyedImmutable(file => supersedenceChainTail(file, id));
   }
 
   /** Pre-flight for a supersedence claim: the actively hosted chain end that
@@ -10680,7 +10712,7 @@ export class AgentRegistry {
   /** The conversation as it stands, a stop that has not reached it yet
       included ({@link conversationAsStopped}). */
   conversation(id: ViewerConversationId): RegistryConversation | null {
-    return this.readKeyed(file => {
+    return this.readKeyedImmutable(file => {
       const conversation = file.conversations[resolveConversationAlias(file, id)];
       return conversation ? conversationAsStopped(file, conversation) : null;
     });
@@ -10689,7 +10721,7 @@ export class AgentRegistry {
   /** Album sources need only the addressed conversation and its aliases.
       Keep retained history keys and the global snapshot off this read. */
   conversationTranscriptPaths(id: ViewerConversationId): string[] {
-    return this.readKeyed(file => {
+    return this.readKeyedImmutable(file => {
       const conversation = file.conversations[resolveConversationAlias(file, id)];
       return conversation ? [...new Set([...conversation.continuityPaths,
         ...conversation.generations.map(generation => generation.path)])] : [];
@@ -10709,17 +10741,17 @@ export class AgentRegistry {
   }
 
   launchProfileForPath(artifactPath: string): LaunchProfile | null {
-    return this.readKeyed(snapshot => {
+    return this.readKeyedImmutable(snapshot => {
       for (const conversation of registryConversationsForPath(snapshot, artifactPath)) {
         const generation = conversation.generations.find((item) => item.path === artifactPath);
-        if (generation) return clone(generation.launchProfile);
+        if (generation) return clone<LaunchProfile>(generation.launchProfile);
         if (conversation.continuityPaths.includes(artifactPath)) {
           const current = conversation.generations.at(-1);
-          if (current) return clone(current.launchProfile);
+          if (current) return clone<LaunchProfile>(current.launchProfile);
         }
       }
       const receipt = registryRowsMatching(snapshot, "receipts", "artifactPath", artifactPath)[0];
-      return receipt ? clone(receipt.launchProfile) : null;
+      return receipt ? clone<LaunchProfile>(receipt.launchProfile) : null;
     });
   }
 
@@ -10728,7 +10760,7 @@ export class AgentRegistry {
       conversation; deriving the account from the path layout stays in the
       account manager only as recovery for artifacts the registry never saw. */
   transcriptAccountId(engine: AgentEngine, artifactPath: string): string | null {
-    return this.readKeyed(file => {
+    return this.readKeyedImmutable(file => {
       for (const conversation of registryConversationsForPath(file, artifactPath)) {
         if (conversation.engine !== engine) continue;
         const generation = conversation.generations.find((item) => item.path === artifactPath);
@@ -10917,9 +10949,9 @@ export class AgentRegistry {
 
   /** The failed account switch holding this conversation's messages, or null (#1846). */
   switchHold(id: ViewerConversationId): ConversationSwitchHold | null {
-    return this.readKeyed((file) => {
+    return this.readKeyedImmutable((file) => {
       const hold = file.conversations[resolveConversationAlias(file, id)]?.switchHold;
-      return hold ? clone(hold) : null;
+      return hold ? clone<ConversationSwitchHold>(hold) : null;
     });
   }
 
@@ -10939,7 +10971,7 @@ export class AgentRegistry {
 
   /** Whether a reconfigure operation was cancelled: withdrawn before its claim, or claimed and then cancelled. */
   reconfigureCancelled(id: ViewerConversationId, operationId: string): boolean {
-    return this.readKeyed((file) => {
+    return this.readKeyedImmutable((file) => {
       const conversation = file.conversations[resolveConversationAlias(file, id)];
       if (!conversation) return false;
       if (conversation.reconfigure?.operationId === operationId && conversation.reconfigure.status === "cancelled") return true;
@@ -11007,7 +11039,7 @@ export class AgentRegistry {
 
   /** Whether a migration is a switch owned by the conversation's applying reconfigure and still cancellable. */
   reconfigureOwnedCancellableSwitch(id: ViewerConversationId): boolean {
-    return this.readKeyed(snapshot => {
+    return this.readKeyedImmutable(snapshot => {
       const conversation = snapshot.conversations[resolveConversationAlias(snapshot, id)];
       const migration = conversation?.migration;
       const owner = conversation?.reconfigure;
@@ -11038,12 +11070,12 @@ export class AgentRegistry {
   }
 
   engineRouting(engine: AgentEngine): { activeAccountId: string | null; revision: number } {
-    return this.readKeyed(file => clone(file.engineRouting[engine]));
+    return this.readKeyedImmutable(file => clone<{ activeAccountId: string | null; revision: number }>(file.engineRouting[engine]));
   }
 
   /** Both compatibility routes from one read transaction. */
   engineRoutingSnapshot(): RegistryFile["engineRouting"] {
-    return this.readKeyed(file => clone(file.engineRouting));
+    return this.readKeyedImmutable(file => clone<RegistryFile["engineRouting"]>(file.engineRouting));
   }
 
   migrationScope(engine: MigrationEngine, targetId: string): MigrationScopeCounts {
@@ -12022,11 +12054,11 @@ export class AgentRegistry {
   }
 
   autoBalancePolicy(engine: AgentEngine): AutoBalancePolicy {
-    return this.readKeyed(file => clone(file.autoBalance[engine]));
+    return this.readKeyedImmutable(file => clone<AutoBalancePolicy>(file.autoBalance[engine]));
   }
 
   quotaObservations(engine: AgentEngine): DurableQuotaObservation[] {
-    return this.readKeyed(file => clone(Object.values(file.quotaObservations[engine])));
+    return this.readKeyedImmutable(file => clone<DurableQuotaObservation[]>(Object.values(file.quotaObservations[engine])));
   }
 
   /** Records one account's live reading outside the controller's evaluation
@@ -12454,7 +12486,7 @@ export class AgentRegistry {
   /** Startup selects only unsettled outcomes; each operation is re-read
       before its existing settlement guard runs. */
   terminalDeliveryCandidates(): HeldDelivery[] {
-    return this.readKeyed(file => clone(registryRowsMatching(file, "heldDeliveries", "state", ["delivery-uncertain", "failed"])),
+    return this.readKeyedImmutable(file => clone<HeldDelivery[]>(registryRowsMatching(file, "heldDeliveries", "state", ["delivery-uncertain", "failed"])),
       { skipColdKeyInitialization: true });
   }
 
