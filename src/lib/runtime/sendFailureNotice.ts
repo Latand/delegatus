@@ -105,7 +105,13 @@ export function recordSendFailureNotice(registry: AgentRegistry, operationId: st
     resend === "safe" ? "The original operation is fenced and will not be resent automatically. A new send is safe."
       : "Arrival is unconfirmed. Verify the recipient before sending again; a second send could duplicate it."].join("\n");
   collection(true)!.boundedPatch(2, tx => {
-    if (tx.get(operationId)) return;
+    const existing = tx.get(operationId);
+    if (existing) {
+      // Older rows did not store deliberate provenance. Capture it while the
+      // original admitted owner still proves the writer's classification.
+      if (existing.deliberate !== true) tx.put({ ...existing, deliberate: true });
+      return;
+    }
     tx.put({ operationId, senderConversationId: origin.conversationId!, targetConversationId: owner.conversationId,
       reason: detail, resend, deliberate: true, createdAt: new Date().toISOString(), state: "pending", recipientConversationId: null,
       clientMessageId: `send_failure_${createHash("sha256").update(operationId).digest("hex")}`, text, settledAt: null });
@@ -203,6 +209,9 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     const cutoff = Date.now() - 14 * 24 * 60 * 60_000;
     const stale = page.filter(row => {
       if (row.state === "pending" || Date.parse(row.settledAt ?? row.createdAt) >= cutoff) return false;
+      // Keep the stable warning key as a replay fence after its sender owner
+      // and runtime journal entry have both passed ordinary retention.
+      if (row.deliberate === true && row.recipientConversationId) return false;
       // Keep the dispatch fence until its admitted warning has a durable
       // terminal projection. A queue may remain offline past alarm retention.
       if (row.recipientConversationId) {
@@ -297,6 +306,16 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
       if (owner?.clientMessageId?.startsWith(seatMessageKeys.spawn)) {
         update(row, { state: "cancelled", suppressSenderWake: true, settledAt: new Date().toISOString() });
         return;
+      }
+      if (owner && (owner.command.kind === "send" || owner.command.kind === "steer")
+        && owner.command.origin?.kind === "agent"
+        && owner.command.origin.conversationId === row.senderConversationId
+        && owner.command.origin.conversationId !== owner.conversationId
+        && row.deliberate !== true) {
+        // Persist the legacy classification before ordinary owner compaction
+        // can erase the admitted authorship that proves this was deliberate.
+        update(row, { deliberate: true });
+        row = { ...row, deliberate: true };
       }
     } catch (error) {
       if (row.state === "pending") { receiptFailure(row, error, "registry projection"); return; }

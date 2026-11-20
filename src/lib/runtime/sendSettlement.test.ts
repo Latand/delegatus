@@ -586,10 +586,10 @@ test(`persisted automatic ${state} sender alarm is retired after process restart
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousState;
   }
-});
+}, 60_000);
 
 for (const kind of ["automatic", "deliberate", "legacy-deliberate"] as const)
-for (const recovery of kind === "legacy-deliberate" ? ["retained"] : ["retained", "before-sweep", "after-sweep"])
+for (const recovery of ["retained", "before-sweep", "after-sweep"] as const)
 test(`real-writer pending warning across failed-owner retention: ${kind} ${recovery}`, async () => {
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(isolated, `lost-owner-${kind}-${recovery}`);
@@ -641,6 +641,15 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
     }
     expect(alarm).toMatchObject({ state: "pending", recipientConversationId: child.conversationId, reason: SEND_UNVERIFIED_REASON });
     expect(alarm.suppressSenderWake).toBeUndefined();
+    if (kind === "legacy-deliberate") {
+      // The upgraded sweep must persist deliberate provenance while the
+      // original admitted owner still exists, before normal retention.
+      await m.sweepSendFailureNotices({ registry: active.registry, assertActive: () => {},
+        receipt: id => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
+        recipient: () => ({ kind: "deliver", conversationId: child.conversationId, path: child.transcriptPath }),
+        deliver: async () => { throw Error("an already admitted warning was delivered twice"); } });
+      expect(m.readSendFailureNotice(original.operationId)?.deliberate).toBe(true);
+    }
     if (recovery !== "retained") {
       compactAfterNewerSends(active, () => { clock += 1_000; setSystemTime(clock); }, "unverified");
     }
@@ -696,12 +705,25 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
       expect(observed.senderSignals).toHaveLength(1);
       expect(observed.launcherSignals).toHaveLength(1);
     } else expect(observed.alarm.state).toBe("cancelled");
+    if (kind === "deliberate" && recovery !== "retained") {
+      // Compact both admitted owners and let the alarm pass its ordinary
+      // retention age. Its stable key must still fence replay after restart.
+      compactAfterNewerSends(child, () => { clock += 1_000; setSystemTime(clock); }, "delivered");
+      clock += 15 * 24 * 60 * 60_000;
+      setSystemTime(clock);
+      let replayAdmissions = 0;
+      await m.sweepSendFailureNotices({ registry: active.registry, assertActive: () => {}, receipt: async () => null,
+        recipient: () => ({ kind: "deliver", conversationId: child.conversationId, path: child.transcriptPath }),
+        deliver: async () => { replayAdmissions++; return { ok: true }; } });
+      expect(replayAdmissions).toBe(0);
+      expect(m.readSendFailureNotice(original.operationId)).toMatchObject({ state: "sent", clientMessageId: alarm.clientMessageId });
+    }
   } finally {
     active.registry.close(); active.close(); setSystemTime();
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousState;
   }
-});
+}, 60_000);
 
 for (const timing of ["before", "during"] as const)
 test(`retention ${timing} the original receipt read preserves an unadmitted warning`, async () => {
