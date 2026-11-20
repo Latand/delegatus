@@ -95,3 +95,17 @@ test("sealed list() avoids file-lock churn and repeated per-row opens while trac
   store.update(first.id, { state: "delivered", resolvedAt: "2026-09-01T00:00:00.000Z" });
   expect(store.list().some(row => row.id === first.id)).toBe(false);
 });
+
+test("sealed lists preserve filename order on timestamp ties and detach returned records", async () => {
+  const directoryPath = path.join(directory, "tied-cuts");
+  const store = interruptionObligationStore(directoryPath);
+  await initializeRecipientInterruptionIndex(directoryPath);
+  const at = "2026-10-07T00:00:00.000Z";
+  const ids = Array.from({ length: 12 }, (_, i) => store.record({ ...cutInput(i), recordedAt: at }).obligation.id);
+  const expected = [...ids].sort();
+  expect(ids).not.toEqual(expected);
+  const first = store.list();
+  expect(first.map(row => row.id)).toEqual(expected);
+  first[0]!.checkpoint.lastEventKind = "changed-by-reader";
+  expect(store.list()[0]!.checkpoint.lastEventKind).toBe("tool-call");
+});

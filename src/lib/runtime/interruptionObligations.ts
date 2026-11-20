@@ -174,47 +174,43 @@ function cutSource(directory: string): CutSource | null {
   return source;
 }
 
-const CUT_COLLECTION_CACHE_LIMIT = 16;
-const cutCollectionOwner = globalThis as typeof globalThis & {
-  __llvInterruptionCutCollections?: Map<string, SqliteStateCollection<InterruptionObligation>>;
-};
-const cutCollections = cutCollectionOwner.__llvInterruptionCutCollections ??= new Map();
-
 function cutRows(directory: string): SqliteStateCollection<InterruptionObligation> {
-  const database = cutDatabase(directory);
-  return new SqliteStateCollection(database, {
+  return new SqliteStateCollection(cutDatabase(directory), {
     collection: cutCollection(directory), schemaVersion: 2, readOnlyOpen: true,
     busyMessage: "interruption source is busy", key: record => record.id,
     decode: value => completeObligation(value) ? value : null,
     clone: record => structuredClone(record), strictDecode: true,
-    decodeAuthority: () => stateEvidenceVersion(database),
     validate: record => { if (!completeObligation(record)) unavailableRecipientCuts(); },
   });
 }
 function withCutRows<T>(directory: string, read: (rows: SqliteStateCollection<InterruptionObligation>) => T): T {
-  const cacheKey = `${path.resolve(cutDatabase(directory))}\u0000${cutCollection(directory)}`;
-  let rows = cutCollections.get(cacheKey);
-  if (rows) {
-    cutCollections.delete(cacheKey);
-    cutCollections.set(cacheKey, rows);
-  } else {
-    rows = cutRows(directory);
-    cutCollections.set(cacheKey, rows);
-    while (cutCollections.size > CUT_COLLECTION_CACHE_LIMIT) {
-      const oldestKey = cutCollections.keys().next().value!;
-      const oldest = cutCollections.get(oldestKey);
-      cutCollections.delete(oldestKey);
-      try { oldest?.close(); } catch { /* evicted test collection already closed */ }
-    }
+  const rows = cutRows(directory);
+  try { return read(rows); } finally { rows.close(); }
+}
+
+// Cache only complete list results. Each miss reads one SQLite snapshot and
+// closes its handle. A concurrent commit prevents publishing that snapshot
+// for reuse, while the current reader can still use its consistent rows.
+type CutListSnapshot = { version: string; records: InterruptionObligation[] };
+const cutListSnapshots = new Map<string, CutListSnapshot>();
+
+function sealedCutList(directory: string): InterruptionObligation[] {
+  const key = path.resolve(directory);
+  const database = cutDatabase(key);
+  const version = stateEvidenceVersion(database);
+  let cached = cutListSnapshots.get(key);
+  cutListSnapshots.delete(key);
+  if (!cached || cached.version !== version) {
+    const records = withCutRows(key, rows => rows.snapshot());
+    // The directory reader visits sorted filenames before its stable date sort.
+    records.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt)
+      || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    if (stateEvidenceVersion(database) !== version) return records;
+    cached = { version, records };
   }
-  try { return read(rows); }
-  catch (error) {
-    if (cutCollections.get(cacheKey) === rows) {
-      cutCollections.delete(cacheKey);
-      try { rows.close(); } catch { /* preserve original error */ }
-    }
-    throw error;
-  }
+  cutListSnapshots.set(key, cached);
+  if (cutListSnapshots.size > 16) cutListSnapshots.delete(cutListSnapshots.keys().next().value!);
+  return structuredClone(cached.records);
 }
 
 function fileStamp(filename: string): string | null {
@@ -804,7 +800,7 @@ function createInterruptionObligationStore(
       const sealed = source();
       if (sealed && sealed.pendingStamp === fileStamp(pendingFile) && activeClaims().length === 0) {
         const now = Date.now();
-        const records = withCutRows(directory, rows => rows.snapshot());
+        const records = sealedCutList(directory);
         const hasExpired = records.some((obligation) => {
           const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;
           return !interruptionObligationUnresolved(obligation) && now - resolvedAt > RESOLVED_RETENTION_MS;
@@ -813,7 +809,7 @@ function createInterruptionObligationStore(
           const current = source();
           if (current && JSON.stringify(current) === JSON.stringify(sealed)
             && fileStamp(pendingFile) === sealed.pendingStamp && activeClaims().length === 0) {
-            return records.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+            return records;
           }
         }
       }
