@@ -7,6 +7,33 @@ type SandboxIdentity = { directory: string; dev: number; ino: number; generation
 const allocations = new Map<string, { identity: SandboxIdentity; journal: string }>();
 const identityKey = (row: SandboxIdentity) => JSON.stringify([row.directory, row.dev, row.ino, row.generation]);
 
+/** A child can recognize a still-owned allocation in its supervisor's journal.
+ * A path spelling or an old allocation at the same path is insufficient. */
+export function hasActiveGateSandbox(directory: string, journal: string | undefined): boolean {
+  if (!journal) return false;
+  try {
+    const stat = fs.lstatSync(directory);
+    if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) return false;
+    const physical = fs.realpathSync(directory);
+    const fd = fs.openSync(journal, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    try {
+      const limit = 1024 * 1024;
+      const record = fs.fstatSync(fd);
+      if (!record.isFile() || record.uid !== stat.uid || (record.mode & 0o077) !== 0 || record.size > limit) return false;
+      const buffer = Buffer.alloc(record.size);
+      if (fs.readSync(fd, buffer, 0, buffer.length, 0) !== buffer.length) return false;
+      const live = new Set<string>();
+      for (const line of buffer.toString("utf8").split("\n").filter(Boolean)) {
+        const row = JSON.parse(line) as SandboxIdentity & { released?: true; retained?: true };
+        if (row.directory !== physical || row.dev !== stat.dev || row.ino !== stat.ino || !row.generation) continue;
+        if (row.released || row.retained) live.delete(row.generation);
+        else live.add(row.generation);
+      }
+      return live.size === 1;
+    } finally { fs.closeSync(fd); }
+  } catch { return false; }
+}
+
 /** The creating process records the exact allocation before using it. The
  * outer owned runner consumes this journal only after its children stop. */
 export function recordGateSandbox(directory: string): string {
