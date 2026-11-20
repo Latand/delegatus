@@ -374,7 +374,8 @@ for (const tool of TOOLS) for (const workspace of [false, true]) {
 
 test("a fresh production SDK reader resolves and reads an archive-only project by exact key", async () => {
   const lane = buildPipeline({ id: "archive-only-lane", project: OWN, task: "Archived board lane", repoDir: root,
-    stages: [], state: "closed", srcPath: null, srcConversationId: null, now: AT });
+    stages: [], state: "draft", srcPath: null, srcConversationId: null, now: AT });
+  lane.state = "closed";
   lane.closedAt = AT;
   savePipelines([lane]);
   expect(await archiveSettledPipelines(Date.parse(AT) + 4 * 24 * 60 * 60 * 1000)).toBe(1);
@@ -430,7 +431,7 @@ test("a fresh production SDK reader resolves and reads an archive-only project b
   const run = Bun.spawnSync(["bun", "-e", child], { cwd: process.cwd(), timeout: 30_000,
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: config, TMPDIR: tmp, LLV_STATE_DIR: path.join(root, "state"), NODE_ENV: "test" },
     stdout: "pipe", stderr: "pipe" });
-  expect(run.exitCode).toBe(0, new TextDecoder().decode(run.stderr));
+  if (run.exitCode !== 0) throw new Error(new TextDecoder().decode(run.stderr));
   const outcomes = JSON.parse(new TextDecoder().decode(run.stdout)) as Record<string, unknown>;
   expect(outcomes.own).toMatchObject({ ok: true, total: 1, pipelines: [{ id: lane.id }] });
   expect(outcomes.foreign).toMatchObject({ ok: false, code: "cross_project_refused", retryable: false });
