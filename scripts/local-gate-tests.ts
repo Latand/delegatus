@@ -490,6 +490,20 @@ function headCheckpointEnvironment(root: string, sandbox: string, inherited: Nod
     && inherited.XDG_RUNTIME_DIR === path.join(outer, "xdg_runtime_dir")
     && hasActiveGateSandbox(outer, inherited.LLV_GATE_SANDBOX_RECORD);
   const env = { ...inherited };
+  // /bin/bash -c reads BASH_ENV before running the owned worker command. Its
+  // pathname alone is insufficient: an external launcher can change while
+  // leaving every repository and environment value untouched. Unknown or
+  // unreadable startup inputs keep reusable per-file receipts cold.
+  let bashEnv: readonly unknown[] | null = null;
+  if (inherited.BASH_ENV !== undefined) {
+    try {
+      const file = path.resolve(root, inherited.BASH_ENV);
+      const stat = statSync(file);
+      if (!stat.isFile()) return;
+      bashEnv = [inherited.BASH_ENV, realpathSync(file), stat.dev, stat.ino, fileFingerprint(file)];
+      if (bashEnv[4] === "missing") return;
+    } catch { return; }
+  }
   // The Linux owned runner's check-worker-entry.py always issues these
   // two identities anew before executing a file.
   delete env.LLV_CHECK_ENTRY_PID;
@@ -508,7 +522,7 @@ function headCheckpointEnvironment(root: string, sandbox: string, inherited: Nod
     // The checked-out directory is still an input to the test process.
     const source = statSync(root);
     const key = fingerprint([[root, realpathSync(root), source.dev, source.ino],
-      [owned, parent, physical, stat.dev, stat.ino], headEnvironmentKey(env, inherited)]);
+      [owned, parent, physical, stat.dev, stat.ino], bashEnv, headEnvironmentKey(env, inherited)]);
     return { env, key };
   } catch { return undefined; }
 }

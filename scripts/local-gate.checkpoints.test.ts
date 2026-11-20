@@ -189,6 +189,69 @@ test("fixture contract", () => {
   }
 }, 120_000);
 
+serviceTest("local check-step invalidates warm and cold retries when BASH_ENV bytes change", () => {
+  const project = path.resolve(import.meta.dir, "..");
+  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-bash-env-")); roots.push(scratch);
+  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  const origin = path.join(scratch, "origin.git");
+  f.git("clone", "--bare", "--shared", ".", origin);
+  f.git("remote", "add", "origin", origin);
+  const marker = path.join(scratch, "samples");
+  const startup = path.join(scratch, "external-bash-env");
+  const env = isolatedEnvironment(path.join(scratch, "caller"), f.env);
+  const bin = path.join(scratch, "bin"); mkdirSync(bin);
+  const runner = Bun.which("systemd-run")!, busctl = Bun.which("busctl")!;
+  const runnerShim = path.join(bin, "systemd-run"), busShim = path.join(bin, "busctl");
+  writeFileSync(runnerShim, `#!/bin/sh\nexec "${runner}" "$@"\n`, { mode: 0o700 });
+  writeFileSync(busShim, `#!/bin/sh\nexec "${busctl}" "$@"\n`, { mode: 0o700 });
+  env.PATH = bin + path.delimiter + env.PATH;
+  env.BASH_ENV = startup;
+  env.LLV_GATE_CHECK_ENV = "BASH_ENV";
+  writeFileSync(startup, "export CHECKPOINT_BASH_ENV=first\n");
+  writeFileSync(path.join(f.dir, "shims/bun"), '#!/bin/sh\nexec "$LLV_GATE_BUN" "$@"\n');
+  symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
+  writeFileSync(path.join(f.dir, "a.test.ts"), `
+import { appendFileSync } from "node:fs";
+import { expect, test } from "bun:test";
+test("startup input affects this head file", () => {
+  appendFileSync(${JSON.stringify(marker)}, "a\\n");
+  if (process.cwd() === ${JSON.stringify(f.dir)} && process.env.CHECKPOINT_BASH_ENV === "changed") expect(false).toBe(true);
+  else expect(true).toBe(true);
+});`);
+  writeFileSync(path.join(f.dir, "b.test.ts"), `
+import { appendFileSync } from "node:fs";
+import { test } from "bun:test";
+test("incomplete file", () => { appendFileSync(${JSON.stringify(marker)}, "b\\n"); process.exit(124); });`);
+  f.git("config", "core.hooksPath", "/dev/null");
+  f.git("add", "."); f.git("commit", "-m", "BASH_ENV checkpoint fixtures");
+  const run = () => spawnSync(process.execPath, ["scripts/local-gate.ts", "check-step", "touched tests"], {
+    cwd: f.dir, env, encoding: "utf8", timeout: 30_000,
+  });
+  const countA = () => readFileSync(marker, "utf8").split("\n").filter(value => value === "a").length;
+  const first = run(); expect(first.status, first.stdout + first.stderr).toBe(1);
+  const warm = run(); expect(warm.status, warm.stdout + warm.stderr).toBe(1);
+  expect(warm.stdout + warm.stderr).toContain("reused complete green head file a.test.ts");
+  expect(countA()).toBe(1);
+
+  const beforeWarmChange = countA();
+  writeFileSync(startup, "export CHECKPOINT_BASH_ENV=changed\n");
+  const changedWarm = run(), changedOutput = changedWarm.stdout + changedWarm.stderr;
+  expect(changedWarm.status, changedOutput).toBe(1);
+  expect(changedOutput).not.toContain("reused complete green head file a.test.ts");
+  expect(changedOutput).toContain("NEW a.test.ts");
+  const afterWarmChange = countA();
+  expect(afterWarmChange).toBeGreaterThan(beforeWarmChange);
+
+  const cache = path.join(f.dir, ".git/delegatus-gate/head-files");
+  rmSync(cache, { recursive: true, force: true });
+  const beforeColdChange = countA();
+  const changedCold = run(), coldOutput = changedCold.stdout + changedCold.stderr;
+  expect(changedCold.status, coldOutput).toBe(1);
+  expect(coldOutput).not.toContain("reused complete green head file");
+  expect(coldOutput).toContain("NEW a.test.ts");
+  expect(countA()).toBeGreaterThan(beforeColdChange);
+}, 120_000);
+
 serviceTest("external roots with gate-shaped names retain their distinct checkpoint keys", () => {
   const f = fixture();
   const rootsFor = (name: string) => isolatedEnvironment(path.join(f.root, `delegatus-local-gate-${name}`), process.env);
