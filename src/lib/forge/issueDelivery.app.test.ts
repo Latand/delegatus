@@ -19,6 +19,13 @@ const NOW = Date.parse(AT) + 1000;
 const required = { issues: "write", pull_requests: "read", metadata: "read" };
 const landingPermissions = { contents: "read", metadata: "read" };
 
+function nativeGitPath(): string | undefined {
+  const directories = (process.env.PATH ?? "").split(path.delimiter)
+    .filter(directory => !/\/delegatus\/agent-(?:git-hooks|forge)\//.test(directory));
+  return directories.map(directory => path.join(directory, "git"))
+    .find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+}
+
 test.skipIf(process.platform === "win32").each([
   "close", "part", "missing-pr", "missing-issues", "manual-batch", "missing-landing", "cold-batch",
   "associated-batch", "associated-reverted-before", "associated-restored-later", "associated-reverted-after",
@@ -39,7 +46,7 @@ test.skipIf(process.platform === "win32").each([
   const callsFile = path.join(directory, "gh-calls.jsonl");
   const gitCallsFile = path.join(directory, "git-calls.jsonl");
   const clone = path.join(directory, "lane-clone");
-  const nativeGit = Bun.which("git");
+  const nativeGit = nativeGitPath();
   if (!nativeGit) throw new Error("Git is required for the landing fixture");
   if (graph && cold) {
     graph.git("clone", "--no-local", "--single-branch", "--branch", "lane", graph.directory, clone);
