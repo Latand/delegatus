@@ -3952,13 +3952,13 @@ test("an admitted deliberate warning reconciles across canonical recipient adopt
     let warningOperationId = "";
     let admissions = 0;
     const first = { registry: active.registry, assertActive: () => {},
-      receipt: async id => id === operationId
+      receipt: async (id: string) => id === operationId
         ? resolveSendReceipt(id, { registry: active.registry, client: active.client })
         : { operationId: id, kind: "send" as const, conversationId: sender.conversationId, clientMessageId: "warning",
           state: "in-flight" as const, reason: null, acceptedAt: null, settledAt: null, duplicateRisk: false,
           resend: null, evidence: "delivery-record" as const },
       recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
-      deliver: async request => { admissions++; warningOperationId = acceptSend(sender, request).operationId; return { ok: true }; } };
+      deliver: async (request: Parameters<typeof acceptSend>[1]) => { admissions++; warningOperationId = acceptSend(sender, request).operationId; return { ok: true }; } };
     await sweepSendFailureNotices(first);
     expect(admissions).toBe(1);
     expect(readSendFailureNotice(operationId)?.warningAdmission).toBe("admitted");
@@ -3981,7 +3981,7 @@ test("an admitted deliberate warning reconciles across canonical recipient adopt
     })).toMatchObject({ kind: "settled", conversation: { id: canonical.conversationId } });
 
     const warm = { ...first,
-      receipt: async id => id === operationId
+      receipt: async (id: string) => id === operationId
         ? resolveSendReceipt(id, { registry: active.registry, client: active.client })
         : { operationId: id, kind: "send" as const, conversationId: canonical.conversationId, clientMessageId: "warning",
           state: "in-flight" as const, reason: null, acceptedAt: null, settledAt: null, duplicateRisk: false,

@@ -515,7 +515,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     if (row.warningAdmission === "unknown" && !snapshot?.deliveryOperationOwners[row.operationId]) return;
     if (row.warningAdmission === "admitted") {
       const admission = ports.registry.deliveryAdmissionForKey(recipient.conversationId, row.clientMessageId);
-      if (admission.outcome !== "not-admitted") return;
+      if (admission.outcome !== "not-executed") return;
     }
     update(row, { recipientConversationId: recipient.conversationId, warningAdmission: "unknown" });
     let result: { ok: boolean; status?: number; error?: string };
