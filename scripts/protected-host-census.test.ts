@@ -250,12 +250,43 @@ test("retired-host candidate payload reads stay bounded as unrelated terminal hi
       onSqliteRowPayloadRead: (collection, count) => coldReads.set(collection, (coldReads.get(collection) ?? 0) + count),
     });
     try {
+    expect(cold.archiveInactiveRows(5000)).toBeGreaterThanOrEqual(2049);
     const snapshot = cold.readOnlySnapshot();
     coldReads.clear();
     const selected = registryRetiredHostRows(snapshot, 200);
     expect(selected.overflow).toBe(false);
     expect(selected.entries.map(entry => entry.key.sessionId)).toEqual(["retired-merger-candidate"]);
-    expect(coldReads.get("entries")).toBe(1);
+    // Only the selected retirement is hydrated; unrelated archived history
+    // stays in SQLite during census candidate discovery.
+    expect(coldReads.get("entries") ?? 0).toBe(1);
+    } finally { cold.close(); }
+  } finally { f.close(); }
+}, 30_000);
+
+test("retired-host candidate overflow marks the production census incomplete", async () => {
+  const f = retainedLivenessFixture(12);
+  try {
+    const base = structuredClone(f.registry.readOnlySnapshot().entries[f.worker.key]!);
+    f.peer.mutate(file => {
+      for (let index = 0; index < 201; index++) {
+        const entry = structuredClone(base);
+        entry.key = { engine: "codex", sessionId: `retired-overflow-${index}` };
+        entry.status = "dead";
+        entry.structuredHost = null;
+        entry.hostExitProcess = { pid: 10000 + index, startIdentity: `retired-${index}` };
+        entry.claimOwner = null;
+        file.entries[`codex:${entry.key.sessionId}`] = entry;
+      }
+    });
+    const cold = new AgentRegistry(path.join(f.directory, "overflow-registry.json"), undefined, undefined, {
+      sqliteMode: "sqlite", sqliteFilename: f.dataset.filename,
+    });
+    try {
+      expect(cold.archiveInactiveRows(5000)).toBeGreaterThanOrEqual(201);
+      const snapshot = cold.readOnlySnapshot();
+      const answer = await censusSnapshot({ ...f.sources, registrySnapshot: () => snapshot }, 1, TARGET, 30000);
+      expect(answer.selection.unreadable).toBeGreaterThan(0);
+      expect(answer.unselectedCount).toBeGreaterThan(0);
     } finally { cold.close(); }
   } finally { f.close(); }
 }, 30_000);
