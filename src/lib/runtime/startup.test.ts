@@ -2220,7 +2220,7 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
     structuredHostOperationId: launch.receipt.launchId });
   if (mode === "legacy") {
     const persisted = structuredClone(registry.readOnlySnapshot());
-    delete persisted.conversations[conversationId].deliveryEvidenceTracked;
+    delete (persisted.conversations[conversationId] as { deliveryEvidenceTracked?: boolean }).deliveryEvidenceTracked;
     registry.close();
     fs.writeFileSync(filename, JSON.stringify(persisted));
     registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
