@@ -758,6 +758,9 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (options.actor !== "operator" || Object.hasOwn(input, "hold")) return { ok: false, status: 400, error: "restoreHold is reserved for fenced operator undo" };
     patch.hold = storedTaskHold(input.restoreHold, notes);
     if (input.restoreHold !== null && !patch.hold) return { ok: false, status: 400, error: "invalid hold snapshot" };
+    // Undo restores provenance and hold data; it cannot restore a Waiting
+    // placement for work whose next action belongs to the seat or an agent.
+    if (patch.status === "blocked" && (!patch.hold || !holdParks(patch.hold))) patch.status = ownerColumn();
   }
   if (writingHold) {
     const holdError = validateTaskHoldInput(input.hold);

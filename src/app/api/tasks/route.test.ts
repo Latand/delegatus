@@ -120,7 +120,7 @@ test("REST creates, patches, lists and undoes a hold without changing another hi
   const createdResponse = await route.POST(new NextRequest("http://localhost/api/tasks", { method: "POST", headers: { "content-type": "application/json", host: "localhost" }, body: JSON.stringify({ project: "motion-fixture", text: "Wait for capacity", placement: "unplaced", hold: { kind: "worker", note: "After a worker is free" } }) }));
   expect(createdResponse.status).toBe(200);
   const created = (await createdResponse.json()).task as BoardTask & { revision: string };
-  expect(created.status).toBe("blocked");
+  expect(created.status).toBe("inbox");
   expect(created.hold?.kind).toBe("worker");
   const hidden: BoardTask = { ...created, id: "hidden-hold-fixture", text: "Hidden older work", hold: undefined, groupHidden: { at: created.createdAt, by: "operator", admitted: [] } };
   saveTasks([...loadTasks(), hidden]);
@@ -133,10 +133,11 @@ test("REST creates, patches, lists and undoes a hold without changing another hi
   expect(restoredResponse.status).toBe(200);
   const restored = (await restoredResponse.json()).task;
   expect(restored.hold).toEqual(created.hold);
+  expect(restored.status).toBe("inbox");
   const editedResponse = await send(restored, { hold: { kind: "external", note: "I will check the prerequisite" } });
   expect(editedResponse.status).toBe(200);
   const edited = (await editedResponse.json()).task as BoardTask;
-  expect(edited).toMatchObject({ status: "blocked", hold: { kind: "external", by: "operator" } });
+  expect(edited).toMatchObject({ status: "inbox", hold: { kind: "external", by: "operator" } });
   const listed = await route.GET(new NextRequest("http://localhost/api/tasks"));
   const rows = (await listed.json()).tasks as BoardTask[];
   expect(rows.find(row => row.id === created.id)?.hold).toEqual(edited.hold);

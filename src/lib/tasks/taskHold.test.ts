@@ -177,6 +177,7 @@ test("operator undo restores hold age and provenance, requires its revision, and
   const request = { status: "blocked", restoreHold: held.hold, expectedProject: moved.project, expectedRevision: taskRevision(moved) };
   const restored = ok(patchTask([moved], moved.id, request, LATER, { actor: "operator" }));
   expect(restored.task.hold).toEqual(held.hold);
+  expect(restored.task.status).toBe("inbox");
   for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], ["banana", "unstated"]] as const) {
     const normalized = ok(patchTask([moved], moved.id, { ...request, restoreHold: { ...held.hold, kind } }, LATER, { actor: "operator" }));
     expect(normalized.task.hold?.kind).toBe(expected);
@@ -185,6 +186,14 @@ test("operator undo restores hold age and provenance, requires its revision, and
   }
   expect(patchTask([moved], moved.id, { ...request, expectedRevision: "stale" }, LATER, { actor: "operator" }).ok).toBe(false);
   expect(patchTask([moved], moved.id, request, LATER, { actor: "agent" }).ok).toBe(false);
+
+  const operatorHeld = ok(patchTask([task()], "hold-task", { hold: { kind: "operator", note: "Choose a setting" } }, NOW, { actor: "operator" })).task;
+  const operatorMoved = ok(patchTask([operatorHeld], operatorHeld.id, { status: "assigned" }, LATER)).task;
+  const operatorRestored = ok(patchTask([operatorMoved], operatorMoved.id, {
+    status: "blocked", restoreHold: operatorHeld.hold, expectedProject: operatorMoved.project,
+    expectedRevision: taskRevision(operatorMoved),
+  }, LATER, { actor: "operator" }));
+  expect(operatorRestored.task).toMatchObject({ status: "blocked", hold: { kind: "operator" } });
 });
 
 for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], ["banana", "unstated"], ["unstated", "unstated"]] as const) {
