@@ -1943,7 +1943,9 @@ export function seatTickReportRequest(
   const owed = [...(state.reportsOwed ?? [])];
   const reported = outcomeReported({ ...reports, acknowledgedOutcomeKeys: state.reportsAcknowledged });
   for (const outcome of seatTickOwedOutcomes(items)) {
-    if (!reported(outcome.key) && !owed.some(entry => entry.key === outcome.key)) owed.push(outcome);
+    if (!reported(outcome.key) && !owed.some(entry => entry.key === outcome.key)) {
+      owed.push({ ...outcome, receivedAt: new Date(input.now).toISOString() });
+    }
   }
   return owed.length ? { key: reportRequestKey(owed, reports, state.seatEpoch), outcomeKeys: owed.map(entry => entry.key) } : undefined;
 }
