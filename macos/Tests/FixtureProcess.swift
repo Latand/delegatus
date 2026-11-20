@@ -19,17 +19,18 @@ enum FixtureProcess {
         return result
     }
 
-    static func readyLine(_ pipe: Pipe, named name: String, timeout: Double = 10) throws -> Data {
+    static func readyLine(_ pipe: Pipe, named name: String, timeout: Double = 10, deadlineEnabled: Bool = true) throws -> Data {
         let fd = pipe.fileHandleForReading.fileDescriptor
         let deadline = DispatchTime.now() + timeout
         var line = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
         while true {
             let now = DispatchTime.now()
-            guard now < deadline else { break }
-            let remaining = deadline.uptimeNanoseconds - now.uptimeNanoseconds
+            guard !deadlineEnabled || now < deadline else { break }
+            let remaining = deadlineEnabled ? deadline.uptimeNanoseconds - now.uptimeNanoseconds : UInt64.max
             var event = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-            let ready = poll(&event, 1, Int32((remaining + 999_999) / 1_000_000))
+            let milliseconds = deadlineEnabled ? Int32((remaining + 999_999) / 1_000_000) : -1
+            let ready = poll(&event, 1, milliseconds)
             if ready == 0 { break }
             if ready < 0 && errno == EINTR { continue }
             guard ready > 0 else { throw LauncherError.message("\(name): readiness poll failed (errno \(errno))") }

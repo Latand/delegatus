@@ -2,14 +2,16 @@ import Foundation
 
 @main struct CoreChecks {
     static var count = 0
+    static var failures = 0
     static func expect(_ condition: @autoclosure () -> Bool, _ reason: String) {
         count += 1
-        if !condition() { fputs("FAIL: \(reason)\n", stderr); exit(1) }
+        if !condition() { failures += 1; fputs("FAIL: \(reason)\n", stderr) }
     }
     static func main() async {
         if await ListenerKeeper.runIfRequested() { return }
         do {
             try await run()
+            if failures != 0 { exit(1) }
         } catch LauncherError.message(let message) {
             fputs("FAIL: \(message)\n", stderr)
             exit(1)
@@ -419,6 +421,31 @@ import Foundation
             }
             expect(FixtureProcess.stop(peer), "the remaining writer exits")
         }
+        do {
+            // Trial the read with its deadline disabled. A separate owned
+            // watchdog closes the writer so a broken read cannot hang CI.
+            let output = Pipe()
+            let peer = Process()
+            peer.executableURL = URL(fileURLWithPath: "/bin/sh")
+            peer.arguments = ["-c", "exec /bin/sleep 30"]
+            peer.standardOutput = output.fileHandleForWriting
+            try peer.run()
+            try output.fileHandleForWriting.close()
+            let watchdog = Process()
+            watchdog.executableURL = URL(fileURLWithPath: "/bin/sh")
+            watchdog.arguments = ["-c", "sleep 1; kill -TERM \(peer.processIdentifier)"]
+            try watchdog.run()
+            do {
+                _ = try FixtureProcess.readyLine(output, named: "deadline-disabled trial", deadlineEnabled: false)
+                expect(false, "deadline-disabled read must fail after the independent watchdog closes its writer")
+            } catch LauncherError.message(let message) {
+                expect(message == "deadline-disabled trial: stdout closed before readiness line",
+                    "the independent watchdog releases the deadline-disabled read")
+            }
+            expect(FixtureProcess.exited(watchdog, within: 2), "independent read watchdog exits")
+            expect(FixtureProcess.stop(peer) && peer.terminationStatus == SIGTERM,
+                "independent read watchdog terminates and reaps its owned writer")
+        }
         let (child, output) = try launch("trap '' TERM; printf 'ready\\n'; exec /bin/sleep 30")
         defer { _ = FixtureProcess.stop(child) }
         let line = try FixtureProcess.readyLine(output, named: "TERM-ignoring fixture")
@@ -486,6 +513,15 @@ import Foundation
                 throw LauncherError.message("detached fixture cleanup: process \(pid) was not reaped after SIGKILL")
             }
         }
+        var teardownErrors: [String] = []
+        func runTeardowns(_ actions: [() throws -> Void]) {
+            teardownErrors.removeAll(keepingCapacity: true)
+            for action in actions {
+                do { try action() }
+                catch { teardownErrors.append(String(describing: error)) }
+            }
+            for error in teardownErrors { expect(false, "fixture cleanup failed: \(error)") }
+        }
         try Data(#"{"name":"delegatus-cli","version":"2.0.0"}"#.utf8).write(to: root.appendingPathComponent("package.json"))
         try Data(#"""
         import {existsSync,readFileSync,writeFileSync} from 'node:fs';
@@ -517,8 +553,8 @@ import Foundation
         import {spawn} from 'node:child_process';
         import {writeFileSync} from 'node:fs';
         const [receipt,ready]=process.argv.slice(2);
-        const child=spawn(process.execPath,['-e',`setTimeout(()=>{process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000)},Number(process.env.FIXTURE_START_DELAY||0))`],{detached:true,stdio:'ignore'});
-        writeFileSync(receipt,String(child.pid));
+        writeFileSync(receipt,'');
+        const child=spawn(process.execPath,['-e',`process.on('SIGTERM',()=>{});require('node:fs').writeFileSync(${JSON.stringify(ready)},'ready');setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(receipt)},String(process.pid)),150);setInterval(()=>{},1000)`],{detached:true,stdio:'ignore'});
         process.stdin.resume();
         """.utf8).write(to: timeoutScript)
         let timeoutLauncher = Process(); timeoutLauncher.executableURL = bun
@@ -526,19 +562,24 @@ import Foundation
         let timeoutOutput = Pipe(), timeoutInput = Pipe()
         timeoutLauncher.standardOutput = timeoutOutput; timeoutLauncher.standardInput = timeoutInput
         try timeoutLauncher.run()
-        defer {
-            _ = FixtureProcess.stop(timeoutLauncher)
-            do { try stopDetachedViewer(timeoutReceipt) }
-            catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
-        }
+        defer { runTeardowns([
+            { guard FixtureProcess.stop(timeoutLauncher) else { throw LauncherError.message("timeout launcher did not exit") } },
+            { try stopDetachedViewer(timeoutReceipt) },
+        ]) }
         let readinessDeadline = DispatchTime.now() + 10
-        while (!fm.fileExists(atPath: timeoutReceipt.path) || !fm.fileExists(atPath: timeoutReady.path)) && DispatchTime.now() < readinessDeadline {
+        var detachedPID: Int32?
+        while DispatchTime.now() < readinessDeadline {
+            let text = try? String(contentsOf: timeoutReceipt, encoding: .utf8)
+            let candidate = text.flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            if let candidate, candidate > 1, fm.fileExists(atPath: timeoutReady.path),
+               let identity = Server.listenerIdentity(Int(candidate), install: install, package: root),
+               identity.bun == fixtureExecutable, getpgid(candidate) == candidate {
+                detachedPID = candidate
+                break
+            }
             Thread.sleep(forTimeInterval: 0.01)
         }
-        guard let detachedText = try? String(contentsOf: timeoutReceipt, encoding: .utf8),
-              let detachedPID = Int32(detachedText.trimmingCharacters(in: .whitespacesAndNewlines)), detachedPID > 1,
-              fm.fileExists(atPath: timeoutReady.path),
-              Server.listenerIdentity(Int(detachedPID), install: install, package: root) != nil else {
+        guard let detachedPID else {
             throw LauncherError.message("induced detached readiness failure: PID or TERM handler did not become ready")
         }
         do {
@@ -554,14 +595,12 @@ import Foundation
         let launcher = Process(); launcher.executableURL = bun; launcher.arguments = [cli.path, viewerPIDFile.path]; launcher.environment = env
         let input = Pipe(), output = Pipe(); launcher.standardInput = input; launcher.standardOutput = output
         try launcher.run()
-        defer {
-            _ = FixtureProcess.stop(launcher)
-            do { try stopDetachedViewer(viewerPIDFile) }
-            catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
-        }
+        defer { runTeardowns([
+            { guard FixtureProcess.stop(launcher) else { throw LauncherError.message("Viewer launcher did not exit") } },
+            { try stopDetachedViewer(viewerPIDFile) },
+        ]) }
         let handshake: FixtureProcess.Handshake
-        do { handshake = try FixtureProcess.handshake(output, named: "detached Viewer") }
-        catch { try stopDetachedViewer(viewerPIDFile); throw error }
+        handshake = try FixtureProcess.handshake(output, named: "detached Viewer")
         let pid = handshake.pid, port = handshake.port
         fputs("Swift relaunch: verify the live CLI and retain its Viewer\n", stderr)
         try check(Server.ownsLauncher(Int(launcher.processIdentifier), parent: Int(getpid()), install: install), "retention recognises the CLI actually launched by this native process")
@@ -666,20 +705,21 @@ import Foundation
             let parentOutput = Pipe(), parentInput = Pipe()
             parent.standardOutput = parentOutput; parent.standardInput = parentInput
             try parent.run()
-            defer {
-                _ = FixtureProcess.stop(parent)
-                do { try stopDetachedViewer(foreignPIDFile) }
-                catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
-            }
+            defer { runTeardowns([
+                { guard FixtureProcess.stop(parent) else { throw LauncherError.message("foreign bootstrap did not exit") } },
+                { try stopDetachedViewer(foreignPIDFile) },
+            ]) }
             let attack: FixtureProcess.Handshake
-            do { attack = try FixtureProcess.handshake(parentOutput, named: "foreign bootstrap") }
-            catch { try stopDetachedViewer(foreignPIDFile); throw error }
+            attack = try FixtureProcess.handshake(parentOutput, named: "foreign bootstrap")
             guard let helperPID = attack.keeper else { throw LauncherError.message("foreign bootstrap: missing keeper PID") }
             let attackPID = attack.pid, attackPort = attack.port
             fputs("Swift relaunch: check discovery and cleanup of the foreign bootstrap\n", stderr)
-            defer {
-                if Server.executablePath(helperPID) == ListenerKeeper.executable { kill(Int32(helperPID), SIGTERM) }
-            }
+            defer { runTeardowns([{
+                if Server.executablePath(helperPID) == ListenerKeeper.executable,
+                   kill(Int32(helperPID), SIGTERM) != 0 && errno != ESRCH {
+                    throw LauncherError.message("keeper cleanup signal failed")
+                }
+            }]) }
             let identity = Server.listenerIdentity(attackPID, install: install, package: root)!
             let copied = await Server.explainAncestry(listenerPID: attackPID, bun: bun.path, server: server.path,
                 cli: cli.path, readExecutable: { Server.executablePath($0) }) { await Server.processRow($0, environment: env) }
