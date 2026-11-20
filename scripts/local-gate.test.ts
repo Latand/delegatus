@@ -32,6 +32,25 @@ test("push checks commits, types and all sibling test variants, excluding browse
   expect(tests.isolated).toBeTrue();
   for (const step of steps.filter(step => step.command[1] === "test")) for (const file of step.command.slice(2)) expect(file).toMatch(/\.test\.[jt]sx?$/);
 });
+test("overlapping Linux and touched tests run once under the same comparator", () => {
+  const shared = "src/example.test.ts";
+  const c = context({ linux: true, linuxTests: [shared, "src/platform.test.ts"] });
+  const checks = plan("pre-push", [shared], c);
+  expect(checks.filter(step => step.command[1] === "scripts/local-gate-tests.ts" && step.command.includes("./" + shared)).map(step => step.name)).toEqual(["Linux tests"]);
+  expect(checks.find(step => step.name === "Linux tests")?.command).toContain("./src/platform.test.ts");
+});
+
+test("privacy tool, catalog and imported source changes select the self-tests", () => {
+  const suite = "scripts/privacy-canonical-text.test.ts";
+  for (const file of ["scripts/privacy-known-value-fingerprints.json", "src/lib/privacy/canonicalText.ts", ".github/workflows/privacy-publication.yml"]) {
+    const selected = discover(root, "HEAD", [file]);
+    expect(selected.privacySelfTests).toContain(suite);
+    expect(plan("pre-push", [file], selected).find(step => step.name === "touched tests")?.command).toContain("./" + suite);
+  }
+  expect(discover(root, "HEAD", ["docs/operator-guide.md"]).privacySelfTests).toEqual([]);
+  expect(discover(root, "HEAD", [suite], "pre-commit").privacySelfTests).toEqual([]);
+});
+
 test("the measured pipeline file families reserve comparison time without changing selection", () => {
   const now = 1_000;
   for (const file of ["src/lib/pipelines/engine.ts", "src/lib/pipelines/engine.fixture.ts", "src/lib/pipelines/engine.providerBudget.test.ts", "src/lib/pipelines/git.ts", "src/lib/pipelines/parkedPublication.test.ts"]) {
@@ -86,12 +105,11 @@ test("dependency candidate installs the frozen graph before later verification",
   expect(steps[1]?.name).toBe("frozen install");
   expect(steps[1]?.command).toEqual(["bun", "install", "--frozen-lockfile", "--ignore-scripts"]);
 });
-test("media deferral preserves the commit selection when the whole diff is media", () => {
-  const steps = plan("pre-push", ["image.png"], context({ skippedMedia: ["image.png"] }));
+test("media-only pushes inspect the full commit selection", () => {
+  const steps = plan("pre-push", ["image.png"], context());
   const privacy = steps.find(step => step.name === "privacy")!.command;
   expect(privacy).not.toContain("image.png"); expect(privacy).toContain("--check-commits");
   expect(privacy).toContain("--added-lines");
-  expect(privacy).toContain("--defer-unavailable-media");
   expect(privacy).not.toContain("--paths");
 });
 test("state isolation replaces inherited roots and removes the live owner claim", () => {
