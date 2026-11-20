@@ -6,7 +6,7 @@ import type { Database } from "bun:sqlite";
 import { readCpuPriority, type CpuPrioritySource } from "./cpuPriority";
 import type { TaskPriority } from "../tasks/types";
 
-import { processIdentityStatus, type ProcessIdentity, type ProcessIdentityStatus } from "../processIdentity";
+import { processIdentityStatus, systemBootEpoch, type ProcessIdentity, type ProcessIdentityStatus } from "../processIdentity";
 import { procBackend } from "../proc";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "./signalSandboxContext";
 
@@ -180,7 +180,7 @@ export class CpuAdmissionQueue {
       const schemaReady = () => {
         const triggers = new Map(this.db.query<{ name: string; sql: string }, []>("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'").all().map(row => [row.name, row.sql]));
         const columns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().map(row => row.name));
-        return triggers.get("tickets_fifo") === TICKETS_FIFO && triggers.get("tickets_poll") === TICKETS_POLL
+        return triggers.has("legacy_gate_retired") && triggers.get("tickets_fifo") === TICKETS_FIFO && triggers.get("tickets_poll") === TICKETS_POLL
           && ["priority", "source", "low_pressure", "aging", "fifo_seq"].every(name => columns.has(name));
       };
       if (!schemaReady()) {
@@ -232,6 +232,19 @@ export class CpuAdmissionQueue {
           }
           this.db.exec("DROP TRIGGER IF EXISTS tickets_fifo");
           this.db.exec(TICKETS_FIFO);
+          if (!this.db.query("SELECT 1 FROM sqlite_master WHERE name = 'legacy_gate_retired'").get()) {
+            // Historical shells delete their own command ticket when claiming.
+            // A cancellation is also a possible claim until that identity exits.
+            this.db.exec(`CREATE TABLE legacy_gate_retirements (seq INTEGER PRIMARY KEY, owner TEXT);
+              CREATE TABLE legacy_gate_cutover (id INTEGER PRIMARY KEY, boot TEXT, clock TEXT, uptime REAL, overflow INTEGER NOT NULL);
+              INSERT INTO legacy_gate_cutover VALUES (1, NULL, NULL, NULL, 0);
+              CREATE TRIGGER legacy_gate_retired AFTER DELETE ON tickets WHEN OLD.key GLOB 'command:[0-9]*' BEGIN
+                INSERT INTO legacy_gate_retirements (owner) VALUES (OLD.owner);
+                UPDATE legacy_gate_cutover SET overflow = 1 WHERE overflow = 0 AND last_insert_rowid() > 128;
+                DELETE FROM legacy_gate_retirements WHERE seq <= last_insert_rowid() - 128;
+              END`);
+            if (this.lastAdmission() !== null) this.restartLegacyObservation();
+          }
           this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
           // The poll trigger above stamped only ownerless tickets at first.
           if (this.db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'tickets_poll'").get()?.sql !== TICKETS_POLL) {
@@ -295,6 +308,53 @@ export class CpuAdmissionQueue {
   }
   lastAdmission(): number | null {
     return this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
+  }
+  // Called with the SQLite writer held. A process already running at this
+  // boundary can own an unobserved grant. A later birth has complete history.
+  private restartLegacyObservation(): void {
+    const context = process.platform === "linux" ? signalSandboxContext() : null;
+    let uptime: number | null = null, clock: string | null = null;
+    if (process.platform === "linux") {
+      const proc = context?.hostProc ?? "/proc";
+      try {
+        clock = fs.readlinkSync(path.join(proc, "self/ns/time"));
+        uptime = Number(fs.readFileSync(path.join(proc, "uptime"), "utf8").split(" ")[0]);
+      }
+      catch { /* An unavailable clock keeps the pre-existing grant uncertain. */ }
+    }
+    this.db.query("UPDATE legacy_gate_cutover SET boot = ?, clock = ?, uptime = ?, overflow = 0").run(
+      context?.hostEpoch ?? (process.platform === "linux" ? systemBootEpoch() : null) ?? "unknown", clock, uptime);
+    this.db.exec("DELETE FROM legacy_gate_retirements");
+  }
+  legacyGateHistory(epoch: string) {
+    const snapshot = () => this.db.transaction(() => ({
+      cutover: this.db.query<{ boot: string | null; clock: string | null; uptime: number | null; overflow: number }, []>(
+        "SELECT boot, clock, uptime, overflow FROM legacy_gate_cutover WHERE id = 1").get()!,
+      rows: this.db.query<{ owner: string | null }, []>("SELECT owner FROM legacy_gate_retirements").all(),
+    }))();
+    const read = () => {
+      const { cutover, rows } = snapshot();
+      const retirements = new Set<string>();
+      let complete = !cutover.overflow;
+      for (const row of rows) {
+        let owner: ProcessIdentity | null = null;
+        try { if (row.owner) owner = JSON.parse(row.owner) as ProcessIdentity; }
+        catch { /* A malformed historical identity requires a new observation. */ }
+        if (owner && owner.bootEpoch === epoch && Number.isSafeInteger(owner.pid) && owner.pid > 0 &&
+          typeof owner.startIdentity === "string" && /^\d+:\d+$/.test(owner.startIdentity) && owner.startIdentity.startsWith(`${owner.pid}:`)) {
+          retirements.add(owner.startIdentity);
+        } else complete = false;
+      }
+      return { cutover, retirements, complete };
+    };
+    const history = read();
+    if (history.complete) return history;
+    // A missed or untranslatable retirement invalidates absence as evidence
+    // for existing processes. Later births get a fresh, complete observation.
+    return this.db.transaction(() => {
+      if (!read().complete) this.restartLegacyObservation();
+      return read();
+    }).immediate();
   }
   waitingGateOwners(): string[] {
     return this.db.query<{ owner: string }, []>(`SELECT DISTINCT owner FROM tickets
