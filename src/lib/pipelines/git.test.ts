@@ -101,25 +101,40 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
   const { registerPipelineTick } = await import("./controllerSignal");
   const entered = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
+  const bin = path.join(box.root, "bin"); fs.mkdirSync(bin);
+  const enteredPath = path.join(box.root, "publish-entered");
+  const releasedPath = path.join(box.root, "publish-released");
+  const gitBinary = Bun.which("git", { PATH: process.env.PATH });
+  if (!gitBinary) throw new Error("git is unavailable on the sanitized PATH");
+  fs.writeFileSync(path.join(bin, "git"), phase === "probe"
+    ? '#!/bin/sh\nif [ "$1" = "ls-remote" ]; then touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; fi\nexec "$PUBLISH_GIT" "$@"\n'
+    : '#!/bin/sh\nif [ "$1" = "push" ]; then "$PUBLISH_GIT" "$@" || exit $?; touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; exit 0; fi\nexec "$PUBLISH_GIT" "$@"\n', { mode: 0o700 });
   const restoreTick = registerPipelineTick(async () => {});
   const exec: ExecPort = async (command, args, cwd, env, options) => {
-    const result = await realExec(command, args, cwd, env, options);
-    // Hold the real Git result at the publisher's boundary. Other Git calls,
-    // including teardown, can proceed even while this reply is held.
-    if (result.code === 0 && command === "git" && args[0] === (phase === "probe" ? "ls-remote" : "push")) {
-      entered.resolve();
-      await released.promise;
+    const resultPromise = realExec(command, args, cwd, command === "git" ? {
+      ...env,
+      PATH: `${bin}:${env?.PATH ?? process.env.PATH ?? ""}`,
+      PUBLISH_ENTERED: enteredPath,
+      PUBLISH_RELEASED: releasedPath,
+      PUBLISH_GIT: gitBinary,
+    } : env, options);
+    if (command === "git" && args[0] === (phase === "probe" ? "ls-remote" : "push")) {
+      let finished = false;
+      void resultPromise.finally(() => { finished = true; });
+      while (!fs.existsSync(enteredPath) && !finished) await Bun.sleep(5);
+      if (fs.existsSync(enteredPath)) entered.resolve();
     }
-    return result;
+    return resultPromise;
   };
   let pending: ReturnType<typeof publishPipelineBranch> | undefined;
   try {
     const head = await box.commit("accepted.txt", "accepted\n");
     pending = publishPipelineBranch(box.subject, exec, { acceptedSha: head });
     expect(await Promise.race([entered.promise.then(() => true), pending.then(() => false)])).toBe(true);
+    expect(fs.existsSync(enteredPath)).toBe(true);
     const ports = { ...defaultPipelinePorts(), stopStageAgent: async () => ({ outcome: "not-running" as const }), paneAgentAlive: async () => false, stageHostResident: async () => false };
     expect((await patchPipeline(box.subject.id, { action: "close" }, ports)).error).toBeUndefined();
-    released.resolve();
+    fs.writeFileSync(releasedPath, "");
     expect(await pending).toMatchObject(phase === "probe" ? { ok: false, error: expect.stringContaining("superseded") }
       : { ok: true, remote: "unreachable", uncertain: true, detail: expect.stringContaining("superseded") });
     expect(findPipelineRecord(box.subject.id)!.state).toBe("closed");
@@ -133,7 +148,7 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
       expect(findPipelineRecord(box.subject.id)!.delivery!.journal.at(-1)!.reason).toContain("reconcile");
     }
   } finally {
-    released.resolve();
+    fs.writeFileSync(releasedPath, "");
     try { await pending; }
     finally {
       restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
