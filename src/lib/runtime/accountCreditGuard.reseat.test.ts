@@ -264,28 +264,87 @@ test("restored capacity on the current successor delivers the preserved cut thro
 });
 
 test("seat rotation during reseat writer admission leaves no stale-seat migration", async () => {
-  const f = fixture("sqlite", { project: "fixture-project", seatEpoch: 4 });
+  const f = fixture("sqlite", { project: "fixture-project", seatEpoch: 1 });
   const select = selection(f.root);
-  let currentSeat = { project: "fixture-project", seatEpoch: 4, conversationId: f.conversation.id };
-  const seatRead = spyOn(orchestratorSeats, "activeOrchestratorSeats").mockImplementation(() => [currentSeat as never]);
+  const seatProject = "fixture-project";
+  const designate = (requestId: string, conversationId: string) => {
+    orchestratorSeats.beginOrchestratorSeatIntent({ project: seatProject, mandate: "fixture", clientRequestId: requestId,
+      mode: "existing", now: new Date(epoch).toISOString() });
+    return orchestratorSeats.completeOrchestratorSeatIntent({ project: seatProject, clientRequestId: requestId,
+      conversationId, path: null, now: new Date(epoch).toISOString() });
+  };
+  designate("initial-seat", f.conversation.id);
+  let rotateDuringResolution = false;
+  let rotated = false;
+  select.mockImplementation((engine, request) => {
+    if (rotateDuringResolution && !rotated && request?.requestedId === "account-b") {
+      // This is the target-resolution await after the guard's initial custody
+      // read and before it acquires the shared writer fence. Rotate through the
+      // real durable seat API, which commits under that same fence.
+      rotated = true;
+      designate("rotated-seat", "conversation_successor");
+    }
+    return { kind: "available", account: { engine, accountId: request?.requestedId ?? "account-b", kind: "managed",
+      home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } };
+  });
   try {
     await f.poll(); await stopAndClean(f);
-    const write = f.registry.deliveryWriteOrBusy.bind(f.registry);
-    const admission = spyOn(f.registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, callback) => {
-      if (correlation.label === "account-credit-guard.reseat") {
-        currentSeat = { ...currentSeat, seatEpoch: 5, conversationId: "conversation_successor" };
-      }
-      return write(correlation, callback);
-    });
-    try {
-      await expect(f.poll()).rejects.toThrow("lost orchestrator seat custody");
-      expect(f.registry.conversation(f.conversation.id)?.migration).toBeNull();
-      expect(Object.values(f.registry.readOnlySnapshot().migrationIntents).filter(intent =>
-        intent.requestIds.some(requestId => requestId.startsWith(`reseat:${f.conversation.id}:`)))).toHaveLength(1);
-      expect(Object.values(f.registry.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries)
-        .filter(delivery => delivery.clientMessageId === f.cut.id)).toHaveLength(0);
-    } finally { admission.mockRestore(); }
-  } finally { seatRead.mockRestore(); select.mockRestore(); f.registry.close(); }
+    rotateDuringResolution = true;
+    await expect(f.poll()).rejects.toThrow("lost orchestrator seat custody");
+    expect(rotated).toBe(true);
+    expect(orchestratorSeats.orchestratorSeatFor(seatProject).active)
+      .toMatchObject({ seatEpoch: 2, conversationId: "conversation_successor" });
+    expect(f.registry.conversation(f.conversation.id)?.migration).toBeNull();
+    expect(Object.values(f.registry.readOnlySnapshot().migrationIntents).filter(intent =>
+      intent.requestIds.some(requestId => requestId.startsWith(`reseat:${f.conversation.id}:`)))).toHaveLength(1);
+    expect(Object.values(f.registry.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries)
+      .filter(delivery => delivery.clientMessageId === f.cut.id)).toHaveLength(0);
+  } finally { select.mockRestore(); f.registry.close(); }
+});
+
+test("a stopped guard cut waits for an independent engine drain and resumes after that drain stops", async () => {
+  const f = fixture(); const select = selection(f.root);
+  try {
+    await f.poll();
+    const first = f.registry.conversation(f.conversation.id)!.migration!;
+    f.registry.transitionConversationMigration(f.conversation.id, first.revision, ["waiting-turn", "requested"], { phase: "preparing" });
+    f.registry.transitionConversationMigration(f.conversation.id, first.revision, ["preparing"], { phase: "successor-starting" });
+    const pathB = path.join(f.root, "successor-b.jsonl"); fs.writeFileSync(pathB, "");
+    const receiptB = { operationId: first.operationId, nativeId: "successor-b", path: pathB, continuityPaths: [pathB],
+      historyHash: "fixture-b", host: { kind: "codex-app-server" as const, identity: "fixture-b", epoch: 1, verifiedAt: new Date().toISOString() } };
+    f.registry.persistMigrationProviderReceipt(f.conversation.id, first.revision, first.operationId, receiptB);
+    f.registry.commitSuccessor(f.conversation.id, { id: receiptB.nativeId, path: pathB, accountId: "account-b",
+      historyHash: receiptB.historyHash, host: receiptB.host }, first.revision, first.operationId, receiptB);
+
+    observe(f.registry, "account-b", 99);
+    select.mockReturnValue({ kind: "available", account: { engine: "codex", accountId: "account-c", kind: "managed",
+      home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
+    await f.poll();
+    expect(f.registry.conversation(f.conversation.id)?.migration).toMatchObject({ creditGuard: true,
+      sourceGenerationId: "successor-b", targetId: "account-c" });
+    await stopAndClean(f);
+
+    const route = f.registry.engineRouting("codex");
+    const drain = f.registry.commitMigrationIntent({ engine: "codex", targetId: "account-d", origin: "manual",
+      requestId: "independent-engine-drain", expectedRevision: route.revision, scope: "all" });
+    expect(f.registry.conversation(f.conversation.id)?.migration).toMatchObject({ intentId: drain.id, targetId: "account-d" });
+    observe(f.registry, "account-b", 1);
+    select.mockImplementation((engine, request) => ({ kind: "available", account: { engine,
+      accountId: request?.requestedId ?? "account-b", kind: "managed", home: f.root, transcriptRoot: f.root,
+      env: { NODE_ENV: "test" } } }));
+    await f.poll();
+    expect(Object.values(f.registry.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries)
+      .filter(delivery => delivery.clientMessageId === f.cut.id)).toHaveLength(0);
+    expect(f.store.list()).toMatchObject([{ id: f.cut.id, state: "owed", attempts: 0 }]);
+
+    expect((await f.registry.stopMigrationIntent(drain.id)).acquired).toBe(true);
+    expect(f.registry.conversation(f.conversation.id)?.migration).toBeNull();
+    await f.poll();
+    const queued = Object.values(f.registry.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries)
+      .filter(delivery => delivery.clientMessageId === f.cut.id);
+    expect(queued).toHaveLength(1);
+    expect(f.store.list()).toMatchObject([{ id: f.cut.id, state: "submitted", attempts: 1 }]);
+  } finally { select.mockRestore(); f.registry.close(); }
 });
 
 test("an explicit reseat joining an in-flight guard operation preserves its automatic retry receipt", async () => {

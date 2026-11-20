@@ -1,6 +1,7 @@
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { accountManager } from "@/lib/accounts/manager";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
@@ -172,7 +173,16 @@ async function runAccountCreditGuard(registry: AgentRegistry,
       : undefined;
     const retainedGuardLineage = guardReseatIntent?.scope === "conversation"
       && guardReseatIntent.state === "stopped"
-      && guardReseatIntent.requestIds.some(request => request.startsWith(`reseat:${conversation.id}:`));
+      && guardReseatIntent.requestIds.some(request => request.startsWith(`reseat:${conversation.id}:`))
+      && (!conversation.migration || conversation.migration.intentId === conversation.creditGuardReseat?.intentId);
+    const migrationOwner = conversation.migration ? registry.migrationIntent(conversation.migration.intentId) : null;
+    const unrelatedMigrationOwnsRecovery = Boolean(migrationOwner?.state === "draining"
+      && conversation.migration?.intentId !== conversation.creditGuardReseat?.intentId);
+    // An engine-wide drain may already have enrolled this conversation even
+    // after a stopped guard reseat cleared its own migration. Keep the cut owed
+    // until that independent owner settles; otherwise its held-delivery fence
+    // can outlive the delivery when the drain is stopped.
+    if (unrelatedMigrationOwnsRecovery) continue;
     if (moved && !retainedGuardLineage
       && (!conversation.migration?.creditGuard || sourceIndex < 0 || migrationSourceIndex < sourceIndex)) {
       await store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "another runtime selection moved the conversation" });
@@ -217,7 +227,6 @@ async function runAccountCreditGuard(registry: AgentRegistry,
       }
     };
     const authorizeTarget = () => {
-      assertSeatEpoch();
       if (!eligible()) throw new Error("paid-credit recovery lost pipeline custody");
       const latest = registry.conversation(conversation.id);
       if (!latest || latest.supersededBy || latest.reconfigure?.status === "applying"
@@ -229,13 +238,17 @@ async function runAccountCreditGuard(registry: AgentRegistry,
         ?? conversationProjectKey(latest?.projectOwnership, latestProfile);
       const selected = resolve("codex", { project: latestProject, model: latestProfile?.model, requestedId: target, requireCapacity: true });
       if (selected.kind !== "available" || selected.account.accountId !== target) throw new Error("paid-credit recovery target is no longer admissible");
+      // Resolve the target before the final seat check. Seat changes share the
+      // account mutation lock held around the eventual registry write.
+      assertSeatEpoch();
     };
     authorizeTarget();
     if (target !== generation.accountId) {
-      const reseated = await registry.deliveryWriteOrBusy({ label: "account-credit-guard.reseat", operationId: obligation.id }, () => {
-        authorizeTarget();
-        return registry.requestConversationReseat(conversation.id, target, undefined, undefined, true, obligation.id);
-      });
+      const reseated = await withAccountMutationLockAsync(() =>
+        registry.deliveryWriteOrBusy({ label: "account-credit-guard.reseat", operationId: obligation.id }, () => {
+          authorizeTarget();
+          return registry.requestConversationReseat(conversation.id, target, undefined, undefined, true, obligation.id);
+        }), { caller: "account-credit-guard.reseat" });
       // A stopped attempt on unchanged dead evidence leaves this obligation
       // owed. Its durable receipt survives hygiene and the next process.
       if (reseated.migration && !["committed", "rolled-back"].includes(reseated.migration.phase)) requestAccountMigrationTick();
