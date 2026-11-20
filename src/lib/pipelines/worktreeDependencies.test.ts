@@ -586,7 +586,7 @@ test("two fresh processes share one completed installation", async () => {
   } finally { f.close(); }
 }, 30_000);
 
-test("warm validation rechecks a CLI link removed immediately after its verification read", async () => {
+test.each([2, 3])("warm validation rechecks a CLI link removed after graph read %i", async removeAfterRead => {
   const f = await lockedFixture({ registry: true });
   let restore: (() => void) | undefined;
   try {
@@ -599,14 +599,14 @@ test("warm validation rechecks a CLI link removed immediately after its verifica
     function intercept(filename: fs.PathLike, options?: StatOptions): Promise<Stats | BigIntStats> {
       const value = options?.bigint ? lstat(filename, { bigint: true }) : lstat(filename);
       return value.then(result => {
-        if (filename === cli && ++reads === 2) fs.unlinkSync(cli);
+        if (filename === cli && ++reads === removeAfterRead) fs.unlinkSync(cli);
         return result;
       });
     }
     const hook = spyOn(fs.promises, "lstat").mockImplementation(intercept);
     restore = () => hook.mockRestore();
     await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow(/changed during (validation|preparation)/);
-    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(reads).toBeGreaterThanOrEqual(removeAfterRead);
     expect(fs.realpathSync(local)).toBe(modules);
     expect(fs.existsSync(cli)).toBe(false);
   } finally { restore?.(); f.close(); }

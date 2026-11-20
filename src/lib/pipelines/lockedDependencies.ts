@@ -149,10 +149,24 @@ class ValidationReads {
     });
   }
 
-  assertCurrent(message: string): void {
-    for (const [filename, seen] of this.observed) {
-      if (!sameVersion(seen, entryNow(filename))) throw new Error(message);
-    }
+  async assertCurrent(message: string, check?: () => void): Promise<void> {
+    const observed = [...this.observed];
+    await inBatches(observed, async ([filename, seen]) => {
+      check?.();
+      if (!sameVersion(seen, await statBigInt(filename))) throw new Error(message);
+      check?.();
+    });
+  }
+
+  snapshot(): IterableIterator<[string, BigIntStats | undefined]> { return this.observed.entries(); }
+  observedEntry(filename: string): BigIntStats | undefined { return this.observed.get(filename); }
+}
+
+async function statBigInt(filename: string): Promise<BigIntStats | undefined> {
+  try { return await fs.lstat(filename, { bigint: true }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
   }
 }
 
@@ -368,12 +382,23 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
   const verify = async () => {
     await reads.verify("dependency installation changed during validation; retry setup", check);
   };
+  const critical = new Set<string>([target, modules, receipt, path.join(modules, ".bin")]);
+  for (const file of executables as string[]) critical.add(path.join(modules, file));
+  for (const link of cliLinks as CliLink[]) critical.add(path.join(modules, link.file));
   const assertAnchors = () => {
     if (!sameVersion(directory, entryNow(target)) || !sameVersion(root, entryNow(modules))
       || !sameVersion(seal, entryNow(receipt))) throw new Error("dependency installation changed during preparation; retry setup");
-    installed.reads.assertCurrent("shared dependency manifest changed during preparation; retry setup");
+    for (const filename of critical) {
+      const expected = reads.observedEntry(filename);
+      if (!sameVersion(expected, entryNow(filename))) throw new Error("dependency graph anchor changed during validation; retry setup");
+    }
+    // The manifest has only a handful of reads; keep this synchronous with
+    // the final anchor check immediately before any return or link commit.
+    for (const [filename, seen] of installed.reads.snapshot()) {
+      if (!sameVersion(seen, entryNow(filename))) throw new Error("shared dependency manifest changed during preparation; retry setup");
+    }
   };
-  return { reseal, writable, verify, assertAnchors, assertCurrent: (message: string) => reads.assertCurrent(message) };
+  return { reseal, writable, verify, assertAnchors, assertCurrent: (message: string, check?: () => void) => reads.assertCurrent(message, check) };
 }
 
 /** Match Git's registration backlink, so a copied .git pointer cannot give a
@@ -473,7 +498,7 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
       return plan;
     };
     const assertInputs = (plan: DependencyPlan) =>
-      plan.reads.assertCurrent("dependency inputs changed during preparation; retry setup");
+      plan.reads.assertCurrent("dependency inputs changed during preparation; retry setup", remaining);
 
     enter("validation", "existing link and seal");
     const before = entryNow(local);
@@ -487,12 +512,14 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
           await checked.verify();
           assertCurrent();
           assertCache();
-          checked.assertAnchors();
-          checked.assertCurrent("dependency graph changed during validation; retry setup");
-          assertInputs(plan);
+          await checked.assertCurrent("dependency graph changed during validation; retry setup", remaining);
+          await assertInputs(plan);
+          assertCurrent();
           if (!sameVersion(before, entryNow(local)) || !linksDirectlyTo(local, graph.modules)) {
             throw new Error("dependency link changed during validation; retry setup");
           }
+          checked.assertAnchors();
+          assertCurrent();
           return true;
         }
       }
@@ -596,7 +623,7 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
         const build = path.join(cache, `building-${plan.key}`);
         if (await stat(build)) throw new Error("unowned dependency build directory; preserve it for inspection");
         assertWriter();
-        assertInputs(plan);
+        await assertInputs(plan);
         await fs.writeFile(activeBuild, JSON.stringify({ key: plan.key }), { flag: "wx" });
         try {
           assertWriter();
@@ -657,12 +684,14 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
       if (previous?.isSymbolicLink() && linksDirectlyTo(local, modules) && await dependencyTarget(local) === modules) {
         await checked.verify();
         assertWriter();
-        checked.assertAnchors();
-        checked.assertCurrent("dependency graph changed during validation; retry setup");
-        assertInputs(plan);
+        await checked.assertCurrent("dependency graph changed during validation; retry setup", remaining);
+        await assertInputs(plan);
+        assertWriter();
         if (!sameVersion(previous, entryNow(local)) || !linksDirectlyTo(local, modules)) {
           throw new Error("dependency link changed during validation; retry setup");
         }
+        checked.assertAnchors();
+        assertWriter();
         return true;
       }
 
@@ -684,12 +713,14 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
         }
         await checked.verify();
         assertWriter();
-        checked.assertAnchors();
-        checked.assertCurrent("dependency graph changed during validation; retry setup");
-        assertInputs(plan);
+        await checked.assertCurrent("dependency graph changed during validation; retry setup", remaining);
+        await assertInputs(plan);
+        assertWriter();
         if (!sameVersion(previous, entryNow(local)) || !sameVersion(staged, entryNow(link))) {
           throw new Error("dependency link changed before commit");
         }
+        checked.assertAnchors();
+        assertWriter();
         const saved = preserved && path.join(preserved, "node_modules");
         try {
           if (saved) filesystem.renameSync(local, saved);
@@ -705,7 +736,7 @@ export async function prepareLockedDependencies(cwd: string, options: Preparatio
             throw error;
           }
           checked.assertAnchors();
-          assertInputs(plan);
+          await assertInputs(plan);
         }
         committed = true;
         return true;
