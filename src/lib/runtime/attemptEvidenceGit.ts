@@ -6,6 +6,7 @@ import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
 
 export const MAX_ATTEMPT_EVIDENCE_BLOBS = 8192;
 const LOOKUP_MS = 2000;
+const GIT_LINE_END = process.platform === "win32" ? /\r?\n/ : "\n";
 
 export type AttemptEvidenceFallback = "repository-unavailable" | "object-format" | "object-store-unverified"
   | "evidence-index-unavailable" | "lookup-limit" | "git-lookup" | "git-deadline";
@@ -70,8 +71,9 @@ export async function attemptEvidenceRepository(repoDir: string | undefined, sou
   if (!repo || within(repo, source) || within(repo, original)) return { fallback: "repository-unavailable" } as const;
   try {
     const [top, objectPath, format, end, ...rest] = (await run(repo,
-      ["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-path", "objects", "--show-object-format"])).split("\n");
-    if (top !== repo || end !== "" || rest.length) return { fallback: "repository-unavailable" } as const;
+      ["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-path", "objects", "--show-object-format"])).split(GIT_LINE_END);
+    if (end !== "" || rest.length || !path.isAbsolute(top) || await fs.promises.realpath(top) !== repo)
+      return { fallback: "repository-unavailable" } as const;
     if (format !== "sha1") return { fallback: "object-format" } as const;
     const objects = await fs.promises.realpath(objectPath);
     if (within(objects, source) || within(objects, original)) return { fallback: "object-store-unverified" } as const;
@@ -83,7 +85,7 @@ export async function attemptEvidenceRepository(repoDir: string | undefined, sou
       try {
         const input = blobs.map(blob => blob.id).join("\n") + "\n";
         const stdout = await run(repo, ["cat-file", "--batch-check"], { input, objects });
-        const lines = stdout.split("\n");
+        const lines = stdout.split(GIT_LINE_END);
         if (lines.pop() !== "" || lines.length !== blobs.length || !current()) return { fallback: "git-lookup" } as const;
         const present = new Set<string>();
         for (const [index, { id, bytes }] of blobs.entries()) {
