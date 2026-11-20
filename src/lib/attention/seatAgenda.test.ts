@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
+import { patchTask } from "@/lib/tasks/commands";
 import type { FileEntry } from "@/lib/types";
 
 import { seatAgendaAsks } from "./seatAgenda";
@@ -169,4 +170,41 @@ test("lane handoffs page every linked task and retain a task moved to Inbox", ()
   expect(asks.map(ask => ask.waitingTaskIds).flat()).toEqual(tasks.map(task => task.id));
   expect(asks.map(ask => ask.label).join(" ")).toContain("waiting-5");
   expect(asks.every(ask => ask.label.includes("pipeline_action retry-merge"))).toBe(true);
+});
+
+test("a completed closed merge keeps the task and retry action together on its wake", () => {
+  const task: BoardTask = { id: "task-merge", project: "project-a", text: "Publish the change", status: "blocked",
+    placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind: "external", by: "agent", since: at, note: "Waiting for merge" } };
+  const lane = { ...mergeLane("engine-completed", "checks did not finish"), taskIds: [task.id], closedAt: at };
+  const [ask] = seatAgendaAsks({ files: [], pipelines: [lane], tasks: [task] }, now, "project-a");
+  expect(ask).toMatchObject({ id: lane.id, waitingTaskIds: [task.id] });
+  expect(ask!.label).toContain(task.id);
+  expect(ask!.label).toContain("pipeline_action retry-merge");
+});
+
+test("the maintenance hold resend write leaves a named task action on the next seat agenda", () => {
+  const task: BoardTask = { id: "moved-task", project: "project-a", text: "Resume publication", status: "blocked",
+    placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind: "external", by: "agent", since: at, note: "Parked publication" } };
+  const moved = patchTask([task], task.id, { hold: task.hold }, at, { actor: "agent" });
+  if (!moved.ok) throw new Error(moved.error);
+  const lane = { ...mergeLane("publication", "checks did not finish"), taskIds: [task.id] };
+  const [ask] = seatAgendaAsks({ files: [], pipelines: [lane], tasks: [moved.task] }, now, "project-a");
+  expect(moved.task.status).toBe("inbox");
+  expect(ask).toMatchObject({ id: lane.id, waitingTaskIds: [task.id] });
+  expect(ask!.label).toContain(`Waiting task(s) ${task.id}`);
+  expect(ask!.label).toContain("pipeline_action retry-merge");
+});
+
+test("an archived merged lane still routes its task to build acceptance", () => {
+  const task: BoardTask = { id: "archived-task", project: "project-a", text: "Verify deployment", status: "blocked",
+    placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind: "external", by: "agent", since: at, note: "Check the build" } };
+  const lane = { ...mergeLane("archived-lane", ""), state: "completed" as const,
+    merge: { state: "merged", updatedAt: at }, hiddenAt: at, taskIds: [task.id] };
+  const [ask] = seatAgendaAsks({ files: [], pipelines: [lane], tasks: [task] }, now, "project-a");
+  expect(ask).toMatchObject({ id: task.id, waitingTaskIds: [task.id] });
+  expect(ask!.label).toContain("deployment_status");
+  expect(ask!.label).toContain(task.id);
 });

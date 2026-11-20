@@ -2648,23 +2648,30 @@ describe("waits routed to the seat", () => {
   });
 
   test("a due pause reminder carries its Waiting card id and the resume action", () => {
-    const since = new Date(NOW - 86_400_000).toISOString();
+    const since = new Date(NOW - MINUTE).toISOString();
     const boardTask: BoardTask = { id: "task-paused", project: PROJECT, status: "blocked", text: "Resume the paused work",
       placement: "unplaced", assignments: [], createdAt: since, updatedAt: since };
     const pipeline = { id: "paused-lane", project: PROJECT, state: "paused", taskIds: [boardTask.id], pausedAt: since,
-      createdAt: since, runs: [] } as unknown as Pipeline;
+      createdAt: since, runs: [], pause: { reason: "quota", resumeCondition: { kind: "account-usage", engine: "codex",
+        accountId: "account-fixture", window: "session", belowPercent: 80 } } } as unknown as Pipeline;
     const waits = new Map<string, string[]>();
     const workerAsks = seatAgendaAsks({ files: [], pipelines: [pipeline], tasks: [boardTask] }, NOW / 1000, PROJECT, waits);
     const decision = seatTickDecision(input({
       tasks: [{ id: boardTask.id, title: boardTask.text, status: "blocked", updatedAt: since, owned: false }],
-      pipelines: [lane({ id: pipeline.id, title: "Paused work", state: "inert", updatedAt: since, pausedBy: "other", pausedAt: since })],
+      pipelines: [lane({ id: pipeline.id, title: "Paused work", state: "inert", updatedAt: since, pausedBy: "other", pausedAt: since,
+        pauseConditionMet: true })],
       pauseWaitingTasks: Object.fromEntries(waits), workerAsks,
+      settledDeploys: [{ deploymentId: "priority-deploy", phase: "succeeded", sha: "e".repeat(40), error: null,
+        settledAt: new Date(NOW - MINUTE).toISOString() }],
     }));
     expect(workerAsks).toEqual([]);
     if (decision.verdict.kind !== "wake") throw new Error("expected a pause wake");
     expect(decision.verdict.items).toContainEqual(expect.objectContaining({ id: pipeline.id, reminderKind: "pause",
       label: expect.stringMatching(/task-paused.*pipeline_action resume/) }));
+    expect(decision.verdict.items[0]).toMatchObject({ kind: "deploy", id: "priority-deploy" });
+    expect(decision.verdict.items[1]!.label).toContain(boardTask.id);
     expect(decision.verdict.taskPage?.rows ?? []).toEqual([]);
+    expect(seatTickWakeCommitPlan(decision.verdict, { fingerprint: "quota-deploy", eventsThrough: 0 })).toBeTruthy();
   });
 
   test("an ask wakes the seat on the next check, without waiting for the interval, and names the question and the way to answer", () => {
