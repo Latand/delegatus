@@ -91,11 +91,12 @@ for (const backend of ["legacy", "sqlite-hot", "sqlite-cold"] as const) test(`ru
       expect(JSON.stringify(appended)).toBe(JSON.stringify(expected));
       expect(aliases.canonicalProject("scope-probe")).toBe("scope-probe");
       const reports = bridge.readBridgeReportLog().reports;
-      const before = reports.filter(row => row.origin?.kind === "manager" && !!row.project && canonical(row.project) === project)
+      const before = reports.filter(row => !!row.project && canonical(row.project) === project)
         .map(({ id, project, origin, at, covers, coversOwedAt }) => ({ id, project, origin, at, covers, coversOwedAt }));
       const seatRows = seatTickReportRows(project);
       expect(JSON.stringify(seatRows.reports)).toBe(JSON.stringify(before));
       expect(seatRows.reservedIds).toEqual(log.retired);
+      expect(seatRows.occupiedIds).toEqual(before.map(row => row.id));
     }
   } finally {
     for (const restore of restores.reverse()) restore();

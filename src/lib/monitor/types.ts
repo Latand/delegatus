@@ -1161,6 +1161,9 @@ export interface SeatTickReportsInput {
   coveredIds?: readonly string[];
   /** Report ids retained after their full rows were retired. */
   reservedIds?: readonly string[];
+  /** IDs of every current project report row, including worker-authored rows;
+      these reserve keys without providing settlement evidence. */
+  occupiedIds?: readonly string[];
   /** Outcome keys settled by an earlier check and retained in project state. */
   acknowledgedOutcomeKeys?: readonly string[];
   /** The ids a report filed under `key` may carry: scoped by the project, and

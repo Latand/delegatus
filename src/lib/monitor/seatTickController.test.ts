@@ -966,8 +966,9 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
     rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
     await runSeatTickCheck(PROJECT, rig.deps);
     expect(rig.sent.at(-1)!.text.length).toBeLessThanOrEqual(wakeLimit);
-    expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed.map(entry => ({ ...entry, requestedBy: [reportsOwed[0]!.key] })));
-    expect(rig.sent.at(-1)!.text).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
+    const requestKey = rig.written.at(-1)!.reportsOwed![0]!.requestedBy![0]!;
+    expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed.map(entry => ({ ...entry, requestedBy: [requestKey] })));
+    expect(rig.sent.at(-1)!.text).toContain(`key ${requestKey} and coversOwed: true`);
   }
   const bullet = `- [maintenance] ${run.taskId} — ${maintenanceItemLabel(run)}`;
   expect(bullet.length).toBeGreaterThan(1_200);
@@ -1061,15 +1062,18 @@ test("a recorded wake report settles its delivered set and its key is skipped on
     writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: at(NOW - 70 * MINUTE), lastProposalAt: at(NOW) }, stateFile);
     const first = await tick(NOW, [parked, second]);
     expect(first.record?.delivery).toMatchObject({ outcome: "delivered", clientMessageId: first.sent[0]!.clientMessageId });
-    expect(first.sent[0]!.text).toContain(`lane park-fir parked, lane park-sec parked. File one report with key ${firstKey}`);
+    const firstRequestKey = first.sent[0]!.text.match(/File one report with key ([^ ]+) and coversOwed: true/)?.[1] ?? "";
+    expect(firstRequestKey).not.toBe("");
+    expect(firstRequestKey).not.toBe(firstKey);
+    expect(first.sent[0]!.text).toContain(`lane park-fir parked, lane park-sec parked. File one report with key ${firstRequestKey}`);
     expect(state().reportsOwed?.map(entry => entry.key)).toEqual([firstKey, secondKey]);
     expect(state().announcedLanes).toEqual(["park-first:needs_decision", "park-second:needs_decision"]);
 
-    const filed = await fileReport(firstKey, "first-wake-report", NOW + MINUTE, false);
+    const filed = await fileReport(firstRequestKey, "first-wake-report", NOW + MINUTE, false);
     expect(filed).toMatchObject({ recorded: true, replayed: false, seq: 1,
       destinations: { telegram: { state: "sent", messageIds: [71] } } });
     expect(readBridgeReportLog().reports[0]).toMatchObject({
-      id: scopedReportId(PROJECT, firstKey), at: at(NOW + MINUTE),
+      id: scopedReportId(PROJECT, firstRequestKey), at: at(NOW + MINUTE),
     });
     expect(readBridgeReportLog().reports[0]).not.toHaveProperty("coversOwedAt");
     const unchanged = await tick(NOW + 2 * MINUTE, [parked, second]);
@@ -1086,8 +1090,8 @@ test("a recorded wake report settles its delivered set and its key is skipped on
     expect(state().reportsOwed?.map(entry => entry.key)).toEqual([laterKey]);
     expect(state().announcedLanes).toContain("park-first:needs_review");
 
-    expect(await fileReport(firstKey, "first-wake-report", NOW + 72 * MINUTE, false)).toEqual({ ...filed, replayed: true });
-    expect(await fileReport(firstKey, "duplicate-wake-report", NOW + 72 * MINUTE)).toMatchObject({
+    expect(await fileReport(firstRequestKey, "first-wake-report", NOW + 72 * MINUTE, false)).toEqual({ ...filed, replayed: true });
+    expect(await fileReport(firstRequestKey, "duplicate-wake-report", NOW + 72 * MINUTE)).toMatchObject({
       recorded: false, alreadyRecorded: true, seq: 1, reportId: filed.ok ? filed.reportId : undefined,
     });
     const stillOwed = await tick(NOW + 73 * MINUTE, []);

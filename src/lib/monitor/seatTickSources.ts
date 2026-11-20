@@ -955,8 +955,9 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
        before its folder changed key filed under the old one, and those rows
        still discharge what they covered. */
     const log = await port.log(project);
-    const manager = log.reports.filter((report) => !!report.project && report.origin?.kind === "manager"
+    const applicable = log.reports.filter((report) => !!report.project
       && (report.project === project || canonicalOrchestratorProject(report.project) === project));
+    const manager = applicable.filter(report => report.origin?.kind === "manager");
     const filedUnder = [...new Set([project, ...manager.map((report) => report.project!)])];
     const reportedIds = new Set<string>();
     const coveredIds = new Set<string>();
@@ -975,6 +976,7 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
       reportedIds: [...reportedIds],
       coveredIds: [...coveredIds],
       reservedIds: log.reservedIds,
+      occupiedIds: [...new Set([...(log.occupiedIds ?? []), ...applicable.map(report => report.id)])],
       reportIdsFor: (key) => filedUnder.map((filed) => scopedReportId(filed, key)),
       latestCoversOwedAt,
     };

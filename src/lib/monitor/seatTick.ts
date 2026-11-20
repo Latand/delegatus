@@ -1728,17 +1728,21 @@ function instant(value: string | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
-type ReportCoverage = Pick<SeatTickReportsInput, "reportedIds" | "coveredIds" | "reportIdsFor"> & { reservedIds?: readonly string[]; acknowledgedOutcomeKeys?: readonly string[] };
+type ReportCoverage = Pick<SeatTickReportsInput, "reportedIds" | "coveredIds" | "reportIdsFor"> & { reservedIds?: readonly string[]; occupiedIds?: readonly string[]; acknowledgedOutcomeKeys?: readonly string[] };
 
 function reportKeyOccupied(reports: ReportCoverage | undefined, key: string): boolean {
   if (!reports) return false;
-  return reports.reportIdsFor(key).some(id => reports.reportedIds.includes(id) || reports.reservedIds?.includes(id));
+  return reports.reportIdsFor(key).some(id => reports.reportedIds.includes(id) || reports.reservedIds?.includes(id) || reports.occupiedIds?.includes(id));
 }
 
 function reportRequestKey(owed: readonly SeatTickReportOwed[], reports: ReportCoverage | undefined, seatEpoch: number | null): string {
-  const available = owed.find(entry => !reportKeyOccupied(reports, entry.key));
-  if (available) return available.key;
-  const base = `catch-up:${seatEpoch ?? 0}:${Date.parse(owed[0]!.receivedAt) || 0}`;
+  const outcomeKeys = [...new Set(owed.map(entry => entry.key))].sort();
+  const identity = createHash("sha256").update(JSON.stringify(outcomeKeys)).digest("hex").slice(0, 16);
+  // A multi-outcome request gets its own identity so a peer outcome report
+  // cannot impersonate the delivered set and a later set cannot reuse it.
+  // Keep the familiar outcome key for an unoccupied singleton.
+  if (outcomeKeys.length === 1 && !reportKeyOccupied(reports, outcomeKeys[0]!)) return outcomeKeys[0]!;
+  const base = `wake-report:${seatEpoch ?? 0}:${identity}`;
   let key = base;
   for (let suffix = 2; reportKeyOccupied(reports, key); suffix++) key = `${base}:${suffix}`;
   return key;
@@ -1768,8 +1772,8 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   const reported = outcomeReported(reports);
   const coveredThrough = instant(reports.latestCoversOwedAt);
   const prior = state.reportsOwed ?? [];
-  const directKeys = new Set(prior.filter(entry => reports.reportIdsFor(entry.key).some(id => reports.reportedIds.includes(id))).map(entry => entry.key));
-  const acknowledgedRequests = new Set(prior.filter(entry => directKeys.has(entry.key)).flatMap(entry => entry.requestedBy ?? []));
+  const requestKeys = new Set(prior.flatMap(entry => entry.requestedBy ?? []));
+  const acknowledgedRequests = new Set([...requestKeys].filter(key => reports.reportIdsFor(key).some(id => reports.reportedIds.includes(id))));
   const cleared = prior.filter(entry => reported(entry.key)
     || (entry.requestedBy ?? []).some(key => acknowledgedRequests.has(key))
     || (Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));

@@ -20,17 +20,17 @@ import { ruleReports } from "./ruleReports";
 
 /** Report storage reads and writes shared by the seat and its response worker. */
 export type SeatTickReportRow = Pick<BridgeReportV1, "id" | "project" | "origin" | "at" | "covers" | "coversOwedAt">;
-export interface SeatTickReportLog { reports: SeatTickReportRow[]; reservedIds: string[] }
+export interface SeatTickReportLog { reports: SeatTickReportRow[]; reservedIds: string[]; occupiedIds?: string[] }
 
 export function seatTickReportRows(project: string): SeatTickReportLog {
   const { reports, retired } = readBridgeReportLog();
   return withProjectAliasSnapshot(projectAliasSnapshot(), (): SeatTickReportLog => ({
-    reports: reports.filter(row => row.origin?.kind === "manager" && !!row.project
-      && canonicalOrchestratorProject(row.project) === project)
+    reports: reports.filter(row => !!row.project && canonicalOrchestratorProject(row.project) === project)
       .map(({ id, project, origin, at, covers, coversOwedAt }) => ({ id, project, origin, at, covers, coversOwedAt })),
     /* IDs are project scoped hashes. Retired reservations therefore remain
        safe to consult across projects without exposing their former rows. */
     reservedIds: retired,
+    occupiedIds: reports.filter(row => !!row.project && canonicalOrchestratorProject(row.project) === project).map(row => row.id),
   }));
 }
 
