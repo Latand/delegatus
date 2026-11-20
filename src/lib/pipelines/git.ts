@@ -31,7 +31,8 @@ import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifa
 import { decisiveRefusal, publicationApp403, publicationDeadlineKind, publicationFrozenInstallFailure, publicationTransportLine } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
-import { recordWorktreeProvenance } from "./worktreeProvenance";
+import { recordWorktreeProvenance, worktreeRegistration } from "./worktreeProvenance";
+import { recoverLaneIndexLock, withLaneIndexLockRecovery } from "./indexLock";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
 import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
@@ -841,9 +842,14 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
   if (branch.code !== 0 || !branch.stdout.trim().startsWith("refs/heads/")) return failure("pinning the stage commit branch", branch);
   const locations = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path", "index"], cwd);
   if (locations.code !== 0 || !path.isAbsolute(locations.stdout.trim())) return failure("locating stage index custody", locations);
-  // An observed foreign claim is never ours to remove or to spend a retry on.
-  if (fs.existsSync(`${locations.stdout.trim()}.lock`)) return { ok: false, deferred: true,
-    error: "stage index custody is held by another Git writer; retrying later" };
+  const lock = `${locations.stdout.trim()}.lock`;
+  if (fs.existsSync(lock)) {
+    // Keep a blocked commit from spending its durable hook/repair intent.
+    if (!worktreeRegistration(cwd)) return { ok: false, deferred: true,
+      error: "stage index custody is held by another Git writer; retrying later" };
+    const refusal = await recoverLaneIndexLock(pipeline, lock, exec, "commit");
+    if (refusal) return { ok: false, error: `committing the passed stage: ${refusal}` };
+  }
   if (outputPaths) {
     const changedPaths = await exec("git", ["diff", "--name-only", "--no-renames", "-z", parent, tree, "--"], cwd);
     if (changedPaths.code !== 0) return failure("verifying the stage commit output tree", changedPaths);
@@ -897,6 +903,7 @@ export async function commitPipelineStage(
   receiptFile?: string,
   control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
+  exec = withLaneIndexLockRecovery(pipeline, exec);
   // A Viewer exit can leave a source-owned link behind. Reap it before
   // inspecting paths or recovering an already-landed commit.
   try { isolateWorktreeDependencies(pipeline); }
@@ -1017,7 +1024,7 @@ export async function commitPipelineStage(
       ...(receipt ? [`Delegatus-Stage-Commit: ${receipt.id}`] : [])], exec, allowCommit ? undefined : changedOutputPaths,
       () => control?.beforeCommit(sha));
   if (!commit.ok) {
-    if (commit.deferred) return commit;
+    if (commit.deferred || commit.error.startsWith("committing the passed stage: index.lock ")) return commit;
     return { ...commit,
       commitRefusal: await stageCommitRefusal(allowCommit ? null : changedOutputPaths, exec, pipeline.worktreeDir) };
   }
@@ -2564,7 +2571,7 @@ export async function synchronizePipelineRetryHead(pipeline: Pipeline, exec: Exe
 
   const localIsAncestor = (await exec("git", ["merge-base", "--is-ancestor", local.sha, remoteSha], pipeline.worktreeDir));
   if (localIsAncestor.code === 0) {
-    const merge = (await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir));
+    const merge = await withLaneIndexLockRecovery(pipeline, exec)("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir);
     if (merge.code !== 0) return failure("fast-forwarding the pipeline worktree to its remote repair", merge);
     return { ok: true, sha: remoteSha };
   }

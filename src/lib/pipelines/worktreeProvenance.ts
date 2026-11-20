@@ -45,7 +45,7 @@ function samePath(left: string, right: string, accessible: Access): boolean {
 
 /** The checkout's administrative directory and the back link Git keeps in
     it, or null unless the two point at each other. */
-function registration(worktree: string, accessible: Access): { admin: string; gitdir: string } | null {
+export function worktreeRegistration(worktree: string, accessible: Access = direct): { admin: string; gitdir: string } | null {
   try {
     const dotGit = path.join(worktree, ".git");
     if (!fs.lstatSync(accessible(dotGit)).isFile()) return null;
@@ -65,7 +65,7 @@ function registration(worktree: string, accessible: Access): { admin: string; gi
     made earlier keeps the first record. Never throws; false when nothing
     could be recorded, which leaves the checkout to its owner. */
 export function recordWorktreeProvenance(worktree: string, owner: { creator: WorktreeCreator; id: string }, now: Date = new Date()): boolean {
-  const found = registration(path.resolve(worktree), direct);
+  const found = worktreeRegistration(path.resolve(worktree));
   if (!found) return false;
   const file = path.join(found.admin, WORKTREE_PROVENANCE_FILE);
   if (fs.existsSync(file)) return readWorktreeProvenance(worktree) !== null;
@@ -88,7 +88,7 @@ export function recordWorktreeProvenance(worktree: string, owner: { creator: Wor
     malformed, or it was written for another registration. */
 export function readWorktreeProvenance(worktree: string, options: { commonDir?: string; accessible?: Access } = {}): WorktreeProvenance | null {
   const accessible = options.accessible ?? direct;
-  const found = registration(path.resolve(worktree), accessible);
+  const found = worktreeRegistration(path.resolve(worktree), accessible);
   if (!found) return null;
   if (options.commonDir && !samePath(path.dirname(found.admin), path.join(options.commonDir, "worktrees"), accessible)) return null;
   try {
