@@ -460,6 +460,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "externalRelay.answers.took": "Тривало",
   "externalRelay.answers.seconds": "{seconds} с",
   "externalRelay.answers.answeredWith": "Відповідав",
+  "externalRelay.answers.diagnostic": "Причина збою",
   "externalRelay.answers.outcome": "Результат",
   "externalRelay.answers.delivery": "Сервіс",
   "externalRelay.answers.delivery.accepted": "Отримав результат",

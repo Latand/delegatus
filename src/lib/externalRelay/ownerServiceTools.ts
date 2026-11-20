@@ -38,6 +38,7 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
   const closed = new AbortController();
   const signal = AbortSignal.any([lease.signal, closed.signal]);
   let open = true;
+  let conversationReady: (() => boolean) | undefined;
   const check = async () => {
     if (!await authorize()) { open = false; closed.abort(); await media?.dispose(); }
     signal.throwIfAborted();
@@ -61,14 +62,13 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
     get actionSent() { return loop.actionSent; },
     get sawUnknown() { return loop.sawUnknown; },
     get available() { return open && !signal.aborted; },
-    bindConversation(conversationId: string) {
+    bindConversation(conversationId: string, ready?: () => boolean) {
       const prior = conversations().get(conversationId);
       if (prior && prior !== adapter) throw new Error("owner service conversation already registered");
+      conversationReady = ready;
       conversations().set(conversationId, adapter);
     },
-    unbindConversation(conversationId: string) {
-      if (conversations().get(conversationId) === adapter) conversations().delete(conversationId);
-    },
+    get readyForConversation() { return !conversationReady || conversationReady(); },
     async op(args: Args, waitMs: number) {
       await check();
       if (args.op === "list") {
@@ -172,7 +172,8 @@ export function openOwnerServiceTools(relay: PairedRelay, target: RelayTargetSet
 export function relayServiceToolsOp(conversationId: string, input: unknown, waitMs = 20_000) {
   return withViewerOperation("relay.service-tools", async () => {
     const adapter = conversations().get(conversationId);
-    if (!adapter?.available || registry().get(adapter.requestId) !== adapter) return null;
+    if (!adapter?.available || registry().get(adapter.requestId) !== adapter
+      || !adapter.readyForConversation) return null;
     try {
       const result = await adapter.op(relayServiceToolsSchema.parse(input), waitMs);
       const images = relayImages(result), guard = relayImageGuard(result);
