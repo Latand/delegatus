@@ -2815,6 +2815,18 @@ except BlockingIOError:
                 outcome = self.adapter.stage({"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1})
                 self.assertEqual((outcome["outcome"], outcome.get("reason")), ("unknown", reason))
 
+    def test_replacement_census_cannot_reuse_the_captured_process_identity(self):
+        self.old_gone = True
+        self.attempts = [{"n": 1, "state": "failed", "conversationId": "synthetic-stage",
+                          "error": "stage host was lost while its turn was open"},
+                         {"n": 2, "state": "running", "conversationId": "synthetic-replacement"}]
+        captured = {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1,
+                    "startIdentity": "203:old"}
+        self.replacement_overrides = {"host": {"process": {"startIdentity": "204:203:old"}}}
+        outcome = self.adapter.stage(captured)
+        self.assertEqual((outcome["outcome"], outcome.get("reason")),
+                         ("unknown", "replacement-process-identity-not-fresh"))
+
     def test_legacy_capture_without_boot_epoch_still_accepts_verified_replacement(self):
         self.old_gone = True
         self.attempts = [{"n": 1, "state": "failed", "conversationId": "synthetic-stage",

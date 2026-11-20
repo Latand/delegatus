@@ -2364,6 +2364,10 @@ class Checkout:
                     or not identity["startIdentity"].startswith(str(live.get("pid")) + ":")
                     or not identity["startIdentity"].split(":", 1)[1]):
                 return {**outcome, "reason": "replacement-process-identity-unverified"}
+            captured_identity = host.get("startIdentity")
+            if (captured_identity is not None
+                    and identity["startIdentity"].split(":", 1)[1] == captured_identity):
+                return {**outcome, "reason": "replacement-process-identity-not-fresh"}
             try:
                 process = self.process({"pid": identity["pid"],
                                         "startIdentity": identity["startIdentity"].split(":", 1)[1]})
