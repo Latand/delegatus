@@ -109,6 +109,32 @@ test("a subagent is not renamable and receives no override affordance", () => {
   expect(file.renamable).toBe(false);
 });
 
+test("a cached Codex subagent title falls back to its own native nickname", () => {
+  const filename = path.join(stateDir, "nickname-session.jsonl");
+  fs.writeFileSync(filename, JSON.stringify({
+    type: "session_meta",
+    payload: { source: { subagent: { thread_spawn: {
+      parent_thread_id: UUID,
+      agent_nickname: "Astra",
+    } } } },
+  }) + "\n");
+  const stat = fs.statSync(filename);
+  const cached = entry({
+    path: filename,
+    engine: "codex",
+    fmt: "codex",
+    root: "codex-sessions",
+    title: "Codex session",
+    nativeParentThreadId: UUID,
+    size: stat.size,
+    mtime: stat.mtimeMs / 1000,
+  });
+  const alreadyNamed = { ...cached, title: "Existing chat title" };
+  overlaySessionTitles([cached, alreadyNamed]);
+  expect(cached.title).toBe("Astra");
+  expect(alreadyNamed.title).toBe("Existing chat title");
+});
+
 test("the resource projection applies identity and titles without transcript-head eligibility reads", () => {
   const pathname = `/home/user/.codex/sessions/2026/07/16/rollout-${UUID}.jsonl`;
   const registry = new AgentRegistry(path.join(stateDir, "agent-registry.json"));

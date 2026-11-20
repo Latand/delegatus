@@ -24,7 +24,7 @@ import {
 import type { Engine, Fmt, RootKey, TranscriptEngine } from "../types";
 import { cleanTitle } from "../title";
 import { globalCache } from "./caches";
-import { nativeCodexSessionMetaResult } from "./codexNative";
+import { codexSubagentTitleFromMeta, nativeCodexSessionMetaResult } from "./codexNative";
 import { HEAD_READ_CHUNK_BYTES, headFingerprint, readHead, type HeadReadResult } from "./head";
 import { readJsonResult, recordValue, recordsValue, stringValue } from "./json";
 import { openclawMessage } from "./openclawNative";
@@ -1130,11 +1130,7 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
     }
     if (engine === "codex" && obj.type === "session_meta" && !codexHeaderSeen) {
       codexHeaderSeen = true;
-      const payload = recordValue(obj.payload);
-      const subagent = recordValue(recordValue(payload?.source)?.subagent);
-      const spawn = recordValue(subagent?.thread_spawn);
-      const nickname = goodTitle(spawn?.agent_nickname ?? payload?.agent_nickname);
-      if (spawn && nickname) codexSubagentTitle = nickname;
+      codexSubagentTitle = codexSubagentTitleFromMeta(recordValue(obj.payload));
     }
     if (engine === "claude" && obj.type === "custom-title") {
       explicitTitle = goodTitle(obj.customTitle) ?? explicitTitle;

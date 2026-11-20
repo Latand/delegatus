@@ -15,7 +15,8 @@ The tree uses the same project-scoped lineage for Claude Desktop chats,
 native Codex forks and registry-owned conversations. The flat catalog and
 conversation search retain their own pagination. A Codex subagent without a
 session title or a usable prompt takes the nickname from its own native
-header, including when copied parent metadata follows that header.
+header, including when copied parent metadata follows that header. Cached
+board rows with generic titles use the same fallback.
 
 Reloading an existing focus entry on desktop starts on its project board
 with the open-agent list retained. Pasting a conversation link or traversing
