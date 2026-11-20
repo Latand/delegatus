@@ -188,6 +188,7 @@ function finishedStage(file = snapshot()) {
 
 test("an unrelated pipeline write during measurement keeps ordinary idle retirement eligible", async () => {
   const unrelated = finishedStage(snapshot(manyCandidates(1)));
+  unrelated.runs[0]!.attempts[0]!.agentPath = "/fixture/unrelated.jsonl";
   savePipelines([unrelated]);
   const probe = await sweep({
     treePss: async () => {
@@ -293,7 +294,8 @@ test.each(["completed", "closed", "merged"] as const)("a %s lane releases all th
   lane.cursor = null;
   // Terminal lane ownership releases hosts even before old attempt stamps reconcile.
   for (const run of lane.runs) for (const attempt of run.attempts) { attempt.state = "running"; attempt.verdict = null; attempt.completedAt = null; }
-  const unrelated = { ...lane, id: "unrelated-lane", stages: [], runs: [] };
+  const unrelated = buildPipeline({ id: "unrelated-lane", task: "Unrelated", project: lane.project, repoDir: lane.repoDir,
+    srcPath: null, srcConversationId: null, now: lane.createdAt, stages: [], state: "draft" });
   savePipelines([lane, unrelated]);
   const stopped: string[] = [];
   const probe = await sweep({

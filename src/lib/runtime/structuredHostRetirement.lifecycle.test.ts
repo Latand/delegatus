@@ -75,7 +75,8 @@ for (const engine of ["codex", "claude"] as const) {
       lane.runs[0]!.attempts = [{ n: 1, state: "passed", effectiveRole: lane.stages[0]!.effectiveRole, launchId: null, conversationId: conversation.id,
         sessionId: FIXTURE_SESSION, agentPath: entry.artifactPath, paneId: null, flowId: null, startedAt: lane.createdAt,
         completedAt: new Date(FIXTURE_NOW).toISOString(), input: null, activatedBy: null, output: null, error: null, verdict: { status: "pass", findings: [] } }];
-      const unrelated = { ...lane, id: "unrelated-lane", runs: [] };
+      const unrelated = buildPipeline({ id: "unrelated-lane", task: "Unrelated", project: lane.project, repoDir: lane.repoDir,
+        srcPath: null, srcConversationId: null, now: lane.createdAt, stages: [], state: "draft" });
       savePipelines([lane, unrelated]);
       const writePipeline = () => {
         if (change === "resume") lane.runs[0]!.attempts[0]!.state = "running";
