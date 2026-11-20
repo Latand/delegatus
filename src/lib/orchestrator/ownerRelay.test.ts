@@ -202,6 +202,80 @@ test("verified owner turn reaches the designated seat through MCP and HTTP with 
   expect(delivered[1].text).toBe(delivered[0].text);
 });
 
+for (const pairedProject of ["project-b", "unknown-project", null] as const) {
+  test(`owner group request with paired project ${pairedProject ?? "unset"}`, async () => {
+    const { runClaimedRequest } = await import("@/lib/externalRelay/runner");
+    const { startTestRelay } = await import("@/lib/externalRelay/testRelay");
+    const { readRelayStore, dropRun } = await import("@/lib/externalRelay/store");
+    const { accountManager } = await import("@/lib/accounts/manager");
+    const sender = actor();
+    const recipient = actor("project-b");
+    actor("project-a");
+    ownerRun(sender);
+    dropRun("owner-request");
+    const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+    updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({
+      ...relay, origin: server.origin, api_base: `${server.origin}/v1`,
+      targets: relay.targets.map(target => ({ ...target, project: pairedProject })),
+    })) }));
+    const paired = readRelayStore().relays[0]!;
+    const words = "Please send this to the project team.";
+    const attachment = "Screenshot showing that a matching message stayed visible.";
+    const message = contextRequest.input.conversation[0]!;
+    const wire = requestSchema.parse({ ...contextRequest, target_id: "target", request_id: "owner-request",
+      chat: { key: "fixture_group_chat" }, answer: { max_chars: 1000, progress: "none" },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+        respond_to: "owner-message", conversation: [
+          { ...message, id: "attachment-message", text: attachment },
+          { ...message, id: "owner-message", text: words, reply_to: "attachment-message" },
+        ],
+      },
+    });
+    const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+      engine: "codex", accountId: "fixture", kind: "managed", home: root, transcriptRoot: root, env: { ...process.env },
+    } });
+    const tools = toolsFor(sender);
+    const send = { clientRequestId: "group-owner-handoff", text: attachment };
+    const accepted = "Queued for the Example recipient orchestrator.";
+    const question = "Which project should receive this?";
+    try {
+      const result = await runClaimedRequest(paired, wire, undefined, { timeoutMs: 10000, ownerPorts: {
+        launch: async input => {
+          expect(input.mcpServers).toEqual(["viewer"]);
+          return { status: 202, body: { conversationId: sender.id } };
+        },
+        observe: async () => {
+          const handoff = await tools.service.callTool("send_message_to_orchestrator", send);
+          if (pairedProject === "project-b") {
+            expect(handoff).toMatchObject({ ok: true, project: "project-b", conversationId: recipient.id, outcome: "queued" });
+            // The admitted operation keeps its project when the target setting changes.
+            updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({
+              ...relay, targets: relay.targets.map(target => ({ ...target, project: "project-a" })),
+            })) }));
+            expect(await tools.service.callTool("send_message_to_orchestrator", send))
+              .toMatchObject({ ok: true, project: "project-b", replayed: true });
+          } else {
+            expect(handoff).toMatchObject({ ok: false, code: pairedProject ? "unknown_project" : "project_required" });
+          }
+          return { state: "ended", finalText: handoff.ok ? accepted : question };
+        }, stop: async () => {}, pollMs: 1,
+      } });
+      expect(result).toMatchObject({ outcome: "answered", answer: {
+        action: "reply", reply_to: "owner-message", text: pairedProject === "project-b" ? accepted : question,
+      } });
+      if (pairedProject !== "project-b") {
+        expect(delivered).toEqual([]);
+        expect(tools.posts).toEqual([]);
+      } else {
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]).toMatchObject({ conversationId: recipient.id, origin: { kind: "agent", role: "owner-relay", conversationId: sender.id } });
+        expect(delivered[0].text).toContain(JSON.stringify({ text: words, requestText: null }));
+        expect(delivered[0].text).toContain(attachment);
+      }
+    } finally { select.mockRestore(); await server.close(); }
+  }, 20000);
+}
+
 test("an owner report reply carries verbatim approval and stored report only to its source seat", async () => {
   const sender = actor(); const recipient = actor("project-b"); const otherSeat = actor("project-a"); ownerRun(sender);
   const reportText = "Create a clone with one button? Confirm the start.";

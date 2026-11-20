@@ -45,7 +45,7 @@ import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
-import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { liveOwnerRelayConversation, liveOwnerRelayProject, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
@@ -6182,7 +6182,8 @@ async function sendMessageToOrchestrator(
   context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
   requireOrchestratorRelayCaller(dependencies);
-  const project = context?.binding?.target.project ?? await resolveOrchestratorToolProject(required(args, "project"), dependencies);
+  const project = context?.binding?.target.project ?? resolveOrchestratorToolProject(
+    orchestratorSendProject(args, ownerRelayCaller(dependencies) ? attributionOf(dependencies).conversationId : null), dependencies);
   requiredMessageText(args);
   const key = requestId(args);
   const bound = context?.binding;
@@ -8381,9 +8382,17 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
+function orchestratorSendProject(args: McpToolArgs, ownerConversationId: string | null): string {
+  if (args.project !== undefined || !ownerConversationId) return required(args, "project");
+  const project = text(liveOwnerRelayProject(ownerConversationId));
+  if (project) return project;
+  throw new McpToolRefusal("This relay target has no configured project. Ask which project should receive the request.", {
+    code: "project_required", outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false,
+  });
+}
+
 async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
-  const named = required(args, "project");
   const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
@@ -8397,7 +8406,10 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
       code: "orchestrator_relay_refused", retryable: false,
     });
   }
-  const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
+  const ownerConversationId = !seat && owner ? attribution.conversationId : null;
+  // An original claim already froze its project, including a default from the relay target.
+  if (forRecovery && (args.project !== undefined || !ownerConversationId)) required(args, "project");
+  const project = forRecovery ? null : resolveOrchestratorToolProject(orchestratorSendProject(args, ownerConversationId), dependencies);
   if (!seat && owner && project && !ownerRelayTargetMatches(attribution.conversationId!, project, orchestratorSeatFor(project).active?.conversationId)) {
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }

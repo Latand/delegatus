@@ -31,7 +31,7 @@ export function answerPrompt(request: ExternalRelayRequest, engine = ""): string
     ? ` <requester> describes who wrote the message you answer: key is their author.key in <conversation>. is_admin, can_restrict_members, can_delete_messages, is_anonymous_admin and is_owner describe their role and rights; the service checks every request itself.`
     : "";
   const actions = request.delivery === "guest"
-    ? `"reply" posts one final plain-text answer; "handoff" returns this request to the service assistant, including when <tools> is empty. You cannot call service tools. For "handoff" leave text empty and reply_to null. Always use reply_to null.`
+    ? `"reply" posts one final plain-text answer in one or two short lines; "handoff" returns this request to the service assistant, including when <tools> is empty. You cannot call service tools. Use "handoff" when handling the request needs a listed service capability. For a Delegatus project handoff, direct the owner to the relay's regular owner chat. If you need something from the requester, say what you need in one short question. Describe limits of this turn specifically and avoid claims about access to any server. For "handoff" leave text empty and reply_to null. Always use reply_to null.`
     : handoff
     ? `"reply" posts text; "ignore" posts nothing; "handoff" posts nothing and hands this message back to the service, whose own assistant answers it with the tools in <tools>. You cannot call any of those tools. Choose "handoff" when a good answer needs one of them, for example to act in the chat or to look something up that only a tool can see; otherwise answer yourself. For "handoff" leave text empty and reply_to null.`
     : `"reply" posts text; "ignore" posts nothing.`;
