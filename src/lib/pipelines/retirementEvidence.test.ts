@@ -33,6 +33,8 @@ function setup() {
   return { root, lane, db: new Database(path.join(root, "state.sqlite")) };
 }
 const target = { conversations: ["conversation_owner"], engine: "codex" as const, sessionId: "session-owner", agentPath: "/fixture/owner.jsonl" };
+const FIXTURE_NOW = Date.parse("2026-10-01T00:00:00Z");
+const readEvidence = (now = FIXTURE_NOW) => pipelineRetirementReader({ now });
 function decodedRows() { return performanceSpans.snapshot().records.filter(row => performanceSites[row.site] === "state.json").reduce((n, row) => n + row.rows, 0); }
 
 test("retirement target reads match the full predicate and warm decoding stays flat across tenfold history", async () => {
@@ -104,15 +106,46 @@ test("a non-pipeline SQLite write leaves sweep standing and the compact projecti
     f.lane.state = "completed";
     f.lane.cursor = null;
     savePipelines([f.lane]);
-    const reader = await pipelineRetirementReader();
+    const reader = await readEvidence();
     expect(reader.sweepStanding(target)).toBe("terminal lane");
     f.db.query("INSERT INTO state_collections(collection,schema_version,revision,migration_id,imported_at) VALUES(?,1,1,?,?)")
       .run("other", "fixture", f.lane.createdAt);
     expect(reader.sweepStanding(target)).toBe("terminal lane");
     expect(reader.sweepStanding({ conversations: ["unrelated"] })).toBeNull();
     performanceSpans.clear();
-    expect((await pipelineRetirementReader()).sweepStanding(target)).toBe("terminal lane");
+    expect((await readEvidence()).sweepStanding(target)).toBe("terminal lane");
     expect(decodedRows()).toBe(0);
+  } finally { f.db.close(); }
+});
+
+test.each(["cold", "warm"] as const)("expired terminal archive attempts yield no waiver on a %s read", async cache => {
+  const f = setup();
+  try {
+    const lane = buildFixtureLane("archived");
+    lane.state = "closed";
+    lane.cursor = null;
+    lane.closedAt = lane.createdAt;
+    const original = f.lane.runs[0]!.attempts[0]!;
+    const attempts = ["first", "second"].map((suffix, index) => ({
+      ...original, n: index + 1, state: "passed" as const, sessionId: `session-${suffix}`,
+      conversationId: `conversation_${suffix}`, agentPath: `/fixture/${suffix}.jsonl`,
+      completedAt: lane.createdAt, verdict: { status: "pass" as const, findings: [] },
+    }));
+    lane.runs[0]!.attempts = attempts;
+    f.db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,1,1,0)")
+      .run(lane.id, JSON.stringify(lane));
+    const targets = attempts.map(attempt => ({ conversations: [attempt.conversationId],
+      engine: "codex" as const, sessionId: attempt.sessionId, agentPath: attempt.agentPath }));
+    const cutoff = FIXTURE_NOW + 3_600_000;
+    if (cache === "warm") {
+      const recent = await readEvidence(cutoff - 1);
+      expect(targets.map(selected => recent.sweepStanding(selected))).toEqual(["terminal lane", "terminal lane"]);
+    }
+    performanceSpans.clear();
+    const expired = await readEvidence(cutoff);
+    expect(targets.map(selected => expired.sweepStanding(selected))).toEqual([null, null]);
+    expect(expired(target)).toBe(true);
+    if (cache === "warm") expect(decodedRows()).toBe(0);
   } finally { f.db.close(); }
 });
 
@@ -124,24 +157,24 @@ test("finished verdict reasons reuse compact evidence and disappear when the sam
     attempt.completedAt = f.lane.createdAt;
     attempt.verdict = { status: "pass", findings: [] };
     savePipelines([f.lane]);
-    const reader = await pipelineRetirementReader();
+    const reader = await readEvidence();
     expect(reader(target)).toBe(false);
     expect(reader.sweepStanding(target)).toBe("stage verdict");
     expect(reader.sweepStanding({ conversations: [], engine: "codex", sessionId: target.sessionId })).toBe("stage verdict");
     expect(reader.sweepStanding({ conversations: ["unrelated"] })).toBeNull();
     performanceSpans.clear();
-    expect((await pipelineRetirementReader()).sweepStanding(target)).toBe("stage verdict");
+    expect((await readEvidence()).sweepStanding(target)).toBe("stage verdict");
     expect(decodedRows()).toBe(0);
     attempt.state = "running";
     savePipelines([f.lane]);
     expect(() => reader.sweepStanding(target)).toThrow("changed");
-    const resumed = await pipelineRetirementReader();
+    const resumed = await readEvidence();
     expect(resumed(target)).toBe(true);
     expect(resumed.sweepStanding(target)).toBeNull();
     attempt.state = "needs_decision";
     attempt.verdict.status = "needs_decision";
     savePipelines([f.lane]);
-    const parked = await pipelineRetirementReader();
+    const parked = await readEvidence();
     expect(parked(target)).toBe(true);
     expect(parked.sweepStanding(target)).toBeNull();
     // resolve-decision reserves a fresh attempt; the answered attempt's
@@ -149,8 +182,9 @@ test("finished verdict reasons reuse compact evidence and disappear when the sam
     f.lane.runs[0]!.attempts.push({ ...attempt, n: 2, state: "running", verdict: null, completedAt: null,
       conversationId: "conversation_successor", sessionId: "session-successor", agentPath: "/fixture/successor.jsonl" });
     savePipelines([f.lane]);
-    expect((await pipelineRetirementReader())(target)).toBe(false);
-    expect((await pipelineRetirementReader()).sweepStanding(target)).toBe("stage verdict");
+    const continued = await readEvidence();
+    expect(continued(target)).toBe(false);
+    expect(continued.sweepStanding(target)).toBe("stage verdict");
   } finally { f.db.close(); }
 });
 
@@ -172,14 +206,14 @@ test("a repair reservation on a later stage keeps its original producer", async 
     }] });
     savePipelines([f.lane]);
     expect(pipelineHostHasLiveWork([f.lane], producer)).toBe(true);
-    const reader = await pipelineRetirementReader();
+    const reader = await readEvidence();
     expect(reader(target)).toBe(true);
     expect(reader.sweepStanding(target)).toBe("held");
 
     f.lane.runs[1]!.attempts[0]!.publicationRepair!.settledAt = f.lane.createdAt;
     savePipelines([f.lane]);
     expect(pipelineHostHasLiveWork([f.lane], producer)).toBe(false);
-    expect((await pipelineRetirementReader()).sweepStanding(target)).toBe("stage verdict");
+    expect((await readEvidence()).sweepStanding(target)).toBe("stage verdict");
   } finally { f.db.close(); }
 });
 

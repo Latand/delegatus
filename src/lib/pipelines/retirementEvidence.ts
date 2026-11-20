@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
+import { AGENT_STATE_POLICY } from "@/lib/agentState/model";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { pipelineEvidenceRevision, readCompactPipelineEvidence, readStateCollectionRevisions, stateEvidenceVersion, type CompactEvidenceCache } from "@/lib/state/sqliteStateStore";
@@ -10,11 +11,12 @@ import type { RuntimeEngine, RuntimeProviderRecoveryRef } from "@/lib/runtime/co
 import type { Pipeline } from "./types";
 import { readRecorded, recordedHostHeld } from "@/lib/recordedChecks/store";
 
-type Claim = { pipeline: string; stage: string | null; attempt: number | null; publishing: boolean; recoverable: boolean; source: boolean; fenced: boolean; identities: string[]; reason?: PipelineRetirementReason };
+type Reason = { name: PipelineRetirementReason; expiresAt: number };
+type Claim = { pipeline: string; stage: string | null; attempt: number | null; publishing: boolean; recoverable: boolean; source: boolean; fenced: boolean; identities: string[]; reason?: Reason };
 type Projection = { id: string; claims: Claim[]; releasedSources: string[] };
-type Evidence = { compact: CompactEvidenceCache<Projection>; index: Map<string, Claim[]>; releasedSources: Set<string>; version: string };
+type Evidence = { compact: CompactEvidenceCache<Projection>; index: Map<string, Claim[]>; releasedSources: Set<string>; version: string; nextExpiry: number };
 type Slot = { value?: Evidence; pending?: Promise<Evidence> };
-// One owner across compiled bundles. Two state roots, at most 16 MiB of compact
+// One owner across compiled bundles. Two cache entries, at most 16 MiB of compact
 // claims each; no pipeline payload, report or transcript survives preparation.
 const owner = process as typeof process & { __llvRetirementEvidence?: Map<string, Slot> };
 const slots = owner.__llvRetirementEvidence ??= new Map<string, Slot>();
@@ -22,14 +24,20 @@ const MAX_BYTES = 16 * 1024 * 1024;
 const pipelineCollections = ["pipelines", "pipelines_archive"];
 const identity = (kind: string, value: string) => JSON.stringify([kind, value]);
 const hostIdentity = (engine: string, sessionId: string) => ["engine-session", `${engine}:${sessionId}`] as const;
-function project(raw: unknown): Projection {
+function timestamp(value: string | null | undefined): number {
+  const time = value ? Date.parse(value) : NaN;
+  return Number.isFinite(time) ? time : -Infinity;
+}
+
+function project(raw: unknown, now: number, idleMs: number): Projection {
   if (!isStoredPipeline(raw)) throw new Error("pipeline retirement ownership is unknown");
   const pipeline: Pipeline = raw;
   const { publishing, sourceHeld, attempts } = pipelineRetirementOwnership(pipeline);
+  const laneSettledAt = Math.max(timestamp(pipeline.closedAt), timestamp(pipeline.merge?.mergedAt));
   const claims: Claim[] = [];
   const releasedSources: string[] = [];
   const add = (stage: string | null, attempt: number | null, values: ReadonlyArray<readonly [string, string | null | undefined]>, options?: {
-    recoverable?: boolean; fenced?: boolean; reason?: PipelineRetirementReason;
+    recoverable?: boolean; fenced?: boolean; reason?: Reason;
   }) => {
     const identities = values.flatMap(([kind, value]) => value ? [identity(kind, value)] : []);
     if (identities.length) claims.push({ pipeline: pipeline.id, stage, attempt, publishing,
@@ -47,10 +55,15 @@ function project(raw: unknown): Projection {
     }
     if (held) add(stageId, attempt.n, identities.flatMap(host => [["conversation", host.conversationId], ["path", host.agentPath],
       ["session", host.sessionId], ["pane", host.paneId], ["launch", host.launchId]] as const), { recoverable, fenced });
-    // A conversation alias can outlive the native generation. The fast path
-    // attaches to the recorded session, with legacy artifact/launch fallback.
-    if (reason) add(stageId, attempt.n, [attempt.sessionId ? hostIdentity(attempt.effectiveRole.engine, attempt.sessionId)
-      : attempt.agentPath ? ["path", attempt.agentPath] : ["launch", attempt.launchId]], { reason });
+    if (reason) {
+      const attemptSettledAt = Math.max(timestamp(attempt.completedAt), timestamp(attempt.report?.at));
+      const settledAt = reason === "terminal lane" ? Math.max(laneSettledAt, attemptSettledAt) : attemptSettledAt;
+      const expiresAt = (Number.isFinite(settledAt) ? settledAt : timestamp(attempt.startedAt ?? pipeline.createdAt)) + idleMs;
+      // A conversation alias can outlive the native generation. Bind the
+      // short-lived waiver to its recorded session or legacy artifact/launch.
+      if (expiresAt > now) add(stageId, attempt.n, [attempt.sessionId ? hostIdentity(attempt.effectiveRole.engine, attempt.sessionId)
+        : attempt.agentPath ? ["path", attempt.agentPath] : ["launch", attempt.launchId]], { reason: { name: reason, expiresAt } });
+    }
   }
   return { id: pipeline.id, claims, releasedSources };
 }
@@ -65,8 +78,8 @@ function pipelineVersion(filename: string): string {
   return stateEvidenceVersion(filename);
 }
 
-async function prepare(filename: string, version: string, previous?: Evidence): Promise<Evidence> {
-  let compact = await readCompactPipelineEvidence(filename, previous?.compact, project);
+async function prepare(filename: string, version: string, now: number, idleMs: number, previous?: Evidence): Promise<Evidence> {
+  let compact = await readCompactPipelineEvidence(filename, previous?.compact, raw => project(raw, now, idleMs));
   if (!compact) {
     const revisions = readStateCollectionRevisions(filename, pipelineCollections);
     if ([...revisions.values()].some(revision => revision !== null)
@@ -76,27 +89,39 @@ async function prepare(filename: string, version: string, previous?: Evidence): 
     compact = { identity: filename, rows: new Map() };
   }
   if (version !== pipelineVersion(filename)) throw new Error("pipeline retirement evidence changed");
-  if (compact === previous?.compact) return { ...previous, version };
+  if (compact === previous?.compact) {
+    if (previous.nextExpiry > now) return { ...previous, version };
+    // Elapsed time can reclaim compact claims even when no row was edited.
+    compact = { ...compact, rows: new Map(compact.rows) };
+  }
   const index = new Map<string, Claim[]>(), ids = new Set<string>();
   // A released attempt also ends a successor's source-only custody. Keep the
   // other identity and every operational/publication claim independent.
   const releasedSources = new Set<string>();
-  let bytes = 0, slice = performance.now();
-  for (const { value } of compact.rows.values()) {
+  let bytes = 0, nextExpiry = Infinity, slice = performance.now();
+  for (const [key, row] of compact.rows) {
+    let { value } = row;
     if (ids.has(value.id)) throw new Error("pipeline retirement identities are contradictory");
     ids.add(value.id);
+    if (value.claims.some(claim => claim.reason && claim.reason.expiresAt <= now)) {
+      value = { ...value, claims: value.claims.filter(claim => !claim.reason || claim.reason.expiresAt > now) };
+      compact.rows.set(key, { ...row, value });
+    }
     bytes += Buffer.byteLength(JSON.stringify(value));
     if (bytes > MAX_BYTES) throw new Error("pipeline retirement evidence exceeds its budget");
     for (const key of value.releasedSources) releasedSources.add(key);
-    for (const claim of value.claims) for (const key of claim.identities) {
-      const held = index.get(key) ?? []; held.push(claim); index.set(key, held);
+    for (const claim of value.claims) {
+      if (claim.reason) nextExpiry = Math.min(nextExpiry, claim.reason.expiresAt);
+      for (const identityKey of claim.identities) {
+        const held = index.get(identityKey) ?? []; held.push(claim); index.set(identityKey, held);
+      }
     }
     if (performance.now() - slice >= 4) {
       await new Promise<void>(resolve => setTimeout(resolve, 0)); slice = performance.now();
     }
   }
   if (version !== pipelineVersion(filename)) throw new Error("pipeline retirement evidence changed");
-  return { compact, index, releasedSources, version };
+  return { compact, index, releasedSources, version, nextExpiry };
 }
 
 function absent(filename: string): boolean {
@@ -110,7 +135,9 @@ export type PipelineRetirementReader = ((target: RetirementTarget, recovery?: Ru
   & { sweepStanding(target: RetirementTarget): PipelineRetirementStanding };
 /** Async validation precedes admission. The sweep refreshes the projection
  * after waits and fences synchronously on pipeline revisions and target custody. */
-export async function pipelineRetirementReader(): Promise<PipelineRetirementReader> {
+export async function pipelineRetirementReader(
+  { now = Date.now(), idleMs = AGENT_STATE_POLICY.idleMs }: { now?: number; idleMs?: number } = {},
+): Promise<PipelineRetirementReader> {
   return withViewerOperation("pipelines.retirement-evidence", async () => {
     const recordedVersion = readRecorded(store => store.version(), 0);
     const recorded = (target: RetirementTarget) => {
@@ -130,14 +157,15 @@ export async function pipelineRetirementReader(): Promise<PipelineRetirementRead
       return Object.assign((target: RetirementTarget) => held(target, false),
         { sweepStanding: (target: RetirementTarget) => held(target, true) ? "held" as const : null });
     }
-    let slot = slots.get(filename);
-    if (!slot) { slot = {}; slots.set(filename, slot); }
-    else { slots.delete(filename); slots.set(filename, slot); }
+    const key = JSON.stringify([filename, idleMs]);
+    let slot = slots.get(key);
+    if (!slot) { slot = {}; slots.set(key, slot); }
+    else { slots.delete(key); slots.set(key, slot); }
     while (slots.size > 2) slots.delete(slots.keys().next().value!);
     const databaseVersion = stateEvidenceVersion(filename);
     const version = pipelineVersion(filename);
-    if (slot.value?.version !== version) {
-      const pending = slot.pending ??= prepare(filename, version, slot.value);
+    if (slot.value?.version !== version || slot.value.nextExpiry <= now) {
+      const pending = slot.pending ??= prepare(filename, version, now, idleMs, slot.value);
       try { slot.value = await pending; }
       finally { if (slot.pending === pending) slot.pending = undefined; }
     }
@@ -160,7 +188,7 @@ export async function pipelineRetirementReader(): Promise<PipelineRetirementRead
       let ordinaryIdle = false;
       for (const { key, sourceReleased } of keys) for (const claim of evidence.index.get(key) ?? []) {
         if (claim.reason) {
-          if (!reason || claim.reason === "terminal lane") reason = claim.reason;
+          if (claim.reason.expiresAt > now && (!reason || claim.reason.name === "terminal lane")) reason = claim.reason.name;
           continue;
         }
         if (claim.source && !claim.publishing && sourceReleased) continue;

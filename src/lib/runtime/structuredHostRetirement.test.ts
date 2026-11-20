@@ -217,6 +217,53 @@ test("a passed review retires on the next sweep with its reason and records inta
   expect(loadPipelinesForRetirement()[0]!.runs[0]!.attempts[0]!.verdict).toEqual(lane.runs[0]!.attempts[0]!.verdict);
 });
 
+test("an unavailable pipeline projection leaves ordinary idle retirement eligible", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-retirement-"));
+  scratchDirs.push(root);
+  process.env.LLV_STATE_DIR = root;
+  fs.writeFileSync(path.join(root, "pipelines.json"), "[]");
+
+  const probe = await sweep();
+  expect(probe.terminated.map(ref => ref.sessionId)).toEqual([SESSION]);
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.retired).toHaveLength(1);
+  expect(probe.report.retired[0]!.reason).toBeUndefined();
+});
+
+test("an unavailable pipeline projection withholds prompt retirement from a recent stage host", async () => {
+  const lane = finishedStage();
+  fs.writeFileSync(statePath("pipelines.json"), JSON.stringify([lane]));
+
+  const probe = await sweep({ transcriptStat: () => determined({ mtimeMs: NOW }) });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.retired).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "transcript-idle", reason: "the transcript was written 0s ago" }]);
+});
+
+test("a recently merged lane releases all its stage hosts on the next sweep", async () => {
+  const file = snapshot(manyCandidates(2));
+  const lane = finishedStage(file);
+  // A merge can settle the lane long after its stages wrote their verdicts.
+  lane.createdAt = new Date(NOW - 24 * IDLE_MS).toISOString();
+  for (const attempt of lane.runs[0]!.attempts) {
+    attempt.startedAt = attempt.completedAt = lane.createdAt;
+  }
+  const head = "a".repeat(40);
+  lane.merge = {
+    state: "merged", by: "outside", repository: "fixture/project", prNumber: 1,
+    policyChangedAt: lane.createdAt, reviewedHead: head, chain: [head], updates: [],
+    seenChecks: [], head, headSeenAt: lane.createdAt, lastChecks: null, readAt: null, nextReadAt: null,
+    requestedAt: lane.createdAt,
+    mergedHead: head, mergeCommit: head, method: "squash", mergedAt: new Date(NOW).toISOString(),
+    attempts: 0, reason: null, blockedAt: null, updatedAt: new Date(NOW).toISOString(),
+  };
+  savePipelines([lane]);
+
+  const probe = await sweep({ snapshot: () => file, transcriptStat: () => determined({ mtimeMs: NOW }) });
+  expect(probe.terminated.map(ref => ref.sessionId).sort()).toEqual(Object.values(file.entries).map(row => row.key.sessionId).sort());
+  expect(probe.report.retired.map(row => row.reason)).toEqual(["terminal lane", "terminal lane"]);
+});
+
 test.each(["commit-repair", "runtime-switch", "undelivered", "assigned-to-runtime", "in-flight",
   "attention", "busy", "no-verdict", "different-generation", "reopened-during-measurement"] as const)(
   "a stage host is kept for %s", async kind => {
@@ -249,7 +296,7 @@ test.each(["commit-repair", "runtime-switch", "undelivered", "assigned-to-runtim
     };
     if (kind === "attention") file.entries[`claude:${SESSION}`]!.structuredHost!.pendingAttention = ["pending-question"];
     if (kind === "busy") file.conversations[CONVERSATION]!.turn.state = "busy";
-    const continuing = ["commit-repair", "runtime-switch", "reopened-during-measurement"].includes(kind);
+    const continuing = ["commit-repair", "runtime-switch"].includes(kind);
     const probe = await sweep({ snapshot: () => file, transcriptStat: () => determined({ mtimeMs: continuing ? NOW - 2 * IDLE_MS : NOW }),
       treePss: async () => {
         await Promise.resolve();

@@ -656,7 +656,6 @@ const CLAUSE_CHECKS: Record<
 
   "transcript-idle": (subject, options) => {
     const pipeline = subject.pipelineStanding;
-    if (pipeline && !pipeline.determined) return pipeline;
     return mapDeterminable(subject.transcriptFile, (stat) => {
       /* Order puts `resumable` first, so an absent transcript has already
          refused; saying it again here keeps the clause true on its own terms
@@ -1544,6 +1543,12 @@ function qualifiedTranscriptMtimeMs(subject: StructuredHostRetirementSubject): n
   return subject.transcriptFile.determined ? subject.transcriptFile.value?.mtimeMs ?? null : null;
 }
 
+function needsPipelineWaiver(subject: StructuredHostRetirementSubject, at: number, idleMs: number): boolean {
+  const mtime = qualifiedTranscriptMtimeMs(subject);
+  return mtime !== null && at - mtime < idleMs && !seatWasRevoked(subject)
+    && qualifiesForPipelineWaiver(subject.pipelineStanding);
+}
+
 /**
  * One pass over every structured host the registry records.
  *
@@ -1625,17 +1630,16 @@ export async function runStructuredHostRetirementSweep(
   };
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
   let pipelineReader: Awaited<ReturnType<typeof pipelineRetirementReader>> | null = null;
-  let pipelineError = "pipeline retirement evidence is unavailable";
   // Refresh after waits. The synchronous authorizers still validate the current
   // projection when they read the target and check process and registry custody.
   const refreshPipelineEvidence = async () => {
-    try { pipelineReader = await pipelineRetirementReader(); }
-    catch (error) { pipelineReader = null; pipelineError = safeReason(error); }
+    try { pipelineReader = await pipelineRetirementReader({ now: now(), idleMs }); }
+    catch { pipelineReader = null; }
   };
   const readers: RetirementReaders = {
     pipelineStanding: target => {
       try {
-        if (!pipelineReader) return undetermined(pipelineError);
+        if (!pipelineReader) return undetermined("pipeline retirement evidence is unavailable");
         return determined(pipelineReader.sweepStanding(target));
       } catch (error) { return undetermined(safeReason(error)); }
     },
@@ -1659,9 +1663,13 @@ export async function runStructuredHostRetirementSweep(
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
   // Keep the original capture even if a concurrent release clears its durable
   // copy. Empty termination diagnostics alone do not prove a tree has exited.
-  const captures = new Map<string, { identities: readonly ProcessIdentity[]; authorizeGone: () => { error: string } | null }>();
+  const captures = new Map<string, {
+    identities: readonly ProcessIdentity[];
+    authorizeGone: () => { error: string } | null;
+    preservePipelineWaiver: boolean;
+  }>();
   const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs,
-    transcriptSignature: string | null, originalSubject: StructuredHostRetirementSubject) => {
+    transcriptSignature: string | null, originalSubject: StructuredHostRetirementSubject, preservePipelineWaiver: boolean) => {
     // Retain the evidence that first qualified this target. Reading a
     // new snapshot here could adopt a reopened turn as the original target.
     const observed = originalInputs.file.entries[`${ref.engine}:${ref.sessionId}`];
@@ -1669,7 +1677,6 @@ export async function runStructuredHostRetirementSweep(
     const originalTurn = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn;
     const originalGenerationPath = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)
       ?.generations.find(generation => generation.id === ref.sessionId)?.path;
-    const preservePipelineWaiver = qualifiesForPipelineWaiver(originalSubject.pipelineStanding);
     const authorize = (gone = false) => {
       const denied = (condition: string) => ({ status: 409 as const, error: `scope retirement target changed: ${condition}` });
       if (publicationState() !== "ready") return denied("publication");
@@ -1741,28 +1748,31 @@ export async function runStructuredHostRetirementSweep(
     // A failed capture must keep the cause observed inside writer admission,
     // even if that condition changes again while its promise settles.
     let captureRefusal: ReturnType<typeof authorize> = null;
+    const persistCapturedTree = (identities: readonly ProcessIdentity[]) => {
+      captures.set(`${ref.engine}:${ref.sessionId}`, {
+        identities: identities.map(identity => ({ ...identity })), authorizeGone: () => authorize(true), preservePipelineWaiver,
+      });
+      return ref.sessionId !== null && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
+        captureRefusal = authorize();
+        if (captureRefusal) return false;
+        return agentRegistry().recordStructuredTerminationSurvivors(
+          { engine: ref.engine, sessionId: ref.sessionId! },
+          { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
+          identities,
+        );
+      });
+    };
     return terminateStructuredHostTree(ref, {
       authorize: () => captureRefusal ?? authorize(),
-      authorizeAsync: async () => { await refreshPipelineEvidence(); return null; },
+      ...(preservePipelineWaiver ? { authorizeAsync: async () => { await refreshPipelineEvidence(); return null; } } : {}),
       stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
       orphanAlarmRegistry: agentRegistry(),
       graceMs,
       deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
-      persistCapturedTree: async identities => {
+      persistCapturedTree: preservePipelineWaiver ? async identities => {
         await refreshPipelineEvidence();
-        captures.set(`${ref.engine}:${ref.sessionId}`, {
-          identities: identities.map(identity => ({ ...identity })), authorizeGone: () => authorize(true),
-        });
-        return ref.sessionId !== null && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
-          captureRefusal = authorize();
-          if (captureRefusal) return false;
-          return agentRegistry().recordStructuredTerminationSurvivors(
-            { engine: ref.engine, sessionId: ref.sessionId! },
-            { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
-            identities,
-          );
-        });
-      },
+        return persistCapturedTree(identities);
+      } : persistCapturedTree,
     });
   });
   const record = dependencies.record ?? recordRetirementReport;
@@ -1819,7 +1829,7 @@ export async function runStructuredHostRetirementSweep(
         return { status: "failed", reason: "agent scope is still loaded or its boot identity differs" };
       }
     }
-    if (capture) await refreshPipelineEvidence();
+    if (capture?.preservePipelineWaiver) await refreshPipelineEvidence();
     // Admission waits asynchronously under the registry's deadline, with an origin.
     return registry.deliveryWriteOrBusy({ label: "registry.idle-reconcile-gone" }, (): GoneHostReconciliation => {
       if (publicationState() !== "ready") return { status: "failed", reason: "retirement publication is no longer ready" };
@@ -2038,8 +2048,10 @@ export async function runStructuredHostRetirementSweep(
       refuse(report, subject, { retire: false, clause: "turn-settled", reason: "conversation turn changed" }, true);
       continue;
     }
-    const verdict = structuredHostRetirementVerdict(subject, { now: now(), idleMs,
-      preservePipelineWaiver: qualifiesForPipelineWaiver(planning.pipelineStanding) });
+    const checkedAt = now();
+    const plannedWithWaiver = needsPipelineWaiver(planning, startedAtMs, idleMs);
+    const verdict = structuredHostRetirementVerdict(subject, { now: checkedAt, idleMs,
+      preservePipelineWaiver: plannedWithWaiver });
     if (!verdict.retire) {
       refuse(report, subject, verdict, true, processStatus(subject.process) === "alive");
       continue;
@@ -2074,7 +2086,8 @@ export async function runStructuredHostRetirementSweep(
 
     let outcome: StructuredHostTerminationOutcome;
     try {
-      outcome = await terminate(ref, planned, transcriptSignature, subject);
+      outcome = await terminate(ref, planned, transcriptSignature, subject,
+        plannedWithWaiver || needsPipelineWaiver(subject, checkedAt, idleMs));
     } catch (error) {
       const reason = safeReason(error);
       report.failed.push({ key: subject.keyId, conversationId: subject.conversationId,
@@ -2082,7 +2095,8 @@ export async function runStructuredHostRetirementSweep(
       continue;
     }
     if (!outcome.ok) {
-      if (captures.has(subject.keyId)) await refreshPipelineEvidence();
+      const capture = captures.get(subject.keyId);
+      if (capture?.preservePipelineWaiver) await refreshPipelineEvidence();
       // The host can finish while termination awaits its runtime or writer.
       // Reconcile only a tree with no unresolved members; the gone path must
       // still prove scope collection and current registry custody itself.
@@ -2098,11 +2112,9 @@ export async function runStructuredHostRetirementSweep(
           "scope retirement target changed: process identity",
           "scope retirement target changed: claimOwner",
           "scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted"].includes(outcome.error);
-      const missingIdentityRefusal = outcome.status === 409 && captures.has(subject.keyId)
+      const missingIdentityRefusal = outcome.status === 409 && capture
         && /^scope retirement target changed: verdict process-identity: no kernel identity can be observed for pid \d+$/.test(outcome.error);
-      const concurrentCloseRefusal = missingIdentityRefusal
-        && captures.has(subject.keyId) && !captures.get(subject.keyId)!.authorizeGone();
-      const capture = captures.get(subject.keyId);
+      const concurrentCloseRefusal = missingIdentityRefusal && !capture.authorizeGone();
       const currentBoot = readers.bootEpoch();
       const expectedRoot: ProcessIdentity = { pid: subject.process.pid,
         startIdentity: subject.process.startIdentity, bootEpoch: subject.process.bootEpoch ?? null };
