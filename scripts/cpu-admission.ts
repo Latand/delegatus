@@ -238,6 +238,26 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
   };
   const queuedHookBelow = (parent: string, membership: string) =>
     [...childrenOf(parent)].some(pid => hookHasQueuedGate(path.join(proc, pid), parent, membership));
+  const queuedHookInTree = (root: string) => {
+    const seen = new Set<string>();
+    const visit = (parent: string, depth: number): boolean => {
+      if (depth >= 8 || seen.size >= 256) return false;
+      for (const pid of childrenOf(parent)) {
+        if (seen.has(pid)) continue;
+        seen.add(pid);
+        const child = path.join(proc, pid);
+        let membership: string;
+        try { membership = fs.readFileSync(path.join(child, "cgroup"), "utf8"); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+        if (hookHasQueuedGate(child, parent, membership) || visit(child, depth + 1)) return true;
+      }
+      return false;
+    };
+    return visit(root, 0);
+  };
   const serviceClients = new Map<string, { unit: string; runner: string }>();
   const bornAfterPriorGrant = (base: string) => {
     const last = queue.lastAdmission();
@@ -252,7 +272,7 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     clockTicks ??= Number(spawnSync("/usr/bin/getconf", ["CLK_TCK"], { encoding: "utf8", timeout: 1_000 }).stdout?.trim());
     if (!Number.isSafeInteger(clockTicks) || clockTicks <= 0) return false;
     const grantUptime = last / 1000 - bootEpoch;
-    const born = readStat(base)[19];
+    const born = Number(readStat(base)[19]);
     return born > (grantUptime + 2) * clockTicks;
   };
   const waitingGateInService = (unit: string) => {
@@ -299,7 +319,12 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
           if (samePool(readEnvironment(base)("LLV_GATE_LOCK_DIR"), cwd())) {
             serviceClients.set(args.at(-1)!, { unit, runner });
           }
-          return skippedAdmission(base) || bornAfterPriorGrant(base) && waitingGateInService(unit);
+          // An upgraded queue can first open from a nested cleanup runner
+          // while the ordinary hook which owns it is already alive. Prove
+          // that direct hook-to-queued-runner relationship before treating
+          // the pre-observer service as a legacy holder.
+          return skippedAdmission(base) || queuedHookInTree(base) ||
+            bornAfterPriorGrant(base) && waitingGateInService(unit);
         }
       }
       if (args[1] === path.join(path.dirname(runner), "test-child-guardian.ts")) {
