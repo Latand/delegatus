@@ -147,7 +147,7 @@ test("census captures busy and quiet standalone merger custody and retains unloc
       encoding: "utf8", timeout: 15_000,
     });
     expect(python.error).toBeUndefined();
-    expect(python.status).toBe(0, python.stdout + python.stderr);
+    expect(python.status).toBe(0);
     expect(python.stdout.trim()).toBe("OK");
     f.file.conversations[busy.id]!.agentRole = null;
     const launch = f.file.receipts["receipt-only"]!;
@@ -204,7 +204,7 @@ test("post-stop census retains a merger retired after admission with its durable
       + "m['validate_merger_census_row'](json.load(sys.stdin)); print('OK')"], {
       cwd: process.cwd(), input: JSON.stringify(retired), encoding: "utf8", timeout: 15_000,
     });
-    expect(python.status).toBe(0, python.stdout + python.stderr);
+    expect(python.status).toBe(0);
     expect(python.stdout.trim()).toBe("OK");
   } finally {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;

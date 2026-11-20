@@ -144,7 +144,7 @@ export function checkoutMergerCustody(file: RegistryFile, cut: CheckoutMerger) {
   const process = entry.structuredHost?.process ?? entry.hostExitProcess;
   if (!process || !sameRecordedProcessIdentity(process, cut.process)) return "changed";
   const writer = entry.claimOwner && structuredClaimIdentity(entry.claimOwner);
-  if (entry.claimOwner && (!writer || !sameRecordedProcessIdentity(writer, cut.writer))) return "changed";
+  if (entry.claimOwner && (!writer || !cut.writer || !sameRecordedProcessIdentity(writer, cut.writer))) return "changed";
   const exit = readHostExit(cut.process);
   const saved = entry.previousHostExit;
   const stop = exit?.stop ?? (saved && sameRecordedProcessIdentity(saved.process, cut.process) ? saved.stop : null);

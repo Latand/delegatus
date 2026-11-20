@@ -252,12 +252,13 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
     if (!process || !id || !generation || generation.path !== entry.artifactPath || representedConversations.has(id)
       || !standaloneMerger(registry, id)) continue;
     const exit = readHostExit(process);
-    if (!exit?.stop || exit.stop.path !== "deploy-cut" || Date.parse(exit.stop.at) < Date.parse(snapshot.observedAt)
+    if ((conversation.engine !== "claude" && conversation.engine !== "codex")
+      || !exit?.stop || exit.stop.path !== "deploy-cut" || Date.parse(exit.stop.at) < Date.parse(snapshot.observedAt)
       || exit.unavailable) continue;
     const writer = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
     if (entry.claimOwner && !writer) continue;
     const turn = await readTranscriptCutEvidence(conversation.engine, generation.path);
-    if (!turn.verified || turn.turn !== "busy" && turn.turn !== "idle" && turn.turn !== "terminal") continue;
+    if (!turn.verified || turn.turn !== "busy" && turn.turn !== "terminal") continue;
     const merger = { conversationId: id, engine: conversation.engine, sessionId: generation.id, path: generation.path,
     claimEpoch: entry.claimEpoch, process, writer, batch: batchFor(registry, id), turnState: turn.turn === "terminal" ? "idle" : turn.turn };
     retiredMergers.push({ conversationId: id, host: { kind: "structured", state: "gone", pid: process.pid,
