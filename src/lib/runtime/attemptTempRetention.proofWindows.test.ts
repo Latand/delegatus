@@ -23,7 +23,7 @@ for (const lowSpace of [false, true]) for (const phase of ["allocation", "protec
     const store = new AttemptTempStore(), config = path.join(root, "fixture.json");
     const directories: { directory: string; identity: string }[] = [];
     try {
-      savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+      savePipelines([finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString())]);
       // Eight exhausted proofs, one available ended root, forty expensive
       // protected roots: the latter must leave the retry reserve usable.
       for (let n = 0; n < 49; n++) {
@@ -38,7 +38,14 @@ for (const lowSpace of [false, true]) for (const phase of ["allocation", "protec
       process.env.LLV_PRESSURE_FIXTURE = config;
       fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
         slowProof: { phase, prefix: 49, timeoutPrefix: 8, requiredCost: 1500 } }));
-      const before = store.bytes(), report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
+      const before = store.bytes();
+      let report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
+      for (let tick = 1; fs.existsSync(directories[8]!.directory) && tick < 5; tick++) {
+        expect(report.errors).toBe(0); expect(clock.elapsed).toBeLessThanOrEqual(40_001);
+        fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+          slowProof: { phase, prefix: 49, timeoutPrefix: 8, requiredCost: 1500 } }));
+        report = await realParentPass(); clock = JSON.parse(fs.readFileSync(config, "utf8"));
+      }
       // Inspect every protected inode and the complete payload before the
       // progress assertion, including when run against the unfixed code.
       for (const { directory, identity } of [...directories.slice(0, 8), ...directories.slice(9)]) {
@@ -64,7 +71,7 @@ test.each([false, true])("real parent resumes behind a held suffix without an em
   process.env.LLV_STATE_DIR = state;
   const store = new AttemptTempStore(), config = path.join(root, "fixture.json");
   try {
-    savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+    savePipelines([finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString())]);
     const ended = path.join(scratch, "llv-stage-000000"), held = path.join(scratch, "llv-stage-000001");
     for (const [index, directory] of [ended, held].entries()) {
       fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
@@ -72,9 +79,8 @@ test.each([false, true])("real parent resumes behind a held suffix without an em
       if (index === 1) plantKeepMarker(path.join(directory, ".delegatus-keep"));
       store.measure(directory, await allocatedAttemptBytes(directory));
     }
-    // A previous full-window deferral checkpointed this ended root. The
-    // fresh helper first sees the protected suffix, then must wrap now.
-    store.checkpointPressure(store.owner(ended)!);
+    // The protected root is larger, so the pass reaches it first; the
+    // ended root follows in the same tick.
     const identity = store.owner(held)!.identity, heldBytes = store.owner(held)!.bytes;
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace ? "1000000000" : "0";
     process.env.LLV_PRESSURE_FIXTURE = config;

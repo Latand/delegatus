@@ -182,10 +182,11 @@ export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: Di
 }
 
 export function formatDiskBytes(bytes: number): string { return `${(bytes / 1024 ** 3).toFixed(2)} GiB`; }
-export function attemptRetentionCategory(retention?: { periodDays: number; dueBytes: number; upcomingBytes: number; until: number | null }): string {
+export function attemptRetentionCategory(retention?: { periodDays: number; dueBytes: number; upcomingBytes: number; until: number | null;
+  scratchPeriodDays?: number; evidencePeriodDays?: number }): string {
   if (!retention) return "Тимчасові дані агентів";
   const until = retention.until === null ? "—" : new Date(retention.until).toISOString().slice(0, 10);
-  return `Тимчасові дані агентів (лінії, завершені понад ${retention.periodDays} днів тому, звільнять ${formatDiskBytes(retention.dueBytes)} найближчими проходами; ще ${formatDiskBytes(retention.upcomingBytes)} — до ${until})`;
+  return `Тимчасові дані агентів (scratch: понад ${(retention.scratchPeriodDays ?? 1) * 24} год після підтвердженого завершення; докази: ${retention.evidencePeriodDays ?? retention.periodDays} днів; ${retention.scratchPeriodDays === undefined ? "облік строків оновлюється; " : ""}загалом ${formatDiskBytes(retention.dueBytes)} найближчими проходами; ще ${formatDiskBytes(retention.upcomingBytes)} — до ${until})`;
 }
 export function diskPressureLabel(pressure: DiskPressure): string {
   const low = pressure.volumes.filter(row => row.level === "warning" || row.level === "critical");

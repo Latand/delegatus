@@ -33,6 +33,12 @@ test("retention category names reclaimable allocation and its deadline", () => {
   expect(attemptRetentionCategory()).toBe("Тимчасові дані агентів");
 });
 const provisionSource = { NODE_ENV: "test" as const, TMPDIR: "/srv/agent-temp", XDG_CONFIG_HOME: "/srv/delegatus-config" };
+test("retention category distinguishes the strict scratch age from evidence lifetime", () => {
+  const text = attemptRetentionCategory({ periodDays: 7, scratchPeriodDays: 1, evidencePeriodDays: 7,
+    dueBytes: GiB, upcomingBytes: 2 * GiB, until: Date.parse("2030-01-21T00:00:00Z") });
+  expect(text).toContain("scratch: понад 24 год"); expect(text).toContain("докази: 7 днів");
+  expect(text).toContain("загалом 1.00 GiB");
+});
 const probe = (free: Record<string, number>): DiskProbe => (directory) => {
   const volume = Object.keys(free).find((prefix) => directory.startsWith(prefix));
   return volume ? { volume, freeBytes: free[volume]! } : null;
