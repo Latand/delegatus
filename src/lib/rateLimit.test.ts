@@ -8,7 +8,7 @@ import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry } from "@/lib/agent/registry";
 import type { EngineLimits, FileEntry, LimitsProvenance } from "@/lib/types";
 
-import { projectRateLimitReadModel, quotaAsEngineLimits, quotaReadingFromAccountLimits, quotaReadingFromEngineLimits, rateLimitFromQuotaObservation, reconcileQuotaReadings, weeklyQuota } from "./rateLimit";
+import { effectiveQuota, projectRateLimitReadModel, quotaAsEngineLimits, quotaReadingFromAccountLimits, quotaReadingFromEngineLimits, rateLimitFromQuotaObservation, reconcileQuotaReadings, weeklyQuota } from "./rateLimit";
 
 const NOW = new Date("2026-07-10T16:00:00.000Z").getTime();
 const RESET = Math.floor(NOW / 1000) + 7_200;
@@ -733,7 +733,6 @@ test("each tier weekly reconciles as its own window and the tightest binds the e
   expect(reconciled.tiers[1]).toMatchObject({ value: { usedPercent: 80, tier: "opus" }, observedAt: 2_000, source: "account" });
   expect(reconciled.tiers[0]).toMatchObject({ value: { usedPercent: 20, tier: "fable" }, observedAt: 1_000, source: "live" });
   expect(quotaAsEngineLimits(reconciled)?.tiers?.[1]).toMatchObject({ usedPercent: 80, tier: "opus", observedAt: 2_000 });
-  const { effectiveQuota } = require("./rateLimit") as typeof import("./rateLimit");
   expect(effectiveQuota(reconciled)).toMatchObject({ window: "tier:opus", percent: 20 });
   // Comfortable tier buckets leave the general week in charge.
   const comfortable = reconcileQuotaReadings(
@@ -806,4 +805,12 @@ test("weeklyQuota reads the general week and never lets a 5-hour or tier window 
   expect(weeklyQuota(reconcile({ session, weekly: null, tiers, plan: "max", capturedAt: now }))).toBeNull();
   // #606: a window filed under session that declares a week is that week.
   expect(weeklyQuota(reconcile({ session: { ...weekly, usedPercent: 15 }, weekly: null, plan: "pro", capturedAt: now }))).toMatchObject({ percent: 85 });
+});
+
+test("a cached weekly quota from an ended cycle does not claim current exhaustion", () => {
+  const capturedAt = Math.floor(NOW / 1000) - 86_400;
+  const data = quota(100, capturedAt);
+  data.weekly = { ...data.weekly!, resetsAt: Math.floor(NOW / 1000) - 1 };
+  const reading = quotaReadingFromEngineLimits(data, { source: "cache", reason: "read failed", staleSince: null }, capturedAt);
+  expect(weeklyQuota(reconcileQuotaReadings(reading, null, Math.floor(NOW / 1000)))).toBeNull();
 });

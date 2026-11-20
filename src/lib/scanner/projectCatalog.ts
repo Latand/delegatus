@@ -540,6 +540,8 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
       projectName: file.projectName,
       projectUnresolved: file.projectUnresolved,
       worktree: file.worktree,
+      nativeParentThreadId: file.nativeParentThreadId,
+      nativeForkSourceThreadId: file.nativeForkSourceThreadId,
       title: file.title,
       firstPrompt: "",
       engine: file.engine,

@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { semanticTitle } from "@/lib/title";
+
 import { globalCache } from "./caches";
 import { readHead } from "./head";
 import { recordValue, stringValue } from "./json";
@@ -15,6 +17,45 @@ const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
 export function codexThreadIdFromPath(pathname: string): string | null {
   return path.basename(pathname).match(UUID_RE)?.[0] ?? null;
+}
+
+const INDEX_TTL_MS = 15_000;
+const MAX_INDEX_BYTES = 16 * 1024 * 1024;
+const codexTitleIndexes = globalCache<{ expiresAt: number; titles: Map<string, string> }>("codex-session-titles-v1");
+
+function codexTitleIndex(indexPath: string): Map<string, string> {
+  const now = Date.now();
+  const cached = codexTitleIndexes.get(indexPath);
+  if (cached && cached.expiresAt > now) return cached.titles;
+  const titles = new Map<string, string>();
+  try {
+    const stat = fs.statSync(indexPath);
+    if (stat.isFile() && stat.size <= MAX_INDEX_BYTES) {
+      for (const line of fs.readFileSync(indexPath, "utf8").split("\n")) {
+        try {
+          const entry = recordValue(JSON.parse(line));
+          const id = stringValue(entry?.id)?.toLowerCase();
+          const title = semanticTitle(stringValue(entry?.thread_name));
+          if (id && title) titles.set(id, title);
+        } catch {
+          // An append may leave an unfinished last record.
+        }
+      }
+    }
+  } catch {
+    // Some accounts do not have a desktop session index.
+  }
+  codexTitleIndexes.set(indexPath, { expiresAt: now + INDEX_TTL_MS, titles });
+  return titles;
+}
+
+/** Read the title recorded by the Codex UI for this rollout's exact thread. */
+export function codexIndexedChatTitle(pathname: string, sessionRoots: readonly string[]): string | null {
+  const id = codexThreadIdFromPath(pathname)?.toLowerCase();
+  if (!id || !pathname.toLowerCase().endsWith(`-${id}.jsonl`)) return null;
+  const normalized = path.resolve(pathname);
+  const root = sessionRoots.find(candidate => normalized.startsWith(candidate + path.sep));
+  return root ? codexTitleIndex(path.join(root, "..", "session_index.jsonl")).get(id) ?? null : null;
 }
 
 export interface NativeCodexParentResult {

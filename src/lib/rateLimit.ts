@@ -88,7 +88,7 @@ function reconciledWindow(reading: QuotaReading, key: "session" | "weekly", now:
 }
 
 function reconciledValue(reading: QuotaReading, value: LimitWindow | null, now: number): ReconciledQuotaWindow | null {
-  if (!value) return null;
+  if (!value || (value.resetsAt !== null && value.resetsAt <= now)) return null;
   const observedAt = value.observedAt ?? reading.observedAt;
   const aged = observedAt !== null && now - observedAt > LIMITS_FRESHNESS_S;
   return { value, observedAt, stale: reading.stale || aged, source: value.source ?? reading.source };

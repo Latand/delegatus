@@ -9,7 +9,7 @@ import type { TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/li
  * Task limit spend on the card (docs/design/task-limit-spend.md §7.2): each
  * provider's engine mark and a four-cell scale with no digits, read for the
  * whole board in one request; the popover's estimates read as estimates (≈,
- * ≥, <1%, ±30%), a provider with no limit readings shows its tokens only, and
+ * ≥, <1%, ±30%), an unrated provider shows counted tokens and a separate current account reading, and
  * a member who is not the owner gets no account detail.
  */
 
@@ -41,6 +41,9 @@ const TASKS: Record<string, TaskSpendSummary> = {
   norate: { providers: [
     provider("claude", [account("claude:c", "C", "max", null, 41e6, null)], "norate"),
     provider("codex", [account("codex:a", "A", "pro", 1, 21e6, 47)]),
+  ] },
+  codexUnrated: { providers: [
+    provider("codex", [account("codex:a", "A", "pro", null, 2.9e9, 37)], "norate"),
   ] },
   counting: { providers: [] },
   /* Lower bounds just under a band's edge: the scale fills by the floored figure. */
@@ -148,7 +151,7 @@ test("the board's cards ask once for every task, and each provider draws its mar
   expect(host.querySelector("[data-spend='counting']")).toBeNull();
   for (const id of ["two", "large"]) expect(/\d/.test(host.querySelector(`[data-spend='${id}']`)!.textContent!)).toBe(false);
   expect(host.querySelector("[data-spend='large'] .scale-floor")!.textContent).toBe("≥");
-  expect(host.querySelector("[data-spend='norate'] .spend-n")!.textContent).toBe("unknown");
+  expect(host.querySelector("[data-spend='norate'] .spend-n")!.textContent).toBe("41m");
   expect(host.querySelector("[data-spend='large']")!.getAttribute("aria-label")).toBe("Limit spent: Claude at least 12% of the week, Codex about 34% of the week");
   expect(host.querySelector("[data-spend='two']")!.getAttribute("role")).toBe("button");
 });
@@ -240,7 +243,7 @@ test("the popover reads as an estimate: ≈ per provider, each account beside it
   expect(document.querySelector("[data-spend-pop='two']")).toBeNull();
 });
 
-test("a lower bound says so; an account with no limit readings shows tokens and no percent — in Ukrainian too", async () => {
+test("a lower bound says so and a missing task percentage shows the counted tokens in Ukrainian", async () => {
   setLocale("uk");
   await mount(<><TaskSpendMarks taskId="large" interactive /><TaskSpendMarks taskId="norate" interactive /></>);
   const large = await open("large");
@@ -249,9 +252,20 @@ test("a lower bound says so; an account with no limit readings shows tokens and 
   expect(large.querySelector(".pop-warn")!.textContent).toBe("Нижня межа: роботу до початку обліку не пораховано");
   const norate = await open("norate");
   const claude = norate.querySelector("[data-spend-provider='claude']")!;
-  expect(claude.textContent!.replace(/\s/g, " ")).toBe("Claude — ліміт акаунта невідомийC · Max: 41 млн токенів, показано лише токени");
+  expect(claude.textContent!.replace(/\s/g, " ")).toBe("Claude — частку задачі не визначеноC · Max: оброблено 41 млн токенів, включно з кешованим контекстом");
   expect(/%/.test(claude.textContent!)).toBe(false);
-  expect(norate.querySelector(".pop-note")!.textContent).toBe("Оцінка, ±30%. Для Claude C ще немає показів ліміту");
+  expect(norate.querySelector(".pop-note")!.textContent).toBe("Оцінка, ±30%. Для оцінки частки задачі потрібно більше історичних даних про ліміт");
+});
+
+test("a known Codex account reading is separate from the unavailable task percentage", async () => {
+  const host = await mount(<TaskSpendMarks taskId="codexUnrated" interactive />);
+  const mark = host.querySelector("[data-spend='codexUnrated']")!;
+  expect(mark.querySelector(".spend-n")!.textContent).toBe("2.9bn");
+  expect(mark.getAttribute("aria-label")).toContain("Codex 2.9bn tokens, task percentage unavailable");
+  const pop = await open("codexUnrated");
+  expect(pop.textContent).toContain("Codex — task percentage unavailable");
+  expect(pop.textContent).toContain("A · Pro: 2.9bn processed tokens, including cached input");
+  expect(pop.textContent).toContain("Last account reading: 37% of the weekly limit used");
 });
 
 test("a member who is not the owner sees each provider's figure and no account", async () => {
@@ -259,7 +273,7 @@ test("a member who is not the owner sees each provider's figure and no account",
   await mount(<TaskSpendMarks taskId="two" interactive />);
   const pop = await open("two");
   expect(pop.querySelectorAll(".meter").length).toBe(0);
-  expect(pop.textContent).toBe("Limit spent by this taskClaude ≈3% of the weekCodex ≈2% of the weekEstimate, ±30%");
+  expect(pop.textContent).toBe("Limit spent by this taskClaude ≈3% of one weekly allowance over the task’s historyCodex ≈2% of one weekly allowance over the task’s historyEstimate, ±30%");
 });
 
 test("the phone's face is passive, and its task screen lists the numbers; a refused read draws nothing", async () => {

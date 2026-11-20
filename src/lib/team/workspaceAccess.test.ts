@@ -747,6 +747,19 @@ describe("workspace authority", () => {
     expect(workspaceFiles(workspaceScope(store, owner.id), source)).toBe(source);
   });
 
+  test("a task's linked title requires access to the source conversation's project", () => {
+    const own = loadTasksForList().find(task => task.project === "repo-alpha")!;
+    const tasks = [
+      { ...own, id: "same-project", conversationTitle: "Local title", conversationTitleProject: "repo-alpha" },
+      { ...own, id: "foreign-project", conversationTitle: "Hidden title", conversationTitleProject: "repo-beta" },
+      { ...own, id: "unknown-project", conversationTitle: "Unknown source" },
+    ];
+    const source: FilesResponse = { files: [], tasks, flows: [], pipelines: [], workflows: [], systemHealth: {} };
+    const result = workspaceFiles(workspaceScope(store, member.id), source);
+    expect(result.tasks.map(task => task.conversationTitle)).toEqual(["Local title", undefined, undefined]);
+    expect(workspaceFiles(workspaceScope(store, owner.id), source)).toBe(source);
+  });
+
   test("every project route and method refuses a foreign project before its handler", async () => {
     let checked = 0;
     for (const [route, decision] of Object.entries(WORKSPACE_ROUTES)) {

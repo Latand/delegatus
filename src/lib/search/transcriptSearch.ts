@@ -1,3 +1,5 @@
+import type { ChatPullRequests } from "@/lib/forge/chatPullRequests";
+import { boundedRepository, normalizeWorkLinkInput, workLinkKey, workLinkUrl, type ForgeCacheView } from "@/lib/forge/workLinks";
 import { redactMediaText } from "@/lib/externalRelay/mediaPrivacy";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite } from "@/lib/sqliteReadAttribution";
@@ -153,6 +155,77 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) throw new Error("Transcript search requires the Bun runtime");
   return sqlite.Database;
+}
+
+const CHAT_REFERENCE_WINDOW = 384;
+const CHAT_REFERENCE_BODY = 16 * 1024;
+const CHAT_REFERENCE_LIMIT = 32;
+
+/** Read the existing index for the already authorized catalog rows. This
+ * never opens a transcript or starts the index writer for a sidebar request. */
+export function readTranscriptPullRequests(
+  files: readonly { path: string; size: number; project?: string; engine?: string; mtime?: number }[],
+  forge: ForgeCacheView,
+  options: { filename?: string; requireCurrent?: boolean } = {},
+): Record<string, ChatPullRequests> {
+  const result: Record<string, ChatPullRequests> = Object.create(null);
+  if (!files.length) return result;
+  const filename = options.filename ?? statePath("transcript-search.sqlite");
+  let db: Database | undefined;
+  try {
+    db = new (sqliteDatabase())(filename, { readonly: true, strict: true });
+    const indexed = db.query<Pick<FileIdentityRow, "size" | "messages_count" | "project" | "engine" | "mtime_ms">, [string]>(
+      "SELECT size, messages_count, project, engine, mtime_ms FROM transcript_files WHERE path=?");
+    const mentions = db.query<{ body: string; clipped: number }, [number, number, string, number]>(`
+      SELECT substr(body, 1, ?) AS body, length(body) > ? AS clipped
+      FROM transcript_messages
+      WHERE transcript_path=? AND message_index >= ? AND instr(body, '/pull/') > 0
+      ORDER BY message_index DESC
+    `);
+    for (const file of files) {
+      const coverage = indexed.get(file.path);
+      if (!coverage) continue;
+      const mtimeMatches = file.mtime === undefined || Math.abs(coverage.mtime_ms - file.mtime * 1000) <= 1;
+      const matchesIdentity = coverage.size === file.size && mtimeMatches;
+      if (options.requireCurrent && (!matchesIdentity || coverage.project !== file.project || coverage.engine !== file.engine)) continue;
+      const from = Math.max(0, coverage.messages_count - CHAT_REFERENCE_WINDOW);
+      const rows = mentions.all(CHAT_REFERENCE_BODY, CHAT_REFERENCE_BODY, file.path, from);
+      const items: ChatPullRequests["items"] = [];
+      const keys = new Set<string>();
+      let partial = !matchesIdentity || from > 0;
+      for (const row of rows) {
+        partial ||= Boolean(row.clipped);
+        const matches = [...row.body.matchAll(/(?<![\w@.\/-])https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+(?=[/?#]|[^\w.-]|\.(?:\s|$)|$)/gi)];
+        for (const [url] of matches.reverse()) {
+          const parsed = normalizeWorkLinkInput(url, { repository: null });
+          if (!parsed.ok) continue;
+          const { repository, number } = parsed.link;
+          const cached = forge.repository(repository);
+          const canonical = boundedRepository(cached?.canonical) ? cached.canonical : repository;
+          const key = workLinkKey(canonical, number);
+          if (keys.has(key)) continue;
+          keys.add(key);
+          if (items.length >= CHAT_REFERENCE_LIMIT) { partial = true; break; }
+          const pr = cached?.pr(number);
+          items.push({
+            repository: canonical, number, url: workLinkUrl(canonical, number, "pr"),
+            state: pr?.state ?? null,
+            ...(pr?.title ? { title: pr.title.slice(0, 240) } : {}),
+            ...(pr?.checkedAt ? { checkedAt: pr.checkedAt } : {}),
+            ...(pr?.additions !== undefined ? { additions: pr.additions } : {}),
+            ...(pr?.deletions !== undefined ? { deletions: pr.deletions } : {}),
+          });
+        }
+        if (keys.size > CHAT_REFERENCE_LIMIT) break;
+      }
+      result[file.path] = { items, partial };
+    }
+  } catch {
+    // The chat list works while the separate search index is absent or busy.
+  } finally {
+    db?.close();
+  }
+  return result;
 }
 
 const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 5;

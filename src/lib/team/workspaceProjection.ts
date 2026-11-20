@@ -13,7 +13,9 @@ export function workspaceFiles(scope: Scope, source: FilesResponse): FilesRespon
   const paths = new Set(files.map(row => row.path));
   const ids = new Set(files.flatMap(row => row.conversationId ? [row.conversationId] : []));
   const keyed = <T>(rows: Record<string, T> | undefined) => Object.fromEntries(Object.entries(rows ?? {}).filter(([project]) => allowed(project)));
-  const tasks = source.tasks.filter(row => allowed(row.project));
+  const tasks = source.tasks.filter(row => allowed(row.project)).map(({ conversationTitleProject, ...task }) => (
+    allowed(conversationTitleProject) ? task : { ...task, conversationTitle: undefined }
+  ));
   const taskIds = new Set(tasks.map(row => row.id));
   return {
     files,

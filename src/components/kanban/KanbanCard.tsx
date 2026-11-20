@@ -44,6 +44,7 @@ import { askOrchestratorAboutTask } from "./askOrchestrator";
 import { TaskStatusNote } from "@/components/tasks/TaskStatusNote";
 import { noteShownBesideSummary, TaskSummaryPanel } from "@/components/tasks/TaskSummaryPanel";
 import { CardInlineText, withinEdit, type CardEditField } from "./CardInlineText";
+import { CardChatLinks, type ChatTaskLinks } from "./CardChatLinks";
 import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
 import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
@@ -264,6 +265,10 @@ export interface KanbanCardProps {
   seatConversationIds?: readonly string[];
   /** Drafts made from a conversation the card holds: the one being made, and Start on a draft lane. */
   conversationDrafts?: ConversationDrafts;
+  chatLinks?: ChatTaskLinks;
+  chatLinksOpen?: boolean;
+  onToggleChatLinks?: (id: string) => void;
+  onJumpChatCard?: (id: string) => void;
 }
 
 /** A draft being made from the card's conversation, or the answer that it was not (variant 3). */
@@ -728,6 +733,10 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
         /* A closed card that has not started keeps its priority mark, which is how the Inbox reads at a glance. */
         <div className="card-state prio-only">{motionLine(false)}<PriorityMark priority={card.priority} /></div>
       ) : motionLine(false)}
+      {props.chatLinks && props.onJumpChatCard ? (
+        <CardChatLinks links={props.chatLinks} open={props.chatLinksOpen ?? false}
+          onToggle={() => props.onToggleChatLinks?.(card.id)} onJump={props.onJumpChatCard} />
+      ) : null}
       {/* The task's deadline and images, closed and open alike: the old Tasks panel's two facts. */}
       {card.task && hasTaskMeta(card.task) ? <div className="card-meta-line"><TaskMeta task={card.task} nowMs={nowMs} /></div> : null}
       {answers && state ? (

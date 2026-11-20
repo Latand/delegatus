@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
+import { NextRequest } from "next/server";
 import os from "node:os";
 import path from "node:path";
 
@@ -10,9 +11,11 @@ import { beginDeputy, DEPUTY_HISTORY_CAP, endDeputy, readDeputies, recordDeputyF
 import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests } from "@/lib/scanner/scanCache";
 import { projectForCwd } from "@/lib/scanner/describe";
+import { indexTranscriptSources } from "@/lib/search/transcriptSearch";
 import { writeSessionTitle } from "@/lib/session/titleStore";
 
 import { GET } from "./route";
+import { GET as pullRequests } from "./pull-requests/route";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-conversations-route-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
@@ -29,7 +32,7 @@ afterEach(() => {
   setFileCatalogMembershipProbeForTests(null);
   replaceConversationCatalog([]);
   setAgentRegistryForTests(null);
-  fs.rmSync(path.join(sandbox, "session-titles.json"), { force: true });
+  fs.rmSync(path.join(sandbox, "session-titles.json"), { force: true, recursive: true });
   fs.rmSync(path.join(sandbox, "registry.json"), { force: true });
 });
 afterAll(() => {
@@ -521,4 +524,27 @@ test("a parallel self stays out of the page after the history cap trims its reco
   } finally {
     fs.rmSync(path.join(sandbox, "orchestrator-deputies.json"), { force: true });
   }
+});
+
+test("chat PR lookup is scoped to cataloged transcripts in the selected project", async () => {
+  const make = (project: string, number: number) => {
+    const file = path.join(sandbox, `chat-pr-${number}.jsonl`);
+    fs.writeFileSync(file, JSON.stringify({ type: "user", message: { content: `Review https://github.com/sample/reports/pull/${number}` } }) + "\n");
+    const stat = fs.statSync(file);
+    return { path: file, project, root: "claude-projects" as const, name: path.basename(file), title: "Review reports",
+      firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, size: stat.size, mtime: stat.mtimeMs / 1000 };
+  };
+  const allowed = make("reports-a", 7);
+  const elsewhere = make("reports-b", 9);
+  const unknown = make("reports-a", 11);
+  replaceConversationCatalog([allowed, elsewhere]);
+  await indexTranscriptSources([allowed, elsewhere, unknown].map(row => ({ ...row, mtimeMs: row.mtime * 1000 })));
+  const query = new URLSearchParams({ project: "reports-a" });
+  for (const row of [allowed, elsewhere, unknown]) query.append("transcript", row.path);
+  const req = new NextRequest(`http://localhost/api/conversations/pull-requests?${query}`, { headers: { host: "localhost" } });
+  const response = await pullRequests(req);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ [allowed.path]: {
+    partial: false, items: [{ repository: "sample/reports", number: 7, url: "https://github.com/sample/reports/pull/7", state: null }],
+  } });
 });

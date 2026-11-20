@@ -1511,3 +1511,25 @@ test("relay media refs are excluded from catalog titles and search prompts", asy
     expect(text.firstPrompt).toContain("Inspect"); expect(JSON.stringify(text)).not.toContain(ref);
   }
 });
+
+test("Claude's latest explicit transcript title names the conversation even after its first prompt", async () => {
+  const { conversationSearchText } = await import("./describe");
+  const records = [
+    { type: "user", message: { content: "Inspect the formatter" } },
+    { type: "custom-title", customTitle: "Formatter review" },
+    { type: "custom-title", customTitle: "Formatter regression review" },
+  ];
+  expect(conversationSearchText(records.map(record => JSON.stringify(record)).join("\n"), "claude")).toEqual({
+    title: "Formatter regression review",
+    firstPrompt: "Inspect the formatter",
+  });
+});
+
+test("Claude system reminder envelopes do not hide the first user request from naming", async () => {
+  const { conversationSearchText } = await import("./describe");
+  const row = {
+    type: "user",
+    message: { content: "<system-reminder>Internal setup instructions</system-reminder>\n\nInspect the formatter" },
+  };
+  expect(conversationSearchText(JSON.stringify(row), "claude").title).toBe("Inspect the formatter");
+});

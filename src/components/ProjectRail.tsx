@@ -1,7 +1,7 @@
 "use client";
 
-import { LayoutGrid, User } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from "react";
+import { LayoutGrid, MessagesSquare, User } from "lucide-react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactNode } from "react";
 
 import { DelegatusMark } from "@/components/brand/BrandMark";
 import { Badge } from "@/components/ui/Badge";
@@ -18,6 +18,7 @@ import { AccessQrButton } from "./AccessQrButton";
 export { createErrorText } from "./createProjectParts";
 import { createErrorText, FolderPreview, useCreateTarget, useDirectorySuggestions, WorkspaceChoice } from "./createProjectParts";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
+import { DesktopConversations } from "./DesktopConversations";
 import { DirectoryPicker, splitDirectoryPath } from "./DirectoryPicker";
 import { FlipRow } from "./FlipRow";
 import { HeaderMenuPanel } from "./headerMenu/HeaderMenu";
@@ -72,6 +73,7 @@ export interface ProjectRailProps {
       the rail through its drawer, which already has a way out. */
   onHide?: () => void;
   onSelect: (project: string) => void;
+  onOpenChat?: (file: FileEntry) => void;
   onToggleCrown?: (project: string, crowned: boolean) => void;
   onCreateProject?: (name: string, root: string | null, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
   /** A team install's workspaces (docs/design/workspaces.md §13.4): the
@@ -159,11 +161,12 @@ function SectionLabel({ children, count, icon, lead }: { children: ReactNode; co
   );
 }
 
-export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onToggleCrown, onCreateProject, workspace, actions, projectCwds }: ProjectRailProps) {
+export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onOpenChat, onToggleCrown, onCreateProject, workspace, actions, projectCwds }: ProjectRailProps) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const [query, setQuery] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [chatsOpen, setChatsOpen] = useState<string | null>(null);
   const summaries = useMemo(
     () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now)),
     [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
@@ -261,23 +264,43 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
   const columns = { anyNeeds: totalAttention > 0, anyLive: totalLive > 0 };
   /* An archived row is drawn as the quiet rows above it; its menu restores it instead of crowning it. */
   const railRow = (summary: ProjectSummary, pinnedMark = false) => (
-    <RailRow
-      key={summary.project}
-      summary={summary}
-      pinnedMark={pinnedMark}
-      active={selected === summary.project}
-      now={now}
-      columns={columns}
-      menuOpen={menu?.project === summary.project}
-      error={rowError?.project === summary.project ? rowError.text : null}
-      rowRef={(element) => { if (element) rows.current.set(summary.project, element); else rows.current.delete(summary.project); }}
-      triggerRef={(element) => { if (element) triggers.current.set(summary.project, element); else triggers.current.delete(summary.project); }}
-      onSelect={onSelect}
-      onMenu={(at) => {
-        setRowError(null);
-        setMenu((open) => (open?.project === summary.project && at.from === "trigger" ? null : { project: summary.project, at }));
-      }}
-    />
+    <Fragment key={summary.project}>
+      <RailRow
+        summary={summary}
+        pinnedMark={pinnedMark}
+        active={selected === summary.project}
+        now={now}
+        columns={columns}
+        menuOpen={menu?.project === summary.project}
+        error={rowError?.project === summary.project ? rowError.text : null}
+        rowRef={(element) => { if (element) rows.current.set(summary.project, element); else rows.current.delete(summary.project); }}
+        triggerRef={(element) => { if (element) triggers.current.set(summary.project, element); else triggers.current.delete(summary.project); }}
+        onSelect={onSelect}
+        onMenu={(at) => {
+          setRowError(null);
+          setMenu((open) => (open?.project === summary.project && at.from === "trigger" ? null : { project: summary.project, at }));
+        }}
+      />
+      {!isMobile && onOpenChat && selected === summary.project ? (
+        <div data-rail-chats="" className="mb-1">
+          <button
+            type="button"
+            aria-expanded={chatsOpen === selected}
+            className={`flex min-h-8 w-full items-center gap-2 rounded-control px-2.5 text-left text-[12px] font-semibold text-muted hover:bg-canvas hover:text-primary ${FOCUS}`}
+            onClick={() => setChatsOpen(chatsOpen === selected ? null : selected)}
+          >
+            <MessagesSquare className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 flex-1">{t("dash.recentAgents")}</span>
+            <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${chatsOpen === selected ? "rotate-90" : ""}`} aria-hidden />
+          </button>
+          {chatsOpen === selected ? (
+            <div className="flex max-h-[min(55dvh,35rem)] min-h-0 flex-col rounded-control border border-border bg-canvas">
+              <DesktopConversations key={selected} project={selected} enabled={loaded} onOpen={onOpenChat} compact />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </Fragment>
   );
   const overview = selected === OVERVIEW;
 

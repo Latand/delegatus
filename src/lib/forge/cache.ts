@@ -123,6 +123,8 @@ function validEntry(value: unknown): ForgeRepositoryEntry | null {
       checkedAt: typeof pr.checkedAt === "string" ? pr.checkedAt : "",
       ...(typeof pr.headRefOid === "string" && pr.headRefOid ? { headRefOid: pr.headRefOid } : {}),
       ...(typeof pr.title === "string" ? { title: pr.title } : {}),
+      ...(typeof pr.additions === "number" && Number.isSafeInteger(pr.additions) && pr.additions >= 0 ? { additions: pr.additions } : {}),
+      ...(typeof pr.deletions === "number" && Number.isSafeInteger(pr.deletions) && pr.deletions >= 0 ? { deletions: pr.deletions } : {}),
       ...(typeof pr.mergedAt === "string" && pr.mergedAt ? { mergedAt: pr.mergedAt } : {}),
     };
   }
@@ -554,6 +556,8 @@ export function observeForgePullRequest(
       closes: prior?.closes ?? [],
       checkedAt: prior?.checkedAt ?? now,
       ...(prior?.title !== undefined ? { title: prior.title } : {}),
+      ...(prior?.additions !== undefined ? { additions: prior.additions } : {}),
+      ...(prior?.deletions !== undefined ? { deletions: prior.deletions } : {}),
       ...(prior?.mergedAt ? { mergedAt: prior.mergedAt } : {}),
     };
     delete entry.issues[String(pullRequest.number)];

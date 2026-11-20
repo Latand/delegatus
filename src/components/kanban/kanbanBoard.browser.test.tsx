@@ -25156,6 +25156,43 @@ describe("state writes disk-full alert", () => {
  * `evidence/whole-card-drag/<label>-desktop.json`; the trace stays under
  * `.artifacts/whole-card-drag/`.
  */
+describe("chat pull requests in the project rail", () => {
+  browserTest("a chat badge opens an ordered PR panel by pointer and keyboard", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "chat-pull-requests");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=chat-prs`, { width: 1440, height: 900 }, "dark", "en");
+      try {
+        await page.locator("[data-rail-chats] > button").click();
+        const badge = page.locator("[data-rail-chats] [data-chat-pr-badge]");
+        await badge.hover();
+        const panel = page.locator("[data-chat-pr-panel]");
+        await panel.waitFor();
+        const rows = panel.getByRole("link");
+        expect(await rows.count()).toBe(2);
+        expect(await rows.first().getAttribute("href")).toBe("https://github.com/sample/widget/pull/7");
+        expect(await rows.last().getAttribute("href")).toBe("https://github.com/sample/widget/pull/5");
+        expect(await rows.last().locator("[data-tone]").getAttribute("data-tone")).toBe("merged");
+        await rows.first().hover();
+        await page.waitForTimeout(260);
+        expect(await panel.isVisible()).toBe(true);
+        await page.screenshot({ path: path.join(out, "chat-pr-panel.png") });
+        await page.keyboard.press("Escape");
+        await panel.waitFor({ state: "hidden" });
+        await badge.focus();
+        await badge.press("Enter");
+        await page.waitForFunction(() => document.activeElement?.closest("[data-chat-pr-panel]") !== null);
+        await page.keyboard.press("Escape");
+        await panel.waitFor({ state: "hidden" });
+        expect(await badge.evaluate(node => node === document.activeElement)).toBe(true);
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 75_000);
+});
+
 describe("whole-card drag rendered evidence", () => {
   const OUT = path.resolve(".artifacts/whole-card-drag");
   /* The orchestrator's panel fills the screen above the columns; `O` folds it, as an operator working the board does. */
@@ -25207,6 +25244,52 @@ describe("whole-card drag rendered evidence", () => {
         await card.locator("[data-rename]").first().click();
         expect(await page.locator(`.kb .card[data-id="${id}"] textarea, .kb .card[data-id="${id}"] input[type="text"]`).count(), "a click renames").toBeGreaterThan(0);
         expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  browserTest("linked chat controls reveal the parent and children while the child moves independently", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? OUT);
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=drag-board&chatLinks=1`, { width: 1440, height: 900 }, "dark", "en");
+      try {
+        const parent = page.locator(deskCard("t-drag-0"));
+        const child = page.locator(deskCard("t-drag-1"));
+        await parent.waitFor();
+        await foldSeat(page);
+        const toggle = parent.locator("[data-chat-children]");
+        expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+        await toggle.click();
+        const childLink = parent.locator('[data-chat-task="task:t-drag-1"]');
+        await childLink.waitFor();
+        expect(await parent.locator("[data-chat-task]").count()).toBe(2);
+        await childLink.click();
+        await child.locator("[data-chat-parent]").click();
+        expect(await toggle.getAttribute("aria-expanded")).toBe("true");
+
+        await child.scrollIntoViewIfNeeded();
+        const title = (await child.locator("[data-rename]").boundingBox())!;
+        const strip = (await page.locator('.kb .column[data-status="blocked"]').boundingBox())!;
+        const from = { x: title.x + 25, y: title.y + title.height / 2 };
+        const target = { x: strip.x + strip.width / 2, y: from.y + 75 };
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(from.x + 64, from.y + 28, { steps: 5 });
+        await page.mouse.move(target.x, target.y, { steps: 10 });
+        await page.locator('.kb .column[data-status="blocked"][data-drop]').waitFor();
+        await page.mouse.up();
+
+        await page.locator(`.kb .column[data-status="blocked"] .card[data-id="task:t-drag-1"]`).waitFor();
+        await childLink.getByText("Waiting", { exact: true }).waitFor();
+        expect(await child.locator("[data-chat-parent]").count()).toBe(1);
+        expect(await page.locator('.kb .column[data-status="inbox"] [data-id="task:t-drag-0"]').count()).toBe(1);
+        const patches = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: Array<{ id: string; body: { status?: string } }> } }).evidence.taskPatches);
+        expect(patches.map(({ id, body }) => [id, body.status])).toEqual([["t-drag-1", "blocked"]]);
+        expect(pageErrors).toEqual([]);
+        await parent.screenshot({ path: path.join(out, "linked-chats-after-drag.png") });
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }
   }, 120_000);

@@ -1,4 +1,5 @@
 "use client";
+import type { ChatTaskLink, ChatTaskLinks } from "./CardChatLinks";
 import { useMaterializedCreationIds } from "@/hooks/useFiles";
 
 import { History, ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin, Workflow } from "lucide-react";
@@ -571,6 +572,40 @@ export function KanbanBoard(props: KanbanBoardProps) {
     for (const card of model.unlinked) map.set(card.id, card);
     return map;
   }, [model]);
+  const [openChatLinks, setOpenChatLinks] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleChatLinks = useCallback((id: string) => {
+    setOpenChatLinks(open => {
+      const next = new Set(open);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const chatLinks = useMemo(() => {
+    const byCard = new Map<string, ChatTaskLinks>();
+    if (props.overview) return byCard;
+    const linksFor = (id: string) => {
+      let links = byCard.get(id);
+      if (!links) byCard.set(id, links = { parent: null, children: [] });
+      return links;
+    };
+    const link = (card: KanbanCardModel): ChatTaskLink => ({
+      id: card.id, title: card.titlePending ? t("kanban.untitled") : card.title, status: card.status,
+    });
+    const children = [...allTasks].filter(task => task.chatParentTaskId).sort((a, b) => {
+      const first = cardsById.get(`task:${a.id}`);
+      const second = cardsById.get(`task:${b.id}`);
+      return (second?.lastAgentWorkAtMs ?? 0) - (first?.lastAgentWorkAtMs ?? 0) || b.createdAt.localeCompare(a.createdAt);
+    });
+    for (const task of children) {
+      const child = cardsById.get(`task:${task.id}`);
+      const parent = cardsById.get(`task:${task.chatParentTaskId}`);
+      if (!child || !parent || child.project !== parent.project || child.id === parent.id) continue;
+      linksFor(child.id).parent = link(parent);
+      linksFor(parent.id).children.push(link(child));
+    }
+    return byCard;
+  }, [allTasks, cardsById, props.overview, t]);
   const timelineCards = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).filter(card => card.task), [model]);
   const timelineTasks = useMemo(() => timelineCards.map(card => card.task!), [timelineCards]);
   const timelineMembers = useMemo(() => [...KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
@@ -2495,6 +2530,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
     focusCard(`task:${taskId}`);
   }, [revealCard, focusCard]);
 
+  const jumpToChatCard = useStableCallback((cardId: string) => {
+    const card = cardsById.get(cardId);
+    if (card && !cardMatchesShown(model, card)) setReasonFilter(undefined);
+    revealCard(cardId);
+    focusCard(cardId);
+  });
+
   /* ── Presence: what the operator can actually see ────────────────────── */
   /* A card counts as seen when it intersects its column's scroll box, the
      board and the window, in a column that is displayed (one tab at a time on
@@ -3004,6 +3046,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
       actingByCard={actingByCard}
       newTask={status === "inbox" && composingTask && !props.overview ? <KanbanTaskComposer project={project} onCreated={taskCreated} onCancel={closeNewTask} /> : null}
       heldLaunches={heldLaunches}
+      chatLinks={chatLinks}
+      openChatLinks={openChatLinks}
+      onToggleChatLinks={toggleChatLinks}
+      onJumpChatCard={jumpToChatCard}
       onColumnMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "column", status } })}
       cardProps={{
         onToggleCollapsed: toggleCollapsed,
@@ -3486,7 +3532,7 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
 > & { holdEditingId?: string | null };
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, draftsByCard, actingByCard, newTask, heldLaunches, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, draftsByCard, actingByCard, newTask, heldLaunches, chatLinks, openChatLinks, onToggleChatLinks, onJumpChatCard, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
@@ -3495,6 +3541,10 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   newTask: ReactNode;
   /** Conversations of launches whose draft still stands for them. */
   heldLaunches: ReadonlySet<string>;
+  chatLinks: ReadonlyMap<string, ChatTaskLinks>;
+  openChatLinks: ReadonlySet<string>;
+  onToggleChatLinks: (id: string) => void;
+  onJumpChatCard: (id: string) => void;
   editing: ReadonlyMap<string, { field: EditField; draft: string }>;
   failedEdits: ReadonlyMap<string, { field: EditField; draft: string; message: string }>;
   incomingEdits: ReadonlyMap<string, { field: EditField; value: string }>;
@@ -3546,6 +3596,10 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       incomingEdit={incomingEdits.get(card.id) ?? null}
       {...cardHandlers}
       holdEditing={holdEditingId === card.id}
+      chatLinks={chatLinks.get(card.id)}
+      chatLinksOpen={openChatLinks.has(card.id)}
+      onToggleChatLinks={onToggleChatLinks}
+      onJumpChatCard={onJumpChatCard}
     />
   );
   // The long-quiet stopped cards gather under the divider, in column order;

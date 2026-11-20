@@ -33,7 +33,7 @@ import { registryRowProjection, registryRowsMatching, type RegistryRowProjector 
 import { readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
 import { orchestratorMandateDeliveries, SPAWN_CLIENT_MESSAGE_PREFIX } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
-import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
+import { catalogEntryToFileEntry, conversationCatalogEntry, conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
 import { pidAlive, readPpid } from "@/lib/scanner/process";
 import { repositoryForProjectRoot } from "@/lib/projects/git";
 import { reviewOutcomeFor } from "@/lib/review/reviewOutcome";
@@ -45,6 +45,7 @@ import { isCanonicalProjectId, isRepositoryProjectId, projectIdentityFromReposit
 import { projectRestoredFlows } from "@/lib/reviewHistory/visibility";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { workLinksForBoard } from "@/lib/forge/resolve";
+import { taskChatParents } from "@/lib/tasks/chatParents";
 import { pathForPanePid, reconcileTasks } from "@/lib/tasks/reconcile";
 import { projectSupersededTaskHandoffs } from "@/lib/tasks/supersedence";
 import { reportRunIdFromAttemptId, TELEGRAM_REPORT_PROJECT } from "@/lib/telegram/reportLineage";
@@ -54,11 +55,12 @@ import { projectStructuredFileLiveness } from "@/lib/runtime/livenessProjection"
 import { overlayLineageProjectAffinity } from "@/lib/session/projectAffinity";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import { overlayRoleSessionTitles } from "@/lib/session/roleTitles";
-import { overlaySessionTitles, registryProjectionForSnapshot } from "@/lib/session/titleProjection";
+import { nativeSessionTitleProjector, overlaySessionTitles, registryProjectionForSnapshot } from "@/lib/session/titleProjection";
 import { claudeProjectRootFor, codexSessionRootFor } from "@/lib/scanner/roots";
 import { projectInfoFromCwd, projectRootForCwd } from "@/lib/scanner/describe";
 import { projectDirectoryFallbacks } from "@/lib/scanner/projectDirectories";
 import type { FilesResponse, ProjectCatalogEntry, StuckDelivery } from "@/lib/types";
+import { semanticTitle } from "@/lib/title";
 import { stateDir } from "@/lib/configDir";
 import { readStorageIncidents } from "@/lib/state/durability";
 import { filesResponseDependencies } from "./dependencies";
@@ -964,7 +966,39 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      source above, so the stamp names the reason the board will draw. A wait
      the seat escalated stays on its decision form while the form waits, as
      the board draws it: undecided, undismissed, the task's newest round. */
-  const summarizedTasks = withPrototypeReviewSummaries(boardTasks);
+  const nativeTitleFor = nativeSessionTitleProjector();
+  const linkedProjects = registryProjectionForSnapshot(registrySnapshot).projectByPath;
+  const titledTasks = boardTasks.map(task => {
+    if (task.origin?.refinement !== "pending" || task.origin.kind !== "conversation") return task;
+    for (const assignment of task.assignments) {
+      if (!assignment.path || assignment.state === "failed" ||
+          (task.origin.key !== assignment.conversationId && task.origin.key !== assignment.path)) continue;
+      const scanned = filesByPath.get(assignment.path);
+      const catalog = conversationCatalogEntry(assignment.path);
+      const source = scanned ?? catalog;
+      // The files worker can hold only the board shortlist, especially on a
+      // warm read. An existing assignment still records the exact native ID.
+      const engine = source?.engine ?? assignment.engine;
+      const nativeTitle = engine ? nativeTitleFor(engine, assignment.path) : null;
+      const title = semanticTitle(scanned?.title) ?? nativeTitle ?? semanticTitle(catalog?.title);
+      if (title) {
+        const sourceProject = linkedProjects.get(assignment.path) ?? source?.project;
+        return { ...task, conversationTitle: title, conversationTitleProject: sourceProject ? remapProject(sourceProject) : undefined };
+      }
+    }
+    return task;
+  });
+  const chatParents = taskChatParents(titledTasks, (pathname, taskProject) => {
+    const file = filesByPath.get(pathname);
+    const catalog = file ? undefined : conversationCatalogEntry(pathname);
+    const sourceProject = linkedProjects.get(pathname) ?? file?.project ?? catalog?.project;
+    if (sourceProject && remapProject(sourceProject) !== taskProject) return null;
+    return file ?? (catalog ? catalogEntryToFileEntry(catalog) : undefined);
+  });
+  const summarizedTasks = withPrototypeReviewSummaries(titledTasks.map(task => {
+    const parent = chatParents.get(task.id);
+    return parent ? { ...task, chatParentTaskId: parent } : task;
+  }));
   const seatDecisions = seatDecisionNotices();
   overlayAttentionRoutes(projected.files, pipelines, waitingRoundIds(summarizedTasks, seatDecisions), Date.now() / 1000,
     productionRoutingSources(seatIdentityResolver(conversationLookup.canonicalConversationId)));

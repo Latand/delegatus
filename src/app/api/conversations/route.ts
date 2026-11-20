@@ -1,5 +1,6 @@
 import { requestWorkspaceScope, filterWorkspaceRows, workspaceRoute } from "@/lib/team/workspaceRoute";
-import { scopeConversationCatalog, catalogEntryToFileEntry, conversationCatalogReady, conversationCatalogSnapshot, ExpiredConversationCatalogCursorError, loadConversationCatalogPage } from "@/lib/scanner/conversationCatalog";
+import { scopeConversationCatalog, catalogEntryToFileEntry, conversationCatalogEntry, conversationCatalogReady, conversationCatalogSnapshot, ExpiredConversationCatalogCursorError, loadConversationCatalogPage } from "@/lib/scanner/conversationCatalog";
+import { projectClaudeDesktopChats } from "@/lib/scanner/claudeDesktop";
 import { conversationSearchProjection } from "@/lib/scanner/conversationSearchProjection";
 import { searchTextForTranscript } from "@/lib/scanner/describe";
 import { refreshConversationCatalog } from "@/lib/scanner/discover";
@@ -30,6 +31,7 @@ async function workspaceGET(request: Request): Promise<Response> {
      own project, so the catalog holds one row per ask. They stay readable by
      id and searchable through search_transcripts. An unreadable deputy file
      hides nothing. */
+  const tree = url.searchParams.get("view") === "tree" && !query;
   const deputies = deputyConversationRefs();
   const hiddenPaths = new Set(deputies?.paths ?? []);
   const hiddenIds = new Set(deputies?.conversationIds ?? []);
@@ -44,7 +46,8 @@ async function workspaceGET(request: Request): Promise<Response> {
   };
   const scope = requestWorkspaceScope(request);
   const options = {
-    authorityScope: scope ? JSON.stringify([scope.memberId, scope.projectFilter]) : "",
+    authorityScope: scope ? JSON.stringify([scope.memberId, scope.projectFilter, tree]) : tree ? "tree" : "",
+    tree,
     project: url.searchParams.get("project")?.trim() || undefined,
     query,
     cursor: url.searchParams.get("cursor"),
@@ -56,6 +59,7 @@ async function workspaceGET(request: Request): Promise<Response> {
       // The cursor owns its frozen ordering; do not rehydrate the corpus for
       // every page (including search pages). The final page overlay stays live.
       page = await loadConversationCatalogPage([], options, undefined, query ? undefined : hydrateSearchText);
+      if (tree) overlaySessionProjects(page.items);
       overlaySessionTitles(page.items);
     } else if (query) {
       // Registry ownership can move a row out of the caller's workspaces; the
@@ -73,21 +77,44 @@ async function workspaceGET(request: Request): Promise<Response> {
       // ships conversationId: null for registry-owned rows (#1040 review).
       overlaySessionTitles(page.items);
     } else {
-      const projectEntries = source.map(catalogEntryToFileEntry);
+      const projectEntries = source.map(entry => catalogEntryToFileEntry(entry));
       overlaySessionProjects(projectEntries);
       const projectByPath = new Map(projectEntries.map((entry) => [entry.path, entry.project]));
-      const projected = filterWorkspaceRows(scope, source.map((entry) => ({ ...entry, project: projectByPath.get(entry.path) ?? entry.project })));
+      let projected = filterWorkspaceRows(scope, source.map((entry) => ({ ...entry, project: projectByPath.get(entry.path) ?? entry.project })));
+      if (tree) {
+        const candidates = projected.filter(entry => !options.project || entry.project === options.project);
+        const rows = candidates.map(entry => catalogEntryToFileEntry(entry));
+        overlayConversationLineage(rows);
+        const byPath = new Map(rows.filter(row => !row.conversationId || !hiddenIds.has(row.conversationId))
+          .map(row => [row.path, row]));
+        projected = projectClaudeDesktopChats(candidates.flatMap(entry => {
+          const row = byPath.get(entry.path);
+          if (!row) return [];
+          const parent = row.parent && byPath.get(row.parent)?.project === entry.project ? row.parent : undefined;
+          return [{ ...entry, parent }];
+        }));
+      }
       page = await loadConversationCatalogPage(projected, options, undefined, hydrateSearchText);
       overlaySessionTitles(page.items);
     }
     // A superseded round or an archived predecessor says so here as it does in
     // the files response, so a list that continues the board drops it (#1671).
-    overlayConversationLineage(page.items);
+    overlayConversationLineage(page.items, undefined, tree);
     /* A cursor page reads the ordering frozen at its first page, and a row
        can be addressed by another path than the one the record holds: its
        conversation id catches both. */
-    const shown = filterWorkspaceRows(requestWorkspaceScope(request), page.items).filter((item) => !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
-    if (shown.length !== page.items.length) page = { ...page, items: shown, total: Math.max(0, page.total - (page.items.length - shown.length)) };
+    const currentScope = requestWorkspaceScope(request);
+    let shown = filterWorkspaceRows(currentScope, page.items).filter((item) => !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
+    if (tree && currentScope && !currentScope.owner) {
+      const ownership = sessionProjectProjection().projectByPath;
+      shown = shown.map(item => {
+        if (!item.parent) return item;
+        const project = ownership.get(item.parent) ?? conversationCatalogEntry(item.parent)?.project;
+        return project === item.project && currentScope.canReadFile(project) && !hiddenPaths.has(item.parent)
+          ? item : { ...item, parent: null };
+      });
+    }
+    page = { ...page, items: shown, total: Math.max(0, page.total - (page.items.length - shown.length)) };
     return Response.json(page);
   } catch (error) {
     if (error instanceof ExpiredConversationCatalogCursorError) {

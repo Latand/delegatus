@@ -1,7 +1,12 @@
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { stat } from "node:fs/promises";
+import path from "node:path";
+
+import { conversationTree, type ConversationBranch } from "@/lib/conversationTree";
 
 import type { FileEntry, Fmt, RootKey, TranscriptEngine } from "../types";
+import { claudeSubagentLineage } from "./claudeNative";
+import { codexThreadIdFromPath } from "./codexNative";
 
 export interface ConversationCatalogEntry {
   path: string;
@@ -11,6 +16,9 @@ export interface ConversationCatalogEntry {
   projectName?: string;
   projectUnresolved?: true;
   worktree?: string;
+  parent?: string;
+  nativeParentThreadId?: string | null;
+  nativeForkSourceThreadId?: string | null;
   title: string;
   firstPrompt: string;
   engine: TranscriptEngine;
@@ -43,6 +51,7 @@ export interface ConversationCatalogQuery {
   limit?: number;
   /** A server-derived member and permission signature; never a query parameter. */
   authorityScope?: string;
+  tree?: boolean;
 }
 
 interface Cursor {
@@ -151,6 +160,24 @@ function matchesQuery(entry: ConversationCatalogEntry, query: string): boolean {
  * every matching conversation while hydrating filesystem metadata one page at
  * a time.
  */
+function groupedCatalog(items: ConversationCatalogEntry[]): ConversationCatalogEntry[] {
+  const byPath = new Map(items.map(entry => [entry.path, entry]));
+  const branches = conversationTree(items.map(entry => catalogEntryToFileEntry(entry)));
+  const order = new Map(items.map((entry, index) => [entry.path, index]));
+  const families = branches.map(branch => {
+    const entries: ConversationCatalogEntry[] = [];
+    let newest = items.length;
+    const visit = (node: ConversationBranch) => {
+      entries.push(byPath.get(node.file.path)!);
+      newest = Math.min(newest, order.get(node.file.path)!);
+      for (const child of node.children) visit(child);
+    };
+    visit(branch);
+    return { entries, newest };
+  }).sort((a, b) => a.newest - b.newest);
+  return families.flatMap(family => family.entries);
+}
+
 export function paginateConversationCatalog(
   catalog: readonly ConversationCatalogEntry[],
   options: ConversationCatalogQuery = {},
@@ -176,7 +203,8 @@ export function paginateConversationCatalog(
       .filter((entry) => matchesQuery(entry, options.query ?? ""))
       .sort((left, right) => right.mtime - left.mtime || left.path.localeCompare(right.path))
       .map((entry) => entry.firstPrompt ? { ...entry, firstPrompt: "" } : entry);
-    snapshotId = rememberPagination(matching, options.authorityScope);
+    const grouped = options.tree ? groupedCatalog(matching) : null;
+    snapshotId = rememberPagination(grouped ?? matching, options.authorityScope);
     offset = 0;
     snapshot = paginationSnapshots().get(snapshotId)!;
   }
@@ -197,6 +225,8 @@ export function paginateConversationCatalog(
  * transcript reads "recent", never a false "idle"; "live"/"stalled" need
  * process and tail evidence the lightweight catalog deliberately skips. */
 export function catalogEntryToFileEntry(entry: ConversationCatalogEntry, nowMs: number = Date.now()): FileEntry {
+  const claudeParent = entry.engine === "claude" ? claudeSubagentLineage(entry.name) : null;
+  const claudeRoot = claudeParent ? entry.path.slice(0, -entry.name.length) : null;
   return {
     path: entry.path,
     root: entry.root,
@@ -207,7 +237,12 @@ export function catalogEntryToFileEntry(entry: ConversationCatalogEntry, nowMs: 
     engine: entry.engine,
     kind: entry.kind,
     fmt: entry.fmt,
-    parent: null,
+    parent: entry.parent ?? (claudeParent && claudeRoot ? path.join(claudeRoot, claudeParent.parentName) : null),
+    ...(entry.engine === "codex" ? {
+      nativeThreadId: codexThreadIdFromPath(entry.path),
+      nativeParentThreadId: entry.nativeParentThreadId,
+      nativeForkSourceThreadId: entry.nativeForkSourceThreadId,
+    } : {}),
     mtime: entry.mtime,
     size: entry.size,
     activity: nowMs / 1000 - entry.mtime < 900 ? "recent" : "idle",

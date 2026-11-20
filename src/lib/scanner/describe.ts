@@ -1048,6 +1048,19 @@ function goodTitle(text: unknown): string | null {
   return val && !skipTitlePrefixes.some((prefix) => val.startsWith(prefix)) ? val : null;
 }
 
+/** Claude can prepend runtime instructions to the operator's message. */
+function claudePromptWithoutReminders(prompt: string): string {
+  const open = "<system-reminder>";
+  const close = "</system-reminder>";
+  let remaining = prompt.trimStart();
+  while (remaining.startsWith(open)) {
+    const end = remaining.indexOf(close, open.length);
+    if (end < 0) return "";
+    remaining = remaining.slice(end + close.length).trimStart();
+  }
+  return remaining;
+}
+
 function userPromptFromRecord(obj: Record<string, unknown>, engine: TranscriptEngine): string | null {
   if (engine === "copilot") {
     /* `data.content` is what the operator typed; `transformedContent` adds
@@ -1096,33 +1109,15 @@ function userPromptFromRecord(obj: Record<string, unknown>, engine: TranscriptEn
 }
 
 function titleFromLines(lines: string[], engine: TranscriptEngine): string | null {
-  for (const line of lines) {
-    let obj: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(line);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      obj = parsed;
-    } catch {
-      continue;
-    }
-    if (obj.type === "summary") {
-      const title = goodTitle(obj.summary);
-      if (title) return title;
-    }
-    if (obj.type === "ai-title") {
-      const title = goodTitle(obj.aiTitle);
-      if (title) return title;
-    }
-    const title = goodTitle(userPromptFromRecord(obj, engine));
-    if (title) return title;
-  }
-  return null;
+  return conversationTextFromLines(lines, engine).title;
 }
 
 function conversationTextFromLines(lines: string[], engine: TranscriptEngine): ConversationSearchText {
   let title: string | null = null;
   let firstPrompt: string | null = null;
+  let explicitTitle: string | null = null;
   for (const line of lines) {
+    if (title && firstPrompt && !line.includes('"custom-title"')) continue;
     let obj: Record<string, unknown>;
     try {
       const parsed = JSON.parse(line);
@@ -1131,6 +1126,10 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
     } catch {
       continue;
     }
+    if (engine === "claude" && obj.type === "custom-title") {
+      explicitTitle = goodTitle(obj.customTitle) ?? explicitTitle;
+    }
+    if (title && firstPrompt) continue;
     if (obj.type === "summary") {
       title ??= goodTitle(obj.summary);
     }
@@ -1140,13 +1139,14 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
       title ??= goodTitle(obj.aiTitle);
     }
     const rawPrompt = userPromptFromRecord(obj, engine);
-    const prompt = rawPrompt ? redactMediaText(rawPrompt) : null;
+    const content = rawPrompt && engine === "claude" ? claudePromptWithoutReminders(rawPrompt) : rawPrompt;
+    const prompt = content ? redactMediaText(content) : null;
     if (!prompt) continue;
     firstPrompt ??= prompt;
     title ??= goodTitle(prompt);
-    if (title && firstPrompt) return { title, firstPrompt };
+    if (engine !== "claude" && title && firstPrompt) break;
   }
-  return { title, firstPrompt };
+  return { title: explicitTitle ?? title, firstPrompt };
 }
 
 /** Parse the same bounded head for asynchronous catalog hydration. */

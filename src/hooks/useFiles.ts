@@ -693,6 +693,10 @@ export function createFilesClientCache(
       const entry = taskOverlays.get(task.id);
       if (!entry) return task;
       seen.add(task.id);
+      // Status updates return the stored record; chat links belong to the board read.
+      if (task.chatParentTaskId && task.project === entry.task.project) {
+        return { ...entry.task, chatParentTaskId: task.chatParentTaskId };
+      }
       return entry.task;
     });
     for (const [id, entry] of taskOverlays) {

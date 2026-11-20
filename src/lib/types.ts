@@ -170,6 +170,8 @@ export interface FileEntry {
   cwd?: string | null;
   /** Identity-bound session creation time parsed from the transcript header. */
   sessionStartedAt?: string | null;
+  /** Native Codex identity used by the paginated conversation catalog. */
+  nativeThreadId?: string | null;
   /** Native Codex parent thread parsed from the identity-bound transcript header. */
   nativeParentThreadId?: string | null;
   /** Source thread of a Codex provider `thread/fork` artifact (issue #708),

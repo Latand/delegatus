@@ -113,7 +113,7 @@ test("every stored conversation is listed recent first, page by page as the end 
   const served = serveCatalog(total);
   const host = mount();
   await settle();
-  expect(served.urls[0]).toBe(`/api/conversations?limit=${DESKTOP_CONVERSATIONS_PAGE_SIZE}&project=repo-board`);
+  expect(served.urls[0]).toBe(`/api/conversations?limit=${DESKTOP_CONVERSATIONS_PAGE_SIZE}&project=repo-board&view=tree`);
   expect(rowPaths(host)).toHaveLength(DESKTOP_CONVERSATIONS_PAGE_SIZE);
   expect(host.querySelector("[data-desktop-conversations-count]")?.textContent).toBe(String(total));
   expect(host.querySelector("input")).toBeNull();
@@ -195,4 +195,25 @@ test("a project with no stored conversations says so, and opening a row hands ov
   expect(row).not.toBeNull();
   flushSync(() => row!.click());
   expect(opened).toEqual([entry(1).path]);
+});
+
+test("a dependent chat is revealed under its parent and opens independently", async () => {
+  const parent = entry(2, { title: "Main chat" });
+  const child = entry(1, { title: "Dependent chat", parent: parent.path });
+  previousFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({ items: [child, parent], total: 2, nextCursor: null })) as typeof fetch;
+  let opened: FileEntry | null = null;
+  const host = mount((file) => { opened = file; });
+  await settle();
+
+  expect(rowPaths(host)).toEqual([parent.path]);
+  const toggle = host.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+  flushSync(() => toggle.click());
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(rowPaths(host)).toEqual([parent.path, child.path]);
+  const dependent = Array.from(host.querySelectorAll("button")).find(button => button.textContent?.includes(child.title))!;
+  flushSync(() => dependent.click());
+  expect(opened).toEqual(child);
+  flushSync(() => toggle.click());
+  expect(rowPaths(host)).toEqual([parent.path]);
 });
