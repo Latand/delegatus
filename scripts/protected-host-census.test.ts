@@ -232,7 +232,7 @@ test("retired-host candidate payload reads stay bounded as unrelated terminal hi
         entry.key = { engine: "codex", sessionId: `unrelated-terminal-${index}` };
         entry.status = "dead";
         entry.structuredHost = null;
-        entry.hostExitProcess = null;
+        delete entry.hostExitProcess;
         entry.claimOwner = null;
         file.entries[`codex:${entry.key.sessionId}`] = entry;
       }
