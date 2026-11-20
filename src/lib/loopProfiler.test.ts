@@ -612,50 +612,72 @@ test("a native call made through a Bun module is credited to the repository fram
   expect(JSON.stringify(categories)).not.toContain("sqlite");
 });
 
+const sourceFrame = (file: string, name: string, line: number, column: number) =>
+  ({ ...caller(line, column), name, sourceURL: path.join(root, "src/lib", file) });
+const readForward = "delegatusReadAttributionForward";
+const performanceSync = "delegatusPerformanceSync";
+const sqliteFrame = "delegatusSqliteInstrumentation";
+
+// Replayed from the Bun 1.4.0 source and SWC probes used to review caller attribution.
 test("snapshot work keeps its source position across deeper instrumentation wrappers", () => {
-  const attribution = path.join(root, "src/lib/readAttribution.ts");
-  const spans = path.join(root, "src/lib/performanceSpans.ts");
   const categories = categorizeLoopProfile({ traces: [{ frames: [native("sort"),
-    { ...caller(280, 22), name: "snapshot", sourceURL: attribution },
-    { ...caller(171, 15), name: "sync", sourceURL: attribution },
-    { ...caller(97, 36), name: "sync", sourceURL: spans },
-    caller(8, 11)] }] }, root);
+    sourceFrame("readAttribution.ts", "snapshot", 295, 22),
+    sourceFrame("stallReviewProbe.ts", "snapshot", 38, 39),
+    sourceFrame("readAttribution.ts", readForward, 257, 20),
+    sourceFrame("readAttribution.ts", readForward, 257, 20),
+    sourceFrame("performanceSpans.ts", performanceSync, 96, 36)] }] }, root);
   expect(categories.callers).toEqual([
-    { native: "sort", positions: [["src/lib/readAttribution.ts:280:22", 1]] },
+    { native: "sort", positions: [["src/lib/readAttribution.ts:295:22", 1]] },
   ]);
 });
 
-test("a native call through synchronous loop instrumentation names the first application caller", () => {
+test("synchronous instrumentation credits native work to the application with recording on and off", () => {
+  const parse = [native("parse"), native("bound parse")];
+  const app = sourceFrame("stallReviewTwoWrappers.ts", "syncValue", 21, 37);
   const categories = categorizeLoopProfile({ traces: [
-    { frames: [native("parse"),
-      { ...caller(171, 15), name: "sync", sourceURL: path.join(root, "src/lib/readAttribution.ts") },
-      { ...caller(97, 36), name: "sync", sourceURL: path.join(root, "src/lib/performanceSpans.ts") },
-      caller(8, 11), caller(9, 12)] },
-    { frames: [native("parse"),
-      { ...caller(1, 36), name: "delegatusReadAttributionSync" },
-      { ...caller(1, 53), name: "delegatusPerformanceSync" },
-      { ...caller(2, 11), name: "sync" }, caller(3, 12)] },
+    { frames: [...parse,
+      sourceFrame("readAttribution.ts", readForward, 257, 20),
+      sourceFrame("performanceSpans.ts", performanceSync, 96, 36), app] },
+    { frames: [...parse, app] },
+    { frames: [...parse,
+      { ...caller(1, 36), name: readForward },
+      { ...caller(1, 53), name: performanceSync },
+      { ...caller(2, 11), name: "sync" }] },
   ] }, root);
   expect(categories.callers).toEqual([
-    { native: "parse", positions: [[".next/server/chunks/57539.js:2:11", 1], [".next/server/chunks/57539.js:8:11", 1]] },
+    { native: "parse", positions: [["src/lib/stallReviewTwoWrappers.ts:21:37", 2], [".next/server/chunks/57539.js:2:11", 1]] },
   ]);
 });
 
-test("SQLite JSON parsing is credited to the row reader through both instrumentation wrappers", () => {
-  const sqliteSource = path.join(root, "src/lib/sqliteReadAttribution.ts");
-  const decode = { name: "decodeRow", sourceURL: path.join(root, "src/lib/agent/sqliteRegistryStore.ts"), line: 2125, column: 27 };
+test("SQLite JSON parsing is credited to the row reader through instrumentation", () => {
+  const decode = sourceFrame("stallReviewProbe.ts", "decodeValue", 19, 34);
+  const parse = [native("parse"), native("bound parse")];
   const categories = categorizeLoopProfile({ traces: [
-    { frames: [native("parse"),
-      { ...caller(122, 78), name: "", sourceURL: sqliteSource },
-      { ...caller(171, 20), name: "sync", sourceURL: path.join(root, "src/lib/readAttribution.ts") },
-      { ...caller(122, 27), name: "parseSqliteJson", sourceURL: sqliteSource }, decode] },
-    { frames: [native("parse"), native("bound parse"),
-      { ...caller(1, 203), name: "delegatusReadAttributionSync" },
-      { ...caller(1, 403), name: "delegatusSqliteInstrumentation" }, caller(5, 48)] },
-    { frames: [native("parse"), { ...caller(122, 78), name: "", sourceURL: sqliteSource }] },
+    { frames: [...parse, sourceFrame("readAttribution.ts", readForward, 257, 20), decode] },
+    { frames: [...parse, decode] },
+    { frames: [...parse, { ...caller(1, 203), name: readForward },
+      { ...caller(1, 403), name: sqliteFrame }, caller(5, 48)] },
+    { frames: [...parse, sourceFrame("sqliteReadAttribution.ts", sqliteFrame, 144, 26)] },
   ] }, root);
   expect(categories.callers).toEqual([
-    { native: "parse", positions: [[".next/server/chunks/57539.js:5:48", 1], ["elsewhere", 1], ["src/lib/agent/sqliteRegistryStore.ts:2125:27", 1]] },
+    { native: "parse", positions: [["src/lib/stallReviewProbe.ts:19:34", 2], [".next/server/chunks/57539.js:5:48", 1], ["elsewhere", 1]] },
+  ]);
+});
+
+test("SWC SQLite samples cross forwarding calls and keep the bookkeeping caller", () => {
+  const emitted = (name: string, column: number) => ({ ...caller(58, column), name,
+    sourceURL: path.join(root, ".next/server/stallReviewSWC.js") });
+  const all = emitted("eS", 17810);
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [native("all"), native("bound #allNoArgs"), emitted(readForward, 2470), all] },
+    { frames: [native("get"), emitted("", 3426), emitted(readForward, 4713), all] },
+    { frames: [native("next"), native("bound next"), emitted(readForward, 2470),
+      emitted(sqliteFrame, 14731), emitted(sqliteFrame, 16584), emitted("ex", 17920)] },
+  ] }, root);
+  expect(categories.callers).toEqual([
+    { native: "all", positions: [[".next/server/stallReviewSWC.js:58:17810", 1]] },
+    { native: "get", positions: [[".next/server/stallReviewSWC.js:58:3426", 1]] },
+    { native: "next", positions: [[".next/server/stallReviewSWC.js:58:17920", 1]] },
   ]);
 });
 
@@ -664,7 +686,7 @@ test("SQLite prepare passes through Bun and compiled SQLite instrumentation", ()
     { frames: [native("prepare"),
       { ...caller(347, 37), name: "prepare", sourceURL: "bun:sqlite" },
       { ...caller(1, 215), name: "delegatusSqliteInstrumentation" },
-      { ...caller(1, 307), name: "delegatusReadAttributionSync" },
+      { ...caller(1, 307), name: readForward },
       { ...caller(1, 418), name: "delegatusSqliteInstrumentation" }, caller(7, 12)] },
   ] }, root);
   expect(categories.callers).toEqual([{ native: "prepare", positions: [[".next/server/chunks/57539.js:7:12", 1]] }]);

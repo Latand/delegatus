@@ -108,12 +108,12 @@ const nativeNames = new Set([
   "encode", "decode", "write", "end", "readFileSync", "writeFileSync", "statSync", "lstatSync", "existsSync",
   "readdirSync", "openSync", "readSync", "closeSync", "renameSync", "mkdirSync", "rmSync", "realpathSync", "digest",
   "update", "createHash", "randomUUID", "randomBytes", "setTimeout", "clearTimeout", "setImmediate", "queueMicrotask",
-  "nextTick", "emit", "fetch", "json", "text", "enqueue", "close", "gc", "deepEquals", "inspect", "isDeepStrictEqual",
+  "next", "nextTick", "emit", "fetch", "json", "text", "enqueue", "close", "gc", "deepEquals", "inspect", "isDeepStrictEqual",
 ]);
 const nativeRows = 12, fileRows = 8, callerRows = 3, callerNatives = 4;
 /* One name, several built-ins: a SQLite statement, a Map, a Promise. Their
  * callers tell them apart, so these keep their callers whatever their rank. */
-const sharedNames = new Set(["all", "get", "run", "set", "has", "values", "parse", "exec"]);
+const sharedNames = new Set(["all", "get", "run", "set", "has", "values", "parse", "exec", "next"]);
 
 /** A repository-relative emitted chunk or source file, or null. Never a path outside the serving root. */
 function safeFile(sourceURL: string | undefined, root: string, known: Map<string, string | null>) {
@@ -136,18 +136,12 @@ function safeFile(sourceURL: string | undefined, root: string, known: Map<string
 }
 
 const runtimeModuleSource = /^(?:bun|node):|^builtin:\/\//;
-// Source paths are useful in uncompiled stacks, but filtering an entire
-// instrumentation module hides real work performed by that module (notably
-// readAttribution.snapshot). Keep this list to the source lines that forward
-// into measured work; compiled chunks use the explicit wrapper names below.
-const instrumentationSourceLines = new Map([
-  ["src/lib/performanceSpans.ts", [[97, 97]]],
-  ["src/lib/readAttribution.ts", [[171, 171]]],
-  ["src/lib/sqliteReadAttribution.ts", [[17, 18], [51, 60], [77, 89], [104, 105], [116, 124], [135, 135]]],
-]);
-// Bun reports displayName for these wrappers, including in minified Viewer chunks.
-const instrumentationFrameNames = new Set([
-  "delegatusPerformanceSync", "delegatusReadAttributionSync", "delegatusSqliteInstrumentation",
+// Bun reports these method names at the actual call site in source and SWC output.
+// Only these functions forward work. Snapshot and bookkeeping have their own frames.
+const instrumentationSources = new Map([
+  ["delegatusPerformanceSync", "src/lib/performanceSpans.ts"],
+  ["delegatusReadAttributionForward", "src/lib/readAttribution.ts"],
+  ["delegatusSqliteInstrumentation", "src/lib/sqliteReadAttribution.ts"],
 ]);
 
 /**
@@ -184,11 +178,8 @@ export function categorizeLoopProfile(raw: LoopProfile, root: string) {
       if (!caller.sourceURL) continue;
       if (runtimeModuleSource.test(caller.sourceURL)) { skippedCaller = true; continue; }
       const file = safeFile(caller.sourceURL, root, known);
-      const sourceLines = file ? instrumentationSourceLines.get(file) : undefined;
-      const isSourceWrapper = Number.isSafeInteger(caller.line)
-        && sourceLines?.some(([first, last]) => caller.line! >= first && caller.line! <= last);
-      if (isSourceWrapper
-        || (file?.startsWith(".next/server/") && instrumentationFrameNames.has(caller.name))) {
+      const instrumentationSource = instrumentationSources.get(caller.name);
+      if (instrumentationSource && (file === instrumentationSource || file?.startsWith(".next/server/"))) {
         skippedCaller = true;
         continue;
       }

@@ -48,8 +48,11 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
   const identity = { id: ++shared.next, reader, counters: emptyReadTotals() };
   shared.connections.set(db, () => identity);
   const closed = trackSqliteMemory(db);
-  const measure = sqliteInstrumentationFrame(<R>(name: string, work: () => R) =>
-    readAttribution.sync(name, work, identity.id, 0, true, identity.counters));
+  const { delegatusSqliteInstrumentation: measure } = {
+    delegatusSqliteInstrumentation<R>(name: string, work: () => R) {
+      return readAttribution.sync(name, work, identity.id, 0, true, identity.counters);
+    },
+  };
   const nativeCall = (method: "query" | "prepare" | "exec" | "run" | "serialize" | "close") => {
     const original = db[method], own = Object.hasOwn(db, method), prototype = Object.getPrototypeOf(db);
     // Keep instance adapters and late prototype guards in the call path.
@@ -94,7 +97,15 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
           return rows;
         }));
         const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? (...values: unknown[]) => measure(label, () => value.apply(target, values)) : value;
+        if (typeof value !== "function") return value;
+        // The bound call has no script frame. Keep the intrinsic name of the
+        // remaining wrapper even when the engine inlines it.
+        const { delegatusSqliteInstrumentation: invoke } = {
+          delegatusSqliteInstrumentation(...values: unknown[]) {
+            return measure(label, value.bind(target, ...values));
+          },
+        };
+        return invoke;
       }) });
     }) });
     return statement;
