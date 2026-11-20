@@ -20,10 +20,12 @@ const SETTLED = new Set<RuntimeReceiptStatus>(["delivered", "applied", "rejected
   "turn-started", "steered", "interrupted", "answered"]);
 
 export function idleRetirementSession(session: RuntimeSession, conversationId: string, key: SessionKey, artifactPath: string): boolean {
+  const idle = session.host === "hosted" && session.turn === "idle";
+  const released = (session.host === "dead" || session.host === "unhosted")
+    && session.turn === "unknown" && session.writerClaim === null;
   return session.conversationId === conversationId && session.sessionKey.engine === key.engine
     && session.sessionKey.sessionId === key.sessionId && session.artifactPath === artifactPath
-    && ["hosted", "unhosted", "dead"].includes(session.host)
-    && session.turn === "idle" && session.activeTurnId === null && session.attentionIds.length === 0
+    && (idle || released) && session.activeTurnId === null && session.attentionIds.length === 0
     && session.retirementBlocked === false && session.nativeTurnClaims?.length === 0 && !session.pendingReconfigure;
 }
 

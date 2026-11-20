@@ -1237,7 +1237,7 @@ export class RuntimeJournal {
         const session = this.entity<RuntimeSession>("session", command.conversationId);
         if (!runtimeIdleKillMatches(session, command.sessionKey, command.onlyIfIdle)
           || this.retirementBlocked(command.conversationId)
-          || (previous.status !== "delivering" && this.retirementClaimInProgress(command.conversationId))) {
+          || (previous.status !== "delivering" && this.retirementInProgress(command.conversationId))) {
           status = "failed";
           details = { ...details, reason: "idle-retirement-deferred" };
         }
@@ -2961,16 +2961,6 @@ export class RuntimeJournal {
   }
 
   private retirementInProgress(conversationId: string): boolean {
-    return !!this.db.query<{ present: number }, [string]>(`
-      SELECT 1 AS present FROM operations WHERE conversation_id = ?
-        AND json_extract(request_json, '$.kind') = 'kill'
-        AND json_type(request_json, '$.onlyIfIdle') = 'object'
-        AND json_extract(receipt_json, '$.status') = 'delivering' LIMIT 1
-    `).get(conversationId);
-  }
-
-  /** Only a delivering retirement owns the reservation against new work. */
-  private retirementClaimInProgress(conversationId: string): boolean {
     return !!this.db.query<{ present: number }, [string]>(`
       SELECT 1 AS present FROM operations WHERE conversation_id = ?
         AND json_extract(request_json, '$.kind') = 'kill'

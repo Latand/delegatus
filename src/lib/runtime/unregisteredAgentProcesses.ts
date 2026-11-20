@@ -140,6 +140,7 @@ interface OrphanSweepPorts {
   client: Pick<RuntimeHostClient, "readSession" | "operationStatus" | "command" | "transitionOperation">;
   pids?: AsyncIterable<number>;
   now?: () => number;
+  attemptId?: (launchId: string, revision: number) => string;
   idleMs: number;
 }
 
@@ -283,7 +284,8 @@ export async function reconcileUnregisteredAgentProcesses(ports: OrphanSweepPort
         return authorized() && !!session && idleRetirementSession(session, launch.conversationId, launch.key, launch.artifactPath);
       } catch { return false; }
     };
-    const retirementId = `unregistered-retirement-${launch.launchId}`;
+    let attemptRevision: number | null = null;
+    let retirementId = "";
     let retirementClaim: RuntimeRetirementClaim | null = null;
     let retirementClaimed = false;
     const operationIsClaimed = (result: Awaited<ReturnType<typeof ports.client.operationStatus>>) => !!result && !!retirementClaim
@@ -316,13 +318,23 @@ export async function reconcileUnregisteredAgentProcesses(ports: OrphanSweepPort
         // the orphan alive, while a delivering claim excludes later work.
         const session = await readSession({ conversationId: launch.conversationId, artifactPath: launch.artifactPath }, { timeoutMs: 500 });
         if (!authorized() || !session || !idleRetirementSession(session, launch.conversationId, launch.key, launch.artifactPath)
-          || session.retirementBlocked !== false || !Number.isSafeInteger(session.revision) || !session.writerClaim) return false;
+          || session.retirementBlocked !== false || !Number.isSafeInteger(session.revision)) return false;
+        const releasedSession = (session.host === "dead" || session.host === "unhosted")
+          && session.turn === "unknown" && session.writerClaim === null;
+        if (releasedSession !== (session.writerClaim === null) || (!releasedSession && !session.writerClaim)) return false;
+        if (attemptRevision !== session.revision) {
+          attemptRevision = session.revision;
+          const attempt = ports.attemptId?.(launch.launchId, session.revision) ?? randomUUID();
+          retirementId = `unregistered-retirement-${launch.launchId}-${session.revision}-${attempt}`;
+        }
         let admitted;
         try {
           admitted = await ports.client.command({
             kind: "kill", operationId: retirementId, idempotencyKey: retirementId,
             conversationId: launch.conversationId, sessionKey: launch.key,
-            onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim },
+            onlyIfIdle: { revision: session.revision,
+              writerClaim: releasedSession ? "released-session" : session.writerClaim!,
+              ...(releasedSession ? { releasedSession: true as const } : {}) },
           } satisfies RuntimeOperationCommand);
         } catch {
           await failUnclaimed("orphan retirement admission could not be confirmed");

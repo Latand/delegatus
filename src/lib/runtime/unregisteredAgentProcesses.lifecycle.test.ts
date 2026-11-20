@@ -31,7 +31,7 @@ test("orphan custody recognizes native scopes in both agent slices", () => {
 
 for (const engine of ["claude", "codex"] as const) {
   test.skipIf(process.platform !== "linux").each([
-    "dead-row", "absent-row", "live-row", "other-live-row", "ambiguous-owner", "open-journal", "probe-limit",
+    "dead-row", "dead-session", "absent-row", "live-row", "other-live-row", "ambiguous-owner", "open-journal", "probe-limit",
     "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission",
     "send-wins-runtime-admission", "missing-launch-proof", "drain-fails-kill-before-signal",
   ] as const)(`${engine} unregistered process reconciliation: %s`, async condition => {
@@ -111,9 +111,9 @@ for (const engine of ["claude", "codex"] as const) {
       journal.append({ scope: { type: "session", id: FIXTURE_CONVERSATION }, kind: "session-status", payload: {
         conversationId: FIXTURE_CONVERSATION, sessionKey: key, artifactPath, cwd: root,
         hostKind: engine === "codex" ? "codex-app-server" : "claude-broker",
-        host: "hosted",
-        turn: "idle", activeTurnId: null, provenance: "structured",
-        writerClaim: `fixture-writer-${engine}`,
+        host: condition === "dead-session" ? "dead" : "hosted",
+        turn: condition === "dead-session" ? "unknown" : "idle", activeTurnId: null, provenance: "structured",
+        writerClaim: condition === "dead-session" ? null : `fixture-writer-${engine}`,
       } });
       if (condition === "open-journal" || condition === "probe-limit") journal.executeOperation({ kind: "spawn", operationId: launchId, idempotencyKey: launchId,
         conversationId: FIXTURE_CONVERSATION, engine, cwd: root, prompt: "fixture" });
@@ -138,9 +138,10 @@ for (const engine of ["claude", "codex"] as const) {
       let sessionReads = 0;
       let pulled = 0;
       let operationReads = 0;
+      let failedDrainOnce = false;
       const ports = {
         registry, idleMs, now: () => now, ready: () => ready, noLocalWork: () => true, treeIdle: treeHasOnlyMcpChildren,
-        pids: (async function* () {
+        pids: { [Symbol.asyncIterator]: async function* () {
           const candidates = condition === "probe-limit"
             ? Array<number>(5).fill(identity.pid)
             : [peerIdentity.pid, identity.pid];
@@ -148,7 +149,8 @@ for (const engine of ["claude", "codex"] as const) {
             pulled++;
             yield pid;
           }
-        })(),
+        } },
+        attemptId: (() => { let sequence = 0; return () => `fixture-attempt-${++sequence}`; })(),
         client: {
           command: async (command: RuntimeOperationCommand) => {
             if (condition === "send-wins-runtime-admission") journal!.executeOperation({
@@ -159,8 +161,9 @@ for (const engine of ["claude", "codex"] as const) {
           },
           transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => {
             const [id, status, details, options] = args;
-            if (condition === "drain-fails-kill-before-signal" && id === `unregistered-retirement-${launchId}`
-              && status === "delivering") {
+            if (condition === "drain-fails-kill-before-signal" && !failedDrainOnce
+              && id.startsWith(`unregistered-retirement-${launchId}-`) && status === "delivering") {
+              failedDrainOnce = true;
               journal!.transitionOperation(id, "failed", { reason: "fixture-drain-refused" }, { fromStatuses: ["queued"] });
             }
             return journal!.transitionOperation(id, status, details, options);
@@ -194,9 +197,10 @@ for (const engine of ["claude", "codex"] as const) {
       if (condition === "writer-admission") expect(writerAdmissions).toBe(1);
       expect(observeAgentProcess(peerIdentity)).toBe("alive");
       expect(readHostExit(peerIdentity)?.stop).toBeNull();
-      if (condition === "dead-row" || condition === "absent-row") {
+      if (condition === "dead-row" || condition === "dead-session" || condition === "absent-row") {
         expect(outcomes).toEqual([{ launchId, key: keyId, process: identity, outcome: "stopped" }]);
-        expect(journal.operationResult(`unregistered-retirement-${launchId}`)?.receipt.status).toBe("delivered");
+        expect(journal.snapshot().recentOperations.find(row => row.operationId.startsWith(`unregistered-retirement-${launchId}-`))?.status)
+          .toBe("delivered");
         // A delivered kill makes this generation dead; once its successor
         // host is recorded, the orphan retirement must no longer reserve it.
         journal.append({ scope: { type: "session", id: FIXTURE_CONVERSATION }, kind: "session-status", payload: {
@@ -216,8 +220,15 @@ for (const engine of ["claude", "codex"] as const) {
         expect(observeAgentProcess(identity)).toBe("alive");
         expect(readHostExit(identity)?.stop).toBeNull();
         if (condition === "drain-fails-kill-before-signal") {
-          expect(journal.operationResult(`unregistered-retirement-${launchId}`)?.receipt)
+          const failed = journal.snapshot().recentOperations.find(row => row.operationId.startsWith(`unregistered-retirement-${launchId}-`));
+          expect(failed)
             .toMatchObject({ status: "failed", reason: "fixture-drain-refused" });
+          expect(journal.operationResult(failed!.operationId)?.receipt.status).toBe("failed");
+          const retry = await reconcileUnregisteredAgentProcesses(ports);
+          expect(retry).toEqual([{ launchId, key: keyId, process: identity, outcome: "stopped" }]);
+          const attempts = journal.snapshot().recentOperations.filter(row => row.operationId.startsWith(`unregistered-retirement-${launchId}-`));
+          expect(attempts.map(row => row.status)).toContain("delivered");
+          expect(new Set(attempts.map(row => row.operationId)).size).toBeGreaterThan(1);
         }
       }
     } finally {
