@@ -1567,7 +1567,7 @@ A request without the additions is answered exactly as above.
 
 | Field | Written by | Meaning |
 |---|---|---|
-| `requester` | the relay service | Exactly six fields: `key` is the triggering message's `author.key` in the same opaque domain; `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin` and `is_owner` are required booleans derived by the service. `is_owner` is false when the owner posts as an anonymous admin or a channel. |
+| `requester` | the relay service | Exactly six fields: `key` is the triggering message's `author.key` in the same opaque domain; `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin` and `is_owner` are required booleans derived by the service. `is_owner` is false when the owner posts as an anonymous admin or a channel. The install declines `invalid_request`, with the detail "Requester does not match the triggering author or the owner delivery context.", before it builds any tool list or chooses a session, when a requester is present and `respond_to` does not name exactly one non-`self` message whose `author.key` is `key`; when `is_owner` and `is_anonymous_admin` are both true; when `owner_delivery` arrives with `is_owner` false; and, for guest delivery, unless the requester is that trigger's non-anonymous owner. |
 | `short_term_memory` | the relay service | The chat's short-term memory, as the service's own agent would see it. At most 16 000 Unicode code points. |
 | `tools` | the relay service | The service's tools that the requester's role may use: a unique `name` of at most 64 characters, a one-line `summary` of at most 200, and a `mode`. At most 100 items. String bounds count Unicode code points. |
 

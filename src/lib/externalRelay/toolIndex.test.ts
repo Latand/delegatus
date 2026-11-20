@@ -1,13 +1,16 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { requestSchema } from "./protocol";
+import { INVALID_REQUESTER_DETAIL, requestSchema, type ExternalRelayRequest } from "./protocol";
+import { ownerTierFor } from "./profile";
 import { x1Dir } from "./toolLoop.fixture";
 import { destinationRelay } from "./ownerDestination.fixture";
 import { startTestRelay } from "./testRelay";
 import { answerPrompt } from "./prompt";
 import { callableTools } from "./toolLoop";
 import * as index from "./toolIndex";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- hostile edits of raw wire JSON
+type Raw = any;
 const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(x1Dir, name + ".json"), "utf8"));
 
 test("on-demand claims preserve spec and hydrate the service's two bounded describe pages", async () => {
@@ -99,4 +102,58 @@ test("a trigger with a cleared owner flag cannot expose owner-only tools", async
     lose: () => { throw new Error("unexpected lease loss"); },
   });
   expect(result.guidance).toEqual([]);
+});
+
+// Forged or conflicting owner flags: the parser refuses the claim before any
+// tool list exists, and every tool-list builder rechecks the same anchor.
+const MEMBER = { key: "u_member_fixture", name: "Member", self: false };
+const ownerAudience = (request: ExternalRelayRequest) => ({
+  callable: callableTools(request).filter(tool => tool.audience === "owner").map(tool => tool.name),
+  index: index.compactToolIndex(request).filter(tool => tool.audience === "owner").map(tool => tool.name),
+  // Only owner-audience offers count: the guest claim also offers list_my_grids as an audience-free handoff.
+  inPrompt: (request.input.tools ?? []).filter(tool => tool.audience === "owner").map(tool => tool.name)
+    .filter(name => answerPrompt(request).includes(`"${name}"`)),
+});
+for (const [name, delivery, alter, outcome] of [
+  ["normal owner", "ordinary", () => {}, "owner"],
+  ["owner flag false with the owner author", "ordinary", (r: Raw) => { r.input.requester.is_owner = false; }, "member"],
+  ["forged owner flag with a member-authored trigger", "ordinary", (r: Raw) => { r.input.conversation[0].author = MEMBER; }, "refused"],
+  ["swapped trigger author", "ordinary", (r: Raw) => {
+    r.input.conversation.push({ ...r.input.conversation[0], id: "m_member_trigger", author: MEMBER });
+    r.input.respond_to = "m_member_trigger";
+  }, "refused"],
+  ["swapped requester key", "ordinary", (r: Raw) => { r.input.requester.key = MEMBER.key; }, "refused"],
+  ["normal guest", "guest", () => {}, "guest"],
+  ["guest forged owner flag with a member-authored trigger", "guest", (r: Raw) => { r.input.conversation[0].author = MEMBER; }, "refused"],
+  ["guest owner flag false with the owner author", "guest", (r: Raw) => { r.input.requester.is_owner = false; }, "refused"],
+] as const) test(`requester validation precedes tool exposure: ${name}`, () => {
+  const raw = structuredClone(fixture(delivery === "guest" ? "claimed_guest_owner" : "claimed_tools_owner").request) as Raw;
+  // The guest claim offers no owner-audience tool; add one so the guest rows prove it stays hidden.
+  if (delivery === "guest") raw.input.tools.push({ name: "owner_private_handoff", summary: "Owner-only handoff", mode: "handoff", audience: "owner" });
+  alter(raw);
+  const parsed = requestSchema.safeParse(raw);
+  if (outcome === "refused") {
+    expect(parsed.success).toBe(false);
+    expect(parsed.error!.issues.map(issue => issue.message)).toContain(INVALID_REQUESTER_DETAIL);
+    return;
+  }
+  const request = parsed.data!;
+  expect(ownerTierFor({ ownerTier: true }, request) !== null).toBe(outcome === "owner");
+  const exposed = ownerAudience(request);
+  const owned = ["get_clone_detail", "get_grid_status", "list_my_clones", "list_my_grids"];
+  expect(exposed).toEqual(outcome === "owner" ? { callable: owned, index: owned, inPrompt: owned }
+    : { callable: [], index: [], inPrompt: [] });
+  if (outcome === "guest") {
+    expect(callableTools(request)).toEqual([]);
+    // The guest prompt does list audience-free handoffs, so the empty owner probe is meaningful.
+    expect(answerPrompt(request)).toContain(`"list_my_grids"`);
+  }
+});
+
+test("a parsed owner claim whose trigger is later rewritten exposes no owner tool", () => {
+  const request = requestSchema.parse(fixture("claimed_tools_owner").request);
+  request.input.conversation[0]!.author = { ...MEMBER };
+  expect(ownerTierFor({ ownerTier: true }, request)).toBeNull();
+  expect(ownerAudience(request)).toEqual({ callable: [], index: [], inPrompt: [] });
+  expect(callableTools(request).some(tool => tool.audience === "admin")).toBe(false);
 });
