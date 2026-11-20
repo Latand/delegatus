@@ -43,7 +43,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
-import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, recorderGateRunRoot } from "./gateCheckRecord";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, recorderGatePaths } from "./gateCheckRecord";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
@@ -2340,6 +2340,10 @@ describe("CodexAppServerHost", () => {
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
     const email = ["no-reply", "build.example.invalid"].join("@");
     const prioritySource = JSON.stringify({ database: path.join(metadataState, "tasks.sqlite"), taskIds: ["stage-task"] });
+    const root = fs.mkdtempSync(path.join(metadataState, "shell-policy-"));
+    const physicalRoot = fs.realpathSync(root);
+    const { dev, ino } = fs.statSync(physicalRoot);
+    const gate = { [GATE_CHECK_LAUNCH_ROOT_ENV]: root, [GATE_CHECK_ROOT_ENV]: physicalRoot, [GATE_CHECK_ROOT_IDENTITY_ENV]: `${dev}:${ino}` };
     const server = new FakeAppServer();
     server.shellPolicy = {
       inherit: "core", set: { GIT_AUTHOR_EMAIL: "unsafe", GIT_COMMITTER_EMAIL: "unsafe", OTHER: "kept" },
@@ -2347,7 +2351,8 @@ describe("CodexAppServerHost", () => {
     };
     const host = await CodexAppServerHost.start({
       cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email,
-        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource },
+        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource, TMPDIR: root, PRIVATE_SETTING: "excluded",
+        [GATE_CHECK_LAUNCH_ROOT_ENV]: "unverified", [GATE_CHECK_ROOT_ENV]: "unverified", [GATE_CHECK_ROOT_IDENTITY_ENV]: "unverified" },
       eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured),
     });
     try {
@@ -2355,13 +2360,14 @@ describe("CodexAppServerHost", () => {
         GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
         GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
         LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
+        ...gate,
       });
       const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email });
-      expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
-        shell_environment_policy: { set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource }, ...(keyedFilters
-          ? { filters: Object.fromEntries([...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"].map((key) => [key, "include"])) }
-          : { include_only: ["PATH", "HOME", ...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"] }) },
-      } });
+      const set = { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource, TMPDIR: root, ...gate };
+      const params = server.requests.find((request) => request.method === "thread/start")?.params as { config: Record<string, unknown> };
+      expect(params.config.shell_environment_policy).toEqual({ set, ...(keyedFilters
+        ? { filters: Object.fromEntries(Object.keys(set).map((key) => [key, "include"])) }
+        : { include_only: ["PATH", "HOME", ...Object.keys(set)] }) });
     } finally { await host.release(); }
   });
 
@@ -2379,9 +2385,9 @@ describe("CodexAppServerHost", () => {
       const log = path.join(root, "check.log");
       expect(env[GATE_CHECK_LAUNCH_ROOT_ENV]).toBe(alias);
       expect(env[GATE_CHECK_ROOT_ENV]).toBe(fs.realpathSync(root));
-      expect(recorderGateRunRoot(log, root, env)).toBe(fs.realpathSync(root));
+      expect(recorderGatePaths(log, root, env).root).toBe(fs.realpathSync(root));
       fs.unlinkSync(alias); fs.symlinkSync(foreign, alias, "dir");
-      expect(() => recorderGateRunRoot(log, root, env)).toThrow("gate launch root identity changed");
+      expect(() => recorderGatePaths(log, root, env)).toThrow("gate launch root identity changed");
     } finally { await host.release(); }
   });
 
