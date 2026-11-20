@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
-import { publishGateRun, recorderGatePaths } from "../src/lib/runtime/gateCheckRecord";
+import { GATE_CHECK_EVIDENCE_ENV, publishGateRun, readGateCheckEvidence, recorderGatePaths } from "../src/lib/runtime/gateCheckRecord";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { descriptorDigest, identitySchema, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
 export { buildManifest } from "../src/lib/recordedChecks/wire";
@@ -68,7 +68,7 @@ export async function openGateRecording(requestedLog: string, command: string[],
   try {
     const completion = { runId, log, rootDirectoryIdentity, recorder: identitySchema.parse(cpuOwnerIdentity(process.pid)), directoryIdentity: physical(dir), deadlineUptimeMs };
     fs.writeFileSync(path.join(dir, "completion.json"), JSON.stringify(completion), { mode: 0o600, flag: "wx" });
-    publishGateRun(root, completion);
+    publishGateRun(root, completion, readGateCheckEvidence(process.env[GATE_CHECK_EVIDENCE_ENV], rootDirectoryIdentity));
     if (physical(root) !== rootDirectoryIdentity) throw new Error("gate temporary root identity changed before dispatch");
   } catch (error) { fs.closeSync(fd); throw error; }
   return { log, dir, fd, root, rootDirectoryIdentity, runId, deadlineUptimeMs, descriptor };

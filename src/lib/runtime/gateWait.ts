@@ -11,6 +11,12 @@ const COMPLETION_RECHECK_MS = 1000;
 const TAIL_BYTES = 16_384;
 const directory = (log: string) => `${log}.gate`;
 
+export class GateRecorderLostError extends Error {}
+
+export function gateRecorderExited(owner: ReturnType<typeof identitySchema.parse>): boolean {
+  return cpuOwnerStatus(owner) === "dead" || cpuOwnerExited(owner);
+}
+
 export function logTail(log: string): string {
   const fd = fs.openSync(log, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
@@ -25,16 +31,25 @@ export function logTail(log: string): string {
 
 export function gateSnapshot(log: string): { state: string; code: number; tail: string } {
   const dir = directory(log);
-  const owner = JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8"));
-  const ownerAlive = cpuOwnerStatus(owner) === "alive" && !cpuOwnerExited(owner);
-  const tail = logTail(log);
+  const owner = identitySchema.parse(readEnvelope(path.join(dir, "owner.json")));
   if (fs.existsSync(path.join(dir, "exit"))) {
     const result = fs.readFileSync(path.join(dir, "exit"), "utf8");
     if (!/^\d+\n$/.test(result) || Number(result) > 255) throw new Error("invalid gate exit record");
+    let tail: string;
+    try { tail = logTail(log); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      tail = "";
+    }
     return { state: `finished exit=${Number(result)}`, code: Number(result), tail };
   }
-  if (!ownerAlive) {
-    throw new Error("gate recorder ownership unavailable; no exit result recorded");
+  const tail = logTail(log);
+  const status = cpuOwnerStatus(owner);
+  const exited = status === "dead" || cpuOwnerExited(owner);
+  if (status !== "alive" || exited) {
+    const message = "gate recorder ownership unavailable; no exit result recorded";
+    if (exited) throw new GateRecorderLostError(message);
+    throw new Error(message);
   }
   if (fs.existsSync(path.join(dir, "running"))) return { state: "running", code: 124, tail };
   const queued = path.join(dir, "queued");
@@ -51,8 +66,13 @@ export function gateSnapshot(log: string): { state: string; code: number; tail: 
  * Recheck the exit path if filesystem notifications are lost. Only the final
  * snapshot reads the tail; log activity does not extend the bound. */
 export async function waitForGate(log: string, timeoutMs = MAX_WAIT_MS): Promise<ReturnType<typeof gateSnapshot>> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) throw new Error("invalid wait deadline");
+  validateGateWaitTimeout(timeoutMs);
   return observeGate(log, timeoutMs);
+}
+
+export function validateGateWaitTimeout(timeoutMs: unknown): asserts timeoutMs is number {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS)
+    throw new Error("invalid wait deadline");
 }
 
 async function observeGate(log: string, timeoutMs: number, signal?: AbortSignal): Promise<ReturnType<typeof gateSnapshot>> {
@@ -122,11 +142,16 @@ export function gateCompletionIdentity(log: string) {
   return { runId, deadlineUptimeMs: ticket.deadlineUptimeMs, validate };
 }
 
-export async function waitForGateCompletion(log: string, signal?: AbortSignal, expectedRunId?: string): Promise<ReturnType<typeof gateSnapshot> & { runId: string; reason?: string }> {
+export async function waitForGateCompletion(log: string, signal?: AbortSignal, expectedRunId?: string, timeoutMs?: number): Promise<ReturnType<typeof gateSnapshot> & { runId: string; reason?: string }> {
+  if (timeoutMs !== undefined) validateGateWaitTimeout(timeoutMs);
   const { runId, deadlineUptimeMs, validate } = gateCompletionIdentity(log);
   if (expectedRunId !== undefined && runId !== expectedRunId) throw new Error("gate completion run identity changed");
   const remaining = Math.max(0, deadlineUptimeMs + CUSTODY_CLEANUP_MS - custodyClock());
-  const result = await observeGate(log, remaining, signal);
+  const result = await observeGate(log, Math.min(remaining, timeoutMs ?? Infinity), signal);
   validate();
-  return { ...result, runId, ...(!result.state.startsWith("finished") ? { reason: "recorded check deadline and cleanup bound expired without a terminal verdict" } : {}) };
+  if (result.state.startsWith("finished")) return { ...result, runId };
+  const reason = result.state.startsWith("queued") ? "Still queued for CPU admission when the wait bound expired"
+    : timeoutMs !== undefined && timeoutMs < remaining ? "The wait bound expired while the check was running"
+      : "recorded check deadline and cleanup bound expired without a terminal verdict";
+  return { ...result, runId, reason };
 }

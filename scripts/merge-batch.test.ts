@@ -510,8 +510,9 @@ esac
       try {
         const answer = await waiting;
         const late = await readFresh("read");
-        expect(answer.success).toBe(false);
-        expect(answer.contentItems[0]!.text).toContain(`(runId=${runId}): gate recorder ownership unavailable; no exit result recorded`);
+        expect(answer.success).toBe(true);
+        expect(JSON.parse(answer.contentItems[0]!.text)).toMatchObject({ runId, state: "lost", terminal: true, code: null,
+          reason: expect.stringContaining("recorder exited") });
         expect(late).toEqual(answer);
         expect((await stdout).match(/runId=[a-f0-9]{64}/g)).toEqual([`runId=${runId}`]);
         expect(resolveGateRun(launch, runId)).toEqual(record);

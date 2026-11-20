@@ -5,6 +5,7 @@ import net from "node:net";
 import { spawn } from "node:child_process";
 import { expect, spyOn, test } from "bun:test";
 import * as gateTool from "./gateCheckTool";
+import { gateCheckLaunchEnvironment } from "./gateCheckRecord";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
@@ -344,7 +345,7 @@ test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retai
   }
 }, 60_000);
 
-for (const fault of ["none", "saved-no-env", "coordinated-root-no-env", "identity", "root", "root-symlink", "proof-changed", "malformed", "symlink", "hardlink", "relative", "unknown", "missing-record-no-identity", "missing-record-substituted", "owner-changed"] as const)
+for (const fault of ["none", "scratch-lost", "saved-no-env", "coordinated-root-no-env", "identity", "root", "root-symlink", "proof-changed", "malformed", "symlink", "hardlink", "relative", "unknown", "missing-record-no-identity", "missing-record-substituted", "owner-changed"] as const)
 test.skipIf(process.platform === "win32")(`callback root binding survives a new reader and refuses ${fault} proof`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gb-")); fs.chmodSync(root, 0o700);
   const launchRoot = path.join(root, "stage-root"), foreignRoot = path.join(root, "foreign-root");
@@ -354,21 +355,23 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
   fs.chmodSync(socket, 0o600);
   const owner = { endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid) };
+  const launchBinding = gateTool.bindGateCheckRoot(launchRoot, fault === "scratch-lost" ? foreignRoot : undefined)!;
+  const launchEnv = gateCheckLaunchEnvironment(launchBinding);
   let recovering = false;
   const readEnv = spyOn(procBackend, "readEnvVar").mockImplementation((_pid, name) => {
     if (name === "TMPDIR") return recovering && ["unknown", "saved-no-env", "coordinated-root-no-env"].includes(fault) ? null : launchRoot;
     if (name === gateTool.GATE_CHECK_ROOT_IDENTITY_ENV)
       return recovering && ["unknown", "saved-no-env", "missing-record-no-identity"].includes(fault) ? null
-        : recovering && fault === "proof-changed" ? physical(foreignRoot) : physical(launchRoot);
-    return null;
+        : recovering && fault === "proof-changed" ? physical(foreignRoot) : launchBinding.rootDirectoryIdentity;
+    return launchEnv[name] ?? null;
   });
   let restoreProof = () => {};
   try {
-    const launchBinding = gateTool.bindGateCheckRoot(launchRoot);
     expect(gateTool.socketGateCheckRoot(owner, launchBinding)).toEqual(launchBinding);
     expect(readEnv).not.toHaveBeenCalled();
     expect(fs.statSync(filename).mode & 0o077).toBe(0);
     recovering = true;
+    if (fault === "scratch-lost") fs.rmdirSync(launchRoot);
     if (fault === "identity") { const saved = JSON.parse(fs.readFileSync(filename, "utf8")); fs.writeFileSync(filename, JSON.stringify({ ...saved, identity: "stale" })); }
     if (fault === "root") { const saved = JSON.parse(fs.readFileSync(filename, "utf8")); fs.writeFileSync(filename, JSON.stringify({ ...saved, root: foreignRoot })); }
     if (fault === "coordinated-root-no-env") {
@@ -403,7 +406,8 @@ test.skipIf(process.platform === "win32")(`callback root binding survives a new 
       });
       restoreProof = () => readProof.mockRestore();
     }
-    expect(gateTool.socketGateCheckRoot(fault === "owner-changed" ? owner : structuredClone(owner))).toEqual(fault === "none" ? gateTool.bindGateCheckRoot(launchRoot) : null);
+    expect(gateTool.socketGateCheckRoot(fault === "owner-changed" ? owner : structuredClone(owner)))
+      .toEqual(fault === "none" || fault === "scratch-lost" ? launchBinding : null);
     if (["unknown", "missing-record-no-identity", "missing-record-substituted"].includes(fault)) {
       expect(readEnv.mock.calls.map(call => call[1])).toContain("TMPDIR");
       expect(readEnv.mock.calls.map(call => call[1]).includes(gateTool.GATE_CHECK_ROOT_IDENTITY_ENV))

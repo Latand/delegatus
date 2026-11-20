@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { createServer, type ServerResponse } from "node:http";
 import { createInterface } from "node:readline";
 import { bindGateCheckRoot, gateCheckTool, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
-import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../src/lib/runtime/gateCheckRecord";
+import { GATE_CHECK_EVIDENCE_ENV, GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../src/lib/runtime/gateCheckRecord";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
@@ -31,9 +31,11 @@ const cases = [
 for (const { mode, exit } of cases) test.skipIf(!binary)(`native stage uses one exec and one completion wait (exit ${exit}, ${mode})`, async () => {
   const filtered = mode === "include_only" || mode === "keyed filters";
   const delayedStartup = mode === "delayed recorder" || filtered;
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gc-"));
-  const env = withoutInheritedGate(isolatedEnvironment(root, checkEnvironment(process.env)));
-  for (const key of [GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV]) env[key] = undefined;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gc-"));
+  const root = path.join(directory, "stage"), evidence = path.join(directory, "evidence");
+  fs.mkdirSync(root); fs.mkdirSync(evidence);
+  const env = withoutInheritedGate(isolatedEnvironment(directory, checkEnvironment(process.env)));
+  for (const key of [GATE_CHECK_EVIDENCE_ENV, GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV]) env[key] = undefined;
   env.TMPDIR = root;
   env.CODEX_HOME = path.join(root, "codex"); fs.mkdirSync(env.CODEX_HOME);
   env.PATH = [path.dirname(process.execPath), path.dirname(Bun.which("node")!), "/usr/bin", "/bin"].join(path.delimiter);
@@ -41,7 +43,7 @@ for (const { mode, exit } of cases) test.skipIf(!binary)(`native stage uses one 
   const first = deferred<ServerResponse>(), second = deferred<{ body: string; response: ServerResponse }>(), third = deferred<string>(), waiting = deferred<void>(), finished = deferred<void>();
   const verdict = deferred<Awaited<ReturnType<typeof runGateCheckTool>>>();
   const abort = new AbortController();
-  const rootBinding = bindGateCheckRoot(root);
+  const rootBinding = bindGateCheckRoot(root, filtered ? evidence : undefined);
   const nested = path.join(root, "nested");
   const log = path.join(filtered ? nested : root, "check.log");
   if (filtered) {
@@ -185,6 +187,10 @@ process.exit(await child.exited);
       const completion = JSON.parse(fs.readFileSync(path.join(`${log}.gate`, "completion.json"), "utf8"));
       runId = completion.runId;
       expect(runId).toMatch(/^[a-f0-9]{64}$/);
+      const localIndex = path.join(root, ".gate-runs", `${runId}.json`);
+      const retainedIndex = path.join(evidence, ".gate-runs", `${runId}.json`);
+      expect(fs.readFileSync(retainedIndex, "utf8")).toBe(fs.readFileSync(localIndex, "utf8"));
+      fs.unlinkSync(localIndex);
     }
     expect(fs.existsSync(path.join(`${log}.gate`, "completion.json"))).toBe(true);
     const waitItem = { id: "one-wait", type: "function_call", call_id: "one-wait", name: gateCheckTool.name,
@@ -208,7 +214,6 @@ process.exit(await child.exited);
       expect(receipt.success).toBe(true);
       expect(JSON.parse(receipt.contentItems[0].text)).toMatchObject({ terminal: true, code: exit, runId });
       expect(resumed).toContain(runId!);
-      expect(fs.existsSync(path.join(root, ".gate-runs", `${runId}.json`))).toBe(true);
       expect(fs.existsSync(path.join(nested, ".gate-runs"))).toBe(false);
     }
     expect(requests).toBe(3);
@@ -222,6 +227,6 @@ process.exit(await child.exited);
     abort.abort();
     await stopFixtureProcess(child);
     backend.closeAllConnections(); await new Promise<void>(resolve => backend.close(() => resolve()));
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 60_000);
