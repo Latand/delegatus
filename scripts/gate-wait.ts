@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { constants, tmpdir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { randomBytes } from "node:crypto";
-import { publishGateRun, recorderGateRunRoot } from "../src/lib/runtime/gateCheckRecord";
+import { publishGateRun, recorderGatePaths } from "../src/lib/runtime/gateCheckRecord";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { descriptorDigest, identitySchema, manifestSchema, readEnvelope, writeEnvelope, verifyManifest, physical, reportSchema, producerCommandIdentity, custodyClock, type Descriptor, type Terminal } from "../src/lib/recordedChecks/wire";
 export { buildManifest } from "../src/lib/recordedChecks/wire";
@@ -36,9 +36,8 @@ export function closedQueueSpans(directory: string | null): { start: number; end
   } catch { return undefined; }
 }
 
-export async function openGateRecording(log: string, command: string[], manifestFile?: string) {
-  log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
-  const root = recorderGateRunRoot(log, process.env.TMPDIR ?? tmpdir());
+export async function openGateRecording(requestedLog: string, command: string[], manifestFile?: string) {
+  const { log, root } = recorderGatePaths(requestedLog, process.env.TMPDIR ?? tmpdir());
   const rootDirectoryIdentity = physical(root);
   const runId = randomBytes(32).toString("hex");
   const manifest = manifestFile ? manifestSchema.parse(readEnvelope(manifestFile)) : null;
@@ -91,8 +90,8 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   const executionAllowance = Math.min(descriptor?.manifest.executionMs ?? Infinity,
     Number.isFinite(inheritedAllowance) && inheritedAllowance > 0 ? inheritedAllowance : 900_000);
   try {
-    const dispatchRoot = recorderGateRunRoot(log, process.env.TMPDIR ?? tmpdir());
-    if (dispatchRoot !== root || physical(dispatchRoot) !== rootDirectoryIdentity)
+    const dispatch = recorderGatePaths(log, process.env.TMPDIR ?? tmpdir());
+    if (dispatch.log !== log || dispatch.root !== root || physical(dispatch.root) !== rootDirectoryIdentity)
       throw new Error("gate temporary root identity changed before dispatch");
     const child = spawn("bash", [path.join(import.meta.dir, "gate-slot.sh"), ...command], {
       stdio: ["ignore", fd, "pipe"],

@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-/** Real histories behind the forge replies: the reviewed PR has a different
- * SHA from its rebased landing, with another lane after it in the batch. */
+/** Real histories behind the forge replies, with another lane after the
+ * reviewed patch lands. */
 export function batchLandingFixture(root: string, kind = "rebased") {
   const directory = fs.mkdtempSync(path.join(root, "batch-git-"));
   const git = (...args: string[]) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "core.fileMode=true", ...args], {
@@ -45,15 +45,28 @@ export function batchLandingFixture(root: string, kind = "rebased") {
   let head = git("rev-parse", "HEAD");
   git("checkout", "main");
   commit("before", "another lane\n");
+  const carrier = kind.startsWith("carrier-");
+  const mergeWork = kind.startsWith("carrier-merge");
+  if (carrier) git("checkout", "-b", "integration/widgets");
   if (kind === "nearby-rebase") commit("feature", String(before).replace("line 17", "updated line 17"));
   if (kind === "offset-rebase") commit("feature", "main inserted a line\n" + before);
   if (kind === "wrong-occurrence") commit("feature", section + section.replace("disabled", "enabled"));
   else if (kind === "wrong-sha") commit("unrelated", "different patch\n");
+  else if (mergeWork) git("merge", "--no-ff", "-m", "Merge reviewed work", "lane");
   else git("cherry-pick", head);
   const landing = git("rev-parse", "HEAD");
-  const tip = commit("after", "last lane in batch\n");
+  if (kind.endsWith("-reverted-before") || kind === "carrier-restored-later") {
+    git("revert", "--no-edit", ...(mergeWork ? ["-m", "1"] : []), landing);
+  }
+  commit("after", "last lane in batch\n");
+  if (carrier) {
+    git("checkout", "main");
+    git("merge", "--no-ff", "-m", "Land integration branch", "integration/widgets");
+  }
+  const tip = git("rev-parse", "HEAD");
   commit("later", "main advanced after the batch\n");
-  if (kind.startsWith("reverted")) git("revert", "--no-edit", landing);
+  if (kind === "carrier-restored-later") git("cherry-pick", landing);
+  if (kind.startsWith("reverted") || kind === "carrier-reverted-after") git("revert", "--no-edit", landing);
   if (kind === "partial-revert") commit("feature", before);
   if (kind === "followup") commit("feature", String(after).replace("line 0", "updated line 0"));
   if (kind === "new-head" || kind === "whitespace") {

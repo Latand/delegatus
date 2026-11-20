@@ -492,7 +492,7 @@ function sendEffect(effect: StructuredDeliveryEffect): SendEffect | null {
     && (!operationId.startsWith("spawn_message_") || typeof roleMemoryRevision !== "string" || !/^[a-f0-9]{64}$/.test(roleMemoryRevision))) return null;
   let onlyIfIdle: import("./contracts").RuntimeIdleKillFence | undefined;
   try {
-    if (effect.payload.onlyIfIdle !== undefined) onlyIfIdle = parseRuntimeIdleKillFence(effect.payload.onlyIfIdle);
+    if (effect.payload.onlyIfIdle !== undefined && origin?.role !== "owner-relay") onlyIfIdle = parseRuntimeIdleKillFence(effect.payload.onlyIfIdle);
   } catch { return null; }
   if (onlyIfIdle && (effect.kind !== "runtime.send" || policy !== "queue" || turnId !== null)) return null;
   return {
@@ -2438,6 +2438,7 @@ export class StructuredDeliveryQueue {
       const nativeJoinsRunningTurn = host.supportsQueuedSend === true && host.coalescesQueuedInput === true
         && host.sendWaitsForRunningTurn === true && host.acceptsInputDuringTurn === true && effect.kind === "send"
         && (effect.turnId === undefined || effect.turnId === health.activeTurnRef) && !effect.onlyIfIdle
+        && effect.origin?.role !== "owner-relay"
         && (effect.policy === "queue" || steerOrQueue || waitsForTurn)
         && health.status === "active" && Boolean(health.activeTurnRef);
       const joinsRunningTurn = nativeJoinsRunningTurn || (waitsForTurn && host.acceptsInputDuringTurn === true && effect.kind === "send"

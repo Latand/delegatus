@@ -2381,12 +2381,16 @@ export class SqliteAgentRegistryStore {
 
   private prepareReadOnlySnapshotWork(signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    if (this.preparedReader) {
-      const cached = this.preparedReader.readOnlyCache;
+    const reader = this.preparedReader;
+    if (reader?.readOnlyCache) {
+      // The stamp query can reopen the database and clear the cached view.
+      // A replacement can have the same counters, so take the cache afterward.
+      const stamp = reader.storeStamp();
+      const cached = reader.readOnlyCache;
       /* A warm archive/write invalidation must enter the cooperative reader
          preparation below. Calling readOnlySnapshot here drains its header and
          projection generators synchronously on the serving loop. */
-      if (cached && cached.stamp === this.preparedReader.storeStamp()) {
+      if (cached?.stamp === stamp) {
         return Promise.resolve(cached);
       }
       /* A few journalled commits are replayed on the published reader, the
@@ -2396,7 +2400,7 @@ export class SqliteAgentRegistryStore {
          view a caller still held. */
       if (cached) {
         let replayed: StampedSnapshot | null = null;
-        try { replayed = this.preparedReader.replayBoundedJournal(); }
+        try { replayed = reader.replayBoundedJournal(); }
         catch (error) {
           // The cooperative preparation below takes over; the class of the
           // refusal is logged so a replay that always fails is visible.
@@ -4512,7 +4516,7 @@ export class SqliteAgentRegistryStore {
   }
 
   /** The callback must finish inside the transaction; no lazy object escapes. */
-  private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[]): string[] {
+  private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[], exactSpawnAttempt = false): string[] {
     if (field === "custodyState" || field === "migration.custodyState") return this.matchingRowKeysBounded(collection, [{ field, value: values }], Number.MAX_SAFE_INTEGER);
     const distinct = [...new Set(values)];
     if (!distinct.length) return [];
@@ -4523,16 +4527,27 @@ export class SqliteAgentRegistryStore {
     // With multiple IN bindings plus ORDER BY, SQLite can prefer collection
     // order and inspect every retained payload. Each distinct value gets one
     // field-index seek; merge only its matches in the original collection order.
-    const rows = distinct.flatMap(value => mapped
-      ? this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM registry_hot_rows
-          WHERE collection='${collection}' AND json_extract(value_json,'${jsonPath}') IN (?)
-          UNION ALL SELECT a.row_key,a.row_order FROM registry_archive a CROSS JOIN registry_cold c
-          WHERE a.collection='${collection}' AND json_extract(a.value_json,'${jsonPath}') IN (?)
-            AND c.collection=a.collection AND c.row_key=a.row_key AND c.archive_id=a.id
-          ORDER BY row_order`).all(value, value)
-      : this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM ${this.recordsSource}
-          WHERE collection=? AND json_extract(value_json,'${jsonPath}') IN (?) ORDER BY row_order`)
-        .all(collection, value));
+    const rows = distinct.flatMap(value => {
+      // SQLite 3.39 compares JSON text keys only through their first NUL.
+      // Decode the complete JSON string on the RHS so the expression index
+      // still gets a scalar equality seek; filter its candidates by the
+      // original JavaScript value below.
+      const parameter = exactSpawnAttempt ? "json_extract(?, '$')" : "?";
+      const bindings = [exactSpawnAttempt ? JSON.stringify(value) : value];
+      const match = (column: string) => {
+        const extracted = `json_extract(${column},'${jsonPath}')`;
+        return exactSpawnAttempt ? `${extracted} = ${parameter}` : `${extracted} IN (${parameter})`;
+      };
+      return mapped
+        ? this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM registry_hot_rows
+            WHERE collection='${collection}' AND ${match("value_json")}
+            UNION ALL SELECT a.row_key,a.row_order FROM registry_archive a CROSS JOIN registry_cold c
+            WHERE a.collection='${collection}' AND ${match("a.value_json")}
+              AND c.collection=a.collection AND c.row_key=a.row_key AND c.archive_id=a.id
+            ORDER BY row_order`).all(...bindings, ...bindings)
+        : this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM ${this.recordsSource}
+            WHERE collection=? AND ${match("value_json")} ORDER BY row_order`).all(collection, ...bindings);
+    });
     return rows.sort((a, b) => a.row_order - b.row_order).map(row => row.row_key);
   }
 
@@ -5855,7 +5870,15 @@ export class SqliteAgentRegistryStore {
       if (values.length === 0) return [];
       if (reorderedCollections.has(collection)) return Object.entries(file[collection])
         .filter(([, row]) => values.includes(lookupValue(row, field) as string)).map(([key]) => key);
-      const keys = new Set(this.matchingRowKeys(collection, field, values));
+      const exactSpawnAttempt = trackMutations && collection === "receipts" && field === "clientAttemptId";
+      const keys = new Set(this.matchingRowKeys(collection, field, values, exactSpawnAttempt));
+      if (exactSpawnAttempt) {
+        // The index supplies candidates. The stored receipt carries the full key.
+        for (const key of keys) {
+          const attempt = file.receipts[key]?.clientAttemptId;
+          if (typeof attempt !== "string" || !values.includes(attempt)) keys.delete(key);
+        }
+      }
       for (const key of dirtyRows.get(collection) ?? []) {
         const row = (file[collection] as Record<string, unknown>)[key];
         if (values.includes(lookupValue(row, field) as string)) keys.add(key); else keys.delete(key);
