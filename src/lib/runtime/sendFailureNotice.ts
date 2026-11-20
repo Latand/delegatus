@@ -512,6 +512,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     // A previous admission can outlive every registry and journal receipt.
     // Keep its stable key as a durable fence instead of admitting a second
     // warning after compaction.
+    if (row.warningAdmission === "unknown" && !snapshot?.deliveryOperationOwners[row.operationId]) return;
     if (row.warningAdmission === "admitted") {
       const admission = ports.registry.deliveryAdmissionForKey(recipient.conversationId, row.clientMessageId);
       if (admission.outcome !== "not-admitted") return;

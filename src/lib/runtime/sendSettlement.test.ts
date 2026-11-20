@@ -745,6 +745,19 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
       replayAdmissions = replay.admissions;
       expect(replayAdmissions).toBe(0);
       expect(replay.alarm).toMatchObject({ state: "pending", warningAdmission: "admitted", clientMessageId: alarm.clientMessageId });
+      const uncertain = new SqliteStateCollection<SendFailureNotice>(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), {
+        collection: "send_failure_notices", schemaVersion: 1, busyMessage: "fixture notices busy",
+        key: row => row.operationId, decode: m.decodeSendFailureNotice, clone: structuredClone,
+        controllerActive: row => row.state === "pending" || row.state === "failed",
+      });
+      try { uncertain.boundedPatch(2, tx => tx.put({ ...alarm, state: "pending", settledAt: null, warningAdmission: "unknown" })); }
+      finally { uncertain.close(); }
+      let uncertainAdmissions = 0;
+      await m.sweepSendFailureNotices({ registry: active.registry, assertActive: () => {}, receipt: async () => null,
+        recipient: () => ({ kind: "deliver", conversationId: child.conversationId, path: child.transcriptPath }),
+        deliver: async () => { uncertainAdmissions++; return { ok: true }; } });
+      expect(uncertainAdmissions).toBe(0);
+      expect(m.readSendFailureNotice(original.operationId)).toMatchObject({ state: "pending", warningAdmission: "unknown" });
     }
   } finally {
     active.registry.close(); active.close(); setSystemTime();
