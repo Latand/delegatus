@@ -128,20 +128,27 @@ interface ProbeResult {
 }
 
 async function runProbe(sandbox: Fixture): Promise<ProbeResult> {
+  const codexHome = path.join(sandbox.home, ".codex");
+  const claudeHome = path.join(sandbox.home, ".claude");
   const child = Bun.spawn(["bun", "src/lib/scanner/observe.probe.ts"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      /* Pin scanner roots to this fixture even when the runner sets its own
-         account homes. CLAUDE_CODE_TMPDIR is cleared so the tasks root uses TMPDIR. */
+      /* The probe can load the public aliases before resolving scanner roots.
+         Set both spellings so the runner's account homes cannot take precedence. */
       HOME: sandbox.home,
-      LLV_CODEX_HOME: path.join(sandbox.home, ".codex"),
-      LLV_CLAUDE_HOME: path.join(sandbox.home, ".claude"),
+      USERPROFILE: sandbox.home,
+      LLV_CODEX_HOME: codexHome,
+      DELEGATUS_CODEX_HOME: codexHome,
+      LLV_CLAUDE_HOME: claudeHome,
+      DELEGATUS_CLAUDE_HOME: claudeHome,
       COPILOT_HOME: path.join(sandbox.home, ".copilot"),
       OPENCLAW_STATE_DIR: path.join(sandbox.home, ".openclaw"),
       XDG_CONFIG_HOME: sandbox.config,
       LLV_STATE_DIR: sandbox.state,
+      DELEGATUS_STATE_DIR: sandbox.state,
       TMPDIR: sandbox.tmp,
+      /* Clear this override so the tasks root follows the fixture's TMPDIR. */
       CLAUDE_CODE_TMPDIR: "",
       TMUX_TMPDIR: path.join(sandbox.tmp, "tmux"),
       /* The scheme window exists to keep the BOARD bounded; here it would trim the
@@ -164,7 +171,8 @@ function expectFullyIsolated(result: ProbeResult, sandbox: Fixture): void {
   expect(result.error).toBeUndefined();
   /* Every resolved transcript and task root must be inside the fixture. */
   expect(result.roots.length).toBeGreaterThanOrEqual(3);
-  for (const { root } of result.roots) expect(root.startsWith(sandbox.home + path.sep)).toBe(true);
+  const outsideFixture = result.roots.filter(({ root }) => !root.startsWith(sandbox.home + path.sep));
+  expect(outsideFixture.map(({ key }) => key)).toEqual([]);
   expect(result.claudeTasksRoot).toBe(sandbox.claudeTasks);
   /* The live root, named explicitly so this fails loudly if it is ever selected. */
   expect(result.claudeTasksRoot).not.toBe(`/tmp/claude-${process.getuid?.() ?? 0}`);
