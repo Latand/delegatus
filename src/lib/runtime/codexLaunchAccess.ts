@@ -141,7 +141,8 @@ export function assertResumedCodexAccess(access: RetainedAccess, result: unknown
     || sandbox.type !== (unrestricted ? "dangerFullAccess" : workspace ? "workspaceWrite" : "readOnly")
     || (!unrestricted && sandbox.networkAccess !== false)
     || (workspace && (sandbox.excludeTmpdirEnvVar !== excludeTemp || sandbox.excludeSlashTmp !== excludeTemp
-      || !Array.isArray(sandbox.writableRoots) || !isDeepStrictEqual([...sandbox.writableRoots].sort(), named ? access.roots : [])))
+      || !Array.isArray(sandbox.writableRoots) || sandbox.writableRoots.some(root => typeof root !== "string")
+      || !isDeepStrictEqual([...sandbox.writableRoots].sort(), named ? access.roots : [])))
     || ((!unrestricted || access.cleaner) && (response.cwd !== access.cwd || !isDeepStrictEqual(response.runtimeWorkspaceRoots, [access.cwd])))) {
     throw new CodexReconnectPolicyError();
   }

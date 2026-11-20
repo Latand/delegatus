@@ -58,6 +58,7 @@ const reconnectPolicies = [
   { name: "approval drift", loaded: true, drift: "approval", refusal: "effective launch policy could not be verified" },
   { name: "wider sandbox", sandboxMode: "restricted", drift: "widened", refusal: "effective launch policy could not be verified" },
   { name: "changed writable roots", sandboxMode: "restricted", drift: "roots", refusal: "effective launch policy could not be verified" },
+  { name: "malformed writable roots", sandboxMode: "restricted", drift: "malformed-roots", refusal: "effective launch policy could not be verified" },
   { name: "changed named profile", sandboxMode: "restricted", drift: "profile", refusal: "effective launch policy could not be verified" },
   { name: "merged named profile override", sandboxMode: "restricted", drift: "config", refusal: "effective launch policy could not be verified" },
 ] satisfies Array<{
@@ -100,6 +101,7 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
     approval: { approvalPolicy: "on-request" },
     widened: { sandbox: { type: "dangerFullAccess" } },
     roots: { sandbox: { ...projectedSandbox, writableRoots: [path.join(cwd, "extra"), ...roots] } },
+    "malformed-roots": { sandbox: { ...projectedSandbox, writableRoots: [...roots, { toString: null }] } },
     profile: { activePermissionProfile: { id: "other", extends: parent } },
   };
   const responseDrift = driftByScenario[scenario.drift ?? ""];
