@@ -46,7 +46,7 @@ test("the manager draft defaults to the Claude Opus alias on low effort through 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
 test("the default mandate advances and marks the previous seat stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(72);
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(73);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -137,7 +137,8 @@ test("the default mandate advances and marks the previous seat stale", () => {
   expect(orchestratorMandateStale(69)).toBe(true);
   expect(orchestratorMandateStale(70)).toBe(true);
   expect(orchestratorMandateStale(71)).toBe(true);
-  expect(orchestratorMandateStale(72)).toBe(false);
+  expect(orchestratorMandateStale(72)).toBe(true);
+  expect(orchestratorMandateStale(73)).toBe(false);
 });
 
 /**
@@ -237,7 +238,11 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   69: "e49c2471d579841f641825c6a3d22c8ae2b391762da7c828520cdcc5844cfe58",
   70: "b8df998cd9afc152c79d07f0089c35bb7f2117963268796e22eb75cff4266ab6",
   71: "2d0d99f0e3441619166cb57b3f96a1aeb42c99d94fe234682b7354d1f37ebbeb",
+  // The reviewed branch independently used v72 with the release-switch rule.
+  // v73 combines it with main's bounded-operation and urgent-work rule.
+  // Its independent v72 fingerprint was 9c54d95c86beaf33d1da07833fc2d56fd747e5ba3d76371a924f51b26741b36d.
   72: "7921512350a6e0a8142c59f12f75cba0a29e67a3b2a1de466d86f731af3cf5b6",
+  73: "9a1b4982cd285e6775eebee02508596c2f4cdd00fd48ad01940410c9dbb938b1",
 };
 
 /* v30: a proactive seat keeps accepted work moving, so the greeting says what

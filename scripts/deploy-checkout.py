@@ -2007,7 +2007,8 @@ class Checkout:
             # loads the board store, but its answer is independent of board size.
             if not isinstance(json.loads(self.http(port, "/api/tasks?project=", self.token)).get("tasks"), list):
                 raise RuntimeError("board read unavailable")
-            update = json.loads(self.http(port, "/api/self-update", self.token))
+            # Serving identity and auto-update state need only the installation snapshot.
+            update = json.loads(self.http(port, "/api/self-update?work=0&readOnly=1", self.token))
             if update["auto"]["enabled"] or update["auto"].get("drain"):
                 raise RuntimeError("automatic update competes with external switch")
             for role, key in [("viewer", "web"), ("runtimeHost", "runtimeHost")]:

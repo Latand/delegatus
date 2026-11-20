@@ -2246,13 +2246,14 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
           const headerScheme = ["ba", "sic"].join("");
           Object.assign(fetchEnv, {
             GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "2",
+            GIT_ASKPASS: "", GIT_CONFIG_PARAMETERS: undefined,
             GIT_CONFIG_KEY_0: `http.https://github.com/${repository}.git.extraheader`,
             GIT_CONFIG_VALUE_0: `${headerName}: ${headerScheme} ${Buffer.from(`${gitUsername}:${token}`).toString("base64")}`,
             GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "",
           });
         }
         return readCarriedBranchLanding(repository, pr, base, {
-          head: lane.merge?.reviewedHead || lane.lastPassedCommit || head,
+          head,
           repoDir: lane.repoDir!,
           ...hint,
         }, issueRead, contentsRead, fetchEnv);

@@ -5,9 +5,27 @@ import type { AgentEngine } from "@/lib/agent/cli";
 
 export const SERVICE_TIER_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 export type CodexTierOffer = { id: string; name: string };
-const cache = new MeasuredCache<string, { key: string; models: unknown[] }>("models", "accounts/codexServiceTiers");
+type SlimCatalogModel = {
+  slug: string;
+  service_tiers?: CodexTierOffer[];
+  additional_speed_tiers?: string[];
+};
+const cache = new MeasuredCache<string, { key: string; models: SlimCatalogModel[] }>("models", "accounts/codexServiceTiers");
 
-function catalogModels(home: string): unknown[] | null {
+function slimCatalogModel(value: unknown): SlimCatalogModel | null {
+  if (!catalogRow(value) || typeof value.slug !== "string") return null;
+  const slim: SlimCatalogModel = { slug: value.slug };
+  if (Array.isArray(value.service_tiers)) {
+    slim.service_tiers = value.service_tiers
+      .filter((tier): tier is Record<string, unknown> & { id: string } => catalogRow(tier) && typeof tier.id === "string")
+      .map(tier => ({ id: tier.id, name: typeof tier.name === "string" ? tier.name : tier.id }));
+  } else if (Array.isArray(value.additional_speed_tiers)) {
+    slim.additional_speed_tiers = value.additional_speed_tiers.filter((tier): tier is string => typeof tier === "string");
+  }
+  return slim;
+}
+
+function catalogModels(home: string): SlimCatalogModel[] | null {
   const file = path.join(home, "models_cache.json");
   try {
     const stat = fs.statSync(file);
@@ -15,7 +33,10 @@ function catalogModels(home: string): unknown[] | null {
     let record = cache.get(file);
     if (record?.key !== key) {
       const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-      record = { key, models: Array.isArray(parsed.models) ? parsed.models : [] };
+      const models = Array.isArray(parsed?.models)
+        ? parsed.models.map(slimCatalogModel).filter((row: SlimCatalogModel | null): row is SlimCatalogModel => row !== null)
+        : [];
+      record = { key, models };
       cache.set(file, record);
       while (cache.size > 64) cache.delete(cache.keys().next().value!);
     }
