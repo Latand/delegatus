@@ -3,9 +3,9 @@ import path from "node:path";
 import { digest, missingOwnedFile, physical, readEnvelope, writeEnvelope } from "../recordedChecks/wire";
 import { procBackend } from "@/lib/proc";
 import { codexSocketPath, verifiedCodexSocketOwner, type CodexSocketOwner } from "./codexSocketTransport";
-import { gateCompletionIdentity, GateRecorderLostError, gateRecorderExited, validateGateWaitTimeout, waitForGateCompletion } from "./gateWait";
+import { gateCompletionIdentity, gateSnapshot, GateRecorderLostError, gateRecorderExited, validateGateWaitTimeout, waitForGateCompletion } from "./gateWait";
 import { GATE_CHECK_EVIDENCE_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV,
-  lookupGateRun, readGateCheckEvidence, validateGateRunId, verifyGateRunTicket, type GateCheckRoot, type GateRunRecord } from "./gateCheckRecord";
+  lookupGateRun, lookupGateRunByLog, readGateCheckEvidence, validateGateRunId, verifyGateRunTicket, type GateCheckRoot, type GateRunRecord } from "./gateCheckRecord";
 
 export const gateCheckTool = {
   type: "function", name: "wait_for_check",
@@ -109,8 +109,14 @@ export function prepareGateCheckTool(args: unknown, binding: GateCheckRoot | nul
     const record = lookupGateRun(ownerRoot, binding.rootDirectoryIdentity, input.runId, gateCheckRootPresent(binding), binding.evidence);
     return { log: record.log, reason, runId: digest({ log: record.log, ticket: record }), record, timeoutMs, binding };
   }
-  validateGateCheckRoot(binding);
   const requestedLog = input.log as string;
+  const scratchPresent = gateCheckRootPresent(binding);
+  if (!scratchPresent && binding.evidence) {
+    const log = path.resolve(requestedLog);
+    const record = lookupGateRunByLog(ownerRoot, binding.rootDirectoryIdentity, log, binding.evidence);
+    return { log: record.log, reason, runId: digest({ log: record.log, ticket: record }), record, timeoutMs, binding };
+  }
+  validateGateCheckRoot(binding);
   let parent: string;
   try {
     parent = fs.realpathSync(path.dirname(requestedLog));
@@ -122,6 +128,10 @@ export function prepareGateCheckTool(args: unknown, binding: GateCheckRoot | nul
   if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
     throw new Error(`gate log is outside this stage's temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}, resolvedRoot=${JSON.stringify(ownerRoot)}, resolvedLog=${JSON.stringify(log)})`);
   validateGateCheckRoot(binding);
+  if (binding.evidence && !fs.existsSync(path.join(`${log}.gate`, "completion.json"))) {
+    const record = lookupGateRunByLog(ownerRoot, binding.rootDirectoryIdentity, log, binding.evidence);
+    return { log: record.log, reason, runId: digest({ log: record.log, ticket: record }), record, timeoutMs, binding };
+  }
   return { log, reason, runId: gateCompletionIdentity(log).runId, record: null, timeoutMs, binding };
 }
 
@@ -183,6 +193,19 @@ export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | n
         ...(!terminal ? { outcome: "unknown", instruction: "Preserve this run and its evidence. A later wait can read the same run." } : {}),
       });
     } catch (error) {
+      if (error instanceof GateRecorderLostError && prepared.record && gateRecorderExited(prepared.record.recorder)) {
+        try {
+          // Once the recorder is confirmed stopped, its exit publication is
+          // stable. A final read lets that durable verdict beat a lost result.
+          recheckGateRun(prepared);
+          const final = gateSnapshot(prepared.log);
+          recheckGateRun(prepared);
+          if (final.state.startsWith("finished"))
+            return gateAnswer({ reason: prepared.reason, ...final, runId: reportedRunId, terminal: true });
+        } catch (finalReadError) {
+          if (!(finalReadError instanceof GateRecorderLostError)) throw finalReadError;
+        }
+      }
       const reason = lostGateReason(error, prepared);
       if (!reason) throw error;
       return gateAnswer({ runId: reportedRunId, state: "lost", outcome: "lost", terminal: true, code: null, reason,

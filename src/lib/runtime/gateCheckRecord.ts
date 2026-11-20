@@ -97,6 +97,7 @@ export type GateRunRecord = {
 };
 
 const indexDirectory = (root: string) => path.join(root, ".gate-runs");
+const MAX_RETAINED_RUNS = 10_000;
 function verifiedIndex(root: string): string {
   const directory = indexDirectory(root);
   physical(directory);
@@ -145,6 +146,24 @@ export function lookupGateRun(root: string, rootIdentity: string, runId: string,
     || record.rootDirectoryIdentity !== rootIdentity || !identitySchema.safeParse(record.recorder).success
     || !Number.isFinite(record.deadlineUptimeMs)) throw new Error("invalid gate run record");
   return record;
+}
+
+/** Resolve an older absolute-log wait from the listener-owned retained index
+ * after the launch scratch directory has disappeared. The scan is bounded and
+ * every candidate is re-read through the normal root and record validation. */
+export function lookupGateRunByLog(root: string, rootIdentity: string, log: string, evidence?: GateCheckEvidence): GateRunRecord {
+  if (!evidence) throw new Error("retained gate evidence is unavailable");
+  const index = verifiedIndex(evidenceRoot(evidence, root));
+  const entries = fs.readdirSync(index, { withFileTypes: true });
+  if (entries.length > MAX_RETAINED_RUNS) throw new Error("retained gate index exceeds the lookup bound");
+  const matches: GateRunRecord[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !/^[a-f0-9]{64}\.json$/.test(entry.name)) continue;
+    const record = lookupGateRun(root, rootIdentity, entry.name.slice(0, -5), false, evidence);
+    if (record.log === log) matches.push(record);
+  }
+  if (matches.length !== 1) throw new Error(matches.length ? "ambiguous retained gate log" : "unknown retained gate log");
+  return matches[0];
 }
 
 export function verifyGateRunTicket(record: GateRunRecord): void {

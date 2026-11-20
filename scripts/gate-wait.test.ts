@@ -265,6 +265,19 @@ test.skipIf(process.platform !== "linux")("a real recorder's run id survives wro
   const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
   expect(runId).toHaveLength(64);
   expect(await recording.closed).toBe(37);
+  const exitFile = path.join(f.dir, "exit");
+  let hiddenExitReads = 2;
+  const realExistsSync = fs.existsSync;
+  const existsSync = spyOn(fs, "existsSync").mockImplementation((file: fs.PathLike) => {
+    if (String(file) === exitFile && hiddenExitReads > 0) { hiddenExitReads--; return false; }
+    return realExistsSync(file);
+  });
+  try {
+    const raced = await runGateCheckTool({ runId, reason: "exit publication race" }, bindGateCheckRoot(f.root), new AbortController().signal);
+    expect(raced.success, raced.contentItems[0].text).toBe(true);
+    expect(JSON.parse(raced.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
+    expect(hiddenExitReads).toBe(0);
+  } finally { existsSync.mockRestore(); }
   const reader = path.join(f.root, "reader.ts");
   fs.writeFileSync(reader, `import { bindGateCheckRoot, runGateCheckTool } from ${JSON.stringify(path.join(import.meta.dir, "../src/lib/runtime/gateCheckTool.ts"))};
 const [root, runId, log] = process.argv.slice(2);
@@ -327,6 +340,7 @@ console.log(JSON.stringify(await runGateCheckTool(args, binding, new AbortContro
   const withoutTicket = read();
   fs.rmSync(f.root, { recursive: true });
   const withoutScratch = read();
+  const withoutScratchByLog = read({ log: f.log, reason: "legacy absolute log" });
   expect(fs.existsSync(f.root)).toBeFalse();
   expect(withScratch.success, withScratch.contentItems[0].text).toBe(true);
   expect(JSON.parse(withScratch.contentItems[0].text)).toMatchObject({ runId, terminal: true, state: "lost", outcome: "lost", code: null,
@@ -337,6 +351,9 @@ console.log(JSON.stringify(await runGateCheckTool(args, binding, new AbortContro
     expect(JSON.parse(lost.contentItems[0].text)).toMatchObject({ runId, terminal: true, state: "lost", code: null,
       reason: expect.stringContaining("scratch") });
   }
+  expect(withoutScratchByLog.success, withoutScratchByLog.contentItems[0].text).toBe(true);
+  expect(JSON.parse(withoutScratchByLog.contentItems[0].text)).toMatchObject({ state: "lost", outcome: "lost", terminal: true,
+    code: null, reason: expect.stringContaining("scratch") });
   const unknown = `${runId[0] === "0" ? "1" : "0"}${runId.slice(1)}`;
   for (const [id, cause] of [["../check.log", "invalid"], [`${runId}\n`, "invalid"], [unknown, "unknown"]]) {
     const refusal = read({ ...args, runId: id });
