@@ -581,7 +581,7 @@ import Foundation
                 detachedPID = candidate
                 break
             }
-            Thread.sleep(forTimeInterval: 0.01)
+            try await Task.sleep(nanoseconds: 10_000_000)
         }
         guard let detachedPID else {
             throw LauncherError.message("induced detached readiness failure: PID or TERM handler did not become ready")
