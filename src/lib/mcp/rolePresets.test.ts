@@ -39,7 +39,7 @@ const auditLines = () => fs.existsSync(stateFile("role-presets-audit.jsonl"))
   : [];
 
 const SONNET = { engine: "claude", model: "claude-sonnet-5-5", effort: "high" };
-const SOL = { engine: "codex", model: "gpt-6.1-sol", effort: "high" };
+const SOL = { engine: "codex", model: "gpt-6.2-sol", effort: "high" };
 
 type Registry = { revision: string; health: { state: string }; roles: { id: string; config: Record<string, string>; variants?: Record<string, Record<string, string>>; shipped: { config: Record<string, string> } }[]; choices: Record<string, Record<string, string[]>> };
 
@@ -86,7 +86,7 @@ test("a read answers every role's config and variants, the revision, the health 
   expect(registry.choices.claude!["claude-sonnet-5-5"]).toContain("high");
   expect(registry.choices.claude!["claude-haiku-5-5"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
   expect(registry.choices.claude!["claude-haiku-4-5"]).toContain("low");
-  expect(Object.keys(registry.choices.codex!)).toContain("gpt-6.1-sol");
+  expect(Object.keys(registry.choices.codex!)).toContain("gpt-6.2-sol");
   expect(hasRoleOverrides()).toBe(false);
 });
 
@@ -178,7 +178,7 @@ test("an unknown model is refused with the valid choices and nothing is written,
   }));
   expect(refused.details.code).toBe("role_presets_invalid");
   expect(refused.message).toContain("gpt-9-imaginary");
-  expect(refused.message).toContain("gpt-6.1-sol");
+  expect(refused.message).toContain("gpt-6.2-sol");
   expect(refused.details.violations).toEqual([expect.objectContaining({ field: "overrides.reviewer.config.model", expected: expect.stringContaining("gpt-6-astra") })]);
   expect(hasRoleOverrides()).toBe(false);
   expect(auditLines()).toEqual([]);
@@ -186,7 +186,7 @@ test("an unknown model is refused with the valid choices and nothing is written,
 
 test("a model of the other engine, and a family the store would accept but the catalogue lacks, are refused", async () => {
   for (const config of [
-    { engine: "claude", model: "gpt-6.1-sol", effort: "high" },
+    { engine: "claude", model: "gpt-6.2-sol", effort: "high" },
     { engine: "claude", model: "claude-opus-5-5", effort: "high" },
   ]) {
     const refused = await refusal(tools(SEAT).role_presets({ clientRequestId: `bad-${config.model}`, overrides: { builder: { config } } }));
@@ -200,7 +200,7 @@ test("an effort the model does not offer is refused with the valid efforts, incl
     clientRequestId: "bad-effort",
     overrides: {
       builder: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "ultra" } },
-      reviewer: { variants: { trivial: { engine: "codex", model: "gpt-6.1-sol", effort: "turbo" } } },
+      reviewer: { variants: { trivial: { engine: "codex", model: "gpt-6.2-sol", effort: "turbo" } } },
     },
   }));
   expect(refused.details.violations).toEqual([

@@ -1,3 +1,4 @@
+import { CODEX_GPT62_SOL_MODEL } from "../src/lib/agent/models";
 /** Live native-hook probe. Only synthetic context, isolated homes and owned hosts. */
 import fs from "node:fs";
 import path from "node:path";
@@ -45,7 +46,7 @@ for (const engine of (process.argv.includes("--codex") ? ["codex"] : ["claude", 
     } else {
       fs.writeFileSync(path.join(home.codexHome, "hooks.json"), JSON.stringify(process.argv.includes("--managed") ? {} : { hooks }));
       host = await CodexAppServerHost.start({ cwd, env, codexHome: home.codexHome,
-        model: "gpt-6.1-sol", effort: "low", mcpServers: [], fileAuthCredentials: true, approvalPolicy: "never", requestTimeoutMs: 30000 });
+        model: CODEX_GPT62_SOL_MODEL, effort: "low", mcpServers: [], fileAuthCredentials: true, approvalPolicy: "never", requestTimeoutMs: 30000 });
       const result = await (host as unknown as { rpc(method: string, params: unknown): Promise<{ data: { hooks: { key: string; currentHash: string; trustStatus: string; enabled: boolean }[] }[] }> }).rpc("hooks/list", { cwds: [cwd] });
       console.log(JSON.stringify({ engine, hooks: result.data.flatMap(d => d.hooks.map(h => ({ trust: h.trustStatus, enabled: h.enabled }))) }));
 

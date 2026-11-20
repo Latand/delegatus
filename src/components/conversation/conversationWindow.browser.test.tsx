@@ -3470,7 +3470,7 @@ describe("the runtime pill offers only current models and keeps a saved one", ()
     { name: "phone-390", width: 390, height: 844, touch: true },
   ] as const;
   const reasoningLabel = (lang: "en" | "uk", tier: string) => translate(lang, `reasoningTier.${tier}` as Parameters<typeof translate>[1]);
-  const CODEX = ["GPT-6.2-Sol", "GPT-6.2-Astra", "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"];
+  const CODEX = ["GPT-6.2-Sol", "GPT-6.2-Astra", "GPT-6-Astra", "GPT-6.1-Terra", "GPT-6-Luna"];
   const CLAUDE = ["Opus 5.5", "Fable 5.2", "Sonnet", "Claude Sonnet 5.5", "Haiku 5.5"];
   const FILES = {
     "legacy-sol": { models: [...CODEX, "GPT-5.6-Sol"], model: "GPT-5.6-Sol", tiers: 6, tier: "high" },

@@ -37353,8 +37353,8 @@ describe("Celestia clone creation in the relay card", () => {
           await card.locator("[data-external-relay-target='fresh'][data-fresh] [data-external-relay-fresh]").waitFor({ timeout: 15_000 });
           await card.locator("[data-external-relay-target='fresh'] [data-external-relay-answered-by='install']").waitFor({ timeout: 15_000 });
           /* The new clone takes the Cloud default, answered here. */
-          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Codex Cloud · GPT-6.1-Sol" }).waitFor({ timeout: 15_000 });
-          expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.fresh())).toMatchObject({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" });
+          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Codex Cloud · GPT-6.2-Sol" }).waitFor({ timeout: 15_000 });
+          expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.fresh())).toMatchObject({ engine: "codex-cloud", model: "gpt-6.2-sol", answered_by: "install" });
           expect(await card.locator("[data-external-relay-no-account], [data-external-relay-running].text-warning").count()).toBe(0);
           await frame("created", "[data-clone-created]");
           expect(await card.locator("[data-clone-created]").textContent()).toContain(translate(lang, "externalRelay.clone.created", { name, username: lang === "uk" ? "nichna_sova_bot" : "night_owl_bot" }));

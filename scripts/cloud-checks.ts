@@ -1,3 +1,4 @@
+import { CODEX_GPT62_SOL_MODEL } from "../src/lib/agent/models";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
@@ -411,13 +412,13 @@ export class AppServerCloudTransport implements CloudTransport {
       context.phase = "environment";
       context.reason = "Cloud thread model or environment does not match the requested configuration";
       const started = await rpc.call("thread/start", {
-        model: "gpt-6.1-sol", allowProviderModelFallback: false, approvalPolicy: "never",
+        model: CODEX_GPT62_SOL_MODEL, allowProviderModelFallback: false, approvalPolicy: "never",
         sandbox: "danger-full-access", serviceName: "codex_cloud", ephemeral: false,
         environments: [{ environmentConfigId: this.config.environmentId, cwd: rpc.cwd }], deferredEnvironment: false,
       });
       threadId = context.threadId = (started.thread as { id?: string } | undefined)?.id;
       const environments = (started.thread as { environments?: { environmentConfigId?: string; environmentId?: string; cwd?: string }[] } | undefined)?.environments;
-      if (!threadId || started.model !== "gpt-6.1-sol" || !Array.isArray(environments) || environments.length !== 1
+      if (!threadId || started.model !== CODEX_GPT62_SOL_MODEL || !Array.isArray(environments) || environments.length !== 1
         || environments[0]?.cwd !== rpc.cwd || !environments[0]?.environmentId?.startsWith("ccarenv_")
         || (environments[0]?.environmentConfigId != null && environments[0].environmentConfigId !== this.config.environmentId)) return { kind: "invalid" };
       if (signal?.aborted) return { kind: "invalid" };

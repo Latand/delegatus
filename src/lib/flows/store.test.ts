@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { CODEX_GPT61_SOL_MODEL, CODEX_TERRA_MODEL } from "@/lib/agent/models";
+import { CODEX_GPT62_SOL_MODEL, CODEX_TERRA_MODEL } from "@/lib/agent/models";
 import { projectKeyIndexSnapshot } from "@/lib/projects/projectKeyIndex";
 
 import { configuredReviewerFallback, loadPresets, savePresets, loadFlows, mergeSeededPresets, patchFlowRows, saveFlows, seededPresetsFromRoles, withFlowSnapshot, withFlowMutation } from "./store";
@@ -20,8 +20,8 @@ test("fresh seeds use Sol and preserve a saved legacy preset", () => {
   expect(presets.some((preset) => preset.name === LEGACY_DEFAULT.name)).toBe(true);
   expect(presets[0]).toMatchObject({
     name: "Builder → Reviewer",
-    implementer: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
-    reviewer: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "xhigh" },
+    implementer: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "high" },
+    reviewer: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "xhigh" },
   });
 });
 
@@ -34,8 +34,8 @@ test("flow preset seeds derive their canonical roles from the role registry", ()
   const presets = seededPresetsFromRoles();
   expect(presets.find((preset) => preset.name === "Builder → Reviewer")).toMatchObject({
     name: "Builder → Reviewer",
-    implementer: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
-    reviewer: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "xhigh" },
+    implementer: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "high" },
+    reviewer: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "xhigh" },
   });
 });
 
@@ -65,7 +65,7 @@ test("flow preset seeds fall back to the role default when a saved builder overr
     expect(() => seededPresetsFromRoles()).not.toThrow();
     expect(seededPresetsFromRoles().find((preset) => preset.name === "Builder → Reviewer")?.implementer).toEqual({
       engine: "codex",
-      model: CODEX_GPT61_SOL_MODEL,
+      model: CODEX_GPT62_SOL_MODEL,
       effort: "high",
     });
   } finally {
@@ -395,7 +395,7 @@ test("seed presets survive an unreadable role overrides file", () => {
   try {
     fs.writeFileSync(path.join(sandbox, "role-presets.json"), "{", "utf8");
     expect(seededPresetsFromRoles().find((preset) => preset.name === "Builder → Reviewer")).toMatchObject({
-      implementer: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+      implementer: { engine: "codex", model: CODEX_GPT62_SOL_MODEL, effort: "high" },
     });
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;

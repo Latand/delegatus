@@ -279,7 +279,7 @@ test("settings this install refuses answer with local codes, never the service's
   }
   const cloud = await patch(JSON.stringify({ target: { id: "bot", engine: "codex-cloud", model: "gpt-6.1-sol", cloudEnvironmentId: "answer-env" } }));
   expect(cloud.status).toBe(200);
-  expect((await cloud.json()).relay.targets[0]).toMatchObject({ engine: "codex-cloud", model: "gpt-6.1-sol", cloudEnvironmentId: "answer-env" });
+  expect((await cloud.json()).relay.targets[0]).toMatchObject({ engine: "codex-cloud", model: "gpt-6.2-sol", cloudEnvironmentId: "answer-env" });
   expect((await patch(JSON.stringify({ target: { id: "bot", cloudEnvironmentId: 42 } }))).status).toBe(400);
 });
 test("recent answers and one exchange are read-only reads for the operator alone", async () => {

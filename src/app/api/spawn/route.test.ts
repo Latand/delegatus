@@ -453,7 +453,7 @@ test("spawn admission rejects an explicit model outside the selected engine cata
 
   expect(response.status).toBe(400);
   expect(await response.json()).toEqual({
-    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+    error: "invalid codex model id \"gpt-5.6-codex\"; valid codex model ids: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra",
   });
 });
 
@@ -3433,7 +3433,7 @@ test("unknown Codex models reject before image blob and receipt mutation", async
     }), dependencies);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
-      error: "invalid codex model id \"gpt-5.3-codex-spark\"; valid codex model ids: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna",
+      error: "invalid codex model id \"gpt-5.3-codex-spark\"; valid codex model ids: gpt-6.2-sol, gpt-6.2-astra, gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-6.1-terra",
     });
     expect(storageCalled).toBeFalse();
     expect(Object.keys(agentRegistry().snapshot().receipts).sort()).toEqual(beforeReceipts);
@@ -4658,7 +4658,7 @@ test("structured spawn binds the launch tier as an inherited preference on a pri
   const previousRegistry = agentRegistry();
   const account = createManagedCodexAccount("Successor carrier");
   fs.writeFileSync(path.join(account.home, "auth.json"), "{}", { mode: 0o600 });
-  fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.1-sol", service_tiers: [{ id: "priority" }] }] }));
+  fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-6.2-sol", service_tiers: [{ id: "priority" }] }] }));
   store.setEngineRouting("codex", account.id);
   const previous = { LLV_SPAWN_TRANSPORT: process.env.LLV_SPAWN_TRANSPORT, LLV_STRUCTURED_HOSTS: process.env.LLV_STRUCTURED_HOSTS, LLV_RUNTIME_HOST_SOCKET: process.env.LLV_RUNTIME_HOST_SOCKET };
   Object.assign(process.env, { LLV_SPAWN_TRANSPORT: "structured", LLV_STRUCTURED_HOSTS: "1", LLV_RUNTIME_HOST_SOCKET: path.join(cwd, "unused.sock") });
@@ -4672,6 +4672,7 @@ test("structured spawn binds the launch tier as an inherited preference on a pri
     const response = await post({ inheritedServiceTier: "ultrafast" }, "inherited-speed-successor");
     expect({ status: response.status, body: response.status === 202 ? null : await response.json() }).toEqual({ status: 202, body: null });
     const receipt = store.spawnReceiptForClientAttempt("inherited-speed-successor");
+    expect(receipt?.launchProfile.model).toBe("gpt-6.2-sol");
     expect(receipt?.accountId).toBe(account.id);
     expect(receipt?.launchProfile.serviceTier).toBeUndefined();
     expect(receipt?.launchProfile.fast).not.toBeTrue();

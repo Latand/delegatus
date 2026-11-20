@@ -22,7 +22,7 @@ function fixture(status: "interrupted" | "completed" | "failed" | "inProgress" |
       if (request.method === "turn/interrupt") interrupted = true;
       if ((!this.recovery && request.method === held) || (this.recovery && status === "pending" && request.method === "thread/turns/list")) { whenHeld?.(); return; }
       let result: Record<string, unknown> = {};
-      if (request.method === "thread/start") result = { model: "gpt-6.1-sol", thread: { id: taskId, environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd }] } };
+      if (request.method === "thread/start") result = { model: "gpt-6.2-sol", thread: { id: taskId, environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd }] } };
       if (request.method === "command/exec") result = { exitCode: 0 };
       if (request.method === "turn/start") {
         launchedCommand = (request.params.input as { text: string }[])[0]!.text.split("\n").slice(1).join("\n");
@@ -172,7 +172,7 @@ function failingAfterDeadline(failing: "turn/interrupt" | "thread/turns/list" | 
       }
       const status = this.connection > 0 ? recoveryStatus : failing === "thread/items/list" && interrupted ? "interrupted" : "inProgress";
       let result: Record<string, unknown> = {};
-      if (request.method === "thread/start") result = { model: "gpt-6.1-sol", thread: { id: taskId, environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd }] } };
+      if (request.method === "thread/start") result = { model: "gpt-6.2-sol", thread: { id: taskId, environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd }] } };
       if (request.method === "command/exec") result = { exitCode: 0 };
       if (request.method === "turn/start") { command = (request.params.input as { text: string }[])[0]!.text.split("\n").slice(1).join("\n"); result = { turn: { id: "turn-fixture" } }; }
       if (request.method === "thread/items/list") result = { data: [{ turnId: "turn-fixture", item: { type: "commandExecution", status: status === "inProgress" ? "inProgress" : "completed", command } }] };

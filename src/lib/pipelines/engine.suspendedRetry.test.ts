@@ -180,10 +180,10 @@ test.each([null, "account-b"])("same-engine explicit retry honors the configured
     row.authCheckedAt = row.observedAt = new Date(Date.parse(f.h.ports.now()) - 6 * 60_000).toISOString();
   await tickPipelines([], f.h.ports); await tickPipelines([], f.h.ports);
   const next = f.attempts()[1]!;
-  expect(next).toMatchObject({ effectiveRole: { engine: "codex", model: "gpt-6.1-sol", effort: "high" }, definition: { account }, accountId: "account-b" });
+  expect(next).toMatchObject({ effectiveRole: { engine: "codex", model: "gpt-6.2-sol", effort: "high" }, definition: { account }, accountId: "account-b" });
   expect(next.effectiveRole.serviceTier).toBeUndefined();
   expect(attemptAccountPin(f.current().stages[0]!, next)).toBe(account);
-  expect(f.h.spawnInputs[1]).toMatchObject({ requestedAccountId: account, unavailableAccountIds: ["account-a"] });
+  expect(f.h.spawnInputs[1]).toMatchObject({ role: { model: "gpt-6.2-sol", effort: "high" }, requestedAccountId: account, unavailableAccountIds: ["account-a"] });
 });
 
 test("a retry with no target capacity reports its wait and uses the configured target once capacity returns", async () => {

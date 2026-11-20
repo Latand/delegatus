@@ -413,6 +413,30 @@ test("model negotiation retains the protocol's model override for subsequent tur
   } finally { await host.release(); }
 });
 
+for (const resume of [false, true]) test(`retired Sol is replaced on ${resume ? "thread/resume" : "thread/start"} and turn/start`, async () => {
+  const threadId = "retired-model-thread";
+  const server = new FakeAppServer(threadId);
+  server.modelList = [{ id: "gpt-6.2-sol", model: "gpt-6.2-sol", isDefault: true, inputModalities: ["text"] }];
+  const options = { cwd: "/repo", model: "gpt-6.1-sol", effort: "xhigh", serviceTier: "default",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) };
+  const open = () => resume ? CodexAppServerHost.adopt(threadId, options) : CodexAppServerHost.start(options);
+  const host = await open();
+  try {
+    expect(server.requests.find(r => r.method === (resume ? "thread/resume" : "thread/start"))?.params)
+      .toMatchObject({ model: "gpt-6.2-sol", serviceTier: "default" });
+    await host.send({ id: "retired-override", text: "Continue", runtime: { model: "gpt-6.1-sol" } });
+    expect(server.requests.find(r => r.method === "turn/start")?.params).toMatchObject({ model: "gpt-6.2-sol", effort: "xhigh" });
+  } finally { await host.release(); }
+});
+
+test("a retired model in the resolved thread receipt refuses before any turn", async () => {
+  const server = new FakeAppServer("retired-reply");
+  server.threadModel = "gpt-6.1-sol";
+  await expect(CodexAppServerHost.adopt("retired-reply", { cwd: "/repo", model: "gpt-6.2-sol",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) })).rejects.toThrow("retired launch model");
+  expect(server.requests.some(r => r.method === "turn/start")).toBe(false);
+});
+
 for (const resumed of [false, true]) test(`model negotiation uses the ${resumed ? "resumed" : "new"} thread's selected-model receipt`, async () => {
   const threadId = "thread-model-receipt";
   const server = modelNegotiationServer(threadId, "image-model");

@@ -202,7 +202,7 @@ test("created: the new row is marked New, takes Codex Cloud with its default mod
   await act(async () => settle(20));
   const patches = harness.calls.filter((call) => call.method === "PATCH");
   expect(patches.map((call) => [call.url, call.body])).toEqual([
-    [BASE, { target: { id: "fresh", engine: "codex-cloud", model: "gpt-6.1-sol" } }],
+    [BASE, { target: { id: "fresh", engine: "codex-cloud", model: "gpt-6.2-sol" } }],
     [`${BASE}/targets/fresh`, { answered_by: "install" }],
   ]);
   const row = host.querySelector("[data-external-relay-target='fresh']")!;
@@ -376,7 +376,7 @@ test("closing the settings while the status read is on the wire still sets the c
   const again = await mount(<ExternalRelaySection />);
   await act(async () => settle(30));
   expect(writes()).toEqual([ENGINE_PATCH, ROUTE_PATCH, FORGET]);
-  expect(relayFake.fake.fresh).toMatchObject({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" });
+  expect(relayFake.fake.fresh).toMatchObject({ engine: "codex-cloud", model: "gpt-6.2-sol", answered_by: "install" });
   expect(relayFake.fake.record).toBeNull();
   expect(again.querySelector("[data-external-relay-target='fresh'] [data-external-relay-fresh]")).toBeTruthy();
   expect(again.querySelector("[data-clone-created]")?.textContent).toContain("This install answers it.");

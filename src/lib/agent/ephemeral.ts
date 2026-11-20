@@ -1,3 +1,4 @@
+import { modelForLaunch } from "@/lib/agent/models";
 import { collectProviderOpen, type ProviderOpen } from "@/lib/externalRelay/providerOpens";
 import fs from "node:fs";
 import path from "node:path";
@@ -241,11 +242,12 @@ export function buildEphemeralCommand(
       reviewerPath: null,
     };
   }
+  const model = modelForLaunch("codex", request.model);
   const home = answerHome(request.account, request.session?.codexHome ?? (request.privateContext || request.imageGeneration ? path.join(request.runDir, "codex-home") : undefined));
   const catalog = writeCatalog(
     request.account,
     home,
-    request.model,
+    model,
     request.runDir,
   );
   const output = path.join(request.runDir, "answer.json");
@@ -308,7 +310,7 @@ export function buildEphemeralCommand(
     "-c",
     `model_catalog_json=${JSON.stringify(catalog)}`,
     "-m",
-    request.model,
+    model,
     ...(request.effort
       ? ["-c", `model_reasoning_effort=${request.effort}`]
       : []),

@@ -266,7 +266,7 @@ export function useCloneSetup({ relayId, phase, recorded, target, engine, onChan
       const { target: current, engine: chosen } = latest.current;
       let error: string | null = current && chosen ? null : "not_found";
       if (current && chosen && current.engine === null) {
-        const set = await call(base, "PATCH", { target: { id: current.id, engine: chosen, model: chosen === "codex-cloud" ? "gpt-6.1-sol" : defaultModelFor(chosen) } });
+        const set = await call(base, "PATCH", { target: { id: current.id, engine: chosen, model: defaultModelFor(chosen === "codex-cloud" ? "codex" : chosen) } });
         if (!set.ok) error = set.error;
       }
       if (!error && current && !current.answered_elsewhere && current.answered_by !== "install") {

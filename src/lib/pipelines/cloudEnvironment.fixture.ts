@@ -102,11 +102,11 @@ export function stubCloudBackend(options: { create?: boolean; missingConnector?:
         switch (frame.method) {
           case "environment/status": result = { data: [{ environmentId: "ccarenv_setup", status: options.missingConnector ? "offline" : "online",
             observations: { phase: options.missingConnector || options.operationPhaseFailed ? "failed" : "ready", ...(options.missingConnector ? { failure: { code: "github_connector_not_configured", message: "private-provider-value" } } : {}) } }] }; break;
-          case "thread/start": thread.environments[0]!.environmentConfigId = ((frame.params.environments as Row[])[0]!.environmentConfigId as string); result = { model: "gpt-6.1-sol", thread }; break;
+          case "thread/start": thread.environments[0]!.environmentConfigId = ((frame.params.environments as Row[])[0]!.environmentConfigId as string); result = { model: "gpt-6.2-sol", thread }; break;
           case "command/exec": result = { exitCode: 0, stdout: head + "\n", stderr: "" }; break;
           case "turn/start": result = { turn: { id: "turn-fixture" } }; break;
-          case "thread/read": result = { model: "gpt-6.1-sol", thread }; break;
-          case "thread/turns/list": result = { data: [{ id: "turn-fixture", status: "completed", model: "gpt-6.1-sol" }], nextCursor: null }; break;
+          case "thread/read": result = { model: "gpt-6.2-sol", thread }; break;
+          case "thread/turns/list": result = { data: [{ id: "turn-fixture", status: "completed", model: "gpt-6.2-sol" }], nextCursor: null }; break;
           case "thread/items/list": result = { data: [{ turnId: "turn-fixture", item: { type: "agentMessage", text: 'Review complete.\n```json\n{"status":"pass","findings":[]}\n```' } }], nextCursor: null }; break;
         }
         socket.send(JSON.stringify({ id: frame.id, result }));

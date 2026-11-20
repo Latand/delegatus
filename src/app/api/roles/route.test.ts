@@ -34,7 +34,7 @@ test("maintainer picker catalogue choices write the shared row and resolve for l
   const catalog = await (await GET()).json() as Catalog & { launchChoices: { engine: "claude" | "codex"; models: { id: string; efforts: string[] }[] }[] };
   expect(catalog.launchChoices.map(c => c.engine)).toEqual(["claude", "codex"]);
   for (const choice of catalog.launchChoices) {
-    expect(choice.models.map(m => m.id)).toEqual(ENGINE_MODELS[choice.engine].map(m => m.id));
+    expect(choice.models.map(m => m.id)).toEqual(ENGINE_MODELS[choice.engine].map(m => m.id).filter(id => id !== "gpt-6.1-sol"));
     for (const model of choice.models) {
       expect(model.efforts).toEqual([...effortScale(choice.engine, model.id)!]);
       for (const effort of model.efforts) {
@@ -46,6 +46,10 @@ test("maintainer picker catalogue choices write the shared row and resolve for l
       }
     }
   }
+  const legacy = await put({ overrides: { maintainer: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } } } });
+  expect(legacy.status).toBe(200);
+  expect((await legacy.json() as Catalog).roles.find(r => r.id === "maintainer")?.config)
+    .toEqual({ engine: "codex", model: "gpt-6.2-sol", effort: "high" });
   const before = JSON.stringify(loadRoleOverrides());
   for (const config of [
     { engine: "codex", model: "gpt-unknown", effort: "high" },
@@ -66,7 +70,7 @@ test("roles route returns all merged role definitions with scaffold previews and
     "orchestrator", "reviewer", "verifier", "builder", "architect",
     "cleaner", "prod-auditor", "deployer", "merger", "maintainer", "curator", "issue-reporter", "visual-critic",
   ]);
-  expect(body.roles.find((role) => role.id === "maintainer")?.config).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "medium" });
+  expect(body.roles.find((role) => role.id === "maintainer")?.config).toEqual({ engine: "codex", model: "gpt-6.2-sol", effort: "medium" });
   expect(body.roles[0]).toMatchObject({ id: "orchestrator" });
   expect(body.roles.find((role) => role.id === "deployer")?.shipped.promptScaffold).toBe(body.roles.find((role) => role.id === "deployer")?.promptScaffold);
   const builder = body.roles.find((role) => role.id === "builder")!;
@@ -113,7 +117,7 @@ test("PUT refuses Sonnet on the reviewer, the architect and the orchestrator, an
 
 /* Visual judgement runs on Claude, never Codex: the row keeps its editable Claude runtime. */
 test("PUT refuses a Codex row for the visual critic and saves an edited Claude one", async () => {
-  const refused = await put({ overrides: { "visual-critic": { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } } } });
+  const refused = await put({ overrides: { "visual-critic": { config: { engine: "codex", model: "gpt-6.2-sol", effort: "high" } } } });
   expect(refused.status).toBe(400);
   expect((await refused.json() as { error: string }).error).toBe("visual-critic runs on claude only");
   expect(hasRoleOverrides()).toBe(false);
@@ -228,7 +232,7 @@ test("a stored fix row writes the file at schema 4", async () => {
 
 
 test("role memory caps round trip through the mapping route and invalid writes preserve the row", async () => {
-  const base = { engine: "codex", model: "gpt-6.1-sol", effort: "high" };
+  const base = { engine: "codex", model: "gpt-6.2-sol", effort: "high" };
   const update = (cap: unknown) => put({ overrides: { builder: { config: { ...base, agentMemoryMaxBytes: cap } } } });
   expect((await update(6 * 2 ** 30)).status).toBe(200);
   const before = JSON.stringify(loadRoleOverrides());

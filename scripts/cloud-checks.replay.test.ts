@@ -28,7 +28,7 @@ function replay(capture: Capture, change: RecordChange = {}) {
   const rpc: CloudRpc = {
     cwd,
     async call(method, params) {
-      if (method === "thread/start") return { model: "gpt-6.1-sol", thread: { id: taskId,
+      if (method === "thread/start") return { model: "gpt-6.2-sol", thread: { id: taskId,
         environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd }] } };
       if (method === "command/exec") return { exitCode: 0 };
       if (method === "turn/start") {

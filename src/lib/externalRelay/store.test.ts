@@ -208,7 +208,7 @@ test("a target refresh keeps settings of listed targets, adds new ones unconfigu
   expect(merged).toEqual([
     {
       id: "added", name: "Added", answered_by: "install", fallback: "none",
-      enabled: true, engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, project: null,
+      enabled: true, engine: "codex-cloud", model: "gpt-6.2-sol", effort: null, project: null,
       concurrency: 1, hardCapMinutes: 30,
     },
     {

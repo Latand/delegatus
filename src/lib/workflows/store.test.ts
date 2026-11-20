@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { CODEX_GPT61_SOL_MODEL, CODEX_GPT6_LUNA_MODEL } from "@/lib/agent/models";
+import { CODEX_GPT62_SOL_MODEL, CODEX_GPT6_LUNA_MODEL } from "@/lib/agent/models";
 import { saveRoleOverrides } from "@/lib/roles/store";
 
 /* Keep every workflow-store side effect inside this file's sandbox. */
@@ -95,15 +95,15 @@ test("normalizeTemplate rejects an invalid stage list", () => {
 test("workflow role references resolve to a frozen effective config", () => {
   expect(roleConfigFromReference({ role: "builder", roleParams: { mode: "tdd" } })).toEqual({
     engine: "codex",
-    model: "gpt-6.1-sol",
+    model: "gpt-6.2-sol",
     effort: "high",
   });
   const template = normalizeTemplate({ name: "role template", stages: [
     { kind: "implement", role: "builder", roleParams: { mode: "plain" }, scope: "Backend/API" },
     { kind: "review-loop", role: "reviewer", roleParams: { diffSource: "main...HEAD", lens: "all" } },
   ] });
-  expect(template?.stages[0]).toMatchObject({ agent: { model: "gpt-6.1-sol", effort: "high" } });
-  expect(template?.stages[1]).toMatchObject({ reviewer: { model: "gpt-6.1-sol", effort: "xhigh" } });
+  expect(template?.stages[0]).toMatchObject({ agent: { model: "gpt-6.2-sol", effort: "high" } });
+  expect(template?.stages[1]).toMatchObject({ reviewer: { model: "gpt-6.2-sol", effort: "xhigh" } });
 });
 
 test("templates seed the canonical fullstack pipeline on first load", () => {
@@ -111,11 +111,11 @@ test("templates seed the canonical fullstack pipeline on first load", () => {
   expect(templates.map((template) => template.name)).toContain("fullstack");
   const fullstack = templates.find((template) => template.name === "fullstack")!;
   expect(fullstack.stages.at(-1)?.kind).toBe("review-loop");
-  expect(fullstack.stages[0]?.kind === "implement" && fullstack.stages[0].agent).toMatchObject({ model: "gpt-6.1-sol", effort: "high" });
+  expect(fullstack.stages[0]?.kind === "implement" && fullstack.stages[0].agent).toMatchObject({ model: "gpt-6.2-sol", effort: "high" });
   expect(fullstack.stages[1]?.kind === "implement" && fullstack.stages[1].agent).toEqual(roleConfigFromReference({ role: "builder", roleParams: { mode: "plain", domain: "frontend" } })!);
   const review = fullstack.stages.at(-1)!;
   expect(review).toMatchObject({ roundLimit: 3 });
-  expect(review.kind === "review-loop" && review.reviewer.model).toBe("gpt-6.1-sol");
+  expect(review.kind === "review-loop" && review.reviewer.model).toBe("gpt-6.2-sol");
   expect(templates.map((template) => template.name)).toContain("Builder → Reviewer");
 });
 
@@ -196,7 +196,7 @@ test("template seeds fall back to the role default when a saved builder override
     const fullstack = seededTemplatesFromRoles().find((template) => template.name === "fullstack")!;
     expect(fullstack.stages[0]?.kind === "implement" && fullstack.stages[0].agent).toEqual({
       engine: "codex",
-      model: CODEX_GPT61_SOL_MODEL,
+      model: CODEX_GPT62_SOL_MODEL,
       effort: "high",
     });
   } finally {

@@ -561,7 +561,7 @@ test("successive mandate renders read saved rows, variants and revision from the
     expect(second).toContain("size=trivial: codex/gpt-5.6-luna/medium");
     expect(second).toContain(`Registry revision: ${shortId(nextRevision)}. Registry health: healthy.`);
     expect(second).not.toContain(firstRevision);
-    expect(second).not.toContain("| builder | codex | gpt-6.1-sol | high |");
+    expect(second).not.toContain("| builder | codex | gpt-6.2-sol | high |");
     expect(second.split(ORCHESTRATOR_ROLE_TABLE_HEADING)).toHaveLength(2);
     saveRoleMapping({ builder: { config: null, variants: { frontend: null } }, reviewer: { variants: { trivial: null } } });
     expect(render(second)).toBe(first);
@@ -581,8 +581,8 @@ test("the delivered mandate renders the role table from the registry it is hande
 
   expect(rows).toHaveLength(ROLE_DEFAULTS.length);
   expect(rows.find((row) => row.startsWith("| prod-auditor |"))).toStartWith("| prod-auditor | claude | sonnet | low | read-only |");
-  expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6.1-sol | high | read-write |");
-  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6.1-sol | xhigh | read-only |");
+  expect(rows.find((row) => row.startsWith("| builder |"))).toStartWith("| builder | codex | gpt-6.2-sol | high | read-write |");
+  expect(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT)).toContain("| prod-auditor | codex | gpt-6.2-sol | xhigh | read-only |");
 });
 
 test("the manager table uses resolved saved builder variants and keeps registry provenance", () => {

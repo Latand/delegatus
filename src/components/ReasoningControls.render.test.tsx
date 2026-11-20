@@ -45,7 +45,7 @@ test("a fresh launch offers only current choices, and a saved retired choice sta
   for (const engine of ["codex", "claude"] as const) {
     const fresh = modelSelect(renderToStaticMarkup(<ReasoningControls engine={engine} model="" effort="" speed="" onModel={() => {}} onEffort={() => {}} onSpeed={() => {}} />));
     expect(options(fresh)).toEqual(["", ...(engine === "codex"
-      ? ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"]
+      ? ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-terra", "gpt-6-luna"]
       : ["opus", "claude-fable-5-2", "sonnet", "claude-sonnet-5-5", "claude-haiku-5-5"])]);
   }
   for (const [engine, model] of [["codex", "gpt-5.6-terra"], ["codex", "gpt-6-sol"], ["claude", "claude-haiku-4-5"]] as const) {

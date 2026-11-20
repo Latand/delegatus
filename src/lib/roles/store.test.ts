@@ -23,17 +23,17 @@ test("fresh installs and config:null resets restore every shipped role and varia
     const codex = (model: string, effort: string): RoleConfig => ({ engine: "codex", model, effort });
     const claude = (model: string, effort: string): RoleConfig => ({ engine: "claude", model, effort });
     const expected = {
-      builder: codex("gpt-6.1-sol", "high"),
-      reviewer: codex("gpt-6.1-sol", "xhigh"),
-      verifier: codex("gpt-6.1-sol", "high"),
+      builder: codex("gpt-6.2-sol", "high"),
+      reviewer: codex("gpt-6.2-sol", "xhigh"),
+      verifier: codex("gpt-6.2-sol", "high"),
       architect: claude("opus", "xhigh"),
       orchestrator: claude("opus", "high"),
-      cleaner: codex("gpt-6.1-sol", "high"),
-      curator: codex("gpt-6.1-sol", "high"),
-      "prod-auditor": codex("gpt-6.1-sol", "xhigh"),
-      deployer: codex("gpt-6.1-sol", "medium"),
-      merger: codex("gpt-6.1-sol", "high"),
-      maintainer: codex("gpt-6.1-sol", "medium"),
+      cleaner: codex("gpt-6.2-sol", "high"),
+      curator: codex("gpt-6.2-sol", "high"),
+      "prod-auditor": codex("gpt-6.2-sol", "xhigh"),
+      deployer: codex("gpt-6.2-sol", "medium"),
+      merger: codex("gpt-6.2-sol", "high"),
+      maintainer: codex("gpt-6.2-sol", "medium"),
       "issue-reporter": claude("claude-sonnet-5-5", "high"),
       "visual-critic": claude("opus", "high"),
     };
@@ -89,7 +89,7 @@ test("role overrides persist with a schema version and merge only the selected r
     const reviewer = loadRoleDefinitions().find((role) => role.id === "reviewer")!;
     expect(builder.config.model).toBe("gpt-custom-builder");
     expect(builder.promptScaffold).toBe("Custom {{mode}} scaffold");
-    expect(reviewer.config.model).toBe("gpt-6.1-sol");
+    expect(reviewer.config.model).toBe("gpt-6.2-sol");
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;
@@ -217,7 +217,7 @@ test("a mapping patch drops rows equal to the shipped value and keeps scaffold o
   const next = applyRoleMappingPatch(
     { reviewer: { promptScaffold: "mine", config: { model: "gpt-5.6-sol" } }, cleaner: { config: { effort: "high" } } },
     {
-      reviewer: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" } },
+      reviewer: { config: { engine: "codex", model: "gpt-6.2-sol", effort: "xhigh" } },
       cleaner: { config: null },
       builder: { variants: { frontend: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } },
     },
@@ -323,7 +323,7 @@ test("the boot pass drops rows equal to shipped, keeps the rest and every scaffo
       orchestrator: { config: { engine: "claude", model: "opus", effort: "high" } },
       architect: { config: { engine: "claude", model: "opus", effort: "xhigh" }, promptScaffold: "mine {{mode}}" },
       builder: { config: { engine: "codex", model: "gpt-6-sol", effort: "high" }, variants: { "apply-fixes": { engine: "codex", model: "gpt-6-luna", effort: "high" } } },
-      reviewer: { config: { model: "gpt-6.1-sol" } },
+      reviewer: { config: { model: "gpt-6.2-sol" } },
     } }));
     expect(applyRoleMappingRetirements([], () => "2026-09-27T08:00:00.000Z")).toEqual({ state: "written", normalized: ["orchestrator", "architect", "builder:apply-fixes", "reviewer"], reset: [] });
     expect(readFile(file)).toEqual({ schemaVersion: 1, overrides: {

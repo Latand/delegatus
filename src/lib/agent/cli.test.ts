@@ -994,6 +994,17 @@ for (const engine of ["claude", "codex"] as const) test(`${engine} terminal boun
   }
 });
 
+test("fresh and resumed Codex CLI commands replace a saved retired model", () => {
+  const profile = { model: "gpt-6.1-sol", effort: "high", serviceTier: "priority" };
+  const sessionId = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+  expect(resumeSpecForSession("codex", sessionId, SANDBOX, SANDBOX)?.command).toContain("-m 'gpt-6.2-sol'");
+  for (const spec of [freshSpecFor("codex", SANDBOX, { ...profile, codexHome: SANDBOX }), resumeSpecForSession("codex", sessionId, SANDBOX, SANDBOX, profile)!]) {
+    expect(spec.command).toContain("'gpt-6.2-sol'");
+    expect(spec.command).not.toContain("gpt-6.1-sol");
+    expect(spec.launchProfile).toMatchObject({ ...profile, model: "gpt-6.2-sol" });
+  }
+});
+
 for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
   test(`${model} preserves all supported efforts in fresh and resumed Codex commands`, () => {
     for (const effort of ["low", "medium", "high", "xhigh", "max", "ultra"]) {

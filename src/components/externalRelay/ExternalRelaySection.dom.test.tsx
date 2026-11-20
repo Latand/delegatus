@@ -141,7 +141,7 @@ test("a pending pairing resumes on open: the identity to confirm, confirm sends 
   expect(owner?.textContent).toBe("The relay service says this is Person A (@person_a). Is this you?");
   await click(Array.from(host.querySelectorAll("button")).find((button) => button.textContent === "Yes, pair"));
   expect(harness.calls.find((call) => call.url === "/api/external-relay/pairings/pair-1" && call.method === "POST")?.body).toEqual({ ownerId: "owner-1" });
-  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6.1-sol" } });
+  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6.2-sol" } });
   expect(paired).toEqual(["relay-1"]);
   expect(host.querySelector("[data-external-relay=relay-1]")).toBeTruthy();
   expect(host.querySelector("[data-external-relay-connect-area]")).toBeTruthy();
@@ -234,7 +234,7 @@ test("a paired relay: poller state, last outcome and progress, per-target settin
   /* Changing the engine sends that engine's default model and clears the effort. */
   await unfold(first);
   await click(Array.from(first.querySelectorAll("[data-external-relay-engine] [role=radio]")).find((radio) => radio.textContent === "Codex"));
-  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6.1-sol", effort: null } });
+  expect(harness.calls.find((call) => call.method === "PATCH")?.body).toEqual({ target: { id: "bot-1", engine: "codex", model: "gpt-6.2-sol", effort: null } });
 });
 
 /** Picks `value` in a select as the operator would, firing its change. */
@@ -274,7 +274,7 @@ test("a target saved on a retired model keeps it selected under its label beside
   answers.relay = { relays: [relay({ targets: [
     target({ engine: "codex", model: "gpt-5.6-sol", effort: "high", answered_by: "install" }),
     target({ id: "bot-2", name: "Sales bot", engine: "claude", model: "claude-haiku-4-5", answered_by: "install" }),
-    target({ id: "bot-3", name: "Cloud bot", engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" }),
+    target({ id: "bot-3", name: "Cloud bot", engine: "codex-cloud", model: "gpt-6.2-sol", answered_by: "install" }),
   ] })], pending: [], status: [] };
   const earlier = harness.calls.length;
   const host = await mount(<ExternalRelaySection />);
@@ -286,7 +286,7 @@ test("a target saved on a retired model keeps it selected under its label beside
   expect(await modelOf("bot-1", "Support bot")).toEqual({ value: "gpt-5.6-sol", chosen: "GPT-5.6-Sol", options: [...listedModels("codex").map((option) => option.id), "gpt-5.6-sol"] });
   expect(await modelOf("bot-2", "Sales bot")).toEqual({ value: "claude-haiku-4-5", chosen: "Haiku 4.5", options: [...listedModels("claude").map((option) => option.id), "claude-haiku-4-5"] });
   // The existing Cloud selection stays selected beside the GPT-6.2 additions.
-  expect(await modelOf("bot-3", "Cloud bot")).toEqual({ value: "gpt-6.1-sol", chosen: "GPT-6.1-Sol", options: ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol"] });
+  expect(await modelOf("bot-3", "Cloud bot")).toEqual({ value: "gpt-6.2-sol", chosen: "GPT-6.2-Sol", options: ["gpt-6.2-sol", "gpt-6.2-astra"] });
   // Reading a saved choice writes nothing back.
   expect(harness.calls.slice(earlier).filter((call) => call.method === "PATCH")).toEqual([]);
 });
@@ -817,10 +817,10 @@ test("Pause reads as paused at once and the menu offers Resume; a refusal shows 
   expect(card.querySelector("[role=alert]")).not.toBeNull();
 });
 
-const CLOUD_HEADERS: Record<string, string> = { "gpt-6.1-sol": "Codex Cloud · GPT-6.1-Sol", "gpt-6.2-sol": "Codex Cloud · GPT-6.2-Sol", "gpt-6.2-astra": "Codex Cloud · GPT-6.2-Astra" };
+const CLOUD_HEADERS: Record<string, string> = { "gpt-6.2-sol": "Codex Cloud · GPT-6.2-Sol", "gpt-6.2-astra": "Codex Cloud · GPT-6.2-Astra" };
 const runningLine = (row: Element) => row.querySelector("[data-external-relay-running]")?.textContent ?? "";
 
-test.each(["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"])("a Cloud target offers and selects %s without a local account", async model => {
+test.each(["gpt-6.2-sol", "gpt-6.2-astra"])("a Cloud target offers and selects %s without a local account", async model => {
   accounts({});
   answers.relay = { relays: [relay({ targets: [target({ engine: "codex-cloud", model, answered_by: "install" })] })], pending: [], status: [] };
   route();
@@ -834,7 +834,7 @@ test.each(["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"])("a Cloud target offer
   expect(runningLine(row)).toContain(CLOUD_HEADERS[model]!);
   expect(row.querySelector('[aria-pressed="true"]')?.textContent).toBe("Codex Cloud");
   const picker = row.querySelector<HTMLSelectElement>('select[aria-label="Model · Support bot"]')!;
-  expect([...picker.options].map(option => option.value)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol"]);
+  expect([...picker.options].map(option => option.value)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra"]);
   expect(picker.value).toBe(model);
   expect(picker.selectedOptions[0]?.textContent).toBe(CLOUD_HEADERS[model]!.replace("Codex Cloud · ", ""));
   const next = model === "gpt-6.2-sol" ? "gpt-6.2-astra" : "gpt-6.2-sol";
@@ -845,7 +845,7 @@ test.each(["gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"])("a Cloud target offer
 
 test("pairing a built-in relay activates its Cloud target without a local account", async () => {
   accounts({});
-  const cloudRelay = relay({ origin: CELESTIA, targets: [target({ engine: "codex-cloud", model: "gpt-6.1-sol" })] });
+  const cloudRelay = relay({ origin: CELESTIA, targets: [target({ engine: "codex-cloud", model: "gpt-6.2-sol" })] });
   answers.relay = { relays: [], pending: [celestiaPending({ owner: OWNER })], status: [] };
   answers.pairing = { status: "awaiting_install", owner: OWNER };
   route((url, init) => {
@@ -873,7 +873,7 @@ for (const surface of ["settings", "onboarding"] as const) {
       accounts({ claude: [signedIn("main")] });
       answers.relay = { relays: [], pending: [celestiaPending({ expires_at: "2099-01-01T00:00:00Z" })], status: [] };
       answers.pairing = { status: "awaiting_install", owner: OWNER, targets: [] };
-      const clones = Array.from({ length: 5 }, (_, i) => target({ id: `clone-${i + 1}`, engine, model: engine ? "gpt-6.1-sol" : null, answered_elsewhere: true }));
+      const clones = Array.from({ length: 5 }, (_, i) => target({ id: `clone-${i + 1}`, engine, model: engine ? "gpt-6.2-sol" : null, answered_elsewhere: true }));
       const bindings = new Map(clones.map(t => [t.id, "other-install"]));
       const paired = relay({ origin: CELESTIA, targets: clones });
       route((url, init) => {
@@ -902,7 +902,7 @@ for (const locale of ["en", "uk"] as const) {
   test(`${locale} shows all three answer sources and confirms one explicit move; cancellation and failed writes preserve the route`, async () => {
     setLocale(locale);
     accounts({});
-    const clones = [target({ id: "elsewhere", name: "Shared clone", engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: true }),
+    const clones = [target({ id: "elsewhere", name: "Shared clone", engine: "codex-cloud", model: "gpt-6.2-sol", answered_elsewhere: true }),
       target({ id: "here", answered_by: "install" }), target({ id: "service" })];
     answers.relay = { relays: [relay({ targets: clones })], pending: [], status: [] };
     const nativePrompts: string[] = [];
@@ -1032,7 +1032,7 @@ test("pairing still adopts a service-only Cloud clone", async () => {
   accounts({});
   answers.relay = { relays: [], pending: [celestiaPending({ expires_at: "2099-01-01T00:00:00Z" })], status: [] };
   answers.pairing = { status: "awaiting_install", owner: OWNER, targets: [] };
-  const paired = relay({ origin: CELESTIA, targets: [target({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: false })] });
+  const paired = relay({ origin: CELESTIA, targets: [target({ engine: "codex-cloud", model: "gpt-6.2-sol", answered_elsewhere: false })] });
   route((url, init) => url.endsWith("/pairings/pair-1") && init?.method === "POST" ? jsonResponse({ relay: paired }) : init?.method === "PATCH" ? jsonResponse({ target: {} }) : undefined);
   const host = await mount(<ExternalRelaySection />);
   await click(Array.from(host.querySelectorAll("button")).find(button => button.textContent === "Yes, pair"));
@@ -1041,7 +1041,7 @@ test("pairing still adopts a service-only Cloud clone", async () => {
 
 test("reopening a created clone now answered elsewhere finishes local setup without taking it back", async () => {
   accounts({});
-  const paired = relay({ origin: CELESTIA, features: ["clone_create"], targets: [target({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: true })],
+  const paired = relay({ origin: CELESTIA, features: ["clone_create"], targets: [target({ engine: "codex-cloud", model: "gpt-6.2-sol", answered_elsewhere: true })],
     cloneCreated: { request_id: "created-elsewhere", target_id: "bot-1", name: "Support bot", username: "support_bot", photo_failed: false, createdAt: "2026-11-17T12:00:00Z" } });
   answers.relay = { relays: [paired], pending: [], status: [] };
   route((url, init) => url.endsWith("/clone-requests/created-elsewhere") && init?.method === "DELETE" ? new Response(null, { status: 204 }) : undefined);
@@ -1055,7 +1055,7 @@ for (const surface of ["settings", "onboarding"] as const) {
     accounts({ claude: [signedIn("main")] });
     answers.relay = { relays: [], pending: [celestiaPending({ expires_at: "2099-01-01T00:00:00Z" })], status: [] };
     answers.pairing = { status: "awaiting_install", owner: OWNER, targets: [] };
-    const clones = Array.from({ length: 5 }, (_, i) => target({ id: `clone-${i + 1}`, engine: "codex-cloud", model: "gpt-6.1-sol" }));
+    const clones = Array.from({ length: 5 }, (_, i) => target({ id: `clone-${i + 1}`, engine: "codex-cloud", model: "gpt-6.2-sol" }));
     const paired = relay({ origin: CELESTIA, targets: clones });
     let pairedCount = 0;
     route((url, init) => {

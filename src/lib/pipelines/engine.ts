@@ -1,3 +1,4 @@
+import { modelForLaunch } from "@/lib/agent/models";
 import { restoreRejectedPublicationRepair } from "./publicationRepairRollback";
 import { briefTextSnapshot, withBriefWarnings, type BriefTextSnapshot, type BriefWarning } from "./briefWarnings";
 import { DELIVERY_UNVERIFIED_AFTER_ACTUATION } from "@/lib/runtime/unverifiedDeliveryReasons";
@@ -823,6 +824,8 @@ async function spawnPipelineAgent(
   preparePrompt?: () => Promise<string>,
   admissionPhase?: (kind: "host" | "writer") => Promise<number>,
 ): Promise<PipelineStageSpawn> {
+  // A reserved activation may still carry a role bound by an earlier release.
+  input = { ...input, role: { ...input.role, model: modelForLaunch(input.role.engine, input.role.model) } };
   // Standalone callers supply one cutoff; stage admission checkpoints host
   // work and writer acquisition separately through the phase callback.
   let deadline = input.spawnAdmissionDeadline ?? Infinity;
@@ -4546,6 +4549,7 @@ async function newAttempt(pipeline: Pipeline, stage: PipelineStage, now: string,
 function bindAttemptDefinition(stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): void {
   if (attempt.definition) return;
   attempt.effectiveRole = structuredClone(stage.effectiveRole);
+  attempt.effectiveRole.model = modelForLaunch(attempt.effectiveRole.engine, attempt.effectiveRole.model);
   attempt.definition = {
     boundAt: ports.now(),
     ...(stage.runtime ? { runtime: stage.runtime } : {}),
@@ -10013,13 +10017,16 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         if (!await checkpoint(cloud)) return;
       }
       const bound = attemptStage(stage, attempt);
+      // Legacy reserved attempts may already be bound. Poll accepted work by its original receipt.
+      const launchModel = modelForLaunch(engine, bound.model!);
+      const model = cloud.taskId && cloud.thread?.hosted?.model !== launchModel ? bound.model! : launchModel;
       const provider = runtime === "claude-cloud" ? ports.claudeCloudClient : ports.cloudClient;
-      const transportError = cloudTransportError(provider, bound.model!, attempt.effectiveRole.effort, label);
+      const transportError = cloudTransportError(provider, model, attempt.effectiveRole.effort, label);
       if (transportError) { if (!provider) throw new HostedCloudError(transportError, "unavailable"); throw new Error(transportError); }
       const client = provider!;
-      const modelMatches = (reported: string | null) => !!reported && (client.sameModel?.(reported, bound.model!) ?? reported === bound.model);
+      const modelMatches = (reported: string | null) => !!reported && (client.sameModel?.(reported, model) ?? reported === model);
       const resolve = (requestedId: string | null, unavailableIds: string[] = []) => {
-        const request = { project: pipeline.project, requestedId, unavailableIds, model: attempt.effectiveRole.model, requireCapacity: requestedId === null };
+        const request = { project: pipeline.project, requestedId, unavailableIds, model, requireCapacity: requestedId === null };
         return ports.resolveProjectSpawn?.(engine, request) ?? accountManager.resolveProjectSpawn(engine, request);
       };
       const assertLane = () => {
@@ -10036,7 +10043,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
         return () => {
           assertLane();
           if (credentialVersion !== undefined && cloudAccountVersion(account) !== credentialVersion) throw new Error(`${label} account credentials changed`);
-          if (!cloud.taskId && !recovering) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine, model: attempt.effectiveRole.model });
+          if (!cloud.taskId && !recovering) assertProactivePipelineExecution(reader.read() ?? pipeline, "dispatch", { id: account.accountId, engine, model });
           const current = resolve(account.accountId);
           if (current.kind !== "available") throw new Error(`${label} account ${current.kind}`);
           if (current.account.accountId !== account.accountId || current.account.home !== account.home) throw new Error(`${label} account changed`);
@@ -10090,7 +10097,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
               if (!repository) { reasons.push(`${label} requires a GitHub repository`); continue; }
               const prepared = await boundedCloudCall(() => { current(); return client.prepareEnvironment!({ project: pipeline.project,
                 account: candidate, repository, ref: pipeline.baseBranch, signal: abort.signal, assertCurrent: current,
-                now: () => unixMs(ports.now()), model: bound.model! }); }, abort.signal);
+                now: () => unixMs(ports.now()), model }); }, abort.signal);
               current();
               if (prepared.state === "ready") {
                 eligible.push(candidate); environments.set(candidate.accountId, prepared);
@@ -10195,7 +10202,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           const submitInput: CloudStageSubmitInput = { environmentId: cloud.environmentId,
             environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
             branch: cloud.branch, headSha: cloud.headSha, prompt, preparePrompt: prepareCloudPrompt,
-            writable: bound.effectiveRole.access === "read-write", model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
+            writable: bound.effectiveRole.access === "read-write", model, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
             account, ...(cloud.environmentPrincipal ? { environmentPrincipal: cloud.environmentPrincipal } : {}), signal: abort.signal, assertCurrent,
             ...(runtime === "claude-cloud" ? { claudeSubmission: cloud.claudeSubmission, checkpointSubmission: async submission => {
               assertCurrent(); cloud.claudeSubmission = submission;
@@ -10224,7 +10231,7 @@ function startCloudStageJob(pipeline: Pipeline, stage: PipelineStage, attempt: P
           submitted = await performanceSpans.wait("controller.job-wait", () => boundedCloudCall(() => { assertCurrent(); submissionDispatched = true; return client.submit({ environmentId: cloud.environmentId,
             environmentScope: { repository: githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? "", ref: pipeline.baseBranch },
             branch: cloud.branch, headSha: cloud.headSha, prompt, preparePrompt: prepareCloudPrompt,
-            writable: bound.effectiveRole.access === "read-write", model: bound.model!, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
+            writable: bound.effectiveRole.access === "read-write", model, reasoningEffort: attempt.effectiveRole.effort, allowProviderModelFallback: false,
             account, ...(cloud.environmentPrincipal ? { environmentPrincipal: cloud.environmentPrincipal } : {}), signal: abort.signal, assertCurrent }); }, abort.signal));
         }
         if (!validCloudTaskReference(submitted.taskId, submitted.taskUrl)
@@ -15132,7 +15139,7 @@ export function normalizeStages(
       && !cloudStageConfigurationError({ ...input, runtime: "codex-cloud", model: resolved.role.model, effectiveRole: resolved.role });
     const runtime = input.runtime ?? (preservedStage ? preservedStage.runtime : inheritsCloud ? "codex-cloud" : undefined);
     const normalizedStage: PipelineStage = { ...input, ...(runtime ? { runtime } : {}),
-      ...(isCloudRuntime(runtime) && input.model === undefined ? { model: resolved.role.model } : {}),
+      ...((!preservedStage && input.model !== undefined) || (isCloudRuntime(runtime) && input.model === undefined) ? { model: resolved.role.model } : {}),
       effectiveRole: structuredClone(resolved.role) };
     // Structural edits keep saved edge semantics, including legacy advance.
     // New definitions and explicit set-edge writes freeze today's default.
@@ -18657,7 +18664,7 @@ async function applyPipelinePatch(
         );
         if (!resolved.role) return { error: resolved.error ?? "invalid stage role", status: 400 };
         const cloudError = cloudStageConfigurationError({ ...target, runtime: req.runtime ?? target.runtime,
-          model: req.model !== undefined ? req.model : isCloudRuntime(req.runtime ?? target.runtime) ? resolved.role.model : resetRuntime ? undefined : target.model, effectiveRole: resolved.role });
+          model: req.model !== undefined || isCloudRuntime(req.runtime ?? target.runtime) ? resolved.role.model : resetRuntime ? undefined : target.model, effectiveRole: resolved.role });
         if (cloudError) return { error: cloudError, status: 400 };
         /* The store keeps a stage's input-level role/engine/model/effort
            consistent with its effectiveRole (isStage), so mirror the resolution

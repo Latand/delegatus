@@ -1,3 +1,4 @@
+import { modelForLaunch } from "@/lib/agent/models";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { AgentEngine } from "@/lib/agent/cli";
 import crypto from "node:crypto";
@@ -47,6 +48,7 @@ import {
   migrationSuccessorLaunchProfile,
   sameGenerationHostEvidence,
   sameProviderReceiptOutcome,
+  type LaunchProfile,
   type HistoryCopyPort,
   type HeldDelivery,
   type MigrationEngine,
@@ -987,6 +989,7 @@ export async function advanceConversationMigration(
   const engine = conversation.engine;
   if (engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
   if (reconfigureOwnsMigration(conversation, options.reconfigureOperationId)) return conversation;
+  const launchProfile = (profile: LaunchProfile): LaunchProfile => ({ ...profile, model: modelForLaunch(engine, profile.model) });
   let migration = conversation.migration;
   let assertSourceAuthority = () => {};
   if (migration.creditGuard) {
@@ -998,7 +1001,7 @@ export async function advanceConversationMigration(
       if (!current || !source) throw new Error("paid-credit recovery source is unavailable");
       const selection = accountManager.resolveProjectSpawn(engine, {
         project: conversationProjectKey(current.projectOwnership, source.launchProfile),
-        model: source.launchProfile.model, requestedId: migration.targetId, requireCapacity: true,
+        model: modelForLaunch(engine, source.launchProfile.model), requestedId: migration.targetId, requireCapacity: true,
       });
       if (selection.kind !== "available" || selection.account.accountId !== migration.targetId) {
         throw new Error("paid-credit recovery target is no longer admissible");
@@ -1100,7 +1103,7 @@ export async function advanceConversationMigration(
           starting.id,
           migration.revision,
           ["successor-starting"],
-          { successorLaunchProfile: migrationSuccessorLaunchProfile(startingSource.launchProfile) },
+          { successorLaunchProfile: launchProfile(migrationSuccessorLaunchProfile(startingSource.launchProfile)) },
         ));
         migration = conversation.migration!;
       }
@@ -1108,7 +1111,7 @@ export async function advanceConversationMigration(
       const creationOwner = { operationId: migration.operationId, revision: migration.revision };
       const successorSource = {
         ...source,
-        launchProfile: migration.successorLaunchProfile!,
+        launchProfile: launchProfile(migration.successorLaunchProfile!),
       };
       if (engine === "codex") assertSourceAuthority = captureCodexSourceAuthority(registry, conversationId, source);
       const assertCreation = () => {
@@ -1148,8 +1151,7 @@ export async function advanceConversationMigration(
     const source = conversation.generations.find((generation) => generation.id === migration.sourceGenerationId)
       ?? conversation.generations.at(-1);
     if (!source) throw new Error("conversation has no source generation");
-    const successorProfile = migration.successorLaunchProfile
-      ?? migrationSuccessorLaunchProfile(source.launchProfile);
+    const successorProfile = launchProfile(migration.successorLaunchProfile ?? migrationSuccessorLaunchProfile(source.launchProfile));
     if (!receipt || receipt.operationId !== migration.operationId) throw new Error("persisted successor receipt operation does not match");
     const publicationConversationId = conversation.id;
     const publicationReceipt = receipt;

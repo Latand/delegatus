@@ -62,7 +62,7 @@ function fakeRpc(output: string, code = 0) {
     cwd,
     async call(method, params) {
       calls.push({ method, params });
-      if (method === "thread/start") return { model: "gpt-6.1-sol", thread: { id: "thread-fixture", environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd: cwd }] } };
+      if (method === "thread/start") return { model: "gpt-6.2-sol", thread: { id: "thread-fixture", environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: config.environmentId, cwd: cwd }] } };
       if (method === "command/exec") { uploadCommand = String((params.command as string[])[2]); return { exitCode: 0, stdout: "", stderr: "" }; }
       if (method === "turn/start") {
         const text = (params.input as { text: string }[])[0]!.text;
@@ -81,7 +81,7 @@ test("hosted launch uses the required Cloud profile and exact tree command", asy
   const transport = new AppServerCloudTransport(config, async () => fake.rpc);
   expect(await transport.run(job)).toEqual(verdict(0));
   expect(fake.calls.find(call => call.method === "thread/start")?.params).toMatchObject({
-    model: "gpt-6.1-sol", approvalPolicy: "never", sandbox: "danger-full-access", ephemeral: false, allowProviderModelFallback: false,
+    model: "gpt-6.2-sol", approvalPolicy: "never", sandbox: "danger-full-access", ephemeral: false, allowProviderModelFallback: false,
     environments: [{ environmentConfigId: config.environmentId, cwd: cwd }],
   });
   expect(fake.calls.find(call => call.method === "turn/start")?.params).toMatchObject({ threadId: "thread-fixture", sandboxPolicy: { type: "dangerFullAccess" } });
@@ -404,7 +404,7 @@ for (const mismatch of ["model", "environment", "cwd"]) test(`a resolved ${misma
   const original = fake.rpc.call;
   fake.rpc.call = async (method, params) => {
     if (method === "thread/start") return {
-      model: mismatch === "model" ? "other-model" : "gpt-6.1-sol",
+      model: mismatch === "model" ? "other-model" : "gpt-6.2-sol",
       thread: { id: "thread-fixture", environments: [{ environmentId: "ccarenv_fixture", environmentConfigId: mismatch === "environment" ? "other" : config.environmentId,
         cwd: mismatch === "cwd" ? "/workspace/other" : cwd }] },
     };

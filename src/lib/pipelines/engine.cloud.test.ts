@@ -216,7 +216,7 @@ test("Cloud builder setup enabled after submission retains remote task custody",
   await setProjectSetupRecipe(lane().project, null);
   await submitted(h);
   await setProjectSetupRecipe(lane().project, { ...setupRecipe, hash: reviewed.hash, approvedAt: h.ports.now() });
-  h.ports.cloudClient!.poll = async () => ({ state: "pending", model: "gpt-6.1-sol" });
+  h.ports.cloudClient!.poll = async () => ({ state: "pending", model: "gpt-6.2-sol" });
   await step(h);
   expect(attempt().cloud?.taskId).toBe(taskId); expect(attempt().cloud?.phase).toBe("polling");
   expect(attempt().cloud?.fallback).toBeUndefined(); expect(lane().state).toBe("running");
@@ -241,10 +241,10 @@ test("Cloud builder setup enabled during catalog admission prevents submission",
 });
 
 test("cloud reviewers submit the role scaffold, relay and lane facts, settle through the local verdict path", async () => {
-  const { h, submits, reads } = await fixture();
+  const { h, submits, reads } = await fixture({ stages: [{ ...stage, model: "gpt-6.1-sol" }] });
   await submitted(h);
   expect(submits).toHaveLength(1);
-  expect(submits[0]).toMatchObject({ environmentId: "env-fixture", branch: lane().branch, model: "gpt-6.1-sol", reasoningEffort: "xhigh", allowProviderModelFallback: false, account: { accountId: "cloud-account" } });
+  expect(submits[0]).toMatchObject({ environmentId: "env-fixture", branch: lane().branch, model: "gpt-6.2-sol", reasoningEffort: "xhigh", allowProviderModelFallback: false, account: { accountId: "cloud-account" } });
   const composed = await composeStageText(lane(), lane().stages[0]!, attempt().effectiveRole, attempt().input ?? "");
   expect(submits[0]!.prompt.slice(0, composed.length)).toBe(composed);
   expect(attempt().definition?.runtime).toBe("codex-cloud");
@@ -252,7 +252,7 @@ test("cloud reviewers submit the role scaffold, relay and lane facts, settle thr
   await step(h); await step(h);
   expect(reads).toHaveLength(1);
   expect(h.spawnInputs).toHaveLength(0);
-  expect(attempt().cloud?.model).toBe("gpt-6.1-sol");
+  expect(attempt().cloud?.model).toBe("gpt-6.2-sol");
   expect(attempt().verdict).toMatchObject({ status: "pass", findings: [] });
   expect(attempt().output).toBe("All checked.");
 });
@@ -330,7 +330,7 @@ for (const detail of ["Environment setup failed: missing dependency", "Cloud tas
   test(`a confirmed Cloud failure stops with its diagnostic: ${detail} (legacy: ${legacy})`, async () => {
   const { h } = await fixture();
   const error = `Codex Cloud turn failed: ${detail}`;
-  h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.1-sol", error });
+  h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.2-sol", error });
   await submitted(h);
   const accountId = attempt().accountId!;
   if (legacy) {
@@ -352,7 +352,7 @@ test("confirmed Cloud failure cannot switch to an allowed local account", async 
   const { h, submits } = await fixture();
   await submitted(h);
   const originalAccount = attempt().accountId!;
-  h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.1-sol", error: "Cloud run timed out" });
+  h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.2-sol", error: "Cloud run timed out" });
   await step(h);
   expect(attempt().cloud?.failureConfirmed).toBe(true);
   h.ports.allowedAccountIds = () => ["replacement-account"];
@@ -450,7 +450,7 @@ test("cloud verifier findings use the same normalization, severity ranking and f
   record.stages[0]!.role!.roleId = "verifier";
   record.stages[0]!.effectiveRole.roleId = "verifier";
   savePipelines([record]);
-  h.ports.cloudClient!.readFinalMessage = async () => ({ model: "gpt-6.1-sol", message:
+  h.ports.cloudClient!.readFinalMessage = async () => ({ model: "gpt-6.2-sol", message:
     'Issues.\n```json\n{"status":"fail","findings":[{"severity":"P3","file":"a.ts","line":4,"summary":"cosmetic"},{"severity":"P1","file":"b.ts","line":8,"summary":"broken"}]}\n```' });
   await submitted(h); await step(h); await step(h);
   expect({ state: attempt().state, error: attempt().error }).toMatchObject({ state: "failed" });
@@ -459,8 +459,8 @@ test("cloud verifier findings use the same normalization, severity ranking and f
 
 test.each(["local", "codex-cloud"] as const)("cloud review findings activate a %s fix stage with the previous output", async runtime => {
   const { h, submits } = await fixture({ stages: [{ ...stage, onFail: { to: "fix", maxRounds: 1 } },
-    { id: "fix", kind: "run", runtime, role: { roleId: "builder" }, engine: "codex", model: "gpt-6.1-sol", prompt: "Fix {{prev.output}}", next: null }] });
-  h.ports.cloudClient!.readFinalMessage = async () => ({ model: "gpt-6.1-sol", message:
+    { id: "fix", kind: "run", runtime, role: { roleId: "builder" }, engine: "codex", model: "gpt-6.2-sol", prompt: "Fix {{prev.output}}", next: null }] });
+  h.ports.cloudClient!.readFinalMessage = async () => ({ model: "gpt-6.2-sol", message:
     'Fix required.\n```json\n{"status":"fail","findings":["P1 — a.ts:8 broken"]}\n```' });
   await submitted(h); await step(h); await step(h);
   expect(lane().cursor?.stageId).toBe("fix");
@@ -501,7 +501,7 @@ test("missing environment stops a required Cloud stage; an internal lane retains
 
 test("polling has durable bounded backoff and expiry retains remote custody", async () => {
   const { h, reads } = await fixture();
-  h.ports.cloudClient!.poll = async input => { reads.push(input); return { state: "pending", model: "gpt-6.1-sol" }; };
+  h.ports.cloudClient!.poll = async input => { reads.push(input); return { state: "pending", model: "gpt-6.2-sol" }; };
   await submitted(h);
   for (const delay of [2000, 4000, 8000, 16000, 30000, 30000]) {
     await step(h);
@@ -524,7 +524,7 @@ test("polling has durable bounded backoff and expiry retains remote custody", as
   await step(h); await step(h);
   expect(h.spawnInputs).toHaveLength(0);
   expect(reads).toHaveLength(6);
-  h.ports.cloudClient!.poll = async input => { reads.push(input); return { state: "completed", model: "gpt-6.1-sol" }; };
+  h.ports.cloudClient!.poll = async input => { reads.push(input); return { state: "completed", model: "gpt-6.2-sol" }; };
   const n = attempt().n;
   expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
   await step(h); await step(h);
@@ -535,13 +535,13 @@ test("polling has durable bounded backoff and expiry retains remote custody", as
 
 test.each(["submission", "read", "final-read", "oversized-message", "invalid-receipt", "missing-verdict", "contradiction"])("cloud failure %s is explicit", async kind => {
   const { h, submits } = await fixture();
-  if (kind === "oversized-message") h.ports.cloudClient!.readFinalMessage = async () => ({ message: "x".repeat(1024 * 1024 + 1), model: "gpt-6.1-sol" });
+  if (kind === "oversized-message") h.ports.cloudClient!.readFinalMessage = async () => ({ message: "x".repeat(1024 * 1024 + 1), model: "gpt-6.2-sol" });
   if (kind === "invalid-receipt") h.ports.cloudClient!.submit = async () => ({ taskId: "invalid receipt", taskUrl });
   if (kind === "submission") h.ports.cloudClient!.submit = async () => { throw new Error("cloud submission unavailable"); };
   if (kind === "read") h.ports.cloudClient!.poll = async () => { throw new Error("cloud backend unavailable"); };
   if (kind === "final-read") h.ports.cloudClient!.readFinalMessage = async () => { throw new Error("cloud final message unavailable"); };
-  if (kind === "missing-verdict") h.ports.cloudClient!.readFinalMessage = async () => ({ model: "gpt-6.1-sol", message: "No verdict" });
-  if (kind === "contradiction") h.ports.cloudClient!.readFinalMessage = async () => ({ model: "gpt-6.1-sol", message: '```json\n{"status":"pass","findings":["P1 — broken"]}\n```' });
+  if (kind === "missing-verdict") h.ports.cloudClient!.readFinalMessage = async () => ({ model: "gpt-6.2-sol", message: "No verdict" });
+  if (kind === "contradiction") h.ports.cloudClient!.readFinalMessage = async () => ({ model: "gpt-6.2-sol", message: '```json\n{"status":"pass","findings":["P1 — broken"]}\n```' });
   for (let i = 0; i < 5 && ["provisioning", "running"].includes(lane().state); i++) await step(h);
   expect(lane().state).toBe("needs_decision");
   const reasons = { submission: "cloud submission unavailable", read: "cloud backend unavailable", "failed-task": "cloud environment setup failed",
@@ -702,7 +702,7 @@ test("a late poll result cannot overwrite a superseding cloud task receipt", asy
 
 test("the indexed controller polls a cloud stage only when its durable backoff is due", async () => {
   const { h, reads } = await fixture();
-  h.ports.cloudClient!.poll = async input => { reads.push(input); return { state: "pending", model: "gpt-6.1-sol" }; };
+  h.ports.cloudClient!.poll = async input => { reads.push(input); return { state: "pending", model: "gpt-6.2-sol" }; };
   for (let i = 0; i < 4 && !lane().runs[0]?.attempts.at(-1)?.cloud?.taskId; i++) {
     await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
   }
@@ -742,9 +742,9 @@ test("account revocation after a poll prevents reading the final message", async
   let finalReads = 0;
   h.ports.cloudClient!.poll = async () => {
     h.ports.resolveProjectSpawn = () => ({ kind: "not_allowed", accountId: "forbidden", allowedAccountIds: ["allowed"] });
-    return { state: "completed", model: "gpt-6.1-sol" };
+    return { state: "completed", model: "gpt-6.2-sol" };
   };
-  h.ports.cloudClient!.readFinalMessage = async () => { finalReads++; return { message: pass, model: "gpt-6.1-sol" }; };
+  h.ports.cloudClient!.readFinalMessage = async () => { finalReads++; return { message: pass, model: "gpt-6.2-sol" }; };
   await step(h); await step(h);
   expect(finalReads).toBe(0); expect(attempt().error).toContain("not_allowed");
 });
@@ -783,16 +783,16 @@ test("edits after activation preserve the explicit model bound to the cloud atte
   record.stages[0]!.effectiveRole.model = "gpt-6-sol";
   savePipelines([record]);
   await step(h); await step(h);
-  expect(submits[0]!.model).toBe("gpt-6.1-sol");
-  expect(attempt().cloud!.model).toBe("gpt-6.1-sol");
+  expect(submits[0]!.model).toBe("gpt-6.2-sol");
+  expect(attempt().cloud!.model).toBe("gpt-6.2-sol");
   expect(attempt().state).toBe("passed");
 });
 
 test.each(["prompt", "output", "error"])("cloud %s never retains a credential-shaped value", async seam => {
   const secret = "sk-" + "x".repeat(48);
   const { h, submits } = await fixture({ stages: [{ ...stage, prompt: "Review " + secret }] });
-  if (seam === "output") h.ports.cloudClient!.readFinalMessage = async () => ({ message: secret + "\n" + pass, model: "gpt-6.1-sol" });
-  if (seam === "error") h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.1-sol", error: secret });
+  if (seam === "output") h.ports.cloudClient!.readFinalMessage = async () => ({ message: secret + "\n" + pass, model: "gpt-6.2-sol" });
+  if (seam === "error") h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.2-sol", error: secret });
   await submitted(h); await step(h); await step(h);
   expect(submits[0]!.prompt).not.toContain(secret);
   expect(attempt().output ?? "").not.toContain(secret);
@@ -813,19 +813,19 @@ test("stage overrides validate the proposed explicit cloud model before copying 
 test("hosted thread and turn handles survive restart and reach poll and final-message reads", async () => {
   const { h } = await fixture();
   const thread = { threadId: "00000000-0000-0000-0000-000000000000", turnId: "hosted-turn-1",
-    hosted: { environmentId: "ccarenv_fixture", cwd: "/workspace/project", model: "gpt-6.1-sol" } };
+    hosted: { environmentId: "ccarenv_fixture", cwd: "/workspace/project", model: "gpt-6.2-sol" } };
   const hostedUrl = `codex://threads/${thread.threadId}?hostId=durable`;
   h.ports.cloudClient!.submit = async () => ({ taskId: thread.threadId, taskUrl: hostedUrl, thread });
   await submitted(h, thread.threadId);
   expect(attempt().cloud?.taskUrl).toBe(hostedUrl);
-  expect(attempt().cloud?.model).toBe("gpt-6.1-sol");
+  expect(attempt().cloud?.model).toBe("gpt-6.2-sol");
   const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
     env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8",
   });
   expect(child.status).toBe(0); expect(JSON.parse(child.stdout).thread).toEqual(thread);
   const reads: string[] = [];
-  h.ports.cloudClient!.poll = async input => { expect(input.thread).toEqual(thread); reads.push("poll"); return { state: "completed", model: "gpt-6.1-sol" }; };
-  h.ports.cloudClient!.readFinalMessage = async input => { expect(input.thread).toEqual(thread); reads.push("final"); return { message: pass, model: "gpt-6.1-sol" }; };
+  h.ports.cloudClient!.poll = async input => { expect(input.thread).toEqual(thread); reads.push("poll"); return { state: "completed", model: "gpt-6.2-sol" }; };
+  h.ports.cloudClient!.readFinalMessage = async input => { expect(input.thread).toEqual(thread); reads.push("final"); return { message: pass, model: "gpt-6.2-sol" }; };
   await step(h); await step(h);
   expect(reads).toEqual(["poll", "final"]); expect(attempt().state).toBe("passed");
 });
@@ -848,7 +848,7 @@ test.each(["delivery", "disabled-environment", "changed-environment"].flatMap(ki
     const submit = h.ports.cloudClient!.submit;
     h.ports.cloudClient!.submit = async input => { ready(); await held; return submit(input); };
   } else {
-    h.ports.cloudClient!.poll = async () => { ready(); await held; return { state: "completed", model: "gpt-6.1-sol" }; };
+    h.ports.cloudClient!.poll = async () => { ready(); await held; return { state: "completed", model: "gpt-6.2-sol" }; };
   }
   try {
     await tickPipelines([], h.ports); await tickPipelines([], h.ports);

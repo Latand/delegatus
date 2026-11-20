@@ -1,3 +1,4 @@
+import { modelForLaunch } from "@/lib/agent/models";
 import { incomingDeliveryOutcome, normalizeIncomingDeliveryHealth, type IncomingDeliveryHealth } from "@/lib/runtime/incomingDeliveryHealth";
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
 import type { AgentProjection, AgentStateJournal, AgentStateMetrics } from "@/lib/agentState/model";
@@ -7966,6 +7967,7 @@ export class AgentRegistry {
       const profile = input.purpose === "resume-successor" && currentProfile
         ? mergeResumeLaunchProfile(currentProfile, requestedProfile)
         : requestedProfile;
+      profile.model = modelForLaunch(input.engine, profile.model);
       /* Reviewer/verifier conversations never regain native multi-agent
          tooling (#393): the sticky-true resume merge and any historically
          corrupted profile are both overridden here, so restart adoption and

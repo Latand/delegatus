@@ -45,7 +45,7 @@ test.each(cases)(
       await tickPipelines([], h.ports); await tickPipelines([], h.ports);
       const current = () => loadPipelines().find(row => row.id === lane.id)!;
       const original = current().runs[0]!.attempts[0]!;
-      expect(original).toMatchObject({ effectiveRole: { engine: sourceEngine, model: sourceModel, effort: "high" },
+      expect(original).toMatchObject({ effectiveRole: { engine: sourceEngine, model: sourceEngine === "codex" ? "gpt-6.2-sol" : sourceModel, effort: "high" },
         definition: { account: "account-a" } });
       h.durableTurns.set(original.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
       if (action === "resume" || action === "retry-stage") expect((await patchPipeline(lane.id, { action: "pause" }, h.ports)).error).toBeUndefined();

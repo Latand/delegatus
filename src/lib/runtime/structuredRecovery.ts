@@ -1,3 +1,4 @@
+import { modelForLaunch } from "@/lib/agent/models";
 import { withHostStopOrigin } from "./hostExit";
 import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
@@ -433,6 +434,7 @@ function candidateFor(
     ?? durableSemanticTitle(entry?.launchProfile?.title, 120);
   const profile = emptyLaunchProfile({
     ...inheritedProfile,
+    model: modelForLaunch(conversation.engine, inheritedProfile.model),
     title: inheritedTitle ?? derivedSpawnTitle(
       "recovery",
       inheritedProfile.goal?.objective ?? inheritedProfile.cwd,

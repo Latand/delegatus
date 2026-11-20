@@ -165,7 +165,7 @@ const stamp = (value: string, locale: string) => {
   return date.toLocaleString(localeTag(locale), { year, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 };
 
-const modelLabel = (engine: RelayEngine | "codex-cloud" | null, model: string | null) => engine === "codex-cloud" ? `Codex Cloud · ${model ? ENGINE_MODELS.codex.find((item) => item.id === model)?.label ?? model : ENGINE_MODELS.codex.find((item) => item.id === "gpt-6.1-sol")?.label}` : engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
+const modelLabel = (engine: RelayEngine | "codex-cloud" | null, model: string | null) => engine === "codex-cloud" ? `Codex Cloud · ${model ? ENGINE_MODELS.codex.find((item) => item.id === model)?.label ?? model : ENGINE_MODELS.codex.find((item) => item.id === defaultModelFor("codex"))?.label}` : engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
 
 const NUMBER = `h-7 rounded-control border border-border bg-card px-2 text-ui text-primary tabular-nums disabled:opacity-50 max-sm:h-11 max-sm:text-body ${FOCUS}`;
 const PHONE_SELECT = "max-sm:h-11 max-sm:text-body";
@@ -523,7 +523,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
               <EngineRadioGroup engine={(target.engine === "codex-cloud" ? "" : target.engine ?? "") as RelayEngine} disabled={actions.busy}
                 onChange={(next) => { const engine = next as RelayEngine; if (engine !== target.engine) actions.patchTarget(target, { engine, model: defaultModelFor(engine), effort: null }); }} />
               <button type="button" aria-pressed={target.engine === "codex-cloud"} disabled={actions.busy}
-                className={QUIET} onClick={() => actions.patchTarget(target, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null })}>Codex Cloud</button>
+                className={QUIET} onClick={() => actions.patchTarget(target, { engine: "codex-cloud", model: defaultModelFor("codex"), effort: null })}>Codex Cloud</button>
             </div>
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               <Select aria-label={name("externalRelay.target.model")} title={t("externalRelay.target.model")} value={target.model ?? ""} disabled={actions.busy || !target.engine} className={`min-w-0 flex-1 ${PHONE_SELECT}`}

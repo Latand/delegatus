@@ -23,7 +23,7 @@ export const taskId = "current-review-1";
 export const taskUrl = `https://example.com/cloud/${taskId}`;
 
 export const stage: PipelineStageInput = { id: "review", kind: "run", runtime: "codex-cloud", role: { roleId: "reviewer" },
-  engine: "codex", model: "gpt-6.1-sol", effort: "xhigh", prompt: "Review {{task}}. {{prev.output}}", next: null };
+  engine: "codex", model: "gpt-6.2-sol", effort: "xhigh", prompt: "Review {{task}}. {{prev.output}}", next: null };
 
 export const pass = 'All checked.\n\n```json\n{"status":"pass","findings":[]}\n```';
 
@@ -54,7 +54,7 @@ export async function fixture(options: { accountId?: string; enabled?: boolean; 
   const submits: Parameters<CloudStageClient["submit"]>[0][] = [];
   const reads: Parameters<CloudStageClient["poll"]>[0][] = [];
   const runtime = options.stages?.[0]?.runtime ?? "codex-cloud";
-  const model = runtime === "claude-cloud" ? "opus" : "gpt-6.1-sol";
+  const model = runtime === "claude-cloud" ? "opus" : "gpt-6.2-sol";
   h.ports.resolveProjectSpawn = (engine, request) => ({ kind: "available", account: {
     engine, accountId: request.requestedId ?? options.accountId ?? "cloud-account", kind: "managed", home: path.resolve("fixture-account"), transcriptRoot: path.resolve("fixture-account"), env: { NODE_ENV: "test" },
   } });

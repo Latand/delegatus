@@ -13,7 +13,7 @@ import { newTargetSettings } from "./store";
 
 test("new relay targets use Codex Cloud without local account admission", () => {
   expect(newTargetSettings({ target_id: "target", name: "Support", answered_by: "install", fallback: "service" })).toMatchObject({
-    engine: "codex-cloud", model: "gpt-6.1-sol",
+    engine: "codex-cloud", model: "gpt-6.2-sol",
   });
 });
 
@@ -251,7 +251,7 @@ for (const ephemeral of [true, false, undefined]) test(`private Cloud refuses in
   } finally { if (oldUrl === undefined) delete process.env.LLV_CODEX_CLOUD_URL; else process.env.LLV_CODEX_CLOUD_URL = oldUrl; }
 });
 
-for (const model of [undefined, "gpt-6.2-sol", "gpt-6.2-astra"])
+for (const model of [undefined, "gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"])
 test.each([false, true])(`Cloud WebSocket sends the selected model ${model ?? "default"} and exact text (fullAccess=%s)`, async (fullAccess) => {
   const oldUrl = process.env.LLV_CODEX_CLOUD_URL;
   process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
@@ -277,7 +277,7 @@ test.each([false, true])(`Cloud WebSocket sends the selected model ${model ?? "d
   }, async () => "/workspace/fixture");
   try {
     expect(await transport({ model, effort: "max", prompt: "exact composed input", environmentId: "repo-env", fullAccess, timeoutMs: 1000, signal: new AbortController().signal })).toBe("answer");
-    expect(sent.find(call => call.method === "thread/start")?.params).toMatchObject({ model: model ?? "gpt-6.1-sol", approvalPolicy: "never", serviceTier: "ultrafast", environments: [{ environmentConfigId: "repo-env", cwd: "/workspace/fixture" }], sandbox: fullAccess ? "danger-full-access" : "read-only" });
+    expect(sent.find(call => call.method === "thread/start")?.params).toMatchObject({ model: model === "gpt-6.2-astra" ? model : "gpt-6.2-sol", allowProviderModelFallback: false, approvalPolicy: "never", serviceTier: "ultrafast", environments: [{ environmentConfigId: "repo-env", cwd: "/workspace/fixture" }], sandbox: fullAccess ? "danger-full-access" : "read-only" });
     const config = sent.find(call => call.method === "thread/start")!.params.config as Record<string, unknown>;
     expect(config.model_reasoning_effort).toBe("max");
     expect(config["skills.include_instructions"]).toBe(fullAccess ? undefined : false);

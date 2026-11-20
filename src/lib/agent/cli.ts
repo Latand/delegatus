@@ -25,7 +25,7 @@ import { claudeTranscriptPath, headCwd } from "./transcript";
 import { normalizedClaudePermissionMode, readClaudePermissionModeSync } from "./claudePermissionMode";
 import { grantedMcpServers } from "./mcpAllowlist";
 import { grantedPlugins } from "./pluginAllowlist";
-import { claudePinnedModelId, normalizeClaudeLaunchModel } from "./models";
+import { defaultModelFor, modelForLaunch, claudePinnedModelId, normalizeClaudeLaunchModel } from "./models";
 import {
   applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, viewerMcpHttpCodexEntry,
   viewerMcpServerEntry, viewerMcpTransportForLaunch, viewerMcpHttpUrl, VIEWER_SPAWN_CAPABILITY_ENV,
@@ -551,12 +551,13 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   const args = [resolveCodexBinary()];
   if (options.omitSkillsInstructions) args.push("-c", "skills.include_instructions=false");
   if (engineMemoryOff(options)) args.push("-c", "features.memories=false");
+  const model = modelForLaunch("codex", options.model ?? defaultModelFor("codex"));
   const home = options.codexHome ?? accountForSpawn().home;
   args.push(...agentCodexPublicationArgs({}, process.env));
   if (isManagedCodexHome(home)) args.push("-c", "cli_auth_credentials_store=file");
   const mcp = codexMcpRuntimeOverrides(home, cwd, mcpServers);
   for (const override of mcp.overrides) args.push("-c", override);
-  if (options.model) args.push("-m", options.model);
+  args.push("-m", model);
   if (options.effort) args.push("-c", `model_reasoning_effort=${options.effort}`);
   if (options.serviceTier) args.push("-c", `service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`);
   else if (options.fast != null) args.push("-c", `service_tier=${options.fast ? "priority" : "standard"}`);
@@ -575,7 +576,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       ...(options.omitSkillsInstructions ? { omitSkillsInstructions: true } : {}),
       ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}),
       cwd,
-      model: options.model ?? null,
+      model,
       effort: options.effort ?? null,
       fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null,
       serviceTier: options.serviceTier ?? null,
@@ -721,7 +722,8 @@ export function resumeSpecForSession(
   const mcp = codexMcpRuntimeOverrides(home, cwd, mcpServers);
   for (const override of mcp.overrides) command += ` -c ${shellQuote(override)}`;
   if (mcp.viewerMcpArgs) command += ` ${mcp.viewerMcpArgs}`;
-  if (options.model) command += ` -m ${shellQuote(options.model)}`;
+  const model = modelForLaunch("codex", options.model ?? defaultModelFor("codex"));
+  command += ` -m ${shellQuote(model)}`;
   if (options.effort) command += ` -c ${shellQuote(`model_reasoning_effort=${options.effort}`)}`;
   if (options.serviceTier) command += ` -c ${shellQuote(`service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`)}`;
   else if (options.fast != null) command += ` -c ${shellQuote(`service_tier=${options.fast ? "priority" : "standard"}`)}`;
@@ -741,7 +743,7 @@ export function resumeSpecForSession(
     cwd,
     windowName: "codex-resume",
     engine: "codex",
-    launchProfile: { ...emptyLaunchProfileForResume(cwd, options.model ?? null, options.effort ?? null),
+    launchProfile: { ...emptyLaunchProfileForResume(cwd, model, options.effort ?? null),
       ...(options.omitSkillsInstructions ? { omitSkillsInstructions: true } : {}),
       ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, sandbox: explicitLaunchProfileSandbox(options), permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
   };

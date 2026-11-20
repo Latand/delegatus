@@ -9,7 +9,7 @@ import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { deadlineChild, deadlineReport, heldCloudAcknowledgement, superviseCloudDeadline } from "./fixtures/cloudDeadline";
 
 type Frame = { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: unknown };
-const model = "gpt-6.1-sol", environmentId = "asenvcfg_fixture", headSha = "a".repeat(40);
+const model = "gpt-6.2-sol", environmentId = "asenvcfg_fixture", headSha = "a".repeat(40);
 const environment = { environmentId: "ccarenv_fixture", environmentConfigId: environmentId, cwd: "/workspace/project" };
 const thread = { id: "00000000-0000-0000-0000-000000000000", ephemeral: false, environments: [environment] };
 const turn = { id: "turn-fixture", model, status: "completed" };
@@ -65,6 +65,15 @@ function fixture(overrides: Partial<HostedCloudDependencies> = {}) {
     authCalls: () => authCalls, supersede: () => { current = false; },
     respond: (fn: typeof handle) => { handle = fn; } };
 }
+
+test("an old model selection reaches both hosted RPCs as current Sol", async () => {
+  const f = fixture();
+  const result = await f.client.submit({ ...f.input, model: "gpt-6.1-sol" });
+  expect(result.thread?.hosted?.model).toBe("gpt-6.2-sol");
+  for (const method of ["thread/start", "turn/start"]) {
+    expect(f.frames.find(frame => frame.method === method)?.params).toMatchObject({ model: "gpt-6.2-sol", allowProviderModelFallback: false });
+  }
+});
 
 test("a principal change after environment preparation refuses before thread or turn submission", async () => {
   const f = fixture();
@@ -827,7 +836,8 @@ for (const selectedModel of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
     expect(f.frames.find(frame => frame.method === "thread/start")?.params).toMatchObject({ model: selectedModel, allowProviderModelFallback: false, config: { model_reasoning_effort: "max" } });
     expect(f.frames.find(frame => frame.method === "turn/start")?.params).toMatchObject({ model: selectedModel, allowProviderModelFallback: false });
     // A different admitted model is still a reroute from this receipt.
-    f.respond((frame, socket) => frame.method === "thread/read" ? { model, thread } : f.original(frame, socket));
+    const rerouted = selectedModel === "gpt-6.2-sol" ? "gpt-6.2-astra" : "gpt-6.2-sol";
+    f.respond((frame, socket) => frame.method === "thread/read" ? { model: rerouted, thread } : f.original(frame, socket));
     await expect(f.client.poll(access)).rejects.toThrow("resolved model mismatch");
   });
 }

@@ -14,7 +14,7 @@ test("merger resolves a required reviewed-PR list with a read-write, non-nesting
   expect(resolved).toMatchObject({ ok: true });
   const role = resolveRole("merger", { prs: "12@abcdef1,13@1234567" });
   if (!role.ok) throw new Error(role.error);
-  expect(role.value.config).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "high" });
+  expect(role.value.config).toEqual({ engine: "codex", model: "gpt-6.2-sol", effort: "high" });
   expect(role.value.definition.capabilities).toEqual([]);
   expect(role.value.prompt).toContain("12@abcdef1,13@1234567");
 });
@@ -39,16 +39,16 @@ test("role registry exposes the thirteen role ids and campaign-ready orchestrato
   ]);
   expect(Object.fromEntries(roles.map((role) => [role.id, role.config]))).toEqual({
     orchestrator: { engine: "claude", model: "opus", effort: "high" },
-    reviewer: { engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" },
-    verifier: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
-    builder: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
+    reviewer: { engine: "codex", model: "gpt-6.2-sol", effort: "xhigh" },
+    verifier: { engine: "codex", model: "gpt-6.2-sol", effort: "high" },
+    builder: { engine: "codex", model: "gpt-6.2-sol", effort: "high" },
     architect: { engine: "claude", model: "opus", effort: "xhigh" },
-    cleaner: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
-    "prod-auditor": { engine: "codex", model: "gpt-6.1-sol", effort: "xhigh" },
-    maintainer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
-    curator: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
-    merger: { engine: "codex", model: "gpt-6.1-sol", effort: "high" },
-    deployer: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" },
+    cleaner: { engine: "codex", model: "gpt-6.2-sol", effort: "high" },
+    "prod-auditor": { engine: "codex", model: "gpt-6.2-sol", effort: "xhigh" },
+    maintainer: { engine: "codex", model: "gpt-6.2-sol", effort: "medium" },
+    curator: { engine: "codex", model: "gpt-6.2-sol", effort: "high" },
+    merger: { engine: "codex", model: "gpt-6.2-sol", effort: "high" },
+    deployer: { engine: "codex", model: "gpt-6.2-sol", effort: "medium" },
     "issue-reporter": { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
     "visual-critic": { engine: "claude", model: "opus", effort: "high" },
   });
@@ -80,14 +80,14 @@ test("role registry exposes the thirteen role ids and campaign-ready orchestrato
 
   expect(resolveRole("builder", { mode: "plain", domain: "general" })).toMatchObject({
     ok: true,
-    value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } },
+    value: { config: { engine: "codex", model: "gpt-6.2-sol", effort: "high" } },
   });
   expect(resolveRole("verifier", { claims: "the regression is fixed" })).toMatchObject({
     ok: true,
-    value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } },
+    value: { config: { engine: "codex", model: "gpt-6.2-sol", effort: "high" } },
   });
-  expect(resolveRole("cleaner")).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" }, params: { mode: "checkout" } } });
-  expect(resolveRole("deployer", { sha: "abc123" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "medium" } } });
+  expect(resolveRole("cleaner")).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.2-sol", effort: "high" }, params: { mode: "checkout" } } });
+  expect(resolveRole("deployer", { sha: "abc123" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.2-sol", effort: "medium" } } });
 });
 
 test("builder parameters select the cheap fixer and the frontend implementation profile", () => {
@@ -154,10 +154,10 @@ test("spawn role resolution injects the scaffold and requires deploy confirmatio
   expect(spawn.value.scaffold).toContain("Builder in tdd mode");
 });
 
-test("explicit spawn fields accept GPT-6.1-Sol at ultra", () => {
-  expect(resolveRole("builder", { mode: "plain" }, { engine: "codex", model: "gpt-6.1-sol", effort: "ultra" })).toMatchObject({
+test("explicit spawn fields accept GPT-6.2-Sol at ultra", () => {
+  expect(resolveRole("builder", { mode: "plain" }, { engine: "codex", model: "gpt-6.2-sol", effort: "ultra" })).toMatchObject({
     ok: true,
-    value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "ultra" } },
+    value: { config: { engine: "codex", model: "gpt-6.2-sol", effort: "ultra" } },
   });
 });
 
@@ -184,7 +184,7 @@ test("spawn role resolution enumerates the selected engine catalog for an invali
     model: "mythos-1",
   })).toEqual({
     ok: false,
-    error: "invalid claude model id \"mythos-1\"; valid claude model ids: opus, fable, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5",
+    error: "invalid claude model id \"mythos-1\"; valid claude model ids: opus, fable, claude-fable-5-2, claude-fable-5-1, sonnet, claude-sonnet-5-5, haiku, claude-haiku-5-5, claude-haiku-4-5",
   });
 });
 
@@ -222,7 +222,7 @@ test("the small-change and docs variants ship their runtime, and only builder an
   expect(resolveRole("builder", { domain: "frontend", mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" } } });
   expect(resolveRole("builder", { mode: "apply-fixes" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-luna", effort: "high" } } });
   expect(resolveRole("reviewer", { diffSource: "#1", size: "trivial" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6-luna", effort: "high" } } });
-  expect(resolveRole("builder", { size: "normal" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } } });
+  expect(resolveRole("builder", { size: "normal" })).toMatchObject({ ok: true, value: { config: { engine: "codex", model: "gpt-6.2-sol", effort: "high" } } });
   /* A trivial UI tweak keeps the frontend scaffold guidance, which is keyed on domain. */
   const trivialFrontend = resolveRole("builder", { size: "trivial", domain: "frontend" });
   expect(trivialFrontend.ok && trivialFrontend.value.prompt).toContain(FRONTEND_GUIDANCE);
@@ -337,9 +337,9 @@ test("spawning a visual critic takes a Claude runtime and refuses Codex", () => 
   const edited = resolveSpawnRole({ role: "visual-critic", model: "fable", effort: "max" });
   if (!edited.ok) throw new Error(edited.error);
   expect(edited.value?.config).toEqual({ engine: "claude", model: "fable", effort: "max" });
-  expect(resolveSpawnRole({ role: "visual-critic", engine: "codex", model: "gpt-6.1-sol", effort: "high" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
-  expect(resolveRole("visual-critic", {}, { engine: "codex", model: "gpt-6.1-sol" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
-  const architect = resolveSpawnRole({ role: "architect", engine: "codex", model: "gpt-6.1-sol" });
+  expect(resolveSpawnRole({ role: "visual-critic", engine: "codex", model: "gpt-6.2-sol", effort: "high" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
+  expect(resolveRole("visual-critic", {}, { engine: "codex", model: "gpt-6.2-sol" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
+  const architect = resolveSpawnRole({ role: "architect", engine: "codex", model: "gpt-6.2-sol" });
   expect(architect.ok && architect.value?.config.engine).toBe("codex");
 });
 
@@ -359,7 +359,7 @@ test("every role receives the correction duty, including stored scaffold overrid
 test("cleaner resolves checkout by default and validates the disk mode", () => {
   expect(resolveSpawnRole({ role: "cleaner" })).toMatchObject({ ok: true, value: { params: { mode: "checkout" } } });
   expect(resolveSpawnRole({ role: "cleaner", roleParams: { mode: "disk" } })).toMatchObject({
-    ok: true, value: { params: { mode: "disk" }, config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } },
+    ok: true, value: { params: { mode: "disk" }, config: { engine: "codex", model: "gpt-6.2-sol", effort: "high" } },
   });
   expect(resolveSpawnRole({ role: "cleaner", roleParams: { mode: "delete" } }).ok).toBe(false);
 });

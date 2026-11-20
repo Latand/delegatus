@@ -19,7 +19,7 @@ import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { agentRegistry, identityMaterializationFence } from "@/lib/agent/registry";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
-import { defaultModelFor, normalizeClaudeLaunchModel } from "@/lib/agent/models";
+import { defaultModelFor, modelForLaunch, normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { internalServiceHeaders, rotationActor, type ViewerActor } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { startDeferredSpawnWork } from "@/lib/agent/spawnDeferral";
@@ -1814,16 +1814,17 @@ async function runOrchestratorRotation(
   }
   if (composed.kind === "too_large") return { status: 413, body: { ...composed.body, admission: "refused", rotatedFrom, triggeredBy } };
 
+  const incumbentModel = modelForLaunch("codex", incumbent.model);
   let inheritedServiceTier: string | undefined;
   if (rawBody.fast === undefined && rawBody.serviceTier === undefined && incumbent.engine === "codex"
     && (rawBody.engine === undefined || rawBody.engine === "codex")
-    && (rawBody.model === undefined || rawBody.model === incumbent.model)) {
+    && (rawBody.model === undefined || typeof rawBody.model === "string" && modelForLaunch("codex", rawBody.model) === incumbentModel)) {
     const generation = agentRegistry().conversation(incumbent.conversationId as `conversation_${string}`)?.generations.at(-1);
-    if (generation && generation.launchProfile.model === incumbent.model) {
+    if (generation && modelForLaunch("codex", generation.launchProfile.model) === incumbentModel) {
       inheritedServiceTier = launchServiceTier(generation.launchProfile);
       const turbo = readTurboSettings(project).turbo;
       const row = turboActive(turbo, Date.now()) ? turbo?.switches.find(row => row.conversationId === incumbent.conversationId
-        && row.accountId === generation.accountId && row.model === generation.launchProfile.model
+        && row.accountId === generation.accountId && modelForLaunch("codex", row.model) === incumbentModel
         && row.state !== "reverted" && row.state !== "skipped" && row.state !== "failed"
         && (row.appliedTier === undefined ? row.to : row.appliedTier) === inheritedServiceTier) : undefined;
       if (row) inheritedServiceTier = row.from ?? undefined;
