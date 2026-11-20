@@ -1,18 +1,62 @@
+import fs from "node:fs";
+import type { CleanerController } from "@/lib/cleaner/run";
+import { statePath } from "@/lib/configDir";
+import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { readDiskPressure } from "./diskPressure";
-import { productionDiskPressureActions, reconcileDiskPressure } from "./diskPressureActions";
+import { productionDiskPressureActions, reconcileDiskPressure, type DiskPressureActions } from "./diskPressureActions";
 
 const host = globalThis as typeof globalThis & { __delegatusDiskPressureTimer?: ReturnType<typeof setTimeout> };
+
+function releaseTrafficSince(now: number): number {
+  if (!process.env.PORT?.trim()) return now;
+  let file: number | undefined;
+  try {
+    file = fs.openSync(statePath("viewer-release.json"), "r");
+    // Promotion atomically replaces this target. Read the target and its
+    // timestamp from the same inode, including on a Viewer process restart.
+    if (viewerReleaseOwnsTraffic(process.env, () => fs.readFileSync(file!, "utf8"))) {
+      return Math.min(now, fs.fstatSync(file).mtimeMs);
+    }
+    return now;
+  } catch {
+    return now;
+  } finally {
+    if (file !== undefined) fs.closeSync(file);
+  }
+}
 
 /** The release-owning startup calls this even when automatic cleanup is off.
  * Pressure remains observable without an open browser or an enabled seat. */
 export function startDiskPressureWatch(ports: {
   observe?: () => Promise<unknown>;
   schedule?: typeof setTimeout;
+  readPressure?: typeof readDiskPressure;
+  actions?: DiskPressureActions;
+  cleaner?: CleanerController;
+  now?: () => number;
 } = {}): void {
   if (host.__delegatusDiskPressureTimer || (!ports.observe && process.env.LLV_STATE_OWNER !== "viewer")) return;
+  const cleaner = ports.cleaner;
+  const actions = ports.actions ?? productionDiskPressureActions();
+  const now = ports.now ?? Date.now;
+  let trafficSince = cleaner && actions.active() ? releaseTrafficSince(now()) : null;
   const observe = ports.observe ?? (async () => {
-    const pressure = await readDiskPressure();
-    await reconcileDiskPressure(pressure, productionDiskPressureActions());
+    if (cleaner) {
+      if (!actions.active()) trafficSince = null;
+      else trafficSince ??= releaseTrafficSince(now());
+    }
+    let pressure = null;
+    try {
+      pressure = await (ports.readPressure ?? readDiskPressure)();
+      await reconcileDiskPressure(pressure, { ...actions, cleaner });
+    } finally {
+      // Startup deliberately supplies no launcher until the guarded tools
+      // ship. The pressure observer alone creates no cleaner run or receipt.
+      if (cleaner && trafficSince !== null) {
+        try { await cleaner.reconcile(); }
+        finally { await cleaner.launchCleanerIfDue(actions.project, trafficSince, pressure); }
+      }
+    }
   });
   const schedule = ports.schedule ?? setTimeout;
   const arm = (delay: number) => {
