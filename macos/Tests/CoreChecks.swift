@@ -514,13 +514,17 @@ import Foundation
             }
         }
         var teardownErrors: [String] = []
-        func runTeardowns(_ actions: [() throws -> Void]) {
+        func attemptTeardowns(_ actions: [() throws -> Void]) -> [String] {
             teardownErrors.removeAll(keepingCapacity: true)
             for action in actions {
                 do { try action() }
                 catch { teardownErrors.append(String(describing: error)) }
             }
-            for error in teardownErrors { expect(false, "fixture cleanup failed: \(error)") }
+            return teardownErrors
+        }
+        func runTeardowns(_ actions: [() throws -> Void]) {
+            let errors = attemptTeardowns(actions)
+            for error in errors { expect(false, "fixture cleanup failed: \(error)") }
         }
         try Data(#"{"name":"delegatus-cli","version":"2.0.0"}"#.utf8).write(to: root.appendingPathComponent("package.json"))
         try Data(#"""
@@ -582,6 +586,17 @@ import Foundation
         guard let detachedPID else {
             throw LauncherError.message("induced detached readiness failure: PID or TERM handler did not become ready")
         }
+        let primaryFixtureDiagnostic = "foreign bootstrap: missing PID receipt"
+        let simulatedBootstrapFailure = attemptTeardowns([
+            { throw LauncherError.message("detached fixture cleanup: missing or invalid PID receipt") },
+            { try stopDetachedViewer(timeoutReceipt) },
+        ])
+        try check(simulatedBootstrapFailure.count == 1
+            && simulatedBootstrapFailure[0].contains("missing or invalid PID receipt")
+            && primaryFixtureDiagnostic == "foreign bootstrap: missing PID receipt",
+            "a missing bootstrap receipt retains the fixture diagnostic after every teardown is attempted")
+        try check(kill(detachedPID, 0) != 0 && errno == ESRCH,
+            "the earlier owned Viewer generation is reaped after bootstrap cleanup reports its missing receipt")
         do {
             _ = try FixtureProcess.readyLine(timeoutOutput, named: "induced detached readiness failure", timeout: 0.2)
             throw LauncherError.message("induced detached readiness failure unexpectedly succeeded")
