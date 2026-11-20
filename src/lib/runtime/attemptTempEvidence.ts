@@ -134,10 +134,11 @@ export async function preserveAttemptEvidence(directory: string, original: strin
           if (blobs.size) {
             const result = await repository.contains([...blobs.values()]);
             budget();
-            if (result.present) {
+            if (result.fallback) selection.selectionFallback = result.fallback;
+            else {
               tracked = result.present;
               if (tracked.size) repositoryCurrent = () => repository.current() && (retention.repoCurrent?.() ?? true);
-            } else selection.selectionFallback = result.fallback;
+            }
           }
         }
       }

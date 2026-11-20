@@ -11,9 +11,13 @@ const GIT_LINE_END = process.platform === "win32" ? /\r?\n/ : "\n";
 export type AttemptEvidenceFallback = "repository-unavailable" | "object-format" | "object-store-unverified"
   | "evidence-index-unavailable" | "lookup-limit" | "git-lookup" | "git-deadline";
 type Blob = { id: string; bytes: number };
+type BlobLookup = { present: Set<string>; fallback?: never } | { fallback: AttemptEvidenceFallback };
 
 function git(cwd: string, args: string[], timeout: number, batch?: { input: string; objects: string }): Promise<string> {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)));
+  const env = { ...process.env };
+  for (const name of Object.keys(env)) {
+    if (/^GIT_/i.test(name)) delete env[name];
+  }
   return new Promise((resolve, reject) => {
     const child = execFile("git", args, { cwd, timeout, env: { ...env,
       GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_NO_REPLACE_OBJECTS: "1",
@@ -81,17 +85,17 @@ export async function attemptEvidenceRepository(repoDir: string | undefined, sou
     if (!identity || !checkout) return { fallback: "object-store-unverified" } as const;
     const current = () => fs.realpathSync(repoDir!) === repo
       && checkoutIdentity(repo) === checkout && fs.realpathSync(objectPath) === objects && objectStoreIdentity(objects) === identity;
-    return { current, async contains(blobs: readonly Blob[]) {
+    return { current, async contains(blobs: readonly Blob[]): Promise<BlobLookup> {
       try {
         const input = blobs.map(blob => blob.id).join("\n") + "\n";
         const stdout = await run(repo, ["cat-file", "--batch-check"], { input, objects });
         const lines = stdout.split(GIT_LINE_END);
-        if (lines.pop() !== "" || lines.length !== blobs.length || !current()) return { fallback: "git-lookup" } as const;
+        if (lines.pop() !== "" || lines.length !== blobs.length || !current()) return { fallback: "git-lookup" };
         const present = new Set<string>();
         for (const [index, { id, bytes }] of blobs.entries()) {
           const line = lines[index];
           if (line === `${id} blob ${bytes}`) present.add(id);
-          else if (line !== `${id} missing`) return { fallback: "git-lookup" } as const;
+          else if (line !== `${id} missing`) return { fallback: "git-lookup" };
         }
         return { present };
       } catch (error) { return failure(error); }
