@@ -10,11 +10,10 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import { headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
-import { censusIndex, ownerProcessAlive, registryOwners, rowKeyId, type OwnerlessRecord, type RecordedOwner } from "@/lib/lifecycle/owners";
+import { ownerProcessAlive, readOwnerCensus, rowKeyId, type OwnerlessRecord, type RecordedOwner } from "@/lib/lifecycle/owners";
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { structuredDeliveryHeldHosts } from "@/lib/runtime/structuredDeliveryController";
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
-import type { Engine } from "@/lib/types";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
 import { flowPipelineController } from "@/lib/pipelines/controller";
@@ -358,13 +357,8 @@ export function ownerCensusReader(
         page = await readEvents(cursor);
       }
     })());
-    const census = registryOwners(registry, flows, probe, { identity: viewer(), heldKeys: held });
-    const index = censusIndex(registry);
+    const { census, index } = readOwnerCensus(registry, flows, probe, { identity: viewer(), heldKeys: held });
     const tails = new Map<string, Promise<TailReading | null>>();
-    const engines = new Map<string, Engine>();
-    for (const conversation of Object.values(registry.conversations)) {
-      for (const generation of conversation.generations) engines.set(generation.path, conversation.engine);
-    }
     /* A missing file or a torn tail reads as null: R8 holds an answering
        owner and bounds an ownerless launch that never proved work. A read
        that fails on anything else (a denied open, an I/O error) is no
@@ -375,7 +369,7 @@ export function ownerCensusReader(
        engine at the same path reads its own (R3, R12). */
     const tail = (path: string | null, engine?: string | null): Promise<TailReading | null> => {
       if (!path) return Promise.resolve(null);
-      const known = engine ?? engines.get(path) ?? null;
+      const known = engine ?? index.generationEngine(path) ?? null;
       const memo = `${known ?? ""}\0${path}`;
       if (!tails.has(memo)) tails.set(memo, (async () => {
         const kind = known ?? (await liveness.describeTranscript(path, { strict: true }))?.engine ?? null;

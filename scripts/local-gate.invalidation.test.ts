@@ -19,7 +19,7 @@ test("hook receipts invalidate base, tool and environment drift, and malformed r
   f.git("add", "example.ts"); f.git("commit", "-m", "change");
   const run = (extra: Partial<NodeJS.ProcessEnv> = {}) => {
     const before = f.calls().length;
-    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: { ...f.env, ...extra }, encoding: "utf8" });
+    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: { ...f.env, LANG: "C", ...extra }, encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
     return f.calls().slice(before).some(call => call.args[0] === "tsc");
   };
