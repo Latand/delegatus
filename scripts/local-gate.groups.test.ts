@@ -157,7 +157,10 @@ test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers
   // A neighbour scope this run must leave alone.
   const neighbourDir = mkdtempSync(path.join(tmpdir(), "gate-neighbour-")); roots.push(neighbourDir);
   const neighbourFile = path.join(neighbourDir, "pid");
-  const neighbour = Bun.spawn({ cmd: ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", "-c", `echo $$ > '${neighbourFile}'; exec sleep 60`], stdio: ["ignore", "ignore", "ignore"] });
+  // A scope launcher may expand dollars in argv before Bash sees them.
+  const neighbourScript = path.join(neighbourDir, "run.sh");
+  writeFileSync(neighbourScript, `echo $$ > '${neighbourFile}'; exec sleep 60`);
+  const neighbour = Bun.spawn({ cmd: ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", neighbourScript], stdio: ["ignore", "ignore", "ignore"] });
   try {
     const [neighbourIdentity] = await recordFixtureIdentities([neighbourFile]);
     // Exercise actual transient scopes directly and below an intermediate.
@@ -168,7 +171,9 @@ test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers
       // One helper keeps the step's environment and one starts from an empty
       // one; both are reparented away from the step's process tree.
       const script = `echo $$ > '${dir}/root.pid'; cat /proc/$$/cgroup > '${dir}/scope'; ( sleep 60 & echo $! > '${dir}/kept.pid' ) ; ( env -i sleep 60 & echo $! > '${dir}/bare.pid' ) ; touch '${dir}/ready'; sleep 60`;
-      const scoped = ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", "-c", script];
+      const scriptFile = path.join(dir, "run.sh");
+      writeFileSync(scriptFile, script);
+      const scoped = ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", scriptFile];
       const command = wrapped ? ["bash", "-c", `"$@"; exit $?`, "step", ...scoped] : scoped;
       const started = performance.now();
       const pending = runSteps("pre-push", [{ name: "touched tests", command: [] }], { root, deadline: soon(4_000), logDir: dir, say: () => {},

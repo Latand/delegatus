@@ -111,7 +111,7 @@ for (const confirmTakeover of [undefined, false]) {
   });
 }
 
-for (const refusal of ["error", "target", "nested-target"] as const) {
+for (const refusal of ["error", "nested-error", "target", "nested-target"] as const) {
   test(`adopting five clones preserves a competing pairing on one service 409 (${refusal}) and adopts every peer`, async () => {
     const ids = Array.from({ length: 5 }, (_, i) => `clone-${i + 1}`);
     const writes: string[] = [];
@@ -127,6 +127,7 @@ for (const refusal of ["error", "target", "nested-target"] as const) {
           ? { ...target, name: "Updated clone", fallback: "none", concurrency: 2 } : target) })) }));
         const target = { ...remote(id), answered_elsewhere: true };
         return { status: 409, body: refusal === "error" ? { error: "answered_elsewhere", target_id: id, message: "Release it there first" }
+          : refusal === "nested-error" ? { error: { code: "answered_elsewhere", message: "Answered by another install. Release it there first.", target_id: id } }
           : refusal === "target" ? target : { target } };
       }
       bindings.set(id, "this-install");
@@ -154,3 +155,35 @@ for (const refusal of ["error", "target", "nested-target"] as const) {
     } finally { await service.close(); }
   });
 }
+
+test("a confirmed move the service refuses answers 409 once and changes no binding; other 409s keep their own code", async () => {
+  const writes: unknown[] = [];
+  let refusal: unknown = { error: { code: "answered_elsewhere", message: "Answered by another install. Release it there first.", target_id: "clone" } };
+  const remote = { target_id: "clone", name: "Clone", answered_by: "service", fallback: "none", answered_elsewhere: true } as const;
+  const service = await startTestRelay((_req, body) => { writes.push(body); return { status: 409, body: refusal }; });
+  const origin = "http://127.0.0.1:8899";
+  const request = (body: unknown) => new NextRequest(`${origin}/api/external-relay/relays/refused/targets/clone`, { method: "PATCH",
+    headers: { origin, host: "127.0.0.1:8899", cookie: `llv_operator=${soloBrowserSession()}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const context = { params: Promise.resolve({ id: "refused", targetId: "clone" }) };
+  updateRelayStore(store => ({ ...store, relays: [{ id: "refused", origin: service.origin, api_base: `${service.origin}/v1`, name: "Relay", description: "", credential: "fixture",
+    owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-11-17T12:00:00Z", paused: true,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: [newTargetSettings(remote)] }] }));
+  try {
+    const stored = () => readRelayStore().relays[0]!.targets[0]!;
+    const refused = await PATCH(request({ answered_by: "install", confirmTakeover: true }), context);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "answered_elsewhere" });
+    expect(writes).toEqual([{ answered_by: "install" }]);
+    expect(stored()).toMatchObject({ name: "Clone", answered_by: "service", answered_elsewhere: true, fallback: "none" });
+    // Not-ready and owner-changed refusals are not ownership answers: they keep their code and leave the target alone.
+    for (const code of ["not_ready", "owner_changed"]) {
+      refusal = { error: { code, message: "Not now." } };
+      const before = JSON.stringify(stored());
+      const other = await PATCH(request({ answered_by: "install", confirmTakeover: true }), context);
+      expect(other.status).toBe(409);
+      expect((await other.json()).error).not.toBe("answered_elsewhere");
+      expect(JSON.stringify(stored())).toBe(before);
+    }
+    expect(writes).toHaveLength(3);
+  } finally { await service.close(); }
+});
