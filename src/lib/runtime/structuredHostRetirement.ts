@@ -2090,10 +2090,9 @@ export async function runStructuredHostRetirementSweep(
       const confirmedExit = capturedTreeGone && (stop !== null || !capture.authorizeGone());
       if (exited && (staleIdentityRefusal || registryCasRefusal || scopeTargetRefusal || concurrentCloseRefusal
         || runtimeCleanupFailure && capturedTreeGone && outcome.stoppedVia !== undefined) && (confirmedExit || noUnresolvedMembers)) {
-        const reconciled = await reconcileGoneAndReport(fresh, subject.conversationId, unflushed, stop !== null);
-        // A stop is credited only after the latest durable capture and the
-        // registry transition agree that every retained identity is gone.
-        if (stop && !reconciled) stop = null;
+        await reconcileGoneAndReport(fresh, subject.conversationId, unflushed, stop !== null);
+        // Stop credit follows the captured process identities. Reconciliation
+        // still reports registry or scope refusal separately after full exit.
         if (capturedTreeGone && outcome.stoppedVia && runtimeCleanupFailure) {
           report.failed.push({ key: subject.keyId, conversationId: subject.conversationId,
             error: `host already exited; cleanup failed: ${outcome.error}`, remaining: outcome.remaining });

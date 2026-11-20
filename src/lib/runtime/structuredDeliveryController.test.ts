@@ -123,6 +123,31 @@ test("unqualified termination still retires its captured host row", async () => 
   } finally { await f.cleanup(); }
 });
 
+test("accepted native release evidence survives a registry writer failure", async () => {
+  const f = migrationDeliveryFixture();
+  let accepted = 0;
+  const releaseIfOwned = async (_expected: { pid: number; startIdentity: string }, authorize?: () => Promise<{ status: 403 | 409; error: string } | null>) => {
+    expect(await authorize?.()).toBeNull();
+    return true;
+  };
+  const host = Object.assign(f.host, { releaseIfOwned });
+  const admission = spyOn(f.registry, "deliveryWriteOrBusy").mockImplementation(async (correlation) => {
+    if (correlation.label === "registry.terminateStructuredHost") throw new Error("registry writer admission timed out after release");
+    throw new Error(`unexpected writer: ${correlation.label}`);
+  });
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host }], { registry: f.registry, client: f.client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    await expect(terminateStructuredDeliveryHost(f.key,
+      { pid: process.pid + 100_000, startIdentity: "expected-old-host" }, async () => null,
+      () => { accepted++; })).rejects.toThrow("registry writer admission timed out after release");
+    expect(accepted).toBe(1);
+  } finally {
+    admission.mockRestore();
+    await f.cleanup();
+  }
+});
+
 test("structured host projection publishes a files revision for connected viewers", async () => {
   let filesRevision = 14;
   const events: Array<{ kind: string; payload: Record<string, unknown> }> = [];

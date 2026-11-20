@@ -31,13 +31,14 @@ already-exited tree can still take read-only reconciliation for lost process cus
 refusal, after proving that no descendants remain and the scope was collected.
 Other verdict refusals retain their cause.
 
-The sweep credits a stop after an accepted runtime release or process signal,
-confirmed exit of the captured tree, and successful reconciliation of the
-latest durable capture for that same target. A changed target, failed registry
-write, or retained descendant that is alive or unverifiable keeps the stop
-uncredited until a later sweep proves cleanup. Runtime writer failures retain
-the accepted stop method and their diagnostic through reconciliation. A tree
-that exited on its own appears in `gone` and contributes no reclaim totals.
+The sweep credits an accepted runtime release or process signal after the
+captured tree is confirmed exited, using the latest durable capture for that
+same target. Reconciliation still reports a changed target or registry write
+failure; that diagnostic does not erase a proven stop. A retained descendant
+that is alive or unverifiable keeps the stop uncredited until a later sweep
+proves the full tree gone. Runtime writer failures retain the accepted stop
+method and their diagnostic. A tree that exited on its own appears in `gone`
+and contributes no reclaim totals.
 
 ## Verification
 

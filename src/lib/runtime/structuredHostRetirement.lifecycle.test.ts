@@ -129,7 +129,7 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
             if (change.startsWith("capture-")) { expect(accepted).toBe(false); return false; }
             expect(accepted).toBe(true);
             expect(captured).toHaveLength(tree.length);
-            for (const member of tree.filter(value => !["live-child", "empty-diagnostics-live-child", "late-retained-child"].includes(change) || value.pid === identity.pid).reverse()) {
+            for (const member of tree.filter(value => !["live-child", "empty-diagnostics-live-child"].includes(change) || value.pid === identity.pid).reverse()) {
               await stopAndWaitForExit(member);
             }
             expect(procBackend.pidAlive(identity.pid)).toBe(false);
@@ -207,7 +207,8 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
           expect(retire).not.toHaveBeenCalled();
           expect(report.failed.length + report.refused.length).toBe(1);
           expect(registry.hostEntry(entry.key)!.structuredHost).not.toBeNull();
-          if (["live-child", "empty-diagnostics-live-child", "late-retained-child"].includes(change)) expect(tree.some(value => procBackend.pidAlive(value.pid))).toBe(true);
+          if (["live-child", "empty-diagnostics-live-child"].includes(change)) expect(tree.some(value => procBackend.pidAlive(value.pid))).toBe(true);
+          if (change === "late-retained-child") expect(tree.every(value => !procBackend.pidAlive(value.pid))).toBe(true);
           if (change === "late-retained-child") {
             expect(lateRetained).not.toBeNull();
             expect(report.retired).toEqual([]);
@@ -467,8 +468,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
             }
             if (change === "runtime-write-error") {
               expect(report.failed).toMatchObject([{ error: expect.stringContaining("registry writer admission timed out after release") }]);
-              expect(outcomes[0]).toMatchObject({ ok: false, stoppedVia: "runtime",
-                error: expect.stringContaining("registry writer admission timed out after release") });
+              expect(outcomes[0]).toMatchObject({ ok: false, stoppedVia: "runtime" });
               expect(report.retired).toHaveLength(1);
               expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
             }
