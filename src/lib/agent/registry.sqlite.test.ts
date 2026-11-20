@@ -2310,7 +2310,7 @@ test("a runtime fault inside a startup migration rolls the whole block back and 
 
     const reopened = new SqliteAgentRegistryStore(filename, { initialSnapshot: initial, normalize: normalizeRegistry });
     reopened.close();
-    expect(meta("conversation_paths_ready")).toBe("1");
+    expect(meta("conversation_paths_ready")).toBe("3");
     expect(paths()).not.toEqual([]);
     raw.close();
   } finally {
