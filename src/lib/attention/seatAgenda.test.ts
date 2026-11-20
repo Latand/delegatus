@@ -6,6 +6,7 @@ import { patchTask } from "@/lib/tasks/commands";
 import type { FileEntry } from "@/lib/types";
 
 import { seatAgendaAsks } from "./seatAgenda";
+import { laneRouteKey } from "@/lib/attention/routeTypes";
 
 /*
  * docs/design/attention-auto-resolve.md, acceptance 3: the seat is told what
@@ -109,7 +110,7 @@ test("a parked lane's line names its stop class before the stage's words", () =>
     attentionRoute: { key: "lane:commit:lane-decision:none", owner: "seat", seat: "conversation_seat" },
   } as unknown as Pipeline;
   const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
-  expect(line!.label).toStartWith("[commit] Ship the panel — stage build stopped: stage failed");
+  expect(line!.label).toStartWith("[commit] Ship the panel — stage build pipeline_action retry-stage;");
   expect(line!.label).toContain("pipeline_action retry-stage");
   expect(line!.label).not.toContain("resolve-decision");
 });
@@ -181,6 +182,21 @@ test("a completed closed merge keeps the task and retry action together on its w
   expect(ask).toMatchObject({ id: lane.id, waitingTaskIds: [task.id] });
   expect(ask!.label).toContain(task.id);
   expect(ask!.label).toContain("pipeline_action retry-merge");
+});
+
+test("a long returned-round lane wake keeps retry-stage and every task id before explanatory text", () => {
+  const ids = [1, 2, 3, 4].map(number => `waiting-task-fixture-with-long-id-0${number}`);
+  const tasks = ids.map(id => ({ id, project: "project-a", text: "Retry publication", status: "blocked" as const, placement: "unplaced" as const,
+    assignments: [], createdAt: at, updatedAt: at, hold: { kind: "external" as const, note: "Publication parked", since: at, by: "agent" as const } }));
+  const long = { ...mergeLane("publication", "stage failed"), state: "needs_decision" as const, taskIds: ids,
+    stages: [{ id: "publish", kind: "run" }], cursor: { stageId: "publish" },
+    runs: [{ stageId: "publish", attempts: [{ n: 1, state: "failed", error: "stage failed" }] }],
+    attentionRoute: { key: "", owner: "seat" as const, seat: "conversation_seat", returnedFrom: "round-returned-12345678901234567890" } };
+  long.attentionRoute.key = laneRouteKey(long as unknown as Pipeline, "lane-decision");
+  const ask = seatAgendaAsks({ files: [], pipelines: [long], tasks }, now, "project-a").find(item => item.id === "publication")!;
+  expect(ask.waitingTaskIds).toEqual(ids);
+  expect(ask.label).toContain("pipeline_action retry-stage");
+  for (const id of ids) expect(ask.label).toContain(id);
 });
 
 test("the maintenance hold resend write leaves a named task action on the next seat agenda", () => {

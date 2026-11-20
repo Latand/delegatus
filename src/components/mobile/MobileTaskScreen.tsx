@@ -980,8 +980,8 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                   selected={entry === status}
                   trailing={entry === status ? <Check className="h-4 w-4 text-accent" aria-hidden /> : undefined}
                   onSelect={() => {
-                    close();
-                    move(status, entry, true);
+                    if (entry === "blocked") setHoldEditing(true);
+                    else { close(); move(status, entry, true); }
                   }}
                   attrs={{ "data-phone-task-status": entry }}
                 />

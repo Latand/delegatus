@@ -183,7 +183,7 @@ function taskPorts(patches: Array<{ id: string; body: PatchBody }>, refuse = () 
       patches.push({ id, body });
       await sleep(5);
       if (refuse()) return { ok: false, status: 500, error: "the store is read-only" };
-      stored = { ...stored, ...("status" in body ? { status: body.status } : {}), ...("text" in body ? { text: body.text } : {}), ...("priority" in body ? { priority: body.priority === "normal" ? undefined : body.priority } : {}), revision: `${(stored as BoardTask & { revision: string }).revision}+` } as BoardTask;
+      stored = { ...stored, ...("status" in body ? { status: body.status } : {}), ...("text" in body ? { text: body.text } : {}), ...("priority" in body ? { priority: body.priority === "normal" ? undefined : body.priority } : {}), ...("hold" in body ? { hold: body.hold } : {}), revision: `${(stored as BoardTask & { revision: string }).revision}+` } as BoardTask;
       return { ok: true, task: stored };
     },
     async read() { return stored; },
@@ -234,12 +234,20 @@ test("the status is a sheet: a choice moves the task with a guarded write and a 
   const sheet = q(dom.document.body as unknown as HTMLElement, "[data-phone-task-status-sheet]")!;
   expect(qa(sheet, "[data-phone-task-status]").map((row) => row.getAttribute("data-phone-task-status"))).toEqual(["inbox", "assigned", "blocked", "done"]);
   click(q(sheet, '[data-phone-task-status="blocked"]'));
+  expect(nav.getState().sheet).toBe("status");
+  const form = q(dom.document.body as unknown as HTMLElement, "[data-hold-editor]")!;
+  expect(form).toBeTruthy();
+  expect(q(host, "[data-phone-task-status-pill]")!.getAttribute("data-phone-task-status-pill")).toBe("assigned");
+  const field = form.querySelector("input") as unknown as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+  flushSync(() => { setter.call(field, "Choose the release"); field.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+  click(form.querySelector('[type="submit"]') as unknown as HTMLElement);
   expect(nav.getState().sheet).toBeNull();
   expect(q(host, "[data-phone-task-status-pill]")!.getAttribute("data-phone-task-status-pill")).toBe("blocked");
   expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: en("kanban.status.blocked") }));
   await sleep(20);
   expect(patches).toHaveLength(1);
-  expect(patches[0]!.body).toMatchObject({ status: "blocked", expectedRevision: "r-t-many-1" });
+  expect(patches[0]!.body).toMatchObject({ status: "blocked", hold: { kind: "operator", note: "Choose the release" }, expectedRevision: "r-t-many-1" });
   click(q(host, "[data-test-undo]"));
   expect(q(host, "[data-phone-task-status-pill]")!.getAttribute("data-phone-task-status-pill")).toBe("assigned");
   await sleep(20);

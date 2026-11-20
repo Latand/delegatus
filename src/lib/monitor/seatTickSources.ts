@@ -889,14 +889,15 @@ export function defaultSeatTickSources(): SeatTickSources {
         const ids = (lane.taskIds ?? []).filter(id => tasksById.has(id));
         if (ids.length) pauseWaitingTasks[lane.id] = [...new Set([...(pauseWaitingTasks[lane.id] ?? []), ...ids])].sort();
       }
-      const linked = new Set(result.asks.flatMap(ask => ask.waitingTaskIds ?? []));
       const relevantArchived = projectRows(loadArchivedPipelinesForList(), project)
         .filter(lane => lane.taskIds?.some(id => tasksById.has(id)));
       let asks = [...result.asks];
       if (relevantArchived.length) {
         const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
-        asks = asks.concat(seatAgendaAsks({ files: [], pipelines: relevantArchived, tasks }, now / 1000, project)
-          .filter(ask => !ask.waitingTaskIds?.every(id => linked.has(id))));
+        const archivedAsks = seatAgendaAsks({ files: [], pipelines: relevantArchived, tasks }, now / 1000, project);
+        const archivedTaskIds = new Set(relevantArchived.flatMap(lane => lane.taskIds ?? []));
+        asks = asks.filter(ask => !(archivedTaskIds.has(ask.id) && ask.waitingTaskIds?.includes(ask.id)));
+        asks = asks.concat(archivedAsks);
       }
       return { ...result, asks, ...(Object.keys(pauseWaitingTasks).length ? { pauseWaitingTasks } : {}) };
     })),
@@ -3400,6 +3401,23 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   }
   const paused = projectRows(sources.pipelines(), project).filter(lane => isOpen(lane) && lane.state === "paused");
   const pauses = pauseInputs(paused, seat, sources, sources.now());
+  const deployThrough = Math.max(...settledDeploys.map(deploy => Date.parse(deploy.settledAt ?? "") || 0));
+  const deployResumeTasks = new Map<string, string[]>();
+  if (deployThrough > 0) {
+    const eligible = new Set(paused.filter(lane => lane.pause?.actor?.kind === "agent"
+      && lane.pause.actor.conversationId === seat.conversationId
+      && Date.parse(lane.pausedAt ?? "") <= deployThrough
+      && (!lane.pause.resumeCondition || pauseReminderDue(lane.pause, lane.pausedAt, now,
+        pauses.get(lane.id)?.pauseConditionMet ?? false))).map(lane => lane.id));
+    for (const task of projectRows(sources.tasks(), project)) {
+      if (task.status === "done" || (task.status !== "blocked" && !task.hold)) continue;
+      for (const lane of paused) if (eligible.has(lane.id) && lane.taskIds?.includes(task.id)) {
+        const ids = deployResumeTasks.get(lane.id) ?? [];
+        ids.push(task.id);
+        deployResumeTasks.set(lane.id, ids);
+      }
+    }
+  }
   const pipelines: SeatTickPipelineInput[] = [];
   await forEachCooperatively(paused, lane => {
     const evidence = evidenceFromPipelines([{ id: lane.id, task: lane.task, project: lane.project,
@@ -3409,7 +3427,10 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   }, { batchSize: 4, timeBudgetMs: 8 });
   return { project, now: sources.now(), seat, state, policy, settings,
     pipelines, tasks: [], events: [], children: [], childrenUnavailable: null,
-    workerAsksObserved, ...(workerAsks ? { workerAsks } : {}), ...(pauseWaitingTasks ? { pauseWaitingTasks } : {}), ...(decisionForms ? { decisionForms } : {}),
+    workerAsksObserved, ...(workerAsks ? { workerAsks } : {}),
+    ...((pauseWaitingTasks || deployResumeTasks.size) ? { pauseWaitingTasks: {
+      ...(pauseWaitingTasks ?? {}), ...Object.fromEntries([...deployResumeTasks].map(([id, taskIds]) => [id, [...new Set([...(pauseWaitingTasks?.[id] ?? []), ...taskIds])].sort()])),
+    } } : {}), ...(decisionForms ? { decisionForms } : {}),
     instructionReview: instructionReviewFor(project, sources.now(), settings, sources.pipelines(), sources.tasks(), seat),
     ownLanes: [], pullRequests: [], pullRequestsUnavailable: null, pullRequestsObserved: false,
     signals: [], settledDeploys, deploySettlementWakeDue: true, ...(observedReports ? { reports: observedReports } : {}),

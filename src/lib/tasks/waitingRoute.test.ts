@@ -80,7 +80,8 @@ test("structured dates and refs tell a cleared wait from an open prerequisite", 
   const dependency = { ...task("aabbccdd", null), status: "assigned" as const };
   const held = task("ref", "task", { ref: dependency.id });
   const finished = { owner: "seat", rule: "wait-cleared", carriedBy: "task" };
-  expect(classify(held, [], [dependency])).toMatchObject({ owner: "agents", rule: "dependency" });
+  expect(classify(held, [], [dependency])).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(classify(held, [], [{ ...dependency, assignments: [{ state: "delivered", path: null, conversationId: "conversation_live" }] }])).toMatchObject({ owner: "agents", rule: "dependency" });
   expect(classify(held, [], [{ ...dependency, status: "inbox" }])).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
   const cycleA = task("cycle-a", "task", { ref: "cycle-b" });
   const cycleB = task("cycle-b", "task", { ref: "cycle-a" });
@@ -201,8 +202,8 @@ test("dry run over 111 synthetic Waiting cards reproduces the design counts", ()
     else outcomes[route.carriedBy]++;
     if (route.owner === "seat" && route.action.includes("deployment_status")) acceptance++;
   }
-  expect(outcomes).toEqual({ operator: 11, answered: 6, task: 31, lane: 34, agents: 29 });
+  expect(outcomes).toEqual({ operator: 11, answered: 6, task: 52, lane: 34, agents: 8 });
   expect(Object.fromEntries(rules)).toEqual({ "operator-hold": 11, "form-answered": 6, "lane-stop": 30, "lane-dismissed": 1,
-    "pause-ready": 4, "wait-cleared": 3, unowned: 27, running: 2, dated: 6, dependency: 21 });
+    "pause-ready": 4, "wait-cleared": 3, unowned: 48, running: 2, dated: 6 });
   expect(acceptance).toBe(11);
 });

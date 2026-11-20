@@ -59,4 +59,6 @@ test("card texts for both locales and states, item label bounded", () => {
   const rendered = maintenanceItemLabel(six);
   expect(rendered).toContain("task-6: Lane settled — Retry step 6");
   expect(rendered).toContain("detail ".repeat(28));
+  const seven = { ...six, log: { ...six.log, seat: [...six.log.seat, { taskId: "task-7", reason: "Lane settled", action: "Retry stage seven" }] } };
+  expect(maintenanceItemLabel(seven, seven.log.seat.slice(6))).toContain("task-7: Lane settled — Retry stage seven");
 });

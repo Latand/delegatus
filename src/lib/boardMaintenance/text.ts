@@ -86,11 +86,11 @@ export function maintenanceBrief(input: { run: MaintenanceRun; previous: Mainten
   ) : "";
   return `Board maintenance run ${run.runId} for project ${run.project}.\nRepository: ${run.repoDir}\nYour run's card: ${run.taskId}. Delegatus manages it.\nThe orchestrator seat's card: ${input.seatTaskIds.join(", ") || "none found; confirm with get_orchestrator"}.\nProduction: ${input.productionLine} ${completion}\nThis run started ${run.claimedAt}. The previous run started ${previous?.claimedAt ?? "never"}; use it as updatedSince for the done-task check.\n\n${section}\nThe record is history. Confirm every decision from current state.\nWork evidence Delegatus measured at ${new Date(input.now).toISOString()}, for ${input.evidence.length} of ${input.openCount} open tasks. Confirm before you act:\n${workEvidenceLines(input.evidence, input.now).map(l => `- ${l}`).join("\n")}${waiting}`;
 }
-export function maintenanceItemLabel(run: Pick<MaintenanceRun, "state" | "endedAt" | "failure" | "counts" | "log" | "claimedAt" | "launchedAt" | "intervalHours">): string {
+export function maintenanceItemLabel(run: Pick<MaintenanceRun, "state" | "endedAt" | "failure" | "counts" | "log" | "claimedAt" | "launchedAt" | "intervalHours">, seatEntries = run.log.seat ?? []): string {
   const c = run.counts;
   const decisions = run.log.attention.filter(maintenanceDecision);
   const seat = run.log.seat ?? [];
-  const handoffs = seat.length ? ` For the seat (${seat.length}): ${seat.slice(0, 6).map(a => `${a.taskId}: ${a.reason.slice(0, 100)} — ${a.action.slice(0, 300)}`).join(". ")}.` : "";
+  const handoffs = seatEntries.length ? ` For the seat (${seat.length} total): ${seatEntries.map(a => `${a.taskId}: ${a.reason.slice(0, 100)} — ${a.action.slice(0, 300)}`).join(". ")}.` : "";
   if (run.state === "failed") {
     const prefix = `board maintenance failed ${run.endedAt}: ${run.failure?.kind}: ${run.failure?.detail}. ${c.tasks} task(s) changed in ${c.writes} write(s) (status ${c.status}, closed ${c.closed}, created ${c.created}, text ${c.text}, details ${c.details}, looks ${c.looks}); for the operator (${decisions.length}): `;
     const attention = decisions.slice(0, 5).map(a => `${a.taskId}: ${a.text}${a.options.length ? ` [${a.options.join(" / ")}]` : ""}`).join("; ");

@@ -107,7 +107,7 @@ function laneLine(pipeline: Pipeline): string {
       }
       const attempt = pipeline.cursor ? latestOperationalStageAttempt(pipeline, pipeline.cursor.stageId) : null;
       if (stop?.kind !== "question" || (attempt?.verdict ?? attempt?.report?.verdict)?.status !== "needs_decision") {
-        return `${kind}${title} —${stage} ${laneQuestion(pipeline)}; repair the stop, then pipeline_action retry-stage; ${escalate}`;
+        return `${kind}${title} —${stage} pipeline_action retry-stage; ${laneQuestion(pipeline)}; repair the stop; ${escalate}`;
       }
       return `${kind}${title} —${stage} asks ${laneQuestion(pipeline)}; answer with pipeline_action resolve-decision (expectedRevision from get_pipeline), or retry-stage for a mechanical stop; ${escalate}`;
     }
@@ -180,7 +180,7 @@ export function seatAgendaAsks(
       return pages.map((page, index) => {
         const waiting = page?.length ? `After settling this lane, move Waiting task(s) ${page.join(", ")} by re-sending or clearing their holds. ` : "";
         const key = agendaKey(route) + (page ? `@waiting:${index + 1}:${waitingTaskIds!.length}:${page.join(",")}` : "");
-        return { key, id: pipeline.id, label: clip(waiting + returnedNote(route) + laneLine(pipeline), LABEL_MAX),
+      return { key, id: pipeline.id, label: clip(waiting + returnedNote(route) + laneLine(pipeline), LABEL_MAX),
           ...(page ? { waitingTaskIds: page } : {}), sinceMs: state.sinceMs,
           seatOwnedLane: { id: pipeline.id, title: pipeline.task || pipeline.id, sinceMs: state.sinceMs,
             reason: `${kind}: ${pipeline.merge?.state === "blocked" ? clip(pipeline.merge.reason ?? "merge stopped", 120) : pipeline.stateDetail ?? state.stop?.kind ?? pipeline.state}` } };

@@ -82,6 +82,7 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
       return seat("form-answered", "the operator answered the task’s decision form",
         `Read round ${decision.id} with read_prototype_review and carry out the answer. Clear the hold or set a new one naming the operator’s next action.`);
     }
+    if (!hold.note.trim()) return seat("unowned", "its operator hold names no action", "Review the wait and either move it back to work or name the operator action or publish an outstanding decision form.");
     return { owner: "operator", rule: "operator-hold" };
   }
   if (open.some(laneActive) || liveMember) return { owner: "agents", rule: "running", action: "Let the current work continue." };
@@ -109,7 +110,7 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
     return seat("wait-cleared", "its recorded prerequisite cleared", "Start or continue the work, then clear the hold.");
   }
   if (until > now || hold?.kind === "postponed") return { owner: "agents", rule: "dated", action: "Keep the recorded postponement or reset time." };
-  const dependencyHasOwner = !!dependency && (dependency.status === "assigned" || dependency.assignments.some(a => a.state === "delivered" || a.state === "spawning" || a.state === "handoff" || a.state === "linked")
+  const dependencyHasOwner = !!dependency && (dependency.assignments.some(a => a.state === "delivered" || a.state === "spawning" || a.state === "handoff")
     || dependency.status === "blocked" && [...(input.lanesByTask.get(dependency.id) ?? [])].some(laneActive))
     || !!dependencyLane && laneActive(dependencyLane);
   if (dependencyHasOwner || open.length && (hold?.kind === "pr" || hold?.kind === "issue")) {

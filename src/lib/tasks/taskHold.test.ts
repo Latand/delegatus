@@ -138,6 +138,15 @@ test("explicit blocked writes are clamped with their reason and completion alway
     { now: () => NOW, id: () => "operator-action" })).task.status).toBe("blocked");
 });
 
+test("an empty operator label cannot park an agent update and is routed to the seat", async () => {
+  const { waitingRoute, waitingRouteIndex } = await import("./waitingRoute");
+  const original = task({ status: "assigned", assignments: [{ path: null, panePid: null, state: "linked", error: null, at: NOW }] });
+  const result = ok(patchTask([original], original.id, { status: "blocked", hold: { kind: "operator" } }, NOW, { actor: "agent" }));
+  expect(result.task.status).toBe("assigned");
+  expect(result.task.hold?.note).toBe("");
+  expect(waitingRoute(result.task, waitingRouteIndex([result.task], []), Date.parse(NOW))).toMatchObject({ owner: "seat", why: expect.stringContaining("names no action") });
+});
+
 
 test("legacy status writes remain accepted, create refuses oversized reasons, and unrelated hidden cards stay untouched", () => {
   const hidden = task({ id: "hidden", status: "blocked", groupHidden: { at: NOW, by: "operator", admitted: [] } });

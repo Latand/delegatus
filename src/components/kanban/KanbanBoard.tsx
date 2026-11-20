@@ -1490,7 +1490,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       type: "radio", id: `status:${status}`, status, label: statusLabel(t, status),
       why: hints ? t(`kanban.statusHint.${status}`) : null,
       checked: card.status === status,
-      onSelect: () => move(card, status, { focus: true }),
+      onSelect: () => status === "blocked" ? setHoldEditing(card.id) : move(card, status, { focus: true }),
     })),
     { type: "item", id: "hold", label: t("kanban.hold.edit"), keepFocus: true, onSelect: () => setHoldEditing(card.id) },
   ], [move, t]);

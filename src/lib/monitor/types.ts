@@ -306,7 +306,7 @@ export interface SeatTickItem {
   manifestLine?: string;
   /** Only on a `deploy` line (#2063): the settled deployment as the ledger
       records it. `id` is its deployment id. */
-  maintenance?: { runId: string };
+  maintenance?: { runId: string; page: number; pages: number };
   deploy?: { deploymentId: string; phase: string; sha: string; error: string | null };
 }
 

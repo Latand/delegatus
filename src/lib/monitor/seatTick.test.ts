@@ -2451,7 +2451,7 @@ test("cropped outcome bullets leave child, deployment and maintenance obligation
       { kind: "pipeline", id: "visible-lane", label: "completed", laneAnnouncement: "visible-lane:completed", itemVersion: "lane@one" },
       { kind: "child", id: "cropped-child", label: "long child result ".repeat(500), outcomeIds: ["child-outcome"], stateTokens: ["cropped-child@one"], stallToken: "child-stall" },
       { kind: "deploy", id: "cropped-deploy", label: "deploy settled", deploy: { deploymentId: "cropped-deploy", phase: "succeeded", sha: "a".repeat(40), error: null } },
-      { kind: "maintenance", id: "cropped-maintenance", label: "maintenance finished", maintenance: { runId: "cropped-maintenance" } },
+      { kind: "maintenance", id: "cropped-maintenance", label: "maintenance finished", maintenance: { runId: "cropped-maintenance", page: 0, pages: 1 } },
     ],
   };
   const text = seatTickWakeMessage({ project: "fixture-project", reasons: verdict.reasons, items: verdict.items, deferred: 0, signals: [] });
@@ -2885,6 +2885,34 @@ describe("reserved task pages", () => {
     expect(page.text).toContain("hold: none");
     expect(page.text).toContain("due none");
   });
+});
+
+test("maintenance handoffs page task/action pairs and credit only the delivered page", () => {
+  const handoffs = Array.from({ length: 7 }, (_, n) => ({ taskId: `handoff-${n + 1}`, reason: `Reason ${n + 1}`, action: `Run action ${n + 1}` }));
+  const run = { runId: "maintenance-run", project: PROJECT, state: "succeeded", endedAt: new Date(NOW - MINUTE).toISOString(),
+    claimedAt: new Date(NOW - 10 * MINUTE).toISOString(), launchedAt: new Date(NOW - 9 * MINUTE).toISOString(), intervalHours: 12,
+    taskId: "maintenance-card", counts: { writes: 7, tasks: 7, status: 7, closed: 0, created: 0, text: 0, details: 0, looks: 0 },
+    log: { changes: [], omittedChanges: 0, logGaps: 0, attention: [], leftAlone: [], seat: handoffs, verdict: "pass" } } as never;
+  const policy = { ...DEFAULT_SEAT_TICK_POLICY, itemsPerWake: 1 };
+  let check = input({ settledMaintenance: [run], policy, state: stateWith({ lastWakeAt: new Date(NOW - 5 * MINUTE).toISOString() }) });
+  const first = seatTickDecision(check);
+  if (first.verdict.kind !== "wake") throw new Error("maintenance page wake expected");
+  expect(first.verdict.items[0]!.label).toContain("handoff-1: Reason 1 — Run action 1");
+  expect(first.verdict.items[0]!.label).toContain("handoff-3: Reason 3 — Run action 3");
+  expect(first.verdict.items[0]!.label).not.toContain("handoff-4:");
+  const firstText = seatTickWakeMessage({ project: PROJECT, ...first.verdict, signals: [] });
+  const firstPlan = seatTickWakeCommitPlan({ ...first.verdict, items: [...first.verdict.items] }, { fingerprint: "maintenance-1", eventsThrough: 0, frozenText: firstText })!;
+  const landed = seatTickWakeCommit(first.state, firstPlan, NOW);
+  check = { ...check, now: NOW + SEAT_TICK_WAKE_INTERVAL_MS, state: JSON.parse(JSON.stringify(landed)) };
+  const second = seatTickDecision(check);
+  if (second.verdict.kind !== "wake") throw new Error("remaining maintenance page must stay owed");
+  expect(second.verdict.items[0]!.label).toContain("handoff-4: Reason 4 — Run action 4");
+  const secondText = seatTickWakeMessage({ project: PROJECT, ...second.verdict, signals: [] });
+  const secondPlan = seatTickWakeCommitPlan({ ...second.verdict, items: [...second.verdict.items] }, { fingerprint: "maintenance-2", eventsThrough: 0, frozenText: secondText })!;
+  const secondLanded = seatTickWakeCommit(second.state, secondPlan, check.now);
+  const third = seatTickDecision({ ...check, now: check.now + SEAT_TICK_WAKE_INTERVAL_MS, state: JSON.parse(JSON.stringify(secondLanded)) });
+  if (third.verdict.kind !== "wake") throw new Error("last maintenance page must stay owed");
+  expect(third.verdict.items[0]!.label).toContain("handoff-7: Reason 7 — Run action 7");
 });
 
 

@@ -621,7 +621,7 @@ export class TaskStatusMutations {
 
   private saved(task: BoardTask, from: TaskStatus, to: TaskStatus, replacing: string | null): StatusMoveOutcome {
     this.remember(task, replacing, true);
-    this.settle(task.id, to, revisionOf(task), true);
+    this.settle(task.id, task.status, revisionOf(task), true);
     this.ports.changed();
     return { kind: "saved", task, from, to, lineage: this.lineages.get(task.id) ?? 0 };
   }

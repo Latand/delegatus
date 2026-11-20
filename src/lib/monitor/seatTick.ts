@@ -216,6 +216,8 @@ function seatSettledMaintenance(input: SeatTickCheckInput) {
     && !(input.state.announcedMaintenance ?? []).includes(run.runId));
 }
 
+function maintenancePageToken(runId: string, page: number): string { return `${runId}:page:${page}`; }
+
 function seatSettledDeploys(input: SeatTickCheckInput): readonly SeatTickDeployInput[] {
   return (input.settledDeploys ?? []).filter((deploy) => {
     const settledAt = deploy.settledAt ? Date.parse(deploy.settledAt) : Number.NaN;
@@ -1989,7 +1991,15 @@ function wakeItems(context: {
   }
   for (const alert of input.releaseAlerts ?? []) items.push({ kind: "signal", id: alert.id, label: alert.label });
   for (const run of seatSettledMaintenance(input)) {
-    items.push({ kind: "maintenance", id: run.taskId ?? run.runId, occurredAt: run.endedAt, label: maintenanceItemLabel(run), maintenance: { runId: run.runId } });
+    const pageSize = 3;
+    const entries = run.log.seat ?? [];
+    const pages = Math.max(1, Math.ceil(entries.length / pageSize));
+    for (let page = 0; page < pages; page++) {
+      if ((input.state.announcedMaintenance ?? []).includes(maintenancePageToken(run.runId, page))) continue;
+      const pageEntries = entries.slice(page * pageSize, (page + 1) * pageSize);
+      items.push({ kind: "maintenance", id: `${run.taskId ?? run.runId}:${page + 1}`, occurredAt: run.endedAt,
+        label: maintenanceItemLabel(run, pageEntries), maintenance: { runId: run.runId, page, pages } });
+    }
   }
   for (const pipeline of seatPausedLanes(input)) {
     const waiting = input.pauseWaitingTasks?.[pipeline.id] ?? [];
@@ -2213,7 +2223,7 @@ export function seatTickWakeCommitPlan(
   const announcedLanes = items.flatMap((item) => item.laneAnnouncement ? [item.laneAnnouncement] : []);
   /* The same rule for a settled deploy (#2063): the landing of the wake that
      carried it is what announces it, once. */
-  const announcedMaintenance = items.filter(item => item.kind === "maintenance").flatMap(item => item.maintenance ? [item.maintenance.runId] : []);
+  const announcedMaintenance = items.filter(item => item.kind === "maintenance").flatMap(item => item.maintenance ? [maintenancePageToken(item.maintenance.runId, item.maintenance.page)] : []);
   const announcedDeploys = items.filter((item) => item.kind === "deploy").map((item) => item.id);
   const deployResumeThrough = items.filter(item => item.kind === "deploy" && item.occurredAt && Number.isFinite(Date.parse(item.occurredAt)))
     .map(item => item.occurredAt!).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
@@ -2233,7 +2243,7 @@ export function seatTickWakeCommitPlan(
         .filter(id => terminal.has(id)).map(id => `child:${id}`) : []),
       ...(item.stateTokens ?? []).map(id => `shown:${id}`),
       ...(item.laneAnnouncement ? [`lane:${item.laneAnnouncement}`] : []),
-      ...(item.maintenance ? [`maintenance:${item.maintenance.runId}`] : []),
+      ...(item.maintenance ? [`maintenance:${item.maintenance.runId}:page:${item.maintenance.page}`] : []),
       ...(item.kind === "deploy" ? [`deploy:${item.id}`] : []),
       ...(item.stallToken ? [`stall:${item.stallToken}`] : []),
       ...(context.bridgeReports ? seatTickOwedOutcomes([item]).map(outcome => `report:${outcome.key}`) : []),

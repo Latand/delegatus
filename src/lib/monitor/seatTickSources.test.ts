@@ -302,6 +302,8 @@ function sources(over: {
   livenessThrows?: boolean;
   events?: LifecycleEvent[];
   latestDeployment?: ReturnType<SeatTickSources["latestDeployment"]>;
+  seatDeployments?: SeatTickSources["seatDeployments"];
+  deployment?: SeatTickSources["deployment"];
   settings?: ReturnType<SeatTickSources["settings"]>;
   livenessCalls?: { project?: string; conversationId?: string; stallAfterMs: number }[];
   openPullRequests?: OpenPullRequest[];
@@ -355,6 +357,8 @@ function sources(over: {
     },
     lifecycleJournal: () => journal(over.events ?? []),
     latestDeployment: () => over.latestDeployment ?? ({ state: "unreadable", error: "no ledger" }) as never,
+    ...(over.seatDeployments ? { seatDeployments: over.seatDeployments } : {}),
+    ...(over.deployment ? { deployment: over.deployment } : {}),
     retirementReport: () => null,
     ...(over.retirementJournal ? { retirementJournal: over.retirementJournal } : {}),
     settings: () => over.settings ?? defaultSeatTickSettings(PROJECT),
@@ -971,6 +975,60 @@ test("the deployment signal reports the latest deployment, and stays silent when
   /* A deployment still running is not an outcome to report at all. */
   const running = await gather({ latestDeployment: deployment({ phase: "promoting", terminal: false }) });
   expect(running.signals).toEqual([]);
+});
+
+test("a settled deploy wake carries the linked seat-paused Waiting task from gathered source rows", async () => {
+  const { gatherSeatTickDeployInput } = await import("./seatTickSources");
+  const task = { id: "task-after-deploy", project: PROJECT, text: "Resume the release", status: "blocked", placement: "unplaced", assignments: [],
+    createdAt: new Date(NOW - 60 * 60_000).toISOString(), updatedAt: new Date(NOW - 60 * 60_000).toISOString(),
+    hold: { kind: "external", note: "Paused for deployment", since: new Date(NOW - 60 * 60_000).toISOString(), by: "agent" } };
+  const pipeline = lane({ id: "paused-after-deploy", state: "paused", taskIds: [task.id], pausedAt: new Date(NOW - 60 * 60_000).toISOString(),
+    pause: { reason: "Deploy in progress", actor: { kind: "agent", conversationId: CONVERSATION } } });
+  const settledAt = new Date(NOW - 30 * 60_000).toISOString();
+  const ports = sources({ now: NOW, pipelines: [pipeline], tasks: [task], seatDeployments: () => [{ deploymentId: "deployment-fixture", conversationId: CONVERSATION,
+    project: PROJECT, revision: "a".repeat(40), requestedAt: new Date(NOW - 45 * 60_000).toISOString() }],
+  deployment: () => ({ state: "ok", value: { deploymentId: "deployment-fixture", phase: "succeeded", revision: "a".repeat(40), updatedAt: settledAt, terminal: true } }) as never });
+  const gathered = await gatherSeatTickDeployInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered?.pauseWaitingTasks).toEqual({ [pipeline.id]: [task.id] });
+  const decision = seatTickDecision(gathered!);
+  if (decision.verdict.kind !== "wake") throw new Error("settled deploy should wake the seat");
+  const resumeLabel = decision.verdict.items.find(item => item.kind === "pipeline")?.label ?? "";
+  expect(resumeLabel).toContain(task.id);
+  expect(resumeLabel).toContain("pipeline_action resume");
+});
+
+test("the default worker-ask source preserves archived merged-task acceptance actions", async () => {
+  const { defaultSeatTickSources } = await import("./seatTickSources");
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const { savePipelines, archiveSettledPipelines, buildPipeline } = await import("@/lib/pipelines/store");
+  const { isPipeline } = await import("@/lib/pipelines/storedRecord");
+  const projection = await import("@/app/api/files/operatorProjection");
+  const { spyOn } = await import("bun:test");
+  const task = { ...boardCard({ id: "archived-build-task", project: PROJECT, text: "Verify the running build", status: "blocked" }),
+    createdAt: new Date(NOW - 5 * DAY_MS).toISOString(), updatedAt: new Date(NOW - 5 * DAY_MS).toISOString(),
+    hold: { kind: "external", note: "Verify acceptance", since: new Date(NOW - 5 * DAY_MS).toISOString(), by: "agent" } };
+  const closedAt = new Date(NOW - 4 * DAY_MS).toISOString();
+  const merged = { ...buildPipeline({ id: "archived-merged-lane", task: "Verify the running build", project: PROJECT, repoDir: "/srv/repo",
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: closedAt, state: "draft" }), state: "completed" as const, closedAt, cursor: null,
+    taskIds: [task.id], hiddenAt: closedAt, merge: { gitOnly: true as const, state: "merged" as const, by: "outside" as const, repository: "fixture/repo",
+      prNumber: null, policyChangedAt: closedAt, reviewedHead: "", chain: [], updates: [], seenChecks: [], head: null, headSeenAt: null, lastChecks: null,
+      readAt: null, nextReadAt: null, requestedAt: closedAt, mergedHead: null, mergeCommit: null, method: null, mergedAt: closedAt,
+      attempts: 0, reason: null, blockedAt: null, updatedAt: closedAt } };
+  expect(isPipeline(merged)).toBe(true);
+  saveTasks([task] as never);
+  savePipelines([merged] as never);
+  expect(await archiveSettledPipelines(NOW)).toBe(1);
+  const agenda = spyOn(projection, "operatorSeatAgenda").mockResolvedValue({ asks: [], forms: { rows: [], count: 0 } } as never);
+  try {
+    const source = defaultSeatTickSources();
+    const result = await source.workerAsks!(PROJECT, CONVERSATION);
+    const ask = result?.asks.find(item => item.id === task.id);
+    expect(ask).toMatchObject({ id: task.id, waitingTaskIds: [task.id] });
+    expect(ask?.label).toContain("deployment_status");
+    expect(ask?.label).toContain(task.id);
+  } finally { agenda.mockRestore(); }
 });
 
 /* ------------------------------------------------------------------------- *

@@ -6,6 +6,7 @@ import { readFindingKey } from "./finding";
 import { canonicalProject } from "@/lib/projects/aliases";
 
 import { holdParks, validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
+import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { taskMutationView } from "./mutationView";
@@ -760,7 +761,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (input.restoreHold !== null && !patch.hold) return { ok: false, status: 400, error: "invalid hold snapshot" };
     // Undo restores provenance and hold data; it cannot restore a Waiting
     // placement for work whose next action belongs to the seat or an agent.
-    if (patch.status === "blocked" && (!patch.hold || !holdParks(patch.hold))) patch.status = ownerColumn();
+    if (patch.status === "blocked" && (!patch.hold || !(holdParks(patch.hold) || prototypeWaitsOnOperator(task.prototypeReview, task)))) patch.status = ownerColumn();
   }
   if (writingHold) {
     const holdError = validateTaskHoldInput(input.hold);
@@ -770,13 +771,18 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (patch.hold?.kind === "operator" && (task.hold?.kind !== "operator" || patch.hold.note !== task.hold.note)) {
       patch.hold.since = now;
     }
+    if (patch.hold?.kind === "operator" && !patch.hold.note.trim() && !prototypeWaitsOnOperator(task.prototypeReview, task)
+      && (patch.status === "blocked" || !patch.status && task.status === "blocked")) {
+      patch.status = ownerColumn();
+      notes.push(WAITING_OPERATOR_NOTE);
+    }
   } else if (patch.status === "blocked" && !restoringHold) {
     const hold = task.hold;
     if (hold && (holdParks(hold) || options.actor === "agent")) patch.hold = hold;
     else patch.hold = readTaskHold(hold ?? { kind: "unstated" }, now, options.actor ?? "operator", hold, options.conversationId);
   }
   if (!restoringHold && patch.status !== "done") {
-    const parks = patch.hold && holdParks(patch.hold);
+    const parks = patch.hold && (holdParks(patch.hold) || patch.hold.kind === "operator" && prototypeWaitsOnOperator(task.prototypeReview, task));
     if (patch.status === "blocked" && !parks) {
       patch.status = ownerColumn();
       if (options.actor === "agent") notes.push(WAITING_OPERATOR_NOTE);

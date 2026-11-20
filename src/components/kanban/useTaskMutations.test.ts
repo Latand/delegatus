@@ -77,6 +77,20 @@ test("a move shows at once, is written with the revision guard, and stays until 
   expect(mutations.statuses().has("a")).toBe(false);
 });
 
+test("a server-normalized Waiting request settles every surface on the accepted work column", async () => {
+  const server = scripted();
+  const mutations = new TaskStatusMutations(server.ports);
+  const done = mutations.move(task("a", "assigned", 1), "blocked", { hold: { kind: "external", note: "Prerequisite cleared" } });
+  await flush();
+  server.patches[0]!.answer.resolve({ ok: true, task: { ...task("a", "inbox", 2), hold: { kind: "external", note: "Prerequisite cleared", since: "2026-09-14T10:00:00.000Z", by: "operator" } } });
+  expect((await done).kind).toBe("saved");
+  expect(mutations.statuses().get("a")).toBe("inbox");
+  mutations.reconcile([task("a", "assigned", 1)]);
+  expect(mutations.statuses().get("a")).toBe("inbox");
+  mutations.reconcile([{ ...task("a", "inbox", 2), hold: { kind: "external", note: "Prerequisite cleared", since: "2026-09-14T10:00:00.000Z", by: "operator" } } as BoardTask]);
+  expect(mutations.statuses().has("a")).toBe(false);
+});
+
 test("a refused write returns the card to the column it came from", async () => {
   const server = scripted();
   const mutations = new TaskStatusMutations(server.ports);

@@ -279,7 +279,7 @@ test("a column names its cards' status, so a card draws no status pill; S opens 
   const ports: TaskMutationPorts = {
     patch: async (id, body) => {
       patches.push({ id, body });
-      return { ok: true, task: task("a", "blocked", "Repair old links", { revision: REV(2) }) };
+      return { ok: true, task: task("a", "blocked", "Repair old links", { revision: REV(2), hold: { kind: "operator", note: "Choose the release", since: "2026-09-14T10:00:00.000Z", by: "operator" } }) };
     },
     read: async () => null,
     changed: () => {},
@@ -296,9 +296,18 @@ test("a column names its cards' status, so a card draws no status pill; S opens 
   expect(menu?.getAttribute("aria-label")).toBe("Status of «Repair old links»");
   expect([...menu!.querySelectorAll('[role="menuitemradio"]')].map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "true", "false", "false"]);
   click([...menu!.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent?.includes("Waiting")));
+  const form = host.querySelector<HTMLFormElement>("[data-hold-editor]")!;
+  expect(form).toBeTruthy();
+  expect(columnOf(host, "a")).toBe("assigned");
+  const select = form.querySelector("select")!;
+  flushSync(() => { select.value = "operator"; select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+  const field = form.querySelector<HTMLInputElement>("input")!;
+  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+  flushSync(() => { setter.call(field, "Choose the release"); field.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+  click(form.querySelector('[type="submit"]'));
   expect(columnOf(host, "a")).toBe("blocked");
   await tick();
-  expect(patches).toEqual([{ id: "a", body: { status: "blocked", expectedProject: "fixture", expectedRevision: REV(1) } }]);
+  expect(patches).toEqual([{ id: "a", body: { status: "blocked", hold: { kind: "operator", note: "Choose the release" }, expectedProject: "fixture", expectedRevision: REV(1) } }]);
   expect(document.activeElement?.getAttribute("data-id")).toBe("task:a");
 });
 
