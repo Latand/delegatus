@@ -1556,6 +1556,9 @@ test("Claude limits uses the shared account store and contains unknown-store err
   } finally { read.mockRestore(); request.mockRestore(); }
 });
 
+// Observe the provider fixtures while both their session and weekly windows are open.
+const CLAUDE_TIER_FIXTURE_NOW = Date.parse("2026-09-19T12:00:00Z");
+
 test("every model tier the provider meters becomes its own window, and a spawn is gated by its own model's (#1796)", async () => {
   const realFetch = globalThis.fetch;
   const resets = "2026-09-26T08:00:00.000Z";
@@ -1586,17 +1589,13 @@ test("every model tier the provider meters becomes its own window, and a spawn i
   expect(read.data?.tiers?.find((window) => window.tier === "fable"))
     .toEqual({ usedPercent: 88, resetsAt, windowMinutes: 10_080, tier: "fable" });
   expect(read.data?.weekly).toMatchObject({ usedPercent: 30 });
-  const { limitRows } = await import("@/components/AccountsPanel");
-  const { reconcileQuotaReadings } = await import("./rateLimit");
-  const { translate } = await import("./i18n");
-  const quota = reconcileQuotaReadings({ limits: read.data, observedAt: Date.now() / 1000, stale: false, source: "live" }, null, Date.now() / 1000);
-  expect(limitRows(quota, (key, params) => translate("en", key, params)).map((row) => row.label))
+  expect(await usageRowLabels(read.data))
     .toEqual(["5h", "Week", "Fable · Week", "Opus · Week", "Sonnet · Week"]);
 
 
   // The gate follows the same data: each model answers to its own window, and a
   // model the provider meters no bucket for answers to the general week alone.
-  const now = Date.now();
+  const now = CLAUDE_TIER_FIXTURE_NOW;
   const observation = {
     engine: "claude" as const,
     accountId: "default",
@@ -1742,12 +1741,13 @@ async function usageRowLabels(data: UsageData): Promise<string[]> {
   const { limitRows } = await import("@/components/AccountsPanel");
   const { reconcileQuotaReadings } = await import("./rateLimit");
   const { translate } = await import("./i18n");
-  const quota = reconcileQuotaReadings({ limits: data, observedAt: Date.now() / 1000, stale: false, source: "live" }, null, Date.now() / 1000);
+  const now = CLAUDE_TIER_FIXTURE_NOW / 1000;
+  const quota = reconcileQuotaReadings({ limits: data, observedAt: now, stale: false, source: "live" }, null, now);
   return limitRows(quota, (key, params) => translate("en", key, params)).map((row) => row.label);
 }
 
 function usageGate(data: UsageData, model: string) {
-  const now = Date.now();
+  const now = CLAUDE_TIER_FIXTURE_NOW;
   return effectiveRemaining({
     engine: "claude" as const,
     accountId: "default",
@@ -1820,36 +1820,11 @@ test("a human display name outranks a machine name, and a codename never reaches
 
 test("a tier the provider meters under a codename becomes its own window, labelled and gated by the model it names (#1839)", async () => {
   const resetsAt = Math.round(Date.parse("2026-09-26T08:00:00.000Z") / 1000);
-  const credentials = path.join(process.env.LLV_CLAUDE_HOME!, ".credentials.json");
-  const read = async (payload: Record<string, unknown>) => {
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = (async () => Response.json(payload)) as unknown as typeof fetch;
-    try { return await fetchClaudeLimits(credentials); } finally { globalThis.fetch = realFetch; }
-  };
-  const { limitRows } = await import("@/components/AccountsPanel");
-  const { reconcileQuotaReadings } = await import("./rateLimit");
-  const { translate } = await import("./i18n");
-  const rowLabels = (data: Awaited<ReturnType<typeof fetchClaudeLimits>>["data"]) => {
-    const quota = reconcileQuotaReadings({ limits: data, observedAt: Date.now() / 1000, stale: false, source: "live" }, null, Date.now() / 1000);
-    return limitRows(quota, (key, params) => translate("en", key, params)).map((row) => row.label);
-  };
-  const gate = (data: Awaited<ReturnType<typeof fetchClaudeLimits>>["data"], model: string) => {
-    const now = Date.now();
-    return effectiveRemaining({
-      engine: "claude" as const,
-      accountId: "default",
-      authenticated: true,
-      limits: data,
-      provenance: { source: "live" as const, reason: null, staleSince: null },
-      observedAt: now,
-      authCheckedAt: now,
-    }, now, { model });
-  };
 
   /* The provider's own labelled list names the window and the model it meters,
      so the row reads as the operator's model and the gate finds Fable's own
      window under a bucket key that never says "fable". */
-  const labelled = await read(usagePayloadWithCodenamedTier([
+  const labelled = await readUsage(usagePayloadWithCodenamedTier([
     { limit_type: "five_hour", name: "Session" },
     { limit_type: "seven_day", name: "Weekly" },
     { limit_type: "nimbus_quill", name: "Fable", model: "claude-fable-5-1" },
@@ -1859,26 +1834,26 @@ test("a tier the provider meters under a codename becomes its own window, labell
   expect(labelled.data?.tiers).toEqual([
     { usedPercent: 88, resetsAt, windowMinutes: 10_080, tier: "fable", label: "Fable" },
   ]);
-  expect(rowLabels(labelled.data)).toEqual(["5h", "Week", "Fable · Week"]);
-  expect(gate(labelled.data, "fable")).toEqual({ percent: 12, window: "tier:fable" });
-  expect(gate(labelled.data, "sonnet")).toEqual({ percent: 70, window: "weekly" });
+  expect(await usageRowLabels(labelled.data)).toEqual(["5h", "Week", "Fable · Week"]);
+  expect(usageGate(labelled.data, "fable")).toEqual({ percent: 12, window: "tier:fable" });
+  expect(usageGate(labelled.data, "sonnet")).toEqual({ percent: 70, window: "weekly" });
 
   /* The same payload whose `limits[]` says nothing this parser can use — the
      shape was never captured, so it has to be allowed to be anything. The
      window is still read from the bucket and still rendered; with nothing
      attributing it to a model, it is named for its bucket rather than shown
      raw as `nimbus_quill`, and no spawn is refused on another tier's number. */
-  const unattributed = await read(usagePayloadWithCodenamedTier([{ foo: 1 }, "opaque", null]));
+  const unattributed = await readUsage(usagePayloadWithCodenamedTier([{ foo: 1 }, "opaque", null]));
   expect(unattributed.data?.tiers).toEqual([
     { usedPercent: 88, resetsAt, windowMinutes: 10_080, tier: "nimbus_quill" },
   ]);
-  expect(rowLabels(unattributed.data)).toEqual(["5h", "Week", "Nimbus Quill · Week"]);
-  expect(gate(unattributed.data, "fable")).toEqual({ percent: 70, window: "weekly" });
+  expect(await usageRowLabels(unattributed.data)).toEqual(["5h", "Week", "Nimbus Quill · Week"]);
+  expect(usageGate(unattributed.data, "fable")).toEqual({ percent: 70, window: "weekly" });
 
   /* An entry for one of the two general windows is never adopted as a tier,
      however it is labelled: filing the 5-hour window under the model its label
      names would show a session number as a week and gate that model on it. */
-  const generalNamed = await read(usagePayloadWithCodenamedTier([
+  const generalNamed = await readUsage(usagePayloadWithCodenamedTier([
     { limit_type: "five_hour", name: "Opus session", model: "claude-opus-5" },
     { limit_type: "nimbus_quill", name: "Fable" },
   ]));
@@ -1888,7 +1863,7 @@ test("a tier the provider meters under a codename becomes its own window, labell
   expect(generalNamed.data?.session).toMatchObject({ usedPercent: 12, windowMinutes: 300 });
 
   // No `limits` key at all is the same story: the bucket scan stands alone.
-  const bucketsOnly = await read(usagePayloadWithCodenamedTier());
+  const bucketsOnly = await readUsage(usagePayloadWithCodenamedTier());
   expect(bucketsOnly.data?.tiers?.map((tier) => tier.tier)).toEqual(["nimbus_quill"]);
 });
 
