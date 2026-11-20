@@ -298,7 +298,8 @@ def observe_switch(adapter, target, samples, interval, timeout):
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
     unknown = ("unknown" in outcomes or interrupted is None or bool(unreadable) or sample.incomplete
-               or any("worker-cleanup-pending" in note for note in diagnostics))
+               or any("worker-cleanup-pending" in note for note in diagnostics)
+               or any(note.startswith(("recovery:", "sample-recovery:")) for note in diagnostics))
     relocation_ready = (relocation is not None and relocation.get("released") is True
                         and relocation.get("placement") == "placed" and relocation.get("started") is True)
     verdict = "fail" if not healthy or "lost" in outcomes or not relocation_ready else "needs_decision" if unknown else "pass"
@@ -326,8 +327,12 @@ class EvidenceSample:
         if kind == "protected":
             index, outcome = value
             row = self.protected[index]
-            if "stageState" in outcome or outcome["outcome"] != "unknown":
-                for field in ("stageState", "observedConversationId", "hostState", "lifecycle"):
+            coordinates = (outcome.get("pipelineId", row.get("pipelineId")),
+                           outcome.get("stageId", row.get("stageId")),
+                           outcome.get("attempt", row.get("attempt")))
+            previous = (row.get("pipelineId"), row.get("stageId"), row.get("attempt"))
+            if coordinates != previous:
+                for field in ("stageState", "observedConversationId", "hostState", "turnState", "lifecycle"):
                     row.pop(field, None)
             row.update(outcome)
             if row["outcome"] != "unknown":
@@ -420,6 +425,22 @@ def evidence_frames(adapter, kind, inputs, deadline):
             clock.sleep(max(0, min(1, deadline - clock.now())))
 
 
+WORKER_CUSTODY = {}
+
+
+def reap_worker_custody():
+    """Reconcile previously killed workers without blocking this sample."""
+    for child_pid, custody in tuple(WORKER_CUSTODY.items()):
+        try:
+            waited, _ = os.waitpid(child_pid, os.WNOHANG)
+        except ChildProcessError:
+            waited = child_pid
+        if waited:
+            with contextlib.suppress(OSError):
+                os.close(custody["fd"])
+            WORKER_CUSTODY.pop(child_pid, None)
+
+
 def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
     # Leave part of this phase's allowance for bounded teardown. Fork returns
     # before exec, so a slow interpreter startup cannot stall the sampler.
@@ -427,9 +448,17 @@ def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
     children = []
     completed = set()
     eof_pending = {}
+    reap_worker_custody()
+    # One slot is reserved for the serving lane that runs beside the protected
+    # reader pool in the same initial sample.
+    worker_limit = PROTECTED_READERS + 1
+    available = max(0, worker_limit - len(WORKER_CUSTODY))
     with selectors.DefaultSelector() as incoming:
         try:
             for lane in lanes:
+                if len(children) >= available:
+                    sample.unavailable(lane, "worker-cleanup-pending")
+                    continue
                 try:
                     kind, inputs = lane[:2]
                     worker_cutoff = min(limit, lane[2]) if len(lane) > 2 else limit
@@ -468,6 +497,10 @@ def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
                                 os._exit(127)
                         os.close(write_fd)
                         children.append((child_pid, read_fd, lane))
+                        WORKER_CUSTODY[child_pid] = {"fd": read_fd, "lane": lane,
+                                                     "startIdentity": None}
+                        with contextlib.suppress(Exception):
+                            WORKER_CUSTODY[child_pid]["startIdentity"] = start_identity(proc_field(child_pid, "stat"))
                         incoming.register(read_fd, selectors.EVENT_READ, (child_pid, lane, bytearray()))
                 except OSError as error:
                     sample.unavailable(lane, "worker-start:" + type(error).__name__)
@@ -557,13 +590,18 @@ def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
                         waited = child_pid
                     if waited:
                         pending.remove(child_pid)
+                        custody = WORKER_CUSTODY.pop(child_pid, None)
+                        if custody:
+                            with contextlib.suppress(OSError):
+                                os.close(custody["fd"])
                 if pending:
                     time.sleep(min(0.01, max(0, cutoff - time.monotonic())))
             for child_pid, read_fd, lane in children:
-                with contextlib.suppress(OSError):
-                    os.close(read_fd)
                 if child_pid in pending:
                     sample.unavailable(lane, "worker-cleanup-pending")
+                else:
+                    with contextlib.suppress(OSError):
+                        os.close(read_fd)
 
 
 def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collect=run_evidence_workers, owner_check=None):
@@ -590,11 +628,10 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
     collect(adapter, lanes, sample, serving_cutoff, owner_check=check_owner)
     check_owner(deadline)
     if since:
-        # A recovery can happen while either the serving check or inventory is
-        # in flight. Each inventory must follow a healthy serving witness for
-        # the latest settled generation; if recovery races the inventory, read
-        # both again under the same sample deadline.
-        witness_generation = recoveries if recoveries == 0 and ready(sample.serving, target) else -1
+        # The concurrent serving lane may finish before protected reads settle.
+        # Always take a fresh witness at the cut boundary, after owner recovery,
+        # and bind the inventory to the same recovery generation.
+        witness_generation = -1
         while adapter.clock.now() < deadline:
             if witness_generation != recoveries:
                 before = recoveries
@@ -1109,12 +1146,52 @@ def detached_command(script, config, state, run_id):
             sys.executable, script, "--approved", "--config", config, "--worker", run_id]
 
 
+COMMAND_CUSTODY = {}
+
+
+def reap_command_custody():
+    for pid, child in tuple(COMMAND_CUSTODY.items()):
+        if child.poll() is not None:
+            with contextlib.suppress(Exception):
+                child.communicate(timeout=0)
+            for stream in (child.stdout, child.stderr):
+                if stream is not None:
+                    with contextlib.suppress(OSError):
+                        stream.close()
+            COMMAND_CUSTODY.pop(pid, None)
+
+
 def command(args, cwd=None, timeout=10):
-    result = subprocess.run(args, cwd=cwd, capture_output=True, timeout=timeout, text=True)
-    if result.returncode:
+    reap_command_custody()
+    deadline = time.monotonic() + timeout
+    child = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, start_new_session=True)
+    if time.monotonic() >= deadline:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        COMMAND_CUSTODY[child.pid] = child
+        raise TimeoutError("command deadline") from None
+    try:
+        stdout, _stderr = child.communicate(timeout=max(0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        # Never use communicate()'s post-SIGKILL unbounded wait. The command
+        # remains unknown if its owned process cannot be reaped immediately.
+        try:
+            child.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            COMMAND_CUSTODY[child.pid] = child
+            raise TimeoutError("command cleanup unconfirmed") from None
+        for stream in (child.stdout, child.stderr):
+            if stream is not None:
+                with contextlib.suppress(OSError):
+                    stream.close()
+        raise TimeoutError("command deadline") from None
+    if child.returncode:
         # Subprocess output and arguments can contain paths or credentials.
         raise RuntimeError("command refused")
-    return result.stdout.strip()
+    return stdout.strip()
 
 
 class Mcp:
@@ -1326,14 +1403,25 @@ class Checkout:
         def bounded(args, cwd=None):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                relocation = getattr(self, "relocation", None)
+                if relocation is not None and "recovery:command-deadline" not in relocation["diagnostics"]:
+                    relocation["diagnostics"].append("recovery:command-deadline")
                 raise TimeoutError("owner recovery command deadline")
-            return command(args, cwd, timeout=min(0.15, remaining))
+            try:
+                return command(args, cwd, timeout=min(0.15, remaining))
+            except TimeoutError:
+                relocation = getattr(self, "relocation", None)
+                if relocation is not None and "recovery:command-deadline" not in relocation["diagnostics"]:
+                    relocation["diagnostics"].append("recovery:command-deadline")
+                raise
 
+        self._command_deadline = deadline
         self.command = bounded
         try:
             yield
         finally:
             self.command = execute
+            self._command_deadline = None
 
     def census(self, timeout=30):
         return self.census_adapter(self.release, self.plan["bun"], self.state, self.target, timeout)
@@ -2077,33 +2165,73 @@ class Checkout:
     def start(self, relocation, attempts=START_ATTEMPTS, settle_timeout=STOP_SETTLE):
         """Starts the unit, retrying a refused or failed start. Whatever the
         relocation found, this always runs once a stop was submitted."""
+        attempted = False
         for attempt in range(attempts):
+            deadline = getattr(self, "_command_deadline", None)
+            if deadline is not None and deadline - time.monotonic() <= 0:
+                break
             if attempt:
-                self.clock.sleep(5)
+                delay = min(5, deadline - time.monotonic()) if deadline is not None else 5
+                if delay <= 0:
+                    break
+                self.clock.sleep(delay)
+                if deadline is not None and deadline - time.monotonic() <= 0:
+                    break
             try:
+                if deadline is not None and deadline - time.monotonic() <= 0:
+                    break
                 relocation["startAttempts"] += 1
+                attempted = True
+                relocation["launchEvidence"] = "unknown"
+                relocation.pop("settlementEvidence", None)
                 start_command = ["systemctl", "--user", "--no-block", "start", self.unit]
                 if self.command is command:
                     self.command(start_command, timeout=0.5)
                 else:
                     self.command(start_command)
+                relocation["launchEvidence"] = "submitted"
                 def settled():
                     if self.jobs():
                         raise RuntimeError("named start pending")
-                retry(settled, self.clock, settle_timeout)
+                if deadline is None:
+                    retry(settled, self.clock, settle_timeout)
+                else:
+                    settle_deadline = min(deadline, time.monotonic() + settle_timeout)
+                    while True:
+                        remaining = settle_deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("owner recovery settlement deadline")
+                        try:
+                            settled()
+                            break
+                        except RuntimeError:
+                            time.sleep(min(0.02, max(0, settle_deadline - time.monotonic())))
+                relocation["settlementEvidence"] = "settled"
                 state = self.active_state()
                 if state == "active":
                     relocation["started"] = True
                     relocation["outcome"] = relocation["stopOutcome"]
                     return
             except Exception as error:
-                diagnostic = "start:" + type(error).__name__
+                if isinstance(error, TimeoutError):
+                    relocation["launchEvidence"] = "unknown"
+                    relocation["settlementEvidence"] = "unknown"
+                    if "recovery:start-unconfirmed" not in relocation["diagnostics"]:
+                        relocation["diagnostics"].append("recovery:start-unconfirmed")
+                diagnostic = ("start:command-deadline" if isinstance(error, TimeoutError)
+                              else "start:" + type(error).__name__)
                 if diagnostic not in relocation["diagnostics"]:
                     relocation["diagnostics"].append(diagnostic)
-        relocation["started"] = False
-        relocation["outcome"] = "start-failed"
+        if attempted and relocation.get("launchEvidence") != "unknown":
+            relocation["started"] = False
+            relocation["outcome"] = "start-failed"
 
     def recover_start(self, attempts=1, settle_timeout=STOP_SETTLE, command_deadline=None):
+        if command_deadline is not None and time.monotonic() >= command_deadline:
+            relocation = self.relocation
+            if "recovery:command-deadline" not in relocation["diagnostics"]:
+                relocation["diagnostics"].append("recovery:command-deadline")
+            return
         with self.bounded_command_scope(command_deadline):
             relocation = self.relocation
             try:
@@ -2114,10 +2242,11 @@ class Checkout:
             except Exception:
                 pass
             self.start(relocation, attempts, settle_timeout)
-            with contextlib.suppress(Exception):
-                observed = self.placement()
-                relocation["placement"] = "placed" if observed["actual"] == observed["expected"] else "failed"
-                relocation["to"] = observed["actual"]
+            if command_deadline is None or time.monotonic() < command_deadline:
+                with contextlib.suppress(Exception):
+                    observed = self.placement()
+                    relocation["placement"] = "placed" if observed["actual"] == observed["expected"] else "failed"
+                    relocation["to"] = observed["actual"]
 
     def restart(self):
         """Stop, wait for the old cgroup to empty and be released, then start.
@@ -2219,12 +2348,26 @@ class Checkout:
             if len(matches) != 1:
                 return {**outcome, "reason": "census-unmatched"}
             activity = matches[0]
+            pipeline = activity.get("pipeline")
+            if (not isinstance(pipeline, dict)
+                    or pipeline.get("pipelineId") != host["pipelineId"]
+                    or pipeline.get("stageId") != host["stageId"]
+                    or pipeline.get("attempt") != current["n"]):
+                return {**outcome, "reason": "replacement-pipeline-mismatch"}
             live = activity.get("host") or {}
             outcome.update(hostState=live.get("state"), turnState=activity.get("turnState"))
             if live.get("state") != "alive":
                 return {**outcome, "reason": "replacement-host-unconfirmed"}
+            identity = live.get("process")
+            if (not census_identity(identity) or identity.get("bootEpoch") != self.boot_epoch
+                    or identity.get("pid") != live.get("pid")
+                    or not identity["startIdentity"].startswith(str(live.get("pid")) + ":")
+                    or not identity["startIdentity"].split(":", 1)[1]):
+                return {**outcome, "reason": "replacement-process-identity-unverified"}
             try:
-                if self.process({"pid": live.get("pid")}) is None:
+                process = self.process({"pid": identity["pid"],
+                                        "startIdentity": identity["startIdentity"].split(":", 1)[1]})
+                if (process is None or identity["startIdentity"] != str(process["pid"]) + ":" + process["startIdentity"]):
                     return {**outcome, "reason": "replacement-process-gone"}
             except Exception as error:
                 return {**outcome, "reason": "replacement-process-unavailable:" + type(error).__name__}

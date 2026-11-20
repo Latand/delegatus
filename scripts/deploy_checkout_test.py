@@ -138,7 +138,7 @@ class LoggedFailures(unittest.TestCase):
                             "attempt": 2, "stageState": "running"}
                 switch.stage = stage
                 result = deploy.run_switch(switch, TARGET)
-                self.assertEqual(len(switch.samples), 21)
+                self.assertEqual(len(switch.samples), 22)
                 self.assertLessEqual(switch.clock.now(), 21 * deploy.SAMPLE_TIMEOUT + 20 * 15)
                 self.assertLessEqual(len(calls), 21 * (12 * count + 1))
                 self.assertEqual(result["verdict"], "needs_decision" if count else "pass")
@@ -158,6 +158,34 @@ class LoggedFailures(unittest.TestCase):
         self.assertEqual(result["protected"][0]["outcome"], "unknown")
         self.assertTrue(deploy.ready(result["serving"], TARGET))
         self.assertTrue(switch.published)
+
+    def test_unconfirmed_owner_recovery_cannot_pass_on_a_healthy_sample(self):
+        switch = Switch()
+        switch.relocation.update({"released": True, "placement": "placed", "started": True,
+                                  "stopSubmitted": True})
+        switch.unit = "synthetic-viewer.service"
+        def unconfirmed(**_kwargs):
+            raise TimeoutError("owner deadline")
+        switch.recover_start = unconfirmed
+        result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertTrue(deploy.ready(result["serving"], TARGET))
+        self.assertIn("sample-recovery:TimeoutError", result["diagnostics"])
+
+    def test_attempt_transition_drops_prior_attempt_evidence_and_keeps_unknown_reason(self):
+        sample = deploy.EvidenceSample([{"pipelineId": "lane", "stageId": "build", "attempt": 1,
+                                        "conversationId": "captured", "startIdentity": "101:old"}])
+        row = sample.protected[0]
+        row.update(stageState="running", observedConversationId="old-conversation", hostState="alive",
+                   turnState="busy", lifecycle="running")
+        sample.accept(("protected", (0, {"outcome": "unknown", "pipelineId": "lane", "stageId": "build",
+                                         "attempt": 2, "stageState": "running", "reason": "replacement-pipeline-mismatch"})))
+        self.assertEqual(row["captured"], {"pipelineId": "lane", "stageId": "build", "attempt": 1,
+                                          "conversationId": "captured", "startIdentity": "101:old"})
+        self.assertEqual(row["reason"], "replacement-pipeline-mismatch")
+        self.assertEqual(row["attempt"], 2)
+        for field in ["observedConversationId", "hostState", "turnState", "lifecycle"]:
+            self.assertNotIn(field, row)
 
     def test_delayed_start_settlement_invalidates_a_pre_settlement_serving_witness(self):
         switch = Switch()
@@ -228,6 +256,35 @@ class LoggedFailures(unittest.TestCase):
         self.assertEqual(sample.unreadable, [])
         self.assertFalse(sample.incomplete)
 
+    def test_degrading_post_protected_serving_witness_never_passes(self):
+        switch = Switch()
+        observations = []
+        def serving():
+            observations.append(len(observations))
+            result = {**{role: {"sha": TARGET, "since": "2026-01-01T00:00:00Z", "healthy": True}
+                         for role in ["launcher", "viewer", "runtimeHost"]},
+                      "checks": dict.fromkeys(["http", "runtimeSocket", "mcp", "service", "placement"], True)}
+            if len(observations) > 1:
+                result["checks"]["http"] = False
+            return result
+        def collect(_adapter, lanes, sample, _cutoff, owner_check=None):
+            for lane in lanes:
+                kind, inputs = lane[:2]
+                if kind == "serving":
+                    sample.accept(("serving", serving()))
+                elif kind == "protected":
+                    for index, _host in inputs:
+                        sample.accept(("protected", (index, {"outcome": "completed", "attempt": 1})))
+                elif kind == "interrupted":
+                    sample.accept(("interrupted", ([], [])))
+        switch.hosts = [{"pipelineId": "synthetic", "stageId": "build", "attempt": 1}]
+        switch.sample = functools.partial(deploy.collect_sample, switch, collect=collect)
+        switch.serving = serving
+        result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=5)
+        self.assertGreaterEqual(len(observations), 2)
+        self.assertFalse(result["serving"]["checks"]["http"])
+        self.assertEqual(result["verdict"], "fail")
+
     def test_cut_inventory_that_overruns_the_sample_deadline_keeps_its_reason(self):
         switch = Switch()
         def overdue_inventory(_since, _hosts):
@@ -245,7 +302,7 @@ class LoggedFailures(unittest.TestCase):
         switch.process_error = FileNotFoundError("old process exited during restart")
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(len(switch.samples), 3)
+        self.assertEqual(len(switch.samples), 4)
         self.assertEqual(result["serving"]["viewer"]["sha"], TARGET)
 
     def test_vanished_protected_host_and_mcp_restart_error_are_reconciled(self):
@@ -253,7 +310,7 @@ class LoggedFailures(unittest.TestCase):
         switch.mcp_errors = 1
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=18)
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(len(switch.samples), 3)
+        self.assertEqual(len(switch.samples), 4)
         self.assertEqual(result["protected"][0]["outcome"], "recovered")
         self.assertGreaterEqual(switch.clock.now(), deploy.SAMPLE_RETRY_INTERVAL)
 
@@ -262,7 +319,7 @@ class LoggedFailures(unittest.TestCase):
         switch.restart_error = TimeoutError("submission timed out while restart continued")
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(len(switch.samples), 3)
+        self.assertEqual(len(switch.samples), 4)
         self.assertEqual(result["serving"]["launcher"]["since"], "2026-01-01T00:00:00Z")
 
     def test_only_lost_work_fails_a_healthy_switch(self):
@@ -272,7 +329,7 @@ class LoggedFailures(unittest.TestCase):
                 switch.outcome = outcome
                 result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
                 self.assertEqual(result["verdict"], expected)
-                self.assertEqual(len(switch.samples), 3)
+                self.assertEqual(len(switch.samples), 4)
 
     def test_verdict_lists_the_conversations_the_restart_cut(self):
         switch = Switch()
@@ -325,7 +382,7 @@ class LoggedFailures(unittest.TestCase):
         switch.serving = restarting
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(len(switch.samples), 3)
+        self.assertEqual(len(switch.samples), 4)
         self.assertGreaterEqual(switch.clock.now(), 6)
 
     def test_persistent_transport_failure_records_unknown_and_keeps_sampling(self):
@@ -349,7 +406,7 @@ class LoggedFailures(unittest.TestCase):
         switch.emit = emit
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(len(switch.samples), 3)
+        self.assertEqual(len(switch.samples), 4)
 
 
 class AdapterContracts(unittest.TestCase):
@@ -897,6 +954,7 @@ class CheckoutIntegration(unittest.TestCase):
         self.inventory_overrides = {}
         self.inventory_reads = 0
         self.recovery_overrides = {}
+        self.replacement_overrides = {}
         # The service's kernel cgroup, under the slice its unit configures.
         self.cgroup = self.root / "cgroup"
         self.slice = "delegatus.slice"
@@ -952,9 +1010,19 @@ class CheckoutIntegration(unittest.TestCase):
                 current = fixture.attempts[-1] if fixture.old_gone else {"n": 1, "conversationId": "synthetic-stage"}
                 row = {"conversationId": "synthetic-stage", "turnState": "busy", "lifecycle": "running",
                        "evidenceSource": "transcript",
-                       "host": {"state": "alive", "pid": 204 if fixture.old_gone else 104},
+                       "host": {"state": "alive", "pid": 204 if fixture.old_gone else 104,
+                                "process": {"pid": 204 if fixture.old_gone else 104,
+                                            "startIdentity": str(204 if fixture.old_gone else 104) + ":" + str(204 if fixture.old_gone else 104),
+                                            "bootEpoch": "fixture-boot"}},
                        "pipeline": {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": current["n"]}}
                 row["conversationId"] = current.get("conversationId", "synthetic-stage")
+                for key, value in fixture.replacement_overrides.items():
+                    if key == "host":
+                        row["host"].update(value)
+                    elif key == "pipeline":
+                        row["pipeline"].update(value)
+                    else:
+                        row[key] = value
                 answer = {"ok": True, "conversations": [row], "unselectedCount": 0,
                           "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
                                         "recoveryTruncated": False, "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}
@@ -1337,14 +1405,54 @@ class CheckoutIntegration(unittest.TestCase):
         systemctl.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(2)\n")
         systemctl.chmod(0o700)
         self.adapter.command = deploy.command
-        self.adapter.relocation = {"stopSubmitted": True, "started": False, "startAttempts": 0,
-                                   "outcome": None, "diagnostics": []}
+        self.adapter.relocation = {"stopSubmitted": True, "started": True, "startAttempts": 0,
+                                   "outcome": "previously-confirmed", "diagnostics": []}
         started = time.monotonic()
         with patch.dict(os.environ, {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}):
-            self.adapter.recover_start(settle_timeout=0.25, command_deadline=started + 0.8)
-        self.assertLess(time.monotonic() - started, 1.2)
-        self.assertFalse(self.adapter.relocation["started"])
-        self.assertEqual(self.adapter.relocation["startAttempts"], 1)
+            self.adapter.recover_start(settle_timeout=0.25, command_deadline=started + 0.15)
+        self.assertLess(time.monotonic() - started, 0.25)
+        self.assertTrue(self.adapter.relocation["started"])
+        self.assertEqual(self.adapter.relocation["outcome"], "previously-confirmed")
+        self.assertEqual(self.adapter.relocation["startAttempts"], 0)
+        self.assertIn("recovery:command-deadline", self.adapter.relocation["diagnostics"])
+
+    def test_expired_recovery_does_not_launch_or_mutate_confirmed_state(self):
+        marker = self.root / "systemctl-launched"
+        binary = self.root / "expired-systemctl"
+        binary.mkdir()
+        systemctl = binary / "systemctl"
+        systemctl.write_text("#!/usr/bin/env python3\nimport pathlib,sys\npathlib.Path(" + repr(str(marker)) + ").write_text('launched')\n")
+        systemctl.chmod(0o700)
+        self.adapter.command = deploy.command
+        self.adapter.relocation = {"stopSubmitted": True, "started": True, "startAttempts": 4,
+                                   "outcome": "confirmed", "diagnostics": []}
+        with patch.dict(os.environ, {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}):
+            self.adapter.recover_start(command_deadline=time.monotonic() - 1)
+        self.assertFalse(marker.exists())
+        self.assertEqual((self.adapter.relocation["started"], self.adapter.relocation["startAttempts"],
+                          self.adapter.relocation["outcome"]), (True, 4, "confirmed"))
+
+    def test_timed_out_start_keeps_confirmed_state_and_marks_launch_unknown(self):
+        binary = self.root / "slow-start-systemctl"
+        binary.mkdir()
+        systemctl = binary / "systemctl"
+        systemctl.write_text("#!/usr/bin/env python3\nimport sys,time\n"
+                             "if 'start' in sys.argv: time.sleep(2)\n"
+                             "elif 'show' in sys.argv: print('ActiveState=inactive')\n")
+        systemctl.chmod(0o700)
+        self.adapter.command = deploy.command
+        self.adapter.relocation = {"stopSubmitted": True, "started": True, "startAttempts": 0,
+                                   "outcome": "previously-confirmed", "stopOutcome": "released",
+                                   "diagnostics": []}
+        started = time.monotonic()
+        with patch.dict(os.environ, {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}):
+            self.adapter.recover_start(settle_timeout=0.25, command_deadline=started + 0.15)
+        self.assertLess(time.monotonic() - started, 0.25)
+        self.assertEqual((self.adapter.relocation["started"], self.adapter.relocation["startAttempts"],
+                          self.adapter.relocation["outcome"]), (True, 1, "previously-confirmed"))
+        self.assertEqual((self.adapter.relocation["launchEvidence"],
+                          self.adapter.relocation["settlementEvidence"]), ("unknown", "unknown"))
+        self.assertIn("recovery:start-unconfirmed", self.adapter.relocation["diagnostics"])
 
     def test_an_incomplete_interruption_record_keeps_a_healthy_switch_from_passing(self):
         directory = self.state / "interruption-obligations"
@@ -2688,6 +2796,34 @@ except BlockingIOError:
         self.assertEqual((outcome["outcome"], outcome["reason"]), ("unknown", "replacement-process-gone"))
         self.adapter.process = original
 
+    def test_replacement_evidence_must_bind_pipeline_attempt_boot_and_process_identity(self):
+        cases = [
+            ({"pipeline": {"pipelineId": "other-lane"}}, "replacement-pipeline-mismatch"),
+            ({"pipeline": {"stageId": "other-stage"}}, "replacement-pipeline-mismatch"),
+            ({"pipeline": {"attempt": 1}}, "replacement-pipeline-mismatch"),
+            ({"host": {"process": {"bootEpoch": "other-boot"}}}, "replacement-process-identity-unverified"),
+            ({"host": {"process": {"startIdentity": "204:stale"}}}, "replacement-process-identity-unverified"),
+            ({"host": {"process": None}}, "replacement-process-identity-unverified"),
+        ]
+        self.old_gone = True
+        self.attempts = [{"n": 1, "state": "failed", "conversationId": "synthetic-stage",
+                          "error": "stage host was lost while its turn was open"},
+                         {"n": 2, "state": "running", "conversationId": "synthetic-replacement"}]
+        for overrides, reason in cases:
+            with self.subTest(reason=reason, overrides=overrides):
+                self.replacement_overrides = overrides
+                outcome = self.adapter.stage({"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1})
+                self.assertEqual((outcome["outcome"], outcome.get("reason")), ("unknown", reason))
+
+    def test_legacy_capture_without_boot_epoch_still_accepts_verified_replacement(self):
+        self.old_gone = True
+        self.attempts = [{"n": 1, "state": "failed", "conversationId": "synthetic-stage",
+                          "error": "stage host was lost while its turn was open"},
+                         {"n": 2, "state": "running", "conversationId": "synthetic-replacement"}]
+        captured = {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1}
+        outcome = self.adapter.stage(captured)
+        self.assertEqual((outcome["outcome"], outcome["attempt"]), ("fresh attempt started", 2))
+
 
 class SampleSupervision(unittest.TestCase):
     def setUp(self):
@@ -2855,8 +2991,8 @@ sys.exit(deploy.evidence_worker(sys.argv[2]))
         self.assertEqual(result["verdict"], "needs_decision", result)
         self.assertTrue(deploy.ready(result["serving"], TARGET))
         self.assertEqual([row.get("reason") for row in result["protected"]], [
-            "stage-conversation-pending", "replacement-host-unconfirmed", "pipeline-unavailable:RuntimeError",
-            "replacement-host-unconfirmed", "pipeline-unavailable:RuntimeError", "sample-deadline",
+            "stage-conversation-pending", "replacement-pipeline-mismatch", "pipeline-unavailable:RuntimeError",
+            "replacement-pipeline-mismatch", "pipeline-unavailable:RuntimeError", "sample-deadline",
             "sample-deadline", None])
         self.assertEqual(result["protected"][-1]["outcome"], "completed")
         calls = self.recorded()
@@ -2932,6 +3068,36 @@ sys.exit(deploy.evidence_worker(sys.argv[2]))
             for pid in set(reaped):
                 with contextlib.suppress(ChildProcessError):
                     waitpid(pid, 0)
+
+    def test_unreaped_workers_keep_their_owned_slots_until_a_later_sample_reaps_them(self):
+        deploy.reap_worker_custody()
+        host = {"pipelineId": "synthetic", "stageId": "build", "attempt": 1}
+        adapter = type("Adapter", (), {"plan": {}, "config_file": self.plan})()
+        with tempfile.TemporaryDirectory(prefix="checkout-worker-custody-") as directory:
+            driver = pathlib.Path(directory) / "worker.py"
+            driver.write_text("import json,sys\nkind,inputs,deadline,plan=json.load(sys.stdin)\n"
+                              "print(json.dumps(['protected',[inputs[0][0],{'outcome':'completed','attempt':1}]]),flush=True)\n"
+                              "print(json.dumps(['worker-done']),flush=True)\n")
+            sample = deploy.EvidenceSample([host] * (deploy.PROTECTED_READERS + 1))
+            real_waitpid = os.waitpid
+            def defer_reap(_pid, _options):
+                return 0, 0
+            with patch.object(deploy, "__file__", str(driver)), patch.object(deploy.os, "waitpid", side_effect=defer_reap):
+                lanes = [("protected", [(index, host)]) for index in range(deploy.PROTECTED_READERS + 1)]
+                deploy.run_evidence_workers(adapter, lanes, sample, time.monotonic() + 0.3)
+                owned = dict(deploy.WORKER_CUSTODY)
+                self.assertEqual(len(owned), deploy.PROTECTED_READERS + 1)
+                self.assertTrue(all(custody["startIdentity"] for custody in owned.values()))
+                second = deploy.EvidenceSample([host])
+                deploy.run_evidence_workers(adapter, [("protected", [(0, host)])], second,
+                                            time.monotonic() + 0.1)
+                self.assertEqual(set(deploy.WORKER_CUSTODY), set(owned))
+                self.assertEqual(second.protected[0]["reason"], "worker-cleanup-pending")
+            for pid in owned:
+                with contextlib.suppress(ChildProcessError):
+                    real_waitpid(pid, 0)
+            deploy.reap_worker_custody()
+            self.assertFalse(set(owned) & set(deploy.WORKER_CUSTODY))
 
     def test_production_worker_entry_reads_only_its_assigned_evidence(self):
         host = {"pipelineId": "complete-0", "stageId": "build", "attempt": 1}
