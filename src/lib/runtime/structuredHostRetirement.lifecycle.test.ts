@@ -39,8 +39,12 @@ afterEach(async () => {
 });
 
 for (const engine of ["codex", "claude"] as const) {
-  for (const boundary of ["none", "measurement", "capture", "release", "open-turn"] as const) {
-    test(`${engine}: recent passed stage retirement, continuation at ${boundary}`, async () => {
+  for (const [boundary, change] of [
+    ["none", "none"], ["open-turn", "none"],
+    ["measurement", "resume"], ["capture", "resume"], ["release", "resume"],
+    ["measurement", "unrelated"], ["capture", "unrelated"], ["release", "unrelated"],
+  ] as const) {
+    test(`${engine}: recent passed stage retirement, ${change} at ${boundary}`, async () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-host-lifecycle-"));
       roots.push(root);
       process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -71,8 +75,13 @@ for (const engine of ["codex", "claude"] as const) {
       lane.runs[0]!.attempts = [{ n: 1, state: "passed", effectiveRole: lane.stages[0]!.effectiveRole, launchId: null, conversationId: conversation.id,
         sessionId: FIXTURE_SESSION, agentPath: entry.artifactPath, paneId: null, flowId: null, startedAt: lane.createdAt,
         completedAt: new Date(FIXTURE_NOW).toISOString(), input: null, activatedBy: null, output: null, error: null, verdict: { status: "pass", findings: [] } }];
-      savePipelines([lane]);
-      const resume = () => { lane.runs[0]!.attempts[0]!.state = "running"; savePipelines([lane]); };
+      const unrelated = { ...lane, id: "unrelated-lane", runs: [] };
+      savePipelines([lane, unrelated]);
+      const writePipeline = () => {
+        if (change === "resume") lane.runs[0]!.attempts[0]!.state = "running";
+        else unrelated.stateDetail = "Unrelated update";
+        savePipelines([lane, unrelated]);
+      };
       const service = new AgentStateService({ registry, now: () => sweepAt, owns: () => true,
         process: value => procBackend.pidAlive(value.pid) ? "alive" : "dead", memory: () => null, release: "fixture", publish: async () => true });
       const holds = spyOn(delivery, "hasStructuredDeliveryHost").mockReturnValue(false);
@@ -82,10 +91,10 @@ for (const engine of ["codex", "claude"] as const) {
         ...dependencies, graceMs: 50, deadlineMs: 2000,
         persistCapturedTree: async captured => {
           const result = await dependencies!.persistCapturedTree!(captured);
-          if (boundary === "capture") resume();
+          if (boundary === "capture") writePipeline();
           return result;
         },
-        terminateOwnedHost: async () => { if (boundary === "release") resume(); return true; },
+        terminateOwnedHost: async () => { if (boundary === "release") writePipeline(); return false; },
         signal: (pid, signal) => { signals++; process.kill(pid, signal); },
       }));
       try {
@@ -94,12 +103,12 @@ for (const engine of ["codex", "claude"] as const) {
           realtimeBound: () => determined(false), orchestratorSeatConversations: () => determined(new Set()), revokedSeatConversations: () => determined(new Set()),
           readCursor: () => null, writeCursor: () => {}, treePss: async () => {
             await Promise.resolve();
-            if (boundary === "measurement") resume();
+            if (boundary === "measurement") writePipeline();
             return { bytes: null, measuredProcesses: 0 };
           } });
         expect(fs.readFileSync(entry.artifactPath!, "utf8")).toBe(native);
         expect(loadPipelinesForRetirement()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
-        if (boundary === "none") {
+        if (!openTurn && change !== "resume") {
           expect(report.failed).toEqual([]);
           expect(report.retired).toMatchObject([{ reason: "stage verdict", idleMs: 0 }]);
           expect(signals).toBeGreaterThan(0);
@@ -114,6 +123,10 @@ for (const engine of ["codex", "claude"] as const) {
               .toMatchObject({ determined: true, value: { state: "open", nativeId } });
             expect(registry.hostEntry(entry.key)?.structuredHost?.activeTurnRef).toBeNull();
             expect(report.refused).toMatchObject([{ clause: "turn-settled", reason: `turn ${nativeId} is in flight` }]);
+          } else {
+            const reason = "the pipeline no longer releases this host for prompt retirement";
+            if (boundary === "measurement") expect(report.refused).toMatchObject([{ clause: "transcript-idle", reason, changed: true }]);
+            else expect(report.failed).toMatchObject([{ error: `scope retirement target changed: verdict transcript-idle: ${reason}` }]);
           }
           expect(signals).toBe(0);
           expect(procBackend.pidAlive(identity.pid)).toBe(true);

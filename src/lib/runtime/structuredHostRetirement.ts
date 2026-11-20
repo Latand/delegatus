@@ -546,6 +546,12 @@ function unflushedEvents(subject: StructuredHostRetirementSubject): StructuredHo
   };
 }
 
+type RetirementVerdictOptions = { now: number; idleMs: number; preservePipelineWaiver?: boolean };
+
+function qualifiesForPipelineWaiver(standing: StructuredHostRetirementSubject["pipelineStanding"]): boolean {
+  return standing?.determined === true && standing.value !== null && standing.value !== "held";
+}
+
 /**
  * The clauses, each a function of the subject alone. Order comes from
  * {@link STRUCTURED_HOST_RETIREMENT_CLAUSES}, so the list and the checks cannot
@@ -575,7 +581,7 @@ function unflushedEvents(subject: StructuredHostRetirementSubject): StructuredHo
  */
 const CLAUSE_CHECKS: Record<
   StructuredHostRetirementClause,
-  (subject: StructuredHostRetirementSubject, options: { now: number; idleMs: number }) => ClauseAnswer
+  (subject: StructuredHostRetirementSubject, options: RetirementVerdictOptions) => ClauseAnswer
 > = {
   "seat-free": (subject) => mapDeterminable(subject.seat,
     (standing) => (standing === "live" ? "the host holds a live orchestrator seat" : null)),
@@ -657,7 +663,8 @@ const CLAUSE_CHECKS: Record<
          rather than relying on the clause before it. */
       if (stat === null) return "the transcript is not present on disk";
       if (pipeline?.determined && pipeline.value === "held") return "the pipeline still owns work on this host";
-      if (pipeline?.determined && pipeline.value !== null) return null;
+      if (qualifiesForPipelineWaiver(pipeline)) return null;
+      if (options.preservePipelineWaiver) return "the pipeline no longer releases this host for prompt retirement";
       /* The revoked-seat waiver (#1245). Recency is evidence that a host is
          doing something, and this is the one host whose doing something is the
          problem: rotation ends its authority and nothing else, so it kept
@@ -707,7 +714,7 @@ const CLAUSE_CHECKS: Record<
  */
 export function structuredHostRetirementVerdict(
   subject: StructuredHostRetirementSubject,
-  options: { now: number; idleMs: number },
+  options: RetirementVerdictOptions,
 ): StructuredHostRetirementVerdict {
   const passed: StructuredHostRetirementClause[] = [];
   for (const clause of STRUCTURED_HOST_RETIREMENT_CLAUSES) {
@@ -1419,7 +1426,7 @@ function retirementSubject(
     conversations: canonicalId ? conversationIdsResolvingTo(inputs.file, canonicalId) : [],
     engine: key.engine, sessionId: key.sessionId, agentPath: entry.artifactPath, launchId,
   });
-  const finishedStage = pipelineStanding.determined && pipelineStanding.value !== null && pipelineStanding.value !== "held";
+  const finishedStage = qualifiesForPipelineWaiver(pipelineStanding);
 
   const central = cachedAgentObservation(subjectId(entry)) ?? inputs.file.agentStates?.[subjectId(entry)];
   let centralSettled: boolean | null = null;
@@ -1617,12 +1624,14 @@ export async function runStructuredHostRetirementSweep(
     revokedConversations: dependencies.revokedSeatConversations ?? defaultRevokedSeatConversations,
   };
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
-  // Prepare the bounded, revision-keyed projection once. The synchronous
-  // reader refuses a changed store at every later signal/cleanup boundary.
   let pipelineReader: Awaited<ReturnType<typeof pipelineRetirementReader>> | null = null;
   let pipelineError = "pipeline retirement evidence is unavailable";
-  try { pipelineReader = await pipelineRetirementReader(); }
-  catch (error) { pipelineError = safeReason(error); }
+  // Refresh after waits. The synchronous authorizers still validate the current
+  // projection when they read the target and check process and registry custody.
+  const refreshPipelineEvidence = async () => {
+    try { pipelineReader = await pipelineRetirementReader(); }
+    catch (error) { pipelineReader = null; pipelineError = safeReason(error); }
+  };
   const readers: RetirementReaders = {
     pipelineStanding: target => {
       try {
@@ -1651,7 +1660,8 @@ export async function runStructuredHostRetirementSweep(
   // Keep the original capture even if a concurrent release clears its durable
   // copy. Empty termination diagnostics alone do not prove a tree has exited.
   const captures = new Map<string, { identities: readonly ProcessIdentity[]; authorizeGone: () => { error: string } | null }>();
-  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs, transcriptSignature: string | null) => {
+  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs,
+    transcriptSignature: string | null, originalSubject: StructuredHostRetirementSubject) => {
     // Retain the evidence that first qualified this target. Reading a
     // new snapshot here could adopt a reopened turn as the original target.
     const observed = originalInputs.file.entries[`${ref.engine}:${ref.sessionId}`];
@@ -1659,7 +1669,7 @@ export async function runStructuredHostRetirementSweep(
     const originalTurn = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn;
     const originalGenerationPath = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)
       ?.generations.find(generation => generation.id === ref.sessionId)?.path;
-    const originalSubject = retirementSubject(observed, originalInputs, readers, observed);
+    const preservePipelineWaiver = qualifiesForPipelineWaiver(originalSubject.pipelineStanding);
     const authorize = (gone = false) => {
       const denied = (condition: string) => ({ status: 409 as const, error: `scope retirement target changed: ${condition}` });
       if (publicationState() !== "ready") return denied("publication");
@@ -1718,13 +1728,13 @@ export async function runStructuredHostRetirementSweep(
         subject.nativeTurnSettled = originalSubject.nativeTurnSettled;
         for (const clause of STRUCTURED_HOST_RETIREMENT_CLAUSES) {
           if (clause === "process-identity" || clause === "turn-settled" || clause === "host-idle-or-dead") continue;
-          const answer = CLAUSE_CHECKS[clause](subject, { now: now(), idleMs });
+          const answer = CLAUSE_CHECKS[clause](subject, { now: now(), idleMs, preservePipelineWaiver });
           if (!answer.determined || answer.value !== null) return denied(`verdict ${clause}: ${answer.determined ? answer.value : answer.why}`);
         }
         return null;
       }
       const verdict = structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers,
-        observed), { now: now(), idleMs });
+        observed), { now: now(), idleMs, preservePipelineWaiver });
       if (!verdict.retire) return denied(`verdict ${verdict.clause}: ${verdict.reason}`);
       return null;
     };
@@ -1733,11 +1743,13 @@ export async function runStructuredHostRetirementSweep(
     let captureRefusal: ReturnType<typeof authorize> = null;
     return terminateStructuredHostTree(ref, {
       authorize: () => captureRefusal ?? authorize(),
+      authorizeAsync: async () => { await refreshPipelineEvidence(); return null; },
       stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
       orphanAlarmRegistry: agentRegistry(),
       graceMs,
       deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
-      persistCapturedTree: identities => {
+      persistCapturedTree: async identities => {
+        await refreshPipelineEvidence();
         captures.set(`${ref.engine}:${ref.sessionId}`, {
           identities: identities.map(identity => ({ ...identity })), authorizeGone: () => authorize(true),
         });
@@ -1807,6 +1819,7 @@ export async function runStructuredHostRetirementSweep(
         return { status: "failed", reason: "agent scope is still loaded or its boot identity differs" };
       }
     }
+    if (capture) await refreshPipelineEvidence();
     // Admission waits asynchronously under the registry's deadline, with an origin.
     return registry.deliveryWriteOrBusy({ label: "registry.idle-reconcile-gone" }, (): GoneHostReconciliation => {
       if (publicationState() !== "ready") return { status: "failed", reason: "retirement publication is no longer ready" };
@@ -1869,6 +1882,7 @@ export async function runStructuredHostRetirementSweep(
     gone: [],
   };
 
+  await refreshPipelineEvidence();
   const publication = publicationState();
   if (publication !== "ready") {
     /* Not an error and not "nothing to do": this process cannot speak for the
@@ -1985,6 +1999,7 @@ export async function runStructuredHostRetirementSweep(
     const tree = descendantPids(planning.process.pid, parents);
     const measured = memoryOf(tree);
     const pss = await withViewerOperation("hosts.retirement", () => measurePss(tree));
+    await refreshPipelineEvidence();
     const afterMeasurement = publicationState();
     if (afterMeasurement !== "ready") { report.standDown = afterMeasurement; break; }
     /* The re-check. Everything durable is re-read, and so is every fact that
@@ -2023,7 +2038,8 @@ export async function runStructuredHostRetirementSweep(
       refuse(report, subject, { retire: false, clause: "turn-settled", reason: "conversation turn changed" }, true);
       continue;
     }
-    const verdict = structuredHostRetirementVerdict(subject, { now: now(), idleMs });
+    const verdict = structuredHostRetirementVerdict(subject, { now: now(), idleMs,
+      preservePipelineWaiver: qualifiesForPipelineWaiver(planning.pipelineStanding) });
     if (!verdict.retire) {
       refuse(report, subject, verdict, true, processStatus(subject.process) === "alive");
       continue;
@@ -2058,7 +2074,7 @@ export async function runStructuredHostRetirementSweep(
 
     let outcome: StructuredHostTerminationOutcome;
     try {
-      outcome = await terminate(ref, planned, transcriptSignature);
+      outcome = await terminate(ref, planned, transcriptSignature, subject);
     } catch (error) {
       const reason = safeReason(error);
       report.failed.push({ key: subject.keyId, conversationId: subject.conversationId,
@@ -2066,6 +2082,7 @@ export async function runStructuredHostRetirementSweep(
       continue;
     }
     if (!outcome.ok) {
+      if (captures.has(subject.keyId)) await refreshPipelineEvidence();
       // The host can finish while termination awaits its runtime or writer.
       // Reconcile only a tree with no unresolved members; the gone path must
       // still prove scope collection and current registry custody itself.

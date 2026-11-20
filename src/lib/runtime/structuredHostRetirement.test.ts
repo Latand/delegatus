@@ -186,6 +186,23 @@ function finishedStage(file = snapshot()) {
   return lane;
 }
 
+test("an unrelated pipeline write during measurement keeps ordinary idle retirement eligible", async () => {
+  const unrelated = finishedStage(snapshot(manyCandidates(1)));
+  savePipelines([unrelated]);
+  const probe = await sweep({
+    treePss: async () => {
+      await Promise.resolve();
+      unrelated.stateDetail = "Unrelated update";
+      savePipelines([unrelated]);
+      return { bytes: null, measuredProcesses: 0 };
+    },
+  });
+  expect(probe.terminated.map(ref => ref.sessionId)).toEqual([SESSION]);
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.retired).toHaveLength(1);
+  expect(probe.report.retired[0]!.reason).toBeUndefined();
+});
+
 test("a passed review retires on the next sweep with its reason and records intact", async () => {
   const lane = finishedStage();
   savePipelines([lane]);
@@ -229,7 +246,7 @@ test.each(["commit-repair", "runtime-switch", "undelivered", "assigned-to-runtim
     };
     if (kind === "attention") file.entries[`claude:${SESSION}`]!.structuredHost!.pendingAttention = ["pending-question"];
     if (kind === "busy") file.conversations[CONVERSATION]!.turn.state = "busy";
-    const continuing = ["commit-repair", "runtime-switch"].includes(kind);
+    const continuing = ["commit-repair", "runtime-switch", "reopened-during-measurement"].includes(kind);
     const probe = await sweep({ snapshot: () => file, transcriptStat: () => determined({ mtimeMs: continuing ? NOW - 2 * IDLE_MS : NOW }),
       treePss: async () => {
         await Promise.resolve();
@@ -238,6 +255,9 @@ test.each(["commit-repair", "runtime-switch", "undelivered", "assigned-to-runtim
       } });
     expect(probe.terminated).toEqual([]);
     expect(probe.report.retired).toEqual([]);
+    if (kind === "reopened-during-measurement") expect(probe.report.refused).toMatchObject([
+      { clause: "transcript-idle", reason: "the pipeline no longer releases this host for prompt retirement", changed: true },
+    ]);
   });
 
 test.each(["needs_decision", "running"] as const)("a %s stage uses the ordinary idle interval", async state => {
@@ -273,10 +293,21 @@ test.each(["completed", "closed", "merged"] as const)("a %s lane releases all th
   lane.cursor = null;
   // Terminal lane ownership releases hosts even before old attempt stamps reconcile.
   for (const run of lane.runs) for (const attempt of run.attempts) { attempt.state = "running"; attempt.verdict = null; attempt.completedAt = null; }
-  savePipelines([lane]);
-  const probe = await sweep({ snapshot: () => file, transcriptStat: () => determined({ mtimeMs: NOW }) });
-  expect(probe.terminated).toHaveLength(3);
-  expect(probe.report.retired.map(row => row.reason)).toEqual(["terminal lane", "terminal lane", "terminal lane"]);
+  const unrelated = { ...lane, id: "unrelated-lane", stages: [], runs: [] };
+  savePipelines([lane, unrelated]);
+  const stopped: string[] = [];
+  const probe = await sweep({
+    snapshot: () => file, transcriptStat: () => determined({ mtimeMs: NOW }),
+    terminate: async ref => {
+      stopped.push(ref.sessionId!);
+      unrelated.stateDetail = `Unrelated update ${stopped.length}`;
+      savePipelines([lane, unrelated]);
+      return { ok: true, via: "runtime", pids: [ref.pid] };
+    },
+  });
+  expect(stopped.sort()).toEqual(lane.runs.map(run => run.attempts[0]!.sessionId!).sort());
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.retired.map(row => row.reason)).toEqual(Array(3).fill("terminal lane"));
 });
 
 /** N qualifying candidates, so a batch bound can be observed deferring. Ids are

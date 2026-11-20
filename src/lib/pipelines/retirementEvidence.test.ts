@@ -98,6 +98,24 @@ test("a peer archive edit and deletion revoke old evidence and the next read ans
   } finally { f.db.close(); }
 });
 
+test("a non-pipeline SQLite write leaves sweep standing and the compact projection current", async () => {
+  const f = setup();
+  try {
+    f.lane.state = "completed";
+    f.lane.cursor = null;
+    savePipelines([f.lane]);
+    const reader = await pipelineRetirementReader();
+    expect(reader.sweepStanding(target)).toBe("terminal lane");
+    f.db.query("INSERT INTO state_collections(collection,schema_version,revision,migration_id,imported_at) VALUES(?,1,1,?,?)")
+      .run("other", "fixture", f.lane.createdAt);
+    expect(reader.sweepStanding(target)).toBe("terminal lane");
+    expect(reader.sweepStanding({ conversations: ["unrelated"] })).toBeNull();
+    performanceSpans.clear();
+    expect((await pipelineRetirementReader()).sweepStanding(target)).toBe("terminal lane");
+    expect(decodedRows()).toBe(0);
+  } finally { f.db.close(); }
+});
+
 test("finished verdict reasons reuse compact evidence and disappear when the same attempt resumes", async () => {
   const f = setup();
   try {

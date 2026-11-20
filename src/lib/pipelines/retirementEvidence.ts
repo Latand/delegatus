@@ -3,7 +3,7 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { readCompactPipelineEvidence, readStateCollectionRevisions, stateEvidenceVersion, type CompactEvidenceCache } from "@/lib/state/sqliteStateStore";
+import { pipelineEvidenceRevision, readCompactPipelineEvidence, readStateCollectionRevisions, stateEvidenceVersion, type CompactEvidenceCache } from "@/lib/state/sqliteStateStore";
 import { isStoredPipeline } from "./store";
 import { pipelineRetirementOwnership, type PipelineRetirementReason } from "./hostRetirement";
 import type { RuntimeEngine, RuntimeProviderRecoveryRef } from "@/lib/runtime/contracts";
@@ -19,6 +19,7 @@ type Slot = { value?: Evidence; pending?: Promise<Evidence> };
 const owner = process as typeof process & { __llvRetirementEvidence?: Map<string, Slot> };
 const slots = owner.__llvRetirementEvidence ??= new Map<string, Slot>();
 const MAX_BYTES = 16 * 1024 * 1024;
+const pipelineCollections = ["pipelines", "pipelines_archive"];
 const identity = (kind: string, value: string) => JSON.stringify([kind, value]);
 const hostIdentity = (engine: string, sessionId: string) => ["engine-session", `${engine}:${sessionId}`] as const;
 function project(raw: unknown): Projection {
@@ -54,18 +55,27 @@ function project(raw: unknown): Projection {
   return { id: pipeline.id, claims, releasedSources };
 }
 
-async function prepare(filename: string, previous?: Evidence): Promise<Evidence> {
-  const version = stateEvidenceVersion(filename);
+function pipelineVersion(filename: string): string {
+  const indexed = pipelineEvidenceRevision(filename);
+  if (indexed !== null) {
+    const revisions = readStateCollectionRevisions(filename, pipelineCollections);
+    const active = revisions.get("pipelines"), archive = revisions.get("pipelines_archive");
+    if (active != null && archive != null) return `${indexed}:${active}:${archive}`;
+  }
+  return stateEvidenceVersion(filename);
+}
+
+async function prepare(filename: string, version: string, previous?: Evidence): Promise<Evidence> {
   let compact = await readCompactPipelineEvidence(filename, previous?.compact, project);
   if (!compact) {
-    const revisions = readStateCollectionRevisions(filename, ["pipelines", "pipelines_archive"]);
+    const revisions = readStateCollectionRevisions(filename, pipelineCollections);
     if ([...revisions.values()].some(revision => revision !== null)
       || !absent(path.join(path.dirname(filename), "pipelines.json")) || !absent(path.join(path.dirname(filename), "pipelines-archive.json"))) {
       throw new Error("pipeline retirement evidence is unavailable");
     }
     compact = { identity: filename, rows: new Map() };
   }
-  if (version !== stateEvidenceVersion(filename)) throw new Error("pipeline retirement evidence changed");
+  if (version !== pipelineVersion(filename)) throw new Error("pipeline retirement evidence changed");
   if (compact === previous?.compact) return { ...previous, version };
   const index = new Map<string, Claim[]>(), ids = new Set<string>();
   // A released attempt also ends a successor's source-only custody. Keep the
@@ -85,7 +95,7 @@ async function prepare(filename: string, previous?: Evidence): Promise<Evidence>
       await new Promise<void>(resolve => setTimeout(resolve, 0)); slice = performance.now();
     }
   }
-  if (version !== stateEvidenceVersion(filename)) throw new Error("pipeline retirement evidence changed");
+  if (version !== pipelineVersion(filename)) throw new Error("pipeline retirement evidence changed");
   return { compact, index, releasedSources, version };
 }
 
@@ -98,8 +108,8 @@ export type RetirementTarget = { conversations: readonly string[]; engine?: Runt
 export type PipelineRetirementStanding = "held" | PipelineRetirementReason | null;
 export type PipelineRetirementReader = ((target: RetirementTarget, recovery?: RuntimeProviderRecoveryRef) => boolean)
   & { sweepStanding(target: RetirementTarget): PipelineRetirementStanding };
-/** Async validation precedes admission. Each synchronous signal fence performs
- * only version checks and target lookups; any intervening write refuses. */
+/** Async validation precedes admission. The sweep refreshes the projection
+ * after waits and fences synchronously on pipeline revisions and target custody. */
 export async function pipelineRetirementReader(): Promise<PipelineRetirementReader> {
   return withViewerOperation("pipelines.retirement-evidence", async () => {
     const recordedVersion = readRecorded(store => store.version(), 0);
@@ -112,26 +122,31 @@ export async function pipelineRetirementReader(): Promise<PipelineRetirementRead
       // Positively absent pre-migration stores are empty; legacy data is never
       // silently skipped. A new store appearing invalidates this evidence.
       if (!absent(path.join(path.dirname(filename), "pipelines.json")) || !absent(path.join(path.dirname(filename), "pipelines-archive.json"))) throw new Error("pipeline retirement requires migrated evidence");
-      const held = (target: RetirementTarget) => {
-        if (recorded(target)) return true;
+      const held = (target: RetirementTarget, sweep: boolean) => {
+        if (sweep ? target.conversations.some(recordedHostHeld) : recorded(target)) return true;
         if (statePath("state.sqlite") !== filename || !absent(filename) || !absent(path.join(path.dirname(filename), "pipelines.json")) || !absent(path.join(path.dirname(filename), "pipelines-archive.json"))) throw new Error("pipeline retirement evidence changed");
         return false;
       };
-      return Object.assign(held, { sweepStanding: (target: RetirementTarget) => held(target) ? "held" as const : null });
+      return Object.assign((target: RetirementTarget) => held(target, false),
+        { sweepStanding: (target: RetirementTarget) => held(target, true) ? "held" as const : null });
     }
     let slot = slots.get(filename);
     if (!slot) { slot = {}; slots.set(filename, slot); }
     else { slots.delete(filename); slots.set(filename, slot); }
     while (slots.size > 2) slots.delete(slots.keys().next().value!);
-    if (slot.value?.version !== stateEvidenceVersion(filename)) {
-      const pending = slot.pending ??= prepare(filename, slot.value);
+    const databaseVersion = stateEvidenceVersion(filename);
+    const version = pipelineVersion(filename);
+    if (slot.value?.version !== version) {
+      const pending = slot.pending ??= prepare(filename, version, slot.value);
       try { slot.value = await pending; }
       finally { if (slot.pending === pending) slot.pending = undefined; }
     }
     const evidence = slot.value!;
     const standing = (target: RetirementTarget, sweep: boolean, recovery?: RuntimeProviderRecoveryRef): PipelineRetirementStanding => withViewerOperation("pipelines.retirement-check", () => performanceSpans.sync("controller.ownership", () => {
-      if (recorded(target)) return "held";
-      if (statePath("state.sqlite") !== filename || evidence.version !== stateEvidenceVersion(filename)) throw new Error("pipeline retirement evidence changed");
+      if (sweep ? target.conversations.some(recordedHostHeld) : recorded(target)) return "held";
+      if (statePath("state.sqlite") !== filename || (sweep
+        ? evidence.version !== pipelineVersion(filename)
+        : evidence.version !== version || databaseVersion !== stateEvidenceVersion(filename))) throw new Error("pipeline retirement evidence changed");
       // The caller supplies every alias of this conversation. A release through
       // one alias also ends source custody through another; path custody is
       // independent and publication or an operational claim always survives.
