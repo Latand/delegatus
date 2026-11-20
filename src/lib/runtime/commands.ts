@@ -81,10 +81,10 @@ export function parseRuntimeProviderRecoveryRef(value: unknown): import("./contr
   };
 }
 
-function runtimeSessionKey(value: unknown): { engine: "codex" | "claude" | "copilot"; sessionId: string } {
+function runtimeSessionKey(value: unknown): { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("sessionKey is invalid");
   const candidate = value as Record<string, unknown>;
-  const engine = candidate.engine === "codex" || candidate.engine === "claude" || candidate.engine === "copilot" ? candidate.engine : null;
+  const engine = candidate.engine === "codex" || candidate.engine === "claude" || candidate.engine === "copilot" || candidate.engine === "antigravity" ? candidate.engine : null;
   const sessionId = typeof candidate.sessionId === "string" ? candidate.sessionId.trim() : "";
   if (!engine || !sessionId || sessionId.includes(":") || /\s/.test(sessionId)) throw new Error("sessionKey is invalid");
   return { engine, sessionId };
@@ -336,7 +336,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
     };
   }
 
-  const engine = body.engine === "codex" || body.engine === "claude" || body.engine === "copilot" ? body.engine : null;
+  const engine = body.engine === "codex" || body.engine === "claude" || body.engine === "copilot" || body.engine === "antigravity" ? body.engine : null;
   if (!engine) throw new Error("engine is invalid");
   const cwd = typeof body.cwd === "string" ? body.cwd.trim() : "";
   if (!cwd) throw new Error("spawn cwd is required");

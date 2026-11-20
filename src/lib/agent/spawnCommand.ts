@@ -23,7 +23,8 @@ import { accountProbeIdentity, accountProbeSnapshot, AccountAdmissionChangedErro
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
-import { copilotBinaryGap, freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
+import { antigravityBinaryGap, copilotBinaryGap, freshSpecFor, type AgentEngine } from "@/lib/agent/cli";
+import { NoAntigravityAccountError, UnknownAntigravityAccountError } from "@/lib/accounts/antigravity";
 import { NoCopilotAccountError, UnknownCopilotAccountError } from "@/lib/accounts/copilot";
 import { agentRegistry, prepareAgentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnLauncher, type SpawnRequest } from "@/lib/agent/registry";
 import { reasoningFromBody } from "@/lib/agent/efforts";
@@ -205,6 +206,8 @@ export interface SpawnCommandDependencies {
   /** Why a Copilot launch cannot start here (the CLI is missing), or null.
       Injected by tests; production probes the binary. */
   copilotBinaryGap?(): string | null;
+  /** Why an Antigravity launch cannot start here (the `agy` CLI is missing), or null. */
+  antigravityBinaryGap?(): string | null;
   /** In-process autonomous callers recheck their admission hold under the
       account lock. Direct operator requests omit this callback. */
   autonomousAdmissionHeld?(): boolean;
@@ -246,7 +249,7 @@ export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
     .flatMap(pipeline => pipeline.taskIds))],
 
   recordOperatorRequest,
-  engineReadiness: (engine, project) => engine === "claude" || engine === "codex" ? engineReadiness(engine, project) : "connected",
+  engineReadiness: (engine, project) => engine === "claude" || engine === "codex" || engine === "antigravity" ? engineReadiness(engine, project) : "connected",
 };
 
 /** Record a request-bound pre-reservation refusal. The shared durable fence is
@@ -285,6 +288,7 @@ interface SuggestResponse {
     claude: ReturnType<typeof runtimeImageCapability>;
     codex: ReturnType<typeof runtimeImageCapability>;
     copilot: ReturnType<typeof runtimeImageCapability>;
+    antigravity: ReturnType<typeof runtimeImageCapability>;
   };
 }
 
@@ -334,6 +338,8 @@ export async function spawnSuggestions(req: NextRequest): Promise<NextResponse<S
       codex: runtimeImageCapability("codex", codexModelSupportsImages(null)),
       /* ACP advertises `promptCapabilities.image` (CLI 1.0.87). */
       copilot: runtimeImageCapability("copilot", true),
+      /* Antigravity ACP advertises `promptCapabilities.image` (`agy 1.5.13`). */
+      antigravity: runtimeImageCapability("antigravity", true),
     },
   });
 }
@@ -471,19 +477,19 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   if (role.value && isSpawnDeniedRole(role.value.role) && body.allowSubagents === true) {
     return NextResponse.json({ error: `${role.value.role} launches cannot enable subagents: reviewer and verifier sessions run every check in-session` }, { status: 400 });
   }
-  const engine = body.engine === "claude" || body.engine === "codex" || body.engine === "copilot"
+  const engine = body.engine === "claude" || body.engine === "codex" || body.engine === "copilot" || body.engine === "antigravity"
     ? (body.engine as AgentEngine)
     : (role.value?.config.engine ?? null);
-  if (!engine) return NextResponse.json({ error: "engine must be claude, codex or copilot" }, { status: 400 });
+  if (!engine) return NextResponse.json({ error: "engine must be claude, codex, copilot or antigravity" }, { status: 400 });
   const diskCleaner = role.value?.role === "cleaner" && role.value.params.mode === "disk";
   if (diskCleaner && engine !== "codex") return refuse("disk cleaner requires the Codex read-only sandbox");
   if (diskCleaner && body.allowSubagents === true) return refuse("disk cleaner cannot enable subagents");
   /* #1876: a role's launch onto an engine nobody is signed in to is refused in
      words, before a receipt exists, and never moved onto the other engine. */
-  const readiness = role.value && (engine === "claude" || engine === "codex")
+  const readiness = role.value && (engine === "claude" || engine === "codex" || engine === "antigravity")
     ? dependencies.engineReadiness?.(engine, typeof body.project === "string" ? body.project : null) ?? "connected"
     : "connected";
-  if (role.value && (engine === "claude" || engine === "codex") && readiness !== "connected") {
+  if (role.value && (engine === "claude" || engine === "codex" || engine === "antigravity") && readiness !== "connected") {
     const refusal = { role: role.value.role, engine, reason: readiness };
     const error = engineNotConnectedMessage(refusal);
     if (!authenticatedCallerError) await fenceSpawnAdmissionRejection(body as Record<string, unknown>, 409, error, dependencies);
@@ -544,7 +550,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     engine,
     model: selectedModel.model,
     hasImages: images.length > 0,
-  }) ?? (engine === "copilot" ? (dependencies.copilotBinaryGap ?? copilotBinaryGap)() : null);
+  })
+    ?? (engine === "copilot" ? (dependencies.copilotBinaryGap ?? copilotBinaryGap)() : null)
+    ?? (engine === "antigravity" ? (dependencies.antigravityBinaryGap ?? antigravityBinaryGap)() : null);
   if (gap) return NextResponse.json({ error: gap }, { status: 409 });
 
   const registry = registryForCaller ?? await prepareAgentRegistry(req.signal, () => dependencies.registry());
@@ -624,7 +632,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (workspacePrincipal && (!workspacePrincipalAllows(workspacePrincipal, explicitProject ?? projectForCwd(cwd))
       || !workspacePrincipalAllows(workspacePrincipal, projectForCwd(cwd))
       || !workspacePrincipalAllows(workspacePrincipal, projectForCwd(fs.realpathSync(cwd))))) throw new TeamError("workspace_forbidden", "workspace access denied", 403);
-    if (workspacePrincipal && engine !== "copilot" && (receipt?.accountId ?? workspaceAccountId)) {
+    if (workspacePrincipal && engine !== "copilot" && engine !== "antigravity" && (receipt?.accountId ?? workspaceAccountId)) {
       const project = explicitProject ?? projectForCwd(cwd);
       const allowed = allowedAccountIdsForProject(project, engine);
       const selected = (receipt?.accountId ?? workspaceAccountId)!;
@@ -752,8 +760,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       ? !existingAttempt.launchProfile.mcpServers.includes("telegram")
       : !telegramAvailable);
     const telegramWanted = requestedTelegram && !telegramLeftOut;
-    if (telegramWanted && engine === "copilot") {
-      return refuse("telegram MCP is unsupported by the Copilot engine");
+    if (telegramWanted && (engine === "copilot" || engine === "antigravity")) {
+      return refuse(`telegram MCP is unsupported by the ${engine === "antigravity" ? "Antigravity" : "Copilot"} engine`);
     }
     if (telegramWanted) {
       if (!existingAttempt && !seatLaunch && !seatParent && sessionOriginFor({
@@ -801,7 +809,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       ? grantedMcpServers(requestedMcpServers ?? [])
       : existingAttempt && implicitRootTelegram && !reportClassGrant
       ? existingAttempt.launchProfile.mcpServers
-      : implicitRootTelegram && (!telegramAvailable || engine === "copilot")
+      : implicitRootTelegram && (!telegramAvailable || engine === "copilot" || engine === "antigravity")
       ? ["viewer"]
       : reportClassGrant
       ? grantedMcpServers(reportClassGrant.mcpServers)
@@ -981,7 +989,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     const assertRequestedAccountBinding = (): void => {
       // The advertised account pin follows pipeline policy; accountId retains
       // the operator's legacy override contract.
-      if (engine === "copilot") return;
+      if (engine === "copilot" || engine === "antigravity") return;
       const named = workspacePrincipal ? requestedAccountId : typeof body.account === "string" ? body.account : null;
       if (!named) return;
       const allowedAccountIds = allowedAccountIdsForProject(spawnProject, engine);
@@ -1010,7 +1018,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       if (error instanceof CodexServiceTierUnavailableError) {
         /* A member's automatic pick on a project with no account list chooses
            among accounts they are not shown, so the refusal names none. */
-        const hidden = workspacePrincipal && engine !== "copilot" && selectedModel.model && launchTier && accountsHiddenFromMember(spawnProject, engine);
+        const hidden = workspacePrincipal && engine !== "copilot" && engine !== "antigravity" && selectedModel.model && launchTier && accountsHiddenFromMember(spawnProject, engine);
         return NextResponse.json({ error: hidden ? hiddenAccountsTierRefusal(selectedModel.model!, launchTier!) : error.message, code: error.code }, { status: 409 });
       }
       if (error instanceof AccountProjectBindingsUnreadableError) {
@@ -1021,10 +1029,11 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
          before any receipt exists, so there is nothing for a retry to replay
          onto an account this project does not allow. */
       if (error instanceof ProjectAccountRefusedError || error instanceof MemberAccountRefusedError) {
-        return projectAccountRefusedResponse(error, spawnProject, !!workspacePrincipal && engine !== "copilot" && accountsHiddenFromMember(spawnProject, engine));
+        return projectAccountRefusedResponse(error, spawnProject, !!workspacePrincipal && engine !== "copilot" && engine !== "antigravity" && accountsHiddenFromMember(spawnProject, engine));
       }
-      /* A Copilot launch with no account set up, or naming one that is gone. */
-      if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError) {
+      /* A Copilot or Antigravity launch with no account set up, or naming one that is gone. */
+      if (error instanceof NoCopilotAccountError || error instanceof UnknownCopilotAccountError
+        || error instanceof NoAntigravityAccountError || error instanceof UnknownAntigravityAccountError) {
         return NextResponse.json({ error: error.message }, { status: 409 });
       }
       const concealedHealth = hiddenNoHealthyAccountResponse(error, spawnProject, !!workspacePrincipal && engine === "claude" && accountsHiddenFromMember(spawnProject, engine));
@@ -1089,7 +1098,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         mcpServers: grantedServers,
         deferClaudeSpawnPolicy: true,
       });
-      const permissionMode = engine === "claude" || engine === "copilot"
+      const permissionMode = engine === "claude" || engine === "copilot" || engine === "antigravity"
         ? structuredClaudePermissionMode(specBase.launchProfile?.permissionMode, {
           agentInitiated,
           operatorAuthenticated: authenticatedCaller?.kind === "operator",
@@ -1233,7 +1242,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
        older crossings it exists to keep. */
     /* Project account bindings cover Claude and Codex; a Copilot launch names
        its account or uses the selected one, so there is no pool to cross. */
-    const accountOverride = begun.kind === "created" && engine !== "copilot" && requestedAccountId && account.accountId === requestedAccountId
+    const accountOverride = begun.kind === "created" && engine !== "copilot" && engine !== "antigravity" && requestedAccountId && account.accountId === requestedAccountId
       ? attributeNamedAccountChoice({
         engine,
         project: spawnProject,
@@ -1563,7 +1572,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (error instanceof AccountProjectBindingsUnreadableError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof ProjectAccountRefusedError || error instanceof MemberAccountRefusedError) {
       const refusedProject = explicitProject ?? projectForCwd(cwd);
-      return projectAccountRefusedResponse(error, refusedProject, !!workspacePrincipal && engine !== "copilot" && accountsHiddenFromMember(refusedProject, engine));
+      return projectAccountRefusedResponse(error, refusedProject, !!workspacePrincipal && engine !== "copilot" && engine !== "antigravity" && accountsHiddenFromMember(refusedProject, engine));
     }
     /* Typed terminal admission rejection (#393): the durable receipt already
        exists and no transcript or process was created. */

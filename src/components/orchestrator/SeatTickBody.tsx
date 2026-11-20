@@ -1204,7 +1204,7 @@ function SeatTickMaintenance({ maintenance, view, state, control, row, phone, on
   );
 }
 
-const ENGINE_NAME = { claude: "Claude", codex: "Codex" } as const;
+const ENGINE_NAME = { claude: "Claude", codex: "Codex", antigravity: "Antigravity" } as const;
 
 function modelName(maintainer: MaintainerRoleRead, runtime: MaintainerRuntime): string {
   const model = maintainer.choices.find((choice) => choice.engine === runtime.engine)?.models.find((candidate) => candidate.id === runtime.model);

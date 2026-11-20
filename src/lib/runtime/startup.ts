@@ -1593,10 +1593,10 @@ async function interruptedCodexContinuations(
 
 function persistedTurnState(
   records: Record<string, unknown>[],
-  engine: "codex" | "claude" | "copilot",
+  engine: "codex" | "claude" | "copilot" | "antigravity",
   prefixTruncated: boolean,
 ) {
-  if (engine === "claude" || engine === "copilot") return turnStateFromRecords(records, engine);
+  if (engine === "claude" || engine === "copilot" || engine === "antigravity") return turnStateFromRecords(records, engine);
   if (!prefixTruncated) return turnStateFromRecords(records, "codex", true);
 
   const turnStartIndex = records.findLastIndex((record) => {
@@ -2039,7 +2039,7 @@ function* pipelineStartupMembershipSteps(registry: AgentRegistry, host?: AgentRe
       if (entries) memberships[id] = entries;
     }
   };
-  const hostKeys = host ? [sessionKeyId(host.key)] : registryKeysMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp"]);
+  const hostKeys = host ? [sessionKeyId(host.key)] : registryKeysMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"]);
   for (const key of hostKeys) {
     const entry = snapshot.entries[key];
     if (!entry || !startupHostInScope(registry, key)) continue;

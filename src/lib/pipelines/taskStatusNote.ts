@@ -6,7 +6,7 @@ import { readTaskSummaryInput } from "@/lib/tasks/summary";
 import { mutateTaskSummary, mutateTaskNote } from "@/lib/tasks/store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
-export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" } | { kind: "quota-reset" } | { kind: "review-budget" }
+export type ParkedTaskReason = { kind: "signed-out"; engine: "claude" | "codex" | "antigravity" } | { kind: "quota-reset" } | { kind: "review-budget" }
   | { kind: "provider-retry"; resumeAt: string; timeZone?: string };
 
 /** Keep host errors, paths and publication diagnostics out of the human note. */
@@ -21,7 +21,7 @@ export function parkedTaskNote(detail: string, locale: "en" | "uk", failed = fal
     return uk ? `Автоповтор ${time} (${label}).` : `Automatic retry ${time} (${label}).`;
   }
   if (reason?.kind === "signed-out") {
-    const engine = reason.engine === "codex" ? "Codex" : "Claude";
+    const engine = reason.engine === "codex" ? "Codex" : reason.engine === "antigravity" ? "Antigravity" : "Claude";
     return uk
       ? `Для ${engine} не під’єднано обліковий запис. Під’єднайте його, щоб продовжити.`
       : `No ${engine} account is connected. Connect one to continue.`;

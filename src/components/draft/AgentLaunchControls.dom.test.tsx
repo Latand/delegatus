@@ -250,7 +250,7 @@ test("an account is signed out by its reconciled auth state, and an unreadable c
     ["expired", true],
     ["copilot-shape", true],
   ]);
-  const catalog = { claude: section, codex: { active: "", accounts: [] }, copilot: { active: "", accounts: [] } };
+  const catalog = { claude: section, codex: { active: "", accounts: [] }, copilot: { active: "", accounts: [] }, antigravity: { active: "", accounts: [] } };
   expect(launchReadiness({ engine: "claude", catalog, launchAccountId: "default" })).toEqual({ kind: "signed-out", engine: "claude", accountId: "default", label: "Main" });
   expect(launchReadiness({ engine: "claude", catalog, launchAccountId: "locked" })).toEqual({ kind: "ready" });
   /* No catalog yet: nothing is known, so nothing is stopped here. */
