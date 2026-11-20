@@ -26,6 +26,7 @@ CPU_WEIGHT = "1000"
 CHECKOUT_MERGER_CAPTURE = "checkout-mergers.json"
 CHECKOUT_MERGER_LIMIT = 200
 CHECKOUT_MERGER_WINDOW_SECONDS = 15 * 60
+CHECKOUT_MERGER_MAX_BYTES = 512 * 1024
 
 
 def census_identity(value):
@@ -1054,7 +1055,7 @@ class Checkout:
         if not hosts:
             return
         destination = self.state / CHECKOUT_MERGER_CAPTURE
-        captured_at = utc()
+        captured_at = getattr(self, "merger_observed_at", utc())
         cutoff = parse_time(captured_at) - datetime.timedelta(seconds=CHECKOUT_MERGER_WINDOW_SECONDS)
         captures = {}
         try:
@@ -1071,7 +1072,33 @@ class Checkout:
         self.merger_boundary = boundary
         if len(captures) > CHECKOUT_MERGER_LIMIT:
             raise RuntimeError("standalone merger inventory exceeds its bound")
-        write_json(destination, list(captures.values()))
+        inventory = list(captures.values())
+        serialized = json.dumps(inventory, indent=2) + "\n"
+        if len(serialized.encode("utf-8")) > CHECKOUT_MERGER_MAX_BYTES:
+            raise RuntimeError("standalone merger inventory exceeds reader byte limit")
+        # Validate the complete successor schema against the exact bytes before
+        # any stop is submitted.
+        decoded = json.loads(serialized)
+        def valid_identity(identity):
+            return (isinstance(identity, dict) and type(identity.get("pid")) is int and identity["pid"] > 0
+                    and isinstance(identity.get("startIdentity"), str) and bool(identity["startIdentity"])
+                    and (identity.get("bootEpoch") is None or isinstance(identity.get("bootEpoch"), str)))
+        def valid_row(row):
+            batch = row.get("batch")
+            return (isinstance(row, dict) and re.fullmatch(r"conversation_[\w-]+", row.get("conversationId", ""))
+                    and row.get("engine") in ["claude", "codex"] and isinstance(row.get("sessionId"), str)
+                    and bool(row["sessionId"]) and isinstance(row.get("path"), str) and os.path.isabs(row["path"])
+                    and (row.get("turnState") is None or row.get("turnState") in ["busy", "idle"])
+                    and type(row.get("claimEpoch")) is int and row["claimEpoch"] > 0
+                    and valid_identity(row.get("process")) and valid_identity(row.get("writer"))
+                    and re.fullmatch(r"checkout-merger:[0-9a-f]{32}", row.get("boundary", ""))
+                    and isinstance(row.get("capturedAt"), str) and parse_time(row["capturedAt"])
+                    and (batch is None or isinstance(batch, dict) and isinstance(batch.get("directory"), str)
+                         and os.path.isabs(batch["directory"]) and isinstance(batch.get("identity"), str)
+                         and isinstance(batch.get("branch"), str)))
+        if not isinstance(decoded, list) or len(decoded) != len(captures) or not all(valid_row(row) for row in decoded):
+            raise RuntimeError("standalone merger inventory failed successor validation")
+        write_json(destination, inventory)
 
     def placement(self):
         """Observed configuration and cgroup, against the required CPU slice.
@@ -1795,6 +1822,9 @@ class Checkout:
         self.relocation = relocation
         try:
             # An incomplete final census cannot authorize stopping the service.
+            # This conservative boundary precedes census observation. A matching
+            # stop admitted while the census/inventory is being written stays visible.
+            self.merger_observed_at = utc()
             self.custody_rows = complete_activity(self.census())
             try:
                 captured = self.generation(group, self.custody_rows)
@@ -1851,6 +1881,8 @@ class Checkout:
             identifier = host["conversationId"]
             rows = complete_activity(self.mcp.call("agent_activity", {"conversationId": identifier, "compact": False, "includeGone": True}))
             active = rows[0] if len(rows) == 1 and rows[0].get("conversationId") == identifier and not rows[0].get("pipeline") else {}
+            if active.get("turnState") == "idle":
+                return {"kind": "standalone-merger", "conversationId": identifier, "outcome": "completed"}
             process = active.get("host") or {}
             outcome = "unknown"
             if process.get("kind") == "structured" and process.get("state") == "alive" and active.get("lifecycle") not in ["failed", "interrupted", "stalled"]:

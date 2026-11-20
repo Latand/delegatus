@@ -27,6 +27,7 @@ export type CheckoutMerger = {
   process: ProcessIdentity;
   writer: ProcessIdentity;
   batch: Batch | null;
+  turnState?: "busy" | "idle";
 };
 
 export type CheckoutMergerCut = CheckoutMerger & { capturedAt: string; boundary: string };
@@ -58,7 +59,9 @@ export function checkoutBatchState(directory: string, identity: string, branch?:
       && state.rows.length > 0 && state.rows.every((row: { status?: string; detail?: string } | null) => row
         && (["needs-review", "head-moved", "culprit"].includes(row.status ?? "")
           || row.status === "merged" && ["closed", "head moved after landing; original kept open"].includes(row.detail ?? "")));
-    return { branch: state.branch, locked: lock?.isDirectory() === true, finished };
+    if (!Array.isArray(state.rows) || state.resolving != null && typeof state.resolving !== "boolean") return null;
+    return { branch: state.branch, locked: lock?.isDirectory() === true, finished,
+      active: !state.landed || state.resolving || !finished };
   } catch { return null; }
 }
 
@@ -88,6 +91,7 @@ export function readCheckoutMergerCuts(directory: string, now = Date.now()): Che
     return rows.map((row: CheckoutMergerCut) => {
       if (!row || !/^conversation_[\w-]+$/.test(row.conversationId) || !["claude", "codex"].includes(row.engine)
         || typeof row.sessionId !== "string" || !row.sessionId || typeof row.path !== "string" || !path.isAbsolute(row.path)
+        || row.turnState != null && row.turnState !== "busy" && row.turnState !== "idle"
         || !Number.isSafeInteger(row.claimEpoch) || row.claimEpoch < 1 || !hasIdentity(row.process) || !hasIdentity(row.writer)
         || !/^checkout-merger:[0-9a-f]{32}$/.test(row.boundary) || typeof row.capturedAt !== "string"
         || !Number.isFinite(Date.parse(row.capturedAt)) || Date.parse(row.capturedAt) > now

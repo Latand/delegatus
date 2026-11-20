@@ -120,7 +120,7 @@ test("custody census carries recorded identities and bounded writer evidence wit
   } finally { f.close(); }
 });
 
-test("census captures a durable standalone merger and leaves a quiet merger out", async () => {
+test("census captures busy and quiet standalone merger custody and retains unlocked batch identity", async () => {
   const f = fixture();
   try {
     const busy = f.rows[0]!;
@@ -133,20 +133,23 @@ test("census captures a durable standalone merger and leaves a quiet merger out"
       row.entry.structuredHost!.writerClaimEpoch = 2;
     }
     const answer = await censusSnapshot(f.sources, 1, TARGET, 30000);
-    expect(answer.conversations.filter(row => row.merger).map(row => row.merger)).toMatchObject([{
+    expect(answer.conversations.find(row => row.merger?.conversationId === busy.id)?.merger).toMatchObject({
       conversationId: busy.id, engine: "codex", sessionId: busy.entry.key.sessionId, path: busy.pathname,
       claimEpoch: 2, process: busy.entry.structuredHost!.process, writer, batch: null,
-    }]);
+    });
+    expect(answer.conversations.find(row => row.merger?.conversationId === quiet.id)?.merger).toMatchObject({
+      conversationId: quiet.id, turnState: "idle",
+    });
     f.file.conversations[busy.id]!.agentRole = null;
     const launch = f.file.receipts["receipt-only"]!;
     Object.assign(launch, { conversationId: busy.id, agentRole: "merger", state: "completed", key: busy.entry.key, artifactPath: busy.pathname });
     const state = temporary();
     const directory = path.join(state, "scratch", "llv-stage-merger-fixture");
     const batchFile = path.join(directory, "tmp", "merge-batch.json");
-    fs.mkdirSync(batchFile + ".lock", { recursive: true });
+    fs.mkdirSync(path.dirname(batchFile), { recursive: true });
     const batchId = ["00000000", "0000", "4000", "8000", "000000000001"].join("-");
     const branch = `merge-batch/${batchId}`;
-    fs.writeFileSync(batchFile, JSON.stringify({ version: 3, branch, landed: false }));
+    fs.writeFileSync(batchFile, JSON.stringify({ version: 3, branch, landed: false, rows: [{ status: "pending" }] }));
     const attempts = new AttemptTempStore(path.join(state, "attempt-temp.sqlite"));
     try { attempts.register({ directory, pipelineId: null, launchId: launch.launchId, retainUntilClose: false, createdAt: Date.parse(NOW) }); }
     finally { attempts.close(); }
@@ -160,7 +163,7 @@ test("census captures a durable standalone merger and leaves a quiet merger out"
       stageId: "merge", stageOrder: 0, round: 1, role: "merger", slot: "merge", createdAt: NOW, parentConversationId: null,
     }] };
     const pipeline = await censusSnapshot(f.sources, 3, TARGET, 30000);
-    expect(pipeline.conversations.every(row => !row.merger)).toBe(true);
+    expect(pipeline.conversations.find(row => row.conversationId === busy.id)?.merger).toBeNull();
   } finally { f.close(); }
 });
 

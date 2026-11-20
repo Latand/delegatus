@@ -272,17 +272,17 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
       let merger: CheckoutMerger | null = null;
       if (id && conversation && generation && generation.path === row.transcriptPath && !conversation.supersededBy
         && !row.pipeline && host.state === "alive" && host.kind === "structured"
-        && row.turnState !== "idle" && standaloneMerger(registry, id)) {
+        && (row.turnState === "idle" || row.turnState === "busy") && standaloneMerger(registry, id)) {
         const engine = conversation.engine;
         const entry = registry.entries[`${engine}:${generation.id}`];
         const writer = entry?.claimOwner && structuredClaimIdentity(entry.claimOwner);
-        if ((engine !== "codex" && engine !== "claude") || row.turnState !== "busy"
+        if ((engine !== "codex" && engine !== "claude")
           || !entry?.structuredHost?.process || !host.process || !sameRecordedProcessIdentity(entry.structuredHost.process, host.process)
           || !writer || !writer.startIdentity || entry.claimEpoch < 1 || entry.structuredHost.writerClaimEpoch !== entry.claimEpoch) {
           throw new Error("standalone merger custody is incomplete");
         }
         merger = { conversationId: id, engine, sessionId: generation.id, path: generation.path,
-          claimEpoch: entry.claimEpoch, process: host.process, writer, batch: batchFor(registry, id) };
+          claimEpoch: entry.claimEpoch, process: host.process, writer, batch: batchFor(registry, id), turnState: row.turnState };
       }
       return { conversationId: row.conversationId, host, turnState: row.turnState, pipeline: row.pipeline ? {
         pipelineId: row.pipeline.pipelineId, stageId: row.pipeline.stageId, attempt: row.pipeline.attempt,
@@ -310,7 +310,7 @@ export function capturedBatch(directory: string, registry: RegistryFile, id: Che
       for (const root of roots) {
         if (path.dirname(root.directory) !== path.join(directory, "scratch")) continue;
         const batch = checkoutBatchState(root.directory, root.identity);
-        if (batch?.locked) matches.set(root.directory, { ...root, branch: batch.branch });
+        if (batch?.active) matches.set(root.directory, { ...root, branch: batch.branch });
       }
     }
     if (matches.size > 1) throw new Error("standalone merger owns multiple locked batches");
