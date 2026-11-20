@@ -124,7 +124,7 @@ server.listen(Number(process.argv[4]), "127.0.0.1", () => {
     const label = scenario === "later-start" ? "path-claude" : "neither-cli";
     const errorFile = join(directory, `${label}-error.txt`);
     const result = startCase(label, env, expected, {
-      directory, rows, home, retentionTimeoutMs: ["missing", "pending-close", "late-stale"].includes(scenario) ? 300 : 3_000,
+      directory, rows, retentionTimeoutMs: ["missing", "pending-close", "late-stale"].includes(scenario) ? 300 : 3_000,
     }).catch((error: Error) => error.message);
     expect(await result).toBe(failure ? `neither-cli: ${failure}` : undefined);
     expect(rows).toEqual([{
@@ -172,7 +172,7 @@ process.on("SIGTERM", () => process.exit(0));
     }
     writeFileSync(audit, "--version\nmcp add viewer viewer\n");
     const failures = await runCases(cases, entries);
-    const report = { rows, passed: false };
+    const report: { rows: unknown[]; passed: boolean; error?: string } = { rows, passed: false };
     expect(() => finalizeCases(report, audit, home, failures)).toThrow("neither-cli: retention completed with 1 error(s)");
     report.error = "neither-cli: retention completed with 1 error(s)";
     writeReport(reportDir, report);

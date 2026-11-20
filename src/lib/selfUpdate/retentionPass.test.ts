@@ -23,7 +23,7 @@ function fixture(count = 12) {
     launcher: {}, web: {}, runtimeHost: {} } as LauncherRecord;
   fs.writeFileSync(record.releasePointer, JSON.stringify({ dir: dirs[0] }));
   const inputs: RetentionInputs = {};
-  const options = { reportFile: path.join(root, "retention.json"), env: { LLV_SELF_UPDATE_KEEP_RELEASES: "1" }, now,
+  const options = { reportFile: path.join(root, "retention.json"), env: { LLV_SELF_UPDATE_KEEP_RELEASES: "1", LLV_RETENTION_RUN_ID: undefined as string | undefined }, now,
     current: () => ({ record, inputs }), fence: () => true, launch: { executable: process.execPath, entry: path.join(import.meta.dir, "retentionPass.fixture.ts"), args: [root] } };
   const ended = () => expect(() => process.kill(Number(fs.readFileSync(path.join(root, "helper-pid"), "utf8")), 0)).toThrow();
   return { root, dirs, record, inputs, options, ended };
