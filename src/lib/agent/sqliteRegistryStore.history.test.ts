@@ -10,7 +10,7 @@ import { normalizeRegistry, readOnlyConversationLookupFromSnapshot, type Registr
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
 import { OWNER_ENDINGS_CURSOR } from "./registryEndings";
 import {
-  registryRowsMatching, archivedOwnersEndedSince, hotRegistryRows, registryConversationsForEntryKey, registryConversationsForPath, registryRowProjection,
+  registryRowsMatching, archivedOwnersEndedSince, hotRegistryRows, registryConversationsForEntryKey, registryConversationsForPath, registryRowProjection, registryRetiredHostRows,
   SqliteAgentRegistryStore, type RegistryRowProjector,
 } from "./sqliteRegistryStore";
 
@@ -162,6 +162,22 @@ test("a grant-bearing write is decided once and serialized without assembling th
   expect(stored.updatedAt).toBe("2026-10-11T21:00:00.000Z");
   expect(stored.launchProfile?.cwd).toBe("/repo/rewritten");
   expect([stored.launchProfile?.mcpServers]).toEqual(expected!);
+});
+
+test("retired-host selection refuses a peer revision newer than its held census snapshot", () => {
+  const { dataset, open } = history();
+  const reader = open();
+  const writer = open();
+  const key = Object.keys(reader.snapshot().file.entries)[0]!;
+  writer.mutate(file => {
+    file.entries[key]!.hostExitProcess = { pid: 7654, startIdentity: "7654:1", stop: {
+      path: "deploy-cut", at: "2026-11-10T12:00:00.000Z",
+    } };
+  }, false);
+  const held = reader.readOnlySnapshot().file;
+  writer.mutate(file => { delete file.entries[key]!.hostExitProcess; }, false);
+  expect(() => registryRetiredHostRows(held, 200, "2026-11-10T11:59:00.000Z"))
+    .toThrow("registry view changed during retired-host selection");
 });
 
 test("a decision inside a mutation reads the attestors that mutation rewrote", () => {

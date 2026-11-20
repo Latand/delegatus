@@ -479,7 +479,9 @@ interface RegistryFileReaders {
   startupSelection: WeakMap<RegistryFile, () => boolean>;
   projection: WeakMap<object, ProjectionReader>;
   liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
-  retiredHosts?: WeakMap<object, (limit: number) => { keys: string[]; overflow: boolean }>;
+  retiredHosts?: WeakMap<object, (limit: number, cutBoundary?: string) => {
+    keys: string[]; overflow: boolean; assertCurrent?: () => void;
+  }>;
 }
 /* Next standalone evaluates instrumentation and route handlers in separate
    bundle realms, each with its own copy of this module, while the process
@@ -733,15 +735,19 @@ export function registryLivenessRows(file: RegistryFile): { entries: AgentRegist
 /** Bounded retired-host candidates for deploy-cut reconciliation. SQLite
  * selects keys before registry payloads are decoded, so unrelated terminal
  * history does not add work to a census. The extra row makes overflow explicit. */
-export function registryRetiredHostRows(file: RegistryFile, limit: number): { entries: AgentRegistryEntry[]; overflow: boolean } {
+export function registryRetiredHostRows(file: RegistryFile, limit: number, cutBoundary?: string): { entries: AgentRegistryEntry[]; overflow: boolean } {
   if (!Number.isInteger(limit) || limit < 1) throw new Error("retired host limit must be positive");
   const reader = retiredHostReaders.get(file);
-  const selected = reader ? reader(limit) : (() => {
-    const entries = Object.entries(file.entries).filter(([, entry]) => entry.hostExitProcess != null)
+  const selected = reader ? reader(limit, cutBoundary) : (() => {
+    const cutoff = cutBoundary && Number.isFinite(Date.parse(cutBoundary)) ? cutBoundary : "";
+    const entries = Object.entries(file.entries).filter(([, entry]) => entry.hostExitProcess != null
+      && typeof entry.updatedAt === "string" && entry.updatedAt >= cutoff)
       .slice(0, limit + 1);
     return { keys: entries.map(([key]) => key), overflow: entries.length > limit };
   })();
-  return { entries: selected.keys.slice(0, limit).map(key => file.entries[key]!).filter(Boolean), overflow: selected.overflow };
+  const entries = selected.keys.slice(0, limit).map(key => file.entries[key]!).filter(Boolean);
+  selected.assertCurrent?.();
+  return { entries, overflow: selected.overflow };
 }
 
 /** Whether this view can select rows without expanding the whole collection. */
@@ -4379,12 +4385,55 @@ export class SqliteAgentRegistryStore {
       const receipts = [...receiptKeys].map(key => file.receipts[key]).filter((row): row is RegistryFile["receipts"][string] => !!row);
       return { entries, receipts };
     });
-    retiredHostReaders.set(file, limit => {
-      const rows = this.db.query<{ row_key: string }, [number]>(
-        `SELECT row_key FROM ${this.recordsSource} WHERE collection='entries'
-          AND json_extract(value_json,'$.hostExitProcess.pid') IS NOT NULL
-          ORDER BY row_order DESC LIMIT ?`).all(limit + 1);
-      return { keys: rows.slice(0, limit).map(row => row.row_key), overflow: rows.length > limit };
+    retiredHostReaders.set(file, (limit, cutBoundary) => {
+      // Only rows written during this cut can be its retired-host receipts.
+      // The partial hot/archive indexes keep old payloads out of candidate
+      // discovery before the bound is applied.
+      const cutoff = cutBoundary && Number.isFinite(Date.parse(cutBoundary)) ? cutBoundary : "";
+      const assertCurrent = () => {
+        if (this.changeId() !== coldGrantChangeId)
+          throw new DatabaseReplacedError("registry view changed during retired-host selection; request a fresh snapshot");
+      };
+      const standaloneMerger = (entry: string) => `EXISTS (
+        SELECT 1 FROM registry_generation_identities i
+          JOIN registry_records conversation ON conversation.collection='conversations' AND conversation.row_key=i.conversation_id
+          WHERE i.entry_key=${entry}.row_key AND i.path=json_extract(${entry}.value_json,'$.artifactPath')
+            AND (json_extract(conversation.value_json,'$.agentRole')='merger'
+              OR (json_extract(conversation.value_json,'$.agentRole') IS NULL AND EXISTS (
+                SELECT 1 FROM registry_records receipt
+                  WHERE receipt.collection='receipts'
+                    AND json_extract(receipt.value_json,'$.conversationId')=i.conversation_id
+                    AND json_extract(receipt.value_json,'$.state')='completed'
+                    AND json_extract(receipt.value_json,'$.agentRole')='merger'
+                    AND json_extract(receipt.value_json,'$.key.engine')=json_extract(${entry}.value_json,'$.key.engine')
+                    AND json_extract(receipt.value_json,'$.key.sessionId')=json_extract(${entry}.value_json,'$.key.sessionId')
+                    AND json_extract(receipt.value_json,'$.artifactPath')=i.path
+              )))
+            AND NOT EXISTS (
+              SELECT 1 FROM registry_records membership,json_each(membership.value_json) member
+                WHERE membership.collection='memberships' AND membership.row_key=i.conversation_id
+                  AND json_extract(member.value,'$.kind') IN ('pipeline','flow')
+            )
+      )`;
+      assertCurrent();
+      const rows = this.db.query<{ row_key: string }, [string, string, number]>(
+        `SELECT row_key FROM (
+          SELECT r.row_key,r.row_order FROM registry_rows r INDEXED BY registry_hot_retired_host_cut
+            WHERE r.collection='entries'
+              AND NOT EXISTS (SELECT 1 FROM registry_cold hot WHERE hot.collection='entries' AND hot.row_key=r.row_key)
+              AND json_extract(r.value_json,'$.hostExitProcess.pid') IS NOT NULL
+              AND json_extract(r.value_json,'$.updatedAt')>=?
+              AND ${standaloneMerger("r")}
+          UNION ALL
+          SELECT c.row_key,a.row_order FROM registry_archive a INDEXED BY registry_archive_retired_host_cut
+            JOIN registry_cold c ON a.id=c.archive_id AND a.collection=c.collection AND a.row_key=c.row_key
+            WHERE c.collection='entries' AND a.collection='entries'
+              AND json_extract(a.value_json,'$.hostExitProcess.pid') IS NOT NULL
+              AND json_extract(a.value_json,'$.updatedAt')>=?
+              AND ${standaloneMerger("a")}
+        ) ORDER BY row_order DESC LIMIT ?`).all(cutoff, cutoff, limit + 1);
+      assertCurrent();
+      return { keys: rows.slice(0, limit).map(row => row.row_key), overflow: rows.length > limit, assertCurrent };
     });
     const ids = coldIds;
     const keys = coldKeys;

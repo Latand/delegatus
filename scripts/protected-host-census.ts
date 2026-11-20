@@ -244,7 +244,14 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
   // the exact predecessor that the successor must reconcile.
   const representedConversations = new Set(snapshot.conversations.map(row => row.conversationId).filter(Boolean));
   const retiredMergers = [];
-  const retiredCandidates = registryRetiredHostRows(registry, 200);
+  let retiredCandidates: ReturnType<typeof registryRetiredHostRows>;
+  try { retiredCandidates = cutBoundary
+    ? registryRetiredHostRows(registry, 200, cutBoundary)
+    : { entries: [], overflow: false }; }
+  catch {
+    snapshot.selection.unreadable++;
+    retiredCandidates = { entries: [], overflow: true };
+  }
   for (const entry of retiredCandidates.entries) {
     if (retiredMergers.length >= 200) break;
     const process = entry.structuredHost?.process ?? entry.hostExitProcess;
@@ -269,6 +276,12 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
       process, exitWriter: readHostExitWriterBinding(process) }, turnState: merger.turnState, pipeline: null,
       evidenceSource: "transcript", merger });
     representedConversations.add(id);
+  }
+  // The key query may include ordinary exits. Only a full window of verified
+  // deploy-cut merger candidates can make its bounded overflow incomplete.
+  if (retiredCandidates.overflow && retiredMergers.length >= 200) {
+    snapshot.selection.unreadable++;
+    snapshot.unselectedCount++;
   }
   const unrepresented = owners.filter(owner => !represented.has(owner.pid));
   // Count physical capture targets. Raw transcript paths can be several

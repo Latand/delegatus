@@ -12,6 +12,7 @@ import subprocess
 import io
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("deploy_checkout", pathlib.Path(__file__).with_name("deploy-checkout.py"))
@@ -939,6 +940,8 @@ class CheckoutIntegration(unittest.TestCase):
         retired = {"conversationId": conversation, "host": {"kind": "structured", "state": "gone",
                    "pid": process["pid"], "process": process}, "turnState": "busy", "evidenceSource": "transcript",
                    "pipeline": None, "merger": merger}
+        # Preflight and the immediate pre-stop census stay empty. The retired
+        # receipt appears only after the named stop has settled.
         self.inventory_overrides = lambda n: {"conversations": [retired] if n >= 3 else [],
             "selection": {"matched": 1 if n >= 3 else 0, "selected": 1 if n >= 3 else 0, "recoveryPending": 0,
                           "recoveryTruncated": False, "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}
@@ -988,7 +991,7 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertEqual(self.service_commands(), [])
         self.assertEqual(result["verdict"], "fail")
 
-    def test_empty_census_atomically_expires_a_valid_legacy_inventory(self):
+    def test_empty_census_retains_an_expired_identity_fence(self):
         legacy = {"conversationId": "conversation_legacy", "engine": "codex", "sessionId": "old",
                   "path": str(self.root / "old.jsonl"), "claimEpoch": 2,
                   "process": {"pid": 104, "startIdentity": "104:104", "bootEpoch": "fixture-boot"},
@@ -1000,7 +1003,28 @@ class CheckoutIntegration(unittest.TestCase):
         self.adapter.custody_rows = []
         self.adapter.merger_observed_at = deploy.utc()
         self.adapter.arm_merger_recovery()
-        self.assertEqual(json.loads(destination.read_text()), [])
+        self.assertEqual(json.loads(destination.read_text()), [legacy])
+
+    def test_successor_inventory_rejects_omitted_contract_fields_before_stop(self):
+        for index, missing in enumerate(("writer", "batch")):
+            if index:
+                self.adapter.close()
+                self.doCleanups()
+                self.setUp()
+            complete = {"conversationId": "conversation_missing_field", "engine": "codex", "sessionId": "old",
+                        "path": str(self.root / "old.jsonl"), "claimEpoch": 2,
+                        "process": {"pid": 104, "startIdentity": "104:104", "bootEpoch": "fixture-boot"},
+                        "writer": None, "batch": None, "capturedAt": deploy.utc(),
+                        "boundary": "checkout-merger:" + "a" * 32}
+            with self.subTest(missing=missing):
+                row = {key: value for key, value in complete.items() if key != missing}
+                (self.state / deploy.CHECKOUT_MERGER_CAPTURE).write_text(json.dumps([row]))
+                self.inventory_overrides = {"conversations": []}
+                self.adapter.placement = lambda: {"actual": self.service_group, "expected": self.service_group}
+                result = deploy.run_switch(self.adapter, TARGET, samples=1, timeout=1)
+                self.assertFalse(result["relocation"]["stopSubmitted"])
+                self.assertEqual(self.service_commands(), [])
+                self.assertEqual(result["verdict"], "fail")
 
     def test_future_previous_merger_cut_refuses_stop_before_successor_inventory_write(self):
         conversation = "conversation_clock_step"
@@ -1058,9 +1082,20 @@ class CheckoutIntegration(unittest.TestCase):
     def test_weaker_post_stop_observation_keeps_durable_merger_custody(self):
         conversation = "conversation_weaker_observation"
         process = {"pid": 104, "startIdentity": "104:104", "bootEpoch": self.adapter.boot_epoch}
+        writer = {"pid": 102, "startIdentity": "102:102", "bootEpoch": self.adapter.boot_epoch}
+        batch_directory = self.root / "batch"
+        batch_directory.mkdir()
+        batch_state = batch_directory / "tmp" / "merge-batch.json"
+        batch_state.parent.mkdir()
+        branch = f"merge-batch/{uuid.UUID(int=2, version=4)}"
+        batch_state.write_text(json.dumps({"version": 3, "branch": branch,
+                                           "landed": False, "rows": [{"status": "pending"}]}))
+        (batch_state.parent / "merge-batch.json.lock").mkdir()
+        batch_identity = f"{batch_directory.stat().st_dev}:{batch_directory.stat().st_ino}"
         merger = {"conversationId": conversation, "engine": "codex", "sessionId": "fixture-merger",
                   "path": str(self.root / "merger.jsonl"), "claimEpoch": 2, "process": process,
-                  "writer": None, "batch": None, "turnState": "busy"}
+                  "writer": writer, "batch": {"directory": str(batch_directory), "identity": batch_identity,
+                                                  "branch": branch}, "turnState": "busy"}
         durable = {"conversationId": conversation, "host": {"kind": "structured", "state": "gone",
                    "pid": 104, "process": process}, "turnState": "busy", "evidenceSource": "transcript",
                    "pipeline": None, "merger": merger}
@@ -1087,6 +1122,17 @@ class CheckoutIntegration(unittest.TestCase):
         result = self.adapter.relocate()
         protected, = self.adapter.merger_hosts(self.adapter.custody_rows)
         self.assertEqual(protected["conversationId"], conversation)
+        saved, = json.loads((self.state / deploy.CHECKOUT_MERGER_CAPTURE).read_text())
+        self.assertEqual(saved["writer"], writer)
+        self.assertEqual(saved["batch"], {"directory": str(batch_directory), "identity": batch_identity, "branch": branch})
+        successor = subprocess.run(["bun", "-e",
+            "import { readCheckoutMergerCuts, checkoutBatchState } from './src/lib/runtime/checkoutMergerRecovery.ts'; "
+            + "const [cut] = readCheckoutMergerCuts(process.argv[1]); "
+            + "console.log(JSON.stringify({writer: cut.writer, batch: checkoutBatchState(cut.batch.directory, cut.batch.identity, cut.batch.branch)}))",
+            str(self.state)], cwd=pathlib.Path(__file__).resolve().parents[1],
+            check=True, capture_output=True, text=True, timeout=15)
+        self.assertEqual(json.loads(successor.stdout), {"writer": writer,
+            "batch": {"branch": branch, "locked": True, "finished": False, "active": True}})
         self.adapter.mcp.call = lambda tool, args: {"conversations": [weak], "unselectedCount": 0,
             "selection": {"matched": 1, "selected": 1, "recoveryPending": 0, "recoveryTruncated": False,
                           "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}

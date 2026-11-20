@@ -1093,18 +1093,20 @@ class Checkout:
                     and (row.get("turnState") is None or row.get("turnState") in ["busy", "idle"])
                     and type(row.get("claimEpoch")) is int and row["claimEpoch"] > 0
                     and valid_identity(row.get("process"))
-                    and (valid_identity(row.get("writer")) or row.get("writer") is None)
+                    and "writer" in row and (valid_identity(row.get("writer")) or row.get("writer") is None)
                     and re.fullmatch(r"checkout-merger:[0-9a-f]{32}", row.get("boundary", ""))
                     and isinstance(row.get("capturedAt"), str) and parse_time(row["capturedAt"])
                     and parse_time(row["capturedAt"]) <= parse_time(captured_at)
                     and row.get("admissionProof") in [None, "fresh-cut-v1"]
-                    and (batch is None or isinstance(batch, dict) and isinstance(batch.get("directory"), str)
+                    and "batch" in row and (batch is None or isinstance(batch, dict) and isinstance(batch.get("directory"), str)
                          and os.path.isabs(batch["directory"]) and isinstance(batch.get("identity"), str)
                          and isinstance(batch.get("branch"), str)))
         if not all(valid_row(row) for row in previous_rows):
             raise RuntimeError("standalone merger inventory failed successor validation")
-        captures = {row["conversationId"]: row for row in previous_rows
-                    if parse_time(row["capturedAt"]) >= cutoff}
+        # Retain expired cuts as identity fences. Startup recognizes the exact
+        # predecessor and suppresses generic recovery, while the window check
+        # prevents delivery from an expired cut.
+        captures = {row["conversationId"]: row for row in previous_rows}
         for host in hosts:
             captures[host["conversationId"]] = {**host["merger"], "capturedAt": captured_at, "boundary": boundary,
                                                  "admissionProof": "fresh-cut-v1"}
@@ -1864,13 +1866,28 @@ class Checkout:
             # census and systemd receiving the stop. Reconcile the durable
             # registry once more while the named stop is pending; keep the
             # same boundary so already recorded owners retain their key.
+            def stopped():
+                if self.jobs() or self.active_state() not in ["inactive", "failed"]:
+                    raise RuntimeError("named stop pending")
+            retry(stopped, self.clock, STOP_SETTLE)
+            # Admission is closed only after stop settlement. Reconcile once
+            # more before starting the successor so a receipt written after
+            # the first census is durably captured.
             try:
                 late_rows = complete_activity(self.census(cut_boundary=self.merger_cut_boundary))
                 known = {row.get("conversationId"): row for row in self.custody_rows}
                 for row in late_rows:
                     conversation = row.get("conversationId")
                     previous = known.get(conversation)
-                    if previous and previous.get("merger") and not row.get("merger"):
+                    old_merger, new_merger = (previous or {}).get("merger"), row.get("merger")
+                    same_cut = (old_merger and new_merger
+                                and old_merger.get("claimEpoch") == new_merger.get("claimEpoch")
+                                and old_merger.get("process") == new_merger.get("process"))
+                    if same_cut:
+                        for field in ("writer", "batch"):
+                            if new_merger.get(field) is None and old_merger.get(field) is not None:
+                                new_merger[field] = old_merger[field]
+                    elif old_merger and not new_merger:
                         continue
                     known[conversation] = row
                 self.custody_rows = list(known.values())
@@ -1878,10 +1895,6 @@ class Checkout:
             except Exception as error:
                 relocation["diagnostics"].append("late-merger-census:" + type(error).__name__)
                 relocation["mergerReconciliationUnknown"] = True
-            def stopped():
-                if self.jobs() or self.active_state() not in ["inactive", "failed"]:
-                    raise RuntimeError("named stop pending")
-            retry(stopped, self.clock, STOP_SETTLE)
             if self.await_release(group, RELEASE_WAIT):
                 relocation["released"], relocation["outcome"] = True, "released"
             else:

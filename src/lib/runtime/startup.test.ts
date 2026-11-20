@@ -2294,6 +2294,8 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
       expect(registry.readOnlySnapshot().entries[hostKey]?.claimEpoch).toBe(2);
       if (mode === "expired") {
         expect(readCuts()).toEqual([]);
+        expect(interruptions.list().filter(row => row.reason === "viewer-restart"
+          && row.conversationId === conversationId)).toEqual([]);
       } else if (mode === "unverified" || mode === "live") {
         expect(readCuts()).toEqual([]);
         expect(structuredStartupDeferral()?.hostKeys).toContain(hostKey);
