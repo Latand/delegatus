@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { viewerServiceUnit } from "../../../bin/oomPolicy.mjs";
 
 /*
  * CPU placement for agent hosts and heavy work (docs/design/cpu-placement.md).
@@ -242,10 +243,13 @@ export function planAgentCpu(workload: AgentWorkload, env: Readonly<Record<strin
  * inherited descriptors stay the caller's.
  */
 export function cpuScopeCommand(plan: AgentCpuPlan, unit: string, description: string, command: string, args: string[]): { command: string; args: string[] } {
+  return scopeCommand(unit, description, plan.systemdVersion, [`--slice=${plan.slice}`, ...cpuScopeProperties(plan)], command, args);
+}
+
+function scopeCommand(unit: string, description: string, version: number, properties: string[], command: string, args: string[]) {
   return { command: "systemd-run", args: ["--user", "--scope", "--quiet", "--collect",
-    ...(plan.systemdVersion >= 254 ? ["--expand-environment=no"] : []),
-    `--unit=${unit}`, `--slice=${plan.slice}`, `--description=${description}`,
-    ...cpuScopeProperties(plan), "--", command, ...args] };
+    ...(version >= 254 ? ["--expand-environment=no"] : []),
+    `--unit=${unit}`, `--description=${description}`, ...properties, "--", command, ...args] };
 }
 
 /** Wraps a first-party heavy command (a publication push and its hooks, a dependency install) in its own work scope. */
@@ -254,6 +258,31 @@ export function wrapWorkCommand(command: string, args: string[], options: { labe
   if (!plan) return { command, args };
   const label = options.label.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 32);
   return cpuScopeCommand(plan, `delegatus-work-${label}-${randomUUID().slice(0, 12)}.scope`, "Delegatus work", command, args);
+}
+
+let publicationSystemdVersion: number | undefined;
+
+/** A user-service Viewer can stop while an owned publication is still running.
+ * Move the command before exec so its hook clients inherit the same scope.
+ * Scope exec keeps both publication lock descriptors and the command's status.
+ * The gate service still owns its own admission, cancellation and receipts. */
+export async function wrapPublicationCommand(command: string, args: string[], label: "publish-install" | "publish-checks" | "publish-push") {
+  const planned = wrapWorkCommand(command, args, { label });
+  if (planned.command !== command || process.platform !== "linux" || process.env.LLV_STATE_OWNER !== "viewer") return planned;
+
+  const unit = viewerServiceUnit(await fs.promises.readFile("/proc/self/cgroup", "utf8"));
+  // An isolated Viewer in a gate stays within that gate's cleanup boundary.
+  if (!unit || process.env.LLV_OWNED_TEST_RUN_CGROUP?.endsWith(`/${unit}`)) return planned;
+
+  // Older versions leave arguments literal in scope mode by default.
+  publicationSystemdVersion ??= await new Promise<number>((resolve, reject) => {
+    execFile("systemd-run", ["--version"], { timeout: 5_000 }, (error, stdout) => {
+      const version = Number(/^systemd (\d+)/.exec(stdout)?.[1]);
+      if (error || !Number.isFinite(version)) reject(new Error("publication scope unavailable: cannot determine the systemd version"));
+      else resolve(version);
+    });
+  });
+  return scopeCommand(`delegatus-work-${label}-${randomUUID()}.scope`, "Delegatus publication", publicationSystemdVersion, [], command, args);
 }
 
 /** Release install and compilation compete with the aggregate work slice at operator weight.

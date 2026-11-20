@@ -32,7 +32,7 @@ import { decisiveRefusal, publicationApp403, publicationDeadlineKind, publicatio
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
-import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { CpuContainmentUnavailable, wrapPublicationCommand } from "@/lib/runtime/cpuPlacement";
 import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
 import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
@@ -2109,18 +2109,20 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
       const preparingChecks = command === "bun" && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare";
-      // The push runs the repository's pre-push gates; both leave the
-      // production service for a work scope. Its PID, group and the inherited
-      // lock descriptor stay this command's.
+      // Keep preparation and native hook clients outside the Viewer service,
+      // even when CPU placement is off. The scope preserves the kernel fences.
       let launch = { command, args };
       if ((command === "git" && args[0] === "push") || preparingDependencies || preparingChecks) {
-        try { launch = wrapWorkCommand(command, args, { label: preparingDependencies ? "publish-install" : preparingChecks ? "publish-checks" : "publish-push" }); }
+        try { launch = await wrapPublicationCommand(command, args, preparingDependencies ? "publish-install" : preparingChecks ? "publish-checks" : "publish-push"); }
         catch (error) {
           if (!(error instanceof CpuContainmentUnavailable)) throw error;
           failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
             code: 1, signal: null, durationMs: 0, outputTail: error.message };
           return { code: 1, stdout: "", stderr: error.message };
         }
+        // Discovering the publication scope can yield before CPU admission.
+        revalidate();
+        if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
       }
       // Preparing dependencies is heavy work that starts only when CPU
       // pressure allows; the push is held by nothing, its gates take slots
