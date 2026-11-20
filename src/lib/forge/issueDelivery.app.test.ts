@@ -162,9 +162,10 @@ process.stdout.write(route.includes("/branches/") ? String(result) : JSON.string
         ? fs.readFileSync(gitCallsFile, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
       if (mode === "missing-landing") expect(gitCalls).toEqual([]);
       else {
+        if (!graph) throw new Error("Cold batch fixture is missing");
         expect(gitCalls).toEqual([
-          { scoped: true, noPersonal: true, objects: [graph?.landing] },
-          { scoped: true, noPersonal: true, objects: [graph?.tip, graph?.base] },
+          { scoped: true, noPersonal: true, objects: [graph.landing] },
+          { scoped: true, noPersonal: true, objects: [graph.tip, graph.base] },
         ]);
       }
     }
