@@ -108,30 +108,31 @@ test("finished verdict reasons reuse compact evidence and disappear when the sam
     savePipelines([f.lane]);
     const reader = await pipelineRetirementReader();
     expect(reader(target)).toBe(false);
-    expect(reader.standing(target)).toBe("stage verdict");
-    expect(reader.standing({ conversations: [], engine: "codex", sessionId: target.sessionId })).toBe("stage verdict");
-    expect(reader.standing({ conversations: ["unrelated"] })).toBeNull();
+    expect(reader.sweepStanding(target)).toBe("stage verdict");
+    expect(reader.sweepStanding({ conversations: [], engine: "codex", sessionId: target.sessionId })).toBe("stage verdict");
+    expect(reader.sweepStanding({ conversations: ["unrelated"] })).toBeNull();
     performanceSpans.clear();
-    expect((await pipelineRetirementReader()).standing(target)).toBe("stage verdict");
+    expect((await pipelineRetirementReader()).sweepStanding(target)).toBe("stage verdict");
     expect(decodedRows()).toBe(0);
     attempt.state = "running";
     savePipelines([f.lane]);
-    expect(() => reader.standing(target)).toThrow("changed");
+    expect(() => reader.sweepStanding(target)).toThrow("changed");
     const resumed = await pipelineRetirementReader();
     expect(resumed(target)).toBe(true);
-    expect(resumed.standing(target)).toBe("held");
+    expect(resumed.sweepStanding(target)).toBeNull();
     attempt.state = "needs_decision";
     attempt.verdict.status = "needs_decision";
     savePipelines([f.lane]);
-    expect((await pipelineRetirementReader())(target)).toBe(true);
-    expect((await pipelineRetirementReader()).standing(target)).toBe("held");
+    const parked = await pipelineRetirementReader();
+    expect(parked(target)).toBe(true);
+    expect(parked.sweepStanding(target)).toBeNull();
     // resolve-decision reserves a fresh attempt; the answered attempt's
     // original needs_decision verdict remains in history without custody.
     f.lane.runs[0]!.attempts.push({ ...attempt, n: 2, state: "running", verdict: null, completedAt: null,
       conversationId: "conversation_successor", sessionId: "session-successor", agentPath: "/fixture/successor.jsonl" });
     savePipelines([f.lane]);
     expect((await pipelineRetirementReader())(target)).toBe(false);
-    expect((await pipelineRetirementReader()).standing(target)).toBe("stage verdict");
+    expect((await pipelineRetirementReader()).sweepStanding(target)).toBe("stage verdict");
   } finally { f.db.close(); }
 });
 
@@ -155,12 +156,12 @@ test("a repair reservation on a later stage keeps its original producer", async 
     expect(pipelineHostHasLiveWork([f.lane], producer)).toBe(true);
     const reader = await pipelineRetirementReader();
     expect(reader(target)).toBe(true);
-    expect(reader.standing(target)).toBe("held");
+    expect(reader.sweepStanding(target)).toBe("held");
 
     f.lane.runs[1]!.attempts[0]!.publicationRepair!.settledAt = f.lane.createdAt;
     savePipelines([f.lane]);
     expect(pipelineHostHasLiveWork([f.lane], producer)).toBe(false);
-    expect((await pipelineRetirementReader()).standing(target)).toBe("stage verdict");
+    expect((await pipelineRetirementReader()).sweepStanding(target)).toBe("stage verdict");
   } finally { f.db.close(); }
 });
 

@@ -7,7 +7,7 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { AgentStateService } from "@/lib/agentState/service";
 import { entryRevision, subjectId } from "@/lib/agentState/store";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
-import { fixtureRecords, fixtureRegistry, FIXTURE_NOW, FIXTURE_SESSION } from "@/lib/agentState/testFixture";
+import { fixtureRecords, fixtureRegistry, FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_TURN } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { fixtureReport, ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { procBackend } from "@/lib/proc";
@@ -55,7 +55,7 @@ for (const engine of ["codex", "claude"] as const) {
       entry.structuredHost!.activeTurnRef = null;
       const records = fixtureRecords(engine);
       const openTurn = boundary === "open-turn";
-      const sweepAt = openTurn ? FIXTURE_NOW + 24 * 3_600_000 : FIXTURE_NOW;
+      const sweepAt = FIXTURE_NOW;
       const native = [...records.open, ...(openTurn ? [] : records.close)].map(row => JSON.stringify(row)).join("\n") + "\n";
       fs.writeFileSync(entry.artifactPath!, native);
       fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
@@ -73,7 +73,7 @@ for (const engine of ["codex", "claude"] as const) {
         completedAt: new Date(FIXTURE_NOW).toISOString(), input: null, activatedBy: null, output: null, error: null, verdict: { status: "pass", findings: [] } }];
       savePipelines([lane]);
       const resume = () => { lane.runs[0]!.attempts[0]!.state = "running"; savePipelines([lane]); };
-      const service = new AgentStateService({ registry, now: () => sweepAt, owns: () => !openTurn,
+      const service = new AgentStateService({ registry, now: () => sweepAt, owns: () => true,
         process: value => procBackend.pidAlive(value.pid) ? "alive" : "dead", memory: () => null, release: "fixture", publish: async () => true });
       const holds = spyOn(delivery, "hasStructuredDeliveryHost").mockReturnValue(false);
       await service.request();
@@ -108,7 +108,13 @@ for (const engine of ["codex", "claude"] as const) {
           expect(JSON.parse(fs.readFileSync(statePath("host-retirement-journal.ndjson"), "utf8").trim().split("\n").at(-1)!).retired[0].reason).toBe("stage verdict");
         } else {
           expect(report.retired).toEqual([]);
-          if (openTurn) expect(report.refused).toMatchObject([{ clause: "turn-settled" }]);
+          if (openTurn) {
+            const nativeId = engine === "codex" ? FIXTURE_TURN : "native-prompt-one";
+            expect(registry.readOnlySnapshot().agentStates[subjectId(entry)]?.facts.turn)
+              .toMatchObject({ determined: true, value: { state: "open", nativeId } });
+            expect(registry.hostEntry(entry.key)?.structuredHost?.activeTurnRef).toBeNull();
+            expect(report.refused).toMatchObject([{ clause: "turn-settled", reason: `turn ${nativeId} is in flight` }]);
+          }
           expect(signals).toBe(0);
           expect(procBackend.pidAlive(identity.pid)).toBe(true);
         }

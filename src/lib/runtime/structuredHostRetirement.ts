@@ -1424,6 +1424,7 @@ function retirementSubject(
   const central = cachedAgentObservation(subjectId(entry)) ?? inputs.file.agentStates?.[subjectId(entry)];
   let centralSettled: boolean | null = null;
   let abandonedTurn = false;
+  let openNativeTurnId: string | null = null;
   let currentAttention: readonly string[] | null = null;
   let centralWhy = central ? "central registry revision changed" : "central projection unavailable";
   const retainedProof = proof && central?.facts.revision === entryRevision(proof)
@@ -1443,13 +1444,14 @@ function retirementSubject(
         if (ownerValid && fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) === facts.transcript.value.signature) {
           const memory = conversationId ? structuredDeliveryHostForConversation(conversationId)?.agentStateMemory?.() : null;
           const turnOpen = facts.turn.determined ? facts.turn.value.state === "open" : null;
+          if (facts.turn.determined && facts.turn.value.state === "open") openNativeTurnId = facts.turn.value.nativeId;
           centralSettled = turnOpen === false
             && !facts.obligations.value.some(obligation => obligation.startsWith("background:"))
             && (!memory || memory.activeTurnRef === null);
           currentAttention = memory?.pendingAttention ?? facts.attention.value;
           if (memory?.attentionUnverified) { centralSettled = null; centralWhy = "current attention cannot be verified"; }
           if (finishedStage && facts.turn.determined && facts.turn.value.state === "absent") pipelineStanding = determined(null);
-          if (!finishedStage && centralSettled === false && turnOpen !== false && facts.owner.value === "absent"
+          if (centralSettled === false && turnOpen !== false && facts.owner.value === "absent"
             && facts.obligations.value.length === 0 && currentAttention.length === 0
             && inputs.nowMs - facts.transcript.value.mtimeMs >= AGENT_STATE_POLICY.abandonedTurnMs
             && treeHasOnlyMcpChildren(hostProcess, retainedProof ? entry.structuredTerminationSurvivors : undefined)) {
@@ -1477,7 +1479,7 @@ function retirementSubject(
     scope: recordedAgentScope(columns),
     observedProcessDead: !procBackend.pidAlive(hostProcess.pid),
     status: centralSettled === true ? "idle" : entry.status,
-    activeTurnRef: centralSettled === true ? null : columns.activeTurnRef,
+    activeTurnRef: centralSettled === true ? null : openNativeTurnId ?? columns.activeTurnRef,
     turnBusy: !central && inputs.requireAgentState ? undetermined("central agent state is unavailable") : central ? centralSettled === null ? undetermined(centralWhy) : determined(!centralSettled) : conversation === null
       ? undetermined("no conversation record establishes this host's turn state")
       : conversation.turn.state === "unknown"
@@ -1623,7 +1625,7 @@ export async function runStructuredHostRetirementSweep(
     pipelineStanding: target => {
       try {
         if (!pipelineReader) return undetermined(pipelineError);
-        return determined(pipelineReader.standing(target));
+        return determined(pipelineReader.sweepStanding(target));
       } catch (error) { return undetermined(safeReason(error)); }
     },
     ownerProcess: dependencies.ownerProcess ?? observeAgentProcess,

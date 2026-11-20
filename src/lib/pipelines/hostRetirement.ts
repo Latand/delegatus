@@ -26,9 +26,9 @@ export function pipelineAttemptReleased(pipeline: Pipeline, attempt: PipelineSta
 type HostIdentity = Pick<PipelineStageHostRef, "conversationId" | "agentPath" | "paneId" | "launchId"> & { sessionId?: string | null };
 
 /** A repair may be reserved by a later stage and dispatched to an earlier
- * producer. The decision stays with the latest operational attempt until the
- * engine reserves its successor. Switch custody also covers both endpoints
- * until the switch or its retry settles. */
+ * producer. A decision park keeps its ordinary idle interval until the engine
+ * reserves a fresh attempt. Switch custody covers both endpoints until the
+ * switch or its retry settles. */
 export function pipelineRetirementOwnership(pipeline: Pipeline) {
   const publishing = pipelinePublicationHoldsHost(pipeline);
   const terminal = pipelineLaneTerminal(pipeline);
@@ -56,13 +56,13 @@ export function pipelineRetirementOwnership(pipeline: Pipeline) {
         || attempt.publicationTextRepair?.state === "pending");
     const decision = current && (attempt.state === "needs_decision" || attempt.verdict?.status === "needs_decision");
     const working = pipelineAttemptMayBeWorking(attempt);
-    const fenced = publishing || pendingDispatch || decision || attempt.activation && attempt.activation.phase !== "settled";
-    const reason: PipelineRetirementReason | null = fenced || attempt.historical ? null
+    const fenced = Boolean(publishing || pendingDispatch || attempt.activation && attempt.activation.phase !== "settled");
+    const reason: PipelineRetirementReason | null = fenced || decision || attempt.historical ? null
       : terminal ? "terminal lane" : attempt.verdict && !working ? "stage verdict" : null;
     const released = !fenced && (reason !== null || pipelineAttemptReleased(pipeline, attempt, latest));
     return {
-      stageId: run.stageId, attempt, identities, reason, released,
-      held: fenced || !released && working,
+      stageId: run.stageId, attempt, identities, reason, released, fenced,
+      held: fenced || decision || !released && working,
       recoverable: !pendingDispatch && byStage.get(run.stageId) === run && attempt === run.attempts.at(-1) && !attempt.historical,
     };
   }));

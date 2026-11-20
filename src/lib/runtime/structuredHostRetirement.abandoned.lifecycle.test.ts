@@ -10,6 +10,7 @@ import { fixtureRecords, fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_NOW, FIX
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { statePath } from "@/lib/configDir";
+import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { determined } from "./determinable";
 import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
@@ -21,12 +22,15 @@ const identities: ProcessIdentity[] = [], roots: string[] = [], registries: Agen
 const children = new Map<ChildProcess, ProcessIdentity>();
 const identityKey = (identity: ProcessIdentity) => `${identity.pid}:${identity.startIdentity}`;
 const originalMcpRoot = process.env.LLV_MCP_RUNTIME_ROOT;
+const originalStateDirectory = process.env.LLV_STATE_DIR;
 // Provenance probes have a one-second deadline and can retry. Give recovery
 // more than one attempt before fixture teardown ends any remaining children.
 const MCP_PROOF_WAIT_MS = 5_000;
 afterEach(async () => {
   if (originalMcpRoot === undefined) delete process.env.LLV_MCP_RUNTIME_ROOT;
   else process.env.LLV_MCP_RUNTIME_ROOT = originalMcpRoot;
+  if (originalStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = originalStateDirectory;
   const direct = new Map([...children].map(([child, identity]) => [identityKey(identity), child]));
   const owned = new Map([...children.values(), ...identities.splice(0)].map(identity => [identityKey(identity), identity]));
   children.clear();
@@ -154,9 +158,10 @@ const reconcile = `
   await service.request(); service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-stale-terminal-abandoned", "oversized-unanchored-terminal", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid", "unflushed-dead-owner", "unflushed-open-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone"] as const) {
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "passed-stage-open", "terminal-lane-open", "running-stage-open", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-stale-terminal-abandoned", "oversized-unanchored-terminal", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid", "unflushed-dead-owner", "unflushed-open-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
+    const pipelineOwnsHost = scenario === "passed-stage-open" || scenario === "terminal-lane-open" || scenario === "running-stage-open";
     fs.mkdirSync(path.join(root, "bin"));
     fs.mkdirSync(path.join(root, "dist"));
     fs.writeFileSync(path.join(root, "lifetime.mjs"), "setInterval(() => {}, 1000);");
@@ -261,6 +266,22 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           : owner);
     const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
     entry.structuredHostOperationId = null;
+    if (pipelineOwnsHost) {
+      process.env.LLV_STATE_DIR = path.join(root, "state");
+      const lane = buildPipeline({ id: "abandoned-stage", task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
+        now: new Date(FIXTURE_NOW - 1000).toISOString(), stages: [{ id: "review", kind: "run", prompt: "Review", next: null,
+          effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+      const passed = scenario !== "running-stage-open";
+      lane.state = scenario === "terminal-lane-open" ? "completed" : "running";
+      if (lane.state === "completed") lane.cursor = null;
+      lane.runs[0]!.attempts = [{
+        n: 1, state: passed ? "passed" : "running", effectiveRole: lane.stages[0]!.effectiveRole, launchId: null,
+        conversationId: FIXTURE_CONVERSATION, sessionId: FIXTURE_SESSION, agentPath: entry.artifactPath, paneId: null,
+        flowId: null, startedAt: lane.createdAt, completedAt: passed ? new Date(FIXTURE_NOW).toISOString() : null,
+        input: null, activatedBy: null, output: null, error: null, verdict: passed ? { status: "pass", findings: [] } : null,
+      }];
+      savePipelines([lane]);
+    }
     if (scenario === "oversized-stale-terminal-unheld") entry.structuredHost!.activeTurnRef = null;
     if (scenario === "question") entry.structuredHost!.pendingAttention = ["fixture-question"];
     if (scenario === "flags") entry.structuredHost!.activeFlags = ["fixture-active-work"];
@@ -300,7 +321,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     }
     const hours = ["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone",  "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed", "oversized-closed", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-unanchored-terminal"].includes(scenario) ? 1
       : ["recent", "oversized-unknown-recent"].includes(scenario) ? 6 - 1 / 60
-      : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
+      : scenario === "six-hours" || pipelineOwnsHost ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
     const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), scenario === "hidden-live-owner" ? String(owner.pid) : ""], { stdout: "pipe", stderr: "pipe" });
     identities.push(captureProcessIdentity(successor.pid));
@@ -344,6 +365,10 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     }) as typeof fs.readdirSync) : null;
     const stat = fs.statSync.bind(fs);
     const persisted = Object.values(registry.readOnlySnapshot().agentStates ?? {})[0];
+    if (pipelineOwnsHost) {
+      expect(persisted?.facts.owner).toMatchObject({ determined: true, value: "absent" });
+      expect(persisted?.facts.turn).toMatchObject({ determined: true, value: { state: "open", nativeId: FIXTURE_TURN_ID } });
+    }
     if (scenario === "oversized-closed") expect(persisted?.facts.turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: FIXTURE_TURN_ID } });
     if (["oversized-open", "oversized-open-live-owner"].includes(scenario)) expect(persisted?.facts.turn).toMatchObject({ determined: true, value: { state: "open", nativeId: null } });
     if (["oversized-unknown", "oversized-unknown-recent", "oversized-unknown-live-owner"].includes(scenario)) {
@@ -395,7 +420,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         expect(journal.gone[0].unflushedEvents).toEqual(unflushed);
         return;
       }
-      const eligible = ["closed-hour", "unflushed-dead-owner", "unflushed-open-dead-owner", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner",
+      const eligible = ["closed-hour", "unflushed-dead-owner", "unflushed-open-dead-owner", "open-62h", "open-76h", "passed-stage-open", "terminal-lane-open", "running-stage-open", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner",
         "oversized-closed", "oversized-open", "oversized-unknown", "oversized-delivered", "oversized-stale-terminal-abandoned"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);

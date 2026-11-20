@@ -197,13 +197,11 @@ test("a passed review retires on the next sweep with its reason and records inta
   expect(loadPipelinesForRetirement()[0]!.runs[0]!.attempts[0]!.verdict).toEqual(lane.runs[0]!.attempts[0]!.verdict);
 });
 
-test.each(["needs-decision", "fix-running", "commit-repair", "runtime-switch", "undelivered", "assigned-to-runtime", "in-flight",
+test.each(["commit-repair", "runtime-switch", "undelivered", "assigned-to-runtime", "in-flight",
   "attention", "busy", "no-verdict", "different-generation", "reopened-during-measurement"] as const)(
   "a stage host is kept for %s", async kind => {
     const lane = finishedStage();
     const attempt = lane.runs[0]!.attempts[0]!;
-    if (kind === "needs-decision") { lane.state = "needs_decision"; attempt.state = "needs_decision"; attempt.verdict!.status = "needs_decision"; }
-    if (kind === "fix-running") attempt.state = "running";
     if (kind === "commit-repair") attempt.commitRepair = { refusedAt: lane.createdAt, detail: "Repair required", paths: [], messageTs: NOW };
     if (kind === "runtime-switch") attempt.runtimeSwitches = [{ id: "switch-fixture", seq: 1, requestedAt: lane.createdAt, actor: { kind: "operator" }, mode: "fork",
       from: { engine: "claude", model: null, effort: null, serviceTier: null, accountId: null, conversationId: CONVERSATION, launchId: null, sessionId: SESSION, agentPath: TRANSCRIPT },
@@ -231,7 +229,7 @@ test.each(["needs-decision", "fix-running", "commit-repair", "runtime-switch", "
     };
     if (kind === "attention") file.entries[`claude:${SESSION}`]!.structuredHost!.pendingAttention = ["pending-question"];
     if (kind === "busy") file.conversations[CONVERSATION]!.turn.state = "busy";
-    const continuing = ["needs-decision", "fix-running", "commit-repair", "runtime-switch"].includes(kind);
+    const continuing = ["commit-repair", "runtime-switch"].includes(kind);
     const probe = await sweep({ snapshot: () => file, transcriptStat: () => determined({ mtimeMs: continuing ? NOW - 2 * IDLE_MS : NOW }),
       treePss: async () => {
         await Promise.resolve();
@@ -241,6 +239,25 @@ test.each(["needs-decision", "fix-running", "commit-repair", "runtime-switch", "
     expect(probe.terminated).toEqual([]);
     expect(probe.report.retired).toEqual([]);
   });
+
+test.each(["needs_decision", "running"] as const)("a %s stage uses the ordinary idle interval", async state => {
+  const lane = finishedStage();
+  const attempt = lane.runs[0]!.attempts[0]!;
+  attempt.state = state;
+  if (state === "needs_decision") {
+    lane.state = state;
+    attempt.verdict = { status: "needs_decision", findings: [] };
+  }
+  savePipelines([lane]);
+  const probe = (idleMs: number) => sweep({ owned: () => false, transcriptStat: () => determined({ mtimeMs: NOW - idleMs }) });
+  const recent = await probe(IDLE_MS - 1000);
+  expect(recent.terminated).toEqual([]);
+  expect(recent.report.refused).toMatchObject([{ clause: "transcript-idle", reason: "the transcript was written 3599s ago" }]);
+  const idle = await probe(IDLE_MS + 1000);
+  expect(idle.terminated).toHaveLength(1);
+  expect(idle.report.retired).toHaveLength(1);
+  expect(idle.report.retired[0]!.reason).toBeUndefined();
+});
 
 test.each(["completed", "closed", "merged"] as const)("a %s lane releases all three recent idle hosts", async state => {
   const file = snapshot(manyCandidates(3));
