@@ -551,7 +551,8 @@ export function planPipelineStateMigration(): {
 
 /** Normalize defaults and project identity on decoded records. Nested config
     can retain input references; shared records need cloneLoadedPipeline. */
-function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
+function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject, ownsNestedValues = false): Pipeline {
+  const copyNested = <T>(value: T): T => ownsNestedValues ? value : structuredClone(value);
   const settledAttempts = pipeline.terminalReap?.settledAttempts
     ?? (pipeline.terminalReap?.settledAt
       ? pipeline.runs.flatMap((run) => run.attempts
@@ -562,15 +563,15 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
   const revived: Pipeline = {
     ...pipeline,
     conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
-    closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
-    closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
+    closeTeardown: pipeline.closeTeardown ? copyNested(pipeline.closeTeardown) : undefined,
+    closeReport: pipeline.closeReport ? copyNested(pipeline.closeReport) : undefined,
     project: resolveProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
     ...(pipeline.taskClass ? { taskClass: { ...pipeline.taskClass } } : {}),
     proactiveTaskIds: pipeline.proactiveTaskIds ? [...pipeline.proactiveTaskIds] : undefined,
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
-    ...(pipeline.inputContext ? { inputContext: structuredClone(pipeline.inputContext) } : {}),
+    ...(pipeline.inputContext ? { inputContext: copyNested(pipeline.inputContext) } : {}),
     baseBranch: pipeline.baseBranch ?? "",
     baseRef: pipeline.baseRef ?? "",
     lastPassedCommit: pipeline.lastPassedCommit ?? "",
@@ -606,14 +607,14 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
-            ...(attempt.accounting ? { accounting: structuredClone(attempt.accounting) } : {}),
+            ...(attempt.accounting ? { accounting: copyNested(attempt.accounting) } : {}),
             ...(attempt.setup ? { setup: { ...attempt.setup, command: [...attempt.setup.command] } } : {}),
             ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
             ...(attempt.roleMemoryDispatchWait ? { roleMemoryDispatchWait: { ...attempt.roleMemoryDispatchWait } } : {}),
             ...(attempt.roleMemoryDelivery ? { roleMemoryDelivery: { ...attempt.roleMemoryDelivery } } : {}),
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
-            ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
+            ...(attempt.runtimeSwitches ? { runtimeSwitches: copyNested(attempt.runtimeSwitches) } : {}),
             launchId: attempt.launchId ?? null,
             conversationId: attempt.conversationId ?? null,
             sessionId: attempt.sessionId ?? null,
@@ -671,7 +672,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
 /** Detach every nested field before a mutable reader or session sees a shared
     decoded record, including configuration and historical attempt evidence. */
 function cloneLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject): Pipeline {
-  return performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(structuredClone(pipeline), resolveProject), 1);
+  return performanceSpans.sync("pipeline.copy", () => reviveLoadedPipeline(structuredClone(pipeline), resolveProject, true), 1);
 }
 
 /** Array slots detach on access. Length, direct lookup and append stay bounded;
