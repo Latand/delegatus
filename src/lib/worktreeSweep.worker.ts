@@ -1,6 +1,7 @@
 import { withAttemptTempDeadline, sweepMonotonicNow } from "./runtime/attemptTempDeadline";
 import { runTempSweepInHelper, scanProcesses } from "./tempSweep";
 import { runAttemptTempSweep } from "./runtime/attemptTempProduction";
+import { runApprovedAttemptTempSweep } from "./runtime/attemptTempApproved";
 import { runTemporaryDataSweep } from "./runtime/temporaryDataProduction";
 import { pruneDockerCache } from "./dockerCacheRetention";
 import { tempSweepMode } from "./tempSweep";
@@ -16,9 +17,8 @@ import { productionWorktreeSweepPorts, runWorktreeSweep, type WorktreeSweepMode 
 console.log = (...args) => console.error(...args);
 console.info = (...args) => console.error(...args);
 console.debug = (...args) => console.error(...args);
-const cache = new WorktreeSweepCache(statePath("worktree-sweep-cache.json"));
-cache.discardAllocations();
-const discovery = new WorktreeSweepDiscovery();
+let cache: WorktreeSweepCache | undefined;
+let discovery: WorktreeSweepDiscovery | undefined;
 const lines = createInterface({ input: process.stdin });
 for await (const line of lines) {
   try {
@@ -36,6 +36,11 @@ for await (const line of lines) {
       await pruneDockerCache({ mode: process.env.NODE_ENV === "test" ? "dry-run" : mode,
         deadline: Math.min(request.deadline - 1000, Date.now() + 22000) });
       const report = await runTemporaryDataSweep({ scan: directories => scanProcesses("/proc", directories) }, process.env, request.deadline - 1000);
+      process.stdout.write(JSON.stringify({ report }) + "\n"); continue;
+    }
+    if (request.kind === "attempt-temp-approved") {
+      const report = await withAttemptTempDeadline(request.deadline, () =>
+        runApprovedAttemptTempSweep(request.approval, { scan: directories => scanProcesses("/proc", directories) }));
       process.stdout.write(JSON.stringify({ report }) + "\n"); continue;
     }
     if (request.kind === "attempt-temp") {
@@ -56,22 +61,27 @@ for await (const line of lines) {
       continue;
     }
     if (request.kind !== "worktrees") throw new Error("invalid sweep request kind");
+    if (!cache) {
+      cache = new WorktreeSweepCache(statePath("worktree-sweep-cache.json"));
+      cache.discardAllocations();
+    }
+    const passCache = cache, passDiscovery = discovery ??= new WorktreeSweepDiscovery();
     const { mode } = request as { mode: WorktreeSweepMode };
     if (mode !== "on" && mode !== "dry-run") throw new Error("invalid worktree sweep mode");
     process.stdout.write(JSON.stringify({ phase: "discovery" }) + "\n");
     const report = await runWorktreeSweep({ LLV_WORKTREE_SWEEP: mode }, async mode => {
       const ports = await waitForStateLock("worktrees.sweep.inputs", () => productionWorktreeSweepPorts(mode));
       let previousPhase = "";
-      return { ...ports, cache, discovery, phase: (phase: string) => {
+      return { ...ports, cache: passCache, discovery: passDiscovery, phase: (phase: string) => {
         if (phase === previousPhase) return;
         previousPhase = phase;
         process.stdout.write(JSON.stringify({ phase }) + "\n");
       } };
     });
-    cache.persist();
+    passCache.persist();
     process.stdout.write(JSON.stringify({ report }) + "\n");
   } catch (error) {
     process.stdout.write(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) + "\n");
   }
 }
-cache.close();
+cache?.close();
