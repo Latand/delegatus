@@ -1074,6 +1074,75 @@ class CheckoutIntegration(unittest.TestCase):
                 self.assertEqual(result["relaunch"]["custodyUnknown"], custody_unknown)
                 self.assertEqual(self.service_commands(), [])
 
+    def test_relaunch_admits_the_captured_attempts_settlement_stop(self):
+        attempt = {"n": 1, "state": "passed", "conversationId": "synthetic-stage", "launchId": "fixture-launch"}
+        receipt = {"active": 1, "path": "pipeline-stage-stop", "operationId": "fixture-launch:build:1",
+                   "signal": "SIGTERM"}
+        signalled = {"signal": "SIGTERM"}
+        for name, exit_record, stop, attempts, outcome, verdict in [
+            ("signal", signalled, receipt, [attempt], "completed", "pass"),
+            ("signal code", {"code": 143}, receipt, [attempt], "completed", "pass"),
+            ("after final sample", signalled, receipt, [attempt], "completed", "pass"),
+            ("withdrawn", signalled, {**receipt, "active": 0}, [attempt], "completed", "fail"),
+            ("prior receipt", signalled, {"active": 0, "prior": receipt}, [attempt], "completed", "pass"),
+            ("startup", signalled, {**receipt, "path": "startup-retained-host-release"}, [attempt], "completed", "fail"),
+            ("other stage", signalled, {**receipt, "operationId": "fixture-launch:other:1"}, [attempt], "completed", "fail"),
+            ("other attempt", signalled, {**receipt, "operationId": "fixture-launch:build:2"}, [attempt], "completed", "fail"),
+            ("other launch", signalled, {**receipt, "operationId": "other-launch:build:1"}, [attempt], "completed", "fail"),
+            ("other conversation", signalled, receipt, [{**attempt, "conversationId": "other"}], "completed", "fail"),
+            ("other signal", {"code": 137}, receipt, [attempt], "completed", "fail"),
+            ("missing receipt", signalled, None, [attempt], "completed", "fail"),
+            ("lost", signalled, receipt, [{**attempt, "state": "failed", "error": "stage host was lost"}], "lost", "fail"),
+            ("reported failure", signalled, receipt, [{**attempt, "state": "failed", "verdict": "fail"}],
+             "completed", "pass"),
+            ("interrupted", signalled, receipt, [{**attempt, "state": "needs_decision", "error": "operator stopped the stage"}],
+             "completed", "fail"),
+            ("replacement", signalled, receipt, [attempt, {**attempt, "n": 2}], "completed", "fail"),
+        ]:
+            with self.subTest(name=name):
+                self.setUp()
+                group = self.helper_groups()[0]
+                group["row"].update(conversationId=attempt["conversationId"],
+                                    pipeline={"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1})
+                host_exited = False
+                original_read = self.adapter.process_read
+
+                def process_read(pid, field):
+                    if host_exited and pid == group["host"]:
+                        raise FileNotFoundError("captured host exited")
+                    return original_read(pid, field)
+
+                self.adapter.process_read = process_read
+
+                def stop_host():
+                    nonlocal host_exited
+                    slots = next(iter(self.adapter.relaunch_hosts.values()))["slots"]
+                    if stop is not None:
+                        deploy.write_json(slots["stop"], stop)
+                    deploy.write_json(slots["exit"], exit_record)
+                    host_exited = True
+                    self.attempts = attempts
+
+                if name == "after final sample":
+                    interrupted = self.adapter.interrupted
+
+                    def read_interrupted(since, hosts):
+                        stop_host()
+                        return interrupted(since, hosts)
+
+                    self.adapter.interrupted = read_interrupted
+                    self.answer_relaunch()
+                else:
+                    self.answer_relaunch(after=stop_host)
+                result = deploy.run_switch(self.adapter, TARGET, samples=2, interval=1, timeout=0)
+                self.assertEqual(result["relaunch"]["result"], "done")
+                self.assertFalse(result["relaunch"]["hosts"][0]["alive"])
+                self.assertEqual(result["protected"][0]["outcome"], outcome)
+                self.assertEqual(result["relaunch"]["custodyChanged"], verdict == "fail")
+                self.assertFalse(result["relaunch"]["custodyUnknown"])
+                self.assertEqual(result["verdict"], verdict)
+                self.assertEqual(self.service_commands(), [])
+
     def test_a_stale_or_wrong_launcher_receipt_cannot_settle_relaunch(self):
         for field, value in [("requestId", "foreign"), ("launcherPid", 900), ("launcherIdentity", "reused"),
                              ("revision", OLD), ("target", OLD)]:

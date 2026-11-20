@@ -703,13 +703,19 @@ Every host exit in the window must be one of:
 - a natural exit;
 - a product stop receipt on an existing cleanup path, for a host that was
   terminal before the switch;
+- a `pipeline-stage-stop` receipt for a busy host whose captured attempt
+  completed on its own during the switch;
 - end of file of a stdio host.
 
 A signal other than end of file, or a signal-shaped exit code (`128 + N`),
-cannot pass when the captured turn was busy; it fails criterion 2. If the
-captured turn was unknown, the same evidence requires a decision because the
-procedure cannot prove the host was terminal. A clean exit and stdio end of
-file remain admissible.
+requires a stop receipt. For a busy host, the receipt must name
+`pipeline-stage-stop`, match the exit signal, and bind the launch, stage and
+attempt through the operation ID `<launchId>:<stageId>:<attempt>`.
+The current attempt must match the captured
+conversation and attempt number, and show a pass or the stage's own verdict
+without evidence of lost work. A startup cleanup receipt, a different
+attempt, or missing proof fails criterion 2. A receipted signal exit for
+a host whose captured turn was unknown requires a decision.
 
 ## 11. Files to touch, and what must not change
 

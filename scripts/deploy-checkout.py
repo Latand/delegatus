@@ -313,8 +313,6 @@ def observe_switch(adapter, target, samples, interval, timeout, old, hosts):
         interrupted, unreadable = None, ["interrupted:" + type(error).__name__]
         diagnostics.append(unreadable[0])
     healthy = ready(serving, target)
-    outcomes = {entry["outcome"] for entry in protected}
-    unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
     relaunch = None
     if in_place:
         relaunch = adapter.finish_relaunch(hosts, protected)
@@ -326,6 +324,8 @@ def observe_switch(adapter, target, samples, interval, timeout, old, hosts):
         switch_failed = not (relocation is not None and relocation.get("released") is True
                              and relocation.get("placement") == "placed" and relocation.get("started") is True)
         switch_unknown = False
+    outcomes = {entry["outcome"] for entry in protected}
+    unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
     if switch_failed or "lost" in outcomes:
         verdict = "fail"
     elif switch_unknown:
@@ -782,6 +782,13 @@ def stage_outcome(host, attempts, activity):
     lost = bool(re.search(r"host.*lost|lost.*host|interrupted.*restart|stopped.*turn went silent", current.get("error") or "", re.I))
     if current["state"] in ["passed", "failed", "needs_decision", "skipped"]:
         result["outcome"] = "lost" if lost else "completed"
+        # Stops for recovery and operator actions share the stage stop path.
+        # Require a pass or a stage's own verdict in addition to terminal state.
+        if (not lost and current["n"] == host["attempt"]
+                and text(host.get("conversationId")) and current.get("conversationId") == host["conversationId"]
+                and text(current.get("launchId"))
+                and (current["state"] == "passed" or current.get("verdict") or current.get("report"))):
+            result["settlementStopOperationId"] = f'{current["launchId"]}:{host["stageId"]}:{current["n"]}'
     elif (current["state"] in ["running", "reviewing", "committing"]
           and activity.get("host", {}).get("state") == "alive"
           and activity.get("lifecycle") not in ["failed", "interrupted", "stalled"]):
@@ -1858,6 +1865,8 @@ class Checkout:
             evidence["custodyUnknown"] = True
         for name, fact in current.items():
             scopes[name]["after"] = fact
+        sampled = {(host["pid"], host["startIdentity"]): (host, outcome)
+                   for host, outcome in zip(hosts, protected)}
         host_evidence = {}
         for key, before in self.relaunch_hosts.items():
             process, scope, slots = before["process"], before["scope"], before["slots"]
@@ -1899,20 +1908,26 @@ class Checkout:
                     evidence["custodyUnknown"] = True
                     continue
                 detail["exit"] = {"code": exit_record.get("code"), "signal": exit_record.get("signal"),
-                                  "stopPath": (stop or {}).get("path")}
+                                  "stopPath": (stop or {}).get("path"),
+                                  "stopOperationId": (stop or {}).get("operationId")}
                 exit_signal = detail["exit"]["signal"]
-                signal_exit = (isinstance(exit_signal, str) and exit_signal.upper() != "EOF"
-                               or type(exit_record.get("code")) is int
-                               and 128 < exit_record["code"] < 128 + signal.NSIG)
+                named_signal = isinstance(exit_signal, str) and exit_signal.upper() != "EOF"
+                signal_code = type(exit_record.get("code")) is int and 128 < exit_record["code"] < 128 + signal.NSIG
                 captured_turn = before["work"].get("turnState")
-                if signal_exit:
+                if named_signal or signal_code:
                     # Every signal-shaped host exit needs the durable product
                     # stop receipt. The exit code alone is not evidence that
                     # an idle host was intentionally cleaned up.
                     if not detail["exit"]["stopPath"]:
                         evidence["custodyChanged"] = True
                     elif captured_turn == "busy":
-                        evidence["custodyChanged"] = True
+                        receipt_signal = stop.get("signal")
+                        recorded_signal = signal.Signals.__members__.get(receipt_signal) if text(receipt_signal) else None
+                        if (stop.get("path") != "pipeline-stage-stop" or not recorded_signal
+                                or named_signal and recorded_signal.name != exit_signal.upper()
+                                or signal_code and 128 + recorded_signal != exit_record["code"]
+                                or not self.settled_relaunch_stop(before["work"], sampled.get(key), stop)):
+                            evidence["custodyChanged"] = True
                     elif captured_turn != "idle":
                         # The cleanup is receipted, but its effect on work we
                         # could not classify is still uncertain.
@@ -1933,6 +1948,24 @@ class Checkout:
                 evidence["custodyUnknown"] = True
         self.poll_relaunch_unit()
         return evidence
+
+    def settled_relaunch_stop(self, work, sample, stop):
+        pipeline = work["pipeline"]
+        operation = stop.get("operationId")
+        if not (sample and pipeline and text(operation)
+                and operation.endswith(f':{pipeline["stageId"]}:{pipeline["attempt"]}')):
+            return False
+        host, outcome = sample
+        if (host.get("conversationId") != work["conversationId"]
+                or any(host.get(field) != pipeline[field] for field in ("pipelineId", "stageId", "attempt"))):
+            return False
+        if outcome["outcome"] == "preserved":
+            # The host can finish between the final sample and the custody read.
+            try:
+                outcome.update(self.stage(host))
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError, IndexError):
+                return False
+        return outcome.get("settlementStopOperationId") == operation
 
     def active_state(self):
         return systemd_properties(self.command(["systemctl", "--user", "show", self.unit, "-p", "ActiveState"])).get("ActiveState")
