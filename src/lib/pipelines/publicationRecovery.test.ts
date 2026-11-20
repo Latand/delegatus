@@ -645,6 +645,10 @@ test.each(["publish", "diverged", "ended", "idle", "expired", "running"] as cons
       expect(await f.git(f.lane(), "rev-parse", "HEAD^")).toBe(remoteHead);
       expect(head).not.toBe(unpublished);
       expect(await f.git(f.lane(), "status", "--porcelain")).toBe("");
+      // The delivery repository is local, so there is no forge to list PRs.
+      f.h.ports.exec = (command, args, cwd, env, options) => command === "gh" && args[0] === "pr" && args[1] === "list"
+        ? Promise.resolve({ code: 0, stdout: "[]", stderr: "" })
+        : f.execute(command, args, cwd, env, options);
       const worker = replacement.runs[0]!.attempts[1]!;
       const report = await engineModule.reportStageCompletion({ verdict: "pass", summary: "Amended the unpublished commit." },
         { kind: "agent", role: "builder", conversationId: worker.conversationId! }, f.h.ports);
