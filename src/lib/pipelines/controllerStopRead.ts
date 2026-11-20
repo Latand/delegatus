@@ -18,12 +18,11 @@ export async function settlePipelineStopReadLanes(): Promise<void> {
   await Promise.allSettled(active.get(stateDir())?.values() ?? []);
 }
 
-/** Transfer the executing lane, including its live snapshot fences, if a
- * stop lookup outlasts the inline budget. The same await receives its answer.
- * Admission owns one bounded slot until the lane's last checkpoint settles. */
+/** Transfer the executing lane with its snapshot fences when a runtime
+ * read or an owned control outlasts the inline budget. The lane holds a
+ * bounded slot until its last checkpoint settles. */
 export function runControllerStopReadLane<T>(id: string, ports: PipelinePorts, run: (ports: PipelinePorts) => Promise<T>): Promise<T | undefined> {
   const read = ports.conversationOperatorStopped;
-  if (!read) return run(ports);
   const root = stateDir();
   const parent = currentOperationLease();
   assertOperationLease();
@@ -35,17 +34,19 @@ export function runControllerStopReadLane<T>(id: string, ports: PipelinePorts, r
   const detached = new Promise<undefined>(resolve => { release = () => resolve(undefined); });
   let laneDeadline: ReturnType<typeof setTimeout> | undefined;
   let detachedRoot: Map<string, Promise<unknown>> | undefined;
-  const localPorts: PipelinePorts = { ...ports, async conversationOperatorStopped(...args) {
+  const occupiedSlots = () => [...active.values()].reduce((count, lanes) => count + lanes.size, 0);
+  const hasCapacity = () => detachedRoot !== undefined || occupiedSlots() < PIPELINE_CONTROLLER_MAX_JOBS;
+
+  const boundedPort = async <R>(operation: string, call: () => Promise<R>): Promise<R> => {
     assertOperationLease();
-    const readLease = new OperationLease();
-    const stopObserving = lane.observe(readLease);
-    const cancelRead = () => readLease.abort.abort(lane.abort.signal.reason);
-    lane.abort.signal.addEventListener("abort", cancelRead, { once: true });
+    const portLease = new OperationLease();
+    const stopObserving = lane.observe(portLease);
+    const cancelPort = () => portLease.abort.abort(lane.abort.signal.reason);
+    lane.abort.signal.addEventListener("abort", cancelPort, { once: true });
     const transfer = detachedRoot ? undefined : setTimeout(() => {
       if (detachedRoot || lane.abort.signal.aborted) return;
-      const occupied = [...active.values()].reduce((count, lanes) => count + lanes.size, 0);
-      if (occupied >= PIPELINE_CONTROLLER_MAX_JOBS) {
-        readLease.abort.abort(new Error("operator stop evidence is waiting for read capacity"));
+      if (!hasCapacity()) {
+        portLease.abort.abort(new Error("pipeline control is waiting for controller capacity"));
         return;
       }
       detachedRoot = active.get(root) ?? new Map();
@@ -57,16 +58,29 @@ export function runControllerStopReadLane<T>(id: string, ports: PipelinePorts, r
       release();
     }, INLINE_READ_MS);
     try {
-      // The transport owns its per-RPC deadline, including legacy receipt
-      // lookups. The lane lease bounds the whole read and its reconciliation.
-      return await readLease.run(() => awaitLeasedOperation("pipelines.operator-stop-evidence", () =>
-        withViewerOperation("pipelines.operator-stop-evidence", () => read.apply(ports, args))));
+      // The transport owns its per-RPC deadline. The lane bounds the work
+      // across multiple reads, a possible mutation, and reconciliation.
+      return await portLease.run(() => awaitLeasedOperation(operation, call));
     } finally {
       stopObserving();
       clearTimeout(transfer);
-      lane.abort.signal.removeEventListener("abort", cancelRead);
+      lane.abort.signal.removeEventListener("abort", cancelPort);
     }
+  };
+  const localPorts: PipelinePorts = { ...ports, async stopStageAgent(target, options) {
+    if (!options?.operationId || !(options.onlyIfIdle || options.automatic)) return ports.stopStageAgent(target, options);
+    if (!hasCapacity()) return { outcome: "deferred" };
+    return boundedPort("pipelines.stage-stop", () => withViewerOperation("pipelines.evidence", () => ports.stopStageAgent(target, options)));
   } };
+  if (read) localPorts.conversationOperatorStopped = (...args) => boundedPort("pipelines.operator-stop-evidence", () =>
+    withViewerOperation("pipelines.operator-stop-evidence", () => read.apply(ports, args)));
+  const withdraw = ports.invalidateProviderContinuation;
+  if (withdraw) localPorts.invalidateProviderContinuation = async (conversationId, ownershipKey) => {
+    if (!ownershipKey) return withdraw.call(ports, conversationId);
+    if (!hasCapacity()) throw new Error("provider continuation withdrawal is waiting for controller capacity");
+    return boundedPort("pipelines.provider-continuation-withdrawal", () =>
+      withViewerOperation("pipelines.evidence", () => withdraw.call(ports, conversationId, ownershipKey)));
+  };
   const work = lane.run(() => run(localPorts)).finally(() => {
     clearTimeout(laneDeadline);
     parent?.abort.signal.removeEventListener("abort", cancel);
@@ -79,7 +93,7 @@ export function runControllerStopReadLane<T>(id: string, ports: PipelinePorts, r
   });
   return Promise.race([work, detached]).finally(() => {
     if (detachedRoot) void work.catch(error => {
-      console.error("[pipelines] detached stop-read lane did not settle", error);
+      console.error("[pipelines] detached runtime-control lane did not settle", error);
     });
   });
 }

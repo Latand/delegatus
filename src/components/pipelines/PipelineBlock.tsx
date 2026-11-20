@@ -2,7 +2,7 @@
 
 import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
 import { Flag, Link2, Settings } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { parseCpuQueueDetail } from "@/lib/runtime/cpuQueueText";
@@ -286,16 +286,35 @@ function CardLine({ summary, nameOf, suffixes, age, tail, opens, onOpenStage }: 
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+  const { width, level, alone, wrap } = current;
+  const levelCount = levels.length;
+  const measureOverflow = useCallback(() => {
+    const element = pills.current;
+    if (!element || !width || wrap) return;
+    const available = element.clientWidth;
+    if (!available || element.scrollWidth <= available + 0.5) return;
+    setFit((previous) => {
+      // Several resize notifications may describe the same rendered fold.
+      if (previous.width !== width || (previous.key === key
+        && (previous.level !== level || previous.alone !== alone || previous.wrap !== wrap))) return previous;
+      if (level < (alone ? levelCount - 1 : lastBeside)) return { key, width, level: level + 1, alone, wrap };
+      if (!alone) return { key, width, level: 0, alone: true, wrap: false };
+      return { key, width, level, alone, wrap: true };
+    });
+  }, [key, width, level, alone, wrap, levelCount, lastBeside]);
   useLayoutEffect(() => {
     const element = pills.current;
-    if (!element || !current.width || element.clientWidth === 0) return;
-    if (element.scrollWidth <= element.clientWidth + 0.5) return;
-    setFit((previous) => {
-      const base = previous.key === key ? previous : { ...current };
-      if (base.level < (base.alone ? levels.length - 1 : lastBeside)) return { ...base, level: base.level + 1 };
-      if (!base.alone) return { ...base, level: 0, alone: true };
-      return base.wrap ? base : { ...base, wrap: true };
-    });
+    if (!element || typeof ResizeObserver !== "function") return;
+    measureOverflow();
+    const observer = new ResizeObserver(measureOverflow);
+    // The strip responds to space left by the age and PR. Its steps respond
+    // to new labels, counts or fonts even when the strip stays clipped.
+    observer.observe(element);
+    for (const step of element.children) observer.observe(step);
+    return () => observer.disconnect();
+  }, [measureOverflow]);
+  useLayoutEffect(() => {
+    if (typeof ResizeObserver !== "function") measureOverflow();
   });
   const items = levels[Math.min(current.level, levels.length - 1)]!;
   const item = (entry: ChainItem, index: number) => (

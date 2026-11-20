@@ -123,6 +123,24 @@ test("an event bound to a session revision is recorded only while the row still 
       expect(await host.handle({ id: "invalid", method: "append-session-fenced", params: { event } })).toMatchObject({ ok: false });
       expect(journal.publishedSeq()).toBe(seq);
     }
+    const withdrawal = {
+      scope, kind: "pipeline.provider-continuation-cancelled", payload: { conversationId: "conversation_fenced" },
+      producer: { kind: "viewer-command", eventKey: `pipeline-withdrawal:${"a".repeat(64)}:1` },
+      expectedSessionRevision: current.revision,
+    };
+    for (const method of ["append", "operation"] as const) {
+      for (const event of [withdrawal, { ...withdrawal,
+        producer: { kind: "viewer-command" }, producerKey: withdrawal.producer.eventKey }]) {
+        expect(await host.handle({ id: method, method, params: { event } })).toMatchObject({ ok: false });
+      }
+    }
+    for (const event of [{ ...withdrawal, payload: { conversationId: "conversation_other" } },
+      { ...withdrawal, expectedSessionRevision: undefined }, { ...withdrawal, kind: "session-status" },
+      { ...withdrawal, operationId: "fixture-other-operation" }]) {
+      expect(await host.handle({ id: "invalid-withdrawal", method: "append-session-fenced", params: { event } })).toMatchObject({ ok: false });
+    }
+    expect(journal.publishedSeq()).toBe(seq);
+    expect(journal.producerCursor("viewer-command", `pipeline-withdrawal:${"a".repeat(64)}:`)).toBe(0);
     expect(await host.handle({ id: "current", method: "append-session-fenced", params: { event: status({ host: "dead", turn: "unknown", activeTurnId: null }, current.revision) } }))
       .toMatchObject({ ok: true });
     expect(journal.readSession({ conversationId: "conversation_fenced" })).toMatchObject({ host: "dead", turn: "unknown", activeTurnId: null });

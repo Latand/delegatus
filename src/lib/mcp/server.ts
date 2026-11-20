@@ -5523,6 +5523,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
   const { withWorkspaceMcpFence } = await import("./workspaceFence");
+  const { prepareAgentRegistry } = await import("@/lib/agent/registry");
   const service = createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
@@ -5531,7 +5532,10 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
   );
-  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(service, productionDomainDependencies));
+  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(
+    service, productionDomainDependencies,
+    async () => (await prepareAgentRegistry()).prepareNativeCallerArtifacts(),
+  ));
 }
 
 /** The executor took the call and stopped before answering it. */

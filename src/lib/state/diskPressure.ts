@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 
 import { stateDir, statePath } from "@/lib/configDir";
 // eslint-disable-next-line no-restricted-imports -- The leased disk-pressure helper scans processes; injected ports keep direct test reads available.
-import { isOwnedTempConsumerName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
+import { isOwnedTempConsumerName, ownTempRoots, discoverSweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { attemptTempConfigParent } from "@/lib/runtime/attemptTempPaths";
@@ -182,10 +182,11 @@ export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: Di
 }
 
 export function formatDiskBytes(bytes: number): string { return `${(bytes / 1024 ** 3).toFixed(2)} GiB`; }
-export function attemptRetentionCategory(retention?: { periodDays: number; dueBytes: number; upcomingBytes: number; until: number | null }): string {
+export function attemptRetentionCategory(retention?: { periodDays: number; dueBytes: number; upcomingBytes: number; until: number | null;
+  scratchPeriodDays?: number; evidencePeriodDays?: number }): string {
   if (!retention) return "Тимчасові дані агентів";
   const until = retention.until === null ? "—" : new Date(retention.until).toISOString().slice(0, 10);
-  return `Тимчасові дані агентів (лінії, завершені понад ${retention.periodDays} днів тому, звільнять ${formatDiskBytes(retention.dueBytes)} найближчими проходами; ще ${formatDiskBytes(retention.upcomingBytes)} — до ${until})`;
+  return `Тимчасові дані агентів (scratch: понад ${(retention.scratchPeriodDays ?? 1) * 24} год після підтвердженого завершення; докази: ${retention.evidencePeriodDays ?? retention.periodDays} днів; ${retention.scratchPeriodDays === undefined ? "облік строків оновлюється; " : ""}загалом ${formatDiskBytes(retention.dueBytes)} найближчими проходами; ще ${formatDiskBytes(retention.upcomingBytes)} — до ${until})`;
 }
 export function diskPressureLabel(pressure: DiskPressure): string {
   const low = pressure.volumes.filter(row => row.level === "warning" || row.level === "critical");
@@ -300,7 +301,7 @@ export async function readDiskPressureInHelper(ports: {
   const pipelines = ports.roots || ports.worktrees ? [] : loadPipelinesForList();
   const sweep = ports.roots || ports.worktrees ? null : readWorktreeSweepReport();
   const worktrees = ports.worktrees ?? [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
-  const tempRoots = includeIdleHostViews(ports.tempRoots ?? (ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")])));
+  const tempRoots = includeIdleHostViews(ports.tempRoots ?? (ports.roots ? [] : discoverSweepRoots([...ownTempRoots(), statePath("scratch")])));
   const worktreeView = (directory: string) => tempViewFor(directory, tempRoots);
   const accessible = (directory: string) => (worktreeView(directory)?.via ?? "") + directory;
   const usesClaude = pipelines.some(pipeline => pipeline.stages.some(stage => stage.effectiveRole.engine === "claude"));

@@ -11,12 +11,12 @@ test("official minting sends the synthetic credential solely in the provider hea
     expect(url).toBe("https://api.openai.com/v1/live/sessions");
     expect((init!.headers as Record<string, string>).authorization).toBe("Bearer synthetic-credential");
     const body = JSON.parse(String(init!.body));
-    expect(body.session.model).toBe("gpt-live-1");
+    expect(body.session.model).toBe("gpt-live-1.1");
     expect(body.session.delegation).toEqual({ type: "client" });
     expect(body.transport).toEqual({ type: "webrtc", sdp: "v=0" });
     expect(String(init!.body)).not.toContain("synthetic-credential");
     expect(init!.redirect).toBe("error");
-    return Response.json({ session: { id: "live_fake", private: syntheticCredential }, transport: { type: "webrtc", sdp: "answer" } });
+    return Response.json({ session: { id: "live_fake", private: syntheticCredential }, transport: { type: "webrtc", sdp: "answer" } }, { status: 201 });
   }) as typeof fetch);
   expect(await provider.create("synthetic-credential", "uk", "v=0")).toEqual({ id: "live_fake", sdp: "answer" });
   expect(called).toBe(1);
