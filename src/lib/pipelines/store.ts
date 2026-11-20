@@ -550,15 +550,9 @@ export function planPipelineStateMigration(): {
 }
 
 /** Normalize defaults and project identity on decoded records. Nested config
-    can retain input references; shared records need cloneLoadedPipeline. When
-    `alreadyCloned` is true, `pipeline` is an owned deep clone so nested fields
-    are normalized in place without repeating `structuredClone` or copying every
-    run and attempt a second time. */
-function reviveLoadedPipeline(
-  pipeline: Pipeline,
-  resolveProject: (project: string) => string = canonicalProject,
-  alreadyCloned = false,
-): Pipeline {
+    can retain input references; shared records need cloneLoadedPipeline. */
+function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: string) => string = canonicalProject, ownsNestedValues = false): Pipeline {
+  const copyNested = <T>(value: T): T => ownsNestedValues ? value : structuredClone(value);
   const settledAttempts = pipeline.terminalReap?.settledAttempts
     ?? (pipeline.terminalReap?.settledAt
       ? pipeline.runs.flatMap((run) => run.attempts
@@ -566,91 +560,18 @@ function reviveLoadedPipeline(
           .map((attempt) => `${run.stageId}:${attempt.n}`))
       : []);
   const outstandingHostKeys = new Set(pipeline.unconfirmedHosts?.map(hostTerminationKey));
-  if (alreadyCloned) {
-    if (!pipeline.conversationSource) pipeline.conversationSource = undefined;
-    if (!pipeline.closeTeardown) pipeline.closeTeardown = undefined;
-    if (!pipeline.closeReport) pipeline.closeReport = undefined;
-    pipeline.project = resolveProject(pipeline.project);
-    if (!pipeline.proactiveTaskIds) pipeline.proactiveTaskIds = undefined;
-    if (!pipeline.creationIntent) pipeline.creationIntent = undefined;
-    pipeline.spec = typeof pipeline.spec === "string" ? pipeline.spec : undefined;
-    pipeline.baseBranch = pipeline.baseBranch ?? "";
-    pipeline.baseRef = pipeline.baseRef ?? "";
-    pipeline.lastPassedCommit = pipeline.lastPassedCommit ?? "";
-    pipeline.publishedCommit = pipeline.publishedCommit ?? null;
-    pipeline.pausedState = pipeline.pausedState ?? null;
-    pipeline.stateDetail = pipeline.stateDetail ?? null;
-    pipeline.srcPath = pipeline.srcPath ?? null;
-    pipeline.srcConversationId = pipeline.srcConversationId ?? null;
-    pipeline.closedAt = pipeline.closedAt ?? null;
-    pipeline.hiddenAt = pipeline.hiddenAt ?? null;
-    if (!pipeline.unconfirmedHosts?.length) pipeline.unconfirmedHosts = undefined;
-    if (pipeline.hostTerminationProofs) {
-      for (const key of Object.keys(pipeline.hostTerminationProofs)) {
-        if (!outstandingHostKeys.has(key)) delete pipeline.hostTerminationProofs[key];
-      }
-    } else {
-      pipeline.hostTerminationProofs = undefined;
-    }
-    if (pipeline.terminalReap) pipeline.terminalReap.settledAttempts = settledAttempts;
-    else pipeline.terminalReap = undefined;
-    pipeline.restored = undefined;
-    for (const stage of pipeline.stages) stage.onFail = stage.onFail ?? null;
-    if (pipeline.stageReports) {
-      for (const entry of pipeline.stageReports) {
-        if (entry.provenanceAt !== undefined && typeof entry.provenanceAt !== "string") {
-          entry.provenanceAt = entry.at;
-        }
-      }
-    }
-    if (pipeline.cursor) {
-      pipeline.cursor.input = pipeline.cursor.input ?? null;
-      pipeline.cursor.activatedBy = pipeline.cursor.activatedBy ?? null;
-    } else {
-      pipeline.cursor = null;
-    }
-    for (const run of pipeline.runs) {
-      if (!Array.isArray(run.attempts)) {
-        run.attempts = [];
-        continue;
-      }
-      for (const attempt of run.attempts) {
-        attempt.launchId = attempt.launchId ?? null;
-        attempt.conversationId = attempt.conversationId ?? null;
-        attempt.sessionId = attempt.sessionId ?? null;
-        attempt.agentPath = attempt.agentPath ?? null;
-        attempt.paneId = attempt.paneId ?? null;
-        if (!attempt.providerRecoveryBudget) attempt.providerRecoveryBudget = undefined;
-        if (!attempt.providerWait) attempt.providerWait = undefined;
-        attempt.flowId = attempt.flowId ?? null;
-        attempt.expectedReviewHeadSha = attempt.expectedReviewHeadSha ?? null;
-        attempt.reviewHeadSha = attempt.reviewHeadSha ?? null;
-        if (!attempt.reviewFlowSync) attempt.reviewFlowSync = undefined;
-        attempt.startedAt = attempt.startedAt ?? null;
-        attempt.completedAt = attempt.completedAt ?? null;
-        attempt.input = attempt.input ?? null;
-        attempt.activatedBy = attempt.activatedBy ?? null;
-        attempt.output = attempt.output ?? null;
-        attempt.verdict = attempt.verdict ?? null;
-        if (attempt.acceptedForReview !== true) delete attempt.acceptedForReview;
-        attempt.error = attempt.error ?? null;
-        if (!attempt.verdictRecovery) attempt.verdictRecovery = undefined;
-        if (!attempt.unresolvedTermination) attempt.unresolvedTermination = undefined;
-      }
-    }
-  }
-  const revived: Pipeline = alreadyCloned ? pipeline : {
+  const revived: Pipeline = {
     ...pipeline,
     conversationSource: pipeline.conversationSource ? { ...pipeline.conversationSource } : undefined,
-    closeTeardown: pipeline.closeTeardown ? structuredClone(pipeline.closeTeardown) : undefined,
-    closeReport: pipeline.closeReport ? structuredClone(pipeline.closeReport) : undefined,
+    closeTeardown: pipeline.closeTeardown ? copyNested(pipeline.closeTeardown) : undefined,
+    closeReport: pipeline.closeReport ? copyNested(pipeline.closeReport) : undefined,
     project: resolveProject(pipeline.project),
     taskIds: [...pipeline.taskIds],
     ...(pipeline.taskClass ? { taskClass: { ...pipeline.taskClass } } : {}),
     proactiveTaskIds: pipeline.proactiveTaskIds ? [...pipeline.proactiveTaskIds] : undefined,
     creationIntent: pipeline.creationIntent ? { ...pipeline.creationIntent } : undefined,
     spec: typeof pipeline.spec === "string" ? pipeline.spec : undefined,
-    ...(pipeline.inputContext ? { inputContext: structuredClone(pipeline.inputContext) } : {}),
+    ...(pipeline.inputContext ? { inputContext: copyNested(pipeline.inputContext) } : {}),
     baseBranch: pipeline.baseBranch ?? "",
     baseRef: pipeline.baseRef ?? "",
     lastPassedCommit: pipeline.lastPassedCommit ?? "",
@@ -686,14 +607,14 @@ function reviveLoadedPipeline(
       attempts: Array.isArray(run.attempts)
         ? run.attempts.map((attempt) => ({
             ...attempt,
-            ...(attempt.accounting ? { accounting: structuredClone(attempt.accounting) } : {}),
+            ...(attempt.accounting ? { accounting: copyNested(attempt.accounting) } : {}),
             ...(attempt.setup ? { setup: { ...attempt.setup, command: [...attempt.setup.command] } } : {}),
             ...(attempt.startupOwnerWait ? { startupOwnerWait: { ...attempt.startupOwnerWait } } : {}),
             ...(attempt.roleMemoryDispatchWait ? { roleMemoryDispatchWait: { ...attempt.roleMemoryDispatchWait } } : {}),
             ...(attempt.roleMemoryDelivery ? { roleMemoryDelivery: { ...attempt.roleMemoryDelivery } } : {}),
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
             ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
-            ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
+            ...(attempt.runtimeSwitches ? { runtimeSwitches: copyNested(attempt.runtimeSwitches) } : {}),
             launchId: attempt.launchId ?? null,
             conversationId: attempt.conversationId ?? null,
             sessionId: attempt.sessionId ?? null,

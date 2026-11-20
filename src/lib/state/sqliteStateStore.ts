@@ -968,11 +968,9 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
     if (result instanceof Promise) throw new Error("state SQL transactions must be synchronous");
     // Publish only task rows changed in this transaction. Older projection
     // backlog is prepared by readers in bounded, independently committed pages.
-    if (pendingBefore !== null) {
-      const pendingAfter = taskTimePendingCursor(db);
-      if (pendingAfter !== null && pendingAfter > pendingBefore) {
-        prepareTaskTimes(db, Number.MAX_SAFE_INTEGER, pendingBefore);
-      }
+    const cursor = pendingBefore ?? 0;
+    if (db.query<{ pending: number }, [number]>("SELECT 1 AS pending FROM task_time_pending WHERE rowid > ? LIMIT 1").get(cursor)) {
+      prepareTaskTimes(db, Number.MAX_SAFE_INTEGER, cursor);
     }
     const after = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     injectWriteFault("commit", collection);

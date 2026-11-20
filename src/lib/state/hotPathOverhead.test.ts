@@ -219,15 +219,15 @@ test("done readDoneMemory and writeDoneProjection avoid deep-cloning untouched r
   writeDoneProjection({ upserts: items }, now);
   // Warm readonly cache.
   readDoneMemory();
-  const cloneSpy = spyOn(globalThis, "structuredClone");
+  const snapshotSpy = spyOn(SqliteStateCollection.prototype, "snapshot");
   try {
     const memory = readDoneMemory();
     expect(memory.settled.size).toBe(0);
     const outcome = writeDoneProjection({ upserts: items }, now);
     expect(outcome.updated).toBe(0);
     // Zero full-snapshot clones of all 40 untouched rows.
-    expect(cloneSpy.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(snapshotSpy).toHaveBeenCalledTimes(0);
   } finally {
-    cloneSpy.mockRestore();
+    snapshotSpy.mockRestore();
   }
 });

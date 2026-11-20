@@ -40,11 +40,8 @@ export function taskTimesReady(db: Database): boolean {
 /** Current queue watermark for the task-time trigger table, or null when the
  * database predates `task_time_pending`. Cached via `db.query` once present. */
 export function taskTimePendingCursor(db: Database): number | null {
-  try {
-    return db.query<{ rowid: number }, []>("SELECT COALESCE(MAX(rowid), 0) AS rowid FROM task_time_pending").get()!.rowid;
-  } catch {
-    return null;
-  }
+  if (!db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_time_pending'").get()) return null;
+  return db.query<{ rowid: number }, []>("SELECT COALESCE(MAX(rowid), 0) AS rowid FROM task_time_pending").get()!.rowid;
 }
 
 /** A key page is committed with its values. Interrupted preparation resumes
@@ -57,7 +54,6 @@ export function prepareTaskTimes(db: Database, limit = 128, afterRowid = 0): boo
       CASE WHEN json_valid(r.value_json) THEN json_extract(r.value_json,'$.updatedAt') END AS updated
     FROM task_time_pending p LEFT JOIN state_rows r ON r.collection='tasks' AND r.row_key=p.row_key
     WHERE p.rowid > ? ORDER BY p.rowid LIMIT ?`).all(afterRowid, limit);
-  if (rows.length === 0) return afterRowid === 0 ? true : !db.query<{ pending: number }, [number]>("SELECT 1 AS pending FROM task_time_pending WHERE rowid > ? LIMIT 1").get(afterRowid);
   const instant = (text: unknown) => {
     const ms = typeof text === "string" ? Date.parse(text) : NaN;
     return Number.isFinite(ms) ? ms : null;
