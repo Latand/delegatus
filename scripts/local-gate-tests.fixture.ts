@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { appendOwnershipFailure, compareTests, confirmFailures, FLAKY_RERUNS, FLAKY_BUDGET_MS, parseReport, touchedTests, type TestSite, type TestRun } from "./local-gate-tests";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
+import { fixtureCheckAdmissionEnv } from "./local-gate.fixture";
 
 setDefaultTimeout(60_000);
 const roots: string[] = [];
@@ -13,7 +14,7 @@ const root = path.resolve(import.meta.dir, "..");
 function fixture(source: string) {
   const dir = mkdtempSync(path.join(gateTemporaryRoot(), "gate-comparison-fixture-")); roots.push(dir);
   const env = isolatedEnvironment(path.join(dir, "env"), process.env);
-  Object.assign(env, { GIT_AUTHOR_NAME: "Test", GIT_COMMITTER_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid" });
+  Object.assign(env, fixtureCheckAdmissionEnv(dir), { GIT_AUTHOR_NAME: "Test", GIT_COMMITTER_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid" });
   const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, env, encoding: "utf8", stdio: "pipe" }).trim();
   git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", "https://example.invalid/repository.git");
   writeFileSync(path.join(dir, "example.test.ts"), source);

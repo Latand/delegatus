@@ -48,3 +48,13 @@ test("a message profile does not mutate the next message defaults", () => {
   expect(codexTurnProfile(undefined, defaults, catalog)).toEqual({ effort: "high" });
   expect(defaults).toEqual({ model: "model-a", effort: "high" });
 });
+
+for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+  test(`${model} forwards every advertised effort to the structured turn`, () => {
+    const efforts = ["low", "medium", "high", "xhigh", "max", "ultra"];
+    const models = { data: [{ id: model, supportedReasoningEfforts: efforts.map(reasoningEffort => ({ reasoningEffort })) }] };
+    for (const effort of efforts) expect(codexTurnProfile({ model, effort }, {}, models)).toEqual({ model, effort });
+    expect(() => codexTurnProfile({ model, effort: "unknown" }, {}, models)).toThrow("effort is invalid");
+    expect(() => codexTurnProfile({ model, effort: "ultra" }, {}, { data: [{ id: model, supportedReasoningEfforts: [] }] })).toThrow("unavailable for this model");
+  });
+}

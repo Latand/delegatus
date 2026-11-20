@@ -21,7 +21,7 @@
   "src/lib/externalRelay/fixtures/service-wire/claimed_rc_anonymous_admin.json": "92fe84d37faddb735ee03c5b08d2392efda03a59d2f2337c7753011a11cc7589",
   "src/lib/externalRelay/fixtures/service-wire/claimed_rc_memory_16000.json": "e219e4a89ded96315cee562e15dfdf8deff1e6824586bb1c6e23e60ea0a552f4",
   "src/lib/externalRelay/fixtures/service-wire/claimed_rc_emoji_memory_16000.json": "8bab44969e33723c6716d98be73c2880e637b9132beacceb4354f8cd923ee471",
-  "evidence/external-relay/install_tool_loop.json": "8631e9f0c4dc3dbd8fa48c85b9f5d096167226888b3809079069bddd0e1a61ce",
+  "evidence/external-relay/install_tool_loop.json": "6635cc375a2f7a6481262f3079210b10c547be22777deee12c8d35821e0ff955",
   "evidence/external-relay/install_completions.json": "8bb0c943fe2b7ae42c0ca58d07244679a7e56d2b1dd2bdbf56a679405b3584b7",
   "evidence/external-relay/recent-answers.json": "ecde6a9f264673dfab74b86df81f04a5d61974ae4c915e09308ad18242ecb7f7",
   "evidence/external-relay/settings.json": "e0ea8eca1ed5091961890a7aafb162bd021e8b84f379c64481f983964ffbb66e",

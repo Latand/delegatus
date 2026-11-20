@@ -338,8 +338,11 @@ describe("apply and revert", () => {
 test("the loading path never reaches the converter", () => {
   /* Startup and every read decode legacy records; only the explicit action converts. */
   const store = fs.readFileSync(path.join(import.meta.dir, "store.ts"), "utf8");
-  for (const name of ["previewLegacyReviewConversion", "applyLegacyReviewConversion", "revertLegacyReviewConversion"]) {
-    expect(store).not.toContain(name);
+  const storedRecord = fs.readFileSync(path.join(import.meta.dir, "storedRecord.ts"), "utf8");
+  for (const source of [store, storedRecord]) {
+    for (const name of ["previewLegacyReviewConversion", "applyLegacyReviewConversion", "revertLegacyReviewConversion"]) {
+      expect(source).not.toContain(name);
+    }
   }
   const detailRoute = fs.readFileSync(path.join(import.meta.dir, "../../app/api/pipelines/[id]/route.ts"), "utf8");
   const listRoute = fs.readFileSync(path.join(import.meta.dir, "../../app/api/pipelines/route.ts"), "utf8");

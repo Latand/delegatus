@@ -9,6 +9,7 @@ import { buildFilesResponse } from "@/app/api/files/response";
 import { writeSummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { stateDir, statePath } from "@/lib/configDir";
+import { projectAliasSnapshot, withProjectAliasSnapshot } from "@/lib/projects/aliases";
 import { diffFilesBodies } from "@/lib/filesDelta";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import type { FilesResponseWorkerRequest, SeatSourceWorkerRequest } from "@/lib/scanner/filesResponseWorker";
@@ -159,10 +160,17 @@ async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<stri
     const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
     const body = { tasks: [], ...JSON.parse(await fs.promises.readFile(request.bodyFile, "utf8")) };
     const { needsYouAnswer } = await import("@/lib/attention/needsYouProjection");
-    const forms = needsYouAnswer({ ...body, files: [] }, null, request.now, request.project, {
-      tasks: body.tasks ?? [], pipelines: body.pipelines ?? [], dismissals: [], reports: null, admissions: [], unavailable: [], workLinks: body.workLinks, seatConversationId: request.seatConversationId,
-    }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
-    value = { asks: seatAgendaAsks(body, request.now, request.project), forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
+    // Imports and file IO finish before this synchronous projection. The scope
+    // ends before result persistence or another request can observe it.
+    value = withProjectAliasSnapshot(projectAliasSnapshot(), (): {
+      asks: ReturnType<typeof seatAgendaAsks>;
+      forms: Pick<ReturnType<typeof needsYouAnswer>, "rows" | "count" | "routedToSeat">;
+    } => {
+      const forms = needsYouAnswer({ ...body, files: [] }, null, request.now, request.project, {
+        tasks: body.tasks ?? [], pipelines: body.pipelines ?? [], dismissals: [], reports: null, admissions: [], unavailable: [], workLinks: body.workLinks, seatConversationId: request.seatConversationId,
+      }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
+      return { asks: seatAgendaAsks(body, request.now, request.project), forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
+    });
   } else if (request.type === "seat-reports") {
     const { seatTickReportRows } = await import("@/lib/monitor/seatTickReports");
     value = seatTickReportRows(request.project);

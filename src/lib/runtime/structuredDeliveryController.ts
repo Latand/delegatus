@@ -7,7 +7,7 @@ import { withHostStopOrigin } from "./hostExit";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
-import { verifiedBackgroundWork, BACKGROUND_TASK_WAIT_CEILING_MS } from "@/lib/pipelines/backgroundTasks";
+import { verifiedBackgroundWork, type VerifiedBackgroundWorkCache, BACKGROUND_TASK_WAIT_CEILING_MS } from "@/lib/pipelines/backgroundTasks";
 import { AgentTranscriptCache } from "@/lib/agentState/transcript";
 import { registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
@@ -23,6 +23,7 @@ import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
 import { ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEAD_STAGE_HOST_REASON, deadStageHostReason, StructuredStageHostGoneError } from "./structuredRecovery";
+import { STAGE_ATTEMPT_SETTLED_PREFIX } from "./stageGitEnvironment";
 import { findPipelineRecord } from "@/lib/pipelines/store";
 import { pipelineRetirementReader, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
 import { cancelRecordedHost } from "@/lib/recordedChecks/service";
@@ -67,14 +68,15 @@ import { readEvidence } from "./evidence";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation, StructuredDispatchDeferredError, StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
-import { cancelDeliveryWakeForKick, DeliveryWake } from "./deliveryWake";
+import { cancelDeliveryWakeForKick, DeliveryHostPage, DeliveryWake } from "./deliveryWake";
 import { DeliveryEffectPages } from "./deliveryEffectPages";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { withoutOperationLease } from "@/lib/operationLease";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
-import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
+import { coalesceReadyEngineDeltas, createEngineHostLedgerProjection, projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
 import { PermissionRequestGuard } from "./permissionGuard";
+import type { RuntimeEvent } from "./engineHost";
 import { permissionDenialRecorder, resolvePermissionAttendance } from "./permissionDenials";
 import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptCutEvidence, transcriptCutEvidenceFromRecords, type TurnLivenessDependencies } from "./liveness";
 import { hostTurnRecordIdentity, readHostTurnRecord } from "./eventStore";
@@ -816,6 +818,8 @@ export async function bindStructuredDeliveryQueue(
   const registry = dependencies.registry ?? agentRegistry();
   const permissionGuard = dependencies.permissionGuard ?? productionPermissionGuard(registry);
   const hosts = new Map<string, EngineHost>();
+  const nativeHostPage = new DeliveryHostPage(hosts);
+  const guardHostPage = new DeliveryHostPage(hosts);
   // Registration events can request a drain while startup is still seating
   // the remaining hosts. Their original queued operations must wait for those
   // seats instead of attempting competing recovery and terminalizing them.
@@ -885,8 +889,7 @@ export async function bindStructuredDeliveryQueue(
     /* Off the loop, a hand-off's own row included (C3, A8). */
     settled: (entry) => settleNativeQueueEntry(registry, entry, progressStore),
     binding: (conversationId) => {
-      const snapshot = registry.readOnlySnapshot();
-      const conversation = snapshot.conversations[conversationId];
+      const conversation = registry.conversation(conversationId as ViewerConversationId);
       const generation = conversation?.generations.at(-1);
       if (!conversation || conversation.engine !== "codex" || !generation) return null;
       return { threadId: generation.id, accountId: generation.accountId };
@@ -1083,7 +1086,7 @@ export async function bindStructuredDeliveryQueue(
       nativeQueueExecute: (command, refusalReason, note, step, settled) => nativeQueueExecutor.execute(command, refusalReason, note, step, settled),
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;
-        const readyHosts = [...hosts].filter(([key, host]) => {
+        const readyHosts = nativeHostPage.next().filter(([key, host]) => {
           if (!host.nativeQueue) {
             if (!queuelessNativeHosts.has(key)) {
               queuelessNativeHosts.add(key);
@@ -1105,9 +1108,10 @@ export async function bindStructuredDeliveryQueue(
         });
         // A cooldown wake must not rebuild the registry snapshot either.
         if (readyHosts.length === 0) return;
-        const entries = registry.readOnlySnapshot().entries;
         for (const [key] of readyHosts) {
-          const entry = entries[key];
+          const registration = registrations.get(key);
+          if (!registration || hosts.get(key) !== registration.host) continue;
+          const entry = registry.hostEntry(registration.key);
           const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
           if (!conversationId) {
             if (!unresolvedNativeHosts.has(key)) {
@@ -1248,7 +1252,8 @@ export async function bindStructuredDeliveryQueue(
                with its queued-only journal fence and no earlier unverified
                actuation. Other failures carry no new disposition. */
             status === "uncertain" ? "unverified"
-              : status === "failed" && details?.reason === DEAD_STAGE_HOST_REASON
+              : status === "failed" && (details?.reason === DEAD_STAGE_HOST_REASON
+                || details?.reason?.startsWith(STAGE_ATTEMPT_SETTLED_PREFIX) === true)
                 && options?.fromStatuses?.length && options.fromStatuses.every(value => value === "pending" || value === "queued")
                 && result.receipt.deliveryUnverified !== true ? "lost" : undefined,
             /* The journal receipt, not these details: it carries the route the
@@ -1451,6 +1456,7 @@ export async function bindStructuredDeliveryQueue(
         } : null;
         const outcome = await terminateStructuredHostTree(ref, {
           stopOrigin: { path: onlyIfIdle ? "idle-delivery-retirement" : "delivery-kill-action", operationId: authority?.operationId ?? conversationId },
+          orphanAlarmRegistry: registry,
           retainedSurvivors,
           scope: targetScope,
           registryCustody: retirementCustody,
@@ -1572,16 +1578,47 @@ export async function bindStructuredDeliveryQueue(
   );
   // Accepted delivery belongs to this queue's lifetime. Publication may have
   // scheduled its wake inside a controller pass that has since expired.
-  const drainWake = new DeliveryWake(() => withoutOperationLease(() => {
-    if (!stopped) void withViewerOperation("runtime.delivery-wake", () => drainWithRetry());
-  }));
+  const drainWake = new DeliveryWake(() => { if (!stopped) void generalDrain(); });
+  let runningGeneralDrain: Promise<void> | null = null;
+  let followingGeneralDrain: { preceding: Promise<void>; run: Promise<void> } | null = null;
+  let generalWakeOwed = false;
+  const generalDrain = (afterAdmission = false, freshAdmission = false): Promise<void> => {
+    if (stopped) return Promise.resolve();
+    if (runningGeneralDrain) {
+      if (!afterAdmission) { generalWakeOwed = true; return runningGeneralDrain; }
+      const preceding = runningGeneralDrain;
+      if (followingGeneralDrain?.preceding === preceding) return followingGeneralDrain.run;
+      // A peer that starts after the preceding owner is already a valid next
+      // read. Join it instead of chaining another barrier behind every peer.
+      const run = preceding.catch(() => undefined).then(() => generalDrain(false, freshAdmission))
+        .finally(() => { if (followingGeneralDrain?.run === run) followingGeneralDrain = null; });
+      followingGeneralDrain = { preceding, run };
+      return run;
+    }
+    runningGeneralDrain = withoutOperationLease(() => Promise.resolve().then(() =>
+      withViewerOperation("runtime.delivery-wake", () => drainWithRetry(afterAdmission, freshAdmission)),
+    )).finally(() => {
+      runningGeneralDrain = null;
+      if (generalWakeOwed && !stopped) { generalWakeOwed = false; scheduleDrain(); }
+    });
+    return runningGeneralDrain;
+  };
   let settleTimer: ReturnType<typeof setInterval> | null = null;
   let watchdogTimer: ReturnType<typeof setInterval> | null = null;
   let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
   let guarding: Promise<void> | null = null;
-  const guardHosts = () => [...hosts].map(([id, host]) => ({ key: registrations.get(id)!.key, host }));
+  const guardHosts = () => {
+    if (!registry.quotaObservations("codex").some(row => accountCreditGuardBlock("codex", row.accountId, row.limits))) {
+      guardHostPage.reset();
+      return [];
+    }
+    return guardHostPage.next().flatMap(([id, host]) => {
+      const registration = registrations.get(id);
+      return registration?.host === host ? [{ key: registration.key, host }] : [];
+    });
+  };
   const enforceGuard = (onlyIfChanged = false) => guarding ??= enforceAccountCreditGuard(registry,
     guardHosts,
     async (key, host) => hosts.get(sessionKeyId(key)) === host
@@ -1595,7 +1632,10 @@ export async function bindStructuredDeliveryQueue(
       return enqueueStructuredMessage({ ...request, admissionGuard: authorize, recoveryAuthorityGuard: authorizeRecovery }, { enabled: () => true,
         registry: () => registry, client: () => client, recover: dependencies.recover, kick: requestDrain,
         authorizeDispatch: authorizeRecovery, interruptionContinuation: true });
-    }, { onlyIfChanged }).finally(() => { guarding = null; });
+    }, { onlyIfChanged: onlyIfChanged && !guardHostPage.pending }).finally(() => {
+      guarding = null;
+      if (guardHostPage.pending && !stopped && state.activeQueue === queue) scheduleDrain();
+    });
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => !stopped && drainWake.schedule(delayMs);
   const drainWithRetry = async (afterAdmission = false, freshAdmission = false, conversationId?: string): Promise<void> => {
     if (stopped) return;
@@ -2008,6 +2048,7 @@ export async function bindStructuredDeliveryQueue(
       ? coalesceReadyEngineDeltas(item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator](), conversationId)
       : null;
     let eventsStopped = false;
+    const projectJournalEvent = createEngineHostLedgerProjection();
     // The accepted host continues consuming its event stream after the
     // controller pass that published it has ended.
     withoutOperationLease(() => void (async () => {
@@ -2023,7 +2064,9 @@ export async function bindStructuredDeliveryQueue(
         /* Before the journal append, which retries for as long as the runtime
            host is away: a request nobody can answer is answered now. */
         permissionGuard.observe(key, item.host, conversationId, next.value);
-        const projected = projectEngineHostEvent(conversationId, key, next.value);
+        const ledgerEvent = projectJournalEvent(next.value as RuntimeEvent) as typeof next.value;
+        const pendingTails = next.value.kind === "turn-ended" ? projectJournalEvent.flushPendingEvents(next.value.turnId) : [];
+        const projected = projectEngineHostEvent(conversationId, key, ledgerEvent);
         let policyObserved = false;
         let policyErrorReported = false;
         while (!eventsStopped) {
@@ -2034,6 +2077,12 @@ export async function bindStructuredDeliveryQueue(
               observeCodexSubagentEvent(registry, entry.artifactPath, next.value);
             }
             policyObserved = true;
+            for (const [index, tail] of pendingTails.entries()) {
+              const projection = projectEngineHostEvent(conversationId, key, tail);
+              if (projection) await client.append({ ...projection,
+                producer: { kind: runtimeHostKindForEngine(item.key.engine), eventKey: `engine-host:${key}:${next.value.seq}:tail:${index}` },
+              });
+            }
             if (projected) await client.append(projected);
             break;
           } catch {
@@ -2235,7 +2284,13 @@ export async function bindStructuredDeliveryQueue(
        replace the earlier accepted deadline. */
     // A scoped pass cannot replace another recipient's pending general retry.
     if (!freshAdmission || !conversationId) cancelDeliveryWakeForKick(drainWake, freshAdmission, queue.canStartPass());
-    return drainWithRetry(true, freshAdmission, conversationId);
+    return freshAdmission && conversationId ? drainWithRetry(true, true, conversationId) : generalDrain(true, freshAdmission);
+  }, async () => {
+    if (stopped) return;
+    if (!startupPending) await enforceGuard();
+    // A shared guard may have begun before this cycle's quota observation.
+    if (!startupPending && !stopped) await enforceGuard(true);
+    if (!stopped && state.activeQueue === queue) scheduleDrain();
   });
   state.stopActive = () => {
     stopped = true;
@@ -2719,6 +2774,8 @@ export interface DemotionInterruptionOptions {
   seats?: () => readonly Pick<OrchestratorSeat, "project" | "seatEpoch" | "conversationId">[];
   /** Keep the evidence check and continuation record in one admitted step. */
   admitRecord?: (record: () => boolean) => Promise<boolean>;
+  /** Optional cache reader for bounded custody recovery; production uses the shared cache. */
+  backgroundWorkCache?: VerifiedBackgroundWorkCache;
 }
 
 /** The seat holding `conversationId`. A seat may still name an alias of the
@@ -3001,7 +3058,8 @@ export async function handOverHostForDemotion(
 }
 
 const backgroundCustodyRetryReasons = new Set([
-  "background transcript recovery is pending", "background read concurrency exceeds its bound",
+  "background transcript recovery is pending", "background transcript recovery is pending cache capacity",
+  "background read concurrency exceeds its bound",
   "the transcript changed under the read", "the transcript shrank under the read",
   "the transcript ends on an unterminated record",
 ]);
@@ -3081,7 +3139,9 @@ async function settleClaudeWorkBeforeDemotion(
         // missing artifact cannot erase a background obligation. A fresh
         // broker that has never ended a turn still has no native work to read.
         const work = pathname && (delivered !== undefined || fs.existsSync(pathname))
-          ? await verifiedBackgroundWork(pathname, Date.now())
+          ? await (options.backgroundWorkCache
+            ? options.backgroundWorkCache.acquire(pathname, Date.now())
+            : verifiedBackgroundWork(pathname, Date.now()))
           : delivered !== undefined ? { state: "unreadable" as const, reason: "native background artifact is missing" }
             : { state: "read" as const, names: [] };
         assertClaim();

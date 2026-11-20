@@ -17,7 +17,8 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { UNKNOWN_RESET_RECHECK_MS } from "./accountPark";
 import type { RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
-import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "./structuredRecovery";
+import { recoverDeadStructuredConversation, StructuredOrphanGraceError, StructuredResumeUnpublishedError } from "./structuredRecovery";
+import { ORPHANED_HOST_IN_FLIGHT_GRACE_MS } from "./orphanedHost";
 import { materializeStructuredHostAccess, structuredResumeSessionId } from "./structuredSpawn";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
@@ -26,7 +27,7 @@ import { trackAccountLeases } from "@/lib/accounts/accountMutation.contention.fi
 import { buildPipeline, loadPipelines, savePipelines, withPipelineMutation } from "@/lib/pipelines/store";
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import { cpuPriorityFromEnv, readCpuPriority } from "./cpuPriority";
-import { captureProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { CodexAppServerHost } from "./codexAppServerHost";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost } from "./structuredDeliveryController";
@@ -2151,4 +2152,176 @@ test("an account authorization lost after the recovery's admission ends its laun
 
   expect(refused.spawns).toBe(0);
   expect(refused.receipt?.state).not.toBe("failed");
+});
+
+/* A host that outlived the Viewer owning its stdio across a release: its
+   recorded owner process is gone while the engine still runs. Recovery used to
+   hand it back as live, and the send that followed failed at once as
+   `dead-host`. Every process here is a child this test started. */
+function orphanFixtureChild() {
+  return ownFixtureTree(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }));
+}
+
+function orphanHostFixture(engine: "claude" | "codex", options: {
+  host: ReturnType<typeof captureProcessIdentity>;
+  owner: ReturnType<typeof captureProcessIdentity>;
+  activeTurnRef?: string | null;
+  records?: string;
+}) {
+  const sessionId = crypto.randomUUID();
+  const cwd = fs.mkdtempSync(path.join(sandbox, `orphan-${engine}-`));
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, options.records ?? "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation(engine, artifactPath, "default");
+  const key = { engine, sessionId } as const;
+  registry.upsert({
+    key, artifactPath, cwd, accountId: "default", launchProfile: emptyLaunchProfile({ cwd }),
+    status: options.activeTurnRef ? "live" : "idle", host: null, claimEpoch: 1,
+    claimOwner: `structured-host:${JSON.stringify(options.owner)}`, pendingAction: null,
+    structuredHost: {
+      kind: engine === "claude" ? "claude-broker" : "codex-app-server",
+      endpoint: "stdio:orphaned", process: options.host, eventCursor: 5, protocolVersion: "fixture",
+      writerClaimEpoch: 1, activeTurnRef: options.activeTurnRef ?? null, pendingAttention: [], activeFlags: [],
+    },
+  });
+  let spawnCalls = 0;
+  const dependencies = (now: number) => ({
+    registry,
+    client: {} as RuntimeHostClient,
+    transportAvailable: () => true,
+    park: () => null,
+    now: () => now,
+    orphanStop: { graceMs: 200, deadlineMs: 3_000 },
+    resolveAccount: (): AccountContext => ({ engine, accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+    spawn: async (input: Parameters<NonNullable<Parameters<typeof recoverDeadStructuredConversation>[1]>["spawn"] & {}>[0]) => {
+      spawnCalls += 1;
+      return { ok: true as const, target: null, path: artifactPath, launchId: input.receipt.launchId, conversationId: conversation.id,
+        launched: true, retrySafe: false, initialMessage: "delivered" as const, state: "settled" as const };
+    },
+  });
+  return { registry, conversation, artifactPath, key, dependencies, spawnCalls: () => spawnCalls };
+}
+
+const ORPHAN_ADMITTED_AT = "2026-07-13T00:00:00.000Z";
+
+test.each(["claude", "codex"] as const)("a %s host whose owner process is gone is stopped and resumed, never handed back as live", async engine => {
+  const host = orphanFixtureChild();
+  const ended = orphanFixtureChild();
+  const owner = captureProcessIdentity(ended.pid!);
+  await stopFixtureTree(ended);
+  const hostIdentity = captureProcessIdentity(host.pid!);
+  const fixture = orphanHostFixture(engine, { host: hostIdentity, owner });
+  try {
+    const result = await recoverDeadStructuredConversation({
+      path: fixture.artifactPath, conversationId: fixture.conversation.id, admittedAt: ORPHAN_ADMITTED_AT,
+    }, fixture.dependencies(Date.parse(ORPHAN_ADMITTED_AT)));
+    expect(result).toMatchObject({ conversationId: fixture.conversation.id, spawned: true });
+    expect(fixture.spawnCalls()).toBe(1);
+    expect(processIdentityStatus(hostIdentity)).toBe("dead");
+  } finally {
+    fixture.registry.close();
+    await stopFixtureTree(host);
+  }
+});
+
+test.each([
+  ["claude", "background shell"],
+  ["claude", "busy turn"],
+  ["codex", "busy turn"],
+] as const)("a %s orphan with a %s is held through its grace, then stopped and resumed", async (engine, work) => {
+  const host = orphanFixtureChild();
+  const ended = orphanFixtureChild();
+  const owner = captureProcessIdentity(ended.pid!);
+  await stopFixtureTree(ended);
+  const hostIdentity = captureProcessIdentity(host.pid!);
+  const shellStarted = {
+    type: "user", timestamp: "2026-07-12T23:59:50.000Z",
+    message: { role: "user", content: [{ tool_use_id: "toolu_orphan_shell", type: "tool_result", content: "Command running in background with ID: orphanshell." }] },
+    toolUseResult: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "orphanshell" },
+  };
+  const fixture = orphanHostFixture(engine, {
+    host: hostIdentity, owner,
+    activeTurnRef: work === "busy turn" ? "turn-cut-by-handover" : null,
+    records: work === "background shell" ? `${JSON.stringify(shellStarted)}\n` : "",
+  });
+  const admitted = Date.parse(ORPHAN_ADMITTED_AT);
+  const request = { path: fixture.artifactPath, conversationId: fixture.conversation.id, admittedAt: ORPHAN_ADMITTED_AT };
+  try {
+    const held = recoverDeadStructuredConversation(request, fixture.dependencies(admitted));
+    await expect(held).rejects.toBeInstanceOf(StructuredOrphanGraceError);
+    await expect(held).rejects.toThrow("in-flight work");
+    const stillHeld = recoverDeadStructuredConversation(request, fixture.dependencies(admitted + ORPHANED_HOST_IN_FLIGHT_GRACE_MS - 1));
+    await expect(stillHeld).rejects.toBeInstanceOf(StructuredOrphanGraceError);
+    expect(processIdentityStatus(hostIdentity)).not.toBe("dead");
+    expect(fixture.spawnCalls()).toBe(0);
+    expect(fixture.registry.readOnlySnapshot().entries[sessionKeyId(fixture.key)]?.structuredHost?.process).toEqual(hostIdentity);
+
+    const result = await recoverDeadStructuredConversation(request, fixture.dependencies(admitted + ORPHANED_HOST_IN_FLIGHT_GRACE_MS));
+    expect(result).toMatchObject({ conversationId: fixture.conversation.id, spawned: true });
+    expect(fixture.spawnCalls()).toBe(1);
+    expect(processIdentityStatus(hostIdentity)).toBe("dead");
+  } finally {
+    fixture.registry.close();
+    await stopFixtureTree(host);
+  }
+});
+
+/* A send queued behind a busy turn before the handover reaches recovery long
+   after its admission. Its grace counts from the first durable observation of
+   the orphan with work in flight, so it never collapses to zero, and the
+   recorded observation is what a later call, in this Viewer or its
+   successor, reads back. */
+test.each(["claude", "codex"] as const)("a %s orphan first seen long after the send's admission still gets its whole grace", async engine => {
+  const host = orphanFixtureChild();
+  const ended = orphanFixtureChild();
+  const owner = captureProcessIdentity(ended.pid!);
+  await stopFixtureTree(ended);
+  const hostIdentity = captureProcessIdentity(host.pid!);
+  const fixture = orphanHostFixture(engine, { host: hostIdentity, owner, activeTurnRef: "turn-cut-by-handover" });
+  const firstSeen = Date.parse(ORPHAN_ADMITTED_AT) + 10 * 60_000;
+  const until = new Date(firstSeen + ORPHANED_HOST_IN_FLIGHT_GRACE_MS).toISOString();
+  const request = { path: fixture.artifactPath, conversationId: fixture.conversation.id, admittedAt: ORPHAN_ADMITTED_AT };
+  try {
+    const held = recoverDeadStructuredConversation(request, fixture.dependencies(firstSeen));
+    await expect(held).rejects.toBeInstanceOf(StructuredOrphanGraceError);
+    await expect(held).rejects.toThrow(until);
+    expect(processIdentityStatus(hostIdentity)).not.toBe("dead");
+
+    // A second registry handle on the same files stands in for a successor Viewer.
+    const successor = new AgentRegistry(fixture.registry.filename, undefined, undefined, { sqliteMode: "off" });
+    try {
+      const later = recoverDeadStructuredConversation(request, { ...fixture.dependencies(firstSeen + 60_000), registry: successor });
+      await expect(later).rejects.toThrow(until);
+    } finally { successor.close(); }
+    expect(processIdentityStatus(hostIdentity)).not.toBe("dead");
+    expect(fixture.spawnCalls()).toBe(0);
+
+    const result = await recoverDeadStructuredConversation(request, fixture.dependencies(firstSeen + ORPHANED_HOST_IN_FLIGHT_GRACE_MS));
+    expect(result).toMatchObject({ conversationId: fixture.conversation.id, spawned: true });
+    expect(fixture.spawnCalls()).toBe(1);
+    expect(processIdentityStatus(hostIdentity)).toBe("dead");
+  } finally {
+    fixture.registry.close();
+    await stopFixtureTree(host);
+  }
+});
+
+test.each(["claude", "codex"] as const)("a %s host whose owner process runs is never stopped by recovery", async engine => {
+  const host = orphanFixtureChild();
+  const ownerChild = orphanFixtureChild();
+  const hostIdentity = captureProcessIdentity(host.pid!);
+  const fixture = orphanHostFixture(engine, { host: hostIdentity, owner: captureProcessIdentity(ownerChild.pid!) });
+  try {
+    const result = await recoverDeadStructuredConversation({
+      path: fixture.artifactPath, conversationId: fixture.conversation.id, admittedAt: ORPHAN_ADMITTED_AT,
+    }, fixture.dependencies(Date.parse(ORPHAN_ADMITTED_AT) + 24 * 60 * 60_000));
+    expect(result).toMatchObject({ conversationId: fixture.conversation.id, spawned: false });
+    expect(fixture.spawnCalls()).toBe(0);
+    expect(processIdentityStatus(hostIdentity)).not.toBe("dead");
+    expect(fixture.registry.readOnlySnapshot().entries[sessionKeyId(fixture.key)]?.structuredHost?.process).toEqual(hostIdentity);
+  } finally {
+    fixture.registry.close();
+    await Promise.all([stopFixtureTree(host), stopFixtureTree(ownerChild)]);
+  }
 });

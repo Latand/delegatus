@@ -5,6 +5,8 @@ import { statePath } from "@/lib/configDir";
 import { readStateCollectionRevisions } from "@/lib/state/sqliteStateStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { agentRegistry } from "@/lib/agent/registry";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { projectAliasSnapshot, withProjectAliasSnapshot } from "@/lib/projects/aliases";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { appendBridgeReports, scopedReportId, bridgeReportId, readBridgeChannel, readBridgeReportLog } from "@/lib/bridge/store";
@@ -20,9 +22,10 @@ import { ruleReports } from "./ruleReports";
 export type SeatTickReportRow = Pick<BridgeReportV1, "id" | "project" | "origin" | "at" | "covers" | "coversOwedAt">;
 
 export function seatTickReportRows(project: string): SeatTickReportRow[] {
-  return readBridgeReportLog().reports.filter(row => row.origin?.kind === "manager" && !!row.project
+  const { reports } = readBridgeReportLog();
+  return withProjectAliasSnapshot(projectAliasSnapshot(), (): SeatTickReportRow[] => reports.filter(row => row.origin?.kind === "manager" && !!row.project
     && canonicalOrchestratorProject(row.project) === project)
-    .map(({ id, project, origin, at, covers, coversOwedAt }) => ({ id, project, origin, at, covers, coversOwedAt }));
+    .map(({ id, project, origin, at, covers, coversOwedAt }) => ({ id, project, origin, at, covers, coversOwedAt })));
 }
 
 // One resident response worker owns this bounded cache. Cross-process revisions
@@ -49,24 +52,28 @@ export async function recordSeatRuleReports(project: string, at: string, deadlin
   if (remaining() <= 0) throw new DeadlineExceededError("seat rule reports source deadline exhausted", 0);
   const prepared = await waitForStateLock("seat-tick.rule-reports.prepare", () => {
     const seat = orchestratorSeatForCurrentProject(project).active;
-    if (!seat?.conversationId) return null;
+    const conversationId = seat?.conversationId;
+    if (!conversationId) return null;
     const cacheKey = `${statePath("state.sqlite")}:${project}`;
-    const revision = reportInputRevision(project, seat.conversationId);
+    const revision = reportInputRevision(project, conversationId);
     if (unchanged.get(cacheKey) === revision) return null;
     const registry = agentRegistry().readOnlySnapshot();
     const log = readBridgeReportLog();
     readBridgeChannel();
     const known = new Set([...log.reports.map(row => row.id), ...log.retired]);
-    const inputs = ruleReports({ project, at, seatConversationId: seat.conversationId, locale: operatorLocale() === "en" ? "en" : "uk",
-      tasks: loadTasksForList().filter(task => canonicalOrchestratorProject(task.project) === project),
-      pipelines: loadPipelinesForList().flatMap(lane => canonicalOrchestratorProject(lane.project) === project ? [{ ...lane, project }] : []), deliveries: Object.values(registry.heldDeliveries),
-      maintenance: maintenanceRuns(project), dismissals: readAttentionDismissals().records, bridgeLog: { ...log, reports: log.reports.map(row => row.project ? { ...row, project: canonicalOrchestratorProject(row.project) } : row) },
+    // Load stores before the read scope: first reads may import legacy state.
+    const tasks = loadTasksForList(), pipelines = loadPipelinesForList();
+    const maintenance = maintenanceRuns(project), dismissals = readAttentionDismissals().records;
+    const inputs = withProjectAliasSnapshot(projectAliasSnapshot(), (): ReturnType<typeof ruleReports> => ruleReports({ project, at, seatConversationId: conversationId, locale: operatorLocale() === "en" ? "en" : "uk",
+      tasks: tasks.filter(task => canonicalOrchestratorProject(task.project) === project),
+      pipelines: pipelines.flatMap(lane => canonicalOrchestratorProject(lane.project) === project ? [{ ...lane, project }] : []), deliveries: registryRowsMatching(registry, "heldDeliveries", "state", "failed"),
+      maintenance, dismissals, bridgeLog: { ...log, reports: log.reports.map(row => row.project ? { ...row, project: canonicalOrchestratorProject(row.project) } : row) },
       deliveryLost: delivery => registry.deliveryOperationOwners[delivery.command.operationId]?.terminalDisposition === "lost",
       deliveryProject: delivery => {
         const held = delivery.command.origin?.project ?? registry.conversations[delivery.conversationId]?.projectOwnership?.project;
         return held ? canonicalOrchestratorProject(held) : null;
-      } }).filter(row => !known.has(scopedReportId(project, row.key)) && !known.has(bridgeReportId(row.key)));
-    return { inputs, cacheKey, revision, conversationId: seat.conversationId };
+      } }).filter(row => !known.has(scopedReportId(project, row.key)) && !known.has(bridgeReportId(row.key))));
+    return { inputs, cacheKey, revision, conversationId };
   }, { waitMs: remaining() });
   if (!prepared) return;
   if (remaining() <= 0) throw new DeadlineExceededError("seat rule reports source deadline exhausted", 0);

@@ -32,6 +32,7 @@ import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 import {
   conversationDeliverabilityFromRecord,
   deliverabilityFailureMessage,
+  deliverabilityRequiresRecovery,
   type ConversationDeliverabilityCondition,
 } from "@/lib/conversation/deliverability";
 
@@ -48,7 +49,8 @@ import {
   runtimeIdleKillMatches,
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
-import { deadStageHostReason, recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
+import { deadStageHostReason, recoverDeadStructuredConversation, StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
+import { STAGE_ATTEMPT_SETTLED_CODE, StageAttemptSettledError } from "./stageGitEnvironment";
 import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import {
@@ -256,6 +258,28 @@ async function endReservationForRequest(
 
 function acceptedHeld(operationId: string, target: string | null = null, spawned = false): StructuredMessageResult {
   return { ok: true, structured: true, target, outcome: "held", operationId, ...(spawned ? { spawned: true } : {}) };
+}
+
+/** A send whose only route was restarting a settled stage attempt's host ends
+    now, with the refusal that says what to do instead. The rehost refused
+    before any host could take it, so the message never left. */
+async function refuseSettledStageSend(
+  registry: AgentRegistry,
+  progress: DeliveryProgressPort | null,
+  reservation: HeldDelivery,
+  error: StageAttemptSettledError,
+): Promise<StructuredMessageResult> {
+  const settled = await endReservationForRequest(registry, progress, reservation, error.refusal);
+  if (!settled.ended) return acceptedHeld(reservation.command.operationId);
+  return {
+    ok: false,
+    structured: true,
+    outcome: "failed",
+    error: settled.error,
+    status: 409,
+    code: STAGE_ATTEMPT_SETTLED_CODE,
+    operationId: reservation.command.operationId,
+  };
 }
 
 /** The reservation behind one accepted operation, read by its key. */
@@ -936,6 +960,7 @@ async function recoverReclaimedMessage(
       client,
     });
   } catch (error) {
+    if (error instanceof StageAttemptSettledError) return refuseSettledStageSend(registry, progress, reservation, error);
     const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`;
     if (error instanceof StructuredResumeUnpublishedError) {
       const settled = await endReservationForRequest(registry, progress, reservation, failure);
@@ -950,9 +975,12 @@ async function recoverReclaimedMessage(
         operationId: admitted.operationId,
       };
     }
+    /* An orphan held for its grace, or behind a refused stop, is still being
+       recovered; its own message says what it waits for. */
+    const orphanWait = error instanceof StructuredOrphanGraceError || error instanceof StructuredOrphanStopRefusedError;
     recordAdmissionWait(progress, registry, reservation, {
-      reason: "awaiting-host",
-      detail: `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
+      reason: orphanWait ? "recovering-host" : "awaiting-host",
+      detail: orphanWait ? error.message : `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
     });
     requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
     return {
@@ -1190,7 +1218,7 @@ async function deliverHeldAttempt(
        its message, attachments and operation id, and the reason (#1974). It
        used to be recorded `delivery-uncertain`, which settlement must treat
        as possibly executed, for a message that provably never left. */
-    if (deliverability.condition !== "reclaimed") {
+    if (!deliverabilityRequiresRecovery(deliverability.condition)) {
       return heldForRetry(deliverability.reason);
     }
     if (!request.reconcileUncertain && !operationId.startsWith("spawn_message_")) {
@@ -1243,6 +1271,17 @@ async function deliverHeldAttempt(
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
         progress.wait("update-handoff");
         return "held";
+      }
+      /* The host this send was waiting for can never come back. Only an
+         operation the runtime journal never admitted is proven unsent; one it
+         holds may have reached an earlier host. */
+      if (error instanceof StageAttemptSettledError && !request.reconcileUncertain && !operationId.startsWith("spawn_message_")) {
+        let journal: RuntimeOperationResult | null;
+        try { journal = await client.operationStatus(operationId); }
+        catch { return heldForRetry(error.refusal); }
+        const authority = await authorityFence();
+        if (authority !== undefined) return authority;
+        return journal ? "delivery-uncertain" : { outcome: "rejected", cause: error.refusal };
       }
       return heldForRetry(`${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1579,7 +1618,7 @@ export async function enqueueStructuredMessage(
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
-    if (deliverability.condition === "reclaimed") {
+    if (deliverabilityRequiresRecovery(deliverability.condition)) {
       return recoverReclaimedMessage(request, registry, client, dependencies, rawImages);
     }
     return holdDuringRuntimeSynchronization(
@@ -1596,7 +1635,7 @@ export async function enqueueStructuredMessage(
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
-    if (deliverability.condition === "reclaimed") {
+    if (deliverabilityRequiresRecovery(deliverability.condition)) {
       return recoverReclaimedMessage(request, registry, client, dependencies, rawImages);
     }
     return ownershipUnavailable(deliverability.condition);
@@ -1884,6 +1923,10 @@ export async function enqueueStructuredMessage(
         authorityGuard: request.recoveryAuthorityGuard,
       }, { registry, client });
     } catch (error) {
+      if (error instanceof StageAttemptSettledError) {
+        if (recoveryReservation) return refuseSettledStageSend(registry, progress, recoveryReservation, error);
+        return { ok: false, structured: true, outcome: "failed", error: error.refusal, status: 409, code: STAGE_ATTEMPT_SETTLED_CODE };
+      }
       const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`;
       if (recoveryReservation && error instanceof StructuredResumeUnpublishedError) {
         const settled = await endReservationForRequest(registry, progress, recoveryReservation, failure);

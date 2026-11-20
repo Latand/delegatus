@@ -374,6 +374,49 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
+test("a failed host-death attempt leaves the seat projection with its failure and clears the old stall", async () => {
+  const active = lane();
+  const ports = sources({ pipelines: [active] });
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  gathered.pipelines[0]!.stageActivity = {
+    lifecycle: "gone", reason: "host_gone_turn_unverified", verified: false, turnState: "busy",
+    conversationId: STAGE_CONVERSATION,
+  };
+  const stalled = seatTickDecision(gathered);
+  expect(stalled.state.stalledSeen).toContain("pipeline_a1");
+
+  const failure = "stage host exited after recovery was cancelled; stopped by pipeline-stage-stop";
+  const settled = lane({
+    state: "needs_decision", stateDetail: failure,
+    cursor: { stageId: "build", state: "needs_decision", input: null, activatedBy: null },
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "failed", error: failure, completedAt: new Date(NOW).toISOString(),
+      conversationId: STAGE_CONVERSATION, agentPath: TRANSCRIPT, startedAt: new Date(NOW - 60_000).toISOString() }] }],
+  });
+  ports.pipelines = () => [settled] as never;
+  const refreshed = refreshSeatTickInput({ ...gathered, state: stalled.state }, ports);
+  expect(refreshed.pipelines).toHaveLength(1);
+  expect(refreshed.pipelines[0]).toMatchObject({ state: "inert", stageState: "needs_decision", stageAttemptState: "failed" });
+  expect(settled.stateDetail).toContain("stopped by pipeline-stage-stop");
+  const afterSettlement = seatTickDecision(refreshed);
+  expect(afterSettlement.state.stalledSeen).not.toContain("pipeline_a1");
+
+  const retried = lane({
+    state: "running", stateDetail: null,
+    cursor: { stageId: "build", state: "running", input: null, activatedBy: null },
+    runs: [{ stageId: "build", attempts: [{ n: 2, state: "running", conversationId: STAGE_CONVERSATION,
+      agentPath: TRANSCRIPT, startedAt: new Date(NOW + 1).toISOString() }] }],
+  });
+  ports.pipelines = () => [retried] as never;
+  const retryProjection = refreshSeatTickInput({ ...refreshed, state: afterSettlement.state }, ports);
+  expect(retryProjection.pipelines[0]).toMatchObject({ state: "active", stageAttemptState: "running" });
+  expect(seatTickDecision(retryProjection).state.stalledSeen).not.toContain("pipeline_a1");
+
+  ports.pipelines = () => [finishedLane()] as never;
+  const terminalProjection = refreshSeatTickInput({ ...retryProjection, state: afterSettlement.state }, ports);
+  expect(terminalProjection.pipelines).toHaveLength(0);
+  expect(seatTickDecision(terminalProjection).state.stalledSeen).not.toContain("pipeline_a1");
+});
+
 test("gather yields while frozen lanes move and refresh carries the replacement agenda", async () => {
   const { deepFreeze } = await import("@/lib/deepFreeze");
   const { refreshSeatTickEvidence } = await import("./seatTickSources");

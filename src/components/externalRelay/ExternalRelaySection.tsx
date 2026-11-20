@@ -14,7 +14,7 @@ import { Select } from "@/components/ui/Select";
 import { accountConnected } from "@/components/onboarding/EnginesStep";
 import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { effortScale } from "@/lib/agent/efforts";
-import { defaultModelFor, ENGINE_MODELS, listedModels } from "@/lib/agent/models";
+import { CODEX_CLOUD_MODEL_IDS, defaultModelFor, ENGINE_MODELS, listedModels } from "@/lib/agent/models";
 import { KNOWN_RELAYS, verifyUrlAllowed, type KnownRelayInfo } from "@/lib/externalRelay/knownRelays";
 import { RELAY_MEMBER_ANSWERS_PER_HOUR } from "@/lib/externalRelay/profile";
 import { selectOwnerDestination } from "@/lib/externalRelay/ownerDestination";
@@ -23,7 +23,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 import { offersCloneCreate } from "@/lib/externalRelay/cloneNames";
 
 import { CloneCreateRow, CloneEmpty, CloneForm, ClonePendingRow, CloneStatus, useCloneCreate, useCloneSetup, type CloneCreatedView, type CloneRequestView } from "./CloneCreate";
-import { alertLine, call, Dot, FOCUS, HEAD, LINK, openBlankWindow, ownerLine, PRIMARY, QUIET, safeLink } from "./relayUi";
+import { alertLine, call, Dot, FOCUS, LINK, openBlankWindow, ownerLine, PRIMARY, QUIET, safeLink } from "./relayUi";
 
 /**
  * The external relay's operator surface (docs/design/relay.md §B.9): pair
@@ -42,6 +42,7 @@ type Target = {
   id: string;
   name: string;
   answered_by: "install" | "service";
+  answered_elsewhere?: boolean;
   fallback: "service" | "none";
   enabled: boolean;
   engine: RelayEngine | "codex-cloud" | null;
@@ -164,7 +165,7 @@ const stamp = (value: string, locale: string) => {
   return date.toLocaleString(localeTag(locale), { year, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 };
 
-const modelLabel = (engine: RelayEngine | "codex-cloud" | null, model: string | null) => engine === "codex-cloud" ? "Codex Cloud · GPT-6.1 Sol" : engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
+const modelLabel = (engine: RelayEngine | "codex-cloud" | null, model: string | null) => engine === "codex-cloud" ? `Codex Cloud · ${model ? ENGINE_MODELS.codex.find((item) => item.id === model)?.label ?? model : ENGINE_MODELS.codex.find((item) => item.id === "gpt-6.1-sol")?.label}` : engine && model ? ENGINE_MODELS[engine].find((item) => item.id === model)?.label ?? model : null;
 
 const NUMBER = `h-7 rounded-control border border-border bg-card px-2 text-ui text-primary tabular-nums disabled:opacity-50 max-sm:h-11 max-sm:text-body ${FOCUS}`;
 const PHONE_SELECT = "max-sm:h-11 max-sm:text-body";
@@ -389,6 +390,12 @@ export function RelayPairing({ resume, disabled = false, known = [], connected =
 
 type Actions = {
   busy: boolean;
+  /** The clone whose move from another install awaits the operator's confirmation. */
+  moving: string | null;
+  /** The clone whose confirmed move the relay refused because another install holds it. */
+  refused: string | null;
+  cancelMove: () => void;
+  confirmMove: (target: Target) => void;
   patchTarget: (target: Target, patch: Partial<Target>) => void;
   route: (target: Target, answeredBy: "install" | "service") => void;
 };
@@ -459,12 +466,13 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
   const configured = target.engine !== null && target.model !== null;
   const load = [t("externalRelay.target.running", { count: running, max: target.concurrency }), limit ? t("externalRelay.target.perHour", { count: limit }) : null].filter(Boolean).join(" · ");
   const here = target.answered_by === "install";
+  const moveRefused = actions.refused === target.id && target.answered_elsewhere === true && !here;
   const name = (key: Parameters<TFunction>[0]) => `${t(key)} · ${target.name}`;
   return (
     <div data-external-relay-target={target.id} data-open={open ? "" : undefined} data-fresh={fresh ? "" : undefined} className={`flex min-w-0 flex-col border-t border-border first:border-t-0 ${fresh ? "rounded-control bg-accent-soft/60" : ""} ${open ? "pb-2.5" : ""}`}>
       <div className="flex min-h-9 min-w-0 items-center gap-2 max-sm:min-h-11">
         <button type="button" aria-expanded={open} onClick={onOpen} data-external-relay-target-fold=""
-          className={`flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-control px-1 text-left hover:bg-sunken max-sm:min-h-11 ${FOCUS}`}>
+          className={`flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-control px-1 py-1.5 text-left hover:bg-sunken max-sm:min-h-11 ${FOCUS}`}>
           {target.engine ? <EngineMark engine={localEngine!} size={14} /> : <Dot tone="muted" className="mx-1" />}
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-1.5">
@@ -481,6 +489,8 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
                 </>
               ) : <span className="min-w-0 truncate">{t("externalRelay.target.needsEngine")}</span>}
             </span>
+            <span data-external-relay-answer-source="" className="text-caption leading-4 text-muted">{t(here ? "externalRelay.target.answeredHere" : target.answered_elsewhere ? "externalRelay.target.answeredElsewhere" : "externalRelay.target.answeredService")}</span>
+            {target.answered_elsewhere && canAnswer && !moveRefused ? <span data-external-relay-release-elsewhere="" className="text-caption leading-4 text-muted">{t("externalRelay.target.releaseElsewhere")}</span> : null}
             {target.ownerTier === true ? <span data-external-relay-owner-tier-caption="" className="text-caption leading-4 text-muted">{t("externalRelay.target.ownerTierOn")}</span> : null}
           </span>
           {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}
@@ -489,6 +499,23 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
           data-external-relay-answered-by={target.answered_by} disabled={actions.busy || relay.paused || (!here && !canAnswer)}
           onClick={() => actions.route(target, here ? "service" : "install")} />
       </div>
+      {actions.moving === target.id && target.answered_elsewhere === true && !here ? (
+        <div role="alertdialog" aria-label={t("externalRelay.target.moveAria", { name: target.name })} data-external-relay-move-confirm=""
+          onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); actions.cancelMove(); } }}
+          className="mb-1.5 flex min-w-0 flex-col gap-2 rounded-control border border-warning bg-warning-soft p-2.5 text-ui text-primary">
+          <p className="m-0">{t("externalRelay.target.confirmMove", { name: target.name })}</p>
+          <div className="flex flex-wrap justify-end gap-2 max-sm:flex-col">
+            <button type="button" data-external-relay-move-cancel="" autoFocus onClick={actions.cancelMove} className={`${QUIET} justify-center px-3`}>{t("common.cancel")}</button>
+            <button type="button" data-external-relay-move-go="" disabled={actions.busy} onClick={() => actions.confirmMove(target)} className={PRIMARY}>{t("externalRelay.target.moveHere")}</button>
+          </div>
+        </div>
+      ) : null}
+      {moveRefused ? (
+        <p role="alert" data-external-relay-move-refused="" className="mb-1.5 flex min-w-0 items-start gap-1.5 rounded-control border border-warning bg-warning-soft p-2.5 text-ui text-primary">
+          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
+          <span className="min-w-0">{t("externalRelay.target.moveRefused")}</span>
+        </p>
+      ) : null}
       {open ? (
         <div className="flex min-w-0 flex-col gap-1.5 pl-7 pt-1 max-sm:pl-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 max-sm:flex-col max-sm:items-stretch">
@@ -502,7 +529,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
               <Select aria-label={name("externalRelay.target.model")} title={t("externalRelay.target.model")} value={target.model ?? ""} disabled={actions.busy || !target.engine} className={`min-w-0 flex-1 ${PHONE_SELECT}`}
                 onChange={(event) => { const model = event.target.value; actions.patchTarget(target, { model, effort: target.effort && target.engine && effortScale(localEngine!, model)?.includes(target.effort) ? target.effort : null }); }}>
                 {target.model ? null : <option value="" disabled>{t("externalRelay.target.choose")}</option>}
-                {target.engine === "codex-cloud" ? <option value="gpt-6.1-sol">GPT-6.1 Sol</option> : localEngine ? listedModels(localEngine, target.model).map((model) => <option key={model.id} value={model.id}>{model.label}</option>) : null}
+                {target.engine === "codex-cloud" ? ENGINE_MODELS.codex.filter(model => CODEX_CLOUD_MODEL_IDS.includes(model.id)).map(model => <option key={model.id} value={model.id}>{model.label}</option>) : localEngine ? listedModels(localEngine, target.model).map((model) => <option key={model.id} value={model.id}>{model.label}</option>) : null}
               </Select>
               <Select aria-label={name("externalRelay.target.effort")} title={t("externalRelay.target.effort")} value={target.effort ?? ""} disabled={actions.busy || !target.engine} className={`min-w-0 max-sm:flex-1 sm:w-28 ${PHONE_SELECT}`}
                 onChange={(event) => actions.patchTarget(target, { effort: event.target.value || null })}>
@@ -541,20 +568,21 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
 
 /**
  * Gives a new pairing's unset targets an engine with its default model and,
- * when `here`, routes each to this install. A clone created from the card is
+ * when `here`, routes each to this install unless it is answered elsewhere.
+ * A clone created from the card is
  * set up by `useCloneSetup` instead, which retries what failed.
  */
 async function adoptTargets(relayId: string, targets: Target[], engine: RelayEngine | null, here: boolean, cloudHere: boolean): Promise<void> {
   const base = `/api/external-relay/relays/${encodeURIComponent(relayId)}`;
   for (const target of targets) {
     if (target.engine === "codex-cloud") {
-      if (cloudHere && target.answered_by !== "install")
+      if (cloudHere && !target.answered_elsewhere && target.answered_by !== "install")
         await call(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install" });
       continue;
     }
     if (target.engine !== null || !engine) continue;
     const set = await call(base, "PATCH", { target: { id: target.id, engine, model: defaultModelFor(engine) } });
-    if (set.ok && here && target.answered_by !== "install")
+    if (set.ok && here && !target.answered_elsewhere && target.answered_by !== "install")
       await call(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install" });
   }
 }
@@ -601,6 +629,8 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
     undraw(targetId, patch);
   };
   const [warned, setWarned] = useState(false);
+  const [moving, setMoving] = useState<string | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const cloneable = offersCloneCreate(relay);
   const clone = useCloneCreate({ relayId: relay.id, stored: relay.cloneRequest ?? null, created: relay.cloneCreated ?? null, onChanged });
@@ -608,10 +638,11 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
   const fresh = freshId ? relay.targets.find((target) => target.id === freshId) ?? null : null;
   const defaultEngine = "codex-cloud" as const;
   const setup = useCloneSetup({ relayId: relay.id, phase: clone.phase, recorded: relay.cloneCreated?.request_id ?? null, target: fresh, engine: defaultEngine, onChanged });
-  const act = async (url: string, method: string, body?: object) => {
+  const act = async (url: string, method: string, body?: object, claim?: { code: string; take: () => void }) => {
     setBusy(true); setError(null);
     const result = await call<{ warned?: boolean }>(url, method, body);
-    if (!result.ok) setError(result.error);
+    if (!result.ok && claim && result.error === claim.code) claim.take();
+    else if (!result.ok) setError(result.error);
     else if (result.value.warned) setWarned(true);
     await onChanged();
     setBusy(false);
@@ -620,7 +651,19 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
   const actions: Actions = {
     busy,
     patchTarget: (target, patch) => void drawnWrite(target.id, patch, { target: { id: target.id, ...patch } }),
-    route: (target, answeredBy) => void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: answeredBy }),
+    moving,
+    refused,
+    cancelMove: () => { setMoving(null); setRefused(null); },
+    confirmMove: (target) => {
+      setMoving(null); setRefused(null);
+      void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install", confirmTakeover: true }, { code: "answered_elsewhere", take: () => setRefused(target.id) });
+    },
+    route: (target, answeredBy) => {
+      setRefused(null);
+      if (answeredBy === "install" && target.answered_elsewhere === true) { setMoving(target.id); return; }
+      setMoving(null);
+      void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: answeredBy });
+    },
   };
   const errorText = (code: string) => relayErrorText(t, code);
   const state = relay.paused ? "paused" : status?.state.state ?? "paused";
@@ -663,7 +706,6 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
       </div>
       {relay.targets.length || (cloneable && clone.phase.kind === "waiting") ? (
         <div className="flex min-w-0 flex-col">
-          {relay.targets.length ? <div className="flex items-baseline justify-end pb-0.5"><span className={HEAD}>{t("externalRelay.target.answeredHere")}</span></div> : null}
           {relay.targets.map((target) => (
             <TargetRow key={target.id} relay={relay} target={target} running={status?.running[target.id] ?? 0} signedIn={signedIn} actions={actions}
               open={open === target.id} onOpen={() => setOpen((value) => value === target.id ? null : target.id)} fresh={target.id === freshId} />

@@ -43,6 +43,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, recorderGateRunRoot } from "./gateCheckRecord";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
@@ -312,16 +313,16 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0", "0.170.1"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
   // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
-  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.168.0": { pin: "0.167.0", schema: "0.167.0" } };
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.170.1": { pin: "0.170.0", schema: "0.170.0" } };
   const pin = unpinned[version]?.pin ?? version;
   const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  if (version === "0.168.0") server.threadResponseExtra = { futureHint: "available" };
+  if (version === "0.170.1") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
-    if (version !== "0.168.0") return raw;
+    if (version !== "0.170.1") return raw;
     const bundle = JSON.parse(raw);
     bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
     return JSON.stringify(bundle);
@@ -349,7 +350,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0"])("compatible C
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-    if (version === "0.168.0") {
+    if (version === "0.170.1") {
       expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
     }
   } finally {
@@ -364,7 +365,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.167.0, 0.166.0, 0.165.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.170.0, 0.169.0, 0.168.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -1080,6 +1081,32 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
     return server as unknown as ChildProcessWithoutNullStreams;
   };
 }
+
+test("Codex host persists a media-free copy while its live event retains the response", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-private-media-ledger-"));
+  const threadId = "thread-private-media";
+  const store = new FileRuntimeEventStore(path.join(directory, "events"));
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: directory, eventStore: store, spawnProcess: fakeSpawn(server) });
+  try {
+    const emit = (host as unknown as { emit(event: object): void }).emit.bind(host);
+    const ref = `media_${"a".repeat(32)}`;
+    const pixels = "cHJpdmF0ZS1waXhlbHM=";
+    emit({ kind: "item", turnId: "turn-private", phase: "completed", item: {
+      type: "mcpToolCall", tool: "relay_service_tools", result: { content: [{ type: "image", data: pixels }], ref },
+    }, voiceResponse: { responseId: "voice-private", text: `spoken ${ref}` } });
+    emit({ kind: "delta", turnId: "turn-private", text: `media_${"b".repeat(9)}` });
+    emit({ kind: "delta", turnId: "turn-private", text: "b".repeat(23) });
+    const stored = JSON.stringify(store.load(threadId));
+    expect(stored).not.toContain(ref);
+    expect(stored).not.toContain(pixels);
+    expect(stored).not.toContain(`media_${"b".repeat(32)}`);
+    expect(JSON.stringify((host as unknown as { events: RuntimeEvent[] }).events)).toContain(pixels);
+  } finally {
+    await host.release();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("Codex refuses fresh and adopted launches with missing or empty Viewer tools before queue recovery", async () => {
   for (const resume of [false, true]) for (const status of [[], [{ name: "viewer", tools: {} }]]) {
@@ -2338,6 +2365,26 @@ describe("CodexAppServerHost", () => {
     } finally { await host.release(); }
   });
 
+  test("the recorder validates the host's complete initial TMPDIR alias binding", async () => {
+    const root = path.join(metadataState, "gate-launch"), foreign = path.join(metadataState, "foreign-launch");
+    const alias = path.join(metadataState, "launch-tmp");
+    fs.mkdirSync(root); fs.mkdirSync(foreign); fs.symlinkSync(root, alias, "dir");
+    const captured: { options?: SpawnOptionsWithoutStdio } = {};
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", env: { NODE_ENV: "test", TMPDIR: alias },
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(new FakeAppServer(), captured),
+    });
+    try {
+      const env = captured.options!.env!;
+      const log = path.join(root, "check.log");
+      expect(env[GATE_CHECK_LAUNCH_ROOT_ENV]).toBe(alias);
+      expect(env[GATE_CHECK_ROOT_ENV]).toBe(fs.realpathSync(root));
+      expect(recorderGateRunRoot(log, root, env)).toBe(fs.realpathSync(root));
+      fs.unlinkSync(alias); fs.symlinkSync(foreign, alias, "dir");
+      expect(() => recorderGateRunRoot(log, root, env)).toThrow("gate launch root identity changed");
+    } finally { await host.release(); }
+  });
+
   test("fans out replay, fences steering, answers attention, and persists host columns", async () => {
     const server = new FakeAppServer();
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
@@ -2377,6 +2424,8 @@ describe("CodexAppServerHost", () => {
       XDG_CONFIG_HOME: sandboxConfig,
       LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"),
       GH_CONFIG_DIR: path.join(os.homedir(), ".config", "gh"),
+      [GATE_CHECK_ROOT_ENV]: fs.realpathSync(os.tmpdir()),
+      [GATE_CHECK_LAUNCH_ROOT_ENV]: os.tmpdir(),
       [GATE_CHECK_ROOT_IDENTITY_ENV]: `${temporaryRootStat.dev}:${temporaryRootStat.ino}`,
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
@@ -8678,9 +8727,11 @@ test("central native completion releases an unanswered old tool and admits the n
   } finally { await host.release(); }
 });
 
-test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+test.each(["memory", "file"])("a settled host releases idle events, replays to subscribers and refills on its next turn (%s)", async kind => {
+  const eventStore = kind === "file"
+    ? new FileRuntimeEventStore(fs.mkdtempSync(path.join(os.tmpdir(), "host-refill-"))) : new MemoryEventStore();
   const server = new FakeAppServer("idle-window-thread");
-  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore, spawnProcess: fakeSpawn(server) });
   const idle = idleWindowFixture(host);
   try {
     const count = host.heapAttribution().events;
@@ -8690,8 +8741,8 @@ test("a settled host releases idle events, replays to subscribers and refills on
     expect(host.heapAttribution().events).toBe(0);
     const stream = host.attach(0)[Symbol.asyncIterator]();
     try {
-      expect(host.heapAttribution().events).toBeGreaterThan(0);
       for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
     } finally { await stream.return?.(); }
     expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
     await host.send({ id: "next-idle-turn", text: "continue" });

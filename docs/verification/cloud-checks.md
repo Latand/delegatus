@@ -230,8 +230,9 @@ PR #3302 remained open when main and its merge status were rechecked, so its
   and untracked source edits invalidate a receipt. The remote command disables
   hook skipping and recursive Cloud or SSH dispatch.
 - A complete Cloud result decides immediately. Confirmed outages and Cloud
-  limits permit one local fallback. A red check, account refusal or invalid
-  evidence never enables fallback. Account refusals during reconnect also block it.
+  capacity limits permit one local fallback. Deadline timeouts, red checks,
+  account refusals and invalid evidence never enable fallback. Account refusals
+  during reconnect also block it.
 - Project, lane and stage choices persist in local Git configuration. Stage
   overrides inherit through lane and project defaults. A separate process reads
   the persisted choice. Refused writes and invalid stored values fail closed.

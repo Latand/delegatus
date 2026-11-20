@@ -1,6 +1,8 @@
 import { publicationLanguageHints, publicationSummary, publicationTitle } from "../src/lib/forge/publicationLanguage";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, unlinkSync, lstatSync, rmdirSync, symlinkSync } from "node:fs";
+import { closeSync, fsyncSync, existsSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, unlinkSync, lstatSync, rmdirSync, symlinkSync } from "node:fs";
+import { openGateRecording, publishGateExit } from "./gate-wait";
+import { GATE_CHECK_ROOT_ENV } from "../src/lib/runtime/gateCheckRecord";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -17,11 +19,12 @@ import { isDeclaredRepository } from "../bin/forge-app-token.mjs";
 // and native main's own fault in a file makes the candidate's pre-existing.
 const testIdentity = (site: TestSite) => site.kind === "error" ? JSON.stringify([site.file, "<file fault>"])
   : JSON.stringify([site.file, site.suite, site.name, site.occurrence ?? 0]);
+const namesakeIdentity = (site: TestSite) => JSON.stringify([site.file, site.suite, site.name]);
 export const INCOMPLETE_FILE = "<incomplete file: no usable report>";
 export const fileFault = (file: string, name: string): TestSite => ({ file, suite: "", name, kind: "error" });
 /** A complete focused report without the requested case proves absence, even
  * when the full file aborts. Skipped and unreported cases prove nothing. */
-type BatchTestRun = TestRun & { absent?: TestSite[] };
+type BatchTestRun = TestRun & { absent?: TestSite[]; registered?: TestSite[] };
 
 /** Native main's failures and file faults are pre-existing. A file main could
  * not complete is compared on completed cases and cases proven absent from
@@ -48,6 +51,7 @@ export type TestAttribution = {
 };
 export type BatchTestDecision = {
   preExisting: TestSite[]; intermittent: TestSite[]; attributed: TestAttribution[]; uncompared?: TestSite[];
+  unattributed?: TestAttribution[];
   /** Retained when reading receipts written by the former stale-copy policy. */
   stale?: TestAttribution[];
 };
@@ -61,12 +65,27 @@ function observed(run: TestRun, test: TestSite): "pass" | "fail" {
 const addUnique = (sites: TestSite[], additions: TestSite[]) => {
   for (const site of additions) if (!sites.some(other => testIdentity(other) === testIdentity(site))) sites.push(site);
 };
+function registeredTests(xml: string, file: string): TestSite[] {
+  const occurrences = new Map<string, number>();
+  return [...xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>)/g)].map(match => {
+    const attrs = Object.fromEntries([...match[1]!.matchAll(/([\w-]+)="([^"]*)"/g)].map(attr => [attr[1]!, decodeXML(attr[2]!)]));
+    const identity = JSON.stringify([attrs.classname ?? "", attrs.name]);
+    const occurrence = occurrences.get(identity) ?? 0;
+    occurrences.set(identity, occurrence + 1);
+    return { file, suite: attrs.classname ?? "", name: attrs.name!, kind: "test", occurrence };
+  });
+}
 
 type ConfirmedFailure = { test: TestSite; confirmation: ("pass" | "fail")[] };
+type AttributionOptions = {
+  memberTests?: (sites: TestSite[]) => Promise<{ preExisting: TestSite[]; added: { test: TestSite; prs: number[] }[] }>;
+  record?: (decision: BatchTestDecision) => void;
+};
 /** Both batch attribution and resolution publication use this comparison and
  * bounded confirmation against a fresh, native-main per-file sample. */
 async function confirmBatchTests(base: BatchTestRun, candidate: TestRun,
-  rerun: (files: string[]) => Promise<TestRun>, mainCases?: (sites: TestSite[]) => Promise<BatchTestRun>
+  rerun: (files: string[]) => Promise<TestRun>, mainCases?: (sites: TestSite[]) => Promise<BatchTestRun>,
+  record?: AttributionOptions["record"]
 ): Promise<{ decision: BatchTestDecision; confirmed: ConfirmedFailure[] }> {
   const probed = new Set<string>();
   const compare = async (run: TestRun) => {
@@ -82,6 +101,7 @@ async function confirmBatchTests(base: BatchTestRun, candidate: TestRun,
   const decision: BatchTestDecision = { preExisting: [], intermittent: [], attributed: [], uncompared: [] };
   addUnique(decision.preExisting, comparison.preExisting);
   addUnique(decision.uncompared!, comparison.uncompared);
+  record?.(decision);
   const pending = new Map(comparison.introduced.map(test => [testIdentity(test), { test, confirmation: [] as ("pass" | "fail")[] }]));
   const files = [...new Set(comparison.introduced.map(test => test.file))];
   if (!files.length) return { decision, confirmed: [] };
@@ -94,6 +114,7 @@ async function confirmBatchTests(base: BatchTestRun, candidate: TestRun,
     const discovered = await compare(run);
     addUnique(decision.preExisting, discovered.preExisting);
     addUnique(decision.uncompared!, discovered.uncompared);
+    record?.(decision);
     for (const entry of pending.values()) entry.confirmation.push(observed(run, entry.test));
     for (const test of discovered.introduced) {
       if (!pending.has(testIdentity(test))) pending.set(testIdentity(test), { test, confirmation: [] });
@@ -108,6 +129,7 @@ async function confirmBatchTests(base: BatchTestRun, candidate: TestRun,
     if (hasPassed(test)) { decision.intermittent.push(test); return false; }
     return true;
   });
+  record?.(decision);
   return { decision, confirmed };
 }
 
@@ -117,10 +139,14 @@ async function confirmBatchTests(base: BatchTestRun, candidate: TestRun,
  * not complete, so their completed cases still name a culprit. */
 export async function attributeBatchTests(base: BatchTestRun, candidate: TestRun, prs: number[],
   rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[], focus: TestSite[]) => Promise<TestRun>,
-  mainCases?: (sites: TestSite[]) => Promise<BatchTestRun>): Promise<BatchTestDecision> {
-  const { decision, confirmed: failures } = await confirmBatchTests(base, candidate, rerun, mainCases);
+  mainCases?: (sites: TestSite[]) => Promise<BatchTestRun>, options: AttributionOptions = {}): Promise<BatchTestDecision> {
+  const { decision, confirmed: failures } = await confirmBatchTests(base, candidate, rerun, mainCases, options.record);
   const confirmed = failures.map(entry => entry.test);
   if (!confirmed.length) return decision;
+  // A removal or native inventory can itself refuse. Persist the confirmed
+  // cases before awaiting either, so that refusal still has a full inventory.
+  decision.unattributed = failures.map(({ test, confirmation }) => ({ test, confirmation, prs: [], reason: "attribution pending", removals: [] }));
+  options.record?.(decision);
   const affected = [...new Set(confirmed.map(test => test.file))];
   const removals: { removed: number[]; run: TestRun }[] = [];
   for (const pr of prs) removals.push({ removed: [pr], run: await without([pr], affected, confirmed) });
@@ -133,11 +159,18 @@ export async function attributeBatchTests(base: BatchTestRun, candidate: TestRun
   const uncleared = confirmed.filter(test => !cleared(test));
   const all = uncleared.length ? await without([...prs], [...new Set(uncleared.map(test => test.file))], uncleared) : undefined;
   const held = uncleared.filter(test => observed(all!, test) !== "pass");
-  if (held.length) {
-    throw new Error(`Cannot establish attribution for ${held.map(site => `${site.file} > ${site.suite} > ${site.name}`).join("; ")}; detectors retained; batch not gated (${UNATTRIBUTABLE_RULE})`);
-  }
+  const origins = held.length && options.memberTests ? await options.memberTests(held) : { preExisting: [], added: [] };
+  addUnique(decision.preExisting, origins.preExisting);
   for (const { test, confirmation } of failures) {
     const samples = evidence.get(testIdentity(test))!;
+    if (held.includes(test)) {
+      samples.push({ removed: [...prs], outcome: observed(all!, test) });
+      const added = origins.added.find(entry => testIdentity(entry.test) === testIdentity(test));
+      if (added?.prs.length && !origins.preExisting.some(site => testIdentity(site) === testIdentity(test))) {
+        decision.attributed.push({ test, prs: added.prs, reason: "member-specific: adds the failing test", confirmation, removals: samples });
+      }
+      continue;
+    }
     let responsible = samples.filter(entry => entry.outcome === "pass").map(entry => entry.removed[0]!);
     const reason = responsible.length === 1 ? "test regression" : "integration: needs both";
     if (!responsible.length) {
@@ -151,6 +184,15 @@ export async function attributeBatchTests(base: BatchTestRun, candidate: TestRun
       }
     }
     decision.attributed.push({ test, prs: responsible, reason, confirmation, removals: samples });
+  }
+  const unresolved = held.filter(test => ![...decision.preExisting, ...decision.attributed.map(entry => entry.test)]
+    .some(site => testIdentity(site) === testIdentity(test)));
+  if (unresolved.length) decision.unattributed = failures.filter(entry => unresolved.includes(entry.test))
+    .map(({ test, confirmation }) => ({ test, confirmation, prs: [], reason: UNATTRIBUTABLE_RULE, removals: evidence.get(testIdentity(test))! }));
+  else delete decision.unattributed;
+  options.record?.(decision);
+  if (unresolved.length) {
+    throw new Error(`Cannot establish attribution for ${unresolved.map(site => `${site.file} > ${site.suite} > ${site.name}`).join("; ")}; detectors retained; batch not gated (${UNATTRIBUTABLE_RULE})`);
   }
   return decision;
 }
@@ -330,6 +372,7 @@ export type RunState = {
   landPolls?: number;
   revalidationExhausted?: true;
   validationHistory?: Pick<Validation, "candidate" | "tip" | "members" | "carried">[];
+  testInventories?: { candidate: Candidate; baseline: BatchTestRun; decisions: BatchTestDecision[]; refusal?: string }[];
 };
 export type CommandResult = { code: number; output: string; report?: string };
 export type CommandRunner = (cwd: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<CommandResult>;
@@ -763,12 +806,16 @@ export class MergeBatch {
    * a namesake included (`only` skips the full run). Neither marks the file
    * completed. */
   private async testSample(cwd: string, files: string[], corpus: false | Record<string, string>,
-    focus: { sites: TestSite[]; only?: boolean } = { sites: [] }): Promise<BatchTestRun> {
+    focus: { sites: TestSite[]; only?: boolean; names?: string[] } = { sites: [] }): Promise<BatchTestRun> {
     const started = performance.now();
     const sample: BatchTestRun = { failures: [], passed: [], completed: [], elapsedMs: 0 };
     for (const file of files) {
       if (!focus.only) {
-        const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true }, corpus);
+        // Cross-file discovery matches the runtime case name in every suite.
+        // Unrelated bodies stay skipped; JUnit still inventories registrations.
+        const filter = focus.names ? ["--test-name-pattern=(?:^| )(?:"
+          + focus.names.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")$", "--pass-with-no-tests"] : undefined;
+        const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true, filter }, corpus);
         let parsed: ReturnType<typeof parseReport> | undefined;
         try { parsed = parseReport(result.report ?? "", result.output, file, cwd); }
         catch {
@@ -780,6 +827,7 @@ export class MergeBatch {
           } catch { sample.failures.push(fileFault(file, INCOMPLETE_FILE)); }
         }
         if (parsed) {
+          addUnique(sample.registered ??= [], registeredTests(result.report!, file));
           if ((result.code === 0) !== (parsed.failures.length === 0)) parsed.failures.push(fileFault(file, `<runner exit ${result.code} disagrees with report>`));
           sample.failures.push(...parsed.failures); sample.passed.push(...parsed.passed); sample.completed.push(file);
           continue;
@@ -815,14 +863,7 @@ export class MergeBatch {
         const noMatch = result.code === 1 && !parsed.failures.length && !parsed.passed.length
           && /^error: regex "[^\n]*" matched 0 tests\. Searched 1 file \(skipping \d+ tests?\)/m.test(result.output);
         if ((!noMatch && (result.code === 0) !== (parsed.failures.length === 0)) || parsed.failures.some(site => site.kind !== "test")) return undefined;
-        const occurrences = new Map<string, number>();
-        const registered = [...result.report!.matchAll(/<testcase\b([^>]*?)(?:\/>|>)/g)].map(match => {
-          const attrs = Object.fromEntries([...match[1]!.matchAll(/([\w-]+)="([^"]*)"/g)].map(attr => [attr[1]!, decodeXML(attr[2]!)]));
-          const identity = JSON.stringify([attrs.classname ?? "", attrs.name]);
-          const occurrence = occurrences.get(identity) ?? 0;
-          occurrences.set(identity, occurrence + 1);
-          return { file, suite: attrs.classname ?? "", name: attrs.name!, kind: "test" as const, occurrence };
-        });
+        const registered = registeredTests(result.report!, file);
         return { ...parsed, registered };
       } finally { if (guard) rmSync(guard, { force: true }); }
     };
@@ -837,6 +878,7 @@ export class MergeBatch {
         // JUnit numbers a skipped namesake while the preload counts only
         // executed cases. A probe that lets no body run tells them apart.
         const probe = await run(-1);
+        if (probe) addUnique(sample.registered ??= [], probe.registered);
         if (probe && !probe.registered.some(other => testIdentity(other) === testIdentity(site!))) {
           (sample.absent ??= []).push(site!);
           return true;
@@ -852,6 +894,7 @@ export class MergeBatch {
       }
       const parsed = await run();
       if (!parsed) return false;
+      addUnique(sample.registered ??= [], parsed.registered);
       const named = new Set(sites.map(testIdentity));
       sample.failures.push(...parsed.failures.filter(site => named.has(testIdentity(site))));
       sample.passed.push(...parsed.passed.filter(site => named.has(testIdentity(site))));
@@ -862,7 +905,7 @@ export class MergeBatch {
   }
 
   private async testSubject(state: RunState, files: string[], removed?: number[], stable: false | Record<string, string> = false,
-    focus: { sites: TestSite[]; only?: boolean } = { sites: [] }): Promise<BatchTestRun> {
+    focus: { sites: TestSite[]; only?: boolean; names?: string[] } = { sites: [] }): Promise<BatchTestRun> {
     const work = join(dirname(this.stateFile), `test-subject-${randomUUID()}`);
     git(state.work, ["worktree", "add", "--detach", work, state.base]);
     recordWorktreeProvenance(work, { creator: "merge-batch", id: state.branch });
@@ -875,7 +918,9 @@ export class MergeBatch {
       const install = await this.gateCommand(work, { id: "dependencies", args: ["bun", "install", "--frozen-lockfile"] }, false);
       if (install.code) throw new Error(`${removed ? "PR removal" : "Baseline"} dependency gate cannot run; batch not gated`);
       const selected = stable ? files : files.filter(file => existsSync(join(work, file)) && statSync(join(work, file)).isFile());
-      return await this.testSample(work, selected, stable, focus);
+      const sample = await this.testSample(work, selected, stable, focus);
+      addUnique(sample.absent ??= [], focus.sites.filter(site => !selected.includes(site.file)));
+      return sample;
     } finally { git(state.work, ["worktree", "remove", "--force", work]); }
   }
 
@@ -986,33 +1031,138 @@ export class MergeBatch {
     } finally { rmSync(root, { recursive: true, force: true }); }
   }
 
+  private async movedTests(state: RunState, baseline: BatchTestRun, sites: TestSite[]) {
+    const tests = sites.filter(site => site.kind === "test"
+      && !baseline.registered?.some(other => testIdentity(other) === testIdentity(site)));
+    if (!tests.length) return;
+    // Reviewed deletions and rename sources retain templates whose expanded
+    // runtime names never appear literally in source. Sample those native-main
+    // files as well as literal-name matches outside the touched-test scope.
+    const changed = state.rows.flatMap(row => git(state.work,
+      ["diff", "--name-only", "--no-renames", "-z", row.reviewBase, row.head, "--"]).split("\0").filter(Boolean));
+    const originals = Object.keys(this.treeTests(state, state.base, changed));
+    let matches = "";
+    try {
+      matches = git(state.work, ["grep", "-l", "-z", "-F", ...tests.flatMap(site => ["-e", site.name]), state.base, "--",
+        "*.test.ts", "*.test.tsx", "*.test.js", "*.test.jsx", "*.test.mjs", "*.test.cjs", "*.test.mts", "*.test.cts"]);
+    } catch (error) { if ((error as { status?: number }).status !== 1) throw error; }
+    const files = [...new Set([...originals, ...matches.split("\0").filter(Boolean).map(path => path.slice(state.base.length + 1))])]
+      .filter(file => (state.browser || !isBrowserTest(file)) && !baseline.completed.includes(file));
+    if (files.length) {
+      const native = await this.testSubject(state, files);
+      addUnique(baseline.failures, native.failures); addUnique(baseline.passed, native.passed);
+      addUnique(baseline.registered ??= [], native.registered ?? []);
+      baseline.completed.push(...native.completed);
+    }
+    // A literal miss says nothing about expanded test.each titles or computed
+    // names. Search the remaining native-main files through Bun before calling
+    // a case new, using a name filter so unrelated test bodies do not run.
+    const missing = tests.filter(test => !baseline.failures.some(other => other.kind === "test"
+      && other.file !== test.file && other.name === test.name));
+    if (!missing.length) return;
+    const paths = git(state.work, ["ls-tree", "-r", "--name-only", "-z", state.base]).split("\0").filter(Boolean);
+    const tracked = new Set(paths);
+    const remaining = touchedTests(paths, path => tracked.has(path))
+      .filter(file => (state.browser || !isBrowserTest(file)) && !baseline.completed.includes(file));
+    if (remaining.length) {
+      const names = [...new Set(missing.map(test => test.name))];
+      const filtered = await this.testSubject(state, remaining, undefined, false, { sites: [], names });
+      // A filter can skip setup tests and create a failure on healthy main.
+      // Use it only to locate files; exemptions need native full-file evidence.
+      const candidates = [...new Set(filtered.failures
+        .filter(test => test.kind === "test" && names.includes(test.name)).map(test => test.file))];
+      if (candidates.length) {
+        const native = await this.testSubject(state, candidates);
+        addUnique(baseline.failures, native.failures); addUnique(baseline.passed, native.passed);
+        addUnique(baseline.registered ??= [], native.registered ?? []);
+        baseline.completed.push(...native.completed);
+      }
+    }
+  }
+
+  /** Removal keeps the detector deliberately. When that cannot distinguish a
+   * member, native inventories prove which reviewed patch added the case. */
+  private async memberTests(state: RunState, baseline: BatchTestRun, sites: TestSite[]) {
+    const tests = sites.filter(site => site.kind === "test");
+    const result = { preExisting: [] as TestSite[], added: [] as { test: TestSite; prs: number[] }[] };
+    if (!tests.length) return result;
+    // Only failures held by the all-removed control reach here. A namesake in
+    // another main file must never suppress a regression that removal clears.
+    await this.movedTests(state, baseline, tests);
+    addUnique(result.preExisting, compareBatchTests(baseline, { failures: tests, passed: [], completed: [], elapsedMs: 0 }).preExisting);
+    addUnique(result.preExisting, tests.filter(site => !baseline.passed.some(other => testIdentity(other) === testIdentity(site))
+      && baseline.failures.some(other => other.kind === "test" && other.file !== site.file && other.name === site.name)));
+    const pending = tests.filter(site => !result.preExisting.includes(site));
+    if (!pending.length) return result;
+    const native = await this.testSubject(state, [...new Set(pending.map(site => site.file))], undefined, false, { sites: pending, only: true });
+    addUnique(baseline.failures, native.failures); addUnique(baseline.passed, native.passed);
+    addUnique(baseline.absent ??= [], native.absent ?? []);
+    addUnique(baseline.registered ??= [], native.registered ?? []);
+    addUnique(result.preExisting, compareBatchTests(baseline, { failures: pending, passed: [], completed: [], elapsedMs: 0 }).preExisting);
+    const absent = pending.filter(site => !result.preExisting.includes(site)
+      && baseline.absent!.some(other => testIdentity(other) === testIdentity(site)));
+    for (const row of state.rows.filter(row => row.status === "clean")) {
+      const changed = new Set(git(state.work, ["diff", "--name-only", "-z", row.reviewBase, row.head, "--"]).split("\0"));
+      const owned = absent.filter(site => changed.has(site.file));
+      if (!owned.length) continue;
+      const files = [...new Set(owned.map(site => site.file))];
+      const before = await this.testSubject({ ...state, base: row.reviewBase }, files, undefined, false, { sites: owned, only: true });
+      const after = await this.testSubject({ ...state, base: row.head }, files, undefined, false, { sites: owned, only: true });
+      for (const test of owned) {
+        // Occurrences are local to each tree. Two independent additions can
+        // both be occurrence 0 at their reviewed heads and become 0/1 when
+        // merged. Inventory growth identifies every contributing member for
+        // that namesake group without equating those tree-local ordinals.
+        const count = (run: BatchTestRun) => run.registered?.filter(site => namesakeIdentity(site) === namesakeIdentity(test)).length ?? 0;
+        if (!before.absent?.some(site => testIdentity(site) === testIdentity(test))
+          || count(after) <= count(before)) continue;
+        let entry = result.added.find(entry => testIdentity(entry.test) === testIdentity(test));
+        if (!entry) result.added.push(entry = { test, prs: [] });
+        entry.prs.push(row.number);
+      }
+    }
+    return result;
+  }
+
   private async validateTests(state: RunState, validation: Validation): Promise<boolean> {
     const detectors = this.detectors(state, validation);
     const files = [...new Set(detectors.flatMap(detector => Object.keys(detector.corpus)))];
     // Native main only: candidate-only files and assertions have no baseline
     // observations. This sample has no lifetime beyond this candidate tuple.
     const baseline = await this.testSubject(state, files);
+    const inventory = { candidate: validation.candidate, baseline, decisions: validation.decisions, refusal: undefined as string | undefined };
+    (state.testInventories ??= []).push(inventory);
+    this.save(state);
     const prs = validation.candidate.prs.map(pr => pr.number);
-    for (const detector of detectors) {
-      const candidate = await this.testSample(state.work, Object.keys(detector.corpus), detector.corpus);
-      const decision = await attributeBatchTests(baseline, candidate, prs,
-        files => this.testSample(state.work, files, detector.corpus),
-        (removed, files, sites) => this.testSubject(state, files, removed, detector.corpus, { sites }),
-        sites => this.testSubject(state, [...new Set(sites.map(site => site.file))], undefined, false, { sites, only: true }));
-      validation.decisions.push(decision);
-      for (const entry of decision.attributed) state.attributionLog.push({ ...entry, candidate: validation.candidate, source: detector.source });
-      for (const row of state.rows) {
-        if (row.status !== "clean") continue;
-        const failures = decision.attributed.filter(entry => entry.prs.includes(row.number));
-        if (failures.length) {
-          row.status = "culprit";
-          row.detail = failures.map(entry => `${entry.reason}: ${entry.test.file} > ${entry.test.suite} > ${entry.test.name}`).join("; ");
+    try {
+      for (const detector of detectors) {
+        const candidate = await this.testSample(state.work, Object.keys(detector.corpus), detector.corpus);
+        const index = validation.decisions.length;
+        const decision = await attributeBatchTests(baseline, candidate, prs,
+          files => this.testSample(state.work, files, detector.corpus),
+          (removed, files, sites) => this.testSubject(state, files, removed, detector.corpus, { sites }),
+          sites => this.testSubject(state, [...new Set(sites.map(site => site.file))], undefined, false, { sites, only: true }), {
+            memberTests: sites => this.memberTests(state, baseline, sites),
+            record: decision => { validation.decisions[index] = decision; this.save(state); },
+          });
+        for (const entry of decision.attributed) state.attributionLog.push({ ...entry, candidate: validation.candidate, source: detector.source });
+        for (const row of state.rows) {
+          if (row.status !== "clean") continue;
+          const failures = decision.attributed.filter(entry => entry.prs.includes(row.number));
+          if (failures.length) {
+            row.status = "culprit";
+            row.detail = failures.map(entry => `${entry.reason}: ${entry.test.file} > ${entry.test.suite} > ${entry.test.name}`).join("; ");
+          }
         }
+        this.save(state);
+        if (decision.attributed.length) return false;
       }
+      return true;
+    } catch (error) {
+      inventory.refusal = error instanceof Error ? error.message : String(error);
       this.save(state);
-      if (decision.attributed.length) return false;
+      throw error;
     }
-    return true;
   }
 
   async gate(options?: { browser?: boolean }): Promise<RunState> {
@@ -1057,7 +1207,8 @@ export class MergeBatch {
     const rows = state.rows.filter((row) => row.status === "clean");
     const issues = [...new Set(rows.flatMap((row) => row.view.closingIssuesReferences.map((issue) => issue.number)))];
     return ["Reviewed patches, one commit per pull request.", ...rows.map((row) => `- #${row.number} at ${row.head}`),
-      "", ...issues.map((number) => `Closes #${number}`)].join("\n");
+      "", ...issues.map((number) => `Closes #${number}`),
+      ...testDecisionReport(state.testInventories?.flatMap(inventory => inventory.decisions) ?? state.gated?.decisions ?? [], state.attributionLog)].join("\n");
   }
 
   private async trustedPrivacy(state: RunState, args: string[], candidate = state.work, base = state.base): Promise<CommandResult> {
@@ -1410,6 +1561,7 @@ function testDecisionReport(decisions: BatchTestDecision[], log: AttributionReco
   const existing = new Map(decisions.flatMap(decision => decision.preExisting).map(site => [testIdentity(site), site]));
   const intermittent = new Map(decisions.flatMap(decision => decision.intermittent).map(site => [testIdentity(site), site]));
   const uncompared = new Map(decisions.flatMap(decision => decision.uncompared ?? []).map(site => [testIdentity(site), site]));
+  const unattributed = decisions.flatMap(decision => decision.unattributed ?? []);
   const attributed = log.filter(entry => !entry.stale), stale = log.filter(entry => entry.stale);
   const evidence = (entry: AttributionRecord) => `${entry.prs.map(number => `#${number}`).join(", ")}: ${entry.reason}: ${describe(entry.test)}; candidate failed; confirmations ${entry.confirmation.join(", ")}; `
     + entry.removals.map(sample => `without ${sample.removed.map(number => `#${number}`).join(", ") || "none"}: ${sample.outcome}`).join("; ") + `; established on ${JSON.stringify(entry.candidate)} (${entry.source})`;
@@ -1417,7 +1569,8 @@ function testDecisionReport(decisions: BatchTestDecision[], log: AttributionReco
     "", "Pre-existing failures (permitted):", ...[...existing.values()].map(site => `- ${describe(site)}`),
     "", "Intermittent failures (permitted):", ...[...intermittent.values()].map(site => `- ${describe(site)}`),
     "", "Not compared (native main could not complete the file):", ...[...uncompared.values()].map(site => `- ${describe(site)}`),
-    "", "Attributed failures (rule: a removal clears them; only the PRs it narrows to are held):", ...attributed.map(entry => `- ${evidence(entry)}`),
+    "", "Attributed failures (clearing removals or member-added tests; only the named PRs are held):", ...attributed.map(entry => `- ${evidence(entry)}`),
+    ...unattributed.length ? ["", "Unattributed failures (batch refused):", ...unattributed.map(entry => `- ${describe(entry.test)}: ${entry.reason}`)] : [],
     "", "Historical stale reviewed detectors (recorded by the former stale-copy policy):",
     ...stale.map(entry => `- ${evidence(entry)}`),
   ];
@@ -1433,7 +1586,7 @@ export function report(state: RunState): string {
     ...[...state.validationHistory ?? [], ...state.gated ? [state.gated] : []].flatMap(validation => [
       `- Fully validated: ${JSON.stringify(validation.candidate)}; tip ${validation.tip}`,
       ...(validation.carried ?? []).map(entry => `  - Carried: main ${entry.main}; tip ${entry.tip}; at ${entry.at}`),
-    ]), ...testDecisionReport(state.gated?.decisions ?? [], state.attributionLog ?? []),
+    ]), ...testDecisionReport(state.testInventories?.flatMap(inventory => inventory.decisions) ?? state.gated?.decisions ?? [], state.attributionLog ?? []),
     ...state.rows.flatMap(row => row.resolutionTests ? [
       "", `Resolution #${row.number}: ${row.resolutionTests.tip}; native main ${row.resolutionTests.main}; per-file comparison:`,
       ...row.resolutionTests.files.map(file => `- ${file}`),
@@ -1464,7 +1617,19 @@ if (import.meta.main) {
     const stateFile = join(process.env.TMPDIR ?? tmpdir(), "merge-batch.json");
     const lock = `${stateFile}.lock`;
     let held = false;
+    let recording: Awaited<ReturnType<typeof openGateRecording>> | undefined;
+    let output = "";
     try {
+      // Register before claiming the batch lock so a competing invocation can
+      // return its own refusal without waiting on or releasing the active run.
+      // The driver already admits its heavy children individually.
+      const launchRoot = process.env[GATE_CHECK_ROOT_ENV];
+      if (launchRoot && (command === "gate" || command === "land")) {
+        const log = join(launchRoot, `merge-${command}-${randomUUID()}.log`);
+        recording = await openGateRecording(log, process.argv.slice(1));
+        writeFileSync(join(recording.dir, "running"), "running\n", { flag: "wx", mode: 0o600 });
+        process.stdout.write(`merge-batch: recording started\nrunId=${recording.runId}\n`);
+      }
       mkdirSync(lock); held = true;
       const batch = new MergeBatch(process.cwd(), stateFile);
       let state: RunState;
@@ -1473,11 +1638,20 @@ if (import.meta.main) {
       else if (command === "land") state = await batch.land();
       else if (command === "resolve" && /^[1-9]\d*$/.test(argument ?? "")) state = await batch.resolve(Number(argument));
       else throw new Error("Usage: merge-batch.ts build N@sha,... | gate [--browser] | land | resolve N");
-      process.stdout.write(report(state) + "\n");
+      output = report(state) + "\n";
+      process.stdout.write(output);
     } catch (error) {
       // Child-process failures may carry secret-bearing stdout/arguments.
-      process.stderr.write(error instanceof Error && !('stdout' in error) ? `${error.message}\n` : "Batch command failed; inspect the private worktree and run state.\n");
+      output = error instanceof Error && !('stdout' in error) ? `${error.message}\n` : "Batch command failed; inspect the private worktree and run state.\n";
+      process.stderr.write(output);
       process.exitCode = 1;
-    } finally { if (held) rmSync(lock, { recursive: true }); }
+    } finally {
+      if (held) rmSync(lock, { recursive: true });
+      if (recording) {
+        try { writeFileSync(recording.fd, output); fsyncSync(recording.fd); }
+        finally { closeSync(recording.fd); }
+        publishGateExit(recording.dir, Number(process.exitCode ?? 0));
+      }
+    }
   }
 }

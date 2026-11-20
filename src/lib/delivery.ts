@@ -9,6 +9,7 @@ import { listFiles } from "@/lib/scanner";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { transcriptLiveOwnership, type TranscriptLiveOwnership } from "@/lib/scanner/transcripts";
 import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "@/lib/runtime/structuredRecovery";
+import { StageAttemptSettledError } from "@/lib/runtime/stageGitEnvironment";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import type { ActuationLease } from "@/lib/deliveryActuation";
 import { ownedDeliveryProgressStore } from "@/lib/runtime/deliveryProgress";
@@ -110,6 +111,7 @@ export function migrationDeliveryOutcome(outcome: DeliveryOutcome): "delivered" 
 function failure(error: unknown, status = 500, actuation?: "started"): DeliveryFailure {
   if (error instanceof DeliveryAdmissionRefusedError) return { ok: false, outcome: "failed", error: error.message, code: error.code, status: 409, admission: "refused" };
   if (error instanceof StructuredResumeUnpublishedError) return { ok: false, outcome: "failed", error: error.message, code: "structured_revival_impossible", status: 503 };
+  if (error instanceof StageAttemptSettledError) return { ok: false, outcome: "failed", error: error.refusal, code: error.code, status: 409 };
   return {
     ok: false,
     outcome: "failed",

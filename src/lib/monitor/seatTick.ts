@@ -438,13 +438,18 @@ function stalledLanes(input: SeatTickCheckInput): { pipeline: SeatTickPipelineIn
   const found: { pipeline: SeatTickPipelineInput; reason: string }[] = [];
   for (const pipeline of input.pipelines) {
     if (!isOpenLane(pipeline) || pipeline.pausedBy) continue;
+    /* Once the stage attempt is durably failed, its host-death alarm is over.
+       The parked lane and its stored failure remain visible through the normal
+       decision surface, without retaining the old running-host stall. */
+    if (pipeline.stageAttemptState === "failed") continue;
     const parked = evidenceStallReason({ kind: "pipeline", id: pipeline.id, state: pipeline.state, updatedAt: pipeline.updatedAt }, options);
     if (parked) {
       found.push({ pipeline, reason: parked });
       continue;
     }
     const activity = pipeline.stageActivity;
-    if (activity && !suppressStall(activity) && (verifiedIdle(activity) || activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
+    if (activity && (activity.lifecycle === "gone" && activity.reason === "host_gone_turn_unverified" || !suppressStall(activity))
+      && (verifiedIdle(activity) || activity.lifecycle === "stalled" || activity.lifecycle === "gone")) {
       const stage = pipeline.stageId ? ` stage ${pipeline.stageId}` : "";
       found.push({
         pipeline,

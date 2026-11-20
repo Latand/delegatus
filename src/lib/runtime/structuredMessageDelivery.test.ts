@@ -1866,12 +1866,14 @@ test("the migration orphan sweep still terminalizes upgrade-era residue without 
     recoveryIntent: null,
   });
 
+  /* Residue of an upgrade was admitted before the serving process started; a
+     reservation admitted since gets the reason settledStageSend.test.ts names. */
   await reconcileMigrations({} as never, {
     async deliver() {
       deliveryCalls += 1;
       return "delivered";
     },
-  }, registry);
+  }, registry, { servingStartedAt: Date.parse(orphan.createdAt) + 60_000 });
 
   expect(deliveryCalls).toBe(0);
   expect(registry.snapshot().heldDeliveries[orphan.id]).toMatchObject({
@@ -5318,3 +5320,88 @@ test.each(["live", "unknown", "unreadable", "publishing", "first-prompt", "journ
       expect(registry.snapshot().heldDeliveries[f.held.id]!.state).toBe("assigned");
     } finally { identityRead?.mockRestore(); registry.close(); setSystemTime(); }
   });
+
+/* A busy Claude agent outlived the Viewer that owned its stdio
+   across a release. Its row still named that gone Viewer as claim owner and a
+   running engine as its process, so recovery handed it back as live, and the
+   send was accepted and then failed in a tenth of a second as `dead-host`.
+   The send now stops the orphan through the fenced ladder and resumes it. The
+   only processes here are children this test started. */
+test("a send to a host whose owner process is gone resumes it instead of failing as dead-host", async () => {
+  const { spawn } = await import("node:child_process");
+  const { ownFixtureTree, stopFixtureTree } = await import("@/lib/testing/fixtureProcess");
+  const { processIdentityStatus } = await import("@/lib/processIdentity");
+  const child = () => ownFixtureTree(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }));
+  const engine = child();
+  const ended = child();
+  const owner = captureProcessIdentity(ended.pid!);
+  await stopFixtureTree(ended);
+  const engineIdentity = captureProcessIdentity(engine.pid!);
+  const cwd = fs.mkdtempSync(path.join(sandbox, "orphan-send-"));
+  const sessionId = "22222222-2222-\x34222-8222-222222222222";
+  const orphanPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.writeFileSync(orphanPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("claude", orphanPath, "default");
+  registry.upsert({
+    key: { engine: "claude", sessionId }, artifactPath: orphanPath, cwd, accountId: "default",
+    launchProfile: emptyLaunchProfile({ cwd }), status: "idle", host: null, claimEpoch: 1,
+    claimOwner: `structured-host:${JSON.stringify(owner)}`, pendingAction: null,
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:orphaned", process: engineIdentity, eventCursor: 3,
+      protocolVersion: "fixture", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+  });
+  let resumed = false;
+  const commands: string[] = [];
+  const session = () => {
+    const state = snapshot(conversation.id, "claude");
+    state.sessions[0] = { ...state.sessions[0]!, sessionKey: { engine: "claude", sessionId }, artifactPath: orphanPath,
+      host: resumed ? "hosted" : "dead" };
+    return state;
+  };
+  const receipt = (operationId: string, idempotencyKey: string) => ({
+    operationId, replayed: false,
+    receipt: { operationId, idempotencyKey, conversationId: conversation.id, kind: "send" as const,
+      status: resumed ? "queued" as const : "rejected" as const, reason: resumed ? null : "dead-host",
+      queuePosition: resumed ? 1 : null, at: "2026-07-13T00:00:01.000Z", revision: 1 },
+  });
+  const results = new Map<string, ReturnType<typeof receipt>>();
+  const client = {
+    readSession: sessionReader(async () => session()),
+    command: async (command: { operationId: string; idempotencyKey: string }) => {
+      commands.push(command.operationId);
+      const result = receipt(command.operationId, command.idempotencyKey);
+      results.set(command.operationId, result);
+      return result;
+    },
+    operationStatus: async (id: string) => results.get(id) ?? null,
+  } as unknown as RuntimeHostClient;
+  try {
+    expect(await conversationDeliverabilityFromRecord(registry.snapshot(), { conversationId: conversation.id }))
+      .toMatchObject({ deliverable: false, condition: "orphaned" });
+    const result = await enqueueStructuredMessage({
+      path: orphanPath, conversationId: conversation.id, clientMessageId: "orphan-send-one",
+      text: "the merge gate finished", hasImages: false,
+    }, {
+      enabled: () => true,
+      client: () => client,
+      registry: () => registry,
+      kick: () => {},
+      recover: (request: Parameters<typeof recoverDeadStructuredConversation>[0]) => recoverDeadStructuredConversation(request, {
+        registry, client: {} as RuntimeHostClient, transportAvailable: () => true, park: () => null,
+        orphanStop: { graceMs: 200, deadlineMs: 3_000 },
+        resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+        spawn: async input => {
+          resumed = true;
+          return { ok: true, target: null, path: orphanPath, launchId: input.receipt.launchId, conversationId: conversation.id,
+            launched: true, retrySafe: false, initialMessage: "delivered", state: "settled" };
+        },
+      }),
+    } as never);
+    expect(result).toMatchObject({ ok: true, structured: true, spawned: true, outcome: "queued" });
+    expect(commands).toHaveLength(1);
+    expect(processIdentityStatus(engineIdentity)).toBe("dead");
+  } finally {
+    registry.close();
+    await stopFixtureTree(engine);
+  }
+});

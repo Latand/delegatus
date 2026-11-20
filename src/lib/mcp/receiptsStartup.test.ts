@@ -99,6 +99,62 @@ test("an MCP first call before Viewer startup refuses cleanly and creates no rec
   } finally { f.sandbox.release(); }
 }, 60_000);
 
+test("the candidate board probe reads an older registry without repairing its indexes", async () => {
+  const f = fixture();
+  let incumbent: Database | undefined;
+  try {
+    const sessions = path.join(f.env.LLV_CODEX_HOME!, "sessions");
+    fs.mkdirSync(sessions, { recursive: true });
+    const transcript = path.join(sessions, "rollout-fixture.jsonl");
+    fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { cwd: f.sandbox.home } }) + "\n");
+    const conversationId = "conversation_probe_fixture";
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    fs.writeFileSync(path.join(f.directory, "agent-registry.json"), JSON.stringify({
+      version: 2, entries: {}, receipts: {},
+      conversations: {
+        [conversationId]: {
+          id: conversationId, engine: "codex", createdAt, updatedAt: createdAt,
+          generations: [{ id: "probe-fixture", path: transcript, accountId: "default" }],
+        },
+      },
+    }));
+    await run(f, "viewer", viewerStartup);
+    const registry = path.join(f.directory, "agent-registry.sqlite");
+    incumbent = new Database(registry);
+    incumbent.exec("DROP INDEX registry_state_page");
+    const before = fs.readFileSync(registry);
+    const wal = `${registry}-wal`;
+    const walBefore = fs.readFileSync(wal);
+    expect(walBefore.length).toBeGreaterThan(0);
+    const transcriptIndex = path.join(f.directory, "transcript-search.sqlite");
+    const indexBefore = fs.existsSync(transcriptIndex) ? fs.readFileSync(transcriptIndex) : null;
+    await run(f, "mcp", `
+      const { createProductionViewerMcpService } = await import('./src/lib/mcp/server');
+      const service = await createProductionViewerMcpService(true, true);
+      const read = id => service.callTool('board_snapshot', { clientRequestId: id, limit: 1 });
+      let reply = await read('candidate-cold');
+      if (reply.code === 'scan_incomplete') {
+        const { completedFileScan } = await import('./src/lib/scanner/scanCache');
+        await completedFileScan();
+        reply = await read('candidate-ready');
+      }
+      if (!reply.ok || reply.conversations?.[0]?.conversationId !== ${JSON.stringify(conversationId)}) {
+        throw new Error(JSON.stringify(reply));
+      }
+    `);
+    expect(fs.readFileSync(registry)).toEqual(before);
+    expect(fs.readFileSync(wal)).toEqual(walBefore);
+    expect(schema(registry)).not.toContain("registry_state_page");
+    expect(fs.existsSync(path.join(f.directory, "files-scan-snapshot.json"))).toBe(false);
+    expect(fs.existsSync(transcriptIndex) ? fs.readFileSync(transcriptIndex) : null).toEqual(indexBefore);
+    await run(f, "viewer", viewerStartup);
+    expect(schema(registry)).toContain("registry_state_page");
+  } finally {
+    incumbent?.close();
+    f.sandbox.release();
+  }
+}, 60_000);
+
 test("opening prepared receipts as MCP performs no startup import or file permission repair", async () => {
   const f = fixture();
   try {

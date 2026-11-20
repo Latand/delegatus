@@ -705,6 +705,132 @@ test("an unflushed event tail blocks retirement", async () => {
   await refusedBy("events-flushed", { durableEventTail: () => determined(19) });
 });
 
+/* The flush settles as impossible only when the recorded owner, the one process
+   that persists the cursor, is proven dead by the same liveness check the agent
+   state uses. These cases read the real kernel for the owner: the injected
+   readers above only describe the host process. */
+const claimToken = (identity: ProcessIdentity) => `structured-host:${JSON.stringify(identity)}`;
+
+async function exitedOwnerIdentity(): Promise<ProcessIdentity> {
+  const child = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  if (child.pid === undefined) throw new Error("fixture owner did not start");
+  const identity = captureProcessIdentity(child.pid);
+  fixtureIdentities.push(identity);
+  const exited = new Promise<void>((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) resolve();
+    else child.once("exit", () => resolve());
+  });
+  await stopFixtureIdentity(identity);
+  await exited;
+  return identity;
+}
+
+function ownedBy(owner: ProcessIdentity | Record<string, unknown>): StructuredHostRetirementDependencies["snapshot"] {
+  return () => snapshot({
+    entries: { [`claude:${SESSION}`]: entry({ claimOwner: claimToken(owner as ProcessIdentity) }) },
+  });
+}
+
+test.skipIf(process.platform !== "linux")("a dead owner settles an unflushed tail as impossible and the host retires with the reason", async () => {
+  const owner = await exitedOwnerIdentity();
+  const probe = await sweep({ snapshot: ownedBy(owner), owned: () => false, durableEventTail: () => determined(15) });
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.terminated).toHaveLength(1);
+  const retired = probe.report.retired[0]!;
+  expect(retired.passed).toContain("events-flushed");
+  expect(retired.unflushedEvents).toEqual({
+    cursor: 12,
+    tail: 15,
+    ownerPid: owner.pid,
+    reason: `the owner process ${owner.pid} is dead, so events 13-15 can never be flushed`,
+  });
+  /* The journal keeps every action whole, so the reason survives there too. */
+  expect(structuredHostRetirementJournalRecord(probe.report).retired[0]!.unflushedEvents).toEqual(retired.unflushedEvents);
+});
+
+test.skipIf(process.platform !== "linux")("a reused owner pid is not a live owner", async () => {
+  const self = captureProcessIdentity(process.pid);
+  const probe = await sweep({
+    snapshot: ownedBy({ ...self, startIdentity: `${self.startIdentity}-earlier-holder` }),
+    owned: () => false,
+    durableEventTail: () => determined(13),
+  });
+  expect(probe.terminated).toHaveLength(1);
+  expect(probe.report.retired[0]!.unflushedEvents).toMatchObject({ cursor: 12, tail: 13, ownerPid: process.pid });
+});
+
+test("a live owner keeps the unflushed tail blocking retirement", async () => {
+  await refusedBy("events-flushed", {
+    snapshot: ownedBy(captureProcessIdentity(process.pid)),
+    owned: () => false,
+    durableEventTail: () => determined(15),
+  });
+});
+
+test.skipIf(process.platform !== "linux")("an owner whose death cannot be verified keeps the tail blocking", async () => {
+  const owner = await exitedOwnerIdentity();
+  /* A legacy claim names no boot domain, so its pid's absence proves nothing. */
+  await refusedBy("events-flushed", {
+    snapshot: ownedBy({ pid: owner.pid, startIdentity: owner.startIdentity }),
+    owned: () => false,
+    durableEventTail: () => determined(15),
+  });
+});
+
+test.skipIf(process.platform !== "linux")("a dead recorded owner whose host this process still holds keeps the tail blocking", async () => {
+  const owner = await exitedOwnerIdentity();
+  await refusedBy("events-flushed", { snapshot: ownedBy(owner), owned: () => true, durableEventTail: () => determined(15) });
+});
+
+test.skipIf(process.platform !== "linux")("a dead owner does not settle a ledger that could not be read", async () => {
+  const owner = await exitedOwnerIdentity();
+  await refusedBy("events-flushed", {
+    snapshot: ownedBy(owner),
+    owned: () => false,
+    durableEventTail: () => undetermined("the ledger tail could not be read"),
+  }, "undetermined");
+});
+
+test.skipIf(process.platform !== "linux")("a flushed host with a dead owner records no unflushed events", async () => {
+  const owner = await exitedOwnerIdentity();
+  const probe = await sweep({ snapshot: ownedBy(owner), owned: () => false });
+  expect(probe.terminated).toHaveLength(1);
+  expect(probe.report.retired[0]!.unflushedEvents).toBeUndefined();
+});
+
+test.skipIf(process.platform !== "linux")("an owner that adopts the host before the signal keeps it", async () => {
+  const owner = await exitedOwnerIdentity();
+  let reads = 0;
+  const dead = ownedBy(owner)!;
+  const adopted = ownedBy(captureProcessIdentity(process.pid))!;
+  const probe = await sweep({
+    snapshot: () => (reads++ === 0 ? dead() : adopted()),
+    owned: () => false,
+    durableEventTail: () => determined(15),
+  });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.retired).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "process-identity", changed: true }]);
+});
+
+test.skipIf(process.platform !== "linux")("a host acquired locally during measurement keeps its unflushed tail blocking", async () => {
+  const owner = await exitedOwnerIdentity();
+  let held = false;
+  const probe = await sweep({
+    snapshot: ownedBy(owner),
+    owned: () => held,
+    durableEventTail: () => determined(15),
+    treePss: async () => {
+      await Promise.resolve();
+      held = true;
+      return { bytes: null, measuredProcesses: 0 };
+    },
+  });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.retired).toEqual([]);
+  expect(probe.report.refused).toMatchObject([{ clause: "events-flushed", changed: true }]);
+});
+
 test("an unreadable event ledger blocks retirement", async () => {
   await refusedBy("events-flushed", { durableEventTail: () => undetermined("the ledger tail could not be read") }, "undetermined");
 });

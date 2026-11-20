@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,14 +8,22 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { AgentStateService, startAgentStateService, stopAgentStateService, servingAgentStateService } from "./service";
 import { readStructuredHostRecords } from "@/lib/runtime/structuredHostControl";
 import { observeAgentProcess } from "./process";
+import { StructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryQueue";
+import type { EngineHost } from "@/lib/runtime/engineHost";
+import * as deliveryController from "@/lib/runtime/structuredDeliveryController";
+import { runStructuredHostRetirementSweep } from "@/lib/runtime/structuredHostRetirement";
+import { determined } from "@/lib/runtime/determinable";
+import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
+import { RuntimeJournal } from "@/runtime-host/journal";
 import { cachedAgentObservation, clearAgentObservations } from "./projectionCache";
-import { centralIdleEligible } from "./model";
+import { AGENT_STATE_POLICY, centralIdleEligible } from "./model";
 import { readAgentProjection, readAgentStateMetrics, subjectId } from "./store";
-import { FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords, type FixtureEngine } from "./testFixture";
+import { VerifiedBackgroundWorkCache } from "@/lib/pipelines/backgroundTasks";
+import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords, currentClaudeRecords, type FixtureEngine } from "./testFixture";
 
 const roots: string[] = [], registries: AgentRegistry[] = [];
 afterEach(() => { clearAgentObservations(); for (const registry of registries.splice(0)) registry.close(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
-function fixture(engine: FixtureEngine = "codex") {
+function fixture(engine: FixtureEngine = "codex", backgroundWork?: (transcriptPath: string, nowMs: number) => Promise<import("@/lib/pipelines/backgroundTasks").VerifiedBackgroundWork>) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-service-")); roots.push(root);
   const filename = path.join(root, "registry.json");
   fs.writeFileSync(filename, JSON.stringify(fixtureRegistry(root, engine, captureProcessIdentity(process.pid), null)));
@@ -25,7 +33,7 @@ function fixture(engine: FixtureEngine = "codex") {
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") }); registries.push(registry);
   let owns = true, clock = FIXTURE_NOW + 2000, publications = 0;
   const service = new AgentStateService({ registry, now: () => clock, owns: () => owns, process: observeAgentProcess,
-    memory: () => null, release: "fixture", publish: async () => { publications++; return true; } });
+    memory: () => null, release: "fixture", backgroundWork, publish: async () => { publications++; return true; } });
   return { root, registry, service, transcript, entry: () => registry.hostEntry({ engine, sessionId: FIXTURE_SESSION })!,
     demote: () => { owns = false; }, advance: (ms: number) => { clock += ms; }, publications: () => publications };
 }
@@ -206,6 +214,272 @@ test("idle host memory cannot hide a generation-bound native open turn", async (
   expect(row.facts.turn).toMatchObject({ determined: false, why: "host-memory-idle-conflicts-with-native-open-turn" });
   expect(readAgentStateMetrics(f.registry)).toMatchObject({ registryTranscriptDivergencesTotal: 1, registryTranscriptDivergencesCurrent: 1 });
   expect(f.entry().structuredHost!.activeTurnRef).toBe("native-turn-one");
+});
+
+test("idle Claude memory with current end_turn shape settles and becomes eligible at the idle bound", async () => {
+  const f = fixture("claude"), records = currentClaudeRecords(40);
+  fs.writeFileSync(f.transcript, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.idle-claude" }, () => f.registry.agentStateWrite(file => {
+    file.entries[`claude:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+    file.entries[`claude:${FIXTURE_SESSION}`]!.structuredHost!.activeTurnRef = null;
+  }));
+  f.service.ports.memory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 });
+  await f.service.request();
+  const row = readAgentProjection(f.registry, subjectId(f.entry()))!;
+  expect(row).toMatchObject({ divergence: null, verdict: { state: "idle", quality: "verified" }, facts: { turn: { determined: true, value: { state: "closed" } } } });
+  expect(centralIdleEligible(cachedAgentObservation(row.subject)!.facts, FIXTURE_NOW + 2000)).toBe(false);
+  f.advance(AGENT_STATE_POLICY.idleMs);
+  await f.service.request();
+  expect(centralIdleEligible(cachedAgentObservation(row.subject)!.facts, f.service.ports.now())).toBe(true);
+});
+
+test("idle Claude conflict has a restart-stable deadline and retains genuinely open native work", async () => {
+  const f = fixture("claude");
+  fs.writeFileSync(f.transcript, currentClaudeRecords().open.map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.conflicting-claude" }, () => f.registry.agentStateWrite(file => {
+    file.entries[`claude:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+  }));
+  f.service.ports.memory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 });
+  await f.service.request();
+  const subject = subjectId(f.entry());
+  expect(readAgentProjection(f.registry, subject)!.facts.turn.determined).toBe(false);
+  f.advance(AGENT_STATE_POLICY.startupGraceMs - 2001);
+  const successor = new AgentStateService({ ...f.service.ports });
+  await successor.request();
+  expect(readAgentProjection(f.registry, subject)!.facts.turn.determined).toBe(false);
+  f.advance(1);
+  await successor.request();
+  const row = cachedAgentObservation(subject)!;
+  expect(row.facts.turn).toMatchObject({ determined: true, value: { state: "open" }, evidence: { ref: "native-open-after-idle-conflict-grace" } });
+  expect(row.verdict.state).toBe("working");
+  expect(centralIdleEligible(row.facts, f.service.ports.now())).toBe(false);
+});
+
+test.each([
+  { policy: "queue", onlyIfIdle: false, busy: false },
+  { policy: "interrupt-active", onlyIfIdle: false, busy: false },
+  { policy: "queue", onlyIfIdle: true, busy: false },
+  { policy: "queue", onlyIfIdle: true, busy: true },
+] as const)("Claude delivery reads live host health despite an unknown central turn: %j", async ({ policy, onlyIfIdle, busy }) => {
+  const f = fixture("claude");
+  fs.writeFileSync(f.transcript, currentClaudeRecords().open.map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.delivery-memory" }, () => f.registry.agentStateWrite(file => {
+    file.entries[`claude:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+  }));
+  f.service.ports.memory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 });
+  await f.service.request();
+  expect(readAgentProjection(f.registry, subjectId(f.entry()))!.facts.turn.determined).toBe(false);
+  let sends = 0;
+  const host: EngineHost = {
+    supportsQueuedSend: true, sendWaitsForRunningTurn: true,
+    attach: () => ({ async *[Symbol.asyncIterator]() {} }),
+    health: async () => ({ status: busy ? "active" : "idle", sessionKey: FIXTURE_SESSION, endpoint: "test:claude", pid: process.pid,
+      processStartIdentity: "fixture", eventCursor: 1, protocolVersion: "test", activeTurnRef: busy ? "running-turn" : null,
+      pendingAttention: [], activeFlags: [], account: null }),
+    send: async () => { sends++; return { outcome: "turn-started", turnId: "next-turn" }; },
+    interrupt: async () => { throw new Error("idle send must not interrupt"); }, answer: async () => {}, release: async () => {},
+  };
+  expect(f.publications()).toBe(0);
+  const journal = new RuntimeJournal(path.join(f.root, "runtime.sqlite"), { structuredHosts: true, now: f.service.ports.now });
+  const conversationId = readAgentProjection(f.registry, subjectId(f.entry()))!.conversationId!, operationId = "delivery-fixture";
+  try {
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: { engine: "claude", sessionId: FIXTURE_SESSION }, hostKind: "claude-broker", host: "hosted",
+      turn: busy ? "running" : "idle", activeTurnId: busy ? "running-turn" : null, writerClaim: "fixture:1", attentionIds: [],
+      capabilities: { steer: false, structuredAttention: true },
+    } });
+    journal.executeOperation({ kind: "send", conversationId, operationId, idempotencyKey: operationId, text: "fixture input", policy,
+      ...(onlyIfIdle ? { turnId: null, onlyIfIdle: { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" } } : {}) });
+    const queue = new StructuredDeliveryQueue({
+      effects: async () => journal.effectBatch(100, ["runtime.send"]),
+      status: async id => journal.operationResult(id)?.receipt ?? null, hostClaim: async () => "fixture:1",
+      idleContinuationCurrent: async (_id, fence) => {
+        const current = journal.readSession({ conversationId })!;
+        return runtimeIdleKillMatches({ ...current, retirementBlocked: false }, current.sessionKey, fence);
+      },
+      transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+    }, () => host, undefined, undefined, null, undefined, undefined, undefined, { now: f.service.ports.now });
+    await queue.drain();
+    expect(sends).toBe(busy ? 0 : 1);
+    expect(journal.operationResult(operationId)!.receipt).toMatchObject(busy
+      ? { status: "rejected", reason: "idle-continuation-cancelled" } : { status: "delivered" });
+  } finally { journal.close(); }
+});
+
+const retirementScenarios: { name: string; hours: number; held: boolean; closed: boolean; operation: boolean;
+  clause: string | null; legacy?: boolean; pending?: boolean;
+  boundary?: "mismatched" | "memory-mismatched" | "retained" | "accepted" | "unbound" }[] = [
+  { name: "a held open turn", hours: 7, held: true, closed: false, operation: true, clause: "turn-settled" },
+  { name: "an ownerless open turn before the abandoned-turn bound", hours: 5, held: false, closed: false, operation: true, clause: "turn-settled" },
+  { name: "an abandoned open turn with an unresolved launch", hours: 7, held: false, closed: false, operation: true, clause: "no-open-operation" },
+  { name: "an abandoned open turn without an operation", hours: 7, held: false, closed: false, operation: false, clause: null },
+  { name: "a native end_turn with a historical launch", hours: 1, held: false, closed: true, operation: true, clause: null },
+  { name: "a held native end_turn with a historical launch", hours: 1, held: true, closed: true, operation: true, clause: null },
+  { name: "a held legacy native end_turn with a historical launch", hours: 1, held: true, closed: true, operation: true, legacy: true, clause: null },
+  { name: "a held native end_turn without an operation", hours: 1, held: true, closed: true, operation: false, clause: null },
+  { name: "a held native end_turn with a pending operation", hours: 1, held: true, closed: true, operation: true, pending: true, clause: "no-open-operation" },
+  { name: "a held terminal from a different native turn", hours: 1, held: true, closed: true, operation: true, boundary: "mismatched", clause: "no-open-operation" },
+  { name: "a held terminal with a different memory native id", hours: 1, held: true, closed: true, operation: true, boundary: "memory-mismatched", clause: "no-open-operation" },
+  { name: "a held terminal with an unresolved local reference", hours: 1, held: true, closed: true, operation: true, boundary: "retained", clause: "no-open-operation" },
+  { name: "a held terminal before a later accepted turn", hours: 1, held: true, closed: true, operation: true, boundary: "accepted", clause: "turn-settled" },
+  { name: "a held terminal without artifact binding", hours: 1, held: true, closed: true, operation: true, boundary: "unbound", clause: "turn-settled" },
+];
+for (const scenario of retirementScenarios) test(`retirement with idle memory preserves ${scenario.name}`, async () => {
+  const f = fixture("claude"), rows = scenario.legacy ? fixtureRecords("claude") : currentClaudeRecords();
+  fs.writeFileSync(f.transcript, [...rows.open, ...(scenario.closed ? rows.close : [])].map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.retirement-policy" }, () => f.registry.agentStateWrite(file => {
+    const entry = file.entries[`claude:${FIXTURE_SESSION}`]!;
+    if (scenario.held) entry.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+    if (scenario.held && scenario.closed) {
+      // The broker clears both references when idle, in currentState and
+      // agentStateMemory. Keep the historical launch reference independent.
+      entry.structuredHost!.activeTurnRef = null;
+      entry.structuredHost!.agentStateNativeTurnId = null;
+    }
+    if (scenario.boundary === "mismatched") entry.structuredHost!.agentStateNativeTurnId = "later-native-turn";
+    if (scenario.boundary === "retained") entry.structuredHost!.activeTurnRef = "unresolved-local-turn";
+    if (scenario.boundary === "accepted") entry.structuredHost!.activeTurnRef = "later-local-turn";
+    if (scenario.boundary === "unbound") file.conversations[FIXTURE_CONVERSATION]!.generations[0]!.path = path.join(f.root, "other.jsonl");
+    if (scenario.pending) entry.pendingAction = "resume";
+    if (!scenario.operation) entry.structuredHostOperationId = null;
+  }));
+  const unexpected = () => { throw new Error("retirement must use central facts without host actuation"); };
+  const idleMemory = () => ({ activeTurnRef: scenario.boundary === "accepted" ? "later-local-turn" : null,
+    nativeTurnId: scenario.boundary === "accepted" || scenario.boundary === "memory-mismatched" ? "later-native-turn" : null,
+    pendingAttention: [], eventCursor: 1 });
+  if (scenario.held) f.service.ports.memory = idleMemory;
+  f.advance(scenario.hours * 3600_000);
+  await f.service.request();
+  const projection = readAgentProjection(f.registry, subjectId(f.entry()))!;
+  expect(projection.facts.owner).toMatchObject({ determined: true, value: scenario.held ? "held" : "absent" });
+  const turnState = scenario.closed && scenario.boundary !== "accepted" ? "closed" : "open";
+  expect(projection.facts.turn).toMatchObject({ determined: true, value: { state: turnState } });
+  if (scenario.pending) expect(projection.facts.obligations).toMatchObject({ determined: true, value: ["pending-resume"] });
+  const idleHost: EngineHost = { agentStateMemory: idleMemory,
+    attach: unexpected, health: unexpected, send: unexpected, interrupt: unexpected, answer: unexpected, release: unexpected };
+  const memory = spyOn(deliveryController, "structuredDeliveryHostForConversation").mockReturnValue(idleHost);
+  const held = spyOn(deliveryController, "hasStructuredDeliveryHost").mockReturnValue(scenario.held);
+  setAgentRegistryForTests(f.registry);
+  let terminations = 0;
+  try {
+    const report = await runStructuredHostRetirementSweep({ snapshot: () => f.registry.readOnlySnapshot(), publicationState: () => "ready",
+      handoffRows: () => determined([]), durableEventTail: () => determined(0), realtimeBound: () => determined(false),
+      orchestratorSeatConversations: () => determined(new Set()), revokedSeatConversations: () => determined(new Set()),
+      readCursor: () => null, writeCursor: () => {}, record: () => {}, now: f.service.ports.now, owned: () => scenario.held,
+      treePss: () => ({ bytes: null, measuredProcesses: 0 }),
+      terminate: async () => { terminations++; return { ok: true, via: "runtime", pids: [] }; } });
+    expect(report.failed).toEqual([]);
+    if (scenario.clause) {
+      expect(terminations).toBe(0);
+      expect(report.retired).toEqual([]);
+      expect(report.refused).toContainEqual(expect.objectContaining({ clause: scenario.clause }));
+    } else {
+      expect(terminations).toBe(1);
+      expect(report.refused).toEqual([]);
+      expect(report.retired).toHaveLength(1);
+      expect(report.retired[0]!.reason).toBe(scenario.closed ? undefined : "abandoned turn");
+      if (scenario.closed) expect(projection.facts.turn.evidence.source).toBe("native-transcript");
+    }
+    // Retirement eligibility must preserve the native boundary for resume.
+    expect(readAgentProjection(f.registry, subjectId(f.entry()))!.facts.turn).toMatchObject({ determined: true,
+      value: { state: turnState } });
+  } finally { held.mockRestore(); memory.mockRestore(); setAgentRegistryForTests(null); }
+});
+
+test("an unreported Claude background task remains a central obligation and blocks retirement", async () => {
+  const f = fixture("claude");
+  const rows = currentClaudeRecords();
+  const result = rows.open.find(row => row.type === "user" && Array.isArray((row.message as { content?: { type?: string }[] }).content)
+    && (row.message as { content: { type?: string }[] }).content.some(part => part.type === "tool_result"));
+  if (!result) throw new Error("Claude tool result fixture missing");
+  result.toolUseResult = { backgroundTaskId: "fixture-background" };
+  fs.writeFileSync(f.transcript, [...rows.open, ...rows.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  f.advance(7 * 3600_000);
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.idle-background-host" }, () => f.registry.agentStateWrite(file => {
+    file.entries[`claude:${FIXTURE_SESSION}`]!.structuredHost!.activeTurnRef = null;
+  }));
+  f.service.ports.memory = () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 });
+  await f.service.request();
+  const projection = readAgentProjection(f.registry, subjectId(f.entry()))!;
+  expect(projection.facts.turn).toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(projection.facts.obligations).toMatchObject({ determined: true, value: ["background:background task fixture-background"] });
+  expect(centralIdleEligible(projection.facts, f.service.ports.now())).toBe(false);
+
+  const unexpected = () => { throw new Error("retirement must use central facts without host actuation"); };
+  const idleHost: EngineHost = { agentStateMemory: () => ({ activeTurnRef: null, pendingAttention: [], eventCursor: 1 }),
+    attach: unexpected, health: unexpected, send: unexpected, interrupt: unexpected, answer: unexpected, release: unexpected };
+  const memory = spyOn(deliveryController, "structuredDeliveryHostForConversation").mockReturnValue(idleHost);
+  setAgentRegistryForTests(f.registry);
+  let terminations = 0;
+  try {
+    const report = await runStructuredHostRetirementSweep({ snapshot: () => f.registry.readOnlySnapshot(), publicationState: () => "ready",
+      handoffRows: () => determined([]), durableEventTail: () => determined(0), realtimeBound: () => determined(false),
+      orchestratorSeatConversations: () => determined(new Set()), revokedSeatConversations: () => determined(new Set()),
+      readCursor: () => null, writeCursor: () => {}, record: () => {}, now: f.service.ports.now, owned: () => false,
+      treePss: () => ({ bytes: null, measuredProcesses: 0 }),
+      terminate: async () => { terminations++; return { ok: true, via: "runtime", pids: [] }; } });
+    expect(terminations).toBe(0);
+    expect(report.retired).toEqual([]);
+    expect(report.refused).toContainEqual(expect.objectContaining({ clause: "turn-settled" }));
+  } finally { memory.mockRestore(); setAgentRegistryForTests(null); }
+});
+
+test("the production scheduler retains background recovery progress past cache capacity", async () => {
+  const recovery = new VerifiedBackgroundWorkCache(4, 2048);
+  const f = fixture("claude", recovery.acquire.bind(recovery));
+  const files = [f.transcript];
+  const originalEntryKey = `claude:${FIXTURE_SESSION}`;
+  const base = currentClaudeRecords();
+  const contents = `${(JSON.stringify({ type: "metadata", padding: "x".repeat(160) }) + "\n").repeat(8)}${[...base.open, ...base.close].map(row => JSON.stringify(row)).join("\n")}\n`;
+  fs.writeFileSync(f.transcript, contents);
+  fs.utimesSync(f.transcript, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  const added: { session: string; filename: string }[] = [];
+  for (let index = 0; index < 4; index++) {
+    const session = `z234567${index}-1234-4123-8123-0123456789ab`;
+    const filename = path.join(f.root, `later-native-${index}.jsonl`);
+    fs.writeFileSync(filename, contents);
+    fs.utimesSync(filename, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+    files.push(filename);
+    added.push({ session, filename });
+  }
+  await f.registry.deliveryWriteOrBusy({ label: "fixture.background-capacity" }, () => f.registry.agentStateWrite(file => {
+    const owner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+    for (const entry of Object.values(file.entries)) if (entry.key.engine === "claude") entry.claimOwner = owner;
+    for (const { session, filename } of added) {
+      const entry = JSON.parse(JSON.stringify(file.entries[originalEntryKey]!));
+      entry.key.sessionId = session;
+      entry.artifactPath = filename;
+      file.entries[`claude:${session}`] = entry;
+      const conversation = JSON.parse(JSON.stringify(file.conversations[FIXTURE_CONVERSATION]!));
+      conversation.id = `conversation_${session}`;
+      conversation.generations = [{ ...conversation.generations.at(-1), id: session, path: filename }];
+      file.conversations[conversation.id] = conversation;
+    }
+  }));
+  f.service.ports.memory = entry => ({ activeTurnRef: null, pendingAttention: [], eventCursor: entry.structuredHost!.eventCursor });
+
+  let completedAt = 0;
+  for (let cycle = 1; cycle <= 30; cycle++) {
+    await f.service.request();
+    const projections = files.map(filename => {
+      const entry = Object.values(f.registry.readOnlySnapshot().entries).find(row => row.artifactPath === filename)!;
+      return readAgentProjection(f.registry, subjectId(entry))!;
+    });
+    if (projections.every(row => row.facts.obligations.determined)) { completedAt = cycle; break; }
+  }
+  const projections = files.map(filename => {
+    const entry = Object.values(f.registry.readOnlySnapshot().entries).find(row => row.artifactPath === filename)!;
+    return readAgentProjection(f.registry, subjectId(entry))!;
+  });
+  expect(completedAt).toBeGreaterThan(0);
+  expect(projections).toHaveLength(5);
+  expect(projections.every(row => row.facts.turn.determined && row.facts.turn.value.state === "closed")).toBe(true);
+  expect(projections.every(row => row.facts.obligations.determined && row.facts.obligations.value.length === 0)).toBe(true);
 });
 
 test("a newer owned memory turn stays ahead of an older native terminal boundary", async () => {

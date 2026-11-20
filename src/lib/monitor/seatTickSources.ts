@@ -549,6 +549,9 @@ export interface SeatTickSources {
   workerAsks?: (project: string, seatConversationId?: string) => Promise<readonly SeatTickWorkerAskInput[] | import("./types").SeatTickAgendaInput | null>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   recoverQuota?: (project: string) => Promise<boolean>;
+  /** Start a fresh host for a designated seat whose host is gone, without a
+      model turn. Absent: the check records the loss and revives nothing. */
+  reviveSeatHost?: import("./seatHostRecovery").SeatHostRevival;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
@@ -833,6 +836,8 @@ export function defaultSeatTickSources(): SeatTickSources {
     },
     wakeResponse: observeSeatWakeResponse,
     recoverQuota: recoverSeatQuota,
+    reviveSeatHost: async (request, dependencies) =>
+      (await import("@/lib/runtime/structuredRecovery")).recoverDeadStructuredConversation(request, dependencies),
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */

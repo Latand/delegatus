@@ -18,6 +18,17 @@ bun scripts/merge-batch.ts gate            # add --browser to run full browser c
 bun scripts/merge-batch.ts land
 ```
 
+On a native Codex launch, `gate` and `land` print a fresh `runId` before
+starting work. If the command yields while still running, call the native
+`wait_for_check` once with that ID and the phase as its `reason`. The callback
+returns the exit code and report tail after the phase ends and releases any
+batch lock it owns. This includes a refusal because another run owns the
+lock, and runs that finish before the wait attaches. The driver owns the
+hosted check loop and schedules each heavy child. Run it directly to leave
+the shared slot available between checks. If the recorder exits without a
+terminal record, the wait reports an unknown result. Preserve the batch
+state and reconcile the worktree and forge before clearing a stale lock.
+
 `build` fetches fresh main and each listed PR, checks its open/non-draft/main
 base and reviewed head, and allocates a temporary worktree on a unique
 `merge-batch/…` branch. It leaves the caller's checkout untouched. In list
@@ -98,19 +109,31 @@ exact detector under investigation. Every subject installs frozen dependencies.
 A behaviour conflict stops the pass. A clearing omission names the responsible
 PR; multiple clearing omissions report `integration: needs both`. If no single
 omission clears it, combined removals find a minimal clearing set. If all
-implementation removals leave a failure, attribution cannot be proven: the gate
-names the failing tests, retains their detectors and refuses publication, and
-its message names that rule. Test authorship and literal assertion syntax supply
-no attribution or exemption; replacement and adaptation require the immutable
-reviewed patch evidence described above.
+implementation removals leave a failure, native test inventories are checked on
+the tested main and each member's reviewed base and head. A case absent on main
+and added by a member names that member with reason
+`member-specific: adds the failing test`; the remaining batch is rebuilt and
+gated. Each member's increase in native registrations identifies contributors
+to a group of identical case names; occurrence numbers can change when those
+independent additions are merged. An observed native-main failure with the same
+case name in another file is pre-existing, including a moved case, and appears
+in the receipt and batch PR body. When changed files and literal-name matches do not show that failure,
+Bun locates candidate files with a case-name filter over the remaining main tests,
+including unchanged parameterized and computed titles. Each matching failure
+must then occur in a full native main file run before it grants an exemption.
+The filter can skip setup tests and make a healthy main case fail; that filtered
+observation alone supplies no baseline verdict.
+Otherwise the gate retains the detector and refuses publication with its
+attribution rule. The baseline inventory and partial decisions survive refusal.
 
 Removal subjects rebuild main plus the remaining PRs' actual changes. Only the
 detector under investigation is held fixed: either the native merged test or a
 reviewed test file its PR actually changed, with any clean main-contract
 adaptation described above. This applies to single omissions, combined removals
 and the all-removed control. Untouched files keep each subject's native contents.
-If the all-removed control remains red, retain the detector and refuse the batch
-without assigning a culprit. Historical stale-copy attribution records remain
+If the all-removed control remains red without native evidence of a moved
+failure or member-added case, retain the detector and refuse the batch without
+assigning a culprit. Historical stale-copy attribution records remain
 readable in the append-only report; new validations never create them.
 A case that passes on main and breaks on the candidate, a new file fault
 included, drops only the PR whose removal clears it; the batch is rebuilt and

@@ -11,7 +11,7 @@
    checkout's own HEAD has not moved since it was published (a checkout that
    moved was updated by hand, and that newer choice wins). */
 import { realExec } from "@/lib/workflows/provision";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export interface Release { sha: string; dir: string }
@@ -26,7 +26,8 @@ export async function headOf(dir: string): Promise<string | null> {
 }
 
 export class ReleasePointer {
-  constructor(readonly file: string, private readonly checkout: string) {}
+  constructor(readonly file: string, private readonly checkout: string,
+    private readonly readCheckoutHead: (dir: string) => Promise<string | null> = headOf) {}
 
   /** The published release, or the checkout at its HEAD. */
   async current(): Promise<Release> {
@@ -48,11 +49,21 @@ export class ReleasePointer {
     return { sha: checkoutHead ?? "", dir: this.checkout };
   }
 
-  async publish(release: Release): Promise<void> {
+  async publish(release: Release, assertReady?: () => void | Promise<void>): Promise<void> {
     mkdirSync(dirname(this.file), { recursive: true });
     const temp = `${this.file}.${process.pid}.tmp`;
-    const body = { ...release, checkoutHead: await headOf(this.checkout), publishedAt: new Date().toISOString() };
-    writeFileSync(temp, `${JSON.stringify(body, null, 2)}\n`);
-    renameSync(temp, this.file);
+    try {
+      const checkoutHead = await this.readCheckoutHead(this.checkout);
+      // HEAD lookup is asynchronous and may outlive the ready deadline. Fence
+      // the final synchronous pointer commit after that await.
+      await assertReady?.();
+      const body = { ...release, checkoutHead, publishedAt: new Date().toISOString() };
+      writeFileSync(temp, `${JSON.stringify(body, null, 2)}\n`);
+      await assertReady?.();
+      renameSync(temp, this.file);
+    } catch (error) {
+      try { unlinkSync(temp); } catch { /* no temporary pointer was created */ }
+      throw error;
+    }
   }
 }

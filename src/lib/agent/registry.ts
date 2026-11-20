@@ -1,3 +1,4 @@
+import { incomingDeliveryOutcome, normalizeIncomingDeliveryHealth, type IncomingDeliveryHealth } from "@/lib/runtime/incomingDeliveryHealth";
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
 import type { AgentProjection, AgentStateJournal, AgentStateMetrics } from "@/lib/agentState/model";
 import { validNativePromptAnchor } from "@/lib/agentState/model";
@@ -28,7 +29,7 @@ import { isDeepStrictEqual } from "node:util";
 import { statePath } from "@/lib/configDir";
 import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation, MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import { assertStateMutationAllowed, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
@@ -116,7 +117,8 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
+  registryCollectionPage, type RowCollection,
+  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryOpenDeliveryKeys, registryHasDeliveryPredecessor, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection,
   type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
@@ -777,6 +779,9 @@ export function seatViewerMcpObservation(conversation: RegistryConversation, ent
 }
 
 export interface RegistryConversation {
+  incomingDeliveryHealth?: IncomingDeliveryHealth;
+  /** Reservation high-water mark survives unsettled owners and compaction. */
+  deliveryAdmissionSeq?: number;
   id: ViewerConversationId;
   engine: AgentEngine;
   generations: NativeGeneration[];
@@ -903,6 +908,8 @@ export interface DeliveryOperationOwner {
   evidenceText?: string | null;
   evidenceImageCount?: number;
   createdAt: string;
+  /** The reservation order within this recipient, retained after compaction. */
+  admissionSeq?: number;
   /** The attempt this row REPLACES, when a retry minted a fresh operation for a
       send that already had one (#1131).
 
@@ -916,6 +923,8 @@ export interface DeliveryOperationOwner {
 
       Null on the ordinary row a reservation writes for itself. */
   retryOfOperationId: string | null;
+  incomingUncertaintyObserved?: true;
+  incomingHealthOutcome?: "delivered" | "failed" | "unverified";
   terminalState: Extract<HeldDelivery["state"], "delivered" | "failed"> | null;
   /** Kept on the owner rather than only on the reservation, because the
       reservation is compacted away and the duplicate-send risk it recorded must
@@ -1007,6 +1016,8 @@ export interface DeliveryEvidenceCompaction {
 
 export interface RegistryFile {
   version: 2;
+  /** JSON store lineage survives atomic commits; a replacement starts a new discovery owner. */
+  _jsonStoreId?: string | null;
   agentStates: Record<string, AgentProjection>;
   agentStateJournal: Record<string, AgentStateJournal>;
   agentStateMetrics: Record<string, AgentStateMetrics>;
@@ -1043,6 +1054,12 @@ export interface RegistryFile {
       keyed by successor conversation id. */
   pendingSupersedence: Record<string, PendingSupersedence>;
 }
+
+export type McpCallerRegistryRows = Pick<RegistryFile, "conversations" | "entries"> & {
+  nativeGenerationAmbiguous?: true;
+  nativeHostsIncomplete?: true;
+  nativeArtifact?: string;
+};
 
 /** Compact read model for resolving the bounded `spawn:<launchId>` paths that
     can appear in one Viewer snapshot. It intentionally excludes launch profile,
@@ -1448,10 +1465,11 @@ function migrationReadinessSignature(
   const conversations = [...new Map([...paths].flatMap(path => registryConversationsForPath(file, path))
     .filter(conversation => conversation.engine === engine && paths.has(conversation.generations.at(-1)?.path ?? ""))
     .map(conversation => [conversation.id, conversation])).values()];
-  const deliveries = conversations.flatMap(conversation => registryRowsMatching(file, "heldDeliveries", "conversationId", conversation.id));
   const index: MigrationReadinessIndex = {
-    uncertainDeliveryConversationIds: new Set(deliveries.filter(row => row.state === "delivery-uncertain").map(row => row.conversationId)),
-    pendingDeliveryConversationIds: new Set(deliveries.filter(row => row.state !== "delivered").map(row => row.conversationId)),
+    uncertainDeliveryConversationIds: new Set(conversations.filter(conversation =>
+      registryOpenDeliveryKeys(file, conversation.id, ["delivery-uncertain"], "", 1).length).map(row => row.id)),
+    pendingDeliveryConversationIds: new Set(conversations.filter(conversation =>
+      registryOpenDeliveryKeys(file, conversation.id, ["held", "assigned", "delivery-uncertain", "failed"], "", 1).length).map(row => row.id)),
     activeHostPaths: new Set([...paths].filter(path => registryRowsMatching(file, "entries", "artifactPath", path)
       .some(entry => ["starting", "live", "idle", "handoff"].includes(entry.status)))),
   };
@@ -2093,11 +2111,21 @@ export function compareDeliveryAdmission(
 
 /** The next admission sequence of a canonical conversation, inside the reservation's own transaction. */
 function nextAdmissionSeq(file: RegistryFile, canonicalId: ViewerConversationId): number {
-  let highest = 0;
+  // Retained deliveries are compacted. Keep reservation order monotonic from
+  // the conversation's durable outcome checkpoint after those rows disappear.
+  const health = file.conversations[canonicalId]?.incomingDeliveryHealth;
+  let highest = Math.max(health?.lastOutcomeAdmissionSeq ?? 0, health?.lastDeliveredAdmissionSeq ?? 0);
   for (const delivery of conversationRows(file, "heldDeliveries", canonicalId)) {
     if (typeof delivery.admissionSeq !== "number" || delivery.admissionSeq <= highest) continue;
     if (resolveConversationAlias(file, delivery.conversationId) === canonicalId) highest = delivery.admissionSeq;
   }
+  for (const owner of conversationRows(file, "deliveryOperationOwners", canonicalId)) {
+    highest = Math.max(highest, owner.admissionSeq ?? 0);
+  }
+  const conversation = file.conversations[canonicalId];
+  highest = Math.max(highest, conversation?.deliveryAdmissionSeq ?? 0);
+  if (!Number.isSafeInteger(highest + 1)) throw new Error("delivery admission sequence exhausted");
+  if (conversation) conversation.deliveryAdmissionSeq = highest + 1;
   return highest + 1;
 }
 
@@ -2257,22 +2285,24 @@ export function registryOpenSpawnReceipts(file: RegistryFile): SpawnReceipt[] {
 }
 
 export function deliveryHasDurableClaimOwner(
-  snapshot: RegistryFile,
+  snapshot: Pick<RegistryFile, "entries" | "receipts">,
   conversation: RegistryConversation,
   delivery: HeldDelivery,
 ): boolean {
   const current = conversation.generations.at(-1);
   if (!current || delivery.generationId !== current.id) return false;
   if (current.host !== null && current.host !== undefined) return true;
-  if (Object.values(snapshot.entries).some((entry) =>
-    entry.key.engine === conversation.engine
-    && entry.key.sessionId === current.id
+  const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: current.id })];
+  if (entry && entry.key.engine === conversation.engine && entry.key.sessionId === current.id
     && entry.artifactPath === current.path
-    && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null)))) return true;
-  return registryRowsMatching(snapshot, "receipts", "conversationId", conversation.id).some((receipt) =>
-    receipt.engine === conversation.engine
-    && receipt.conversationId === conversation.id
-    && CLAIMABLE_RECEIPT_STATES.has(receipt.state));
+    && ((entry.structuredHost !== null && entry.structuredHost !== undefined) !== (entry.host !== null))) return true;
+  // Each state is a scalar equality seek. Terminal history is excluded before
+  // LIMIT, and no receipt payload is materialized to establish existence.
+  return [...CLAIMABLE_RECEIPT_STATES].some(state => registryKeysMatchingBounded(snapshot, "receipts", [
+    { field: "conversationId", value: conversation.id },
+    { field: "engine", value: conversation.engine },
+    { field: "state", value: state },
+  ], 1).length > 0);
 }
 
 function terminalizeHeldDelivery(
@@ -2630,6 +2660,7 @@ function emptyPolicy(restartedAt = now()): AutoBalancePolicy {
 
 const EMPTY: RegistryFile = {
   version: 2,
+  _jsonStoreId: null,
   agentStates: {}, agentStateJournal: {}, agentStateMetrics: {},
   entries: {},
   receipts: {},
@@ -3146,6 +3177,8 @@ function normalizeConversation(value: RegistryConversation, policy?: McpGrantPol
     : null;
   return {
     ...value,
+    incomingDeliveryHealth: normalizeIncomingDeliveryHealth(value.incomingDeliveryHealth),
+    deliveryAdmissionSeq: Number.isSafeInteger(value.deliveryAdmissionSeq) && value.deliveryAdmissionSeq! > 0 ? value.deliveryAdmissionSeq : undefined,
     generations,
     continuityPaths,
     abandonedContinuityPaths,
@@ -3422,15 +3455,19 @@ function syncDeliveryOperationOwnerState(
   file: RegistryFile,
   delivery: HeldDelivery,
   disposition?: DeliveryTerminalDisposition,
+  observeOutcome = disposition !== undefined,
 ): void {
   const owner = file.deliveryOperationOwners[delivery.command.operationId];
   if (owner?.deliveryId !== delivery.id) return;
+  if (delivery.admissionSeq !== undefined) owner.admissionSeq = delivery.admissionSeq;
   if (delivery.generationId) owner.targetGenerationId = delivery.generationId;
   owner.evidenceText ??= delivery.text;
   owner.evidenceImageCount ??= delivery.runtimeImages.length;
   const terminalState = terminalDeliveryState(delivery);
   owner.terminalState = terminalState;
   if (terminalState === null) {
+    delete owner.incomingHealthOutcome;
+    if (delivery.state === "delivery-uncertain" && !owner.incomingUncertaintyObserved) recordIncomingDeliveryOwner(file, owner, true);
     owner.terminalDisposition = null;
     owner.terminalReason = null;
     delete owner.primaryFailure;
@@ -3444,6 +3481,30 @@ function syncDeliveryOperationOwnerState(
   owner.terminalReason = delivery.error ?? owner.terminalReason ?? null;
   owner.primaryFailure = terminalState === "failed" ? normalizeRuntimeDeliveryFailure(delivery.primaryFailure) : undefined;
   owner.settledAt = delivery.deliveredAt ?? owner.settledAt ?? now();
+  const outcome = terminalState === "delivered" ? "delivered" : owner.terminalDisposition === "lost" ? "failed" : "unverified";
+  if (observeOutcome && owner.incomingHealthOutcome !== outcome) recordIncomingDeliveryOwner(file, owner);
+}
+
+function recordIncomingDeliveryOwner(file: RegistryFile, owner: DeliveryOperationOwner, pendingUncertainty = false): void {
+  const conversation = file.conversations[resolveConversationAlias(file, owner.conversationId)];
+  const state = !pendingUncertainty && owner.terminalState === "delivered" ? "delivered"
+    : !pendingUncertainty && owner.terminalDisposition === "lost" ? "failed" : "unverified";
+  if (conversation) {
+    const admissionSeq = owner.admissionSeq ?? file.heldDeliveries[owner.deliveryId]?.admissionSeq;
+    const health = pendingUncertainty && conversation.incomingDeliveryHealth ? { ...conversation.incomingDeliveryHealth }
+      : incomingDeliveryOutcome(conversation.incomingDeliveryHealth, state, now(), owner.terminalReason, admissionSeq);
+    const operationId = owner.command.operationId;
+    health.lastOperationId = operationId.length <= 200 ? operationId : undefined;
+    if (state === "failed" && (admissionSeq === undefined || conversation.incomingDeliveryHealth?.lastOutcomeAdmissionSeq === undefined
+      || admissionSeq >= conversation.incomingDeliveryHealth.lastOutcomeAdmissionSeq)) health.episodeId = health.failures > 1
+      ? conversation.incomingDeliveryHealth?.episodeId
+      : operationId.length <= 200 ? operationId : `sha256:${crypto.createHash("sha256").update(operationId).digest("hex")}`;
+    health.uncertain = Math.max(0, (health.uncertain ?? 0) + Number(state === "unverified") - Number(owner.incomingUncertaintyObserved === true));
+    conversation.incomingDeliveryHealth = health;
+  }
+  if (!pendingUncertainty) owner.incomingHealthOutcome = state;
+  if (state === "unverified") owner.incomingUncertaintyObserved = true;
+  else delete owner.incomingUncertaintyObserved;
 }
 
 function placeDeliveryForRetryInFile(
@@ -3797,6 +3858,9 @@ function normalizeDeliveryOperationOwners(
         createdAt: typeof owner.createdAt === "string"
           ? owner.createdAt
           : referencedDelivery?.createdAt ?? settledDelivery?.createdAt ?? LEGACY_POLICY_RESTARTED_AT,
+        ...(Number.isSafeInteger(owner.admissionSeq) && owner.admissionSeq! > 0 ? { admissionSeq: owner.admissionSeq }
+          : referencedDelivery?.admissionSeq ? { admissionSeq: referencedDelivery.admissionSeq }
+            : settledDelivery?.admissionSeq ? { admissionSeq: settledDelivery.admissionSeq } : {}),
         retryOfOperationId: typeof owner.retryOfOperationId === "string" && owner.retryOfOperationId
           ? owner.retryOfOperationId
           : null,
@@ -3814,6 +3878,8 @@ function normalizeDeliveryOperationOwners(
         settledAt: typeof owner.settledAt === "string"
           ? owner.settledAt
           : referencedDelivery?.deliveredAt ?? settledDelivery?.deliveredAt ?? null,
+        ...(["delivered", "failed", "unverified"].includes(owner.incomingHealthOutcome ?? "") ? { incomingHealthOutcome: owner.incomingHealthOutcome } : {}),
+        ...(owner.incomingUncertaintyObserved === true ? { incomingUncertaintyObserved: true as const } : {}),
         ...(owner.directAdmission === "native-queue-add" ? { directAdmission: owner.directAdmission } : {}),
         ...(owner.delivery === "interrupt-then-turn-started" ? { delivery: owner.delivery } : {}),
         ...(owner.delivery === "interrupt-then-turn-started" && typeof owner.interruptedTurnId === "string" && owner.interruptedTurnId
@@ -3840,6 +3906,7 @@ function normalizeDeliveryOperationOwners(
       evidenceText: delivery.text,
       evidenceImageCount: delivery.runtimeImages.length,
       createdAt: delivery.createdAt,
+      ...(delivery.admissionSeq ? { admissionSeq: delivery.admissionSeq } : {}),
       retryOfOperationId: null,
       terminalState: terminalDeliveryState(delivery),
       terminalDisposition: terminalDeliveryState(delivery) === "delivered" ? "delivered" : null,
@@ -4492,6 +4559,8 @@ function adoptProvisionalOwner(
   /* The adopted identity's keys are answered under the target from here on, so
      the target inherits the weaker of the two histories. */
   if (!owner.deliveryEvidenceTracked) target.deliveryEvidenceTracked = false;
+  const admissionSeq = Math.max(target.deliveryAdmissionSeq ?? 0, owner.deliveryAdmissionSeq ?? 0);
+  if (admissionSeq > 0) target.deliveryAdmissionSeq = admissionSeq;
   for (const receipt of registryReceiptsReferencing(file, owner.id)) {
     if (receipt.conversationId === owner.id) receipt.conversationId = target.id;
     if (receipt.parentConversationId === owner.id) receipt.parentConversationId = target.id;
@@ -5026,6 +5095,8 @@ export function normalizeRegistry(
     : {};
   const normalized = backfillMaterializedSpawnArtifacts({
       version: 2,
+      _jsonStoreId: typeof parsed._jsonStoreId === "string" && /^[a-f0-9-]{36}$/.test(parsed._jsonStoreId)
+        ? parsed._jsonStoreId : null,
       agentStates: normalizeAgentStateRows(parsed.agentStates, "projection"),
       agentStateJournal: normalizeAgentStateRows(parsed.agentStateJournal, "journal"),
       agentStateMetrics: normalizeAgentStateRows(parsed.agentStateMetrics, "metrics"),
@@ -5123,8 +5194,9 @@ function readFileWithPayload(
     const parsed = JSON.parse(payload);
     /* A whole file, so an entry no conversation owns is genuinely unowned and
        falls back to the baseline rather than keeping a claimed grant (#739). */
+    const file = reboundAssembledMcpGrants(normalizeRegistry(parsed, policy), policy);
     return {
-      file: reboundAssembledMcpGrants(normalizeRegistry(parsed, policy), policy),
+      file,
       payload,
       sqliteRevision: sqliteRevisionFromParsed(parsed),
     };
@@ -5167,6 +5239,7 @@ function compactLaunchProfile(profile: LaunchProfile): Partial<LaunchProfile> {
 
 function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string {
   const storage = {
+    _jsonStoreId: value._jsonStoreId,
     ...value,
     ...(sqliteRevision === undefined ? {} : { _sqliteRevision: sqliteRevision }),
     entries: Object.fromEntries(Object.entries(value.entries).map(([id, entry]) => [id, {
@@ -5505,8 +5578,10 @@ export class AgentRegistry {
       afterRename: storage.afterMirrorRename,
     };
     this.beforeDualWriteMutationReplace = storage.beforeDualWriteMutationReplace;
-    const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
+    const probeReader = storage.resolveBackendIdentity === true && process.env[MCP_PROBE_READ_ONLY_ENV] === "1";
+    const mayRunStartupMaintenance = !probeReader && mayRunStateStartupMutation(path.dirname(this.filename));
     const openStore = () => new SqliteAgentRegistryStore(sqliteFilename, {
+      readOnly: probeReader,
       allowArchiveMigration: mayRunStartupMaintenance,
       deferColdKeyInitialization: storage.deferColdKeyInitialization,
       /* Lazy: an initialised store never reads the JSON (#1870). */
@@ -5524,6 +5599,9 @@ export class AgentRegistry {
       onRowPayloadParse: storage.onSqliteRowPayloadParse,
       onRevisionQuery: storage.onSqliteRevisionQuery,
     });
+    if (probeReader && backend.pendingJsonImport) {
+      throw new RegistryReadError("the registry is waiting for the serving Viewer to import it");
+    }
     this.sqliteStore = this.sqliteMode === "off"
       ? null
       : backend.pendingJsonImport
@@ -5867,8 +5945,9 @@ export class AgentRegistry {
       throw error;
     }
     let file: RegistryFile;
+    let sourceRevision: number | null;
     try {
-      file = readFile(this.filename, this.mcpGrantPolicy);
+      ({ file, sqliteRevision: sourceRevision } = readFileWithPayload(this.filename, this.mcpGrantPolicy));
     } catch (error) {
       if (error instanceof RegistryReadError) {
         console.error("agent registry startup compaction skipped:", error);
@@ -5876,8 +5955,12 @@ export class AgentRegistry {
       }
       throw error;
     }
+    // Opening a rollback mirror through the JSON reader must preserve parity.
+    // An actual JSON mutation below establishes lineage when it takes ownership.
+    if (this.sqliteMode === "off" && sourceRevision === null) file._jsonStoreId ??= crypto.randomUUID();
     compactDeliveryReservations(file, undefined, this.now());
-    if (serializeRegistry(file, sqliteRevision) !== original) writeAtomic(this.filename, file, sqliteRevision);
+    const revision = sqliteRevision ?? sourceRevision ?? undefined;
+    if (serializeRegistry(file, revision) !== original) writeAtomic(this.filename, file, revision);
   }
 
   private synchronizeDualWriteStartup(beforeReplace: (() => void) | undefined): void {
@@ -6296,6 +6379,7 @@ export class AgentRegistry {
         ? clone(original.file)
         : null;
       const file = original.file;
+      if (!sqlite) file._jsonStoreId ??= crypto.randomUUID();
       const result = mutator(file);
       const currentPayload = serializeRegistry(file, sqlite?.revision);
       const changed = original.payload !== currentPayload;
@@ -6570,6 +6654,55 @@ export class AgentRegistry {
       ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot())));
   }
 
+  /** Ordered controller discovery, with predicates applied before payloads are
+      decoded. Terminal delivery history stays available for keyed receipts. */
+  migrationWorkPage<C extends "heldDeliveries" | "conversations" | "pendingSuccessorCleanups" | "migrationIntents">(
+    collection: C, after = "", limit = 16, repairs = false,
+  ): Array<[string, RegistryFile[C][string]]> {
+    return this.readKeyed(file => {
+      const filter = collection === "heldDeliveries" ? { field: "state" as const, value: ["held", "assigned", "delivery-uncertain"] }
+        : collection === "conversations" ? { field: "migration.phase" as const,
+          value: repairs ? ["committed"] : ["requested", "waiting-turn", "preparing", "successor-starting", "verifying"] }
+        : collection === "migrationIntents" ? { field: "state" as const, value: "draining" } : undefined;
+      const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+      return registryCollectionPage(file, collection as RowCollection, after, limit, filter)
+        .map((key): [string, RegistryFile[C][string]] => [key, clone(rows[key]!)]);
+    }, { skipColdKeyInitialization: true });
+  }
+
+  conversationMigrationPhase(id: ViewerConversationId): string | null {
+    return withViewerOperation("registry.read", () => this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")
+      ? this.sqliteStore.conversationMigrationPhase(id) : this.readOnlySnapshot().conversations[id]?.migration?.phase ?? null);
+  }
+
+  /** Re-read under the writer after admission: a stop or a newly enrolled
+      conversation must not be completed from an earlier controller page. */
+  completeSettledMigrationIntent(id: string, cooldownUntil: string): void {
+    this.mutate(file => {
+      const intent = file.migrationIntents[id];
+      if (!intent || intent.state !== "draining") return;
+      const owned = [{ field: "migration.intentId" as const, value: id }];
+      // Unknown predecessor/future phases remain unresolved, like live work.
+      if (registryKeysMatchingBounded(file, "conversations", [...owned,
+        { field: "migration.custodyState", value: "pending" }], 1).length) return;
+      if (intent.scope !== "conversation") {
+        const failed = registryKeysMatchingBounded(file, "conversations", [...owned, { field: "migration.phase", value: "failed-recoverable" }], 1).length > 0;
+        const policy = file.autoBalance[intent.engine];
+        const evidence = intent.evidence;
+        policy.cooldownUntil = cooldownUntil;
+        policy.lastOutcome = { at: now(), kind: failed ? "failed" : "switched",
+          fromId: evidence?.sourceId ?? null, fromPercent: evidence?.sourcePercent ?? null,
+          toId: evidence?.targetId ?? null, toPercent: evidence?.targetPercent ?? null,
+          window: evidence?.sourceWindow ?? null, detail: failed ? "one or more sessions need operator recovery" : null };
+        policy.lastTrigger = evidence;
+        if (evidence) policy.departed[evidence.sourceId] = now();
+        policy.revision += 1;
+      }
+      intent.state = "complete";
+      intent.updatedAt = now();
+    }, { deliveryOnly: true });
+  }
+
   /** Retention evidence for one pending runtime effect. SQLite selectors run
       in one keyed read transaction without materializing unrelated history. */
   conversationRetentionSnapshot(conversationId: string): Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> {
@@ -6742,6 +6875,25 @@ export class AgentRegistry {
     return `file:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`;
   }
 
+  /** Store identity, separate from the revision that changes on every commit.
+      JSON puts its lineage first so this read stays bounded even for old history. */
+  reconciliationSource(): string {
+    if (this.sqliteStore) return this.sqliteStore.terminationRevision().replace(/:\d+:\d+$/, "");
+    let descriptor: number;
+    try { descriptor = fs.openSync(this.filename, "r"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "json:empty";
+      throw error;
+    }
+    try {
+      const header = Buffer.alloc(128);
+      const count = fs.readSync(descriptor, header, 0, header.length, 0);
+      const lineage = header.subarray(0, count).toString().match(/^\{"_jsonStoreId":"([a-f0-9-]{36})"/);
+      // Legacy files receive their lineage at the first normal write/startup.
+      return `json:${lineage?.[1] ?? "legacy"}`;
+    } finally { fs.closeSync(descriptor); }
+  }
+
   private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean, liveness = false): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
@@ -6846,6 +6998,8 @@ export class AgentRegistry {
       if (conversation) result.conversations[canonical] = clone(conversation);
       for (const identity of conversationIdentities(file, canonical)) {
         if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+        const compacted = file.deliveryEvidenceCompactions[identity];
+        if (compacted) result.deliveryEvidenceCompactions[identity] = clone(compacted);
       }
       for (const [id, delivery] of deliveryRegistryEntriesForKey(file, "heldDeliveries", clientMessageId, [canonical])) {
         result.heldDeliveries[id] = clone(delivery);
@@ -6881,6 +7035,12 @@ export class AgentRegistry {
   snapshotSpawns(launchIds: readonly string[]): SnapshotSpawnProjection {
     if (this.sqliteStore) return this.sqliteStore.snapshotSpawns(launchIds);
     return snapshotSpawnsFromRegistry(this.readOnlySnapshot(), launchIds);
+  }
+
+  /** One keyed recipient row; no retained delivery history is hydrated. */
+  incomingDeliveryHealth(conversationId: string): IncomingDeliveryHealth | null {
+    return this.readKeyed(file => normalizeIncomingDeliveryHealth(
+      file.conversations[resolveConversationAlias(file, conversationId as ViewerConversationId)]?.incomingDeliveryHealth) ?? null);
   }
 
   /** Monitor-only bounded lineage projection; JSON backends cannot prove a bounded read. */
@@ -6970,8 +7130,8 @@ export class AgentRegistry {
       custody of a single host; SQLite reads that row alone, through the
       writer's own transaction, where the complete view walked every retained
       row under the write lock. */
-  hostEntry(key: SessionKey): AgentRegistryEntry | null {
-    const id = sessionKeyId(key);
+  hostEntry(key: SessionKey | string): AgentRegistryEntry | null {
+    const id = typeof key === "string" ? key : sessionKeyId(key);
     if (!this.sqliteStore || (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite")) return this.readOnlySnapshot().entries[id] ?? null;
     return this.readKeyed(file => {
       const entry = file.entries[id];
@@ -7116,13 +7276,27 @@ export class AgentRegistry {
     });
   }
 
-  /** Caller identity reads only its generation keys, without a grant expansion. */
-  mcpCallerSnapshot(conversationId: string, ancestry: readonly number[], configuredRootId: string | null) {
+  /** Caller identity reads only the capability and ancestry candidates. */
+  mcpCallerSnapshot(conversationId: string | null, ancestry: readonly number[], configuredRootId: string | null) {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
       return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpCallerSnapshot(conversationId, ancestry, configuredRootId));
     }
     const snapshot = this.readOnlySnapshot();
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
+  }
+
+  mcpNativeCallerSnapshot(sessionId: string, configuredRootId: string | null) {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpNativeCallerSnapshot(sessionId, configuredRootId));
+    }
+    const snapshot = this.readOnlySnapshot();
+    return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
+  }
+
+  async prepareNativeCallerArtifacts(): Promise<void> {
+    if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
+      await this.sqliteStore?.prepareNativeCallerArtifacts();
+    }
   }
 
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
@@ -7591,13 +7765,13 @@ export class AgentRegistry {
     const inherited = accountMutationHeld();
     const startedAt = performance.now();
     const totalWaitMs = options.waitMs ?? this.writerDeadlineMs ?? 2_000;
+    const deadline = startedAt + totalWaitMs;
     let waited = false;
     let refused = false;
     let acquiredAt: number | undefined;
     let backoffMs = 5;
     let correlation: BlockingWaitCorrelation = { label, operationId: options.operationId };
-    const run = async (remainingMs: number): Promise<{ acquired: true; value: T } | { acquired: false }> => {
-      const deadline = performance.now() + remainingMs;
+    const run = async (): Promise<{ acquired: true; value: T } | { acquired: false }> => {
       try {
         for (;;) {
           let result: { acquired: true; value: T } | { acquired: false };
@@ -7606,12 +7780,20 @@ export class AgentRegistry {
               guard?.();
               // Publish one correlated wait after admission supplies its operation
               // id; individual failed probes are part of this same wait.
-              const invoke = () => { acquiredAt = performance.now(); refused = false; return write(); };
+              const invoke = (): { acquired: true; value: T } | { acquired: false } => {
+                const admittedAt = performance.now();
+                // A retry or lease acquisition can finish after the cutoff.
+                if (admittedAt >= deadline) return { acquired: false };
+                acquiredAt = admittedAt;
+                refused = false;
+                return { acquired: true, value: write() };
+              };
               if (options.releaseBeforeWrite) {
                 const probe = this.deliveryWriteNow(correlation, () => undefined, { recordRefusal: false });
-                return probe.acquired ? { acquired: true, value: withWaitCorrelation(correlation, invoke) } : probe;
+                return probe.acquired ? withWaitCorrelation(correlation, invoke) : probe;
               }
-              return this.deliveryWriteNow(correlation, invoke, { recordRefusal: false });
+              const probe = this.deliveryWriteNow(correlation, invoke, { recordRefusal: false });
+              return probe.acquired ? probe.value : probe;
             }, {
               holder: label, caller: label,
               waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
@@ -7639,7 +7821,7 @@ export class AgentRegistry {
           durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
       }
     };
-    if (inherited) return withViewerOperation("registry.write", () => run(totalWaitMs));
+    if (inherited) return withViewerOperation("registry.write", run);
     return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(run, totalWaitMs, () => {
       refused = true;
       recordBlockingWait({ site: "registry-lock-async", synchronous: false,
@@ -12075,6 +12257,7 @@ export class AgentRegistry {
         evidenceText: held.text,
         evidenceImageCount: held.runtimeImages.length,
         createdAt: held.createdAt,
+        admissionSeq: held.admissionSeq,
         retryOfOperationId: null,
         terminalState: null,
         terminalDisposition: null,
@@ -12227,6 +12410,47 @@ export class AgentRegistry {
       .sort(compareDeliveryAdmission));
   }
 
+  // Only full open pages retain an offset, with at most seven state
+  // combinations per conversation. A short/empty page drops it; replacing
+  // SQLite or reopening this owner resets it. No payload or terminal row is cached.
+  private openDeliveryPages = new Map<string, string>();
+  private openDeliveryPageSource = "";
+
+  /** Bounded actuation input. Settled records remain keyed recovery evidence;
+      they never participate in periodic discovery or a conversation drain. */
+  openDeliveries(conversationId: ViewerConversationId,
+    states: readonly ("held" | "assigned" | "delivery-uncertain")[] = ["held", "assigned", "delivery-uncertain"],
+    options: { advance?: boolean } = {}): HeldDelivery[] {
+    return this.readKeyed(file => {
+      const canonical = resolveConversationAlias(file, conversationId);
+      // JSON commits atomically replace their inode. That is an ordinary
+      // write in this owner, so it must not restart an unchanged open queue.
+      const source = this.sqliteStore ? this.sqliteStore.terminationRevision().replace(/:\d+:\d+$/, "") : "json";
+      if (source !== this.openDeliveryPageSource) { this.openDeliveryPages.clear(); this.openDeliveryPageSource = source; }
+      const key = JSON.stringify([canonical, [...new Set(states)].sort()]);
+      const after = options.advance ? this.openDeliveryPages.get(key) ?? "" : "";
+      let keys = registryOpenDeliveryKeys(file, canonical, states, after, 256);
+      if (!keys.length && after) keys = registryOpenDeliveryKeys(file, canonical, states, "", 256);
+      if (options.advance) {
+        if (keys.length === 256) this.openDeliveryPages.set(key, keys.at(-1)!);
+        else this.openDeliveryPages.delete(key);
+      }
+      // The writer's compareDeliveryAdmission guard authorizes the real head.
+      // Rotating pages reach it even for legacy/storage-order disagreement;
+      // later rows cannot dispatch while an earlier assigned admission exists.
+      return keys.map(key => clone(file.heldDeliveries[key]!)).sort(compareDeliveryAdmission);
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Bounded observation for a recovery page's cancellation preflight.
+      The writer repeats this decision before cancellation and claim. */
+  hasDurableDeliveryOwner(delivery: HeldDelivery): boolean {
+    return this.readKeyed(file => {
+      const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+      return Boolean(conversation && (conversation.migration || deliveryHasDurableClaimOwner(file, conversation, delivery)));
+    }, { skipColdKeyInitialization: true });
+  }
+
   /** Startup selects only unsettled outcomes; each operation is re-read
       before its existing settlement guard runs. */
   terminalDeliveryCandidates(): HeldDelivery[] {
@@ -12373,13 +12597,28 @@ export class AgentRegistry {
     this.mutate((file) => { delete file.pendingSuccessorCleanups[operationId]; });
   }
 
-  beginDeliveryAttempt(id: string, generationId: string): HeldDelivery | null {
+  beginDeliveryAttempt(id: string, generationId: string,
+    orphanGuard?: { expected: HeldDelivery; reason: string }): HeldDelivery | null {
     return this.mutate((file) => {
       const claimed = file.heldDeliveries[id];
       if (claimed) settleStoppedMigrationOf(file, claimed.conversationId);
       const delivery = file.heldDeliveries[id];
       if (!delivery || delivery.state !== "assigned" || delivery.generationId !== generationId) return null;
       const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
+      // Recovery authorizes exactly the selected candidate under the same
+      // writer as its claim. A replacement admission or newly started migration
+      // belongs to a later drain; neither inherits this candidate's authority.
+      if (orphanGuard) {
+        const expected = orphanGuard.expected;
+        if (!conversation || conversation.migration
+          || delivery.command.operationId !== expected.command.operationId
+          || delivery.attempts !== expected.attempts || delivery.assignedAt !== expected.assignedAt
+          || delivery.generationId !== expected.generationId) return null;
+        if (delivery.recoveryIntent !== "reclaimed-host" && !deliveryHasDurableClaimOwner(file, conversation, delivery)) {
+          terminalizeHeldDelivery(file, delivery, orphanGuard.reason);
+          return null;
+        }
+      }
       const paths = new Set([conversation?.generations.at(-1)?.path].filter((pathname): pathname is string => Boolean(pathname)));
       const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
       const migrationBlocksDelivery = conversation?.migration
@@ -12389,11 +12628,7 @@ export class AgentRegistry {
          switch commits cannot overtake what the switch carried. Every actuator claims here, and its claim and
          journal admission run inside `withConversationActuation`, so an earlier claim is admitted first. */
       const canonicalId = resolveConversationAlias(file, delivery.conversationId);
-      if (conversationRows(file, "heldDeliveries", canonicalId).some((other) => other.id !== delivery.id
-        && other.state === "assigned"
-        && other.generationId === generationId
-        && resolveConversationAlias(file, other.conversationId) === canonicalId
-        && compareDeliveryAdmission(other, delivery) < 0)) return null;
+      if (registryHasDeliveryPredecessor(file, conversationIdentities(file, canonicalId), delivery)) return null;
       delivery.state = "delivery-uncertain";
       delivery.attempts += 1;
       /* Keep the last proved pre-dispatch cause across another read attempt;
@@ -12502,6 +12737,7 @@ export class AgentRegistry {
           evidenceText: identity.evidenceText,
           evidenceImageCount: identity.evidenceImageCount,
           createdAt: now(),
+          admissionSeq: conversation ? nextAdmissionSeq(file, conversationId as ViewerConversationId) : undefined,
           retryOfOperationId: null,
           terminalState: null,
           terminalDisposition: null,
@@ -12599,6 +12835,7 @@ export class AgentRegistry {
           delete recorded.primaryFailure;
           recorded.settledAt = null;
           recorded.createdAt = now();
+          recorded.admissionSeq = nextAdmissionSeq(file, resolveConversationAlias(file, recorded.conversationId));
         }
         return clone(recorded);
       }
@@ -12641,6 +12878,7 @@ export class AgentRegistry {
         evidenceText: source.evidenceText ?? delivery?.text ?? null,
         evidenceImageCount: source.evidenceImageCount ?? delivery?.runtimeImages.length ?? 0,
         createdAt: now(),
+        admissionSeq: nextAdmissionSeq(file, resolveConversationAlias(file, source.conversationId)),
         retryOfOperationId: previousOperationId,
         terminalState: null,
         terminalDisposition: null,
@@ -12729,6 +12967,7 @@ export class AgentRegistry {
       owner.terminalReason = error?.slice(0, 240) ?? null;
       owner.primaryFailure = state === "failed" ? normalizeRuntimeDeliveryFailure(primaryFailure) : undefined;
       owner.settledAt = now();
+      recordIncomingDeliveryOwner(file, owner);
       if (state === "delivered") recordDeliveryRoute(owner, route);
       return clone(owner);
     });
@@ -12802,7 +13041,7 @@ export class AgentRegistry {
     if (state === "delivered") delivery.text = "";
     if (state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
     if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
-    syncDeliveryOperationOwnerState(file, delivery, disposition);
+    syncDeliveryOperationOwnerState(file, delivery, disposition, true);
     if (state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), route);
     const settled = clone(delivery);
     if (state === "delivered" || state === "failed") compactDeliveryReservations(file, delivery.conversationId, this.now());
@@ -12893,6 +13132,7 @@ export class AgentRegistry {
             owner.terminalReason = null;
             delete owner.primaryFailure;
             owner.settledAt = now();
+            recordIncomingDeliveryOwner(file, owner);
           }
           return null;
         }
@@ -12919,7 +13159,7 @@ export class AgentRegistry {
         if (outcome.state === "delivered") delivery.text = "";
         if (outcome.state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
         if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
-        syncDeliveryOperationOwnerState(file, delivery, outcome.disposition);
+        syncDeliveryOperationOwnerState(file, delivery, outcome.disposition, true);
         if (discarded) {
           const owner = file.deliveryOperationOwners[outcome.operationId];
           if (owner) owner.evidenceText = "";
@@ -13045,7 +13285,7 @@ export class AgentRegistry {
       delivery.deliveredAt = null;
       delivery.error = reason.slice(0, 240);
       failInitialSpawnReceiptForDelivery(file, delivery);
-      syncDeliveryOperationOwnerState(file, delivery, disposition);
+      syncDeliveryOperationOwnerState(file, delivery, disposition, true);
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       compactDeliveryReservations(file, delivery.conversationId, this.now());
       return clone(delivery);

@@ -16,6 +16,8 @@ import { isStoredFlow, flowStateCollectionSeed } from "../src/lib/flows/store";
 import type { Flow } from "../src/lib/flows/types";
 import type { RootKey } from "../src/lib/types";
 import { catalogEntryToFileEntry } from "../src/lib/scanner/conversationCatalog";
+import { readHostExitWriterBinding } from "../src/lib/runtime/hostExit";
+import type { ProcessIdentity } from "../src/lib/processIdentity";
 
 const MAX_OUTPUT = 4 * 1024 * 1024;
 
@@ -244,10 +246,24 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
     const pids = folded.get(owner.binding) ?? new Set<number>();
     pids.add(owner.pid); folded.set(owner.binding, pids);
   }
+  function hostCustody(host: { state: string; pid?: number | null }) {
+    const identities: ProcessIdentity[] = [];
+    if (host.state === "alive") {
+      for (const owner of recorded.filter(owner => owner.pid === host.pid)) identities.push(...owner.identities);
+      for (const owner of owners.filter(owner => owner.pid === host.pid && owner.receipt)) {
+        const evidence = receiptProcessEvidence(owner.receipt!, sources.probe);
+        if (evidence?.state === "alive") identities.push(evidence.process);
+      }
+    }
+    const unique = [...new Map(identities.filter(identity => identity.pid === host.pid && identity.startIdentity)
+      .map(identity => [JSON.stringify([identity.pid, identity.startIdentity, identity.bootEpoch ?? null]), identity])).values()];
+    const process = unique.length === 1 ? unique[0]! : null;
+    return { process, exitWriter: process ? readHostExitWriterBinding(process) : null };
+  }
   return {
     observedAt: snapshot.observedAt, targetRevision, registryRevision,
     conversations: snapshot.conversations.map(row => ({ conversationId: row.conversationId,
-      host: row.host, turnState: row.turnState, pipeline: row.pipeline ? {
+      host: { ...row.host, ...hostCustody(row.host) }, turnState: row.turnState, pipeline: row.pipeline ? {
         pipelineId: row.pipeline.pipelineId, stageId: row.pipeline.stageId, attempt: row.pipeline.attempt,
       } : null, evidenceSource: row.evidenceSource })),
     selection: snapshot.selection,
