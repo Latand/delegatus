@@ -2416,11 +2416,13 @@ test("a deploy reminder credits the matching ordinary pause agenda", () => {
   const paused = lane({ pausedBy: "seat", state: "inert", pausedAt: new Date(NOW - 4 * 24 * 60 * MINUTE).toISOString() });
   const deploy = { deploymentId: "deploy-pause-credit", phase: "succeeded" as const, sha: "c".repeat(40), error: null,
     settledAt: new Date(NOW - MINUTE).toISOString() };
-  const first = seatTickDecision(input({ pipelines: [paused], state: stateWith({ stalledSeen: [paused.id] }), settledDeploys: [deploy] }));
+  const waitingTaskId = "waiting-on-deploy";
+  const first = seatTickDecision(input({ pipelines: [paused], pauseWaitingTasks: { [paused.id]: [waitingTaskId] },
+    state: stateWith({ stalledSeen: [paused.id] }), settledDeploys: [deploy] }));
   expect(first.verdict.kind).toBe("wake");
   if (first.verdict.kind !== "wake") return;
   expect(first.verdict.items.map(item => item.id)).toEqual([deploy.deploymentId, paused.id]);
-  expect(first.verdict.items[1]).toMatchObject({ reminderKind: "pause" });
+  expect(first.verdict.items[1]).toMatchObject({ reminderKind: "pause", label: expect.stringContaining(waitingTaskId) });
   const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
   const quiet = seatTickDecision(input({ now: NOW + 90 * MINUTE, pipelines: [paused], state: landed, settledDeploys: [] }));
   expect(quiet.verdict.kind).toBe("quiet");
@@ -2655,21 +2657,19 @@ describe("waits routed to the seat", () => {
       createdAt: since, runs: [], pause: { reason: "quota", resumeCondition: { kind: "account-usage", engine: "codex",
         accountId: "account-fixture", window: "session", belowPercent: 80 } } } as unknown as Pipeline;
     const waits = new Map<string, string[]>();
+    waits.set(pipeline.id, [boardTask.id]); // durable fresh quota observation adds linked task membership
     const workerAsks = seatAgendaAsks({ files: [], pipelines: [pipeline], tasks: [boardTask] }, NOW / 1000, PROJECT, waits);
     const decision = seatTickDecision(input({
       tasks: [{ id: boardTask.id, title: boardTask.text, status: "blocked", updatedAt: since, owned: false }],
       pipelines: [lane({ id: pipeline.id, title: "Paused work", state: "inert", updatedAt: since, pausedBy: "other", pausedAt: since,
         pauseConditionMet: true })],
       pauseWaitingTasks: Object.fromEntries(waits), workerAsks,
-      settledDeploys: [{ deploymentId: "priority-deploy", phase: "succeeded", sha: "e".repeat(40), error: null,
-        settledAt: new Date(NOW - MINUTE).toISOString() }],
     }));
     expect(workerAsks).toEqual([]);
     if (decision.verdict.kind !== "wake") throw new Error("expected a pause wake");
     expect(decision.verdict.items).toContainEqual(expect.objectContaining({ id: pipeline.id, reminderKind: "pause",
       label: expect.stringMatching(/task-paused.*pipeline_action resume/) }));
-    expect(decision.verdict.items[0]).toMatchObject({ kind: "deploy", id: "priority-deploy" });
-    expect(decision.verdict.items[1]!.label).toContain(boardTask.id);
+    expect(decision.verdict.items[0]!.label).toContain(boardTask.id);
     expect(decision.verdict.taskPage?.rows ?? []).toEqual([]);
     expect(seatTickWakeCommitPlan(decision.verdict, { fingerprint: "quota-deploy", eventsThrough: 0 })).toBeTruthy();
   });
