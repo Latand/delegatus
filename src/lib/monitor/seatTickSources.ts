@@ -869,7 +869,9 @@ export function defaultSeatTickSources(): SeatTickSources {
       const tasksById = new Map(tasks.map(task => [task.id, task] as const));
       const pipelines = projectRows(loadPipelinesForList(), project).filter(lane => lane.state === "paused");
       const observations = new Map<string, readonly DurableQuotaObservation[]>();
-      const pauseWaitingTasks: Record<string, string[]> = { ...result.pauseWaitingTasks };
+      const pauseWaitingTasks: Record<string, string[]> = Object.fromEntries(
+        Object.entries(result.pauseWaitingTasks ?? {}).map(([laneId, ids]) => [laneId, [...ids]]),
+      );
       for (const lane of pipelines) {
         const condition = lane.pause?.resumeCondition;
         let met = false;

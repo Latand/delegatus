@@ -202,7 +202,7 @@ test("an archived merged lane still routes its task to build acceptance", () => 
     placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
     hold: { kind: "external", by: "agent", since: at, note: "Check the build" } };
   const lane = { ...mergeLane("archived-lane", ""), state: "completed" as const,
-    merge: { state: "merged", updatedAt: at }, hiddenAt: at, taskIds: [task.id] };
+    merge: { state: "merged", updatedAt: at } as Pipeline["merge"], hiddenAt: at, taskIds: [task.id] };
   const [ask] = seatAgendaAsks({ files: [], pipelines: [lane], tasks: [task] }, now, "project-a");
   expect(ask).toMatchObject({ id: task.id, waitingTaskIds: [task.id] });
   expect(ask!.label).toContain("deployment_status");
