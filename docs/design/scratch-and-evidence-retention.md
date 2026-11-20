@@ -76,7 +76,7 @@ either way.
 | **Keep marker** `.delegatus-keep` anywhere in a root | `touch` by an operator or a capture driver, the purpose `bounded-cleanup.md` §4.1 gave it; agents also write it | `inspectAttemptTree` → `markerHolds` (`attemptTempFilesystem.ts:474`, `:478`, `:572`): held for ever. The legacy temp sweep honours it at the root (`tempSweep.ts:630`, `:746` at `ec82e477`). |
 | Git link to a repository outside the root | Agents checking out other repositories inside scratch | `markerHolds` (`attemptTempFilesystem.ts:476-491`): held for ever. A repository wholly inside the root is disposable since #3473. |
 | **Quarantine directory** `.delegatus-trash-<root>-<uuid>` with journal `.delegatus-sweep-<sha256(root)>.json` | `removeTreeViaTrash` writes the journal, then renames (`tempSweep.ts:410-424` at `ec82e477`; journal name `:560`) | Replayed by the attempt sweep through `sweepStaleTempDirs({ onlyDirectories })` while the ledger row exists (`attemptTempRetention.ts:210`, `tempSweep.ts:448`). A held row never reaches the replay (`attemptTempRetention.ts:221` runs first). |
-| **Automatic copy of attempt evidence** `statePath("evidence","attempt-temp",<sha256(root,identity)>)` with `manifest.json {original, identity, files}` | `preserveAttemptEvidence` (`attemptTempEvidence.ts:14`, destination `:63-64`, manifest `:116`), called by the sweep before every retirement (`attemptTempRetention.ts:280`) | Nothing removes it. The ledger refuses evidence paths (`attemptTempRetention.ts:58-60`), no sweep lists `statePath("evidence")`, and the copy records **no lane**: once the root's ledger row is forgotten (`:358`) nothing ties the copy to a pipeline. |
+| **Automatic copy of attempt evidence** `statePath("evidence","attempt-temp",<sha256(root,identity)>)` | Before ordinary retirement, `preserveAttemptEvidence` saves explicit artifacts, report-linked media and media whose content the lane repository cannot account for. | Bound lane copies expire with the lane. Bound agent copies expire by age. Legacy unattributed copies stay (§5.4). |
 | Recorded-check evidence copy `statePath("evidence","recorded-checks",<pipeline>,<run>)` | `retainResult` (`recordedChecks/service.ts:305-313`) | Nothing removes it. (Out of scope, §13.) |
 | Per-lane evidence folder `statePath("evidence",<pipelineId>)` (`$LLV_EVIDENCE_DIR`) | `structuredSpawn.ts:205-209` | Durable by design (`disk-retention-fix.md` §4). Not an automatic copy; untouched here. |
 | Worktree of a finished lane holding ignored evidence | Lane checkout | The worktree sweep keeps `ignored-files` (`worktreeSweep.ts:1419`), and after four days removes it behind a backup ref and an evidence copy (`:1318-1364`, `worktreeBackup.ts:21-60`, #3473). |
@@ -322,14 +322,28 @@ dispatch recheck of `recordedRootHeld` stays and would refuse one.
 
 New table `copies` in `attempt-temp.sqlite` (§5.5).
 
+- **Selection.** Ordinary retirement copies every file under any `.artifacts/`
+  directory and keeps media named in the report picture index. Other media are
+  omitted only when the same bytes are available as a SHA-1 blob from the lane's
+  verified primary Git object store. This works for archives, shared-clone
+  exports, older revisions and renamed copies. Generated frames and edited
+  assets with different bytes are copied. When provenance is unavailable or
+  the batch cannot be verified, the sweep copies all selected media. A spent
+  preservation deadline keeps the root for retry. Omitted paths still
+  participate in the source-change fence through dispatch.
+- **Accounting.** `manifest.json` keeps a bounded `skippedTracked` count and
+  byte total before its final `files` array. The sweep reports the same totals
+  by root in `evidenceSelections` even when every selected file is omitted
+  and no copy directory is created. A fallback reason is recorded when one applies.
+  The policy applies to new copies. Existing retained files keep their expiry.
 - **Registration.** Before `preserveAttemptEvidence` copies its first file,
   the sweep inserts `copies(destination, pipelineId, launchId, kind, createdAt,
   expiresAt, checkedAt)` for the root it is retiring, with `kind = "lane"`
   (owner has a pipeline) or `"agent"` (no pipeline), and `expiresAt` from §5.1
   (`null` while the lane is open or not yet finished; `createdAt + retentionMs`
   for `"agent"`), and `checkedAt` = `expiresAt` when known, otherwise now + 1 h.
-  `manifest.json` also records `pipelineId` and `launchId`
-  (`attemptTempEvidence.ts:116`), so a lost row can be rebuilt.
+  `manifest.json` also records `pipelineId` and `launchId` so a lost row can
+  be rebuilt.
 - **Expiry page.** After `sweepAttemptTemps` returns and outside its admission,
   `runAttemptTempSweep` calls `sweepEvidenceCopies` with its own 10 s budget:
   1. replay journals of copies being removed (a copy row whose directory is
