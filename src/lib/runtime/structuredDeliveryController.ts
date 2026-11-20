@@ -103,7 +103,7 @@ import {
 
 type ObservableEngineHost = EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
 type IdentityBoundEngineHost = ObservableEngineHost & {
-  releaseIfOwned?(expected: Readonly<ProcessIdentity>): Promise<boolean>;
+  releaseIfOwned?(expected: Readonly<ProcessIdentity>, authorizeAsync?: () => Promise<{ status: 403 | 409 | 500; error: string } | null>): Promise<boolean>;
 };
 type StructuredConversationRecovery = typeof import("./structuredRecovery")["recoverDeadStructuredConversation"];
 export interface StructuredDeliveryHost {
@@ -173,7 +173,7 @@ interface ControllerState {
   activeRegistrations: (() => readonly StructuredDeliveryHost[]) | null;
   republishActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   releaseActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
-  terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>) => Promise<boolean>) | null;
+  terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>, authorizeAsync?: () => Promise<{ status: 403 | 409 | 500; error: string } | null>, onAccepted?: () => void) => Promise<boolean>) | null;
   detachRetiredActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   /* Optional: a controller published by a bundle realm built before #2515
      shares this object and has no such hook. */
@@ -2219,7 +2219,7 @@ export async function bindStructuredDeliveryQueue(
     }
     return true;
   };
-  state.terminateActiveHost = async (key, expected) => {
+  state.terminateActiveHost = async (key, expected, authorizeAsync, onAccepted) => {
     const id = sessionKeyId(key);
     const current = registrations.get(id);
     if (!current) return false;
@@ -2238,7 +2238,8 @@ export async function bindStructuredDeliveryQueue(
       /* A health read can go stale before a later release signal. Real
          structured hosts expose an operation that rechecks the kernel
          identity inside that signal boundary. */
-      if (!releaseIfOwned || !await releaseIfOwned.call(current.host, expected)) return false;
+      if (!releaseIfOwned || !await releaseIfOwned.call(current.host, expected, authorizeAsync)) return false;
+      onAccepted?.();
       const registered = takeRegistration(id, current.host);
       announceHostReleased(current.host);
       (await registry.deliveryWriteOrBusy({ label: "registry.terminateStructuredHost" },
@@ -3321,10 +3322,12 @@ export async function releaseStructuredDeliveryHostsForDemotion(
 export async function terminateStructuredDeliveryHost(
   key: SessionKey,
   expected?: Readonly<ProcessIdentity>,
+  authorizeAsync?: () => Promise<{ status: 403 | 409 | 500; error: string } | null>,
+  onAccepted?: () => void,
 ): Promise<boolean> {
   const process = expected ?? (state.activeRegistry ? startupHostSnapshot(state.activeRegistry, key).entries[sessionKeyId(key)]?.structuredHost?.process : undefined);
-  if (!process) return await state.terminateActiveHost?.(key, expected) ?? false;
-  return withRecordedHostFence(process, async () => await state.terminateActiveHost?.(key, expected) ?? false);
+  if (!process) return await state.terminateActiveHost?.(key, expected, authorizeAsync, onAccepted) ?? false;
+  return withRecordedHostFence(process, async () => await state.terminateActiveHost?.(key, expected, authorizeAsync, onAccepted) ?? false);
 }
 
 

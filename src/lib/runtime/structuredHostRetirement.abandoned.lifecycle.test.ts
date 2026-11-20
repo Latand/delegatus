@@ -362,6 +362,11 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           },
         } : {}),
       });
+      if (["shipped-mcp", "stable-mcp", "historical-mcp"].includes(scenario)) {
+        expect(report.failed).toMatchObject([{ error: "scope retirement target changed: verdict turn-settled: turn native-turn-one is in flight" }]);
+        expect(report.retired).toEqual([]);
+        return;
+      }
       if (["hidden-live-owner", "preload-tool", "legacy-dead-closed", "legacy-dead-open"].includes(scenario)) {
         console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals, captures }));
       }
