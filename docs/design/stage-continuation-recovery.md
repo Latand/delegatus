@@ -21,7 +21,9 @@ projection. Unknown activity, unreadable evidence and unsettled delivery refuse
 only inside the original window. Affirmative running activity still refuses
 after expiry, as does busy transcript progress or background work newer than
 the existing 12-minute silence bound. Custody refusals before head acceptance
-retain their original busy and queued guards. Abandonment records its timestamp
+use the same deadline and retain the live activity and pending delivery guards.
+A terminal record after the attempt's evidence floor can prove its turn ended
+before custody recorded completion. Abandonment records its timestamp
 and reason on the attempt and settles an unfinished repair as rejected,
 preserving any earlier settlement.
 A passed replacement with no repair record uses its own completion timestamp
@@ -30,6 +32,12 @@ A stored failed receipt survives a read outage for the same operation.
 The refusal names the stage and attempt, age in seconds, delivery operation and
 its current state. Producer and receipt reads occur outside the shared pipeline
 mutation lease; revision, attempt and repair identity guards apply afterwards.
+
+When settlement reports dropped starting history, the lane creator, project
+seat or operator can use `publish` with `acceptedSha` to accept the reviewed
+clean lane head in place. The controller checks that the current delivery branch
+tip is an ancestor of that head before accepting the rewrite. Publication
+preserves the pass and its provenance and uses the normal fast-forward push.
 
 The next controller tick refreshes parked repair records, including legacy
 records with no send key or start timestamps and passed attempts with no repair

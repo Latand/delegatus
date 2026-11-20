@@ -5221,7 +5221,8 @@ function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAt
         || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
 }
 
-const CUSTODY_ACCEPTANCE_RECOVERY = "To accept the stage's own work without a new lane, review the lane head, then call pipeline_action publish with acceptedSha set to that clean worktree HEAD (the lane's creator, its project's seat or the operator); resolve-decision instead continues in a fresh attempt.";
+const DROPPED_STAGE_START = /^settling the stage push: commit [0-9a-f]{40} dropped the attempt's starting history;/;
+const CUSTODY_ACCEPTANCE_RECOVERY = "The lane creator, project seat or operator can review the clean lane HEAD and call pipeline_action publish with acceptedSha set to HEAD.";
 
 /** Custody can refuse a pass before its head is accepted or completedAt is
  * recorded. A guarded answer may retire that attempt for a fresh repair, or
@@ -5976,9 +5977,9 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   const now = ports.now();
   // A replacement may have passed without ever receiving a repair request.
   // Its completed pass, rather than an earlier attempt's repair, bounds it.
-  const startedAt = repair?.refusedAt ?? attempt.completedAt ?? attempt.startedAt;
-  const age = Math.max(0, unixMs(now) - unixMs(startedAt));
-  const expired = age >= COMMIT_REPAIR_WAIT_MS;
+  const startedAt = unixMs(repair?.refusedAt ?? attempt.completedAt ?? attempt.startedAt);
+  const age = Math.max(0, unixMs(now) - startedAt);
+  const expired = startedAt > 0 && age >= COMMIT_REPAIR_WAIT_MS;
   const turn = `${repair?.stageId ?? pipeline.cursor?.stageId}/${worker.n}`;
   const delivery = evidence?.delivery ?? repair?.delivery;
   const suffix = repair ? publicationRepairDeliveryDetail(repair, delivery) : "";
@@ -5999,7 +6000,7 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
     || evidence.repairIdentity !== publicationRepairIdentity(pipeline, attempt)) return refusal;
   if (!worker.conversationId) return abandon("the producer has no conversation.");
   const { active, durable } = evidence;
-  const bounded = !passedStageCustodyPark(pipeline, attempt);
+  const custodyPark = passedStageCustodyPark(pipeline, attempt);
   const outstanding = ports.conversationDeliveryOutstanding?.(worker.conversationId) === true;
   const repairDeliverySettled = delivery?.state === "failed" && delivery.safeToReplace
     || delivery?.state === "unreserved" && delivery.safeToReplace && !repair?.requestedAt;
@@ -6018,17 +6019,18 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   // its own lifecycle can settle it later.
   if (outstanding && !canProceedWithUnrelatedHeldDelivery) return refusal;
   if (active === true) return refusal;
-  if (active === false && evidence.hostGone !== false && (repair || bounded)) return abandon("the producer is gone or idle.");
+  if (active === false && evidence.hostGone !== false && (repair || !custodyPark)) return abandon("the producer is gone or idle.");
   const background = liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(now));
   const progressAt = durable?.lastRecordAt ?? durable?.message?.ts;
   if ((durable?.turn === "busy" && typeof progressAt === "number"
     && unixMs(now) - progressAt < IDLE_TURN_QUIET_MS)
     || background.some(task => unixMs(now) - task.startedAt < IDLE_TURN_QUIET_MS)) return refusal;
-  if (evidence.idle && bounded) return abandon("the producer host is idle with no recent repair work.");
-  if (expired && bounded) return abandon("the 20-minute repair window expired without a confirmed running producer.");
-  const repairStartedAt = repair?.requestedAt ?? repair?.sendingAt ?? (!repair ? attempt.completedAt : undefined);
+  if (evidence.idle) return abandon("the producer host is idle with no recent repair work.");
+  if (expired) return abandon("the 20-minute repair window expired without a confirmed running producer.");
+  const custodyFloor = custodyPark && !repair ? attemptEvidenceFloor(attempt) : null;
+  const repairStartedAt = repair?.requestedAt ?? repair?.sendingAt ?? (!repair ? attempt.completedAt ?? custodyFloor : undefined);
   const finished = !!repairStartedAt && durable?.turn === "terminal"
-    && (durable.message?.ts ?? 0) > (repair?.messageTs ?? 0)
+    && (durable.message?.ts ?? 0) > (repair?.messageTs ?? unixMs(custodyFloor))
     && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repairStartedAt);
   const failed = delivery?.state === "failed";
   if (durable?.turn === "busy" || outstanding && !canProceedWithUnrelatedHeldDelivery
@@ -6663,8 +6665,15 @@ async function commitPassedStage(
   if (!(await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist))) return;
   /* Every park after a requested repair keeps the refusal it was about. A
      custody refusal also names its in-place recovery. */
-  const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt,
-    /^(?:settling the stage push:|stage push refused:)/.test(reason) ? `${reason}\n${CUSTODY_ACCEPTANCE_RECOVERY}` : reason), attempt);
+  const parkStage = (reason: string) => {
+    if (/^(?:settling the stage push:|stage push refused:)/.test(reason)) {
+      const requirement = DROPPED_STAGE_START.test(reason)
+        ? "To replace unpublished history, HEAD must contain the current delivery branch tip."
+        : "HEAD must contain the previously passed commit.";
+      reason += `\n${CUSTODY_ACCEPTANCE_RECOVERY} ${requirement}`;
+    }
+    return park(pipeline, afterCommitRepair(attempt, reason), attempt);
+  };
   const pushRefusal = await stageAttemptPushRefusal(attempt.launchId);
   if (pushRefusal !== null) { await parkStage(pushRefusal); return; }
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
@@ -17342,13 +17351,23 @@ async function applyPipelinePatch(
         return { error: "only the pipeline creator conversation, the project's current designated seat, or a direct user action can accept a head whose commit custody was refused", status: 403 };
       }
       if (!/^[0-9a-f]{40}$/i.test(accepted)) return { error: "publication requires an exact accepted SHA", status: 400 };
+      const ancestor = await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, accepted], pipeline.worktreeDir, pipelineLiteralGitEnv());
+      // An explicit review can replace unpublished history. Prove the live
+      // delivery tip now, and let the publisher enforce fast-forward again.
+      const rewroteUnpublishedStart = ancestor.code === 1 && custodyAcceptance
+        && DROPPED_STAGE_START.test(pipeline.stateDetail ?? "");
+      if (rewroteUnpublishedStart) {
+        const remote = await currentPipelineRemoteBranchHead(pipeline, ports.exec);
+        if (!remote.ok) return { error: remote.error, status: 409 };
+        const fastForward = await ports.exec("git", ["merge-base", "--is-ancestor", remote.sha, accepted],
+          pipeline.worktreeDir, pipelineLiteralGitEnv());
+        if (fastForward.code !== 0) return { error: "could not verify acceptedSha can fast-forward the delivery branch; both tips are preserved", status: 409 };
+      } else if (ancestor.code !== 0) return { error: ancestor.code === 1
+        ? "the previously passed commit is not an ancestor of acceptedSha"
+        : "could not verify the previously passed commit is an ancestor of acceptedSha", status: 409 };
       const head = await currentPipelineBranchHead(pipeline, ports.exec);
       if (!head.ok) return { error: head.error, status: 409 };
       if (head.sha !== accepted) return { error: `worktree HEAD ${shortId(head.sha)} does not equal acceptedSha ${shortId(accepted)}`, status: 409 };
-      const ancestor = await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, accepted], pipeline.worktreeDir, pipelineLiteralGitEnv());
-      if (ancestor.code !== 0) return { error: ancestor.code === 1
-        ? "the previously passed commit is not an ancestor of acceptedSha"
-        : "could not verify the previously passed commit is an ancestor of acceptedSha", status: 409 };
       if (custodyAcceptance) {
         // The stage committer never ran; nothing uncommitted may be left behind.
         const status = await ports.exec("git", ["status", "--porcelain", "--untracked-files=all"], pipeline.worktreeDir, pipelineLiteralGitEnv());
@@ -17408,8 +17427,12 @@ async function applyPipelinePatch(
         await persist(); requestPipelineTick();
         return { pipeline: current };
       }
-      if (custodyAcceptance && !(current.state === "needs_decision" && passedStageCustodyPark(current, attempt))) {
+      if (custodyAcceptance && (current.stateDetail !== pipeline.stateDetail
+        || !(current.state === "needs_decision" && passedStageCustodyPark(current, attempt)))) {
         return { error: "the lane changed during accepted-head verification; read it again", status: 409 };
+      }
+      if (custodyAcceptance && !mayAnswerPipelineDecision(current, actor, "decision")) {
+        return { error: "the authority to accept a head whose commit custody was refused changed", status: 403 };
       }
       if (moved || custodyAcceptance) {
         current.lastPassedCommit = accepted;

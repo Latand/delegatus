@@ -1,4 +1,4 @@
-import { expect, test, fs, path, tickPipelines, createPipelineFromRequest, savePipelines, pipelineRevision, rawPatchPipeline, entry } from "./engine.fixture";
+import { expect, test, fs, path, tickPipelines, createPipelineFromRequest, savePipelines, pipelineRevision, rawPatchPipeline, entry, engineModule, finishReported } from "./engine.fixture";
 import { realExec } from "@/lib/workflows/provision";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
@@ -616,6 +616,91 @@ for (const proof of ["unrecorded", "hooks-off", "foreign"] as const) {
     } finally { f.close(); }
   });
 }
+
+test.each(["publish", "diverged", "ended", "idle", "expired", "running"] as const)(
+  "a replacement amends unpublished history then recovers from the custody park (%s)", async recovery => {
+    const f = await fixture();
+    try {
+      const initial = current();
+      const remoteRef = initial.delivery!.target.branch;
+      const remoteHead = await f.git(f.lane(), "rev-parse", "HEAD");
+      await f.git(f.repo, "push", "origin", `${remoteHead}:${remoteRef}`);
+      const unpublished = await f.commit("unpublished accepted work");
+      const producer = initial.runs[0]!.attempts[0]!;
+      f.h.durableTurns.set(producer.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(producer.startedAt!) + 1 });
+      f.h.advanceWallClock(600_000);
+      f.h.ports.conversationTurnInterrupted = async () => "dead";
+      await tickPipelines([entry(producer.agentPath!)], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      const replacement = current();
+      expect(replacement.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "host-lost" });
+      replacement.lastPassedCommit = unpublished;
+      replacement.publishedCommit = remoteHead;
+      savePipelines([replacement]);
+
+      fs.writeFileSync(path.join(f.lane(), "file.txt"), "revised unpublished work\n");
+      await f.agentGit(f.lane(), "add", "file.txt");
+      await f.agentGit(f.lane(), "commit", "--amend", "--no-edit");
+      const head = await f.git(f.lane(), "rev-parse", "HEAD");
+      expect(await f.git(f.lane(), "rev-parse", "HEAD^")).toBe(remoteHead);
+      expect(head).not.toBe(unpublished);
+      expect(await f.git(f.lane(), "status", "--porcelain")).toBe("");
+      const worker = replacement.runs[0]!.attempts[1]!;
+      const report = await engineModule.reportStageCompletion({ verdict: "pass", summary: "Amended the unpublished commit." },
+        { kind: "agent", role: "builder", conversationId: worker.conversationId! }, f.h.ports);
+      expect(report.error).toBeUndefined();
+      await tickPipelines([finishReported(f.h, worker.agentPath!, "pass", "Amended the unpublished commit.")], f.h.ports);
+
+      const parked = current();
+      const attempt = parked.runs[0]!.attempts[1]!;
+      expect(parked).toMatchObject({ state: "needs_decision", lastPassedCommit: unpublished, publishedCommit: remoteHead });
+      expect(parked.stateDetail).toContain(`settling the stage push: commit ${head} dropped the attempt's starting history`);
+      expect(attempt.verdict?.status).toBe("pass");
+      expect(attempt.report?.provenance).toMatchObject({ state: "complete", head });
+      expect(await f.git(f.remote, "rev-parse", remoteRef)).toBe(remoteHead);
+
+      if (recovery === "publish" || recovery === "diverged") {
+        let remoteTip = remoteHead;
+        if (recovery === "diverged") {
+          await f.git(f.repo, "commit", "--allow-empty", "-m", "independent delivery work");
+          remoteTip = await f.git(f.repo, "rev-parse", "HEAD");
+          await f.git(f.repo, "push", "origin", `${remoteTip}:${remoteRef}`);
+        }
+        const result = await rawPatchPipeline(parked.id, { action: "publish", acceptedSha: head }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+        if (recovery === "diverged") {
+          expect(result).toMatchObject({ status: 409, error: expect.stringContaining("delivery branch") });
+          expect(current()).toEqual(parked);
+          expect(await f.git(f.remote, "rev-parse", remoteRef)).toBe(remoteTip);
+          return;
+        }
+        expect(result.error).toBeUndefined();
+        await tickPipelines([], f.h.ports);
+        expect(current()).toMatchObject({ lastPassedCommit: head, publishedCommit: head, cursor: { stageId: "review" } });
+        expect(current().runs[0]!.attempts).toHaveLength(2);
+        expect(await f.git(f.remote, "rev-parse", remoteRef)).toBe(head);
+      } else {
+        f.h.setConversationActive(recovery === "running" ? true : null);
+        f.h.ports.conversationTurnInterrupted = async () => recovery === "idle" ? "idle" : null;
+        if (recovery !== "ended") f.h.ports.durableTurnEvidence = async () => null;
+        if (recovery === "expired" || recovery === "running") f.h.advanceWallClock(20 * 60_000);
+        const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: `amended-custody-${recovery}`,
+          answer: "Continue from the reviewed branch.", expectedStageId: "build", expectedAttempt: 2,
+          expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+        if (recovery === "running") {
+          expect(result).toMatchObject({ status: 409, error: expect.stringContaining("producer repair turn") });
+          expect(current()).toEqual(parked);
+          return;
+        }
+        expect(result.error).toBeUndefined();
+        expect(current().runs[0]!.attempts).toHaveLength(3);
+        expect(current().lastPassedCommit).toBe(unpublished);
+        expect(await f.git(f.remote, "rev-parse", remoteRef)).toBe(remoteHead);
+      }
+      expect(current().runs[0]!.attempts[1]!.report).toEqual(attempt.report);
+      expect(current().runs[0]!.attempts[1]!.verdict).toEqual(attempt.verdict);
+      expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
+    } finally { f.close(); }
+  });
 
 test("a passed replacement's custody refusal can be answered without resetting its checkout", async () => {
   const f = await fixture();
