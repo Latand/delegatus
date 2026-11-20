@@ -6,7 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { censusDescriber, censusSnapshot, readOnlyReferences } from "./protected-host-census";
+import { capturedBatch, censusDescriber, censusSnapshot, readOnlyReferences } from "./protected-host-census";
 import { agentLivenessSnapshot } from "../src/lib/lifecycle/liveness";
 import { retainedLivenessFixture as nativeRetainedFixture } from "../src/lib/lifecycle/liveness.retained.fixture";
 import { describeTranscriptPath } from "../src/lib/lifecycle/transcript";
@@ -19,6 +19,7 @@ import { projectInfoFromCwd } from "../src/lib/scanner/describe";
 import type { AgentRegistryEntry, RegistryFile } from "../src/lib/agent/registry";
 import type { Flow } from "../src/lib/flows/types";
 import { bindHostExitWriter } from "../src/lib/runtime/hostExit";
+import { AttemptTempStore } from "../src/lib/runtime/attemptTempRetention";
 
 const TARGET = "a".repeat(40);
 const NOW = "2026-10-29T12:00:00.000Z";
@@ -116,6 +117,50 @@ test("custody census carries recorded identities and bounded writer evidence wit
       expect(answer.conversations.find(row => row.host.pid === 4003)!.host.process).toMatchObject({ pid: 4003, startIdentity: "fixture-start" });
       expect(answer.conversations.find(row => row.host.pid === 4006)!.host.process).toBeNull();
     }
+  } finally { f.close(); }
+});
+
+test("census captures a durable standalone merger and leaves a quiet merger out", async () => {
+  const f = fixture();
+  try {
+    const busy = f.rows[0]!;
+    const quiet = f.rows[1]!;
+    const writer = { pid: 8001, startIdentity: "8001:42", bootEpoch: "fixture-boot" };
+    for (const row of [busy, quiet]) {
+      f.file.conversations[row.id]!.agentRole = "merger";
+      row.entry.claimEpoch = 2;
+      row.entry.claimOwner = `structured-host:${JSON.stringify(writer)}`;
+      row.entry.structuredHost!.writerClaimEpoch = 2;
+    }
+    const answer = await censusSnapshot(f.sources, 1, TARGET, 30000);
+    expect(answer.conversations.filter(row => row.merger).map(row => row.merger)).toMatchObject([{
+      conversationId: busy.id, engine: "codex", sessionId: busy.entry.key.sessionId, path: busy.pathname,
+      claimEpoch: 2, process: busy.entry.structuredHost!.process, writer, batch: null,
+    }]);
+    f.file.conversations[busy.id]!.agentRole = null;
+    const launch = f.file.receipts["receipt-only"]!;
+    Object.assign(launch, { conversationId: busy.id, agentRole: "merger", state: "completed", key: busy.entry.key, artifactPath: busy.pathname });
+    const state = temporary();
+    const directory = path.join(state, "scratch", "llv-stage-merger-fixture");
+    const batchFile = path.join(directory, "tmp", "merge-batch.json");
+    fs.mkdirSync(batchFile + ".lock", { recursive: true });
+    const batchId = ["00000000", "0000", "4000", "8000", "000000000001"].join("-");
+    const branch = `merge-batch/${batchId}`;
+    fs.writeFileSync(batchFile, JSON.stringify({ version: 3, branch, landed: false }));
+    const attempts = new AttemptTempStore(path.join(state, "attempt-temp.sqlite"));
+    try { attempts.register({ directory, pipelineId: null, launchId: launch.launchId, retainUntilClose: false, createdAt: Date.parse(NOW) }); }
+    finally { attempts.close(); }
+    const legacy = await censusSnapshot(f.sources, 2, TARGET, 30000, (registry, id) => capturedBatch(state, registry, id));
+    const stat = fs.statSync(directory);
+    expect(legacy.conversations.find(row => row.conversationId === busy.id)?.merger).toMatchObject({
+      claimEpoch: 2, batch: { directory, identity: `${stat.dev}:${stat.ino}`, branch },
+    });
+    f.file.memberships = { ...f.file.memberships, [busy.id]: [{
+      kind: "pipeline", conversationId: busy.id as `conversation_${string}`, containerId: "fixture-lane",
+      stageId: "merge", stageOrder: 0, round: 1, role: "merger", slot: "merge", createdAt: NOW, parentConversationId: null,
+    }] };
+    const pipeline = await censusSnapshot(f.sources, 3, TARGET, 30000);
+    expect(pipeline.conversations.every(row => !row.merger)).toBe(true);
   } finally { f.close(); }
 });
 

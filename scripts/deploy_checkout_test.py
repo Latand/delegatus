@@ -713,6 +713,7 @@ class CheckoutIntegration(unittest.TestCase):
         self.inventory_overrides = {}
         self.inventory_reads = 0
         self.recovery_overrides = {}
+        self.merger_delivery = {}
         # The service's kernel cgroup, under the slice its unit configures.
         self.cgroup = self.root / "cgroup"
         self.slice = "delegatus.slice"
@@ -760,6 +761,8 @@ class CheckoutIntegration(unittest.TestCase):
                         {"stageId": "other", "attempts": [{"n": 99, "state": "passed"}]},
                         {"stageId": "build", "attempts": fixture.attempts if fixture.old_gone else [
                             {"n": 1, "state": "running", "conversationId": "synthetic-stage"}]}]}}
+                if tool == "conversation_deliverability":
+                    return fixture.merger_delivery
                 current = fixture.attempts[-1] if fixture.old_gone else {"n": 1, "conversationId": "synthetic-stage"}
                 row = {"conversationId": "synthetic-stage", "turnState": "busy", "lifecycle": "running",
                        "evidenceSource": "transcript",
@@ -810,6 +813,62 @@ class CheckoutIntegration(unittest.TestCase):
             self.adapter.preflight()
             self.adapter.generation(self.service_group)
         self.assertIn(104, self.adapter.agents)
+        self.assertEqual(self.service_commands(), [])
+
+    def test_standalone_merger_is_recorded_before_stop_and_needs_its_own_receipt(self):
+        for has_receipt in (False, True):
+            with self.subTest(has_receipt=has_receipt):
+                if has_receipt:
+                    self.adapter.close()
+                    self.doCleanups()
+                    self.setUp()
+                conversation = "conversation_merger"
+                process = {"pid": 104, "startIdentity": "104:104", "bootEpoch": "fixture-boot"}
+                merger = {"conversationId": conversation, "engine": "codex", "sessionId": "fixture-merger",
+                          "path": str(self.root / "merger.jsonl"), "claimEpoch": 2, "process": process,
+                          "writer": {"pid": 102, "startIdentity": "102:102", "bootEpoch": "fixture-boot"}, "batch": None}
+                row = {"conversationId": conversation, "host": {"kind": "structured", "state": "alive", "pid": 104,
+                                                                "process": process},
+                       "turnState": "busy", "evidenceSource": "transcript", "pipeline": None, "merger": merger}
+                # The merger started after preflight. The final census must
+                # both persist it and add it to the switch verdict.
+                self.inventory_overrides = lambda n: {"conversations": [row]} if n > 1 else {
+                    "conversations": [], "selection": {"matched": 0, "selected": 0, "recoveryPending": 0,
+                                                        "recoveryTruncated": False}}
+                self.recovery_overrides = {"conversations": [{**row, "host": {"kind": "structured", "state": "alive", "pid": 204},
+                                                              "lifecycle": "working"}]}
+                self.merger_delivery = {"conversationId": conversation, "transcriptPath": merger["path"],
+                                        "deliverable": True, "processRecorded": True}
+                observations = []
+                def observed(command, cwd=None):
+                    if command[:4] == ["systemctl", "--user", "--no-block", "stop"]:
+                        capture = self.state / deploy.CHECKOUT_MERGER_CAPTURE
+                        self.assertEqual(capture.stat().st_mode & 0o777, 0o600)
+                        record, = json.loads(capture.read_text())
+                        observations.append(record)
+                        if has_receipt:
+                            directory = self.state / "interruption-obligations"
+                            directory.mkdir()
+                            deploy.write_json(directory / "interruption-continuation-fixture.json", {
+                                "version": 1, "id": "fixture", "conversationId": conversation, "engine": "codex",
+                                "hostKey": "codex:fixture-merger", "path": merger["path"],
+                                "reason": "viewer-restart", "state": "delivered", "boundary": record["boundary"],
+                                "recordedAt": record["capturedAt"], "checkpoint": {},
+                            })
+                    return self.execute(command, cwd)
+                self.adapter.command = observed
+                result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+                self.assertEqual(len(observations), 1)
+                self.assertEqual(observations[0]["conversationId"], conversation)
+                self.assertEqual(result["protected"], [{"kind": "standalone-merger", "conversationId": conversation,
+                                                         "outcome": "recovered" if has_receipt else "unknown"}])
+                self.assertEqual(result["verdict"], "pass" if has_receipt else "needs_decision")
+
+    def test_final_census_failure_leaves_the_original_service_running(self):
+        self.inventory_overrides = lambda n: {"undescribedHostCount": 1} if n > 1 else {}
+        result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=1, timeout=1)
+        self.assertEqual(result["verdict"], "fail")
+        self.assertFalse(result["relocation"]["stopSubmitted"])
         self.assertEqual(self.service_commands(), [])
 
     def test_census_failure_refuses_preflight_without_publication(self):
@@ -1982,7 +2041,8 @@ class CheckoutIntegration(unittest.TestCase):
                         self.members = self.members + [160, 161]
                         self.surviving = {160, 161}
                         if registered:
-                            self.inventory_overrides = {"conversations": [{"host": {"state": "alive", "pid": 160}}]}
+                            self.inventory_overrides = {"conversations": [{"host": {"state": "alive", "pid": 160},
+                                                                          "evidenceSource": "transcript"}]}
                     self.adapter.publish = admit
                     result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
                     self.assert_back_in_service(result)
