@@ -246,6 +246,10 @@ test.skipIf(process.platform !== "linux")("a recorded run with a missing scratch
   expect(JSON.parse(answer.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
   // A second reader sees the durable result after its recorder exits.
   expect((await waitForGateCompletion(f.log)).code).toBe(37);
+  fs.unlinkSync(f.log);
+  const withoutTail = await runGateCheckTool(args, binding, signal);
+  expect(withoutTail.success).toBe(true);
+  expect(JSON.parse(withoutTail.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId, tail: "" });
 }, 30_000);
 
 test("an unregistered gate cannot supply a completion result", async () => {

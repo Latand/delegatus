@@ -32,14 +32,20 @@ export function logTail(log: string): string {
 export function gateSnapshot(log: string): { state: string; code: number; tail: string } {
   const dir = directory(log);
   const owner = identitySchema.parse(readEnvelope(path.join(dir, "owner.json")));
-  const tail = logTail(log);
-  const status = cpuOwnerStatus(owner);
-  const exited = status === "dead" || cpuOwnerExited(owner);
   if (fs.existsSync(path.join(dir, "exit"))) {
     const result = fs.readFileSync(path.join(dir, "exit"), "utf8");
     if (!/^\d+\n$/.test(result) || Number(result) > 255) throw new Error("invalid gate exit record");
+    let tail: string;
+    try { tail = logTail(log); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      tail = "";
+    }
     return { state: `finished exit=${Number(result)}`, code: Number(result), tail };
   }
+  const tail = logTail(log);
+  const status = cpuOwnerStatus(owner);
+  const exited = status === "dead" || cpuOwnerExited(owner);
   if (status !== "alive" || exited) {
     const message = "gate recorder ownership unavailable; no exit result recorded";
     if (exited) throw new GateRecorderLostError(message);
