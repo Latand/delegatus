@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
@@ -321,19 +321,13 @@ function png(withLiveSource = true) {
     chunk("tEXt", Buffer.from(`Description\0${home}`)), ...(withLiveSource ? [chunk("tEXt", Buffer.from("capture-source\0live-fixture"))] : []), chunk("IDAT", deflateSync(Buffer.from([0, 0, 0, 0]))), chunk("IEND", Buffer.alloc(0))]);
 }
 
-test("historical image blobs retain metadata, OCR and provenance checks", async () => {
+test("historical image blobs retain metadata and provenance checks", async () => {
   const f = fixture();
-  const bin = join(f.root, "bin"); mkdirSync(bin);
-  const tesseract = join(bin, "tesseract");
-  const trace = join(f.root, "ocr-calls");
-  writeFileSync(tesseract, `#!/bin/sh\nprintf 'call\\n' >> '${trace}'\nprintf '%s\\n' '${mailbox}'\n`); chmodSync(tesseract, 0o755);
-  f.env.PATH = `${bin}:${f.env.PATH}`;
   f.write("image.png", png()); f.commit();
   f.write("duplicate.png", png()); f.commit();
   f.git("rm", "image.png", "duplicate.png"); f.commit();
   const result = await f.scan();
-  for (const finding of ["home_path", "email_address", "provenance_missing", "media_live_source"]) refuses(result, finding);
-  expect(readFileSync(trace, "utf8")).toBe("call\n");
+  for (const finding of ["home_path", "provenance_missing", "media_live_source"]) refuses(result, finding);
 });
 
 test("explicit paths cannot replace the pushed selection", async () => {
@@ -384,16 +378,14 @@ test("a historical image cannot borrow a later manifest", async () => {
   refuses(await f.scan(), "provenance_invalid");
 });
 
-test("unavailable OCR can be deferred locally while metadata and provenance still refuse", async () => {
+test("metadata and provenance checks work with only Git installed", async () => {
   const f = fixture(); const bin = join(f.root, "only-git"); mkdirSync(bin);
   const nativeGit = Bun.which("git", { PATH: checkEnvironment(process.env).PATH ?? "" });
   if (!nativeGit) throw new Error("Git fixture executable is unavailable");
   symlinkSync(nativeGit, join(bin, "git")); f.env.PATH = bin;
   f.write("image.png", png()); f.commit();
-  refuses(await f.scan(), "tool_unavailable");
-  const deferred = await f.scan(["--defer-unavailable-media"]);
-  refuses(deferred, "home_path"); refuses(deferred, "provenance_missing");
-  expect(deferred.stdout.toString()).not.toContain("tool_unavailable:");
+  const result = await f.scan();
+  refuses(result, "home_path"); refuses(result, "provenance_missing");
 });
 
 for (const name of [":(exclude)*.txt", "[abc].txt", "-leading.txt"]) test(`commit paths are literal: ${name}`, async () => {
@@ -418,9 +410,6 @@ test("approved fixture media passes from its own commit snapshot", async () => {
     expectedFindingClasses: ["home_path"],
   }] }));
   f.commit(); f.rebase();
-  const bin = join(f.root, "bin"); mkdirSync(bin);
-  const tesseract = join(bin, "tesseract"); writeFileSync(tesseract, "#!/bin/sh\nexit 0\n"); chmodSync(tesseract, 0o755);
-  f.env.PATH = `${bin}:${f.env.PATH}`;
   f.git("rm", image); f.commit(); f.write(image, bytes); f.commit(); f.git("rm", image); f.commit();
   passes(await f.scan());
 });

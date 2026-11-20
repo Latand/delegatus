@@ -93,6 +93,9 @@ export async function PATCH(req: NextRequest, context: Context) {
       if (latest) remote = { ...remote, name: latest.name, fallback: latest.fallback };
     }
     refreshExternalRelayPollers(id);
+    // A move the owner confirmed was refused: say so. Unconfirmed writes (adoption, clone setup) keep the 200.
+    if (refusedElsewhere && patch.confirmTakeover === true)
+      return NextResponse.json({ error: "answered_elsewhere" }, { status: 409 });
     return NextResponse.json({ target: remote });
   } catch (error) {
     return relayRouteError(error);
