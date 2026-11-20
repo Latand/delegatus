@@ -12,7 +12,7 @@ import path from "node:path";
  *
  * ## Isolation, and why it needs proving rather than asserting
  *
- * The scanner resolves three roots, and only two of them follow HOME. The
+ * The scanner resolves account roots that can override HOME. The
  * `claude-tasks` root is `<CLAUDE_CODE_TMPDIR or tmpdir>/claude-<uid>`, Claude Code's
  * own rule — so a fixture that set HOME but inherited the operator's TMPDIR (or a
  * CLAUDE_CODE_TMPDIR) would quietly walk the operator's real background-task outputs,
@@ -132,10 +132,13 @@ async function runProbe(sandbox: Fixture): Promise<ProbeResult> {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      /* Isolated on every axis the scanner, the state layer and the pane resolver
-         read. TMPDIR is what moves the `claude-tasks` root off the live one, and an
-         inherited CLAUDE_CODE_TMPDIR would outrank it, so it is cleared. */
+      /* Pin scanner roots to this fixture even when the runner sets its own
+         account homes. CLAUDE_CODE_TMPDIR is cleared so the tasks root uses TMPDIR. */
       HOME: sandbox.home,
+      LLV_CODEX_HOME: path.join(sandbox.home, ".codex"),
+      LLV_CLAUDE_HOME: path.join(sandbox.home, ".claude"),
+      COPILOT_HOME: path.join(sandbox.home, ".copilot"),
+      OPENCLAW_STATE_DIR: path.join(sandbox.home, ".openclaw"),
       XDG_CONFIG_HOME: sandbox.config,
       LLV_STATE_DIR: sandbox.state,
       TMPDIR: sandbox.tmp,
@@ -159,7 +162,7 @@ async function runProbe(sandbox: Fixture): Promise<ProbeResult> {
 
 function expectFullyIsolated(result: ProbeResult, sandbox: Fixture): void {
   expect(result.error).toBeUndefined();
-  /* Every root, not just the two that follow HOME. */
+  /* Every resolved transcript and task root must be inside the fixture. */
   expect(result.roots.length).toBeGreaterThanOrEqual(3);
   for (const { root } of result.roots) expect(root.startsWith(sandbox.home + path.sep)).toBe(true);
   expect(result.claudeTasksRoot).toBe(sandbox.claudeTasks);
