@@ -2,6 +2,7 @@ import { materializeStructuredHostAccess } from "../src/lib/runtime/structuredSp
 import { readAttemptCheckTiming } from "../src/lib/runtime/attemptCheckTiming";
 import { reportCpuWait, cpuInheritedWaitMs } from "../src/lib/runtime/cpuAdmissionBudget";
 import { afterEach, expect, spyOn, test } from "bun:test";
+import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -311,7 +312,7 @@ setInterval(() => {}, 60_000);`);
   fs.writeFileSync(reader, `import { runGateCheckTool } from ${JSON.stringify(path.join(import.meta.dir, "../src/lib/runtime/gateCheckTool.ts"))};
 const [binding, args] = process.argv.slice(2).map(JSON.parse);
 console.log(JSON.stringify(await runGateCheckTool(args, binding, new AbortController().signal)));`);
-  const read = (input = args) => {
+  const read = (input = args): Awaited<ReturnType<typeof runGateCheckTool>> => {
     const readerEnv = isolatedEnvironment(fs.mkdtempSync(path.join(evidence, "reader-")), env);
     readerEnv.LLV_GATE_LOCK_DIR = readerEnv.TMPDIR;
     readerEnv.PATH = process.env.PATH;
@@ -517,6 +518,9 @@ for (const shift of [-86_400_000, 86_400_000]) test.skipIf(process.platform !== 
   expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
 }, 45_000);
 
+// The supervised Bun process may exit on SIGTERM or handle it and exit 143.
+const terminatedCommandOutcomes: [exit: number | null, signal: string | null][] = [[null, "SIGTERM"], [143, null]];
+
 test.skipIf(process.platform !== "linux")("the original absolute deadline closes a running recorder with real command and cleanup evidence", async () => {
   const f = fixture(), env = portableEnvironment(f);
   const recording = await declaredRecording(f, env, 3000);
@@ -524,10 +528,11 @@ test.skipIf(process.platform !== "linux")("the original absolute deadline closes
   expect([124, 143]).toContain(await recording.closed ?? -1);
   const terminal = terminalSchema.parse(readEnvelope(path.join(f.dir, "result.json")));
   expect(terminal.cancellation?.reason).toBe("deadline");
-  expect(terminal.report?.phase).toBe("close");
-  // The supervised Bun process may exit on SIGTERM or handle it and exit 143.
-  expect([[null, "SIGTERM"], [143, null]]).toContainEqual([terminal.report?.commandExit, terminal.report?.commandSignal]);
-  expect(terminal.report?.cleanup).toBe("confirmed");
+  const { report } = terminal;
+  assert(report, "expected the supervisor's close report");
+  expect(report.phase).toBe("close");
+  expect(terminatedCommandOutcomes).toContainEqual([report.commandExit, report.commandSignal]);
+  expect(report.cleanup).toBe("confirmed");
   expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
 }, 45_000);
 
@@ -543,7 +548,7 @@ test.skipIf(process.platform !== "linux")("recorder death ends its original supe
       catch { return false; }
     });
     const report = reportSchema.parse(readEnvelope(path.join(f.dir, "portable.json")));
-    expect([[null, "SIGTERM"], [143, null]]).toContainEqual([report.commandExit, report.commandSignal]);
+    expect(terminatedCommandOutcomes).toContainEqual([report.commandExit, report.commandSignal]);
     expect(report.cleanup).toBe("confirmed");
     expect(report.cancellation?.reason).toBe("owner");
     expect(fs.existsSync(path.join(f.dir, "result.json"))).toBeFalse();
