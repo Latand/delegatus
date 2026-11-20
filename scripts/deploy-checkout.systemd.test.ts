@@ -48,6 +48,7 @@ async function exercise(testCase: Case) {
   const unit = "llvswitchtest" + process.pid.toString(16) + randomBytes(4).toString("hex") + ".service";
   const slice = unit.replace(".service", ".slice");
   const agentSlice = unit.replace(".service", "agents.slice");
+  const pin = unit.replace(".service", "pin.service");
   const scopes = {
     socket: "delegatus-agent-codex-" + unit.replace(".service", "") + ".scope",
     stdio: "delegatus-agent-claude-" + unit.replace(".service", "") + ".scope",
@@ -122,6 +123,14 @@ async function exercise(testCase: Case) {
         "DBUS_SESSION_BUS_ADDRESS", "LLV_STATE_DIR", "TMPDIR", "LLV_BUN_EXECUTABLE", "LLV_VIEWER_CONTROL_URL"].includes(key))
         .map(([key, value]) => "--setenv=" + key + "=" + value),
       "--", process.execPath, "--bun", path.join(f.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port)], { env });
+    // Keep the transient service definition loaded across an explicit stop.
+    // After= holds a reference without adding a stop-propagating dependency.
+    if (testCase === "old-stop") {
+      checked(["systemd-run", "--user", "--unit=" + pin, "--remain-after-exit", "--property=After=" + unit,
+        "--", "/usr/bin/true"], { env });
+      await until(() => invocation(pin).ActiveState === "active");
+      seen.referenceUnit = { name: pin, ...invocation(pin) };
+    }
     const record = () => read(file("launcher"));
     await until(() => fs.existsSync(stateFile("fixture-hosts.json")) && record().launcher.state === "healthy", 25_000);
     const rows = read(stateFile("fixture-hosts.json")) as HostRow[];
@@ -175,9 +184,11 @@ async function exercise(testCase: Case) {
       if (!ownedLauncher || processIdentityStatus(ownedLauncher) !== "alive") throw new Error("fixture launcher identity changed");
       process.kill(ownedLauncher.pid, "SIGKILL");
     }
-    const verdict = await until(() => fs.existsSync(resultPath) ? read(resultPath) : false, 140_000);
+    const status = path.join(path.dirname(resultPath), "status.json");
+    const verdict = await until(() => read(status).phase === "finished" ? read(resultPath) : false, 140_000);
     const ended = new Date().toISOString().replace("T", " ").replace("Z", " UTC");
     seen.verdict = verdict;
+    seen.status = read(status);
     seen.events = fs.readFileSync(path.join(path.dirname(resultPath), "switch.log"), "utf8");
     seen.after = { unit: invocation(unit), scopes: Object.fromEntries(Object.values(scopes).map(scope => [scope, invocation(scope)])),
       launcher: record(), processes: members(invocation(unit).ControlGroup!) };
@@ -200,6 +211,9 @@ async function exercise(testCase: Case) {
       seen.restarted = restarted;
       seen.exits = [terminal, exit(1)];
       if (testCase === "old-stop") {
+        expect(verdict.verdict).toBe("pass");
+        expect(verdict.relocation.started).toBeTrue();
+        expect(verdict.serving.viewer.sha).toBe(next.sha);
         expect(verdict.relocation.signalled).toEqual([]);
       } else {
         expect(verdict.verdict).toBe("fail");
@@ -277,7 +291,7 @@ async function exercise(testCase: Case) {
       const group = invocation(scope).ControlGroup!;
       for (const entry of members(group)) if (processIdentityStatus(entry) === "alive") process.kill(entry.pid, "SIGKILL");
     }
-    for (const name of [unit, ...Object.values(scopes), ...(worker ? [worker] : []), slice, agentSlice]) {
+    for (const name of [unit, ...Object.values(scopes), ...(worker ? [worker] : []), pin, slice, agentSlice]) {
       Bun.spawnSync(["systemctl", "--user", "stop", name], { timeout: 10_000, stdout: "ignore", stderr: "ignore" });
       Bun.spawnSync(["systemctl", "--user", "reset-failed", name], { timeout: 5_000, stdout: "ignore", stderr: "ignore" });
     }
