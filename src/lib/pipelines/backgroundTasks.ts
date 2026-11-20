@@ -371,10 +371,9 @@ export async function readBackgroundTaskLedger(transcriptPath: string, options: 
     const stat = await handle.stat({ bigint: true });
     if (!stat.isFile()) return null;
     const size = Number(stat.size);
-    let cached = cache.get(transcriptPath);
-    if (!cached || cached.dev !== stat.dev || cached.ino !== stat.ino || cached.offset > size) {
-      cached = { dev: stat.dev, ino: stat.ino, offset: 0, ledger: emptyBackgroundTaskLedger() };
-    }
+    const existing = cache.get(transcriptPath);
+    const reused = existing !== undefined && existing.dev === stat.dev && existing.ino === stat.ino && existing.offset <= size;
+    const cached = reused ? existing : { dev: stat.dev, ino: stat.ino, offset: 0, ledger: emptyBackgroundTaskLedger() };
     // Bounded observers can use the existing incremental ledger, but never
     // start an unbounded cold history read to classify one current turn.
     let { offset, ledger } = cached;
@@ -406,9 +405,14 @@ export async function readBackgroundTaskLedger(transcriptPath: string, options: 
     }
     /* The unterminated tail is read again once its line is complete. */
     const consumed = offset - carry.length;
-    cache.delete(transcriptPath);
-    cache.set(transcriptPath, { dev: stat.dev, ino: stat.ino, offset: consumed, ledger });
-    while (cache.size > MAX_CACHED_TRANSCRIPTS) cache.delete(cache.keys().next().value!);
+    if (reused && ledger === cached.ledger) {
+      cached.offset = consumed;
+      cache.touch(transcriptPath);
+    } else {
+      cache.delete(transcriptPath);
+      cache.set(transcriptPath, { dev: stat.dev, ino: stat.ino, offset: consumed, ledger });
+      while (cache.size > MAX_CACHED_TRANSCRIPTS) cache.delete(cache.keys().next().value!);
+    }
     return options.maxBytes === undefined || consumed === size ? ledger : null;
   } catch {
     return null;

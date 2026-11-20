@@ -12,6 +12,7 @@ import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 import { cacheSizes } from "@/lib/cacheTelemetry";
 import { registryLockHolder } from "./registryLockHolderFixture";
+import { RegistryTransactionError } from "./registryTransaction";
 
 /* The shared read-only registry view (viewer-hot-path-clones): every reader of
    `readOnlySnapshot` holds the same objects, so none may change them, and every
@@ -48,6 +49,117 @@ function fixture() {
 function transactionState(store: SqliteAgentRegistryStore) {
   return store as unknown as { db: Database; writerHeld: boolean };
 }
+
+test("a nested snapshot during stepwise journal replay borrows the open read transaction", () => {
+  const { open, kept } = fixture();
+  const reader = open(), peer = open();
+  reader.readOnlySnapshot();
+  peer.mutate(file => { file.receipts[kept]!.error = "peer replay"; }, false);
+  const replay = (reader as unknown as { refreshSnapshotSteps(): Generator<void, unknown> }).refreshSnapshotSteps();
+  try {
+    expect(replay.next().done).toBe(false);
+    expect(transactionState(reader).db.inTransaction).toBe(true);
+    expect(transactionState(reader).writerHeld).toBe(false);
+    peer.mutate(file => { file.receipts[kept]!.error = "later peer commit"; }, false);
+    expect(reader.snapshot().file.receipts[kept]!.error).toBe("peer replay");
+    expect(reader.readOnlySnapshot().file.receipts[kept]!.error).toBe("peer replay");
+    expect(transactionState(reader).db.inTransaction).toBe(true);
+    while (!replay.next().done) { /* Resume the real cooperative reader. */ }
+    expect(transactionState(reader).db.inTransaction).toBe(false);
+  } finally {
+    replay.return(undefined);
+  }
+  expect(reader.readOnlySnapshot().file.receipts[kept]!.error).toBe("later peer commit");
+  expect(open().read(file => file.receipts[kept]!.error)).toBe("later peer commit");
+});
+
+test.each(["snapshot", "readOnlySnapshot", "worktreeProtectionSnapshot", "mcpCallerSnapshot", "spawnDiagnosticAttempt",
+  "conversationRetentionSnapshot", "snapshotSpawns", "pageSeatChildren", "liveWorkerChildren", "workerSeatContexts",
+  "retirementSubject", "snapshotTitleConversations"] as const)("stepwise replay keeps ownership through nested %s and its failure", method => {
+  const { open, kept, conversation } = fixture();
+  const reader = open(), peer = open();
+  reader.readOnlySnapshot();
+  peer.mutate(file => { file.receipts[kept]!.error = "journal change"; }, false);
+  const replay = (reader as unknown as { refreshSnapshotSteps(): Generator<void, unknown> }).refreshSnapshotSteps();
+  expect(replay.next().done).toBe(false);
+  const args: Record<string, unknown[]> = {
+    mcpCallerSnapshot: [conversation.id, [], null], spawnDiagnosticAttempt: [kept],
+    conversationRetentionSnapshot: [conversation.id], snapshotSpawns: [[kept]],
+    pageSeatChildren: [conversation.id, null, 10], workerSeatContexts: [[conversation.id]],
+    retirementSubject: [conversation.id, "codex:missing"], snapshotTitleConversations: [[conversation.id]],
+  };
+  try {
+    Reflect.apply(reader[method], reader, args[method] ?? []);
+    expect(transactionState(reader).db.inTransaction).toBe(true);
+    expect(() => reader.read(() => { throw new Error("nested failure"); })).toThrow("nested failure");
+    expect(transactionState(reader).db.inTransaction).toBe(true);
+    let writes = 0;
+    expect(() => reader.mutate(() => { writes++; }, false)).toThrow(RegistryTransactionError);
+    expect(reader.tryWriter(() => { writes++; })).toEqual({ acquired: false });
+    expect(writes).toBe(0);
+    expect(transactionState(reader).db.inTransaction).toBe(true);
+  } finally { replay.return(undefined); }
+  expect(transactionState(reader).db.inTransaction).toBe(false);
+  expect(open().read(file => file.receipts[kept]!.error)).toBe("journal change");
+});
+
+test.each([false, true])("aborting cooperative preparation preserves a borrowed transaction: %s", async borrowed => {
+  const { open, kept } = fixture();
+  const reader = open(), peer = open();
+  reader.readOnlySnapshot();
+  peer.mutate(file => { file.receipts[kept]!.error = "before abort"; }, false);
+  const state = transactionState(reader);
+  if (borrowed) state.db.exec("BEGIN");
+  const abort = new AbortController();
+  abort.abort(new Error("preparation cancelled"));
+  const prepare = reader as unknown as { refreshSnapshotForPreparation(signal: AbortSignal): Promise<unknown> };
+  await expect(prepare.refreshSnapshotForPreparation(abort.signal)).rejects.toThrow("preparation cancelled");
+  expect(state.db.inTransaction).toBe(borrowed);
+  if (borrowed) state.db.exec("ROLLBACK");
+  expect(reader.read(file => file.receipts[kept]!.error)).toBe("before abort");
+});
+
+test("the cooperative full reload admits a nested read and releases its own transaction", async () => {
+  const { open, kept } = fixture();
+  let enabled = false, inside = false, nested = 0;
+  const reader = open({ onRowPayloadRead: () => {
+    if (!enabled || inside) return;
+    inside = true;
+    try {
+      expect(transactionState(reader).db.inTransaction).toBe(true);
+      expect(reader.read(file => file.receipts[kept]!.error)).toBeNull();
+      expect(transactionState(reader).db.inTransaction).toBe(true);
+      nested++;
+    } finally { inside = false; }
+  } });
+  enabled = true;
+  const prepare = reader as unknown as { refreshSnapshotForPreparation(): Promise<unknown> };
+  await prepare.refreshSnapshotForPreparation();
+  expect(nested).toBeGreaterThan(1);
+  expect(transactionState(reader).db.inTransaction).toBe(false);
+  expect(reader.readOnlySnapshot().file.receipts[kept]!.error).toBeNull();
+});
+
+test.each([false, true])("a cooperative full reload permits nested reads and preserves ownership, borrowed=%s", async borrowed => {
+  const { open, kept } = fixture();
+  let enabled = false, nested = 0;
+  const reader = open({ onRowPayloadRead: () => {
+    if (!enabled) return;
+    enabled = false;
+    nested++;
+    expect(transactionState(reader).db.inTransaction).toBe(true);
+    expect(reader.snapshot().file.receipts[kept]!.error).toBeNull();
+    expect(transactionState(reader).db.inTransaction).toBe(true);
+  } });
+  const state = transactionState(reader);
+  if (borrowed) state.db.exec("BEGIN");
+  enabled = true;
+  const prepare = reader as unknown as { refreshSnapshotForPreparation(): Promise<{ file: RegistryFile }> };
+  expect((await prepare.refreshSnapshotForPreparation()).file.receipts[kept]!.error).toBeNull();
+  expect(nested).toBe(1);
+  expect(state.db.inTransaction).toBe(borrowed);
+  if (borrowed) state.db.exec("ROLLBACK");
+});
 
 for (const prepared of [false, true]) {
   for (const admission of ["optimistic", "async", "immediate"] as const) {
@@ -847,9 +959,9 @@ test("cooperative cold headers use an iterator and retain ordered rows after res
     expect(plan.some(row => row.detail.includes("SEARCH a USING INTEGER PRIMARY KEY"))).toBe(true);
   }
   finally { expected.close(); }
-  const query = Database.prototype.query;
+  const query = Database.prototype.prepare;
   let iterations = 0;
-  const probe = spyOn(Database.prototype, "query").mockImplementation(function(this: Database, sql: string) {
+  const probe = spyOn(Database.prototype, "prepare").mockImplementation(function(this: Database, sql: string) {
     const statement = query.call(this, sql);
     if (sql.startsWith("SELECT c.collection,c.row_key,c.archive_id")) {
       expect(sql).not.toContain("ORDER BY");
@@ -1699,6 +1811,109 @@ test("a traversal of archived rows asks the filesystem for the file identity onc
     expect(traverse()).toBe(300);
     expect(stat.mock.calls.filter(call => call[0] === filename).length).toBeGreaterThan(0);
   } finally { stat.mockRestore(); }
+});
+
+test("the first prepared read after a same-counter database replacement sees the new rows", async () => {
+  const { open, filename, kept } = fixture();
+  let loads = 0;
+  const store = open({ onSnapshotLoad: () => { loads++; } });
+  const archived = "archived-replacement-receipt";
+  store.mutate(file => {
+    file.receipts[archived] = {
+      ...file.receipts[kept]!, launchId: archived, state: "failed", error: "original archive",
+      createdAt: "2020-01-01T00:00:00Z",
+    };
+  }, false);
+  expect(store.archiveInactive(1024)).toBeGreaterThan(0);
+  {
+    using checkpoint = new Database(filename);
+    checkpoint.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+
+  const original = await store.prepareReadOnlySnapshot();
+  expect(original.file.receipts[archived]?.error).toBe("original archive");
+  const initialLoads = loads;
+  expect(await store.prepareReadOnlySnapshot()).toBe(original);
+  expect(loads).toBe(initialLoads);
+
+  // Replace one immutable payload in the copy, keeping the revision, journal
+  // counters and archive version IDs from the original database.
+  const replacement = `${filename}.replacement`;
+  fs.copyFileSync(filename, replacement);
+  {
+    using edited = new Database(replacement);
+    edited.exec("DROP TRIGGER registry_archive_immutable_update");
+    edited.query("UPDATE registry_archive SET value_json = replace(value_json, ?, ?)").run("original archive", "replacement archive");
+  }
+  const counters = (file: string) => {
+    using db = new Database(file, { readonly: true });
+    return db.query("SELECT (SELECT data_version FROM pragma_data_version) AS version, total_changes() AS changes").get();
+  };
+  expect(counters(replacement)).toEqual(counters(filename));
+  fs.renameSync(replacement, filename);
+
+  const first = await store.prepareReadOnlySnapshot();
+  expect(first.file.receipts[archived]?.error).toBe("replacement archive");
+  expect(() => original.file.receipts[archived]).toThrow(DatabaseReplacedError);
+  expect(first.revision).toBe(original.revision);
+  expect(loads - initialLoads).toBe(1);
+  expect(await store.prepareReadOnlySnapshot()).toBe(first);
+  expect(loads - initialLoads).toBe(1);
+});
+
+function stageReceiptReplacement({ filename, initial, kept }: ReturnType<typeof fixture>) {
+  const replacement = `${filename}.replacement`;
+  const next = new SqliteAgentRegistryStore(replacement, { initialSnapshot: initial, normalize: normalizeRegistry });
+  try {
+    next.mutate(file => { file.receipts[kept]!.error = "replacement receipt"; }, false);
+  } finally { next.close(); }
+  return () => {
+    const previous = `${filename}.old`;
+    fs.renameSync(filename, previous);
+    for (const suffix of ["-wal", "-shm"]) fs.renameSync(filename + suffix, previous + suffix);
+    fs.renameSync(replacement, filename);
+    return previous;
+  };
+}
+
+test("a database replaced inside prepared reading refuses the in-flight snapshot", async () => {
+  const setup = fixture();
+  const swap = stageReceiptReplacement(setup);
+  let replaced = false;
+  const store = setup.open({ onRowPayloadRead: (collection, count) => {
+    if (replaced || collection !== "receipts" || count === 0) return;
+    swap();
+    replaced = true;
+  } });
+  const prepare = () => store.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
+  await expect(prepare()).rejects.toMatchObject({ code: "LLV_DATABASE_REPLACED" });
+  expect(replaced).toBe(true);
+  expect((await prepare()).file.receipts[setup.kept]?.error).toBe("replacement receipt");
+});
+
+test("a database replaced during an admitted mutation rolls back the moved writer", () => {
+  const setup = fixture();
+  const swap = stageReceiptReplacement(setup);
+  const store = setup.open();
+  const { filename, kept } = setup;
+  let previous: string | undefined;
+  expect(() => store.tryWriter(() => store.mutate(file => {
+    file.receipts[kept]!.error = "refused write";
+    previous = swap();
+  }, false))).toThrow(DatabaseReplacedError);
+  expect(previous).toBeDefined();
+
+  const receiptError = (file: string) => {
+    using db = new Database(file, { readonly: true });
+    return db.query<{ error: string | null }, [string]>(
+      "SELECT json_extract(value_json, '$.error') AS error FROM registry_rows WHERE collection='receipts' AND row_key=?",
+    ).get(kept)?.error;
+  };
+  expect(receiptError(previous!)).toBeNull();
+  expect(receiptError(filename)).toBe("replacement receipt");
+  store.mutate(file => { file.receipts[kept]!.error = "current write"; }, false);
+  expect(receiptError(filename)).toBe("current write");
+  expect(receiptError(previous!)).toBeNull();
 });
 
 for (const replacement of ["other payloads under the same version ids", "no archived versions"] as const) {

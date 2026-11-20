@@ -3,6 +3,8 @@
 import { Check, ChevronDown, CircleAlert, LoaderCircle, Mic, MicOff, Minimize2, PhoneOff, RotateCcw, SendHorizontal, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { COMPOSER_FIELD_RESIZE_EVENT } from "@/lib/composerFocus";
+
 import { EngineMark } from "@/components/EngineMark";
 import { useActiveVoiceInput, useVoiceOutputFellBack } from "@/lib/audio/voiceDevices";
 import { useLocale } from "@/lib/i18n";
@@ -870,6 +872,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class", "style", "hidden", "open"] });
     /* A transition that ended and a font that loaded move the page without changing its tree. */
     const onSettled = (event: Event) => { if (!(event.target instanceof Node) || !root.current?.contains(event.target)) schedule(); };
+    document.addEventListener(COMPOSER_FIELD_RESIZE_EVENT, onSettled, true);
     document.addEventListener("transitionend", onSettled, true);
     document.addEventListener("animationend", onSettled, true);
     /* A surface that scrolled carried its controls with it. */
@@ -881,6 +884,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     return () => {
       live = false;
       observer.disconnect();
+      document.removeEventListener(COMPOSER_FIELD_RESIZE_EVENT, onSettled, true);
       document.removeEventListener("transitionend", onSettled, true);
       document.removeEventListener("animationend", onSettled, true);
       document.removeEventListener("scroll", onSettled, true);

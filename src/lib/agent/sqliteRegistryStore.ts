@@ -1,5 +1,6 @@
 import { compareDeliveryAdmission, seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
+import { beginRegistryTransaction } from "./registryTransaction";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { nextSqliteRows, observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
@@ -12,7 +13,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import type { Database as BunDatabase } from "bun:sqlite";
+import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 
 import { yieldToRuntime } from "@/lib/cooperative";
 import { deepFreeze } from "@/lib/deepFreeze";
@@ -100,7 +101,7 @@ function registryArchiveSchemaInstalled(db: BunDatabase, Database: typeof import
 /** Startup owns these transactions. Explicit statements also pass through the
  * writer observer; Bun's transaction callback API bypasses Database.exec. */
 function withStartupTransaction<T>(db: BunDatabase, write: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
+  beginRegistryTransaction(db, true);
   try {
     const result = write();
     db.exec("COMMIT");
@@ -2108,13 +2109,14 @@ export class SqliteAgentRegistryStore {
   }
 
   private withCallerRead<T>(read: () => T): T {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const value = read();
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return value;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
     }
   }
@@ -2283,8 +2285,8 @@ export class SqliteAgentRegistryStore {
   private loadSnapshot(useRowCache: boolean): StampedSnapshot {
     this.onSnapshotLoad?.();
     // A full read before a mutation borrows the admitted writer transaction.
-    const ownsTransaction = !this.writerHeld;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const hot = useRowCache && this.coldKeys.size > 0;
@@ -2326,8 +2328,8 @@ export class SqliteAgentRegistryStore {
    * delivery bodies or the complete immutable registry graph. Normalize one
    * stored row at a time and keep only the fields its existing guard reads. */
   worktreeProtectionSnapshot(): WorktreeProtection {
-    const admitted = this.writerHeld;
-    if (!admitted) this.db.exec("BEGIN");
+    const admitted = this.db.inTransaction;
+    if (!admitted) beginRegistryTransaction(this.db);
     try {
       const result: WorktreeProtection = { entries: {}, conversations: {}, heldDeliveries: {} };
       for (const collection of ["entries", "conversations", "heldDeliveries"] as const) {
@@ -2381,12 +2383,16 @@ export class SqliteAgentRegistryStore {
 
   private prepareReadOnlySnapshotWork(signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    if (this.preparedReader) {
-      const cached = this.preparedReader.readOnlyCache;
+    const reader = this.preparedReader;
+    if (reader?.readOnlyCache) {
+      // The stamp query can reopen the database and clear the cached view.
+      // A replacement can have the same counters, so take the cache afterward.
+      const stamp = reader.storeStamp();
+      const cached = reader.readOnlyCache;
       /* A warm archive/write invalidation must enter the cooperative reader
          preparation below. Calling readOnlySnapshot here drains its header and
          projection generators synchronously on the serving loop. */
-      if (cached && cached.stamp === this.preparedReader.storeStamp()) {
+      if (cached?.stamp === stamp) {
         return Promise.resolve(cached);
       }
       /* A few journalled commits are replayed on the published reader, the
@@ -2396,7 +2402,7 @@ export class SqliteAgentRegistryStore {
          view a caller still held. */
       if (cached) {
         let replayed: StampedSnapshot | null = null;
-        try { replayed = this.preparedReader.replayBoundedJournal(); }
+        try { replayed = reader.replayBoundedJournal(); }
         catch (error) {
           // The cooperative preparation below takes over; the class of the
           // refusal is logged so a replay that always fails is visible.
@@ -2419,15 +2425,16 @@ export class SqliteAgentRegistryStore {
     if (!this.readOnlyCache || !cold || !this.changesReady || this.writerHeld) return null;
     /* One read transaction decides and replays: a commit landing between the
        two would otherwise be replayed without having been judged. */
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const replayed = this.journalIsBounded(cold.coldIds)
         ? withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => finishSteps(this.refreshSnapshotSteps(true))))
         : null;
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return replayed;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* Transaction already closed. */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* Transaction already closed. */ }
       throw error;
     }
   }
@@ -2499,7 +2506,7 @@ export class SqliteAgentRegistryStore {
         if (this.closed) throw new Error("registry closed during preparation");
         for (let attempt = 0; attempt < 3; attempt++) {
           const identity = databaseFileIdentity(this.filename);
-          reader.db.exec("BEGIN");
+          beginRegistryTransaction(reader.db);
           const steps = (function* () {
             // Copy immutable projections inside the same bounded, cancellable
             // slices as the loader. Each builder prunes its own map. A peer
@@ -2752,6 +2759,18 @@ export class SqliteAgentRegistryStore {
     finishSteps(this.refreshColdKeySteps());
   }
 
+  /** Cooperative iterators cannot share Bun's cached query statement with a
+      nested reader while suspended. Each owns and finalizes its statement. */
+  private stepStatement<Row, Bindings extends SQLQueryBindings[]>(sql: string): { iterate: (...bindings: Bindings) => IterableIterator<Row> } {
+    const db = this.db;
+    return { *iterate(...bindings) {
+      const statement = db.prepare<Row, SQLQueryBindings[]>(sql);
+      const rows = statement.iterate(...bindings);
+      try { yield* rows; }
+      finally { try { rows.return?.(); } finally { statement.finalize(); } }
+    } };
+  }
+
   private *refreshColdKeySteps(): Generator<void, void> {
     const stamp = this.storeStamp();
     if (stamp === this.coldKeysStamp) return;
@@ -2763,7 +2782,7 @@ export class SqliteAgentRegistryStore {
     const first = this.coldKeysChangeId
       ? this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq : 0;
     if (this.coldKeysChangeId && first > 0 && first <= this.coldKeysChangeId + 1 && changeId >= this.coldKeysChangeId) {
-      const changed = this.db.query<{ collection: string; row_key: string; cold: number }, [number]>(
+      const changed = this.stepStatement<{ collection: string; row_key: string; cold: number }, [number]>(
         `SELECT j.collection,j.row_key,EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection=j.collection AND c.row_key=j.row_key) AS cold
           FROM registry_changes j WHERE j.seq>? ORDER BY j.seq`).iterate(this.coldKeysChangeId);
       try {
@@ -2780,7 +2799,7 @@ export class SqliteAgentRegistryStore {
       } finally { changed.return?.(); }
     } else {
       this.coldKeys = new Set();
-      for (const row of yield* headerRowSteps(this.db.query<{ collection: string; row_key: string }, []>(
+      for (const row of yield* headerRowSteps(this.stepStatement<{ collection: string; row_key: string }, []>(
         "SELECT collection,row_key FROM registry_cold").iterate())) this.coldKeys.add(grantDecisionKey(row.collection,row.row_key));
       for (const [collection,rows] of this.rowCache) {
         for (const key of rows.keys()) {
@@ -2942,7 +2961,7 @@ export class SqliteAgentRegistryStore {
   private *orderedKeysSteps(collection: RowCollection): Generator<void, string[]> {
     let order = this.collectionOrders.get(collection);
     if (!order) {
-      const rows = yield* headerRowSteps(this.db.query<{ row_key: string; row_order: number }, [string]>(
+      const rows = yield* headerRowSteps(this.stepStatement<{ row_key: string; row_order: number }, [string]>(
         "SELECT row_key,row_order FROM registry_rows WHERE collection=? ORDER BY row_order").iterate(collection));
       const keys: string[] = [], orders = new Map<string, number>();
       for (const row of rows) {
@@ -3084,15 +3103,14 @@ export class SqliteAgentRegistryStore {
       }
     } catch (error) {
       try { refresh.return(undefined as never); } catch { /* Preserve the refusal. */ }
-      try { this.db.exec("ROLLBACK"); } catch { /* Transaction already closed. */ }
       throw error;
     }
     if (next.value) return next.value;
 
     // A trimmed journal or replaced view needs a complete, validated reload.
     // Keep that recovery path cooperative too.
-    const ownsTransaction = !this.writerHeld;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     const reload = (function* (store: SqliteAgentRegistryStore) {
       yield* store.refreshColdKeySteps();
       const hot = yield* store.loadHotSteps();
@@ -3100,8 +3118,8 @@ export class SqliteAgentRegistryStore {
       store.snapshotChangeId = store.changeId();
       return result;
     })(this);
-    next = reload.next();
     try {
+      next = reload.next();
       while (!next.done) {
         signal?.throwIfAborted();
         const started = performance.now();
@@ -3123,8 +3141,8 @@ export class SqliteAgentRegistryStore {
   private *refreshSnapshotSteps(admitted = false): Generator<void, StampedSnapshot | null> {
     const previous = this.readOnlyCache;
     if (!previous || !this.changesReady) return null;
-    const ownsTransaction = !this.writerHeld && !admitted;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction && !admitted;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
       if (first > this.snapshotChangeId + 1 || this.changeId() < this.snapshotChangeId
@@ -3132,7 +3150,7 @@ export class SqliteAgentRegistryStore {
         if (ownsTransaction) this.db.exec("COMMIT");
         return null;
       }
-      const changeRows = this.db.query<{ collection: string; row_key: string }, [number]>(
+      const changeRows = this.stepStatement<{ collection: string; row_key: string }, [number]>(
         "SELECT collection,row_key FROM registry_changes WHERE seq>? ORDER BY seq").iterate(this.snapshotChangeId);
       const changes: Array<{ collection: string; row_key: string }> = [];
       const seenChanges = new Set<string>();
@@ -3214,7 +3232,7 @@ export class SqliteAgentRegistryStore {
         if (kind === "heldDeliveries") {
           const previousDelivery = file.heldDeliveries[key];
           if (previousDelivery) affectedOwners.add(previousDelivery.command.operationId);
-          const owners = this.db.query<{ row_key: string }, [string]>(
+          const owners = this.stepStatement<{ row_key: string }, [string]>(
             "SELECT row_key FROM registry_rows WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.deliveryId')=?").iterate(key);
           try {
             for (;;) {
@@ -3383,9 +3401,8 @@ export class SqliteAgentRegistryStore {
       this.snapshotChangeId = this.changeId();
       if (ownsTransaction) this.db.exec("COMMIT");
       return remembered;
-    } catch (error) {
-      if (ownsTransaction) { try { this.db.exec("ROLLBACK"); } catch { /* closed */ } }
-      throw error;
+    } finally {
+      if (ownsTransaction && this.db.inTransaction) this.db.exec("ROLLBACK");
     }
   }
 
@@ -3456,7 +3473,7 @@ export class SqliteAgentRegistryStore {
     const preselected = held ? undefined : archiveCandidates(this.db,limit);
     if (preselected && !preselected.length) return 0;
     this.writerHeld = false;
-    if (!held) this.db.exec("BEGIN IMMEDIATE");
+    if (!held) beginRegistryTransaction(this.db, true);
     try {
       const moved = archiveInactiveRegistryRows(this.db,limit,preselected);
       if (moved) {
@@ -3573,7 +3590,7 @@ export class SqliteAgentRegistryStore {
       this.coldGrantForgets += 1;
       return changeId;
     }
-    const changes = this.db.query<{ collection: RowCollection; row_key: string }, [number]>(
+    const changes = this.stepStatement<{ collection: RowCollection; row_key: string }, [number]>(
       "SELECT collection,row_key FROM registry_changes WHERE seq>? ORDER BY seq").iterate(previous.changeId);
     const invalidate = function* (store: SqliteAgentRegistryStore, dependency: string): Generator<void> {
       for (const id of store.coldGrantTargets.get(dependency) ?? []) {
@@ -3589,7 +3606,7 @@ export class SqliteAgentRegistryStore {
         const { collection,row_key: key } = next.value;
         yield* invalidate(this,authorityDependency("row",grantDecisionKey(collection,key)));
         if (collection === "conversations") {
-          const identities = this.db.query<{ entry_key: string; artifact_path: string | null }, [string]>(
+          const identities = this.stepStatement<{ entry_key: string; artifact_path: string | null }, [string]>(
             `SELECT json_extract(r.value_json,'$.engine')||':'||json_extract(g.value,'$.id') AS entry_key,
               json_extract(g.value,'$.path') AS artifact_path FROM ${this.recordsSource} r,json_each(r.value_json,'$.generations') g
               WHERE r.collection='conversations' AND r.row_key=?`).iterate(key);
@@ -3948,7 +3965,7 @@ export class SqliteAgentRegistryStore {
          owner keys; with neither named by the journal they stand. */
       if (!delta.ownersChanged && !touched.has("heldDeliveries")) keptOwners = prior.syntheticOwners;
     } else if (!cache && this.changesReady) {
-      const readHeaders = yield* headerRowSteps(this.db.query<ColdHeader, []>(
+      const readHeaders = yield* headerRowSteps(this.stepStatement<ColdHeader, []>(
         "SELECT c.collection,c.row_key,c.archive_id,a.row_order FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id").iterate());
       headers = yield* orderedHeaderSteps(readHeaders, (a, b) => a.row_order - b.row_order);
     }
@@ -3972,7 +3989,7 @@ export class SqliteAgentRegistryStore {
     const archivedDeliveries = keptOwners ? undefined : grouped.get("heldDeliveries");
     if (archivedDeliveries) {
       const storedOwners = new Set<string>();
-      for (const row of yield* headerRowSteps(this.db.query<{ row_key: string }, []>(
+      for (const row of yield* headerRowSteps(this.stepStatement<{ row_key: string }, []>(
         "SELECT row_key FROM registry_rows WHERE collection='deliveryOperationOwners'").iterate())) storedOwners.add(row.row_key);
       for (const header of archivedDeliveries) {
         const operationId = this.coldRowProjections.get(header.archive_id)?.operationId;
@@ -4512,7 +4529,7 @@ export class SqliteAgentRegistryStore {
   }
 
   /** The callback must finish inside the transaction; no lazy object escapes. */
-  private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[]): string[] {
+  private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[], exactSpawnAttempt = false): string[] {
     if (field === "custodyState" || field === "migration.custodyState") return this.matchingRowKeysBounded(collection, [{ field, value: values }], Number.MAX_SAFE_INTEGER);
     const distinct = [...new Set(values)];
     if (!distinct.length) return [];
@@ -4523,16 +4540,27 @@ export class SqliteAgentRegistryStore {
     // With multiple IN bindings plus ORDER BY, SQLite can prefer collection
     // order and inspect every retained payload. Each distinct value gets one
     // field-index seek; merge only its matches in the original collection order.
-    const rows = distinct.flatMap(value => mapped
-      ? this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM registry_hot_rows
-          WHERE collection='${collection}' AND json_extract(value_json,'${jsonPath}') IN (?)
-          UNION ALL SELECT a.row_key,a.row_order FROM registry_archive a CROSS JOIN registry_cold c
-          WHERE a.collection='${collection}' AND json_extract(a.value_json,'${jsonPath}') IN (?)
-            AND c.collection=a.collection AND c.row_key=a.row_key AND c.archive_id=a.id
-          ORDER BY row_order`).all(value, value)
-      : this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM ${this.recordsSource}
-          WHERE collection=? AND json_extract(value_json,'${jsonPath}') IN (?) ORDER BY row_order`)
-        .all(collection, value));
+    const rows = distinct.flatMap(value => {
+      // SQLite 3.39 compares JSON text keys only through their first NUL.
+      // Decode the complete JSON string on the RHS so the expression index
+      // still gets a scalar equality seek; filter its candidates by the
+      // original JavaScript value below.
+      const parameter = exactSpawnAttempt ? "json_extract(?, '$')" : "?";
+      const bindings = [exactSpawnAttempt ? JSON.stringify(value) : value];
+      const match = (column: string) => {
+        const extracted = `json_extract(${column},'${jsonPath}')`;
+        return exactSpawnAttempt ? `${extracted} = ${parameter}` : `${extracted} IN (${parameter})`;
+      };
+      return mapped
+        ? this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM registry_hot_rows
+            WHERE collection='${collection}' AND ${match("value_json")}
+            UNION ALL SELECT a.row_key,a.row_order FROM registry_archive a CROSS JOIN registry_cold c
+            WHERE a.collection='${collection}' AND ${match("a.value_json")}
+              AND c.collection=a.collection AND c.row_key=a.row_key AND c.archive_id=a.id
+            ORDER BY row_order`).all(...bindings, ...bindings)
+        : this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM ${this.recordsSource}
+            WHERE collection=? AND ${match("value_json")} ORDER BY row_order`).all(collection, ...bindings);
+    });
     return rows.sort((a, b) => a.row_order - b.row_order).map(row => row.row_key);
   }
 
@@ -4586,8 +4614,8 @@ export class SqliteAgentRegistryStore {
   /** Diagnostic attribution needs one client id, including a conserving
       owner fallback, without materializing retained receipt bodies. */
   spawnDiagnosticAttempt(launchId?: string, conversationId?: string): string | undefined {
-    const ownsTransaction = !this.writerHeld;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const mapped = this.changesReady && this.db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_records'")
         .get()?.sql.includes("a.collection=c.collection AND a.row_key=c.row_key");
@@ -4714,7 +4742,7 @@ export class SqliteAgentRegistryStore {
     }> }; offset: number; totalGenerations: number; currentEvidence: unknown; nextOffset: number; complete: boolean;
   } {
     const ownsTransaction = !this.db.inTransaction;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const result: ReturnType<SqliteAgentRegistryStore["terminationPage"]>["snapshot"] = { entries: {}, conversations: {} };
       const metadata = this.db.query<{ engine: "codex" | "claude" | "copilot"; total: number; version: string }, [string]>(
@@ -4782,7 +4810,7 @@ export class SqliteAgentRegistryStore {
     // A mutation consumes writer admission before calling its guard. Nested
     // readers borrow the open transaction; only its owner may end it.
     const ownsTransaction = !this.db.inTransaction;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const skipColdKeyInitialization = options.skipColdKeyInitialization === true;
       if (this.changesReady && !skipColdKeyInitialization) this.refreshColdKeys();
@@ -4799,7 +4827,8 @@ export class SqliteAgentRegistryStore {
       component. Keep this projection out of the generic lazy reader: an MCP
       grant on a selected row otherwise triggers its whole-registry fallback. */
   conversationRetentionSnapshot(conversationId: string): Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const result: Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> = {
@@ -4832,7 +4861,7 @@ export class SqliteAgentRegistryStore {
         const next = read("conversationAliases", canonical);
         if (typeof next !== "string") break;
         aliases[canonical] = next;
-        if (seen.has(canonical)) { this.db.exec("COMMIT"); return result; }
+        if (seen.has(canonical)) { if (ownsTransaction) this.db.exec("COMMIT"); return result; }
         seen.add(canonical);
         canonical = next;
       }
@@ -4862,10 +4891,10 @@ export class SqliteAgentRegistryStore {
         const receipt = read("receipts", key);
         if (receipt) receipts[key] = receipt;
       }
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* closed */ }
       throw error;
     }
   }
@@ -4873,7 +4902,8 @@ export class SqliteAgentRegistryStore {
   /** One transaction and keyed row reads for the at-most-bounded spawn paths in
       a Viewer snapshot. No collection enumeration or whole snapshot occurs. */
   snapshotSpawns(launchIds: readonly string[]): SnapshotSpawnProjection {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const readRow = (collection: RowCollection, key: string): unknown => {
@@ -4935,10 +4965,10 @@ export class SqliteAgentRegistryStore {
             : null,
         };
       }
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return projection;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
     }
   }
@@ -4969,7 +4999,8 @@ export class SqliteAgentRegistryStore {
   pageSeatChildren(parentId: string, after: SeatChildrenAnchor | null, limit: number, keys?: readonly string[]): SeatChildrenPage {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 60) throw new Error("invalid child page limit");
     if (keys && keys.length > limit) throw new Error("child key budget exceeded");
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const file = this.normalize({ version: 2, entries: {}, receipts: {} });
@@ -5031,7 +5062,7 @@ export class SqliteAgentRegistryStore {
           if (key) read("entries", sessionKeyId(key));
         }
       }
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       const last = rows.at(-1);
       return {
         file,
@@ -5042,7 +5073,7 @@ export class SqliteAgentRegistryStore {
         evidenceGap,
       };
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
       throw error;
     }
   }
@@ -5050,7 +5081,8 @@ export class SqliteAgentRegistryStore {
   /** Advisory worker inventory. This reads indexed live hosts and their own
       lineage only; the general lazy registry reader inventories historical keys. */
   liveWorkerChildren(): { conversationId: string; parentConversationId: string; pipeline: boolean; deputy: boolean }[] {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const rows = this.db.query<{ artifactPath: string }, []>(`
         SELECT json_extract(value_json, '$.artifactPath') AS artifactPath
@@ -5087,10 +5119,10 @@ export class SqliteAgentRegistryStore {
         this.onRowPayloadRead?.("memberships", stored ? 1 : 0);
         children.set(conversationId, { conversationId, parentConversationId: canonicalParent(edge.parent), pipeline: memberships.some(item => item.kind === "pipeline"), deputy: memberships.some(item => item.kind === "orchestrator") });
       }
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return [...children.values()];
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
     }
   }
@@ -5116,7 +5148,7 @@ export class SqliteAgentRegistryStore {
     this.db.exec("PRAGMA busy_timeout=0");
     try { return stateLockAttempt("orchestrator.authority", () => {
       const ownsTransaction = !this.db.inTransaction;
-      if (ownsTransaction) this.db.exec("BEGIN");
+      if (ownsTransaction) beginRegistryTransaction(this.db);
       try {
         const canonical = this.workerConversationId(id);
         const row = this.db.query<{ superseded: string | null; generations: number | null; project: string | null }, [string]>(
@@ -5140,7 +5172,8 @@ export class SqliteAgentRegistryStore {
   }
 
   workerSeatContexts(ids: readonly string[]): Map<string, { conversationId: string; directories: string[] }> {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const result = new Map<string, { conversationId: string; directories: string[] }>();
       for (const id of new Set(ids)) {
@@ -5150,17 +5183,17 @@ export class SqliteAgentRegistryStore {
         const generations = row?.generations ? parseSqliteJson(row.generations, this.db) as { launchProfile?: { cwd?: string } }[] : [];
         result.set(id, { conversationId, directories: generations.toReversed().flatMap(generation => generation.launchProfile?.cwd ? [generation.launchProfile.cwd] : []) });
       }
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
     }
   }
 
   seatTickConversation(id: string): SeatTickConversation | null {
     const ownsTransaction = !this.db.inTransaction;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const read = (collection: "conversationAliases" | "conversations" | "entries", key: string) => {
@@ -5215,7 +5248,8 @@ export class SqliteAgentRegistryStore {
     conversation: RegistryFile["conversations"][string] | null;
     entry: RegistryFile["entries"][string] | null;
   } {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const read = (collection: "conversations" | "entries", id: string): unknown => {
         const row = this.db.query<{ value_json: string | null }, [string, string]>(
@@ -5231,10 +5265,10 @@ export class SqliteAgentRegistryStore {
       const normalized = this.normalize({ version: 2, receipts: {},
         conversations: rawConversation === null ? {} : { [conversationId]: rawConversation },
         entries: rawEntry === null ? {} : { [key]: rawEntry } });
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return { conversation: normalized.conversations[conversationId] ?? null, entry: normalized.entries[key] ?? null };
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
       throw error;
     }
   }
@@ -5262,7 +5296,8 @@ export class SqliteAgentRegistryStore {
       most one alias chain and one conversation row per title record; it never
       enumerates a registry collection. */
   snapshotTitleConversations(conversationIds: readonly string[]): SnapshotTitleConversationProjection {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const readRow = (collection: "conversationAliases" | "conversations", key: string): unknown => {
@@ -5314,10 +5349,10 @@ export class SqliteAgentRegistryStore {
           ...[...conversation.continuityPaths].reverse(),
         ])].slice(0, SNAPSHOT_TITLE_OWNED_PATH_LIMIT),
       }));
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return projection;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
     }
   }
@@ -5393,7 +5428,7 @@ export class SqliteAgentRegistryStore {
       const waitStartedAt = performance.now();
       if (writerHeld) { /* the lock is held and the transaction is open */ }
       else if (pessimistic) this.beginMutationWrite(options.noWait);
-      else this.db.exec("BEGIN");
+      else beginRegistryTransaction(this.db);
       let current: LazyRegistrySnapshot;
       let changes: RegistryChanges;
       let result: T;
@@ -5566,9 +5601,10 @@ export class SqliteAgentRegistryStore {
 
   /** One request for the write lock that never waits. */
   private tryBeginWrite(): boolean {
+    if (this.db.inTransaction) return false;
     this.db.exec("PRAGMA busy_timeout = 0");
     try {
-      this.db.exec("BEGIN IMMEDIATE");
+      beginRegistryTransaction(this.db, true);
       return true;
     } catch (error) {
       if (error instanceof Error && (error as { code?: string }).code === "SQLITE_BUSY") return false;
@@ -5581,7 +5617,7 @@ export class SqliteAgentRegistryStore {
   private beginMutationWrite(noWait = false): void {
     if (noWait) {
       this.db.exec("PRAGMA busy_timeout = 0");
-      try { this.db.exec("BEGIN IMMEDIATE"); }
+      try { beginRegistryTransaction(this.db, true); }
       finally { this.db.exec("PRAGMA busy_timeout = 5000"); }
       return;
     }
@@ -5593,7 +5629,7 @@ export class SqliteAgentRegistryStore {
     try {
       for (;;) {
         try {
-          this.db.exec("BEGIN IMMEDIATE");
+          beginRegistryTransaction(this.db, true);
           return;
         } catch (error) {
           if (!(error instanceof Error)
@@ -5614,7 +5650,7 @@ export class SqliteAgentRegistryStore {
        failing to compile. */
     const decided = this.decideAssembled(file);
     if (options.noWait) this.beginMutationWrite(true);
-    else this.db.exec("BEGIN IMMEDIATE");
+    else beginRegistryTransaction(this.db, true);
     try {
       const current = this.loadInTransaction();
       if (expectedRevision !== undefined && current.revision !== expectedRevision) {
@@ -5641,7 +5677,7 @@ export class SqliteAgentRegistryStore {
     initialSnapshot: SqliteRegistryStoreOptions["initialSnapshot"],
     verifyImport: SqliteRegistryStoreOptions["verifyImport"],
   ): void {
-    this.db.exec("BEGIN IMMEDIATE");
+    beginRegistryTransaction(this.db, true);
     try {
       const complete = this.meta("migration_complete");
       if (complete !== "1") {
@@ -5855,7 +5891,15 @@ export class SqliteAgentRegistryStore {
       if (values.length === 0) return [];
       if (reorderedCollections.has(collection)) return Object.entries(file[collection])
         .filter(([, row]) => values.includes(lookupValue(row, field) as string)).map(([key]) => key);
-      const keys = new Set(this.matchingRowKeys(collection, field, values));
+      const exactSpawnAttempt = trackMutations && collection === "receipts" && field === "clientAttemptId";
+      const keys = new Set(this.matchingRowKeys(collection, field, values, exactSpawnAttempt));
+      if (exactSpawnAttempt) {
+        // The index supplies candidates. The stored receipt carries the full key.
+        for (const key of keys) {
+          const attempt = file.receipts[key]?.clientAttemptId;
+          if (typeof attempt !== "string" || !values.includes(attempt)) keys.delete(key);
+        }
+      }
       for (const key of dirtyRows.get(collection) ?? []) {
         const row = (file[collection] as Record<string, unknown>)[key];
         if (values.includes(lookupValue(row, field) as string)) keys.add(key); else keys.delete(key);
@@ -6301,7 +6345,7 @@ export class SqliteAgentRegistryStore {
     if (!this.grantJournalReady) { this.grantDecisions = null; return; }
     const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq), 0) AS seq FROM registry_grant_changes").get()!.seq;
     if (first > previous.changeId + 1) { this.grantDecisions = null; return; }
-    const changed = this.db.query<{ seq: number; collection: RowCollection; row_key: string }, [number]>(
+    const changed = this.stepStatement<{ seq: number; collection: RowCollection; row_key: string }, [number]>(
       "SELECT seq, collection, row_key FROM registry_grant_changes WHERE seq > ? ORDER BY seq",
     ).iterate(previous.changeId);
     const rows = previous.rows;

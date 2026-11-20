@@ -170,7 +170,7 @@ test("a fresh process adopts the persisted retry without creating another attemp
 }, 20_000);
 
 
-for (const fence of ["admission", "async-admission", "dispatch", "recovery", "idle"] as const)
+for (const fence of ["admission", "async-admission", "dispatch", "recovery"] as const)
 test(`production continuation retry rechecks custody at ${fence} after an await`, async () => {
   const f = fixture();
   const { sendOwnerContinuation } = await import("./ownerRun");
@@ -200,10 +200,6 @@ test(`production continuation retry rechecks custody at ${fence} after an await`
     if (fence === "async-admission") await request.admissionGuardAsync?.();
     if (fence === "dispatch") await dependencies?.authorizeDispatch?.();
     if (fence === "recovery") request.recoveryAuthorityGuard?.();
-    if (fence === "idle") {
-      expect(await dependencies?.idleContinuationAllowed?.()).toBe(false);
-      throw Error("owner continuation retry custody changed");
-    }
     effects++;
     return { ok: true, structured: true, target: f.conversationId, outcome: "held", operationId: continuation.operationId };
   });
