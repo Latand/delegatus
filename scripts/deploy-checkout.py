@@ -1900,6 +1900,12 @@ class Checkout:
                     continue
                 detail["exit"] = {"code": exit_record.get("code"), "signal": exit_record.get("signal"),
                                   "stopPath": (stop or {}).get("path")}
+                exit_signal = detail["exit"]["signal"]
+                interrupted_busy_turn = (before["work"].get("turnState") == "busy"
+                                         and (isinstance(exit_signal, str) and exit_signal.upper() != "EOF"
+                                              or exit_record.get("code") == 143))
+                if interrupted_busy_turn:
+                    evidence["custodyChanged"] = True
                 if detail["exit"]["signal"] and not detail["exit"]["stopPath"]:
                     evidence["custodyChanged"] = True
                     if scope and evidence["unitLeftActive"] and scope not in evidence["scopeStopped"]:

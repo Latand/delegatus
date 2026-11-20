@@ -1023,6 +1023,45 @@ class CheckoutIntegration(unittest.TestCase):
                     self.assertEqual(proof["scopeStopped"], [group["scope"]["Id"]])
                 self.assertEqual(self.service_commands(), [])
 
+    def test_relaunch_rejects_busy_host_stop_receipt_but_allows_terminal_and_stdio_exits(self):
+        for turn_state, exit_record, expected, custody_changed in [
+            ("busy", {"code": None, "signal": "SIGTERM"}, "fail", True),
+            ("idle", {"code": None, "signal": "SIGTERM"}, "pass", False),
+            ("busy", {"code": 0, "signal": "EOF"}, "pass", False),
+            ("busy", {"code": 143, "signal": None}, "fail", True),
+            ("busy", {"code": 143, "signal": "EOF"}, "fail", True),
+        ]:
+            with self.subTest(turn_state=turn_state, exit_record=exit_record):
+                self.setUp()
+                group = self.helper_groups()[0]
+                group["row"]["turnState"] = turn_state
+                group["row"]["pipeline"] = {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1}
+                original_alive = self.adapter.identity_alive
+                stopped = {"value": False}
+
+                def stop_host():
+                    before = next(iter(self.adapter.relaunch_hosts.values()))
+                    slots = before["slots"]
+                    deploy.write_json(slots["stop"], {
+                        "active": 1, "path": "startup-adoption-cleanup", "signal": "SIGTERM"})
+                    deploy.write_json(slots["exit"], exit_record)
+                    stopped["value"] = True
+                    self.attempts = [{"n": 2, "state": "running", "conversationId": "synthetic-stage"}]
+
+                def identity_alive(entry):
+                    if stopped["value"] and entry["pid"] == group["host"]:
+                        return False
+                    return original_alive(entry)
+
+                self.adapter.identity_alive = identity_alive
+                self.answer_relaunch(after=stop_host)
+                result = deploy.run_switch(self.adapter, TARGET, samples=2, interval=1, timeout=0)
+                self.assertEqual(result["verdict"], expected)
+                custody = result["relaunch"]["hosts"][0]
+                self.assertEqual(custody["exit"]["stopPath"], "startup-adoption-cleanup")
+                self.assertEqual(result["relaunch"]["custodyChanged"], custody_changed)
+                self.assertEqual(self.service_commands(), [])
+
     def test_a_stale_or_wrong_launcher_receipt_cannot_settle_relaunch(self):
         for field, value in [("requestId", "foreign"), ("launcherPid", 900), ("launcherIdentity", "reused"),
                              ("revision", OLD), ("target", OLD)]:
