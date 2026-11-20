@@ -719,16 +719,16 @@ export async function runClaimedRequest(
     const earlyMemberDecline = memberDecline();
     if (earlyMemberDecline) return await finish(earlyMemberDecline);
     const profile = answerProfileFor(requester);
-    // Third-party context stays in the closed, request-local answer profile.
-    // Owner authority must never launch a general session for guest delivery.
-    const ownerMessage = request.delivery === "guest" ? null : ownerTierFor({ ownerTier: true }, request);
+    // The paired service verifies owner identity independently of guest delivery.
+    // Only that verified, non-anonymous author can enter the owner tier.
+    const ownerMessage = ownerTierFor({ ownerTier: true }, request);
     const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
     const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
       && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
     const trigger = request.input.conversation.find(message => message.id === ownerMessage?.messageId);
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
-    owner = request.delivery === "guest" ? null : prototype ? ownerMessage : ownerTierFor(target, request);
+    owner = prototype ? ownerMessage : ownerTierFor(target, request);
     if (owner || request.delivery === "guest") delete profile.pageRead;
     boundedOwnerTurn = !!owner && !prototype;
     ownerExecution = boundedOwnerTurn;

@@ -202,8 +202,8 @@ test("verified owner turn reaches the designated seat through MCP and HTTP with 
   expect(delivered[1].text).toBe(delivered[0].text);
 });
 
-for (const pairedProject of ["project-b", "unknown-project", null] as const) {
-  test(`owner group request with paired project ${pairedProject ?? "unset"}`, async () => {
+for (const pairedProject of ["project-b", "unknown-project", null] as const) for (const delivery of ["owner", "guest"] as const) {
+  test(`${delivery} group request with paired project ${pairedProject ?? "unset"}`, async () => {
     const { runClaimedRequest } = await import("@/lib/externalRelay/runner");
     const { startTestRelay } = await import("@/lib/externalRelay/testRelay");
     const { readRelayStore, dropRun } = await import("@/lib/externalRelay/store");
@@ -222,9 +222,11 @@ for (const pairedProject of ["project-b", "unknown-project", null] as const) {
     const words = "Please send this to the project team.";
     const attachment = "Screenshot showing that a matching message stayed visible.";
     const message = contextRequest.input.conversation[0]!;
-    const wire = requestSchema.parse({ ...contextRequest, target_id: "target", request_id: "owner-request",
+    const projectKey = pairedProject ?? "unset";
+    const wire = requestSchema.parse({ ...contextRequest, ...(delivery === "guest" ? { delivery: "guest" } : {}), target_id: "target", request_id: `owner-request-${delivery}-${projectKey}`,
       chat: { key: "fixture_group_chat" }, answer: { max_chars: 1000, progress: "none" },
-      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+      input: { ...contextRequest.input, ...(delivery === "guest" ? { tools: contextRequest.input.tools.filter(tool => tool.mode === "handoff") } : {}),
+        requester: { ...contextRequest.input.requester, is_owner: true },
         respond_to: "owner-message", conversation: [
           { ...message, id: "attachment-message", text: attachment },
           { ...message, id: "owner-message", text: words, reply_to: "attachment-message" },
@@ -235,7 +237,7 @@ for (const pairedProject of ["project-b", "unknown-project", null] as const) {
       engine: "codex", accountId: "fixture", kind: "managed", home: root, transcriptRoot: root, env: { ...process.env },
     } });
     const tools = toolsFor(sender);
-    const send = { clientRequestId: "group-owner-handoff", text: attachment };
+    const send = { clientRequestId: `group-owner-handoff-${delivery}-${projectKey}`, text: attachment };
     const accepted = "Queued for the Example recipient orchestrator.";
     const question = "Which project should receive this?";
     try {
@@ -257,11 +259,12 @@ for (const pairedProject of ["project-b", "unknown-project", null] as const) {
           } else {
             expect(handoff).toMatchObject({ ok: false, code: pairedProject ? "unknown_project" : "project_required" });
           }
-          return { state: "ended", finalText: handoff.ok ? accepted : question };
+          const outcome = handoff.ok ? accepted : question;
+          return { state: "ended", finalText: `${outcome}\n\nThis extra analysis must never be published.\nA third verbose line.` };
         }, stop: async () => {}, pollMs: 1,
       } });
       expect(result).toMatchObject({ outcome: "answered", answer: {
-        action: "reply", reply_to: "owner-message", text: pairedProject === "project-b" ? accepted : question,
+        action: "reply", reply_to: delivery === "guest" ? null : "owner-message", text: pairedProject === "project-b" ? accepted : question,
       } });
       if (pairedProject !== "project-b") {
         expect(delivered).toEqual([]);

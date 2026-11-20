@@ -70,7 +70,7 @@ test("guest contract refuses direct service tools, progress, destinations and ri
 });
 
 for (const populated of [false, true]) test(`guest handoff and final text validation with tools=${populated}`, async () => {
-  const request = guest(); if (!populated) request.input.tools = [];
+  const request = guest(); request.input.requester = { ...request.input.requester!, is_owner: false }; if (!populated) request.input.tools = [];
   expect(offersHandoff(request)).toBe(true);
   expect(callableTools(request)).toEqual([]);
   const owner = ownerTierFor({ ownerTier: true }, request)!;
@@ -96,7 +96,7 @@ for (const populated of [false, true]) test(`guest handoff and final text valida
 
 for (const ownerTier of [true, false]) for (const populated of [true, false]) for (const handoff of (ownerTier ? [false, true, "late", "timeout"] as const : [false, true] as const))
   test(`real guest runner ownerTier=${ownerTier} tools=${populated} handoff=${handoff}`, async () => {
-    const request = guest(); if (!populated) request.input.tools = [];
+    const request = guest(); request.input.requester = { ...request.input.requester!, is_owner: false }; if (!populated) request.input.tools = [];
     const beats: unknown[] = [], completions: unknown[] = [], unexpected: string[] = [];
     const wire: Record<string, unknown> = {};
     const server = await startTestRelay((req, body) => {
