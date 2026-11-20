@@ -26,6 +26,20 @@ test("pressure reclaims oldest recent ended temp to the cap without making evide
   } finally { f.store.close(); }
 });
 
+test("a missing consumer checkout is an operator decision with the root allocation", async () => {
+  const f = fixture(), directory = f.make("consumer-gone");
+  const checkout = path.join(f.root, "retired-consumer");
+  try {
+    const report = await sweepAttemptTemps(f.store, { ...f.options, capBytes: 0,
+      references: async () => { await fs.promises.readdir(checkout); return true; } });
+    expect(report).toMatchObject({ removed: 0, liveHeld: 0, operatorHeld: 1 });
+    expect(report.operatorHeldBytes).toBeGreaterThan(0);
+    expect(report.outcomes[0]).toMatchObject({ directory, disposition: "operator", bytes: report.operatorHeldBytes,
+      reason: expect.stringContaining("consumer checkout became unreadable during retirement") });
+    expect(fs.existsSync(directory)).toBeTrue();
+  } finally { f.store.close(); }
+});
+
 test("the next pressure episode restarts oldest first after a helper restart", async () => {
   const f = fixture(), old = f.make("old-live", NOW - 3), middle = f.make("middle", NOW - 2);
   f.make("newest", NOW - 1);

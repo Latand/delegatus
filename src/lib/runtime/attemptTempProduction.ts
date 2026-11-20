@@ -176,7 +176,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     const previous = recordedReport(file, mode);
     const changed = JSON.stringify(previous.condition) !== JSON.stringify(condition);
     const forecastChanged = previous.retention !== undefined && JSON.stringify(previous.retention) !== JSON.stringify(report.retention);
-    if (report.pass || report.removed || copies.removed || report.errors || copies.errors || report.spaceError || report.lowSpace || report.deferred || report.overCapBytes || changed || forecastChanged || report.retention.dueBytes || report.retention.upcomingBytes) {
+    if (report.pass || report.operatorHeld || report.removed || copies.removed || report.errors || copies.errors || report.spaceError || report.lowSpace || report.deferred || report.overCapBytes || changed || forecastChanged || report.retention.dueBytes || report.retention.upcomingBytes) {
       const gb = (bytes: number) => `${(bytes / 1e9).toFixed(2)} GB`;
       const minutes = (ms: number) => `${(ms / 60000).toFixed(1)} min`;
       const pass = report.pass, last = report.lastPass, full = report.lastFullPass;
