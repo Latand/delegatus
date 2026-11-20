@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { CLEARANCE, CONTROL_WEIGHT, placeStack, stackRects, TEXT_WEIGHT, type Obstacle } from "./soundCaptionPlacement";
+import { CLEARANCE, CONTROL_WEIGHT, GRID_SLACK, NARROW_MIN, placeStack, stackRects, TEXT_WEIGHT, widthClearOfLeft, type Obstacle } from "./soundCaptionPlacement";
 
 const viewport = { width: 1000, height: 700 };
 const toast = { width: 200, height: 56 };
@@ -116,5 +116,34 @@ describe("sound caption placement", () => {
 
   test("no toasts, nothing to place", () => {
     expect(place(0, [text(700, 56, 280, 300)])).toEqual({ top: 56, fold: 0, free: true, shift: 0 });
+  });
+});
+
+describe("the width a toast needs to stand clear of words on its left", () => {
+  const wide = { width: 300, height: 62 };
+  const input = (obstacles: Obstacle[], size = wide, top = 142) => ({ viewport, right: 16, top, size, obstacles });
+
+  test("nothing under the toast needs no narrower toast", () => {
+    expect(widthClearOfLeft(input([text(100, 400, 300)]))).toBeNull();
+  });
+
+  test("a label under the toast's left end narrows it to the label's right edge plus the clearance", () => {
+    /* The toast's left edge is 684; a tab label ends at 700. */
+    const room = widthClearOfLeft(input([text(640, 150, 60)]));
+    expect(room).toBe(1000 - 16 - (700 + CLEARANCE + GRID_SLACK));
+    expect(room!).toBeLessThan(wide.width);
+  });
+
+  test("the widest covered edge decides", () => {
+    expect(widthClearOfLeft(input([text(640, 150, 60), control(650, 160, 70)]))).toBe(1000 - 16 - (720 + CLEARANCE + GRID_SLACK));
+  });
+
+  test("a line that runs far under the toast cannot be cleared by a toast of at least the narrowest width", () => {
+    expect(widthClearOfLeft(input([text(640, 150, 300)]))).toBeNull();
+    expect(NARROW_MIN).toBeGreaterThan(0);
+  });
+
+  test("an obstacle above or below the toast's rows is not covered", () => {
+    expect(widthClearOfLeft(input([text(640, 142 + wide.height + CLEARANCE + 1, 60), text(640, 142 - CLEARANCE - 17, 60)]))).toBeNull();
   });
 });

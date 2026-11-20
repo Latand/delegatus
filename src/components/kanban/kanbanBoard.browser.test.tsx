@@ -12275,7 +12275,7 @@ describe("the orchestrator seat's header keeps every element readable and clicka
    * header's controls or words is under it. Read at 768, 1080 and 1440 px (1440 also with the needs-you panel docked,
    * where the toast moves with the panel's edge), en and uk, light and dark.
    */
-  browserTest("the question toast, showing, covers no control or word of the seat's header, in en and uk, light and dark", async () => {
+  browserTest("the question toast, showing, covers no control or word of the seat's header or the page under it, in en and uk, light and dark", async () => {
     const pngDir = process.env.SEAT_HEAD_PNG_DIR ?? null;
     fs.mkdirSync(OUT, { recursive: true });
     fs.mkdirSync(EVIDENCE, { recursive: true });
@@ -12318,10 +12318,40 @@ describe("the orchestrator seat's header keeps every element readable and clicka
               range.selectNodeContents(node);
               for (const line of range.getClientRects()) if (touches(line as DOMRect)) under.push(`text ${(node.nodeValue ?? "").trim().slice(0, 40)}`);
             }
+            /* The rest of the page the toast stands over: a line of text or a control is covered where the page draws it at a point
+               of its overlap with the toast (hit testing sees the page's clipping), whether it lies under the header or the reports pane. */
+            const toastElement = document.querySelector<HTMLElement>("[data-attention-toast]")!;
+            const drawnUnder = (element: Element, box: { left: number; top: number; right: number; bottom: number }) => {
+              const x = (Math.max(box.left, toast.left) + Math.min(box.right, toast.right)) / 2;
+              const y = (Math.max(box.top, toast.top) + Math.min(box.bottom, toast.bottom)) / 2;
+              const stack = document.elementsFromPoint(x, y);
+              const above = stack.findIndex((candidate) => toastElement.contains(candidate));
+              const below = stack.findIndex((candidate) => candidate === element || candidate.contains(element) || element.contains(candidate));
+              return above !== -1 && below > above;
+            };
+            const page: string[] = [];
+            const pageWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            for (let node = pageWalker.nextNode(); node; node = pageWalker.nextNode()) {
+              const parent = node.parentElement;
+              if (!parent || !(node.nodeValue ?? "").trim() || toastElement.contains(parent) || parent.closest("[data-sound-captions]") || head.contains(parent)) continue;
+              range.selectNodeContents(node);
+              for (const line of range.getClientRects()) if (touches(line as DOMRect) && drawnUnder(parent, line)) page.push(`text ${(node.nodeValue ?? "").trim().slice(0, 40)}`);
+            }
+            for (const control of document.querySelectorAll<HTMLElement>("button, a[href], select, input, [role=switch], [role=tab]")) {
+              if (toastElement.contains(control) || control.closest("[data-sound-captions]") || head.contains(control)) continue;
+              const box = control.getBoundingClientRect();
+              if (control.getClientRects().length && touches(box) && drawnUnder(control, box)) page.push(`control ${(control.getAttribute("aria-label") ?? control.textContent ?? control.tagName).trim().slice(0, 40)}`);
+            }
+            /* A control under the toast fails at once. A line of the page's text fails when the toast calls its place free; where none
+               is free (the header's rotation banner at 768, with the reports pane's rows under it) the toast stands on its first line,
+               under the header, and the lines it then covers are recorded. */
+            const placement = toastElement.closest<HTMLElement>("[data-question-toast-placement]")?.dataset.questionToastPlacement ?? "";
+            const coveredText = page.filter((line) => line.startsWith("text "));
+            under.push(...page.filter((line) => line.startsWith("control ") || placement !== "covers"));
             const open = document.querySelector<HTMLElement>("[data-attention-toast-open]")!.getBoundingClientRect();
             const hit = document.elementFromPoint((open.left + open.right) / 2, (open.top + open.bottom) / 2);
             return {
-              toast: round(toast), head: round(headBox), under: [...new Set(under)],
+              toast: round(toast), head: round(headBox), under: [...new Set(under)], placement, coveredText: [...new Set(coveredText)],
               toastPressable: Boolean(hit?.closest("[data-attention-toast]")),
               inWindow: toast.left >= 0 && toast.top >= 0 && toast.right <= innerWidth && toast.bottom <= innerHeight,
               right: Math.round((document.documentElement.clientWidth - toast.right) * 10) / 10,

@@ -132,6 +132,31 @@ export function placeStack({ viewport, right, minTop, toasts, obstacles, maxDrop
   return { top: best.top, fold: toasts.length - floor, free: false, shift: 0 };
 }
 
+/** The narrowest a question toast may be made, px: its title and one line of its text still read. */
+export const NARROW_MIN = 220;
+/** The occupancy grid is 2 px: an edge is cleared a cell further than its own coordinate. */
+export const GRID_SLACK = 2;
+
+/**
+ * The width a toast of `size`, right-aligned and standing at `top`, must take to keep clear of the words and controls
+ * it covers on its left (a tab's label at the foot of a header, say): its left edge moves to their right edge plus
+ * `CLEARANCE` and a grid cell, and its text wraps. Null when nothing is covered, or when something covered reaches too far right to be
+ * cleared by a toast at least `NARROW_MIN` wide. The caller measures the taller toast the width makes and places it again.
+ */
+export function widthClearOfLeft({ viewport, right, top, size, obstacles }: { viewport: Size; right: number; top: number; size: Size; obstacles: readonly Obstacle[] }): number | null {
+  const edge = viewport.width - right;
+  const box = { x: edge - size.width - CLEARANCE, y: top - CLEARANCE, width: size.width + CLEARANCE * 2, height: size.height + CLEARANCE * 2 };
+  let clear = -Infinity;
+  for (const obstacle of obstacles) {
+    if (obstacle.width <= 0 || obstacle.height <= 0) continue;
+    if (obstacle.x >= box.x + box.width || obstacle.x + obstacle.width <= box.x || obstacle.y >= box.y + box.height || obstacle.y + obstacle.height <= box.y) continue;
+    clear = Math.max(clear, obstacle.x + obstacle.width + CLEARANCE + GRID_SLACK);
+  }
+  if (clear === -Infinity) return null;
+  const width = Math.floor(edge - clear);
+  return width >= NARROW_MIN && width < size.width ? width : null;
+}
+
 /** The part of a box a pointer can reach: cut to the viewport and to every clipping ancestor from `within` up. */
 function reachable(within: Element | null, box: { left: number; top: number; right: number; bottom: number }, width: number, clips: Map<Element, DOMRect | null>): Rect | null {
   let left = Math.max(box.left, 0);

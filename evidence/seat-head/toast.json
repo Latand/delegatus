@@ -14,6 +14,11 @@
         158
       ],
       "under": [],
+      "placement": "covers",
+      "coveredText": [
+        "text Rotation strongly recommended",
+        "text Context is at 52% of the model's window."
+      ],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -33,6 +38,11 @@
         158
       ],
       "under": [],
+      "placement": "covers",
+      "coveredText": [
+        "text Rotation strongly recommended",
+        "text Context is at 52% of the model's window."
+      ],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -52,6 +62,11 @@
         176.5
       ],
       "under": [],
+      "placement": "covers",
+      "coveredText": [
+        "text Наполегливо рекомендовано ротацію",
+        "text Контекст заповнено на 52% вікна моделі. "
+      ],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -71,6 +86,11 @@
         176.5
       ],
       "under": [],
+      "placement": "covers",
+      "coveredText": [
+        "text Наполегливо рекомендовано ротацію",
+        "text Контекст заповнено на 52% вікна моделі. "
+      ],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -90,6 +110,8 @@
         158
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -109,6 +131,8 @@
         158
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -128,6 +152,8 @@
         158
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -147,6 +173,8 @@
         158
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -154,10 +182,10 @@
     },
     "1440-en-light": {
       "toast": [
-        1120.4,
+        1161,
         142,
         1424,
-        204
+        223.5
       ],
       "head": [
         325,
@@ -166,6 +194,8 @@
         134
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -173,10 +203,10 @@
     },
     "1440-en-dark": {
       "toast": [
-        1120.4,
+        1161,
         142,
         1424,
-        204
+        223.5
       ],
       "head": [
         325,
@@ -185,6 +215,8 @@
         134
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -192,10 +224,10 @@
     },
     "1440-uk-light": {
       "toast": [
-        1120.4,
+        1139,
         142,
         1424,
-        204
+        223.5
       ],
       "head": [
         325,
@@ -204,6 +236,8 @@
         134
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -211,10 +245,10 @@
     },
     "1440-uk-dark": {
       "toast": [
-        1120.4,
+        1139,
         142,
         1424,
-        204
+        223.5
       ],
       "head": [
         325,
@@ -223,6 +257,8 @@
         134
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 16,
@@ -242,6 +278,8 @@
         158
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 336,
@@ -261,6 +299,8 @@
         158
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 336,
@@ -280,6 +320,8 @@
         158
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 336,
@@ -299,6 +341,8 @@
         158
       ],
       "under": [],
+      "placement": "free",
+      "coveredText": [],
       "toastPressable": true,
       "inWindow": true,
       "right": 336,

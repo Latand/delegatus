@@ -168,9 +168,12 @@ placed by the Viewer's bar-island callback (`src/components/Viewer.tsx:1844–18
   band it starts 8 px under that header, so the toast never covers the seat's
   tick switch, Rotate or Stop host, and from there it takes the first place
   `placeStack` finds within 96 px that covers no line of text and no control, on
-  its own right edge; with none free it stays on that first line and never moves
-  down the page. It is read when the toast's size, the window or the header under it
-  change, never while a pointer or the focus is on the toast, and it announces
+  its own right edge. With none free, and words or a control lying under its left
+  end (the reports pane's tab labels at the foot of the header), it narrows
+  (`widthClearOfLeft`, never under 220 px, its text on two lines) until its left
+  edge clears them and is placed again; with that no place either, it stays on
+  that first line and never moves down the page. It is read when the toast's size, the window or the header under it
+  change and again, at most every 250 ms, when content under it changes, never while a pointer or the focus is on the toast, and it announces
   a move with the window event `QUESTION_TOAST_PLACED`, which the caption stack
   under it answers by reading the page again. The caption stack is not an
   obstacle for it (`readObstacles` takes `skip: "[data-sound-captions]"`);
@@ -369,7 +372,7 @@ and one click on the page first:
 | click | seam: a lane target | the lane's card has the focus ring, the caption is gone |
 | muted | real path with sound off (the ⋯ Sound levels switch) | the stage passes and no `[data-sound-captions]` child appears; turning sound off with one toast visible removes it |
 | task open | seam push with an agent window open | the stack is above the window (`elementFromPoint` at its centre is the toast), its top is ≥ the window header's bottom + 8, the place is free: no line of the conversation, no control and no icon is under a toast, at 1440, 1000 and 640; the conversation's lines arrive after the push, and the stack reads the page again for them |
-| question toast over the seat's header | the seat-header driver (`?scenario=seat-head`) with the toast showing, 768, 1080, 1440 and 1440 with the panel docked | no control or line of the seat's header is under the toast, the toast is pressable and inside the window, on its right edge (16, or 336 with the panel docked) |
+| question toast over the seat's header | the seat-header driver (`?scenario=seat-head`) with the toast showing, 768, 1080, 1440 and 1440 with the panel docked | no control or line of the seat's header, and no line of text or control of the page under it, is under the toast, the toast is pressable and inside the window, on its right edge (16, or 336 with the panel docked) |
 | panel docked | seam with the needs-you panel docked | the stack's right edge is at `innerWidth − 336` |
 | phone 390 × 844 | seam push | no `[data-sound-captions]` in the DOM |
 
