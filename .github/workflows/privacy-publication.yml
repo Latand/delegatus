@@ -47,9 +47,15 @@ jobs:
         working-directory: trusted
         env:
           PRIVACY_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           git fetch --no-tags --force origin "+refs/heads/${PRIVACY_BASE_REF}:refs/remotes/origin/${PRIVACY_BASE_REF}"
-          PRIVACY_BASE_SHA="$(git rev-parse --verify "refs/remotes/origin/${PRIVACY_BASE_REF}^{commit}")"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            [[ "$PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]]
+            PRIVACY_BASE_SHA="$(git rev-parse --verify "${PUSH_BEFORE}^{commit}")"
+          else
+            PRIVACY_BASE_SHA="$(git rev-parse --verify "refs/remotes/origin/${PRIVACY_BASE_REF}^{commit}")"
+          fi
           printf 'PRIVACY_BASE_SHA=%s\n' "$PRIVACY_BASE_SHA" >> "$GITHUB_ENV"
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -89,8 +95,8 @@ jobs:
 
       - name: Scope candidate privacy self-tests with trusted code
         id: privacy-scope
-        env:
-          PRIVACY_PUSH_BEFORE: ${{ github.event.before }}
+        # The push scans the landed range. The nightly job retests main.
+        if: github.event_name != 'push'
         working-directory: trusted
         run: |
           bun -e '
@@ -99,7 +105,7 @@ jobs:
             const { ALWAYS_IN_SCOPE, executedPaths } = require("./scripts/ci-platform-scope.ts");
             const tests = readdirSync("scripts").filter(f => /^privacy-.*\.test\.ts$/.test(f)).map(f => `scripts/${f}`);
             const closure = executedPaths(process.cwd(), [...tests, "test-preload.ts"]);
-            const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_PUSH_BEFORE || process.env.PRIVACY_BASE_SHA}...HEAD`], { cwd: "../candidate", encoding: "utf8" }).split("\0").filter(Boolean);
+            const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_BASE_SHA}...HEAD`], { cwd: "../candidate", encoding: "utf8" }).split("\0").filter(Boolean);
             const run = changed.some(f => closure.has(f) || ALWAYS_IN_SCOPE.includes(f) || f.startsWith("scripts/privacy-") || f.startsWith("scripts/generate-privacy-") || f.startsWith("src/lib/privacy/") || [".github/workflows/privacy-publication.yml", ".github/workflows/privacy-tracker-audit.yml"].includes(f));
             appendFileSync(process.env.GITHUB_OUTPUT, `run=${run}\n`);
           '
@@ -129,9 +135,16 @@ jobs:
       # prevented rather than found afterwards in the public history.
       - name: Scan changed publication surfaces, commit messages and the merge boundary
         env:
+          PRIVACY_PUSH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
+          PRIVACY_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: ${{ github.workspace }}/trusted/scripts/privacy-known-value-fingerprints.json
         working-directory: trusted
-        run: bun scripts/privacy-publication-gate.ts --repository ../candidate --require-known-values --check-commits --base "$PRIVACY_BASE_SHA"
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            bun scripts/privacy-landed-publication.ts
+          else
+            bun scripts/privacy-publication-gate.ts --repository ../candidate --require-known-values --check-commits --base "$PRIVACY_BASE_SHA"
+          fi
 
       # Candidate code runs last, after trusted inspection.
       # It receives no credentials and cannot alter a later trusted verdict.

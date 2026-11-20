@@ -13,6 +13,11 @@ const shared = global.__delegatusSqliteReaders ??= { next: 0, connections: new W
 const collections = new Set(["pipelines", "pipelines_archive", "deliveryOperationOwners", "tasks", "flows", "workflows",
   "entries", "receipts", "conversations", "deliveries", "launches", "memberships", "attention", "board", "accounts"]);
 
+// Bun's sampler uses displayName even after Next minifies these functions.
+function sqliteInstrumentationFrame<Work extends (...args: never[]) => unknown>(work: Work): Work {
+  return Object.assign(work, { displayName: "delegatusSqliteInstrumentation" });
+}
+
 /** On an observed statement's iterator: the next rows, at most `limit`, read
  * under one measurement. Fewer rows than the limit means the read is done. */
 export const SQLITE_ROW_BATCH = Symbol("sqliteRowBatch");
@@ -30,6 +35,7 @@ export function nextSqliteRows<Row>(rows: Iterator<Row>, limit: number): Row[] {
   }
   return read;
 }
+sqliteInstrumentationFrame(nextSqliteRows);
 
 export function bindSqliteReadIdentity(handle: object, current: () => object): void {
   shared.connections.set(handle, () => shared.connections.get(current())?.());
@@ -42,15 +48,19 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
   const identity = { id: ++shared.next, reader, counters: emptyReadTotals() };
   shared.connections.set(db, () => identity);
   const closed = trackSqliteMemory(db);
-  const measure = <R>(name: string, work: () => R) => readAttribution.sync(name, work, identity.id, 0, true, identity.counters);
+  const { delegatusSqliteInstrumentation: measure } = {
+    delegatusSqliteInstrumentation<R>(name: string, work: () => R) {
+      return readAttribution.sync(name, work, identity.id, 0, true, identity.counters);
+    },
+  };
   const nativeCall = (method: "query" | "prepare" | "exec" | "run" | "serialize" | "close") => {
     const original = db[method], own = Object.hasOwn(db, method), prototype = Object.getPrototypeOf(db);
     // Keep instance adapters and late prototype guards in the call path.
     // Capturing a bound prototype function would bypass an installed guard.
-    return (...args: unknown[]) => {
+    return sqliteInstrumentationFrame((...args: unknown[]) => {
       try { return Reflect.apply(own ? original : Reflect.get(prototype, method, db), db, args); }
       catch (error) { throw classifySchemaStatementError(error, args[0], path.basename(db.filename)); }
-    };
+    });
   };
   const observeStatement = (statement: Statement, sql: string) => {
     if (shared.observed.has(statement)) return statement;
@@ -67,17 +77,17 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
     for (const method of ["all", "get", "run", "values"] as const) {
       const original = statement[method].bind(statement);
       Object.defineProperty(statement, method, { configurable: true, writable: true,
-        value: (...args: SQLQueryBindings[]) => measure(`${name(args)}.${method}`, () => original(...args)) });
+        value: sqliteInstrumentationFrame((...args: SQLQueryBindings[]) => measure(`${name(args)}.${method}`, () => original(...args))) });
     }
     const iterate = statement.iterate.bind(statement);
-    Object.defineProperty(statement, "iterate", { configurable: true, writable: true, value: (...args: SQLQueryBindings[]) => {
+    Object.defineProperty(statement, "iterate", { configurable: true, writable: true, value: sqliteInstrumentationFrame((...args: SQLQueryBindings[]) => {
       const iterator = iterate(...args);
       const label = `${name(args)}.iterate`;
-      return new Proxy(iterator, { get(target, property) {
+      return new Proxy(iterator, { get: sqliteInstrumentationFrame((target: typeof iterator, property: string | symbol) => {
         if (property === Symbol.iterator) return function (this: unknown) { return this; };
         // One measurement for a run of rows: a row measured alone costs more
         // in its measurement than in SQLite.
-        if (property === SQLITE_ROW_BATCH) return (limit: number) => measure(label, () => {
+        if (property === SQLITE_ROW_BATCH) return (limit: number) => measure(label, sqliteInstrumentationFrame(() => {
           const rows: unknown[] = [];
           while (rows.length < limit) {
             const next = target.next();
@@ -85,42 +95,55 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
             rows.push(next.value);
           }
           return rows;
-        });
+        }));
         const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? (...values: unknown[]) => measure(label, () => value.apply(target, values)) : value;
-      } });
-    } });
+        if (typeof value !== "function") return value;
+        // The bound call has no script frame. Keep the intrinsic name of the
+        // remaining wrapper even when the engine inlines it.
+        const { delegatusSqliteInstrumentation: invoke } = {
+          delegatusSqliteInstrumentation(...values: unknown[]) {
+            return measure(label, value.bind(target, ...values));
+          },
+        };
+        return invoke;
+      }) });
+    }) });
     return statement;
   };
   for (const method of ["query", "prepare"] as const) {
     const original = nativeCall(method);
-    Object.defineProperty(db, method, { configurable: true, writable: true, value: (sql: string, ...args: unknown[]) =>
-      observeStatement(measure(`${reader}.prepare`, () => original(sql, ...args)) as Statement, sql) });
+    Object.defineProperty(db, method, { configurable: true, writable: true, value: sqliteInstrumentationFrame((sql: string, ...args: unknown[]) =>
+      observeStatement(measure(`${reader}.prepare`, () => original(sql, ...args)) as Statement, sql)) });
   }
   for (const method of ["exec", "run", "serialize", "close"] as const) {
     const original = nativeCall(method);
-    Object.defineProperty(db, method, { configurable: true, writable: true, value: (...args: unknown[]) =>
-      measure(`${reader}.${method}`, () => {
+    const invoke = method === "close" ? {
+      delegatusSqliteInstrumentation(...args: unknown[]) {
         const result = original(...args);
-        if (method === "close") closed();
+        closed();
         return result;
-      }) });
+      },
+    }.delegatusSqliteInstrumentation : original;
+    Object.defineProperty(db, method, { configurable: true, writable: true, value: sqliteInstrumentationFrame((...args: unknown[]) =>
+      measure(`${reader}.${method}`, method === "close" ? invoke.bind(undefined, ...args) : () => invoke(...args))) });
   }
   const dispose = db[Symbol.dispose];
   if (typeof dispose === "function") {
-    Object.defineProperty(db, Symbol.dispose, { configurable: true, writable: true, value: () => {
+    Object.defineProperty(db, Symbol.dispose, { configurable: true, writable: true, value: sqliteInstrumentationFrame(() => {
       const result = Reflect.apply(dispose, db, []);
       closed();
       return result;
-    } });
+    }) });
   }
   return db;
 }
 
 export function parseSqliteJson(value: string, db?: object, fallback = "sqlite") {
   const identity = db && shared.connections.get(db)?.();
-  return readAttribution.sync(`${identity?.reader ?? fallback}.json`, () => JSON.parse(value), identity?.id ?? 0, Buffer.byteLength(value), false, identity?.counters);
+  // The bound native call adds no JavaScript frame to a sampled stack.
+  return readAttribution.sync(`${identity?.reader ?? fallback}.json`, JSON.parse.bind(JSON, value), identity?.id ?? 0, Buffer.byteLength(value), false, identity?.counters);
 }
+sqliteInstrumentationFrame(parseSqliteJson);
 
 export function sqliteReadCounters(db: object) {
   const identity = shared.connections.get(db)?.();

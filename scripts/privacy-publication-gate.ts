@@ -2855,8 +2855,9 @@ function isForgeComposerIdentityAddress(address: string, identity: CommitIdentit
     && isForgeComposerMailbox(address);
 }
 
-function isForgeComposerAddress(address: string, identity: CommitIdentity): boolean {
-  return identity.parentCount > 1 && isForgeComposerIdentityAddress(address, identity);
+function isForgeComposerAddress(address: string, identity: CommitIdentity, signedLandedTip?: string): boolean {
+  const composed = identity.parentCount > 1 || (identity.commit === signedLandedTip && identity.name === "GitHub");
+  return composed && isForgeComposerIdentityAddress(address, identity);
 }
 
 /** Each distinct identity git recorded on the commits the merge will squash. */
@@ -2920,7 +2921,7 @@ function composedAttributionMessage(identity: CommitIdentity): string {
  * its body, keeps the narrow reading the trailer rule gives it — this is the
  * merge-boundary identity path, and it widens nothing else.
  */
-export function mergeBoundaryReview(repository: string, base: string): MergeBoundaryReview {
+export function mergeBoundaryReview(repository: string, base: string, signedLandedTip?: string): MergeBoundaryReview {
   const findings = new Map<FindingClass, number>();
   const notices: string[] = [];
   const identities = branchIdentities(repository, base);
@@ -2944,12 +2945,12 @@ export function mergeBoundaryReview(repository: string, base: string): MergeBoun
     const { attributable } = commitMessageAddressReview(attribution);
     /* The composed trailer rules classify any exact `noreply` local part as
        machine attribution. For the forge's web-flow mailbox, the commit graph
-       is the additional proof: a zero- or one-parent commit did not come from
-       the forge's merge composer and remains attributable. */
+       identifies a merge. A protected push can also verify GitHub's signature
+       on the exact single-parent tip it just published. */
     const unverifiedForgeComposer = isForgeComposerIdentityAddress(identity.address, identity)
-      && !isForgeComposerAddress(identity.address, identity);
+      && !isForgeComposerAddress(identity.address, identity, signedLandedTip);
     const publishes = unverifiedForgeComposer || attributable.some((address) => {
-      return !isForgeAccountAddress(address) && !isForgeComposerAddress(address, identity);
+      return !isForgeAccountAddress(address) && !isForgeComposerAddress(address, identity, signedLandedTip);
     });
     if (!publishes) continue;
     addFinding(findings, "email_address");
@@ -2971,8 +2972,7 @@ export function reportPrivacyFindings(findings: Map<FindingClass, number>, notic
   process.exitCode = 1;
 }
 
-if (import.meta.main) {
-  const arguments_ = process.argv.slice(2);
+export function runPublicationGate(arguments_: string[], signedLandedTip?: string): void {
   if (arguments_.includes("--require-known-values") && knownValues.fingerprints.length === 0
     && (!knownValues.error || process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE === undefined)) {
     console.error("Known-value catalog unavailable. Set LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE to the committed scripts/privacy-known-value-fingerprints.json, or pass LLV_PRIVACY_KNOWN_VALUES_FILE or LLV_PRIVACY_KNOWN_VALUES.");
@@ -3015,7 +3015,7 @@ if (import.meta.main) {
     /* The branch commits publish their messages when they are pushed; the merge
        publishes a commit composed from their identities. Both are the commit
        surface, so one flag reads both. */
-    const boundary = mergeBoundaryReview(inspectionRoot, trustedBase);
+    const boundary = mergeBoundaryReview(inspectionRoot, trustedBase, signedLandedTip);
     for (const [finding, count] of boundary.findings) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);
     }
@@ -3023,3 +3023,5 @@ if (import.meta.main) {
   }
   reportPrivacyFindings(pathFindings, notices);
 }
+
+if (import.meta.main) runPublicationGate(process.argv.slice(2));
