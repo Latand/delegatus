@@ -16,6 +16,17 @@ type Settlement = {
   projectedRow?: FileEntry;
 };
 
+function sameBoardStatus(a: RuntimeSession, b: RuntimeSession): boolean {
+  if (a === b) return true;
+  const included = (s: RuntimeSession) => s.provenance === "structured" && s.hostKind !== "unhosted";
+  if (!included(a) || !included(b)) return included(a) === included(b);
+  return a.conversationId === b.conversationId && a.artifactPath === b.artifactPath
+    && a.sessionKey.engine === b.sessionKey.engine && a.sessionKey.sessionId === b.sessionKey.sessionId
+    && a.turn === b.turn && a.activeTurnId === b.activeTurnId && a.settledTurnId === b.settledTurnId
+    && Boolean(a.attentionIds.length) === Boolean(b.attentionIds.length)
+    && Boolean(a.liveTurn?.text || a.liveTurn?.items?.length) === Boolean(b.liveTurn?.text || b.liveTurn?.items?.length);
+}
+
 /** Inventory generations deliberately coalesce transcript revisions for five
  * minutes. Turn status must instead follow the structured runtime in the same
  * frame as its live feed. This projection stays outside the certified files
@@ -34,6 +45,7 @@ export function createRuntimeFilesStatusProjection() {
   const activeTurnIds = new Map<string, string>();
   const terminalGenerations = new Map<string, { turnId: string; keys: Set<string> }>();
   let live = false;
+  let lastSessions: Record<string, RuntimeSession> | null = null;
   const identity = (session: Pick<RuntimeSession, "conversationId" | "artifactPath">) =>
     JSON.stringify([session.conversationId, session.artifactPath]);
 
@@ -45,15 +57,25 @@ export function createRuntimeFilesStatusProjection() {
     if (!runtime.enabled || runtime.connection !== "live" || !runtime.store) {
       if (!live) return false;
       live = false;
+      lastSessions = null;
       projected = new WeakMap();
       arrays = new WeakMap();
       return true;
     }
-    const sessions = runtime.enabled && runtime.connection === "live" && runtime.store
-      ? Object.values(runtime.store.sessions).filter((session) =>
-        session.provenance === "structured"
-        && session.hostKind !== "unhosted")
-      : [];
+    // Several mounted readers project the same immutable runtime frame. Text
+    // deltas replace a session but usually leave its board status unchanged.
+    const current = runtime.store.sessions;
+    if (current === lastSessions) return false;
+    const previous = lastSessions;
+    lastSessions = current;
+    if (previous) {
+      const keys = Object.keys(current);
+      const previousKeys = Object.keys(previous);
+      if (keys.length === previousKeys.length && keys.every((key, index) =>
+        key === previousKeys[index] && sameBoardStatus(current[key]!, previous[key]!))) return false;
+    }
+    const sessions = Object.values(current).filter(session =>
+      session.provenance === "structured" && session.hostKind !== "unhosted");
     const currentIdentities = new Set(sessions.map(identity));
     for (const key of observedTurns) if (!currentIdentities.has(key)) observedTurns.delete(key);
     for (const key of activeTurnIds.keys()) if (!currentIdentities.has(key)) activeTurnIds.delete(key);

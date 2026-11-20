@@ -23,6 +23,7 @@ import {
   reduceOpenAiTranscript,
   type OpenAiTranscript,
 } from "@/lib/transcribe/openaiLive";
+import { prepareDictationInput } from "@/lib/transcribe/dictationInput";
 import { DictationSession, DICTATION_BUFFER_SAMPLES, DICTATION_CONNECT_MS, DICTATION_TOKEN_MS } from "@/lib/transcribe/dictationSession";
 import { newDictationTrace, publishDictationTrace, type DictationTrace } from "@/lib/transcribe/dictationTrace";
 
@@ -747,6 +748,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     discardRef.current = false;
     let stream: MediaStream | null = null;
     let streamOwned = true;
+    let prepared: ReturnType<typeof prepareDictationInput> | null = null;
     try {
       const trace = newDictationTrace();
       traceRef.current = trace;
@@ -764,9 +766,11 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         publishDictationTrace(trace);
         return token === "deadline" ? null : token;
       });
+      prepared = prepareDictationInput();
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
       rememberMicGrant();
-      if (!mountedRef.current || discardRef.current) return;
+      const worklet = await prepared.ready;
+      if (!mountedRef.current || discardRef.current || generation !== startGenerationRef.current) return;
       setLiveText("");
       const capture = new DictationSession(stream, trace, {
         language: transcriptionLanguage(locale),
@@ -789,7 +793,8 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
           } else if (waiters.length) waiters.forEach((resolve, index) => resolve(index === 0 ? text : null));
           else if (text) onUnclaimedText(text);
         },
-      });
+      }, prepared.ctx, worklet);
+      prepared = null;
       captureRef.current = capture;
       streamOwned = false;
       startMeter(stream);
@@ -801,9 +806,10 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       elapsedRef.current = 0;
       setElapsed(0);
       setPhase("rec");
+      const recordingBegan = performance.now();
       timerRef.current = window.setInterval(() => {
         const prev = elapsedRef.current;
-        const next = prev + 1;
+        const next = Math.min(MAX_SECONDS, Math.floor((performance.now() - recordingBegan) / 1000));
         elapsedRef.current = next;
         setElapsed(next);
         const cues = dictationCues(prev, next, MAX_SECONDS);
@@ -853,6 +859,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       finishTrace(stream ? "incomplete" : "no-microphone");
       if (mountedRef.current) onError(stream ? t("dictation.unsupported") : t("dictation.noMic"));
     } finally {
+      if (prepared) void prepared.ctx.close().catch(() => undefined);
       if (streamOwned) stopStream(stream);
       // An earlier token waiter cannot unlock or reset a newer microphone press.
       if (startGenerationRef.current === generation) {
