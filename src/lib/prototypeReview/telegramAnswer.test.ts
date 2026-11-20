@@ -274,6 +274,18 @@ test("contextual answers preserve recommendations, custom comments, authority bo
   expect(matchPrototypeAnswer("1b", [telegramTask([round])], undefined, [], `${prototypeReference(round)} #proto-aaaaaaaa`)).toBeNull();
 });
 
+test("explicit Answers lists parse colon bundles and reject an invalid single-choice bundle", () => {
+  const round = telegramRound();
+  expect(parsePrototypeAnswer(round, `${prototypeReference(round)} · Відповіді 1b, 2: ab, 3b`)).toMatchObject({
+    input: { chosen: [], answers: [
+      { questionId: "place", options: [1] },
+      { questionId: "scope", options: [0, 1] },
+      { questionId: "timing", options: [1] },
+    ] },
+  });
+  expect(parsePrototypeAnswer(round, `${prototypeReference(round)} · Відповіді 1: ab, 2a, 3b`)).toHaveProperty("error");
+});
+
 test.each(["1b, 2", "1b 2", "1b; 2:", "1b\n2", "1b, 2m", "1b, 2: m", "1b, 2mn", "1b, 12a"])("mixed shorthand refuses incomplete or invalid fragments: %s", text => {
   expect(parsePrototypeAnswer(telegramRound(), text, true)).toHaveProperty("error");
 });
@@ -283,4 +295,10 @@ test.each(["1b, 2a", "1b, wait 2 days", "1b, 2 days should be enough", "1b, 2 GI
   expect(input.answers?.[0]).toMatchObject({ questionId: "place", options: [1] });
   if (text === "1b, 2a") expect(input.answers?.[1]).toMatchObject({ questionId: "scope", options: [0] });
   else expect(input.comment).toContain(text.slice(4).trim());
+});
+
+test.each(["Hold 2 s between clips.", "Run 2 A/B tests on the landing page.", "Use 2 mm+ of padding.", "Maybe 2b is best."])("numeric prose remains an unselected custom reply: %s", text => {
+  const input = parsePrototypeAnswer(telegramRound(), text, true).input!;
+  expect(input.comment).toBe(text);
+  expect(input.answers).toEqual(telegramRound().questions!.map(q => ({ questionId: q.id, options: [], other: true })));
 });

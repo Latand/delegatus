@@ -236,7 +236,24 @@ test("the exact owner reservation is saved, acknowledged and delivered to the as
   expect((await read()).rounds.find(r => r.id === round.id)!.decision!.recommendedWithReservation).toBe(true);
 });
 
-test.each(["custom", "numbered-prose", "numbered-reservation", "numbered-custom", "continuation-control", "other-before-recommendation", "other-line-before-recommendation", "long", "long-unicode"])("owner %s replies survive decision normalization, reload and production delivery", async kind => {
+test("an invalid multi-option answer for a single-choice question asks for clarification without saving", async () => {
+  const published = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({
+    clientRequestId: "single-choice-clarification", taskId: "task-prototype", title: "Single-choice clarification", questions }) }), world);
+  expect(published.status).toBe(200);
+  const id = (await published.json()).reviewId as string;
+  const round = loadTasks()[0]!.prototypeReviews!.find(r => r.id === id)!;
+  const reply = `${prototypeReference(round)} · Відповіді 1: ab, 2a, 3b`;
+  const parsed = parsePrototypeAnswer(round, reply);
+  expect(parsed).toHaveProperty("error");
+  const before = runtime.delivered.length;
+  const result = await runPrototypeAnswer(parsed, "owner-message", () => {}, { world, delivery }).done;
+  expect((result.answer as ExternalRelayAnswer).text).toContain("Не записав:");
+  resetLegacyDocumentStoresForTests();
+  expect(loadTasks()[0]!.prototypeReviews!.find(r => r.id === id)!.decision).toBeUndefined();
+  expect(runtime.delivered).toHaveLength(before);
+});
+
+test.each(["custom", "numbered-prose", "numeric-seconds", "numeric-ab-tests", "numeric-mm-padding", "numbered-reservation", "numbered-custom", "continuation-control", "other-before-recommendation", "other-line-before-recommendation", "long", "long-unicode"])("owner %s replies survive decision normalization, reload and production delivery", async kind => {
   const published = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({
     clientRequestId: `owner-${kind}`, taskId: "task-prototype", title: "Owner words", questions }) }), world);
   expect(published.status).toBe(200);
@@ -246,6 +263,9 @@ test.each(["custom", "numbered-prose", "numbered-reservation", "numbered-custom"
   const prose = "Show 2  GIF previews.\nKeep  the captions.";
   const words = kind === "custom" ? copy.replace("Відповіді рекомендовані", "1: Власне місце.\n2: Власні поверхні.\n3: Власний час.")
     : kind === "numbered-prose" ? `${prototypeReference(round)} · ${prose}`
+    : kind === "numeric-seconds" ? "Hold 2 s between clips."
+    : kind === "numeric-ab-tests" ? "Run 2 A/B tests on the landing page."
+    : kind === "numeric-mm-padding" ? "Use 2 mm+ of padding."
     : kind === "numbered-reservation" ? `${copy}, але 2: Беремо реальний інтерфейс телеги.`
     : kind === "numbered-custom" ? `${prototypeReference(round)} · 1: Мій гайд;2: Реальна телега;3: Перший ролик`
     : kind === "continuation-control" ? `${copy}\nВаріант 2`
@@ -253,13 +273,13 @@ test.each(["custom", "numbered-prose", "numbered-reservation", "numbered-custom"
     : kind === "other-line-before-recommendation" ? `${prototypeReference(round)} · Відповіді 1a 2a 3+\nВідповіді рекомендовані`
     : kind === "long-unicode" ? `${copy} · ${"🙂".repeat(20_000 - [...copy].length - 3)}`
     : `${copy}, ${"я".repeat(20_000 - copy.length - 2)}`;
-  const match = parsePrototypeAnswer(round, words);
+  const match = parsePrototypeAnswer(round, words, kind.startsWith("numeric-"));
   expect(match).toHaveProperty("input");
   const before = runtime.delivered.length;
   const result = await runPrototypeAnswer(match, "owner-message", () => {}, { world, delivery }).done;
   expect((result.answer as ExternalRelayAnswer).text).toContain("✅ Записав рішення");
   expect((result.answer as ExternalRelayAnswer).text).toContain(
-    kind === "custom" || kind === "numbered-custom" || kind === "numbered-prose" ? "власні відповіді" : "рекомендовані з застереженням");
+    kind === "custom" || kind === "numbered-custom" || kind === "numbered-prose" || kind.startsWith("numeric-") ? "власні відповіді" : "рекомендовані з застереженням");
   await settlePrototypeDeliveriesForTests();
   await until(() => runtime.delivered.length === before + 1);
   resetLegacyDocumentStoresForTests();
@@ -269,11 +289,12 @@ test.each(["custom", "numbered-prose", "numbered-reservation", "numbered-custom"
   expect(saved.answers).toEqual(match.input!.answers);
   expect(isPrototypeReplica(prototypeReviewReplica(task), task.id, task.project)).toBe(true);
   expect(runtime.delivered.at(-1)!.text).toBe(saved.delivery.text);
-  if (kind === "numbered-prose") {
-    expect((result.answer as ExternalRelayAnswer).text).toContain(prose);
-    expect(saved.comment).toBe(prose);
+  if (kind === "numbered-prose" || kind.startsWith("numeric-")) {
+    const customReply = kind === "numbered-prose" ? prose : words;
+    expect((result.answer as ExternalRelayAnswer).text).toContain(customReply);
+    expect(saved.comment).toBe(customReply);
     expect(saved.answers).toEqual(questions.map(q => ({ questionId: q.id, options: [], other: true })));
-    expect(runtime.delivered.at(-1)!.text).toContain(prose);
+    expect(runtime.delivered.at(-1)!.text).toContain(customReply);
     await until(() => runtime.journal.operationResult(saved.delivery.operationId!)?.receipt.status === "delivered");
     await sweep();
     expect(runtime.delivered).toHaveLength(before + 1);
