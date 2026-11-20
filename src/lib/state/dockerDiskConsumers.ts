@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { releaseBuilderName } from "../../runtime-host/deploymentArtifacts";
-import { retentionUnderTest } from "../retentionTestSafety";
 
 const exec = promisify(execFile);
 type Row = { kind: "dockerImages" | "dockerCache"; bytes: number };
@@ -14,7 +13,12 @@ function dockerBytes(text: string): number | undefined {
 }
 
 export async function readDockerDiskConsumers(state: string, run?: (args: string[]) => Promise<string>): Promise<Row[]> {
-  if (!run && (retentionUnderTest() || !(process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || process.env.LLV_VIEWER_DEPLOY_TARGET))) return [];
+  if (!run) {
+    if (process.env.LLV_DOCKER_NSENTER_SHIMS !== "1" && !process.env.LLV_VIEWER_DEPLOY_TARGET) return [];
+    // Runtime-host startup also imports the disk report. Resolve retention's
+    // private temp root only when the measurement actually needs Docker.
+    if ((await import("../retentionTestSafety")).retentionUnderTest()) return [];
+  }
   const docker = run ?? (async args => (await exec("docker", args, { timeout: 15_000, maxBuffer: 4 * 1024 * 1024 })).stdout);
   let usage: string;
   try { usage = await docker(["system", "df", "--format", "{{.Type}}\t{{.Size}}"]); }
