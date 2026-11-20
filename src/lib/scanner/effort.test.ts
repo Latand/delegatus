@@ -1,32 +1,20 @@
-import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import type { FileEntry } from "../types";
+import * as scannerProcess from "./process";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-effort-test-"));
 let argvByPid = new Map<number, string[]>();
 
-mock.module("./process", () => ({
-  agentProcesses: () => [],
-  argvEngine: () => null,
-  isHelperArgv: () => false,
-  outputHolders: () => new Map(),
-  pidAlive: () => false,
-  pidHoldsPath: () => false,
-  pidWritesPath: () => false,
-  readArgv: (pid: number) => argvByPid.get(pid) ?? [],
-  readCmdlineText: () => "",
-  readCwd: () => null,
-  readEnvVar: () => null,
-  readPpid: () => null,
-  writingHolders: () => new Map(),
-}));
+const readArgv = spyOn(scannerProcess, "readArgv").mockImplementation((pid) => argvByPid.get(pid) ?? []);
 
 const { entryEffort } = await import("./effort");
 
 afterAll(() => {
+  readArgv.mockRestore();
   fs.rmSync(SANDBOX, { recursive: true, force: true });
 });
 
