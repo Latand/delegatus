@@ -1,13 +1,13 @@
 {
-  "capturedAt": "2026-10-23T05:04:58.743Z",
+  "capturedAt": "2026-11-20T03:14:33.655Z",
   "command": "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"sound captions\" (isolated roots, scripts/gate-slot.sh)",
   "sourceDigests": {
-    "src/components/SoundCaptions.tsx": "a627805b9031890884f9b3941bac8f8da330cab96ccbc728bd2d5391576de6bf",
-    "src/components/soundCaptionPlacement.ts": "9abe01db66fd905c6ea41ede119770f7653d74840b0cd9104d7de75514ef6cbf",
+    "src/components/SoundCaptions.tsx": "0d0985544f8954f36cc9cdb18ee29764a25ca317016a378cd2fa3371c9bba343",
+    "src/components/soundCaptionPlacement.ts": "5c06e2ce5b9172c5ec5e83394a3a3a827ccb9c94089e0a827a79a7322b7f6aee",
     "src/components/soundCaptionStyles.ts": "1a7c3674f640de9699c331e82ccb004fd7926680e0cae4ff18932af04160c454",
     "src/lib/audio/captions.ts": "aa34bd96d37b4e26a5d80a4aa0a9df9f451f17806fa21e564491876ecde47889",
-    "src/lib/i18n/en.ts": "c7504d33ca1839397b185a1185186fa675da8461a353a88e8394dec5597fd60c",
-    "src/lib/i18n/uk.ts": "5fc068997fe4d5469dd40f20681c37d93eb4c751316f4a73a476334ab94cf1d3"
+    "src/lib/i18n/en.ts": "e173654bb2840c39c9b6be280c453932026c73a5398cbe6c89a5930943d799a0",
+    "src/lib/i18n/uk.ts": "8028bcefbeabd7c9b1b041969b8d34f904414daa3e1fa9a588d1d5aed0f6ad8d"
   },
   "readings": [
     {
@@ -15,9 +15,9 @@
       "held": [
         [
           1288.3,
-          130,
+          352,
           1424,
-          186
+          408
         ]
       ],
       "dockedRight": 336,
@@ -28,9 +28,9 @@
       "held": [
         [
           1295.6,
-          130,
+          352,
           1424,
-          186
+          408
         ]
       ],
       "dockedRight": 336,

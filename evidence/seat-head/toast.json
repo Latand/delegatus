@@ -1,0 +1,353 @@
+{
+  "frames": {
+    "768-en-light": {
+      "toast": [
+        448.4,
+        166,
+        752,
+        228
+      ],
+      "head": [
+        261,
+        61,
+        755,
+        158
+      ],
+      "under": [],
+      "placement": "covers",
+      "coveredText": [
+        "text Rotation strongly recommended",
+        "text Context is at 52% of the model's window."
+      ],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "768-en-dark": {
+      "toast": [
+        448.4,
+        166,
+        752,
+        228
+      ],
+      "head": [
+        261,
+        61,
+        755,
+        158
+      ],
+      "under": [],
+      "placement": "covers",
+      "coveredText": [
+        "text Rotation strongly recommended",
+        "text Context is at 52% of the model's window."
+      ],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "768-uk-light": {
+      "toast": [
+        448.4,
+        185,
+        752,
+        247
+      ],
+      "head": [
+        261,
+        61,
+        755,
+        176.5
+      ],
+      "under": [],
+      "placement": "covers",
+      "coveredText": [
+        "text Наполегливо рекомендовано ротацію",
+        "text Контекст заповнено на 52% вікна моделі. "
+      ],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "768-uk-dark": {
+      "toast": [
+        448.4,
+        185,
+        752,
+        247
+      ],
+      "head": [
+        261,
+        61,
+        755,
+        176.5
+      ],
+      "under": [],
+      "placement": "covers",
+      "coveredText": [
+        "text Наполегливо рекомендовано ротацію",
+        "text Контекст заповнено на 52% вікна моделі. "
+      ],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "1080-en-light": {
+      "toast": [
+        760.4,
+        166,
+        1064,
+        228
+      ],
+      "head": [
+        265,
+        61,
+        1063,
+        158
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "1080-en-dark": {
+      "toast": [
+        760.4,
+        166,
+        1064,
+        228
+      ],
+      "head": [
+        265,
+        61,
+        1063,
+        158
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "1080-uk-light": {
+      "toast": [
+        760.4,
+        166,
+        1064,
+        228
+      ],
+      "head": [
+        265,
+        61,
+        1063,
+        158
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "1080-uk-dark": {
+      "toast": [
+        760.4,
+        166,
+        1064,
+        228
+      ],
+      "head": [
+        265,
+        61,
+        1063,
+        158
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "1440-en-light": {
+      "toast": [
+        1161,
+        142,
+        1424,
+        223.5
+      ],
+      "head": [
+        325,
+        61,
+        1363,
+        134
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "1440-en-dark": {
+      "toast": [
+        1161,
+        142,
+        1424,
+        223.5
+      ],
+      "head": [
+        325,
+        61,
+        1363,
+        134
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "1440-uk-light": {
+      "toast": [
+        1139,
+        142,
+        1424,
+        223.5
+      ],
+      "head": [
+        325,
+        61,
+        1363,
+        134
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "1440-uk-dark": {
+      "toast": [
+        1139,
+        142,
+        1424,
+        223.5
+      ],
+      "head": [
+        325,
+        61,
+        1363,
+        134
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 16,
+      "chip": true
+    },
+    "1440-docked-en-light": {
+      "toast": [
+        800.4,
+        166,
+        1104,
+        228
+      ],
+      "head": [
+        265,
+        61,
+        1103,
+        158
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 336,
+      "chip": false
+    },
+    "1440-docked-en-dark": {
+      "toast": [
+        800.4,
+        166,
+        1104,
+        228
+      ],
+      "head": [
+        265,
+        61,
+        1103,
+        158
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 336,
+      "chip": false
+    },
+    "1440-docked-uk-light": {
+      "toast": [
+        800.4,
+        166,
+        1104,
+        228
+      ],
+      "head": [
+        265,
+        61,
+        1103,
+        158
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 336,
+      "chip": false
+    },
+    "1440-docked-uk-dark": {
+      "toast": [
+        800.4,
+        166,
+        1104,
+        228
+      ],
+      "head": [
+        265,
+        61,
+        1103,
+        158
+      ],
+      "under": [],
+      "placement": "free",
+      "coveredText": [],
+      "toastPressable": true,
+      "inWindow": true,
+      "right": 336,
+      "chip": false
+    }
+  },
+  "failures": []
+}

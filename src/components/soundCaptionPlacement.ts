@@ -9,9 +9,13 @@ import { createPageVisibilityGuard } from "./voiceCompanion/pageVisibility";
  * to a free place. The geometry here is pure; `readObstacles` reads the page.
  *
  * A stack that fits nowhere folds its oldest toasts, newest kept: an old
- * caption is the one whose sound was heard longest ago. With no place free for
- * the `keep` newest (2 in a wide window, 1 in a narrow one), it takes the place
- * that covers the least.
+ * caption is the one whose sound was heard longest ago. Before any place that
+ * covers something, it tries in this order: the whole stack, then fewer toasts
+ * down to the newest one, within `MAX_DROP` of the first line; the newest alone
+ * anywhere down the window's height; the newest alone anywhere down the height,
+ * moved leftward in steps while it stays in the window's right half. With no
+ * free place at all it takes the place that covers the least for the `keep`
+ * newest (2 in a wide window, 1 in a narrow one).
  */
 
 /** A rectangle the stack keeps off, with what covering it costs: a control weighs more than a line of text. */
@@ -24,12 +28,16 @@ export const CONTROL_WEIGHT = 8;
 export const WIDE_WINDOW = 1100;
 /** A control larger than this (a card's whole title row, a tab) is kept off by what it shows, its text and icons: a toast over its blank part hides nothing. */
 export const SMALL_CONTROL_AREA = 6000;
+/** How far each leftward try moves the column, px. */
+export const SHIFT_STEP = 8;
 /** The gap kept between a toast and what it stands beside. */
 export const CLEARANCE = 4;
 /** The widest a toast is. */
 export const TOAST_MAX_WIDTH = 300;
 /** How far under its first line (the question toast's bottom) the stack may be pushed to find a free place. */
 export const MAX_DROP = 320;
+/** The window event the question toast sends once it stands on a new place, so the caption stack under it reads the page again. */
+export const QUESTION_TOAST_PLACED = "delegatus:question-toast-placed";
 /** `NodeFilter.SHOW_TEXT`, by value: a test window has no `NodeFilter` global. */
 const SHOW_TEXT = 4;
 const STEP = 4;
@@ -50,6 +58,10 @@ export interface PlaceStackInput {
   obstacles: readonly Obstacle[];
   /** Overrides `MAX_DROP`. */
   maxDrop?: number;
+  /** Whether the newest toast alone may take a free place anywhere down the window's height when none is free within `maxDrop`. Absent: it stays within `maxDrop`. */
+  anywhere?: boolean;
+  /** Whether the newest toast alone may move leftward, up to the window's middle, to find a free place. Absent: it keeps its right edge. */
+  leftward?: boolean;
   /** The fewest toasts left on show before a covering place is taken instead of folding one more; 1 when absent. */
   keep?: number;
 }
@@ -60,6 +72,8 @@ export interface StackPlace {
   fold: number;
   /** Whether the place keeps clear of every obstacle. */
   free: boolean;
+  /** How far leftward from `right` the column stands, px; 0 on the column's own edge. */
+  shift: number;
 }
 
 /** The rectangles `toasts` take with the column's top at `top`, right-aligned, one `GAP` apart. */
@@ -74,24 +88,33 @@ export function stackRects(viewport: Size, right: number, top: number, toasts: r
 
 const inflate = (rect: Rect, by: number): Rect => ({ x: rect.x - by, y: rect.y - by, width: rect.width + by * 2, height: rect.height + by * 2 });
 
-export function placeStack({ viewport, right, minTop, toasts, obstacles, maxDrop = MAX_DROP, keep = 1 }: PlaceStackInput): StackPlace {
-  if (!toasts.length) return { top: minTop, fold: 0, free: true };
+export function placeStack({ viewport, right, minTop, toasts, obstacles, maxDrop = MAX_DROP, keep = 1, anywhere = false, leftward = false }: PlaceStackInput): StackPlace {
+  if (!toasts.length) return { top: minTop, fold: 0, free: true, shift: 0 };
   const occupancy = new Occupancy(viewport, obstacles);
   const last = (count: number) => toasts.slice(toasts.length - count);
   const height = (list: readonly Size[]) => list.reduce((sum, toast) => sum + toast.height, 0) + GAP * (list.length - 1);
-  /* The tops a list may take: from the first line down `maxDrop`, while it stays inside the window. */
-  const tops = (list: readonly Size[]) => {
+  /* The tops a list may take: from the first line down `drop`, while it stays inside the window. */
+  const tops = (list: readonly Size[], drop = maxDrop) => {
     const found: number[] = [];
-    for (let top = minTop; top <= minTop + maxDrop && top + height(list) <= viewport.height - GAP; top += STEP) found.push(top);
+    for (let top = minTop; top <= minTop + drop && top + height(list) <= viewport.height - GAP; top += STEP) found.push(top);
     return found;
   };
+  const fits = (list: readonly Size[], at: number, top: number) => stackRects(viewport, at, top, list).every((rect) => occupancy.free(rect.x - CLEARANCE, rect.y - CLEARANCE, rect.width + CLEARANCE * 2, rect.height + CLEARANCE * 2));
   const floor = Math.min(toasts.length, Math.max(1, keep));
-  for (let count = toasts.length; count >= floor; count -= 1) {
+  /* The whole stack, then fewer down to the newest one, near the first line. */
+  for (let count = toasts.length; count >= 1; count -= 1) {
     const list = last(count);
     for (const top of tops(list)) {
-      if (stackRects(viewport, right, top, list).every((rect) => occupancy.free(rect.x - CLEARANCE, rect.y - CLEARANCE, rect.width + CLEARANCE * 2, rect.height + CLEARANCE * 2))) {
-        return { top, fold: toasts.length - count, free: true };
-      }
+      if (fits(list, right, top)) return { top, fold: toasts.length - count, free: true, shift: 0 };
+    }
+  }
+  /* The newest alone, anywhere down the window, on its own edge and then moved leftward while it stays in the right half. */
+  const newest = last(1);
+  const wide = Math.max(...newest.map((toast) => toast.width));
+  const reach = leftward ? Math.max(0, viewport.width - right - wide - viewport.width / 2) : 0;
+  for (let shift = 0; shift <= reach && (anywhere || leftward); shift += SHIFT_STEP) {
+    for (const top of tops(newest, anywhere ? viewport.height : maxDrop)) {
+      if (fits(newest, right + shift, top)) return { top, fold: toasts.length - 1, free: true, shift };
     }
   }
   /* No free place for the `keep` newest: the one in the same search that covers the least, the nearest to the first line on a tie. */
@@ -106,7 +129,32 @@ export function placeStack({ viewport, right, minTop, toasts, obstacles, maxDrop
     }
     if (cost < best.cost) best = { top, cost };
   }
-  return { top: best.top, fold: toasts.length - floor, free: false };
+  return { top: best.top, fold: toasts.length - floor, free: false, shift: 0 };
+}
+
+/** The narrowest a question toast may be made, px: its title and one line of its text still read. */
+export const NARROW_MIN = 220;
+/** The occupancy grid is 2 px: an edge is cleared a cell further than its own coordinate. */
+export const GRID_SLACK = 2;
+
+/**
+ * The width a toast of `size`, right-aligned and standing at `top`, must take to keep clear of the words and controls
+ * it covers on its left (a tab's label at the foot of a header, say): its left edge moves to their right edge plus
+ * `CLEARANCE` and a grid cell, and its text wraps. Null when nothing is covered, or when something covered reaches too far right to be
+ * cleared by a toast at least `NARROW_MIN` wide. The caller measures the taller toast the width makes and places it again.
+ */
+export function widthClearOfLeft({ viewport, right, top, size, obstacles }: { viewport: Size; right: number; top: number; size: Size; obstacles: readonly Obstacle[] }): number | null {
+  const edge = viewport.width - right;
+  const box = { x: edge - size.width - CLEARANCE, y: top - CLEARANCE, width: size.width + CLEARANCE * 2, height: size.height + CLEARANCE * 2 };
+  let clear = -Infinity;
+  for (const obstacle of obstacles) {
+    if (obstacle.width <= 0 || obstacle.height <= 0) continue;
+    if (obstacle.x >= box.x + box.width || obstacle.x + obstacle.width <= box.x || obstacle.y >= box.y + box.height || obstacle.y + obstacle.height <= box.y) continue;
+    clear = Math.max(clear, obstacle.x + obstacle.width + CLEARANCE + GRID_SLACK);
+  }
+  if (clear === -Infinity) return null;
+  const width = Math.floor(edge - clear);
+  return width >= NARROW_MIN && width < size.width ? width : null;
 }
 
 /** The part of a box a pointer can reach: cut to the viewport and to every clipping ancestor from `within` up. */
@@ -133,15 +181,17 @@ function reachable(within: Element | null, box: { left: number; top: number; rig
  * hides what is under it) and, for a control, reach. A larger control counts by the icons it holds; its text is
  * read with the page's. `column` is left out, and never counts as covering what is under it.
  */
-export function readObstacles(column: Element | null, right: number): Obstacle[] {
+export function readObstacles(column: Element | null, right: number, options: { width?: number; skip?: string } = {}): Obstacle[] {
   const width = document.documentElement.clientWidth;
-  const bandLeft = width - right - TOAST_MAX_WIDTH - CLEARANCE;
+  const bandLeft = width - right - (options.width ?? TOAST_MAX_WIDTH) - CLEARANCE;
+  /* The column itself, and what the caller names (the other stack, which this one is placed against and never over). */
+  const own = (element: Element) => Boolean(column?.contains(element) || (options.skip && element.closest(options.skip)));
   const canRead = createPageVisibilityGuard();
   const clips = new Map<Element, DOMRect | null>();
   const obstacles: Obstacle[] = [];
   /* Whether `element` is what the page shows at any of five points of `rect` (a box half under the question toast still is): the first thing there that is not the column. */
   const shown = (element: Element, rect: Rect) => [[0.5, 0.5], [0.12, 0.5], [0.88, 0.5], [0.5, 0.2], [0.5, 0.8]].some(([across, down]) => {
-    const hit = document.elementsFromPoint(rect.x + rect.width * across!, rect.y + rect.height * down!).find((candidate) => !column?.contains(candidate));
+    const hit = document.elementsFromPoint(rect.x + rect.width * across!, rect.y + rect.height * down!).find((candidate) => !own(candidate));
     return Boolean(hit) && (element.contains(hit!) || hit!.contains(element));
   });
   /* A `display: contents` wrapper (a conversation's messages sit in them) has no box and reads as hidden: its nearest ancestor with one draws it. */
@@ -155,7 +205,7 @@ export function readObstacles(column: Element | null, right: number): Obstacle[]
   const seen = new Map<Element, boolean>();
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const parent = node.parentElement;
-    if (!parent || !node.nodeValue?.trim() || column?.contains(parent) || !canRead(parent)) continue;
+    if (!parent || !node.nodeValue?.trim() || own(parent) || !canRead(parent)) continue;
     if (!seen.has(parent)) seen.set(parent, parent.tagName !== "STYLE" && parent.tagName !== "SCRIPT" && visibleBox(parent));
     if (!seen.get(parent)) continue;
     range.selectNodeContents(node);
@@ -166,7 +216,7 @@ export function readObstacles(column: Element | null, right: number): Obstacle[]
     }
   }
   for (const control of document.querySelectorAll<HTMLElement>(CONTROL_SELECTOR)) {
-    if (column?.contains(control) || !canRead(control) || !visibleBox(control)) continue;
+    if (own(control) || !canRead(control) || !visibleBox(control)) continue;
     if (getComputedStyle(control).pointerEvents === "none") continue;
     const box = control.getBoundingClientRect();
     if (box.right <= bandLeft) continue;

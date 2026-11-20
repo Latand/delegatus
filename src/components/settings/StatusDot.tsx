@@ -123,10 +123,11 @@ export function StatusDot({ tone, note, label, hit = "h-6 w-6 justify-center", d
       const muted = labelBox ? own.filter((box) => box.top >= labelBox.bottom - 1) : [];
       const candidates: Candidate[] = [];
       if (label && labelBox) {
+        /* The room runs to the state word or the chevron, not to the popover's usual width: a longer note (the Ukrainian one) still stands here, in one line, instead of hiding the muted line under the label. */
         const left = Math.ceil(wordsEnd(label) + AFTER_LABEL);
         const stop = Math.min(right, value ? value.getBoundingClientRect().left - 6 : Infinity, chevron ? chevron.getBoundingClientRect().left - 6 : Infinity);
         const firstOfMuted = muted.length ? Math.min(...muted.map((box) => box.top)) : Infinity;
-        candidates.push({ left, width: Math.min(POPOVER_WIDTH, Math.floor(stop - left)), top: 0, topOf: (height) => Math.round(Math.min(labelBox.top + labelBox.height / 2 - height / 2, firstOfMuted - height)) });
+        candidates.push({ left, width: Math.floor(stop - left), top: 0, topOf: (height) => Math.round(Math.min(labelBox.top + labelBox.height / 2 - height / 2, firstOfMuted - height)) });
       }
       if (labelBox && muted.length) {
         const left = Math.max(EDGE, Math.floor(Math.min(...muted.map((box) => box.left)) - 4));

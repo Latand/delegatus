@@ -1,13 +1,13 @@
 {
-  "capturedAt": "2026-10-23T05:04:16.555Z",
+  "capturedAt": "2026-11-20T03:13:47.219Z",
   "command": "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"sound captions\" (isolated roots, scripts/gate-slot.sh)",
   "sourceDigests": {
-    "src/components/SoundCaptions.tsx": "a627805b9031890884f9b3941bac8f8da330cab96ccbc728bd2d5391576de6bf",
-    "src/components/soundCaptionPlacement.ts": "9abe01db66fd905c6ea41ede119770f7653d74840b0cd9104d7de75514ef6cbf",
+    "src/components/SoundCaptions.tsx": "0d0985544f8954f36cc9cdb18ee29764a25ca317016a378cd2fa3371c9bba343",
+    "src/components/soundCaptionPlacement.ts": "5c06e2ce5b9172c5ec5e83394a3a3a827ccb9c94089e0a827a79a7322b7f6aee",
     "src/components/soundCaptionStyles.ts": "1a7c3674f640de9699c331e82ccb004fd7926680e0cae4ff18932af04160c454",
     "src/lib/audio/captions.ts": "aa34bd96d37b4e26a5d80a4aa0a9df9f451f17806fa21e564491876ecde47889",
-    "src/lib/i18n/en.ts": "c7504d33ca1839397b185a1185186fa675da8461a353a88e8394dec5597fd60c",
-    "src/lib/i18n/uk.ts": "5fc068997fe4d5469dd40f20681c37d93eb4c751316f4a73a476334ab94cf1d3"
+    "src/lib/i18n/en.ts": "e173654bb2840c39c9b6be280c453932026c73a5398cbe6c89a5930943d799a0",
+    "src/lib/i18n/uk.ts": "8028bcefbeabd7c9b1b041969b8d34f904414daa3e1fa9a588d1d5aed0f6ad8d"
   },
   "readings": [
     {
@@ -45,12 +45,12 @@
           "sound": "your-move",
           "line": "An agent asks you",
           "rect": [
-            1189.2,
-            134,
-            1424,
-            190
+            -10000,
+            0,
+            -9765.2,
+            56
           ],
-          "folded": false,
+          "folded": true,
           "textUnder": 0
         },
         {
@@ -58,21 +58,22 @@
           "line": "An agent was stopped: out of memory",
           "rect": [
             1124,
-            198,
+            740,
             1424,
-            254
+            796
           ],
           "folded": false,
-          "textUnder": 6
+          "textUnder": 0
         }
       ],
-      "placement": "covers",
+      "placement": "free",
+      "stackRight": 16,
       "single": [
         [
           1274.3,
-          130,
+          352,
           1424,
-          186
+          408
         ]
       ],
       "singlePlacement": "free",
@@ -145,21 +146,22 @@
           "line": "An agent was stopped: out of memory",
           "rect": [
             744,
-            258,
+            259,
             984,
-            334
+            335
           ],
           "folded": false,
           "textUnder": 0
         }
       ],
       "placement": "free",
+      "stackRight": 16,
       "single": [
         [
           834.3,
-          258,
+          259,
           984,
-          314
+          315
         ]
       ],
       "singlePlacement": "free",
@@ -178,9 +180,9 @@
         ],
         "toast": [
           848.3,
-          282,
+          283,
           984,
-          338
+          339
         ]
       }
     },
@@ -231,29 +233,30 @@
           "sound": "fault",
           "line": "An agent was stopped: out of memory",
           "rect": [
-            369,
-            318,
-            609,
-            394
+            384,
+            291,
+            624,
+            367
           ],
           "folded": false,
           "textUnder": 3
         }
       ],
       "placement": "covers",
+      "stackRight": 16,
       "single": [
         [
-          459.3,
-          342,
-          609,
-          398
+          474.3,
+          315,
+          624,
+          371
         ]
       ],
       "singlePlacement": "free",
       "island": [
-        608.7,
+        582.3,
         7.5,
-        654.4,
+        628,
         39.5
       ],
       "taskOpen": {
@@ -264,10 +267,10 @@
           49
         ],
         "toast": [
-          473.3,
-          318,
-          609,
-          374
+          488.3,
+          319,
+          624,
+          375
         ]
       }
     },
@@ -306,12 +309,12 @@
           "sound": "your-move",
           "line": "An agent asks you",
           "rect": [
-            1189.2,
-            134,
-            1424,
-            190
+            -10000,
+            0,
+            -9765.2,
+            56
           ],
-          "folded": false,
+          "folded": true,
           "textUnder": 0
         },
         {
@@ -319,21 +322,22 @@
           "line": "An agent was stopped: out of memory",
           "rect": [
             1124,
-            198,
+            740,
             1424,
-            254
+            796
           ],
           "folded": false,
-          "textUnder": 6
+          "textUnder": 0
         }
       ],
-      "placement": "covers",
+      "placement": "free",
+      "stackRight": 16,
       "single": [
         [
           1274.3,
-          130,
+          352,
           1424,
-          186
+          408
         ]
       ],
       "singlePlacement": "free",
@@ -406,21 +410,22 @@
           "line": "An agent was stopped: out of memory",
           "rect": [
             744,
-            258,
+            259,
             984,
-            334
+            335
           ],
           "folded": false,
           "textUnder": 0
         }
       ],
       "placement": "free",
+      "stackRight": 16,
       "single": [
         [
           834.3,
-          258,
+          259,
           984,
-          314
+          315
         ]
       ],
       "singlePlacement": "free",
@@ -439,9 +444,9 @@
         ],
         "toast": [
           848.3,
-          282,
+          283,
           984,
-          338
+          339
         ]
       }
     },
@@ -492,29 +497,30 @@
           "sound": "fault",
           "line": "An agent was stopped: out of memory",
           "rect": [
-            369,
-            318,
-            609,
-            394
+            384,
+            291,
+            624,
+            367
           ],
           "folded": false,
           "textUnder": 3
         }
       ],
       "placement": "covers",
+      "stackRight": 16,
       "single": [
         [
-          459.3,
-          342,
-          609,
-          398
+          474.3,
+          315,
+          624,
+          371
         ]
       ],
       "singlePlacement": "free",
       "island": [
-        608.7,
+        582.3,
         7.5,
-        654.4,
+        628,
         39.5
       ],
       "taskOpen": {
@@ -525,10 +531,10 @@
           49
         ],
         "toast": [
-          473.3,
-          318,
-          609,
-          374
+          488.3,
+          319,
+          624,
+          375
         ]
       }
     },
@@ -567,12 +573,12 @@
           "sound": "your-move",
           "line": "Агент питає вас",
           "rect": [
-            1189.2,
-            134,
-            1424,
-            190
+            -10000,
+            0,
+            -9765.2,
+            56
           ],
-          "folded": false,
+          "folded": true,
           "textUnder": 0
         },
         {
@@ -580,21 +586,22 @@
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
             1124,
-            198,
+            740,
             1424,
-            254
+            796
           ],
           "folded": false,
-          "textUnder": 6
+          "textUnder": 0
         }
       ],
-      "placement": "covers",
+      "placement": "free",
+      "stackRight": 16,
       "single": [
         [
           1287.8,
-          130,
+          352,
           1424,
-          186
+          408
         ]
       ],
       "singlePlacement": "free",
@@ -667,21 +674,22 @@
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
             744,
-            258,
+            259,
             984,
-            334
+            335
           ],
           "folded": false,
           "textUnder": 0
         }
       ],
       "placement": "free",
+      "stackRight": 16,
       "single": [
         [
           847.8,
-          258,
+          259,
           984,
-          314
+          315
         ]
       ],
       "singlePlacement": "free",
@@ -700,9 +708,9 @@
         ],
         "toast": [
           855.6,
-          282,
+          283,
           984,
-          338
+          339
         ]
       }
     },
@@ -753,29 +761,30 @@
           "sound": "fault",
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
-            369,
-            318,
-            609,
-            394
+            384,
+            319,
+            624,
+            395
           ],
           "folded": false,
           "textUnder": 3
         }
       ],
       "placement": "covers",
+      "stackRight": 16,
       "single": [
         [
-          472.8,
-          342,
-          609,
-          398
+          487.8,
+          343,
+          624,
+          399
         ]
       ],
       "singlePlacement": "free",
       "island": [
-        608.7,
+        582.3,
         7.5,
-        654.4,
+        628,
         39.5
       ],
       "taskOpen": {
@@ -786,10 +795,10 @@
           49
         ],
         "toast": [
-          480.6,
-          318,
-          609,
-          374
+          495.6,
+          319,
+          624,
+          375
         ]
       }
     },
@@ -828,12 +837,12 @@
           "sound": "your-move",
           "line": "Агент питає вас",
           "rect": [
-            1189.2,
-            134,
-            1424,
-            190
+            -10000,
+            0,
+            -9765.2,
+            56
           ],
-          "folded": false,
+          "folded": true,
           "textUnder": 0
         },
         {
@@ -841,21 +850,22 @@
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
             1124,
-            198,
+            740,
             1424,
-            254
+            796
           ],
           "folded": false,
-          "textUnder": 6
+          "textUnder": 0
         }
       ],
-      "placement": "covers",
+      "placement": "free",
+      "stackRight": 16,
       "single": [
         [
           1287.8,
-          130,
+          352,
           1424,
-          186
+          408
         ]
       ],
       "singlePlacement": "free",
@@ -928,21 +938,22 @@
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
             744,
-            258,
+            259,
             984,
-            334
+            335
           ],
           "folded": false,
           "textUnder": 0
         }
       ],
       "placement": "free",
+      "stackRight": 16,
       "single": [
         [
           847.8,
-          258,
+          259,
           984,
-          314
+          315
         ]
       ],
       "singlePlacement": "free",
@@ -961,9 +972,9 @@
         ],
         "toast": [
           855.6,
-          282,
+          283,
           984,
-          338
+          339
         ]
       }
     },
@@ -1014,29 +1025,30 @@
           "sound": "fault",
           "line": "Агента зупинено: забракло пам'яті",
           "rect": [
-            369,
-            318,
-            609,
-            394
+            384,
+            319,
+            624,
+            395
           ],
           "folded": false,
           "textUnder": 3
         }
       ],
       "placement": "covers",
+      "stackRight": 16,
       "single": [
         [
-          472.8,
-          342,
-          609,
-          398
+          487.8,
+          343,
+          624,
+          399
         ]
       ],
       "singlePlacement": "free",
       "island": [
-        608.7,
+        582.3,
         7.5,
-        654.4,
+        628,
         39.5
       ],
       "taskOpen": {
@@ -1047,10 +1059,10 @@
           49
         ],
         "toast": [
-          480.6,
-          318,
-          609,
-          374
+          495.6,
+          319,
+          624,
+          375
         ]
       }
     }

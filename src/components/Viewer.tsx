@@ -42,6 +42,7 @@ import { AttentionIsland } from "./attention/AttentionIsland";
 import { AttentionPanel, type AttentionPanelPlacement } from "./attention/AttentionPanel";
 import { needsYouCounts } from "./attention/needsYouPanel";
 import { AttentionToast } from "./attention/AttentionToast";
+import { QuestionToastColumn } from "./attention/QuestionToastColumn";
 import { SoundCaptions } from "./SoundCaptions";
 import type { CaptionTarget } from "@/lib/audio/captions";
 import { attentionEntryProject, buildNeedsYouQueue, laneFocusId, laneFocusPath, type MobileAttentionEntry } from "./attention/attentionQueue";
@@ -1958,9 +1959,9 @@ function ViewerApp() {
                   </div>
                 )}
                 {toast ? (
-                  <div className="pointer-events-none fixed top-14 z-50 flex flex-col items-end text-[15px] leading-normal" style={{ right: panelDocked ? PANEL_WIDTH + 16 : 16 }}>
+                  <QuestionToastColumn className="pointer-events-none fixed top-14 z-50 flex flex-col items-end text-[15px] leading-normal" right={panelDocked ? PANEL_WIDTH + 16 : 16}>
                     {toast}
-                  </div>
+                  </QuestionToastColumn>
                 ) : null}
               </>
             );
