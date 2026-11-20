@@ -36,7 +36,7 @@ afterEach(async () => {
 
 for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex", true], ["claude", true]] as const) {
   for (const change of ["released-owner", "capture-release", "capture-replacement", "capture-release-epoch", "capture-release-writer", "missing-identity", "already-reconciled", "live-owner", "new-generation", "reopened-turn",
-    "live-child", "empty-diagnostics-live-child", "loaded-scope", "unknown-scope", "unknown-identity", "scope-owner", "scope-turn",
+    "live-child", "empty-diagnostics-live-child", "late-retained-child", "loaded-scope", "unknown-scope", "unknown-identity", "scope-owner", "scope-turn",
     "admission-owner", "admission-turn", "admission-boot", "reused-pids", "settled-scope", "live-status", "released-columns", "released-columns-live-work",
     ...(eventDebt ? ["unverified-owner", "locally-owned", "released-claim-epoch", "released-writer-epoch"] as const : [])] as const) {
     test(`${engine}: concurrent close after capture, ${change}${eventDebt ? ", unflushed events" : ""}`, async () => {
@@ -49,6 +49,7 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
       const identity = captureProcessIdentity(child.pid!);
       identities.push(identity);
       let tree: ProcessIdentity[] = [];
+      let lateRetained: ProcessIdentity | null = null;
       for (let attempt = 0; attempt < 200 && tree.length < 2; attempt++) {
         await Bun.sleep(10);
         tree = descendantPids(identity.pid, procBackend.ppidMap()).map(pid => captureProcessIdentity(pid));
@@ -108,6 +109,13 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
         if (correlation.label === "registry.idle-reconcile-gone") {
           await Promise.resolve();
           admitted = true;
+          if (change === "late-retained-child") {
+            const retained = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+            children.push(retained);
+            lateRetained = captureProcessIdentity(retained.pid!);
+            identities.push(lateRetained);
+            expect(registry.captureStructuredTerminationSurvivors(entry.key, identity, [lateRetained], "fixture-late-admission")).not.toBeNull();
+          }
           if (change === "admission-owner") registry.agentStateWrite(state => { state.entries[`${engine}:${FIXTURE_SESSION}`]!.claimOwner = "replacement-owner"; });
           if (change === "admission-turn") registry.agentStateWrite(state => { Object.values(state.conversations)[0]!.turn.state = "busy"; Object.values(state.conversations)[0]!.turn.observedAt = new Date(FIXTURE_NOW + 1).toISOString(); });
         }
@@ -121,7 +129,7 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
             if (change.startsWith("capture-")) { expect(accepted).toBe(false); return false; }
             expect(accepted).toBe(true);
             expect(captured).toHaveLength(tree.length);
-            for (const member of tree.filter(value => !["live-child", "empty-diagnostics-live-child"].includes(change) || value.pid === identity.pid).reverse()) {
+            for (const member of tree.filter(value => !["live-child", "empty-diagnostics-live-child", "late-retained-child"].includes(change) || value.pid === identity.pid).reverse()) {
               await stopAndWaitForExit(member);
             }
             expect(procBackend.pidAlive(identity.pid)).toBe(false);
@@ -155,7 +163,8 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
         if (change === "settled-scope") {
           expect(registry.settleStructuredTerminationSurvivors(entry.key, identity, tree, "fixture", entry.structuredHost!.scope!)).toBe(true);
         }
-        const reported = change === "empty-diagnostics-live-child" && !outcome.ok ? { ...outcome, remaining: [], survivors: [] } : outcome;
+        const reported = ["empty-diagnostics-live-child", "late-retained-child"].includes(change) && !outcome.ok
+          ? { ...outcome, remaining: [], survivors: [] } : outcome;
         outcomes.push(reported);
         return reported;
       });
@@ -198,7 +207,15 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
           expect(retire).not.toHaveBeenCalled();
           expect(report.failed.length + report.refused.length).toBe(1);
           expect(registry.hostEntry(entry.key)!.structuredHost).not.toBeNull();
-          if (["live-child", "empty-diagnostics-live-child"].includes(change)) expect(tree.some(value => procBackend.pidAlive(value.pid))).toBe(true);
+          if (["live-child", "empty-diagnostics-live-child", "late-retained-child"].includes(change)) expect(tree.some(value => procBackend.pidAlive(value.pid))).toBe(true);
+          if (change === "late-retained-child") {
+            expect(lateRetained).not.toBeNull();
+            expect(report.retired).toEqual([]);
+            expect(report.reclaimed.processes).toBe(0);
+            expect(report.failed).toHaveLength(1);
+            expect(procBackend.pidAlive(lateRetained!.pid)).toBe(true);
+            expect(report.failed[0]!.error).toContain("retained descendant is alive or its exit cannot be verified");
+          }
           return;
         }
         expect(report.failed).toEqual([]);
@@ -233,7 +250,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
     for (const change of boundary === "measurement" || boundary === "pre-authorize" ? ["conversation-turn"] as const
       : ["none", "held", "dead-owner", "publication", "entry missing", "process identity", "pid", "claimEpoch", "claimOwner", "writerClaimEpoch", "scope", "turn", "conversation-turn", "flags", "attention", "seat", "queue", "transcript", "moved-transcript", "replaced-transcript", "refresh-unchanged", "busy-memory",
         ...(boundary === "admission" ? ["seat-restored"] as const : []),
-        ...(boundary === "release" ? ["runtime-exit", "runtime-live-child"] as const : []),
+        ...(boundary === "release" ? ["runtime-exit", "runtime-live-child", "runtime-write-error"] as const : []),
         ...(boundary === "scope" ? ["late-cas", "closed-event-tail"] as const : [])] as const) {
       test(`${engine} ${scoped ? "scope" : "tree"}: central-state retirement after ${boundary}, ${change}`, async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-lifecycle-"));
@@ -250,7 +267,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
         expect(descendant.startIdentity).not.toBeNull();
         const tree = [identity.pid, descendant.pid];
         identities.push(descendant);
-        const runtimeStop = change === "runtime-exit" || change === "runtime-live-child";
+        const runtimeStop = change === "runtime-exit" || change === "runtime-live-child" || change === "runtime-write-error";
         const owner = change === "held" ? captureProcessIdentity(process.pid) : change === "dead-owner" || change === "late-cas" || runtimeStop
           ? { pid: 2_147_483_647, startIdentity: "fixture-dead-owner", bootEpoch: identity.bootEpoch } : null;
         const file = fixtureRegistry(root, engine, identity, owner);
@@ -360,17 +377,19 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
               if (boundary === "capture") { mutate(); await refresh(); }
               return accepted;
             },
-            terminateOwnedHost: async () => {
+            terminateOwnedHost: async (_key, _expected, _authorize, onAccepted) => {
               released++;
               if (runtimeStop) {
-                if (change === "runtime-exit") await stopFixtureIdentity(descendant);
+                if (change === "runtime-exit" || change === "runtime-write-error") await stopFixtureIdentity(descendant);
                 await stopFixtureIdentity(identity);
                 await stopFixtureProcess(child);
-                if (change === "runtime-exit") {
+                if (change === "runtime-exit" || change === "runtime-write-error") {
                   for (let attempt = 0; attempt < 200 && procBackend.pidAlive(descendant.pid); attempt++) await Bun.sleep(10);
                   expect(procBackend.pidAlive(descendant.pid)).toBe(false);
                 }
+                if (change === "runtime-write-error") onAccepted?.();
                 expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
+                if (change === "runtime-write-error") throw new Error("registry writer admission timed out after release");
                 return true;
               }
               if (boundary === "release") { mutate(); await refresh(); }
@@ -441,9 +460,16 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
               expect(report.failed).toEqual([]);
               expect(report.refused).toMatchObject([{ clause: "events-flushed", reason: expect.stringContaining(debt), changed: true }]);
               expect(events.load(FIXTURE_SESSION)).toHaveLength(1);
-            } else {
+            } else if (change !== "runtime-write-error") {
               expect(report.failed).toEqual([]);
               expect(report.refused).toEqual([]);
+              expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
+            }
+            if (change === "runtime-write-error") {
+              expect(report.failed).toMatchObject([{ error: expect.stringContaining("registry writer admission timed out after release") }]);
+              expect(outcomes[0]).toMatchObject({ ok: false, stoppedVia: "runtime",
+                error: expect.stringContaining("registry writer admission timed out after release") });
+              expect(report.retired).toHaveLength(1);
               expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
             }
             const stored = JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8"));
