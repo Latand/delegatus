@@ -388,19 +388,20 @@ test("a fresh production SDK reader resolves and reads an archive-only project b
     import { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } from "./src/lib/mcp/server.ts";
     const own = ${JSON.stringify(OWN)}, foreign = ${JSON.stringify(FOREIGN)}, laneId = ${JSON.stringify(lane.id)};
     const conversationId = "conversation_archive_reader";
-    let authorizedProject = own;
+    let manager = false;
+    let authorizedProject = null;
     const domain = { ...productionDomainDependencies,
-      callerAttribution: () => ({ kind: "manager", conversationId, role: "orchestrator" }),
-      attentionAuthority: () => ({ kind: "worker", conversationId, role: "orchestrator" }),
+      callerAttribution: () => manager
+        ? ({ kind: "manager", conversationId, role: "orchestrator" })
+        : ({ kind: "unidentified", conversationId: null, role: null }),
+      attentionAuthority: undefined,
       authorizedSeats: () => authorizedProject ? [{ conversationId, path: null, project: authorizedProject }] : [],
+      callerProject: () => null,
       registrySnapshot: () => null, workspaceConversation: () => null,
-      lastCompletedCatalog: () => {
-        const current = productionDomainDependencies.lastCompletedCatalog() ?? { projectCatalog: [], files: [] };
-        return { ...current, projectCatalog: [...current.projectCatalog,
-          { project: own, displayName: "Shared Archive Board", smt: 1, conversations: 1 },
-          { project: foreign, displayName: "Shared Archive Board", smt: 1, conversations: 1 },
-        ] };
-      },
+      lastCompletedCatalog: () => ({ files: [], projectCatalog: [
+        { project: foreign, displayName: "Shared Archive Board", smt: 1, conversations: 1 },
+        { project: "repo-33333333333333333333333333333333", displayName: "Shared Archive Board", smt: 1, conversations: 1 },
+      ] }),
     };
     const bindings = viewerMcpBindings(undefined, {
       post: async () => { throw new Error("unexpected control write"); },
@@ -419,9 +420,12 @@ test("a fresh production SDK reader resolves and reads an archive-only project b
       return result.structuredContent ?? result.content;
     };
     const outcomes = {
-      own: await read(own), foreign: await read(foreign), unknown: await read("Unknown Archive Board"),
+      own: await read(own),
     };
-    authorizedProject = null;
+    manager = true; authorizedProject = own;
+    outcomes.foreign = await read(foreign);
+    manager = false; authorizedProject = null;
+    outcomes.unknown = await read("Unknown Archive Board");
     outcomes.ambiguous = await read("Shared Archive Board");
     await client.close(); await server.close(); receipts.close();
     process.stdout.write(JSON.stringify(outcomes));
