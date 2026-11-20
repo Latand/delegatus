@@ -517,8 +517,9 @@ function headCheckpointEnvironment(root: string, sandbox: string, inherited: Nod
  * actual local bus and its manager connection before using a service receipt. */
 function serviceCleanupIdentity(root: string, isolated: NodeJS.ProcessEnv): string | undefined {
   if (process.platform !== "linux") return;
-  const env = { ...isolated, PATH: fileRunnerPath(isolated) };
-  const search = { PATH: env.PATH, cwd: root };
+  const PATH = fileRunnerPath(isolated);
+  const env: NodeJS.ProcessEnv = { ...isolated, PATH };
+  const search = { PATH, cwd: root };
   const systemctl = Bun.which("systemctl", search), runner = Bun.which("systemd-run", search), busctl = Bun.which("busctl", search);
   const python = Bun.which("python3", search) ?? "/usr/bin/python3";
   const address = env.DBUS_SESSION_BUS_ADDRESS;
