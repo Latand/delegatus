@@ -26,9 +26,10 @@ parent thread, even when a subagent worked in another project. Opening
 the subagent uses its own project and transcript. The Chats list indents
 child rows, and a Codex subagent's row identifies it on hover and focus.
 Project-restricted views keep their existing access rules.
-Resting over a chat for 100 ms or focusing its row shows the title, creation
-time and last message time. If the message index is missing or behind, the
-tooltip labels the transcript's modification time as **Updated**. Creation
+Resting over a chat for 100 ms or focusing its row shows its title and the last
+message first. The creation time appears underneath in quieter text. Both rows
+share the same date and time columns. If the message index is missing or behind,
+the tooltip labels the transcript's modification time as **Updated**. Creation
 falls back to the time recorded in the session header.
 
 Reloading an existing focus entry on desktop starts on its project board
@@ -59,10 +60,10 @@ the panel uses explicit GitHub PR URLs in the indexed messages, most recent
 first. It reads up to 384 indexed messages for Claude and 4,096 for Codex.
 The panel shows at most 128 distinct PRs, and a plus sign indicates partial
 history. The native attachment reader checks up to 128 MiB of the authorized
-transcript and caches the links by file identity. Titles, states, and line
-counts come from the local forge cache. A known link with no cached state has
-an unknown state. Team members receive cached metadata only for the project's
-recorded GitHub repository.
+transcript and caches the links by file identity. The local forge cache
+provides initial titles, states and line counts. A known link whose state has
+yet to be read shows **state not read yet**. Team members receive cached
+metadata for the project's recorded GitHub repository.
 
 On the board, including **In progress**, a badge represents the originating
 chat or the card's sole linked conversation. The branch count in **Chats**
@@ -70,13 +71,36 @@ counts dependent conversations. The PR badge counts the selected chat's links.
 Subagent PR badges use that subagent's own indexed chat history and its
 project's access checks.
 
-The PR badge reads the local index and forge cache. Opening its panel shows
-12 references immediately. After a brief hover, it asks GitHub for just the
-missing or stale states in that page. **Show more** opens the next 12.
-Updates share one bounded queue and a short cache across panels. Known
-merged states are reused, and failed reads pause for a minute before retry.
-Shared readers see the cached state. The request to GitHub contains only
-repository names and PR numbers.
+The conversation PR route's GET reads the local index and forge cache.
+Reloading the dashboard uses that path. The owner or local operator can open
+the panel to see 12 references immediately and request a status refresh for
+that page after a brief hover. **Show more** displays the next 12 and requests
+their status. The panel rechecks the selected page every three minutes in a
+visible, focused window while any PR on that page can still change. Closing
+the panel stops the timer. A window that regains focus requests a refresh
+when its current page is due.
+
+The POST selects the page from the same authorized transcript. It sends only
+repository names and PR numbers to GitHub. One Viewer process shares a
+four-request queue and a bounded cache across tabs, windows and browser
+profiles. It checks the cache again before each queued refresh and starts
+GitHub reads at least five seconds apart. Confirmed states are fresh for
+three minutes. Missing results, failures and unresolved mergeability wait
+at least one minute before another read. Known merged states are reused.
+
+The same GitHub read includes mergeability. A confirmed conflict on an open
+or draft PR adds a yellow warning to the badge and to that PR's row in the
+panel. GitHub can return unresolved mergeability while computing it. That
+result carries no conflict mark.
+
+### Code entry points
+
+| Responsibility | Implementation |
+| --- | --- |
+| Chat rows, relationship disclosures and timestamps | [DesktopConversations](../../src/components/DesktopConversations.tsx) |
+| On-screen badge loading and scoped transcript lookup | [useChatPullRequests](../../src/hooks/useChatPullRequests.ts) and [conversation PR route](../../src/app/api/conversations/pull-requests/route.ts) |
+| PR refresh cadence, cache and mergeability | [ChatPullRequestBadge](../../src/components/workLinks/ChatPullRequestBadge.tsx) and [chatPullRequestStatus](../../src/lib/forge/chatPullRequestStatus.ts) |
+| Rendered chat and board behaviour with synthetic names and PRs | [Kanban browser evidence](../../src/components/kanban/kanbanBoard.browser.test.tsx), case `chat badges open an ordered PR panel by pointer and keyboard` |
 
 ## Token usage on task cards
 

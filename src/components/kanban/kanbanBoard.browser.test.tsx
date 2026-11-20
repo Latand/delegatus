@@ -25189,6 +25189,17 @@ describe("chat pull requests on the board and in the project rail", () => {
         await panel.waitFor({ state: "hidden" });
 
         await page.locator("[data-rail-chats] > button").click();
+        const chatTitle = page.locator("[data-rail-chats] [data-desktop-chat-open]").filter({ hasText: "Sort the reports" });
+        await chatTitle.hover();
+        const chatHint = page.getByRole("tooltip").filter({ hasText: "Last message" });
+        await chatHint.waitFor();
+        expect(await chatHint.innerText()).toMatch(/Last message[\s\S]+Created/);
+        const positions = await chatHint.locator("time").evaluateAll(nodes => nodes.map(node => ({
+          date: node.firstElementChild?.getBoundingClientRect().left,
+          clock: node.lastElementChild?.getBoundingClientRect().right,
+        })));
+        expect(positions[0]).toEqual(positions[1]);
+        await chatHint.screenshot({ path: path.join(out, "chat-tooltip.png") });
         const badge = page.locator("[data-rail-chats] [data-chat-pr-badge]");
         await badge.hover();
         await panel.waitFor();
@@ -25197,6 +25208,9 @@ describe("chat pull requests on the board and in the project rail", () => {
         expect(await rows.first().getAttribute("href")).toBe("https://github.com/sample/widget/pull/7");
         expect(await rows.last().getAttribute("href")).toBe("https://github.com/sample/widget/pull/5");
         expect(await rows.last().locator("[data-tone]").getAttribute("data-tone")).toBe("merged");
+        await rows.first().getByText("Merge conflict").waitFor();
+        expect(await badge.getAttribute("aria-label")).toContain("Merge conflict");
+        await panel.screenshot({ path: path.join(out, "chat-pr-conflict.png") });
         await rows.first().hover();
         await page.waitForTimeout(260);
         expect(await panel.isVisible()).toBe(true);
@@ -25209,6 +25223,7 @@ describe("chat pull requests on the board and in the project rail", () => {
         await page.keyboard.press("Escape");
         await panel.waitFor({ state: "hidden" });
         expect(await badge.evaluate(node => node === document.activeElement)).toBe(true);
+
         const rail = page.locator("[data-rail-chats]");
         const branch = rail.getByRole("button", { name: /Dependent chats for Sort the reports/ });
         const branchLabel = await branch.getAttribute("aria-label");
@@ -25245,6 +25260,46 @@ describe("chat pull requests on the board and in the project rail", () => {
           await direct.getByRole("dialog").filter({ hasText: "Sort the reports" }).waitFor();
         } finally { await direct.close(); }
         expect(pageErrors).toEqual([]);
+        const { context: cadenceContext, page: cadence } = await openFixture(
+          browser, `${server.base}?scenario=chat-prs`, { width: 1440, height: 900 }, "dark", "en",
+        );
+        try {
+          await cadence.locator("[data-rail-chats] > button").click();
+          const cadenceBadge = cadence.locator("[data-rail-chats] [data-chat-pr-badge]");
+          await cadenceBadge.waitFor();
+          // A focused panel follows forge changes. A background panel waits,
+          // and closing it removes the scheduled read.
+          await cadence.clock.install();
+          await cadence.evaluate(() => {
+            let focused = true;
+            Object.defineProperty(document, "hasFocus", { value: () => focused });
+            const callFetch = window.fetch;
+            const counters = { reads: 0 };
+            Object.defineProperty(window, "chatStatusEvidence", { value: counters });
+            window.addEventListener("blur", () => { focused = false; });
+            window.addEventListener("focus", () => { focused = true; });
+            window.fetch = (input, init) => {
+              if (typeof input === "string" && input.startsWith("/api/conversations/pull-requests?") && init?.method === "POST") counters.reads += 1;
+              return callFetch(input, init);
+            };
+          });
+          const statusReads = () => cadence.evaluate(() => Reflect.get(window, "chatStatusEvidence").reads as number);
+          await cadenceBadge.press("Enter");
+          await cadence.clock.runFor(200);
+          expect(await statusReads()).toBe(1);
+          await cadence.evaluate(() => window.dispatchEvent(new Event("blur")));
+          await cadence.clock.fastForward(180_000);
+          expect(await statusReads()).toBe(1);
+          await cadence.evaluate(() => window.dispatchEvent(new Event("focus")));
+          await cadence.clock.runFor(20);
+          expect(await statusReads()).toBe(2);
+          await cadence.clock.fastForward(180_000);
+          expect(await statusReads()).toBe(3);
+          await cadence.keyboard.press("Escape");
+          await cadence.locator("[data-chat-pr-panel]").waitFor({ state: "hidden" });
+          await cadence.clock.fastForward(180_000);
+          expect(await statusReads()).toBe(3);
+        } finally { await cadenceContext.close(); }
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }
   }, 75_000);

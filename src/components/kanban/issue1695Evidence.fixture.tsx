@@ -2065,7 +2065,9 @@ function task(id: string, status: TaskStatus, title: string, description: string
   } as BoardTask;
 }
 
-const chatWithPullRequests = SCENARIO === "chat-prs" ? add(conversation("report-chat", "Sort the reports", { directChildCount: 2 })) : null;
+const chatWithPullRequests = SCENARIO === "chat-prs" ? add(conversation("report-chat", "Sort the reports", {
+  directChildCount: 2, firstMessageAt: Date.UTC(2026, 9, 30, 14, 26) / 1000, lastMessageAt: Date.UTC(2026, 10, 11, 0, 42) / 1000,
+})) : null;
 const reportChild = chatWithPullRequests && conversation("report-child", "Review the report", { parent: chatWithPullRequests.path, directChildCount: 0 });
 const reportFork = chatWithPullRequests && conversation("report-fork", "Test the report export", { engine: "codex", parent: chatWithPullRequests.path, directChildCount: 0 });
 const otherMainChat = chatWithPullRequests && conversation("report-other", "Plan the next report", { engine: "codex", directChildCount: 0 });
@@ -5275,12 +5277,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations/pull-requests" && SCENARIO === "chat-prs") {
     const transcripts = url.searchParams.getAll("transcript").filter(path => path === chatWithPullRequests?.path);
-    return json(Object.fromEntries(transcripts.map(transcript => [transcript, { partial: false, items: [
+    const items = [
       { repository: "sample/widget", number: 7, url: "https://github.com/sample/widget/pull/7", state: "open",
-        title: "Add report sorting", additions: 21, deletions: 4 },
+        title: "Add report sorting", additions: 21, deletions: 4, conflict: method === "POST" ? true : undefined },
       { repository: "sample/widget", number: 5, url: "https://github.com/sample/widget/pull/5", state: "merged",
         title: "Prepare the report index" },
-    ] }])));
+    ];
+    return json(method === "POST" ? (transcripts.length ? items : [])
+      : Object.fromEntries(transcripts.map(transcript => [transcript, { partial: false, items }])));
   }
   if (url.pathname === "/api/conversations") {
     if (chatWithPullRequests) {

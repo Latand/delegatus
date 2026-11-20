@@ -1,11 +1,12 @@
 "use client";
 
+import { TriangleAlert } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { intlLocale } from "@/components/activity/format";
 import { Z } from "@/components/layers";
-import { CHAT_PULL_REQUEST_PAGE_SIZE, type ChatPullRequest, type ChatPullRequests } from "@/lib/forge/chatPullRequests";
+import { CHAT_PULL_REQUEST_PAGE_SIZE, CHAT_PULL_REQUEST_REFRESH_MS, type ChatPullRequest, type ChatPullRequests } from "@/lib/forge/chatPullRequests";
 import { useLocale } from "@/lib/i18n";
 
 import { WorkLinkGlyph } from "./WorkLinkChips";
@@ -26,7 +27,6 @@ export function ChatPullRequestBadge({ title, requests, transcript, project }: {
   const anchor = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const refreshSession = useRef<AbortController | null>(null);
   const [mode, setMode] = useState<"hover" | "pinned" | null>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   const [offset, setOffset] = useState(0);
@@ -34,11 +34,14 @@ export function ChatPullRequestBadge({ title, requests, transcript, project }: {
   const open = mode !== null;
   const items = useMemo(() => requests.items.map(item => {
     const updated = updates[item.url];
-    return updated && item.state !== "merged" && (!item.checkedAt || (updated.checkedAt ?? "") >= item.checkedAt) ? updated : item;
+    return updated && item.state !== "merged" && (updated.state === "merged" || !item.checkedAt || (updated.checkedAt ?? "") >= item.checkedAt) ? updated : item;
   }), [requests.items, updates]);
   const visible = items.slice(0, offset + CHAT_PULL_REQUEST_PAGE_SIZE);
+  const pageHasUnmerged = items.slice(offset, offset + CHAT_PULL_REQUEST_PAGE_SIZE).some(item => item.state !== "merged");
   const label = t("chatPullRequests.label", { title });
   const tone = TONE_ORDER.find(state => items.some(item => item.state === state)) ?? "unknown";
+  const hasConflict = items.some(item => item.conflict === true);
+  const conflictLabel = t("chatPullRequests.conflict");
   const format = numberFormats[locale];
 
   const keepOpen = () => clearTimeout(closeTimer.current);
@@ -49,16 +52,22 @@ export function ChatPullRequestBadge({ title, requests, transcript, project }: {
 
   useEffect(() => () => clearTimeout(closeTimer.current), []);
   useEffect(() => {
-    if (!open || !project || !transcript || requests.refresh === false) return;
+    if (!open || !pageHasUnmerged || !project || !transcript || requests.refresh === false) return;
     const abort = new AbortController();
-    refreshSession.current = abort;
-    return () => { abort.abort(); refreshSession.current = null; };
-  }, [open, project, requests.refresh, transcript]);
-  useEffect(() => {
-    const abort = refreshSession.current;
-    if (!open || !abort || !project || !transcript) return;
-    const timer = setTimeout(async () => {
-      const query = new URLSearchParams({ project, transcript, offset: String(offset) });
+    const query = new URLSearchParams({ project, transcript, offset: String(offset) });
+    let nextReadAt = Date.now() + (offset === 0 ? 150 : 0);
+    let reading = false;
+    let firstRead = true;
+    let timer: ReturnType<typeof setTimeout>;
+    function schedule() {
+      clearTimeout(timer);
+      if (abort.signal.aborted || reading || document.visibilityState !== "visible" || (!firstRead && !document.hasFocus())) return;
+      timer = setTimeout(() => void read(), Math.max(0, nextReadAt - Date.now()));
+    }
+    async function read() {
+      if (document.visibilityState !== "visible" || (!firstRead && !document.hasFocus())) return;
+      firstRead = false;
+      reading = true;
       try {
         const response = await fetch(`/api/conversations/pull-requests?${query}`, { method: "POST", signal: abort.signal });
         if (!response.ok) return;
@@ -66,9 +75,24 @@ export function ChatPullRequestBadge({ title, requests, transcript, project }: {
         if (!Array.isArray(rows) || abort.signal.aborted) return;
         setUpdates(previous => ({ ...previous, ...Object.fromEntries((rows as ChatPullRequest[]).map(row => [row.url, row])) }));
       } catch { /* cached history remains usable */ }
-    }, offset === 0 ? 150 : 0);
-    abort.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
-  }, [open, offset, project, requests.refresh, transcript]);
+      finally {
+        reading = false;
+        nextReadAt = Date.now() + CHAT_PULL_REQUEST_REFRESH_MS;
+        schedule();
+      }
+    }
+    schedule();
+    document.addEventListener("visibilitychange", schedule);
+    window.addEventListener("focus", schedule);
+    window.addEventListener("blur", schedule);
+    return () => {
+      abort.abort();
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", schedule);
+      window.removeEventListener("focus", schedule);
+      window.removeEventListener("blur", schedule);
+    };
+  }, [open, offset, pageHasUnmerged, project, requests.refresh, transcript]);
   useLayoutEffect(() => {
     const button = anchor.current;
     const surface = panel.current;
@@ -120,7 +144,7 @@ export function ChatPullRequestBadge({ title, requests, transcript, project }: {
   return (
     <>
       <button
-        ref={anchor} type="button" aria-label={label} aria-expanded={Boolean(mode)} aria-controls={mode ? id : undefined}
+        ref={anchor} type="button" aria-label={hasConflict ? `${label} · ${conflictLabel}` : label} aria-expanded={Boolean(mode)} aria-controls={mode ? id : undefined}
         data-chat-pr-badge="" data-no-drag="" data-tone={tone} className="wl-chip self-center"
         onPointerEnter={event => {
           if (event.pointerType !== "mouse") return;
@@ -133,6 +157,7 @@ export function ChatPullRequestBadge({ title, requests, transcript, project }: {
       >
         <WorkLinkGlyph tone={tone} />
         {requests.items.length}{requests.partial ? "+" : ""}
+        {hasConflict ? <TriangleAlert className="size-3 shrink-0 text-warning" aria-hidden /> : null}
       </button>
       {mode ? createPortal(
         <div
@@ -153,6 +178,12 @@ export function ChatPullRequestBadge({ title, requests, transcript, project }: {
                       <WorkLinkGlyph tone={pr.state ?? "unknown"} />
                       {t(`workLinks.state.${pr.state ?? "unknown"}`)}
                     </span>
+                    {pr.conflict === true ? (
+                      <span className="inline-flex items-center gap-1 text-warning">
+                        <TriangleAlert className="size-3 shrink-0" aria-hidden />
+                        {conflictLabel}
+                      </span>
+                    ) : null}
                     <span className="min-w-0 flex-1 break-all">{pr.repository} #{pr.number}</span>
                     {pr.additions !== undefined ? <span className="tabular-nums text-success">+{format.format(pr.additions)}</span> : null}
                     {pr.deletions !== undefined ? <span className="tabular-nums text-danger">−{format.format(pr.deletions)}</span> : null}

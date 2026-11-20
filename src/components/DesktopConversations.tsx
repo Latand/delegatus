@@ -208,16 +208,30 @@ function ChatBranch({ file, ...props }: ChatListProps & { file: FileEntry }) {
 
 function ChatHintDetails({ file, title, subagent }: { file: FileEntry; title: string; subagent: boolean }) {
   const { locale, t } = useLocale();
-  const format = new Intl.DateTimeFormat(intlLocale(locale), { dateStyle: "medium", timeStyle: "short" });
+  const date = new Intl.DateTimeFormat(intlLocale(locale), { dateStyle: "medium" });
+  const time = new Intl.DateTimeFormat(intlLocale(locale), { timeStyle: "short" });
   const created = file.firstMessageAt != null ? file.firstMessageAt * 1000 : Date.parse(file.sessionStartedAt ?? "");
   const latest = (file.lastMessageAt ?? file.mtime) * 1000;
+  const timestamps = [
+    { label: t(file.lastMessageAt == null ? "list.chatUpdated" : "list.chatLastMessage"), value: latest, className: "text-secondary" },
+    { label: t("list.chatCreated"), value: created, className: "text-muted opacity-95" },
+  ].filter(({ value }) => Number.isFinite(value) && value > 0);
   return (
     <>
       <span className="block font-semibold [overflow-wrap:anywhere]">{title}{subagent ? ` · ${t("kind.subagent")}` : ""}</span>
-      {Number.isFinite(created) ? <span className="mt-1 block text-muted">{t("list.chatCreated", { time: format.format(created) })}</span> : null}
-      {Number.isFinite(latest) && latest > 0 ? <span className="mt-0.5 block text-muted">
-        {t(file.lastMessageAt == null ? "list.chatUpdated" : "list.chatLastMessage", { time: format.format(latest) })}
-      </span> : null}
+      {timestamps.length ? (
+        <span className="mt-1 grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)] gap-x-3 gap-y-0.5">
+          {timestamps.map(({ label, value, className }) => (
+            <span key={label} className="contents">
+              <span className={className}>{label}</span>
+              <time dateTime={new Date(value).toISOString()} className={`flex justify-between gap-x-2 tabular-nums ${className}`}>
+                <span>{date.format(value)}</span>
+                <span className="shrink-0">{time.format(value)}</span>
+              </time>
+            </span>
+          ))}
+        </span>
+      ) : null}
     </>
   );
 }

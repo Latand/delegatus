@@ -2,6 +2,7 @@ import { boundedRepository, normalizeWorkLinkInput, workLinkUrl, type ForgeCache
 
 export const CHAT_PULL_REQUEST_BATCH = 8;
 export const CHAT_PULL_REQUEST_PAGE_SIZE = 12;
+export const CHAT_PULL_REQUEST_REFRESH_MS = 3 * 60_000;
 export const MAX_CHAT_PULL_REQUESTS = 128;
 
 export interface ChatPullRequest {
@@ -10,6 +11,7 @@ export interface ChatPullRequest {
   url: string;
   title?: string;
   state: PullRequestState | null;
+  conflict?: boolean | null;
   checkedAt?: string;
   additions?: number;
   deletions?: number;
