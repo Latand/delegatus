@@ -1450,13 +1450,15 @@ function retirementSubject(
             && (!memory || memory.activeTurnRef === null);
           currentAttention = memory?.pendingAttention ?? facts.attention.value;
           if (memory?.attentionUnverified) { centralSettled = null; centralWhy = "current attention cannot be verified"; }
-          if (finishedStage && facts.turn.determined && facts.turn.value.state === "absent") pipelineStanding = determined(null);
           if (centralSettled === false && turnOpen !== false && facts.owner.value === "absent"
             && facts.obligations.value.length === 0 && currentAttention.length === 0
             && inputs.nowMs - facts.transcript.value.mtimeMs >= AGENT_STATE_POLICY.abandonedTurnMs
             && treeHasOnlyMcpChildren(hostProcess, retainedProof ? entry.structuredTerminationSurvivors : undefined)) {
             abandonedTurn = true;
             centralSettled = true;
+          }
+          if (finishedStage && (abandonedTurn || facts.turn.determined && facts.turn.value.state === "absent")) {
+            pipelineStanding = determined(null);
           }
           // Otherwise a turn unknown by size stays unknown, never busy.
           if (!memory && !abandonedTurn && !facts.turn.determined) { centralSettled = null; centralWhy = facts.turn.why; }

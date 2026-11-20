@@ -16,7 +16,7 @@ import { determined } from "./determinable";
 import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
 import type { HandoffRow } from "./handoffQueue";
 import * as control from "./structuredHostControl";
-import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry } from "./structuredHostRetirement";
+import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry, type StructuredHostRetirementDependencies } from "./structuredHostRetirement";
 
 const identities: ProcessIdentity[] = [], roots: string[] = [], registries: AgentRegistry[] = [];
 const children = new Map<ChildProcess, ProcessIdentity>();
@@ -389,7 +389,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "passed-stage-ope
       if (realMcp) expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
       const exitHost = () => stopFixtureProcess(host);
       if (scenario === "unflushed-already-gone") await exitHost();
-      const report = await runStructuredHostRetirementSweep({ snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
+      const sweepDependencies: StructuredHostRetirementDependencies = { snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
         now: () => now, publicationState: () => "ready", handoffRows: () => determined(scenario === "delivery" ? [row] : []),
         durableEventTail: sessionId => durableRuntimeEventTailSeq(sessionId, path.join(root, "events")), realtimeBound: () => determined(false),
         orchestratorSeatConversations: () => determined(new Set<string>()), revokedSeatConversations: () => determined(new Set<string>()),
@@ -401,7 +401,15 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "passed-stage-ope
             return { bytes: null, measuredProcesses: 0 };
           },
         } : {}),
-      });
+      };
+      if (scenario === "passed-stage-open") {
+        const kept = await runStructuredHostRetirementSweep({ ...sweepDependencies, idleMs: 7 * 3_600_000 });
+        expect(kept.refused).toMatchObject([{ clause: "transcript-idle" }]);
+        expect(kept.retired).toEqual([]);
+        expect(captures).toBe(0);
+        expect(signalTargets).toEqual([]);
+      }
+      const report = await runStructuredHostRetirementSweep(sweepDependencies);
       if (["hidden-live-owner", "preload-tool", "legacy-dead-closed", "legacy-dead-open"].includes(scenario)) {
         console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals: signalTargets.length, captures }));
       }
