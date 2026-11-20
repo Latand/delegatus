@@ -641,15 +641,10 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
     }
     expect(alarm).toMatchObject({ state: "pending", recipientConversationId: child.conversationId, reason: SEND_UNVERIFIED_REASON });
     expect(alarm.suppressSenderWake).toBeUndefined();
-    if (kind === "legacy-deliberate") {
-      // The upgraded sweep must persist deliberate provenance while the
-      // original admitted owner still exists, before normal retention.
-      await m.sweepSendFailureNotices({ registry: active.registry, assertActive: () => {},
-        receipt: id => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
-        recipient: () => ({ kind: "deliver", conversationId: child.conversationId, path: child.transcriptPath }),
-        deliver: async () => { throw Error("an already admitted warning was delivered twice"); } });
-      expect(m.readSendFailureNotice(original.operationId)?.deliberate).toBe(true);
-    }
+    // The legacy deliberate row intentionally receives no upgraded sweep
+    // before retention. Its original owner is gone when recovery starts; the
+    // retained runtime receipt must restore provenance before fail-closed
+    // missing-owner handling.
     if (recovery !== "retained") {
       compactAfterNewerSends(active, () => { clock += 1_000; setSystemTime(clock); }, "unverified");
     }
@@ -668,6 +663,10 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
       const sweep = () => m.sweepSendFailureNotices({ registry, assertActive: () => {},
         receipt: id => resolveSendReceipt(id, { registry, progress: null,
           client: { operationStatus: async operationId => journal.operationResult(operationId) } }),
+        operationIdentity: async id => {
+          const receipt = journal.operationResult(id)?.receipt;
+          return receipt ? { kind: receipt.kind, conversationId: receipt.conversationId, clientMessageId: receipt.idempotencyKey } : null;
+        },
         recipient: () => ({ kind: "deliver", conversationId: ${JSON.stringify(child.conversationId)}, path: ${JSON.stringify(child.transcriptPath)} }),
         fallback: () => ({ kind: "deliver", conversationId: ${JSON.stringify(active.conversationId)} }),
         deliver: async () => { throw Error("an admitted warning was resent"); } });
@@ -680,7 +679,12 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
         const queue = new StructuredDeliveryQueue({
           effects: async () => journal.effectBatch(100).filter(effect => effect.payload.operationId === operationId),
           status: async id => journal.operationResult(id)?.receipt ?? null,
-          settled: id => sendIsSettled(registry.deliverySnapshotForOperation(id), id) || m.sendFailureWarningSuppressed(registry, id),
+          settled: async id => sendIsSettled(registry.deliverySnapshotForOperation(id), id)
+            || await m.sendFailureWarningSuppressedAsync(registry, id, async originalId => {
+              const receipt = journal.operationResult(originalId)?.receipt;
+              return receipt ? { kind: receipt.kind, conversationId: receipt.conversationId,
+                clientMessageId: receipt.idempotencyKey } : null;
+            }),
           transition: async (id, status, details) => journal.transitionOperation(id, status, details),
         }, () => host);
         await queue.drain();
@@ -699,11 +703,11 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
     if (kind !== "automatic") {
       expect(observed.alarm).toMatchObject({ state: "sent", operationId: original.operationId, clientMessageId: alarm.clientMessageId });
     } else if (recovery !== "retained") {
-      expect(observed.alarm).toMatchObject({ state: "failed", suppressSenderWake: true, text: alarm.text });
+      expect(observed.alarm).toMatchObject({ state: recovery === "before-sweep" ? "cancelled" : "failed", suppressSenderWake: true, text: alarm.text });
       expect(observed.alarm.reason).toContain(SEND_UNVERIFIED_REASON);
-      expect(observed.alarm.reason).toContain("delivery record unavailable");
-      expect(observed.senderSignals).toHaveLength(1);
-      expect(observed.launcherSignals).toHaveLength(1);
+      if (recovery === "after-sweep") expect(observed.alarm.reason).toContain("delivery record unavailable");
+      expect(observed.senderSignals).toHaveLength(recovery === "before-sweep" ? 0 : 1);
+      expect(observed.launcherSignals).toHaveLength(recovery === "before-sweep" ? 0 : 1);
     } else expect(observed.alarm.state).toBe("cancelled");
     if (kind === "deliberate" && recovery !== "retained") {
       // Compact both admitted owners and let the alarm pass its ordinary
@@ -711,12 +715,36 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
       compactAfterNewerSends(child, () => { clock += 1_000; setSystemTime(clock); }, "delivered");
       clock += 15 * 24 * 60 * 60_000;
       setSystemTime(clock);
+      const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+      const persisted = new SqliteStateCollection<SendFailureNotice>(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), {
+        collection: "send_failure_notices", schemaVersion: 1, busyMessage: "fixture notices busy",
+        key: row => row.operationId, decode: m.decodeSendFailureNotice, clone: structuredClone,
+        controllerActive: row => row.state === "pending" || row.state === "failed",
+      });
+      try { persisted.boundedPatch(2, tx => tx.put({ ...alarm, state: "pending", settledAt: null, warningAdmission: "admitted" })); }
+      finally { persisted.close(); }
       let replayAdmissions = 0;
-      await m.sweepSendFailureNotices({ registry: active.registry, assertActive: () => {}, receipt: async () => null,
-        recipient: () => ({ kind: "deliver", conversationId: child.conversationId, path: child.transcriptPath }),
-        deliver: async () => { replayAdmissions++; return { ok: true }; } });
+      const restart = Bun.spawn([process.execPath, "--eval", `
+        const { AgentRegistry } = await import(${JSON.stringify(new URL("../agent/registry.ts", import.meta.url).pathname)});
+        const m = await import(${JSON.stringify(new URL("./sendFailureNotice.ts", import.meta.url).pathname)});
+        const registry = new AgentRegistry(${JSON.stringify(active.registryPath)}, undefined, undefined,
+          { sqliteMode: "sqlite", sqliteFilename: ${JSON.stringify(active.registryPath.replace(/\.json$/, ".sqlite"))} });
+        let admissions = 0;
+        try {
+          await m.sweepSendFailureNotices({ registry, assertActive: () => {}, receipt: async () => null,
+            recipient: () => ({ kind: "deliver", conversationId: ${JSON.stringify(child.conversationId)}, path: ${JSON.stringify(child.transcriptPath)} }),
+            deliver: async () => { admissions++; return { ok: true }; } });
+          console.log(JSON.stringify({ admissions, alarm: m.readSendFailureNotice(${JSON.stringify(original.operationId)}) }));
+        } finally { registry.close(); }
+      `], { env: process.env, stdout: "pipe", stderr: "pipe" });
+      const [restartOut, restartErr, restartExit] = await Promise.all([
+        new Response(restart.stdout).text(), new Response(restart.stderr).text(), restart.exited,
+      ]);
+      expect(restartExit, restartErr).toBe(0);
+      const replay = JSON.parse(restartOut);
+      replayAdmissions = replay.admissions;
       expect(replayAdmissions).toBe(0);
-      expect(m.readSendFailureNotice(original.operationId)).toMatchObject({ state: "sent", clientMessageId: alarm.clientMessageId });
+      expect(replay.alarm).toMatchObject({ state: "pending", warningAdmission: "admitted", clientMessageId: alarm.clientMessageId });
     }
   } finally {
     active.registry.close(); active.close(); setSystemTime();
@@ -3886,9 +3914,86 @@ test("a permanent notice refusal becomes a durable seat alarm with its transport
     await sweepSendFailureNotices(ports);
     await sweepSendFailureNotices(ports);
     expect(attempts).toBe(1);
-    expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", attempts: 1, reason: expect.stringContaining("403") });
+    expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", attempts: 1, warningAdmission: "refused", reason: expect.stringContaining("403") });
     expect(sendFailureSignals(seat.conversationId)).toContainEqual(expect.objectContaining({ id: `send-failed:${operationId}`, label: expect.stringContaining("recipient refused admission") }));
+    setSystemTime(Date.now() + 15 * 24 * 60 * 60_000);
+    await sweepSendFailureNotices(ports);
+    expect(readSendFailureNotice(operationId)).toBeNull();
+    expect(sendFailureSignals(seat.conversationId).some(signal => signal.id === `send-failed:${operationId}`)).toBe(false);
   } finally { active.close(); }
+});
+
+test("an admitted deliberate warning reconciles across canonical recipient adoption", async () => {
+  const active = fixture("notice-canonical-recipient", { sqlite: true });
+  const otherProject = fixture("notice-canonical-other-project", { sqlite: true });
+  try {
+    const sender = secondConversation(active, "canonical-notice-sender");
+    const { recordSendFailureNotice, readSendFailureNotice, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: "canonical-notice-original",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    recordSendFailureNotice(active.registry, operationId, "uncertain", "confirmation unavailable");
+    const alarm = readSendFailureNotice(operationId)!;
+    const sameKeyElsewhere = acceptSend(otherProject, { clientMessageId: alarm.clientMessageId });
+    await otherProject.registry.prepareRecoveryIndexes();
+    let warningOperationId = "";
+    let admissions = 0;
+    const first = { registry: active.registry, assertActive: () => {},
+      receipt: async id => id === operationId
+        ? resolveSendReceipt(id, { registry: active.registry, client: active.client })
+        : { operationId: id, kind: "send" as const, conversationId: sender.conversationId, clientMessageId: "warning",
+          state: "in-flight" as const, reason: null, acceptedAt: null, settledAt: null, duplicateRisk: false,
+          resend: null, evidence: "delivery-record" as const },
+      recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
+      deliver: async request => { admissions++; warningOperationId = acceptSend(sender, request).operationId; return { ok: true }; } };
+    await sweepSendFailureNotices(first);
+    expect(admissions).toBe(1);
+    expect(readSendFailureNotice(operationId)?.warningAdmission).toBe("admitted");
+    expect(lookupOriginalSend(otherProject.registry.deliverySnapshotForMessageKey(otherProject.conversationId, alarm.clientMessageId),
+      { conversationId: otherProject.conversationId, clientMessageId: alarm.clientMessageId }))
+      .toMatchObject({ kind: "found", operationId: sameKeyElsewhere.operationId });
+    expect(lookupOriginalSend(active.registry.deliverySnapshotForMessageKey(sender.conversationId, alarm.clientMessageId),
+      { conversationId: sender.conversationId, clientMessageId: alarm.clientMessageId }))
+      .toMatchObject({ kind: "found", operationId: warningOperationId });
+
+    const canonical = secondConversation(active, "canonical-notice-successor");
+    const migration = active.registry.beginSpawnRequest({ engine: "codex", cwd: path.dirname(sender.transcriptPath),
+      conversationId: canonical.conversationId, purpose: "migration-successor",
+      launchProfile: { title: "Recovered sender" }, expectedArtifactPath: sender.transcriptPath });
+    if (migration.kind !== "created") throw Error("fixture migration admission failed");
+    expect(active.registry.settleSpawn(migration.receipt.launchId, {
+      key: { engine: "codex", sessionId: sender.generationId }, artifactPath: sender.transcriptPath,
+      cwd: path.dirname(sender.transcriptPath), accountId: "settlement-fixture-account", status: "live", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null,
+    })).toMatchObject({ kind: "settled", conversation: { id: canonical.conversationId } });
+
+    const warm = { ...first,
+      receipt: async id => id === operationId
+        ? resolveSendReceipt(id, { registry: active.registry, client: active.client })
+        : { operationId: id, kind: "send" as const, conversationId: canonical.conversationId, clientMessageId: "warning",
+          state: "in-flight" as const, reason: null, acceptedAt: null, settledAt: null, duplicateRisk: false,
+          resend: null, evidence: "delivery-record" as const },
+      recipient: () => ({ kind: "deliver" as const, conversationId: canonical.conversationId, path: sender.transcriptPath }),
+    };
+    await sweepSendFailureNotices(warm);
+    expect(readSendFailureNotice(operationId)?.state).toBe("pending");
+    const { AgentRegistry } = await import("@/lib/agent/registry");
+    const coldRegistry = new AgentRegistry(active.registryPath, undefined, undefined,
+      { sqliteMode: "sqlite", sqliteFilename: active.registryPath.replace(/\.json$/, ".sqlite") });
+    try {
+      expect(coldRegistry.canonicalConversationId(sender.conversationId)).toBe(canonical.conversationId);
+      await sweepSendFailureNotices({ ...warm, registry: coldRegistry,
+        receipt: async id => id === operationId
+          ? resolveSendReceipt(id, { registry: coldRegistry, client: active.client })
+          : { operationId: id, kind: "send" as const, conversationId: canonical.conversationId, clientMessageId: "warning",
+            state: "delivered" as const, reason: null, acceptedAt: null, settledAt: new Date().toISOString(), duplicateRisk: false,
+            resend: "not-needed" as const, evidence: "delivery-record" as const },
+      });
+    } finally { coldRegistry.close(); }
+    expect(readSendFailureNotice(operationId)).toMatchObject({ state: "sent", warningAdmission: "admitted" });
+    expect(admissions).toBe(1);
+    expect(active.registry.canonicalConversationId(sender.conversationId)).toBe(canonical.conversationId);
+  } finally { otherProject.close(); active.close(); }
 });
 
 test("a later registry projection failure increments and escalates the persisted notice budget", async () => {

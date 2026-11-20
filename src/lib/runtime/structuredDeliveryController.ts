@@ -1,7 +1,7 @@
 import { viewerMcpOwnerForEntry, type SeatTickConversation } from "@/lib/agent/registry";
 import { boardFor } from "@/lib/board/store";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
-import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sendFailureWarningSuppressed, sweepSendFailureNotices } from "./sendFailureNotice";
+import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sendFailureWarningSuppressedAsync, sweepSendFailureNotices } from "./sendFailureNotice";
 import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "./agentScope";
 import { withHostStopOrigin } from "./hostExit";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
@@ -1157,7 +1157,7 @@ export async function bindStructuredDeliveryQueue(
       /* The durable delivery record's own fence (#1131): a send a receipt query
          already ended — the only answer it could give while this socket was
          unreachable — must not be actuated when the socket comes back. */
-      settled: (operationId: string) => {
+      settled: async (operationId: string) => {
         const snapshot = registry.deliverySnapshotForOperation(operationId);
         const receipt = operationId.startsWith("spawn_message_") ? registry.spawnReceipt(operationId.slice("spawn_message_".length)) : null;
         const owner = snapshot.deliveryOperationOwners[operationId];
@@ -1166,7 +1166,11 @@ export async function bindStructuredDeliveryQueue(
         return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId)
           || !!conversationId && !ownerRelayOperationAuthorized(operationId, conversationId)
           || sendIsSettled(snapshot, operationId)
-          || sendFailureWarningSuppressed(registry, operationId);
+          || await sendFailureWarningSuppressedAsync(registry, operationId, async originalId => {
+            const receipt = (await client.operationStatus(originalId, { currentRetryLeaf: true }))?.receipt;
+            return receipt ? { kind: receipt.kind, conversationId: receipt.conversationId,
+              clientMessageId: receipt.idempotencyKey } : null;
+          });
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
       authorizeDispatch: (operationId: string, conversationId: string, origin) => {
@@ -2502,6 +2506,11 @@ export async function bindStructuredDeliveryQueue(
           import("./sendSettlement"), import("@/lib/spawnNotice/production"), import("@/lib/delivery"),
         ]);
         await sweepSendFailureNotices({ registry, receipt: operationId => resolveSendReceipt(operationId, { registry, client, assertActive }),
+          operationIdentity: async operationId => {
+            const retained = (await client.operationStatus(operationId, { currentRetryLeaf: true }))?.receipt;
+            return retained ? { kind: retained.kind, conversationId: retained.conversationId,
+              clientMessageId: retained.idempotencyKey } : null;
+          },
           recipient: sender => spawnNoticeRecipient(sender, {
             seats: readOrchestratorSeatFileOrNull, conversation: id => registry.conversation(id as ViewerConversationId),
             hiddenPaths: project => boardFor(project).prefs.hidden,
