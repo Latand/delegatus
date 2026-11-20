@@ -1624,9 +1624,14 @@ function repairedPublication() {
   savePipelines([lane]);
   const ports = { ...defaultPipelinePorts(), exec: realExec, conversationAgentActive: async () => false, stageHostResident: async () => false,
     paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
-  return { root, checkout, git, lane, ports, hook: path.join(repo, ".git", "hooks", "pre-push"),
-    current: () => findPipelineRecord(lane.id)!,
-    tick: async () => { for (let n = 0; n < 3; n += 1) await tickPipelines([], ports); } };
+  const current = () => findPipelineRecord(lane.id)!;
+  return { root, checkout, git, hook: path.join(repo, ".git", "hooks", "pre-push"),
+    tickToFirstPark: async () => {
+      // Once the park is recorded, another tick can reserve a fresh producer.
+      for (let n = 0; n < 3 && current().state === "running"; n += 1) await tickPipelines([], ports);
+      return current();
+    },
+  };
 }
 
 test.each([
@@ -1642,12 +1647,17 @@ test.each([
   const h = repairedPublication();
   try {
     breakPublication(h);
-    await h.tick();
-    const parked = h.current();
+    const parked = await h.tickToFirstPark();
     expect(parked.state).toBe("needs_decision");
     expect(parked.stateDetail).toStartWith(cause);
     expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
     expect(parked.stateDetail!.indexOf(WHITESPACE_REFUSAL)).toBeGreaterThan(parked.stateDetail!.indexOf("\n"));
     expect(parked.runs[0]!.attempts[0]!.error).toBe(parked.stateDetail);
+    if (cause === "publishing the passed stage: ") {
+      expect(parked.delivery?.operation).toMatchObject({
+        state: "settled",
+        result: { ok: false, failure: { code: 1, changedFiles: 1, outputTail: expect.stringContaining("(fail) the stage broke this") } },
+      });
+    }
   } finally { fs.rmSync(h.root, { recursive: true, force: true }); }
 });

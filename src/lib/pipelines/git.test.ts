@@ -99,33 +99,32 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
   const box = await publishSandbox();
   const { patchPipeline, defaultPipelinePorts } = await import("./engine");
   const { registerPipelineTick } = await import("./controllerSignal");
+  const entered = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
   const restoreTick = registerPipelineTick(async () => {});
-  const head = await box.commit("accepted.txt", "accepted\n");
-  const bin = path.join(box.root, "bin"); fs.mkdirSync(bin);
-  const entered = path.join(bin, "entered"), released = path.join(bin, "released");
-  const gitBinary = Bun.which("git")!;
-  fs.writeFileSync(path.join(bin, "git"), phase === "probe"
-    ? '#!/bin/sh\nif [ "$1" = "ls-remote" ]; then touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; fi\nexec "$PUBLISH_GIT" "$@"\n'
-    : '#!/bin/sh\nif [ "$1" = "push" ]; then "$PUBLISH_GIT" "$@" || exit $?; touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; exit 0; fi\nexec "$PUBLISH_GIT" "$@"\n', { mode: 0o700 });
-  const previous = { PATH: process.env.PATH, PUBLISH_ENTERED: process.env.PUBLISH_ENTERED, PUBLISH_RELEASED: process.env.PUBLISH_RELEASED, PUBLISH_GIT: process.env.PUBLISH_GIT };
-  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, PUBLISH_ENTERED: entered, PUBLISH_RELEASED: released, PUBLISH_GIT: gitBinary });
+  const exec: ExecPort = async (command, args, cwd, env, options) => {
+    const result = await realExec(command, args, cwd, env, options);
+    // Hold the real Git result at the publisher's boundary. Other Git calls,
+    // including teardown, can proceed even while this reply is held.
+    if (result.code === 0 && command === "git" && args[0] === (phase === "probe" ? "ls-remote" : "push")) {
+      entered.resolve();
+      await released.promise;
+    }
+    return result;
+  };
   let pending: ReturnType<typeof publishPipelineBranch> | undefined;
   try {
-    pending = publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
-    // Wait for the actual Git boundary. Startup under a busy runner is outside
-    // the publication contract; the test's infrastructure deadline bounds it.
-    let settled = false;
-    void pending.then(() => { settled = true; }, () => { settled = true; });
-    while (!fs.existsSync(entered) && !settled) await Bun.sleep(5);
-    expect(fs.existsSync(entered)).toBe(true);
+    const head = await box.commit("accepted.txt", "accepted\n");
+    pending = publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(await Promise.race([entered.promise.then(() => true), pending.then(() => false)])).toBe(true);
     const ports = { ...defaultPipelinePorts(), stopStageAgent: async () => ({ outcome: "not-running" as const }), paneAgentAlive: async () => false, stageHostResident: async () => false };
     expect((await patchPipeline(box.subject.id, { action: "close" }, ports)).error).toBeUndefined();
-    fs.writeFileSync(released, "");
+    released.resolve();
     expect(await pending).toMatchObject(phase === "probe" ? { ok: false, error: expect.stringContaining("superseded") }
       : { ok: true, remote: "unreachable", uncertain: true, detail: expect.stringContaining("superseded") });
     expect(findPipelineRecord(box.subject.id)!.state).toBe("closed");
     expect(findPipelineRecord(box.subject.id)!.publishedCommit).not.toBe(head);
-    const remote = await realExec(gitBinary, ["show-ref", "--verify", `refs/heads/${box.subject.branch}`], box.origin);
+    const remote = await realExec("git", ["show-ref", "--verify", `refs/heads/${box.subject.branch}`], box.origin);
     if (phase === "probe") expect(remote.code).not.toBe(0);
     else {
       expect(remote.code).toBe(0);
@@ -134,10 +133,9 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
       expect(findPipelineRecord(box.subject.id)!.delivery!.journal.at(-1)!.reason).toContain("reconcile");
     }
   } finally {
-    fs.writeFileSync(released, "");
+    released.resolve();
     try { await pending; }
     finally {
-      for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
       restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
     }
   }
@@ -2467,8 +2465,12 @@ store.leaveLessons({ request: ${JSON.stringify(request)}, source: { ...${JSON.st
     let damaged = false;
     const damage = () => {
       const database = new Database(path.join(publicationState, "state.sqlite"));
-      try { expect(database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'").run(JSON.stringify({ kind: "rule", id: 7, rule })).changes).toBe(1); }
-      finally { database.close(); }
+      try {
+        database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'")
+          .run(JSON.stringify({ kind: "rule", id: 7, rule }));
+        // Bun's run().changes also counts the privacy revision trigger.
+        expect(database.query<{ count: number }, []>("SELECT changes() AS count").get()).toEqual({ count: 1 });
+      } finally { database.close(); }
       damaged = true;
     };
     if (when === "before") damage();
