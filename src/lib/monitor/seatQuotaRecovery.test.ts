@@ -14,6 +14,8 @@ import { dispatchStructuredControl } from "@/lib/runtime/structuredControls";
 import { StructuredDispatchDeferredError, StructuredSendRefusedError } from "@/lib/runtime/engineHost";
 import type { StructuredMessageRequest } from "@/lib/runtime/structuredMessageDelivery";
 import { SEAT_QUOTA_RECOVERY_ROLE } from "@/lib/runtime/recoveryNotices";
+import { RegistryTransactionError } from "@/lib/agent/registryTransaction";
+import { SeatTickWork } from "./seatTickWork";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "seat-quota-check-"));
 const previous = process.env.LLV_STATE_DIR;
@@ -43,6 +45,38 @@ function harness() {
   return { h, ports, recover: () => recoverSeatQuota("fixture", ports), read: () => readSeatQuotaObligation("fixture"),
     guard: () => seatQuotaDispatchGuard("fixture", ports) };
 }
+
+test.each(["recovered", "rotated", "deadline", "permanent"] as const)("quota observation retries only transient store admission: %s", async scenario => {
+  const f = harness();
+  let instant = 0, calls = 0;
+  const work = new SeatTickWork("fixture", 800, () => instant);
+  const observe = f.ports.observe;
+  f.ports.observe = async (...args) => {
+    calls++;
+    if (calls === 1 || scenario === "deadline") {
+      if (scenario === "permanent") throw new Error("permanent observation failure");
+      if (scenario === "rotated") f.h.seat = null;
+      if (scenario === "deadline") instant += 400;
+      throw new RegistryTransactionError();
+    }
+    return observe(...args);
+  };
+  try {
+    const result = work.run(() => recoverSeatQuota("fixture", f.ports));
+    if (scenario === "permanent") {
+      await expect(result).rejects.toThrow("permanent observation failure");
+      expect(calls).toBe(1);
+    } else if (scenario === "deadline") {
+      await expect(result).rejects.toThrow("seat project deadline exceeded");
+      expect(calls).toBe(2);
+    } else {
+      expect(await result).toBe(scenario === "recovered");
+      expect(calls).toBe(scenario === "recovered" ? 2 : 1);
+    }
+    expect(f.h.sent).toEqual([]);
+    expect(f.read()?.state ?? null).toBe(scenario === "recovered" ? "owed" : null);
+  } finally { work.close(); }
+});
 
 test("retains the ask before reset, then submits its stable recovery identity with Viewer authorship", async () => {
   const f = harness();
