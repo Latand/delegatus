@@ -1701,6 +1701,109 @@ test("a traversal of archived rows asks the filesystem for the file identity onc
   } finally { stat.mockRestore(); }
 });
 
+test("the first prepared read after a same-counter database replacement sees the new rows", async () => {
+  const { open, filename, kept } = fixture();
+  let loads = 0;
+  const store = open({ onSnapshotLoad: () => { loads++; } });
+  const archived = "archived-replacement-receipt";
+  store.mutate(file => {
+    file.receipts[archived] = {
+      ...file.receipts[kept]!, launchId: archived, state: "failed", error: "original archive",
+      createdAt: "2020-01-01T00:00:00Z",
+    };
+  }, false);
+  expect(store.archiveInactive(1024)).toBeGreaterThan(0);
+  {
+    using checkpoint = new Database(filename);
+    checkpoint.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+
+  const original = await store.prepareReadOnlySnapshot();
+  expect(original.file.receipts[archived]?.error).toBe("original archive");
+  const initialLoads = loads;
+  expect(await store.prepareReadOnlySnapshot()).toBe(original);
+  expect(loads).toBe(initialLoads);
+
+  // Replace one immutable payload in the copy, keeping the revision, journal
+  // counters and archive version IDs from the original database.
+  const replacement = `${filename}.replacement`;
+  fs.copyFileSync(filename, replacement);
+  {
+    using edited = new Database(replacement);
+    edited.exec("DROP TRIGGER registry_archive_immutable_update");
+    edited.query("UPDATE registry_archive SET value_json = replace(value_json, ?, ?)").run("original archive", "replacement archive");
+  }
+  const counters = (file: string) => {
+    using db = new Database(file, { readonly: true });
+    return db.query("SELECT (SELECT data_version FROM pragma_data_version) AS version, total_changes() AS changes").get();
+  };
+  expect(counters(replacement)).toEqual(counters(filename));
+  fs.renameSync(replacement, filename);
+
+  const first = await store.prepareReadOnlySnapshot();
+  expect(first.file.receipts[archived]?.error).toBe("replacement archive");
+  expect(() => original.file.receipts[archived]).toThrow(DatabaseReplacedError);
+  expect(first.revision).toBe(original.revision);
+  expect(loads - initialLoads).toBe(1);
+  expect(await store.prepareReadOnlySnapshot()).toBe(first);
+  expect(loads - initialLoads).toBe(1);
+});
+
+function stageReceiptReplacement({ filename, initial, kept }: ReturnType<typeof fixture>) {
+  const replacement = `${filename}.replacement`;
+  const next = new SqliteAgentRegistryStore(replacement, { initialSnapshot: initial, normalize: normalizeRegistry });
+  try {
+    next.mutate(file => { file.receipts[kept]!.error = "replacement receipt"; }, false);
+  } finally { next.close(); }
+  return () => {
+    const previous = `${filename}.old`;
+    fs.renameSync(filename, previous);
+    for (const suffix of ["-wal", "-shm"]) fs.renameSync(filename + suffix, previous + suffix);
+    fs.renameSync(replacement, filename);
+    return previous;
+  };
+}
+
+test("a database replaced inside prepared reading refuses the in-flight snapshot", async () => {
+  const setup = fixture();
+  const swap = stageReceiptReplacement(setup);
+  let replaced = false;
+  const store = setup.open({ onRowPayloadRead: (collection, count) => {
+    if (replaced || collection !== "receipts" || count === 0) return;
+    swap();
+    replaced = true;
+  } });
+  const prepare = () => store.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
+  await expect(prepare()).rejects.toMatchObject({ code: "LLV_DATABASE_REPLACED" });
+  expect(replaced).toBe(true);
+  expect((await prepare()).file.receipts[setup.kept]?.error).toBe("replacement receipt");
+});
+
+test("a database replaced during an admitted mutation rolls back the moved writer", () => {
+  const setup = fixture();
+  const swap = stageReceiptReplacement(setup);
+  const store = setup.open();
+  const { filename, kept } = setup;
+  let previous: string | undefined;
+  expect(() => store.tryWriter(() => store.mutate(file => {
+    file.receipts[kept]!.error = "refused write";
+    previous = swap();
+  }, false))).toThrow(DatabaseReplacedError);
+  expect(previous).toBeDefined();
+
+  const receiptError = (file: string) => {
+    using db = new Database(file, { readonly: true });
+    return db.query<{ error: string | null }, [string]>(
+      "SELECT json_extract(value_json, '$.error') AS error FROM registry_rows WHERE collection='receipts' AND row_key=?",
+    ).get(kept)?.error;
+  };
+  expect(receiptError(previous!)).toBeNull();
+  expect(receiptError(filename)).toBe("replacement receipt");
+  store.mutate(file => { file.receipts[kept]!.error = "current write"; }, false);
+  expect(receiptError(filename)).toBe("current write");
+  expect(receiptError(previous!)).toBeNull();
+});
+
 for (const replacement of ["other payloads under the same version ids", "no archived versions"] as const) {
   test(`a file replaced inside one synchronous run refuses the held view's archived rows: ${replacement}`, async () => {
     const { open, filename, initial, kept } = fixture();

@@ -12,6 +12,11 @@ import configureNext from "./next.config";
 
 const nextConfig = configureNext(PHASE_DEVELOPMENT_SERVER);
 
+test("the browser bundle and the same-origin audio processor use the same program", () => {
+  const source = fs.readFileSync(new URL("./public/audio/dictation-capture.js", import.meta.url), "utf8");
+  expect(configureNext(PHASE_PRODUCTION_BUILD).env?.NEXT_PUBLIC_DICTATION_WORKLET_SOURCE).toBe(source);
+});
+
 test("development reads the config without relying on truncated showConfig stdout", async () => {
   const probe = fs.mkdtempSync(path.join(tmpdir(), "dev-types-"));
   try {

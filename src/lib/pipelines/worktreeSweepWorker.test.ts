@@ -439,7 +439,7 @@ test("temporary data maintenance coalesces and carries its deadline through the 
   expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("maintenance\n");
 });
 
-test("an attempt tick whose queue budget expired defers, then a fresh tick runs", async () => {
+test("an attempt tick finishes on its own lease while a worktree pass remains held", async () => {
   const { root, worker } = fixture("--hold-worktree", 10_000);
   await worker.run("dry-run");
   const ready = new Promise<void>((resolve, reject) => {
@@ -450,16 +450,11 @@ test("an attempt tick whose queue budget expired defers, then a fresh tick runs"
   });
   const worktree = worker.run("on");
   await ready;
-  let now = Date.parse("2026-11-04T12:00:00Z");
-  const clock = spyOn(workerClock, "now").mockImplementation(() => now);
-  const queued = worker.attemptTemp();
-  now += 10_001;
-  fs.writeFileSync(path.join(root, "release-worktree"), "release");
   try {
-    await worktree;
-    expect(await queued).toBeNull();
-    expect(fs.existsSync(path.join(root, "requests"))).toBeFalse();
-  } finally { clock.mockRestore(); await queued.catch(() => {}); }
+    expect(await worker.attemptTemp()).toMatchObject({ checked: 0, removed: 0 });
+    expect(fs.existsSync(path.join(root, "release-worktree"))).toBeFalse();
+    expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("attempt-temp\n");
+  } finally { fs.writeFileSync(path.join(root, "release-worktree"), "release"); await worktree; }
   expect(await worker.attemptTemp()).toMatchObject({ checked: 0, removed: 0 });
 }, 20_000);
 
