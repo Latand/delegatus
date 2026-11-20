@@ -999,7 +999,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "dash.recentAgents": "Чати",
   "chatPullRequests.label": "Пул-реквести в чаті «{title}»",
   "chatPullRequests.heading": "Пул-реквести",
-  "chatPullRequests.partial": "Показано останні посилання з проіндексованої історії чату",
+  "chatPullRequests.partial": "Деякі давніші pull request можуть бути відсутні",
   "list.chatBranches": "Залежні чати для «{title}» ({count})",
   "dash.more": "Більше дій",
   "dash.menu.accounts": "Акаунти",

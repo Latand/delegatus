@@ -3,10 +3,12 @@ import { NextRequest } from "next/server";
 import { agentRegistry } from "@/lib/agent/registry";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { taskRepository } from "@/lib/forge/resolve";
+import { readNativeChatPullRequests } from "@/lib/forge/nativeChatPullRequests";
 import { CHAT_PULL_REQUEST_BATCH } from "@/lib/forge/chatPullRequests";
 import { deputyConversationRefs } from "@/lib/orchestrator/deputies";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { catalogEntryToFileEntry, conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
+import { pathAllowed } from "@/lib/scanner/roots";
 import { readTranscriptPullRequests } from "@/lib/search/transcriptSearch";
 import { overlaySessionProjects } from "@/lib/session/titleProjection";
 import { requestWorkspaceScope, workspaceRoute } from "@/lib/team/workspaceRoute";
@@ -14,7 +16,7 @@ import { requestWorkspaceScope, workspaceRoute } from "@/lib/team/workspaceRoute
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function workspaceGET(req: NextRequest): Response {
+async function workspaceGET(req: NextRequest): Promise<Response> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
   const headers = { "Cache-Control": "private, no-store" };
@@ -42,7 +44,15 @@ function workspaceGET(req: NextRequest): Response {
   const scopedCache = scope && !scope.owner
     ? { repository: (name: string) => name === repository ? cache.repository(name) : null }
     : cache;
-  return Response.json(readTranscriptPullRequests(allowed, scopedCache, { requireCurrent: Boolean(scope && !scope.owner) }), { headers });
+  const indexed = readTranscriptPullRequests(allowed, scopedCache, { requireCurrent: Boolean(scope && !scope.owner) });
+  for (const file of allowed) {
+    if (file.root !== "claude-projects" || file.engine !== "claude" || !pathAllowed(file.path)) continue;
+    const native = await readNativeChatPullRequests(file.path, scopedCache);
+    // Claude records its actual chat attachments separately from references
+    // made in prose. Match that history when the provider has it.
+    if (native?.items.length) indexed[file.path] = native;
+  }
+  return Response.json(indexed, { headers });
 }
 
 export const GET = workspaceRoute("/api/conversations/pull-requests", workspaceGET, true);

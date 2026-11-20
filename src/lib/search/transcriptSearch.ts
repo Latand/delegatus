@@ -1,5 +1,5 @@
-import type { ChatPullRequests } from "@/lib/forge/chatPullRequests";
-import { boundedRepository, normalizeWorkLinkInput, workLinkKey, workLinkUrl, type ForgeCacheView } from "@/lib/forge/workLinks";
+import { chatPullRequestForUrl, MAX_CHAT_PULL_REQUESTS, type ChatPullRequests } from "@/lib/forge/chatPullRequests";
+import type { ForgeCacheView } from "@/lib/forge/workLinks";
 import { redactMediaText } from "@/lib/externalRelay/mediaPrivacy";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite } from "@/lib/sqliteReadAttribution";
@@ -159,7 +159,7 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
 
 const CHAT_REFERENCE_WINDOW = 384;
 const CHAT_REFERENCE_BODY = 16 * 1024;
-const CHAT_REFERENCE_LIMIT = 32;
+const CODEX_CHAT_REFERENCE_WINDOW = 4096;
 
 /** Read the existing index for the already authorized catalog rows. This
  * never opens a transcript or starts the index writer for a sidebar request. */
@@ -188,7 +188,8 @@ export function readTranscriptPullRequests(
       const mtimeMatches = file.mtime === undefined || Math.abs(coverage.mtime_ms - file.mtime * 1000) <= 1;
       const matchesIdentity = coverage.size === file.size && mtimeMatches;
       if (options.requireCurrent && (!matchesIdentity || coverage.project !== file.project || coverage.engine !== file.engine)) continue;
-      const from = Math.max(0, coverage.messages_count - CHAT_REFERENCE_WINDOW);
+      const window = file.engine === "codex" ? CODEX_CHAT_REFERENCE_WINDOW : CHAT_REFERENCE_WINDOW;
+      const from = Math.max(0, coverage.messages_count - window);
       const rows = mentions.all(CHAT_REFERENCE_BODY, CHAT_REFERENCE_BODY, file.path, from);
       const items: ChatPullRequests["items"] = [];
       const keys = new Set<string>();
@@ -197,26 +198,13 @@ export function readTranscriptPullRequests(
         partial ||= Boolean(row.clipped);
         const matches = [...row.body.matchAll(/(?<![\w@.\/-])https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+(?=[/?#]|[^\w.-]|\.(?:\s|$)|$)/gi)];
         for (const [url] of matches.reverse()) {
-          const parsed = normalizeWorkLinkInput(url, { repository: null });
-          if (!parsed.ok) continue;
-          const { repository, number } = parsed.link;
-          const cached = forge.repository(repository);
-          const canonical = boundedRepository(cached?.canonical) ? cached.canonical : repository;
-          const key = workLinkKey(canonical, number);
-          if (keys.has(key)) continue;
-          keys.add(key);
-          if (items.length >= CHAT_REFERENCE_LIMIT) { partial = true; break; }
-          const pr = cached?.pr(number);
-          items.push({
-            repository: canonical, number, url: workLinkUrl(canonical, number, "pr"),
-            state: pr?.state ?? null,
-            ...(pr?.title ? { title: pr.title.slice(0, 240) } : {}),
-            ...(pr?.checkedAt ? { checkedAt: pr.checkedAt } : {}),
-            ...(pr?.additions !== undefined ? { additions: pr.additions } : {}),
-            ...(pr?.deletions !== undefined ? { deletions: pr.deletions } : {}),
-          });
+          const pr = chatPullRequestForUrl(url, forge);
+          if (!pr || keys.has(pr.url)) continue;
+          keys.add(pr.url);
+          if (items.length >= MAX_CHAT_PULL_REQUESTS) { partial = true; break; }
+          items.push(pr);
         }
-        if (keys.size > CHAT_REFERENCE_LIMIT) break;
+        if (keys.size > MAX_CHAT_PULL_REQUESTS) break;
       }
       result[file.path] = { items, partial };
     }

@@ -1571,3 +1571,21 @@ test("chat PRs come from indexed messages, dedupe by repository and keep last-me
   ] });
   expect(readTranscriptPullRequests([{ ...selected, size: selected.size + 1 }], { repository: () => null })[pathname]?.partial).toBe(true);
 });
+
+test("Codex PR history includes older indexed messages and excludes tool output", async () => {
+  const file = path.join(sandbox, "historical-codex-pr.jsonl");
+  const message = (text: string) => JSON.stringify({ type: "response_item", payload: {
+    type: "message", role: "assistant", content: [{ type: "output_text", text }],
+  } });
+  fs.writeFileSync(file, [
+    message("Opened https://github.com/sample/reports/pull/7"),
+    ...Array.from({ length: 400 }, (_, i) => message(`Status update ${i}`)),
+    message("Merged https://github.com/sample/reports/pull/11"),
+    JSON.stringify({ type: "response_item", payload: { type: "custom_tool_call_output", output: "https://github.com/sample/another/pull/9" } }),
+  ].join("\n") + "\n");
+  const selected = source(file, "codex", "reports");
+  await indexTranscriptSources([selected]);
+  expect(readTranscriptPullRequests([selected], { repository: () => null })[file]).toMatchObject({
+    partial: false, items: [{ number: 11 }, { number: 7 }],
+  });
+});

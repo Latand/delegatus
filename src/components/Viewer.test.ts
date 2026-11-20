@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 
 import { filesApiUrl } from "@/hooks/useFiles";
 import { parseConversationHash } from "@/lib/accounts/identity";
+import { reloadedBoardProject } from "@/lib/navigation/focusHistory";
+
 import type { FileEntry } from "@/lib/types";
 
 import { OVERVIEW } from "./projectModel";
@@ -164,4 +166,16 @@ test("REGRESSION: no surface in the app asks for an operator key any more", asyn
     const source = await Bun.file(new URL(`../lib/i18n/${locale}.ts`, import.meta.url)).text();
     expect(source).not.toContain("operator.key");
   }
+});
+
+test("only a desktop reload of the tab's matching focus entry returns to its board", () => {
+  const state = { llvFocus: { v: 1, conversationId: "conversation-report", path: "/sessions/report.jsonl", project: "reports" } };
+  const link = parseConversationHash("#c=conversation-report");
+  expect(reloadedBoardProject(link, state, "reload", false)).toBe("reports");
+  expect(reloadedBoardProject(link, state, "reload", true)).toBeNull();
+  expect(reloadedBoardProject(link, state, "navigate", false)).toBeNull();
+  expect(reloadedBoardProject(link, state, "back_forward", false)).toBeNull();
+  expect(reloadedBoardProject(link, null, "reload", false)).toBeNull();
+  expect(reloadedBoardProject(parseConversationHash("#c=conversation-other"), state, "reload", false)).toBeNull();
+  expect(reloadedBoardProject(parseConversationHash("#f=%2Fsessions%2Freport.jsonl"), state, "reload", false)).toBe("reports");
 });

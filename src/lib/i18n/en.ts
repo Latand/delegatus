@@ -1009,7 +1009,7 @@ export const en = {
   "dash.recentAgents": "Chats",
   "chatPullRequests.label": "Pull requests in {title}",
   "chatPullRequests.heading": "Pull requests",
-  "chatPullRequests.partial": "Showing recent references in the indexed chat history",
+  "chatPullRequests.partial": "Some older pull requests may be missing",
   "list.chatBranches": "Dependent chats for {title} ({count})",
   "dash.more": "More actions",
   "dash.menu.accounts": "Accounts",

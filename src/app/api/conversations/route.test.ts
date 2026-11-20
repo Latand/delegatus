@@ -588,3 +588,39 @@ test("chat PR lookup is scoped to cataloged transcripts in the selected project"
     partial: false, items: [{ repository: "sample/reports", number: 7, url: "https://github.com/sample/reports/pull/7", state: null }],
   } });
 });
+
+test("chat PR history uses Claude attachments outside the indexed message window", async () => {
+  const priorHome = process.env.LLV_CLAUDE_HOME;
+  process.env.LLV_CLAUDE_HOME = path.join(sandbox, "claude");
+  try {
+    const projects = path.join(process.env.LLV_CLAUDE_HOME, "projects", "reports");
+    fs.mkdirSync(projects, { recursive: true });
+    const file = path.join(projects, "native-history.jsonl");
+    const attach = (number: number) => JSON.stringify({
+      type: "pr-link", prNumber: number, prUrl: `https://github.com/sample/reports/pull/${number}`,
+    });
+    fs.writeFileSync(file, [
+      attach(7), attach(11),
+      JSON.stringify({ type: "user", message: { content: "Compare https://github.com/sample/reports/pull/9" } }),
+      attach(7), JSON.stringify({ type: "pr-link", prUrl: "https://example.test/reports/pull/1" }),
+    ].join("\n") + "\n");
+    const stat = fs.statSync(file);
+    const row = { path: file, project: "reports", root: "claude-projects" as const, name: path.basename(file),
+      title: "Review reports", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const,
+      size: stat.size, mtime: stat.mtimeMs / 1000 };
+    replaceConversationCatalog([row]);
+    await indexTranscriptSources([{ ...row, mtimeMs: stat.mtimeMs }]);
+    const url = new URL("http://localhost/api/conversations/pull-requests");
+    url.search = new URLSearchParams({ project: row.project, transcript: file }).toString();
+    const read = async () => {
+      const response = await pullRequests(new NextRequest(url, { headers: { host: "localhost" } }));
+      return (await response.json())[file];
+    };
+    expect(await read()).toMatchObject({ partial: false, items: [{ number: 7 }, { number: 11 }] });
+    fs.appendFileSync(file, attach(13) + "\n");
+    expect(await read()).toMatchObject({ partial: false, items: [{ number: 13 }, { number: 7 }, { number: 11 }] });
+  } finally {
+    if (priorHome === undefined) delete process.env.LLV_CLAUDE_HOME;
+    else process.env.LLV_CLAUDE_HOME = priorHome;
+  }
+});

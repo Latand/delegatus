@@ -1533,3 +1533,14 @@ test("Claude system reminder envelopes do not hide the first user request from n
   };
   expect(conversationSearchText(JSON.stringify(row), "claude").title).toBe("Inspect the formatter");
 });
+
+test("unnamed Codex subagents use their own nickname after normal title sources", async () => {
+  const { conversationSearchText } = await import("./describe");
+  const own = { type: "session_meta", payload: { source: { subagent: { thread_spawn: { agent_nickname: "Maple" } } } } };
+  const copied = { type: "session_meta", payload: { source: { subagent: { thread_spawn: { agent_nickname: "Birch" } } } } };
+  const prompt = { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Review the export queue" }] } };
+  const title = (...rows: object[]) => conversationSearchText(rows.map(row => JSON.stringify(row)).join("\n"), "codex").title;
+  expect(title(own, copied)).toBe("Maple");
+  expect(title(own, copied, prompt)).toBe("Review the export queue");
+  expect(title({ type: "session_meta", payload: {} }, copied)).toBeNull();
+});

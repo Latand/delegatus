@@ -25228,6 +25228,22 @@ describe("chat pull requests on the board and in the project rail", () => {
         expect(await branch.getAttribute("aria-label")).toBe(branchLabel);
         expect(await rail.locator("[data-chat-pr-badge]").textContent()).toBe("2");
         await page.screenshot({ path: path.join(out, "chat-branches.png") });
+        await rail.locator("[data-desktop-chat-open]").filter({ hasText: "Sort the reports" }).click();
+        const reader = page.getByRole("dialog").filter({ hasText: "Sort the reports" });
+        await reader.waitFor();
+        const deepLink = page.url();
+        await page.reload();
+        await page.getByRole("heading", { name: "In progress" }).waitFor();
+        const reopen = page.getByRole("button", { name: /Show the open agent|1 agent open/i }).first();
+        await reopen.waitFor();
+        expect(await reader.isVisible()).toBe(false);
+        await reopen.click();
+        await reader.waitFor();
+        const direct = await context.newPage();
+        try {
+          await direct.goto(deepLink);
+          await direct.getByRole("dialog").filter({ hasText: "Sort the reports" }).waitFor();
+        } finally { await direct.close(); }
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }

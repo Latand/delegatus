@@ -1116,6 +1116,8 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
   let title: string | null = null;
   let firstPrompt: string | null = null;
   let explicitTitle: string | null = null;
+  let codexHeaderSeen = false;
+  let codexSubagentTitle: string | null = null;
   for (const line of lines) {
     if (title && firstPrompt && !line.includes('"custom-title"')) continue;
     let obj: Record<string, unknown>;
@@ -1125,6 +1127,14 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
       obj = parsed;
     } catch {
       continue;
+    }
+    if (engine === "codex" && obj.type === "session_meta" && !codexHeaderSeen) {
+      codexHeaderSeen = true;
+      const payload = recordValue(obj.payload);
+      const subagent = recordValue(recordValue(payload?.source)?.subagent);
+      const spawn = recordValue(subagent?.thread_spawn);
+      const nickname = goodTitle(spawn?.agent_nickname ?? payload?.agent_nickname);
+      if (spawn && nickname) codexSubagentTitle = nickname;
     }
     if (engine === "claude" && obj.type === "custom-title") {
       explicitTitle = goodTitle(obj.customTitle) ?? explicitTitle;
@@ -1146,7 +1156,7 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
     title ??= goodTitle(prompt);
     if (engine !== "claude" && title && firstPrompt) break;
   }
-  return { title: explicitTitle ?? title, firstPrompt };
+  return { title: explicitTitle ?? title ?? codexSubagentTitle, firstPrompt };
 }
 
 /** Parse the same bounded head for asynchronous catalog hydration. */

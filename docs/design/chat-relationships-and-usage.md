@@ -13,7 +13,13 @@ and opens its own conversation.
 
 The tree uses the same project-scoped lineage for Claude Desktop chats,
 native Codex forks and registry-owned conversations. The flat catalog and
-conversation search retain their own pagination.
+conversation search retain their own pagination. A Codex subagent without a
+session title or a usable prompt takes the nickname from its own native
+header, including when copied parent metadata follows that header.
+
+Reloading an existing focus entry on desktop starts on its project board
+with the open-agent list retained. Pasting a conversation link or traversing
+browser history still opens its target.
 
 Delegatus reads native session titles when available and preserves explicit
 Delegatus renames. An unnamed imported task can display the title of its
@@ -33,18 +39,20 @@ Enter. The list opens beside the badge when there is room. Escape closes it.
 Each row opens the pull request on GitHub. The newest mention of each pull
 request determines its place in the list.
 
-The list reads GitHub PR URLs in up to 384 recent indexed messages per visible
-chat, with up to 32 distinct links. A plus sign indicates partial history.
-Titles, states, and line counts come from the local forge cache when
-available. A referenced PR with no cached state remains a link with an
-unknown state. Team members receive cached metadata only for the project's
-recorded GitHub repository. The panel works from existing indexes and never
-requests a GitHub refresh of its own.
+When Claude records pull requests as attachments to a transcript, the badge
+and panel show those links in last-recorded order on both surfaces. Otherwise
+the panel uses explicit GitHub PR URLs in the indexed messages, most recent
+first. It reads up to 384 indexed messages for Claude and 4,096 for Codex.
+The panel shows at most 128 distinct PRs, and a plus sign indicates partial
+history. The native attachment reader checks up to 128 MiB of the authorized
+transcript and caches the links by file identity. Titles, states, and line
+counts come from the local forge cache. A known link with no cached state has
+an unknown state. Team members receive cached metadata only for the project's
+recorded GitHub repository.
 
-On the board, including **In progress**, a badge appears when the card has an
-identifiable conversation and its indexed messages contain a PR link. The
-branch count in **Chats** counts dependent conversations. The PR badge counts
-links in that specific conversation.
+On the board, including **In progress**, a badge represents the originating
+chat or the card's sole linked conversation. The branch count in **Chats**
+counts dependent conversations. The PR badge counts the selected chat's links.
 
 ## Token usage on task cards
 

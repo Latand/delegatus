@@ -1,4 +1,4 @@
-import { formatConversationHash } from "@/lib/accounts/identity";
+import { type ConversationHash, formatConversationHash } from "@/lib/accounts/identity";
 
 /**
  * Per-tab browser history over deliberate card focus (issue #866).
@@ -136,6 +136,19 @@ export function setFocusHistoryOwner(next: FocusHistoryOwner): () => void {
   return () => {
     if (owner === next) owner = null;
   };
+}
+
+/** A desktop reload of this tab's own focus entry restores the board.
+ * Fresh deep links and traversed entries still open the conversation. */
+export function reloadedBoardProject(
+  intent: ConversationHash, state: unknown, navigationType: string | undefined, phone: boolean,
+): string | null {
+  if (phone || navigationType !== "reload") return null;
+  const focus = parseFocusHistoryState(state);
+  if (!focus) return null;
+  const matches = intent.conversationId ? intent.conversationId === focus.conversationId
+    : Boolean(intent.filePath && intent.filePath === focus.path);
+  return matches ? focus.project : null;
 }
 
 /** The typed entry the tab is currently standing on, if any. */
