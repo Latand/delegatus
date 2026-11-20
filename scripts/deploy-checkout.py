@@ -35,6 +35,24 @@ def census_identity(value):
             and (value.get("bootEpoch") is None or isinstance(value["bootEpoch"], str)))
 
 
+def validate_merger_census_row(row):
+    host, pipeline, merger = row.get("host") or {}, row.get("pipeline"), row.get("merger")
+    if merger is None:
+        return
+    process = host.get("process")
+    if (not isinstance(merger, dict) or pipeline is not None or host.get("kind") != "structured"
+            or host.get("state") not in ["alive", "gone"] or row.get("turnState") not in ["busy", "idle"]
+            or not isinstance(merger.get("conversationId"), str) or merger["conversationId"] != row.get("conversationId")
+            or merger.get("engine") not in ["claude", "codex"] or not text(merger.get("sessionId"))
+            or not text(merger.get("path")) or not os.path.isabs(merger["path"])
+            or type(merger.get("claimEpoch")) is not int or merger["claimEpoch"] < 1
+            or not census_identity(merger.get("process")) or merger["process"] != process
+            or (not census_identity(merger.get("writer"))
+                and not (host.get("state") == "gone" and merger.get("writer") is None))
+            or "batch" not in merger):
+        raise RuntimeError("standalone merger census row malformed")
+
+
 class BaselineReadinessError(RuntimeError):
     def __init__(self, serving, target):
         checks = serving.get("checks", {})
@@ -128,15 +146,7 @@ def protected_host_census(release, bun, state, target, timeout):
                 raise RuntimeError("census row malformed")
             merger = row.get("merger")
             if merger is not None:
-                if (not isinstance(merger, dict) or pipeline is not None or host.get("kind") != "structured"
-                        or host.get("state") != "alive" or row.get("turnState") != "busy"
-                        or not isinstance(merger.get("conversationId"), str) or merger["conversationId"] != row.get("conversationId")
-                        or merger.get("engine") not in ["claude", "codex"] or not text(merger.get("sessionId"))
-                        or not text(merger.get("path")) or not os.path.isabs(merger["path"])
-                        or type(merger.get("claimEpoch")) is not int or merger["claimEpoch"] < 1
-                        or not census_identity(merger.get("process")) or merger["process"] != process
-                        or not census_identity(merger.get("writer")) or "batch" not in merger):
-                    raise RuntimeError("standalone merger census row malformed")
+                validate_merger_census_row(row)
         return answer
     finally:
         # Kill the process group even when the leader exited with a pipe held by
@@ -1053,8 +1063,6 @@ class Checkout:
     def arm_merger_recovery(self):
         hosts = self.merger_hosts(self.custody_rows)
         self.refreshed_mergers = hosts
-        if not hosts:
-            return
         destination = self.state / CHECKOUT_MERGER_CAPTURE
         captured_at = getattr(self, "merger_observed_at", utc())
         cutoff = parse_time(captured_at) - datetime.timedelta(seconds=CHECKOUT_MERGER_WINDOW_SECONDS)
@@ -1092,7 +1100,8 @@ class Checkout:
                     and bool(row["sessionId"]) and isinstance(row.get("path"), str) and os.path.isabs(row["path"])
                     and (row.get("turnState") is None or row.get("turnState") in ["busy", "idle"])
                     and type(row.get("claimEpoch")) is int and row["claimEpoch"] > 0
-                    and valid_identity(row.get("process")) and valid_identity(row.get("writer"))
+                    and valid_identity(row.get("process"))
+                    and (valid_identity(row.get("writer")) or row.get("writer") is None)
                     and re.fullmatch(r"checkout-merger:[0-9a-f]{32}", row.get("boundary", ""))
                     and isinstance(row.get("capturedAt"), str) and parse_time(row["capturedAt"])
                     and parse_time(row["capturedAt"]) <= parse_time(captured_at)
@@ -1102,6 +1111,11 @@ class Checkout:
                          and isinstance(batch.get("branch"), str)))
         if not isinstance(decoded, list) or len(decoded) != len(captures) or not all(valid_row(row) for row in decoded):
             raise RuntimeError("standalone merger inventory failed successor validation")
+        # Even an empty census must prove that the retained successor inventory
+        # is readable before the stop boundary. Keep the existing file intact
+        # when there is no new custody to add.
+        if not hosts:
+            return
         write_json(destination, inventory)
 
     def placement(self):
@@ -1898,11 +1912,6 @@ class Checkout:
             identifier = host["conversationId"]
             rows = complete_activity(self.mcp.call("agent_activity", {"conversationId": identifier, "compact": False, "includeGone": True}))
             active = rows[0] if len(rows) == 1 and rows[0].get("conversationId") == identifier and not rows[0].get("pipeline") else {}
-            if active.get("turnState") == "idle":
-                # Idle activity can describe a successor that lost the
-                # original interrupted turn. Settlement needs the durable
-                # cut receipt, which run_switch reconciles after sampling.
-                return {"kind": "standalone-merger", "conversationId": identifier, "outcome": "unknown"}
             process = active.get("host") or {}
             outcome = "unknown"
             if process.get("kind") == "structured" and process.get("state") == "alive" and active.get("lifecycle") not in ["failed", "interrupted", "stalled"]:

@@ -817,9 +817,9 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertEqual(self.service_commands(), [])
 
     def test_standalone_merger_is_recorded_before_stop_and_needs_its_own_receipt(self):
-        for has_receipt in (False, True):
-            with self.subTest(has_receipt=has_receipt):
-                if has_receipt:
+        for case_index, (has_receipt, turn_state) in enumerate(((False, "busy"), (True, "busy"), (False, "idle"))):
+            with self.subTest(has_receipt=has_receipt, turn_state=turn_state):
+                if case_index:
                     self.adapter.close()
                     self.doCleanups()
                     self.setUp()
@@ -830,7 +830,7 @@ class CheckoutIntegration(unittest.TestCase):
                           "writer": {"pid": 102, "startIdentity": "102:102", "bootEpoch": "fixture-boot"}, "batch": None}
                 row = {"conversationId": conversation, "host": {"kind": "structured", "state": "alive", "pid": 104,
                                                                 "process": process},
-                       "turnState": "busy", "evidenceSource": "transcript", "pipeline": None, "merger": merger}
+                       "turnState": turn_state, "evidenceSource": "transcript", "pipeline": None, "merger": merger}
                 # The merger started after preflight. The final census must
                 # both persist it and add it to the switch verdict.
                 self.inventory_overrides = lambda n: {"conversations": [row]} if n > 1 else {
@@ -863,8 +863,8 @@ class CheckoutIntegration(unittest.TestCase):
                 original_generation = self.adapter.generation
                 def generation_with_late_turn(group, rows=None):
                     captured = original_generation(group, rows)
-                    row["turnState"] = "busy"
-                    row["merger"]["turnState"] = "busy"
+                    row["turnState"] = turn_state
+                    row["merger"]["turnState"] = turn_state
                     return captured
                 self.adapter.generation = generation_with_late_turn
                 result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
@@ -876,8 +876,9 @@ class CheckoutIntegration(unittest.TestCase):
                     str(self.state)], cwd=pathlib.Path(__file__).resolve().parents[1],
                     check=True, capture_output=True, text=True, timeout=15)
                 self.assertEqual(json.loads(reader.stdout)[0]["boundary"], observations[0]["boundary"])
+                expected = "recovered" if has_receipt else "unknown"
                 self.assertEqual(result["protected"], [{"kind": "standalone-merger", "conversationId": conversation,
-                                                         "outcome": "recovered" if has_receipt else "unknown"}])
+                                                         "outcome": expected}])
                 self.assertEqual(result["verdict"], "pass" if has_receipt else "needs_decision")
                 self.assertLessEqual(len((self.state / deploy.CHECKOUT_MERGER_CAPTURE).read_bytes()), deploy.CHECKOUT_MERGER_MAX_BYTES)
 
@@ -916,6 +917,76 @@ class CheckoutIntegration(unittest.TestCase):
             "host": {"kind": "structured", "state": "dead", "pid": 104}}]}
         self.assertEqual(self.adapter.stage(host), {
             "kind": "standalone-merger", "conversationId": conversation, "outcome": "unknown"})
+
+    def test_idle_deliverable_successor_is_recovered_when_checkout_receipt_is_present(self):
+        conversation = "conversation_idle_recovered_merger"
+        host = {"conversationId": conversation, "kind": "standalone-merger", "pid": 104,
+                "startIdentity": "104:104", "merger": {"path": str(self.root / "merger.jsonl")}}
+        self.recovery_overrides = {"conversations": [{"conversationId": conversation, "turnState": "idle",
+            "lifecycle": "running", "pipeline": None, "evidenceSource": "transcript",
+            "host": {"kind": "structured", "state": "alive", "pid": 204}}]}
+        self.merger_delivery = {"conversationId": conversation, "transcriptPath": host["merger"]["path"],
+                                "deliverable": True, "processRecorded": True}
+        self.assertEqual(self.adapter.stage(host), {
+            "kind": "standalone-merger", "conversationId": conversation, "outcome": "recovered"})
+
+    def test_merger_admitted_during_stop_is_cut_from_its_retired_exit_record(self):
+        conversation = "conversation_late_retired_merger"
+        process = {"pid": 104, "startIdentity": "104:104", "bootEpoch": self.adapter.boot_epoch}
+        merger = {"conversationId": conversation, "engine": "codex", "sessionId": "late-merger",
+                  "path": str(self.root / "late-merger.jsonl"), "claimEpoch": 3, "process": process,
+                  "writer": None, "batch": None, "turnState": "busy"}
+        retired = {"conversationId": conversation, "host": {"kind": "structured", "state": "gone",
+                   "pid": process["pid"], "process": process}, "turnState": "busy", "evidenceSource": "transcript",
+                   "pipeline": None, "merger": merger}
+        self.inventory_overrides = lambda n: {"conversations": [retired] if n >= 3 else [],
+            "selection": {"matched": 1 if n >= 3 else 0, "selected": 1 if n >= 3 else 0, "recoveryPending": 0,
+                          "recoveryTruncated": False, "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}
+        self.recovery_overrides = {"conversations": [{"conversationId": conversation, "turnState": "busy",
+            "lifecycle": "working", "pipeline": None, "evidenceSource": "transcript",
+            "host": {"kind": "structured", "state": "alive", "pid": 204}}]}
+        self.merger_delivery = {"conversationId": conversation, "transcriptPath": merger["path"],
+                                "deliverable": True, "processRecorded": True}
+        original_command = self.adapter.command
+        def retire_during_submission(command, cwd=None):
+            result = original_command(command, cwd)
+            if command[:4] == ["systemctl", "--user", "--no-block", "stop"]:
+                self.adapter.interrupted = lambda since, hosts: ([{"kind": "standalone-merger",
+                    "conversationId": conversation, "boundary": self.adapter.merger_boundary,
+                    "state": "delivered"}], [])
+            return result
+        self.adapter.command = retire_during_submission
+        self.adapter.placement = lambda: {"slice": deploy.CPU_SLICE, "actual": self.service_group,
+                                          "expected": self.service_group, "weight": deploy.CPU_WEIGHT}
+        self.adapter.generation = lambda group, rows=None: {}
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=2)
+        captured, = json.loads((self.state / deploy.CHECKOUT_MERGER_CAPTURE).read_text())
+        self.assertEqual(captured["conversationId"], conversation)
+        self.assertEqual(captured["process"], process)
+        self.assertEqual(captured["writer"], None)
+        reader = subprocess.run(["bun", "-e",
+            "import { readCheckoutMergerCuts } from './src/lib/runtime/checkoutMergerRecovery.ts'; "
+            + "console.log(JSON.stringify(readCheckoutMergerCuts(process.argv[1])))",
+            str(self.state)], cwd=pathlib.Path(__file__).resolve().parents[1],
+            check=True, capture_output=True, text=True, timeout=15)
+        self.assertEqual(json.loads(reader.stdout)[0]["boundary"], captured["boundary"])
+        self.assertEqual(result["protected"], [{"kind": "standalone-merger", "conversationId": conversation,
+                                                 "outcome": "recovered"}],
+                         json.dumps({"protected": result["protected"], "interrupted": result["interrupted"],
+                                     "diagnostics": result["diagnostics"], "delivery": self.merger_delivery}))
+        self.assertEqual(result["verdict"], "pass", json.dumps({"relocation": result["relocation"],
+            "serving": result["serving"], "diagnostics": result["diagnostics"], "protected": result["protected"]}))
+
+    def test_empty_census_still_validates_retained_successor_inventory_before_stop(self):
+        destination = self.state / deploy.CHECKOUT_MERGER_CAPTURE
+        destination.write_text('[{"conversationId":"conversation_bad"}]')
+        self.inventory_overrides = {"conversations": []}
+        self.adapter.placement = lambda: {"actual": self.service_group, "expected": self.service_group}
+        self.adapter.generation = lambda group, rows=None: {}
+        result = deploy.run_switch(self.adapter, TARGET, samples=1, timeout=1)
+        self.assertFalse(result["relocation"]["stopSubmitted"])
+        self.assertEqual(self.service_commands(), [])
+        self.assertEqual(result["verdict"], "fail")
 
     def test_future_previous_merger_cut_refuses_stop_before_successor_inventory_write(self):
         conversation = "conversation_clock_step"

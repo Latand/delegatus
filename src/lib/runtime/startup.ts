@@ -936,11 +936,19 @@ async function checkoutMergersForStartup(registry: AgentRegistry, store: Interru
       for (const row of releaseCuts.get(key) ?? []) {
         if (row.conversationId === cut.conversationId && row.claimEpoch === cut.claimEpoch
           && row.owner && sameRecordedProcessIdentity(cut.process, row.owner)
-          && registry.deliveryAdmissionForKey(cut.conversationId, row.id).outcome === "not-executed") {
+          && (registry.deliveryAdmissionForKey(cut.conversationId, row.id).outcome === "not-executed"
+            || row.state === "owed" && row.attempts === 0)) {
           store.update(row.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "the checkout cut accounts for this predecessor" });
         }
       }
     };
+    const uncertainRelease = (releaseCuts.get(key) ?? []).some(row => row.conversationId === cut.conversationId
+      && row.claimEpoch === cut.claimEpoch && row.owner && sameRecordedProcessIdentity(cut.process, row.owner)
+      && row.state === "owed" && (() => {
+        const admission = registry.deliveryAdmissionForKey(cut.conversationId, row.id);
+        return admission.outcome === "admitted" || admission.outcome === "unknown" && row.attempts > 0;
+      })());
+    if (uncertainRelease) { waiting.add(key); return; }
     const prior = existing.get(`${cut.conversationId}:\0${cut.boundary}`);
     if (prior) {
       const entry = currentCheckoutMerger(current(), cut);
@@ -2835,7 +2843,7 @@ async function adoptStructuredHostsPass(
   settleSubmittedInterruptionObligations(registry, interruptions,
     interruptions.list().filter(interruptionObligationUnresolved));
   const checkout = await checkoutMergersForStartup(registry, interruptions, resumeDeferred, client);
-  const checkoutKeys = new Set(checkout.captured.keys());
+  const checkoutKeys = new Set([...checkout.captured.keys(), ...checkout.waiting]);
   const recognition = await restartCutTargets(
     registry,
     orchestratorSeats(),
@@ -2968,7 +2976,7 @@ async function adoptStructuredHostsPass(
   }
   {
     assertActive();
-    const deferredHostKeys = new Set<string>();
+    const deferredHostKeys = new Set<string>(checkout.waiting);
     if (pipelineEvidence.deferred.size) {
       const deferralSnapshot = await preparedStartupSnapshot(registry);
       for await (const conversation of startupConversationRows(deferralSnapshot)) {

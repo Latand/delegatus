@@ -8,7 +8,7 @@ import { describeTranscriptPath, type LivenessTranscript } from "../src/lib/life
 import { registryOwners, ownerProcessAlive, type RecordedOwner } from "../src/lib/lifecycle/owners";
 import { receiptProcessEvidence } from "../src/lib/agent/accountLiveness";
 import { normalizeRegistry, structuredClaimIdentity, type RegistryFile, type SpawnReceipt } from "../src/lib/agent/registry";
-import { SqliteAgentRegistryStore, registryLivenessRows, registryHasPathIndex, registryConversationsForPath, registryRowsMatching } from "../src/lib/agent/sqliteRegistryStore";
+import { SqliteAgentRegistryStore, registryLivenessRows, registryHasPathIndex, registryConversationsForEntryKey, registryConversationsForPath, registryRowsMatching } from "../src/lib/agent/sqliteRegistryStore";
 import { defaultRegistrySqliteFilename, resolveRegistryBackend } from "../src/lib/agent/registryBackendIdentity";
 import { historyInputSql, historyPipelineRef, historyProjectionReady } from "../src/lib/state/historyProjection";
 import { isStoredPipeline, pipelineStateCollectionSeeds } from "../src/lib/pipelines/store";
@@ -16,7 +16,8 @@ import { isStoredFlow, flowStateCollectionSeed } from "../src/lib/flows/store";
 import type { Flow } from "../src/lib/flows/types";
 import type { RootKey } from "../src/lib/types";
 import { catalogEntryToFileEntry } from "../src/lib/scanner/conversationCatalog";
-import { readHostExitWriterBinding } from "../src/lib/runtime/hostExit";
+import { readHostExit, readHostExitWriterBinding } from "../src/lib/runtime/hostExit";
+import { readTranscriptCutEvidence } from "../src/lib/runtime/liveness";
 import { sameRecordedProcessIdentity, type ProcessIdentity } from "../src/lib/processIdentity";
 import { checkoutBatchState, standaloneMerger, type CheckoutMerger } from "../src/lib/runtime/checkoutMergerRecovery";
 
@@ -237,6 +238,33 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
     snapshot.selection.recoveryPending += described.selection.recoveryPending;
     snapshot.selection.recoveryTruncated ||= described.selection.recoveryTruncated;
   }
+  // A merger admitted after the first census may already have exited by the
+  // post-stop census. Its durable deploy-cut exit receipt still identifies
+  // the exact predecessor that the successor must reconcile.
+  const representedConversations = new Set(snapshot.conversations.map(row => row.conversationId).filter(Boolean));
+  const retiredMergers = [];
+  for (const entry of Object.values(registry.entries)) {
+    if (retiredMergers.length >= 200) break;
+    const process = entry.structuredHost?.process ?? entry.hostExitProcess;
+    const conversation = registryConversationsForEntryKey(registry, `${entry.key.engine}:${entry.key.sessionId}`)[0];
+    const id = conversation?.id;
+    const generation = conversation?.generations.at(-1);
+    if (!process || !id || !generation || generation.path !== entry.artifactPath || representedConversations.has(id)
+      || !standaloneMerger(registry, id)) continue;
+    const exit = readHostExit(process);
+    if (!exit?.stop || exit.stop.path !== "deploy-cut" || Date.parse(exit.stop.at) < Date.parse(snapshot.observedAt)
+      || exit.unavailable) continue;
+    const writer = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
+    if (entry.claimOwner && !writer) continue;
+    const turn = await readTranscriptCutEvidence(conversation.engine, generation.path);
+    if (!turn.verified || turn.turn !== "busy" && turn.turn !== "idle" && turn.turn !== "terminal") continue;
+    const merger = { conversationId: id, engine: conversation.engine, sessionId: generation.id, path: generation.path,
+    claimEpoch: entry.claimEpoch, process, writer, batch: batchFor(registry, id), turnState: turn.turn === "terminal" ? "idle" : turn.turn };
+    retiredMergers.push({ conversationId: id, host: { kind: "structured", state: "gone", pid: process.pid,
+      process, exitWriter: readHostExitWriterBinding(process) }, turnState: merger.turnState, pipeline: null,
+      evidenceSource: "transcript", merger });
+    representedConversations.add(id);
+  }
   const unrepresented = owners.filter(owner => !represented.has(owner.pid));
   // Count physical capture targets. Raw transcript paths can be several
   // generations of one owner, while one conversation can have several owners.
@@ -264,7 +292,7 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
   }
   return {
     observedAt: snapshot.observedAt, targetRevision, registryRevision,
-    conversations: snapshot.conversations.map(row => {
+    conversations: [...snapshot.conversations.map(row => {
       const host = { ...row.host, ...hostCustody(row.host) };
       const id = row.conversationId as CheckoutMerger["conversationId"] | null;
       const conversation = id && registry.conversations[id];
@@ -287,8 +315,9 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
       return { conversationId: row.conversationId, host, turnState: row.turnState, pipeline: row.pipeline ? {
         pipelineId: row.pipeline.pipelineId, stageId: row.pipeline.stageId, attempt: row.pipeline.attempt,
       } : null, merger, evidenceSource: row.evidenceSource };
-    }),
-    selection: snapshot.selection,
+    }), ...retiredMergers],
+    selection: { ...snapshot.selection, selected: snapshot.selection.selected + retiredMergers.length,
+      matched: Math.max(snapshot.selection.matched, snapshot.selection.selected + retiredMergers.length) },
     unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
     undescribedHostCount: unrepresented.length,
     measurements: { owners: owners.length, foldedConversations: [...folded.values()].filter(pids => pids.size > 1).length },

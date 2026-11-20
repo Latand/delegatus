@@ -25,7 +25,7 @@ export type CheckoutMerger = {
   path: string;
   claimEpoch: number;
   process: ProcessIdentity;
-  writer: ProcessIdentity;
+  writer: ProcessIdentity | null;
   batch: Batch | null;
   turnState?: "busy" | "idle";
 };
@@ -92,7 +92,8 @@ export function readCheckoutMergerCuts(directory: string, now = Date.now()): Che
       if (!row || !/^conversation_[\w-]+$/.test(row.conversationId) || !["claude", "codex"].includes(row.engine)
         || typeof row.sessionId !== "string" || !row.sessionId || typeof row.path !== "string" || !path.isAbsolute(row.path)
         || row.turnState != null && row.turnState !== "busy" && row.turnState !== "idle"
-        || !Number.isSafeInteger(row.claimEpoch) || row.claimEpoch < 1 || !hasIdentity(row.process) || !hasIdentity(row.writer)
+        || !Number.isSafeInteger(row.claimEpoch) || row.claimEpoch < 1 || !hasIdentity(row.process)
+        || row.writer !== null && !hasIdentity(row.writer)
         || !/^checkout-merger:[0-9a-f]{32}$/.test(row.boundary) || row.admissionProof != null && row.admissionProof !== "fresh-cut-v1"
         || typeof row.capturedAt !== "string"
         || !Number.isFinite(Date.parse(row.capturedAt)) || Date.parse(row.capturedAt) > now
@@ -151,7 +152,8 @@ export function checkoutMergerCustody(file: RegistryFile, cut: CheckoutMerger) {
   const domain = entry.structuredHost?.signalDomain;
   const survivors = [...entry.structuredTerminationSurvivors ?? [], ...(domain && !domain.retired
     ? [domain.monitor, domain.bubblewrap, domain.init, domain.native] : [])];
-  if (exit?.unavailable || [cut.process, cut.writer, ...survivors].some(identity => processIdentityStatus(identity) !== "dead")) return "wait";
+  if (exit?.unavailable || [cut.process, ...(cut.writer ? [cut.writer] : []), ...survivors]
+    .some(identity => processIdentityStatus(identity) !== "dead")) return "wait";
   return "ended";
 }
 

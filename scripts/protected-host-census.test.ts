@@ -18,7 +18,7 @@ import { publishRegistryBackendIdentity } from "../src/lib/agent/registryBackend
 import { projectInfoFromCwd } from "../src/lib/scanner/describe";
 import type { AgentRegistryEntry, RegistryFile } from "../src/lib/agent/registry";
 import type { Flow } from "../src/lib/flows/types";
-import { bindHostExitWriter } from "../src/lib/runtime/hostExit";
+import { bindHostExitWriter, recordHostExit, recordHostStop } from "../src/lib/runtime/hostExit";
 import { AttemptTempStore } from "../src/lib/runtime/attemptTempRetention";
 
 const TARGET = "a".repeat(40);
@@ -140,6 +140,15 @@ test("census captures busy and quiet standalone merger custody and retains unloc
     expect(answer.conversations.find(row => row.merger?.conversationId === quiet.id)?.merger).toMatchObject({
       conversationId: quiet.id, turnState: "idle",
     });
+    const python = spawnSync("python3", ["-c",
+      "import json,runpy,sys; m=runpy.run_path('scripts/deploy-checkout.py'); "
+      + "m['validate_merger_census_row'](json.load(sys.stdin)); print('OK')"], {
+      cwd: process.cwd(), input: JSON.stringify(answer.conversations.find(row => row.merger?.conversationId === quiet.id)),
+      encoding: "utf8", timeout: 15_000,
+    });
+    expect(python.error).toBeUndefined();
+    expect(python.status).toBe(0, python.stdout + python.stderr);
+    expect(python.stdout.trim()).toBe("OK");
     f.file.conversations[busy.id]!.agentRole = null;
     const launch = f.file.receipts["receipt-only"]!;
     Object.assign(launch, { conversationId: busy.id, agentRole: "merger", state: "completed", key: busy.entry.key, artifactPath: busy.pathname });
@@ -165,6 +174,43 @@ test("census captures busy and quiet standalone merger custody and retains unloc
     const pipeline = await censusSnapshot(f.sources, 3, TARGET, 30000);
     expect(pipeline.conversations.find(row => row.conversationId === busy.id)?.merger).toBeNull();
   } finally { f.close(); }
+});
+
+test("post-stop census retains a merger retired after admission with its durable cut receipt", async () => {
+  const f = fixture();
+  const previousState = process.env.LLV_STATE_DIR;
+  const state = temporary();
+  try {
+    process.env.LLV_STATE_DIR = state;
+    const row = f.rows[0]!;
+    const processIdentity = row.entry.structuredHost!.process!;
+    f.file.conversations[row.id]!.agentRole = "merger";
+    row.entry.status = "dead";
+    row.entry.structuredHost = null;
+    row.entry.hostExitProcess = processIdentity;
+    row.entry.claimEpoch = 2;
+    row.entry.claimOwner = null;
+    row.entry.previousHostExit = undefined;
+    expect(recordHostStop(processIdentity, "SIGTERM", "deploy-cut")).toBeDefined();
+    expect(recordHostExit(processIdentity, null, "SIGTERM")).toBe(true);
+
+    const answer = await censusSnapshot(f.sources, 2, TARGET, 30000);
+    const retired = answer.conversations.find(item => item.conversationId === row.id)!;
+    expect(retired).toMatchObject({ host: { state: "gone", kind: "structured" }, pipeline: null,
+      turnState: "busy", evidenceSource: "transcript", merger: { conversationId: row.id, process: processIdentity, writer: null } });
+    expect(answer.selection.selected).toBe(answer.conversations.length);
+    const python = spawnSync("python3", ["-c",
+      "import json,runpy,sys; m=runpy.run_path('scripts/deploy-checkout.py'); "
+      + "m['validate_merger_census_row'](json.load(sys.stdin)); print('OK')"], {
+      cwd: process.cwd(), input: JSON.stringify(retired), encoding: "utf8", timeout: 15_000,
+    });
+    expect(python.status).toBe(0, python.stdout + python.stderr);
+    expect(python.stdout.trim()).toBe("OK");
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    f.close();
+  }
 });
 
 test("custody census refuses ambiguous recorded identities for the same PID", async () => {

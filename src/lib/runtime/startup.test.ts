@@ -2183,7 +2183,7 @@ async function restartCutSettled(predicate: () => boolean, what: string): Promis
 }
 
 test.each((["codex", "claude"] as const).flatMap(engine =>
-  (["interrupted", "legacy", "unlocked", "release-record", "quiet", "finished", "stopped", "stopped-before-capture", "live", "unverified", "expired"] as const).map(mode => [engine, mode] as const)))(
+  (["interrupted", "legacy", "unlocked", "release-record", "release-uncertain", "quiet", "finished", "stopped", "stopped-before-capture", "live", "unverified", "expired"] as const).map(mode => [engine, mode] as const)))(
   "%s checkout standalone merger custody: %s", async (engine, mode) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-checkout-merger-"));
   const filename = path.join(directory, "agent-registry.json");
@@ -2218,7 +2218,7 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
     claimOwner: `structured-host:${JSON.stringify(writer)}`, structuredHost: columns, pendingAction: null });
   registry.upsert({ ...entry, status: "dead", structuredHost: null, hostExitProcess: processIdentity, claimOwner: null,
     structuredHostOperationId: launch.receipt.launchId });
-  if (mode === "legacy") {
+  if (mode === "legacy" || mode === "release-uncertain") {
     const persisted = structuredClone(registry.readOnlySnapshot());
     delete (persisted.conversations[conversationId] as { deliveryEvidenceTracked?: boolean }).deliveryEvidenceTracked;
     registry.close();
@@ -2239,10 +2239,11 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
     batch: { directory, identity: `${stat.dev}:${stat.ino}`, branch: state.branch } };
   fs.writeFileSync(path.join(directory, CHECKOUT_MERGER_CAPTURE), JSON.stringify([cut]));
   const interruptions = interruptionObligationStore(interruptionObligationDirectory(filename));
-  const release = mode === "release-record" ? interruptions.record({
+  const release = mode === "release-record" || mode === "release-uncertain" ? interruptions.record({
     conversationId, engine, hostKey, path: artifactPath, owner: processIdentity, claimEpoch: 2, turnRef: "merger-turn",
     boundary: "ordinary-release", reason: "viewer-release", recordedAt: at, checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null,
   }).obligation : null;
+  if (mode === "release-uncertain" && release) interruptions.update(release.id, { attempts: 1 });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true,
     ...(mode === "stopped-before-capture" ? { now: () => Date.parse(at) } : {}) });
   const client = runtimeJournalClient(journal);
@@ -2295,6 +2296,10 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
         expect(readCuts()).toEqual([]);
       } else if (mode === "unverified" || mode === "live") {
         expect(readCuts()).toEqual([]);
+        expect(structuredStartupDeferral()?.hostKeys).toContain(hostKey);
+      } else if (mode === "release-uncertain") {
+        expect(readCuts()).toEqual([]);
+        expect(ledger.writes).toEqual([]);
         expect(structuredStartupDeferral()?.hostKeys).toContain(hostKey);
       } else {
         expect(readCuts()).toMatchObject([{ boundary: cut.boundary, state: "discharged",
