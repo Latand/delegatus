@@ -11,11 +11,10 @@ import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { cleanerBrief, cleanerDiskEvidence } from "./brief";
 import {
   activeCleanerRun, claimCleanerRun, cleanerDailyDue, cleanerPressureRun,
-  pendingCleanerCard, previousCleanerRun, readCleanerRun, recordCleanerCardAttempt, updateActiveCleanerRun, type CleanerRun,
+  pendingCleanerCard, previousCleanerRun, readCleanerRun, recordCleanerCardAttempt, updateActiveCleanerRun, CLEANER_RUN_TIMEOUT_MS, type CleanerRun,
 } from "./store";
 import { cleanerCardDetails, cleanerCardText, parseCleanerReport, type CleanerReport } from "./text";
 
-const RUN_TIMEOUT_MS = 90 * 60_000;
 const REPLY_TIMEOUT_MS = 10_000;
 
 type CleanerPorts = {
@@ -82,7 +81,7 @@ export function createCleanerController(ports: CleanerPorts) {
   const enabled = ports.enabled ?? (() => process.env.LLV_CLEANER !== "off");
   const allowed = () => ownsTraffic() && enabled() && !draining();
   const cwd = ports.cwd ?? process.cwd();
-  const expired = (run: CleanerRun) => now() - Date.parse(run.launchedAt ?? run.claimedAt) >= RUN_TIMEOUT_MS;
+  const expired = (run: CleanerRun) => now() - Date.parse(run.launchedAt ?? run.claimedAt) >= CLEANER_RUN_TIMEOUT_MS;
   const observe = ports.observe ?? (async (run: CleanerRun) => {
     const [{ observeSpawnedTurn }, { defaultSeatTickSources }] = await Promise.all([
       import("@/lib/agent/autonomousConversation"), import("@/lib/monitor/seatTickSources"),
@@ -96,6 +95,14 @@ export function createCleanerController(ports: CleanerPorts) {
     report?: CleanerReport | null; observed?: SpawnedTurnObservation; unadmittedOnly?: boolean;
   } = {}) =>
     updateActiveCleanerRun(run.runId, ownsTraffic, current => {
+      if (current.settledAt) {
+        if (!options.observed || (options.observed.state !== "ended" && options.observed.state !== "failed")) return null;
+        return {
+          ...current,
+          ...observedBinding(current, options.observed),
+          quiescedAt: current.quiescedAt ?? new Date(now()).toISOString(),
+        };
+      }
       if (options.unadmittedOnly && (current.launchAcknowledged || current.launchId || current.conversationId)) return null;
       const quiescent = !current.launchedAt || options.unadmittedOnly === true
         || options.observed?.state === "ended" || options.observed?.state === "failed";
@@ -171,6 +178,17 @@ export function createCleanerController(ports: CleanerPorts) {
       observed = null;
     }
     if (!ownsTraffic()) return;
+    // The launch body is durable before reservation. At the deadline, an
+    // authoritative registry read showing no receipt proves no queued launch
+    // can still execute; the queued actuator independently checks this run.
+    if (expired(run) && !run.launchAcknowledged && !run.launchId && !run.conversationId) {
+      const [{ defaultSeatTickSources }] = await Promise.all([import("@/lib/monitor/seatTickSources")]);
+      const receipt = defaultSeatTickSources().registry().spawnReceiptForClientAttempt(run.runId);
+      if (!receipt) {
+        await settle(run, { kind: "timed-out", detail: "Cleaner launch was not reserved before its 90-minute deadline." }, { unadmittedOnly: true });
+        return;
+      }
+    }
     if (run.settledAt) {
       if (observed?.state === "ended" || observed?.state === "failed") {
         await updateActiveCleanerRun(run.runId, ownsTraffic, current => ({

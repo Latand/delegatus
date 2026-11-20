@@ -13,7 +13,11 @@ import { createCleanerController } from "./run";
 import { activeCleanerRun, pendingCleanerCard, readCleanerRun } from "./store";
 
 const [fault, at, space] = process.argv.slice(2);
-const now = () => Date.parse(at!);
+const clock = statePath("fixture-clock.json");
+const now = () => {
+  try { return Date.parse(JSON.parse(fs.readFileSync(clock, "utf8")).at); }
+  catch { return Date.parse(at!); }
+};
 const ledger = statePath("fixture-launches.json");
 const end = () => process.exit(71);
 type Attempt = { body: Record<string, unknown>; calls: number };
@@ -64,6 +68,10 @@ const controller = createCleanerController({
     });
   },
   observe: async run => {
+    if (fault === "hold-success-observe") {
+      writeJsonDurably(statePath("fixture-observer-held"), { runId: run.runId });
+      while (!fs.existsSync(statePath("fixture-observer-release"))) await new Promise(resolve => setTimeout(resolve, 5));
+    }
     if (fault === "demote-on-observe") {
       writeJsonDurably(statePath("viewer-release.json"), {
         endpoint: "http://127.0.0.1:9231", revision: "a".repeat(40), hotStateBackend: "sqlite-v1",
@@ -73,7 +81,7 @@ const controller = createCleanerController({
     const conversationId = `conversation_${run.taskId}`;
     if (fault === "quiesce-after-timeout") return { state: "ended", conversationId, finalText: "" };
     if (fault === "host-died") return { state: "failed", conversationId, failure: { kind: "host-died", detail: "Fixture host exited." } };
-    if (fault === "success" || fault === "settlement-crash" || fault === "card-receipt-crash" || fault === "demote-on-observe") {
+    if (fault === "success" || fault === "settlement-crash" || fault === "card-receipt-crash" || fault === "demote-on-observe" || fault === "hold-success-observe") {
       return { state: "ended", conversationId, finalText: [
         'Inventory summary\n```json\n{"items":1}\n```',
         'Done.\n```json\n{"verdict":"pass","kept":[{"target":"fixture","reason":"keep"}],"notes":"Checked.","removed":["invented"]}\n```',

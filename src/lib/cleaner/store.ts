@@ -8,6 +8,7 @@ import type { CleanerReport } from "./text";
 export const CLEANER_DAILY_INTERVAL_MS = 24 * 60 * 60_000;
 export const CLEANER_DAILY_START_DELAY_MS = 10 * 60_000;
 const RETAIN_RUNS = 60;
+export const CLEANER_RUN_TIMEOUT_MS = 90 * 60_000;
 
 export type CleanerTrigger = `disk-pressure:${string}` | `daily:${string}`;
 export type CleanerDiskEvidence = {
@@ -76,6 +77,14 @@ function schedule(): Schedule {
 }
 export function readCleanerRun(id: string): CleanerRun | null {
   return (collection()?.get(runKey(id)) as CleanerRun | null) ?? null;
+}
+/** Queued disk-cleaner reservations may actuate only while their exact durable
+ * run still owns the slot and its original launch deadline has not elapsed. */
+export function cleanerAttemptMayStart(id: string, now = Date.now()): boolean {
+  const run = readCleanerRun(id);
+  const held = schedule();
+  if (!run || held.activeRunId !== id || run.settledAt) return false;
+  return now - Date.parse(run.launchedAt ?? run.claimedAt) < CLEANER_RUN_TIMEOUT_MS;
 }
 export function activeCleanerRun(): CleanerRun | null {
   const id = schedule().activeRunId;

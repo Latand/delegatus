@@ -18,6 +18,7 @@ import { defaultStartHost, structuredHostWorkingDirectory, materializeStructured
 import { CLEANER_SANDBOX_READY } from "@/lib/runtime/cleanerSandboxProbe";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
+import { claimCleanerRun } from "@/lib/cleaner/store";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cleaner-launch-"));
 const env = {
@@ -54,6 +55,18 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+async function cleanerAttempt(episode: string) {
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, `state-${episode}`);
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const run = await claimCleanerRun({ project: "repo-test", cwd, now: Date.now,
+    evidence: { volumes: [], categories: [] }, allowed: () => true, episode });
+  if (typeof run === "string") throw new Error(`failed to seed Cleaner controller run: ${run}`);
+  return { runId: run.runId, cleanup() {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  } };
+}
+
 async function launch(id: string, body: Record<string, unknown> = {}, controls: {
   defer?: (work: () => Promise<void>) => void;
   held?: () => boolean;
@@ -86,7 +99,8 @@ test("an accepted disk cleaner request stays replayable when a drain starts afte
   let held = false;
   let deferred: (() => Promise<void>) | undefined;
   let actuations = 0;
-  const id = "cleaner_drain_after_acceptance";
+  const cleanerSeed = await cleanerAttempt("cleaner-drain-after-acceptance");
+  const id = cleanerSeed.runId;
   const accepted = await launch(id, {}, {
     held: () => held,
     defer: work => { deferred = work; },
@@ -126,13 +140,14 @@ test("an accepted disk cleaner request stays replayable when a drain starts afte
     });
     expect(actuations).toBe(1);
     expect(registry.spawnReceiptForClientAttempt(id)?.clientAttemptId).toBe(id);
-  } finally { releaseDrain(drainFile(), "cleaner-after-202"); }
+  } finally { releaseDrain(drainFile(), "cleaner-after-202"); cleanerSeed.cleanup(); }
 });
 
 test("a drain during runtime admission retries a refused lease release and replays the same launch", async () => {
   let held = false, deferred: (() => Promise<void>) | undefined, refusals = 1;
   let actuations = 0;
-  const id = "cleaner_runtime_admission_drain_retry";
+  const cleanerSeed = await cleanerAttempt("cleaner-runtime-admission-drain-retry");
+  const id = cleanerSeed.runId;
   const originalWrite = registry.deliveryWrite.bind(registry);
   const releaseSpy = spyOn(registry, "deliveryWrite").mockImplementation(async (correlation, write, correlate) => {
     if (correlation.label === "spawn.cleaner-drain-hold" && refusals-- > 0) return { acquired: false };
@@ -179,6 +194,7 @@ test("a drain during runtime admission retries a refused lease release and repla
     releaseSpy.mockRestore();
     held = false;
     releaseDrain(drainFile(), "cleaner-during-runtime-admission");
+    cleanerSeed.cleanup();
   }
 });
 

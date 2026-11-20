@@ -9,7 +9,7 @@ import { readBridgeReportLog } from "@/lib/bridge/store";
 import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { loadPrototypeTask, loadTasksForList } from "@/lib/tasks/store";
 import { createCleanerController } from "./run";
-import { activeCleanerRun, claimCleanerRun, pendingCleanerCard, readCleanerRun, recordCleanerCardAttempt, updateActiveCleanerRun, type CleanerRun } from "./store";
+import { activeCleanerRun, claimCleanerRun, cleanerAttemptMayStart, pendingCleanerCard, readCleanerRun, recordCleanerCardAttempt, updateActiveCleanerRun, type CleanerRun } from "./store";
 
 const start = Date.parse("2031-02-01T11:00:00.000Z");
 const minute = 60_000;
@@ -65,7 +65,12 @@ function fixture() {
     expect(errors).not.toContain("launch reply unavailable");
     return JSON.parse(out) as { active: CleanerRun | null; pending: CleanerRun | null; ledger: Record<string, { body: object; calls: number }> };
   }
-  return { state, env, target, drain, history, tick, card: (id: string) => loadPrototypeTask(id, path.join(state, "tasks.json")) };
+  function startTick(offset: number, space: "ok" | "low" | "ready", fault = "none") {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "run.fixture.ts"), fault, at(offset), space],
+      { env, stdout: "pipe", stderr: "pipe" });
+    return { child, output: new Response(child.stdout).text(), errors: new Response(child.stderr).text() };
+  }
+  return { state, env, target, drain, history, tick, startTick, card: (id: string) => loadPrototypeTask(id, path.join(state, "tasks.json")) };
 }
 
 test("the ordinary watch preserves alarm effects with no launcher or cleaner receipt", async () => {
@@ -148,6 +153,42 @@ test("daily eligibility restarts at the restored traffic owner’s promotion tim
   const eligible = (await tick(30 * minute, "ok"))!;
   expect(eligible.active?.trigger).toBe("daily:2031-02-01");
   expect(eligible.active?.claimedAt).toBe(at(30 * minute));
+});
+
+test("a saved launch with no registry reservation releases the slot at its deadline", async () => {
+  const { tick, target, history, card } = fixture();
+  target(0);
+  await tick(15 * minute, "ready", "prepare-crash", 71);
+  const saved = history()[0]!;
+  expect(saved.launchBody?.clientAttemptId).toBe(saved.runId);
+  expect(saved.settledAt).toBeNull();
+  const deadlineTick = (await tick(105 * minute, "ok"))!;
+  expect(readCleanerRun(saved.runId)).toMatchObject({ settledAt: at(105 * minute), quiescedAt: at(105 * minute), failure: { kind: "timed-out" } });
+  expect(cleanerAttemptMayStart(saved.runId, start + 105 * minute)).toBe(false);
+  expect(card(saved.taskId)?.status).toBe("blocked");
+  const next = deadlineTick.active!;
+  expect(next.runId).not.toBe(saved.runId);
+  expect(next.trigger).toBe("daily:2031-02-01");
+});
+
+test("terminal proof arriving after timeout preserves the committed refusal and card", async () => {
+  const { tick, startTick, state, history, card } = fixture();
+  const started = (await tick(0, "ready"))!.active!;
+  const pending = startTick(90 * minute - 1, "ready", "hold-success-observe");
+  const marker = path.join(state, "fixture-observer-held");
+  const until = Date.now() + 10_000;
+  while (!fs.existsSync(marker) && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 5));
+  expect(fs.existsSync(marker)).toBe(true);
+  await tick(90 * minute, "ready");
+  fs.writeFileSync(path.join(state, "fixture-clock.json"), JSON.stringify({ at: at(90 * minute + 1) }));
+  fs.writeFileSync(path.join(state, "fixture-observer-release"), "release");
+  const [output, errors, status] = await Promise.all([pending.output, pending.errors, pending.child.exited]);
+  expect(status, errors).toBe(0);
+  expect(JSON.parse(output)).toMatchObject({ active: null });
+  expect(errors).not.toContain("observation failed");
+  expect(history()).toContainEqual(expect.objectContaining({ runId: started.runId, settledAt: at(90 * minute),
+    quiescedAt: at(90 * minute + 1), failure: { kind: "timed-out", detail: expect.any(String) } }));
+  expect(card(started.taskId)?.status).toBe("blocked");
 });
 
 test("pressure claim and dispatch are held outside ownership and during a drain", async () => {

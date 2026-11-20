@@ -7,8 +7,8 @@ import { productionDiskPressureActions, reconcileDiskPressure, type DiskPressure
 
 const host = globalThis as typeof globalThis & { __delegatusDiskPressureTimer?: ReturnType<typeof setTimeout> };
 
-function releaseTrafficSince(now: number): number {
-  if (!process.env.PORT?.trim()) return now;
+function releaseTrafficSince(now: number): number | null {
+  if (!process.env.PORT?.trim()) return null;
   let file: number | undefined;
   try {
     file = fs.openSync(statePath("viewer-release.json"), "r");
@@ -17,9 +17,9 @@ function releaseTrafficSince(now: number): number {
     if (viewerReleaseOwnsTraffic(process.env, () => fs.readFileSync(file!, "utf8"))) {
       return Math.min(now, fs.fstatSync(file).mtimeMs);
     }
-    return now;
+    return null;
   } catch {
-    return now;
+    return null;
   } finally {
     if (file !== undefined) fs.closeSync(file);
   }
@@ -41,19 +41,19 @@ export function startDiskPressureWatch(ports: {
   const now = ports.now ?? Date.now;
   const watchStartedAt = now();
   let trafficSince = cleaner && actions.active()
-    ? process.env.PORT?.trim() ? releaseTrafficSince(watchStartedAt) : watchStartedAt
+    ? releaseTrafficSince(watchStartedAt) ?? watchStartedAt
     : null;
   const observe = ports.observe ?? (async () => {
     if (cleaner) {
       if (!actions.active()) trafficSince = null;
-      else if (process.env.PORT?.trim()) trafficSince = releaseTrafficSince(now());
+      else if (process.env.PORT?.trim()) trafficSince = releaseTrafficSince(now()) ?? trafficSince ?? now();
       else trafficSince ??= now();
     }
     let pressure = null;
     try {
       pressure = await (ports.readPressure ?? readDiskPressure)();
       if (cleaner && actions.active()) {
-        if (process.env.PORT?.trim()) trafficSince = releaseTrafficSince(now());
+        if (process.env.PORT?.trim()) trafficSince = releaseTrafficSince(now()) ?? trafficSince ?? now();
         else trafficSince ??= now();
       }
       else if (cleaner) trafficSince = null;

@@ -20,6 +20,7 @@ import { LAUNCH_FAILURE_NOTICE_WINDOW_MS } from "@/lib/tasks/launchFailureReport
 import { closeStateMutationActivationForTests, openStateMutationActivation, stateMutationRefusal } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
+import { claimCleanerRun } from "@/lib/cleaner/store";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
@@ -1264,6 +1265,23 @@ test("the actuation cap bounds one cycle and the remainder converges on the next
   }
 });
 
+async function cleanerAttemptFixture(ageMs = 0) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cleaner-queue-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const now = Date.now() - ageMs;
+  const run = await claimCleanerRun({
+    project: "repo-test", cwd: root, now: () => now, episode: `queue-fixture-${ageMs}`,
+    evidence: { volumes: [], categories: [] }, allowed: () => true,
+  });
+  if (typeof run === "string") throw new Error(`failed to seed cleaner admission: ${run}`);
+  return { runId: run.runId, cleanup() {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  } };
+}
+
 function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off", cleaner = false) {
   const store = registry(mode);
   const cwd = path.dirname(store.filename);
@@ -1285,7 +1303,8 @@ function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: st
 }
 
 test.serial("queued cleaner recovery holds its saved attempt throughout an update drain", async () => {
-  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_recovery_drain", "off", true);
+  const cleanerSeed = await cleanerAttemptFixture();
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true);
   const saved = store.spawnReceipt(receipt.launchId)?.queuedPinnedSpawn;
   let actuations = 0;
   const options = {
@@ -1311,6 +1330,28 @@ test.serial("queued cleaner recovery holds its saved attempt throughout an updat
     releaseDrain(drainFile(), "cleaner-recovery-drain");
     store.close();
     fs.rmSync(cwd, { recursive: true, force: true });
+    cleanerSeed.cleanup();
+  }
+});
+
+test.serial("queued cleaner recovery fences a reservation after its durable run deadline", async () => {
+  const cleanerSeed = await cleanerAttemptFixture(91 * 60_000);
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true);
+  let actuations = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      now: () => Date.now(),
+      resolveSpawnAccount: () => ({ engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async () => { actuations++; throw Error("expired Cleaner must not start"); },
+    });
+    expect(actuations).toBe(0);
+    expect(store.spawnReceipt(receipt.launchId)).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
+    expect(store.spawnReceipt(receipt.launchId)?.error).toContain("disk cleaner run expired");
+  } finally {
+    store.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    cleanerSeed.cleanup();
   }
 });
 

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expect, test } from "bun:test";
 import { startDiskPressureWatch, stopDiskPressureWatch } from "./diskPressureWatch";
 import type { CleanerController } from "@/lib/cleaner/run";
@@ -19,7 +22,10 @@ test("the pressure observer starts without a resources request and retires its h
 test("a standalone watcher anchors daily eligibility once for its whole lifetime", async () => {
   const previousPort = process.env.PORT;
   const previousOwner = process.env.LLV_STATE_OWNER;
-  delete process.env.PORT;
+  const previousState = process.env.LLV_STATE_DIR;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-watch-"));
+  process.env.LLV_STATE_DIR = state;
+  process.env.PORT = "9230";
   process.env.LLV_STATE_OWNER = "viewer";
   let now = 10_000, launches = 0;
   const callbacks: Array<() => void> = [];
@@ -60,5 +66,7 @@ test("a standalone watcher anchors daily eligibility once for its whole lifetime
     stopDiskPressureWatch();
     if (previousPort === undefined) delete process.env.PORT; else process.env.PORT = previousPort;
     if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER; else process.env.LLV_STATE_OWNER = previousOwner;
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(state, { recursive: true, force: true });
   }
 });
