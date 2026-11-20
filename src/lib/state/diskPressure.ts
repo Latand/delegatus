@@ -2,6 +2,7 @@ import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readDockerDiskConsumers } from "./dockerDiskConsumers";
 import { createHash } from "node:crypto";
 
 import { stateDir, statePath } from "@/lib/configDir";
@@ -39,7 +40,7 @@ const CONSUMER_CACHE_MS = 30 * 60_000;
 const CONSUMER_WAKE_WAIT_MS = 15 * 60_000;
 
 export type DiskVolume = { volume?: string; views?: string[]; roles: string[]; freeBytes: number | null; totalBytes?: number; provisioning?: boolean; level: "ok" | "warning" | "critical" | "unknown" };
-export type DiskConsumer = { kind: "state" | "worktrees" | "temp"; bytes: number; measuredAt: string };
+export type DiskConsumer = { kind: "state" | "worktrees" | "temp" | "dockerCache" | "dockerImages"; bytes: number; measuredAt: string };
 export type DiskCategory = { name: string; bytes: number };
 export type DiskPressure = { categories?: DiskCategory[]; at: string; episode: string | null; kernelBoot?: string | null; volumes: DiskVolume[]; consumers: DiskConsumer[]; warningBytes: number; criticalBytes: number };
 export type DiskRoot = { role: string; directory: string; provisioning?: boolean; view?: TempSweepRoot };
@@ -274,6 +275,7 @@ export async function readDiskPressureInHelper(ports: {
   tempRoots?: TempSweepRoot[];
   probe?: DiskProbe;
   now?: () => number;
+  dockerUsage?: typeof readDockerDiskConsumers;
   readOnly?: boolean;
 } = {}): Promise<DiskPressure> {
   const now = ports.now ?? Date.now;
@@ -294,7 +296,7 @@ export async function readDiskPressureInHelper(ports: {
   if (now() - cached.observedAt < OBSERVATION_TTL_MS) return structuredClone(cached.pressure);
   cached.observedAt = now();
   /* Loaded here: the pipeline engine imports this module for its admission check. */
-  const [{ loadPipelinesForList }, { allocatedBytes, readWorktreeSweepReport }] = await Promise.all([
+  const [{ loadPipelinesForList }, { diskConsumerBytes, readWorktreeSweepReport }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/pipelines/worktreeSweep"),
   ]);
@@ -325,16 +327,18 @@ export async function readDiskPressureInHelper(ports: {
         const measuredAt = new Date(now()).toISOString();
         const worktreePaths = worktrees.map(consumerPath);
         const seenAllocations = new Set<string>();
-        const stateBytes = await allocatedBytes(directory, worktreePaths, seenAllocations);
+        const scratch = statePath("scratch");
+        const stateBytes = await diskConsumerBytes(directory, [scratch, ...worktreePaths], seenAllocations);
+        const scratchBytes = await diskConsumerBytes(scratch, worktreePaths, seenAllocations);
         let worktreeBytes = 0;
         // Nested linked checkouts must be measured once, through the outer one.
         for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep)))) {
           const view = consumerView(worktree);
           if (view && !tempViewAvailable(view)) continue;
-          const bytes = await allocatedBytes(consumerPath(worktree), [directory], seenAllocations);
+          const bytes = await diskConsumerBytes(consumerPath(worktree), [directory], seenAllocations);
           if (!view || tempViewAvailable(view)) worktreeBytes += bytes;
         }
-        let tempBytes = 0, unmanagedTempBytes = 0;
+        let tempBytes = scratchBytes, unmanagedTempBytes = 0;
         for (const root of consumerRoots) {
           if (!tempViewAvailable(root)) continue;
           const base = root.via + root.path;
@@ -343,11 +347,11 @@ export async function readDiskPressureInHelper(ports: {
               if (!entry.isDirectory()) continue;
               const child = path.join(base, entry.name);
               const canonicalChild = path.join(root.path, entry.name);
-              // Scratch is part of state. Other owned roots can contain both a
+              // Scratch was measured separately. Other owned roots can contain both a
               // checkout and independent role files; exclude only the checkout.
               if (canonicalChild === directory || canonicalChild.startsWith(directory + path.sep)) continue;
               if (!tempViewAvailable(root)) break;
-              const bytes = await allocatedBytes(child, [directory, ...worktreePaths], seenAllocations);
+              const bytes = await diskConsumerBytes(child, [directory, ...worktreePaths], seenAllocations);
               if (tempViewAvailable(root)) {
                 if (isOwnedTempConsumerName(entry.name)) tempBytes += bytes; else unmanagedTempBytes += bytes;
               }
@@ -355,9 +359,9 @@ export async function readDiskPressureInHelper(ports: {
           } catch { /* An inaccessible root has no attributable consumer count. */ }
         }
         if (target.pressure.episode !== episode) return;
-        const scratchBytes = await allocatedBytes(statePath("scratch"));
+        const dockerRows = await (ports.dockerUsage ?? readDockerDiskConsumers)(directory);
         if (target.pressure.episode !== episode) return;
-        const evidenceBytes = await allocatedBytes(statePath("evidence"));
+        const evidenceBytes = await diskConsumerBytes(statePath("evidence"));
         if (target.pressure.episode !== episode) return;
         let ledgerBytes = 0, attemptCategory = "Тимчасові дані агентів";
         try {
@@ -370,17 +374,19 @@ export async function readDiskPressureInHelper(ports: {
         let releaseBytes = 0;
         try { releaseBytes = JSON.parse(fs.readFileSync(statePath("self-update/retention.json"), "utf8")).kept.reduce((total: number, row: { bytes?: number }) => total + (row.bytes ?? 0), 0); } catch { /* No release measurement yet. */ }
         const used = target.pressure.volumes.reduce((total, row) => total + (row.totalBytes !== undefined && row.freeBytes !== null ? Math.max(0, row.totalBytes - row.freeBytes) : 0), 0);
-        target.pressure.consumers = [{ kind: "state", bytes: stateBytes, measuredAt }, { kind: "worktrees", bytes: worktreeBytes, measuredAt }, { kind: "temp", bytes: tempBytes, measuredAt }];
+        target.pressure.consumers = [{ kind: "state", bytes: stateBytes, measuredAt }, { kind: "worktrees", bytes: worktreeBytes, measuredAt }, { kind: "temp", bytes: tempBytes, measuredAt },
+          ...dockerRows.map(row => ({ ...row, measuredAt }))];
         target.pressure.categories = [
           { name: attemptCategory, bytes: ledgerBytes },
           { name: "Scratch поза обліком розміру", bytes: Math.max(0, scratchBytes - ledgerBytes) },
           { name: "Збережені зображення та звіти", bytes: evidenceBytes },
           ...[...worktreeKinds].map(([reason, bytes]) => ({ name: `Робочі дерева (${reason})`, bytes })),
-          { name: "Обліковані тимчасові дані поза scratch", bytes: tempBytes },
+          { name: "Обліковані тимчасові дані поза scratch", bytes: tempBytes - scratchBytes },
           { name: "Необліковані тимчасові дані", bytes: unmanagedTempBytes },
           { name: "Збережені релізи", bytes: releaseBytes },
-          { name: "Інші дані стану", bytes: Math.max(0, stateBytes - scratchBytes - evidenceBytes) },
-          { name: "Поза обліком Delegatus", bytes: Math.max(0, used - stateBytes - worktreeBytes - tempBytes - unmanagedTempBytes - releaseBytes) },
+          { name: "Інші дані стану", bytes: Math.max(0, stateBytes - evidenceBytes) },
+          ...dockerRows.map(row => ({ name: row.kind === "dockerCache" ? "Кеш збірок Docker" : "Образи Docker", bytes: row.bytes })),
+          { name: "Поза обліком Delegatus", bytes: Math.max(0, used - stateBytes - worktreeBytes - tempBytes - unmanagedTempBytes - releaseBytes - dockerRows.reduce((sum, row) => sum + row.bytes, 0)) },
         ];
         target.consumersAt = now();
         withFileTransactionSync(file, "disk pressure report is busy", () => {
