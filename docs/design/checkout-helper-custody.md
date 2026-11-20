@@ -705,7 +705,11 @@ Every host exit in the window must be one of:
   terminal before the switch;
 - end of file of a stdio host.
 
-Any other signal fails criterion 2.
+A signal other than end of file, or a signal-shaped exit code (`128 + N`),
+cannot pass when the captured turn was busy; it fails criterion 2. If the
+captured turn was unknown, the same evidence requires a decision because the
+procedure cannot prove the host was terminal. A clean exit and stdio end of
+file remain admissible.
 
 ## 11. Files to touch, and what must not change
 

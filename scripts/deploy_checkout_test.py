@@ -1024,12 +1024,16 @@ class CheckoutIntegration(unittest.TestCase):
                 self.assertEqual(self.service_commands(), [])
 
     def test_relaunch_rejects_busy_host_stop_receipt_but_allows_terminal_and_stdio_exits(self):
-        for turn_state, exit_record, expected, custody_changed in [
-            ("busy", {"code": None, "signal": "SIGTERM"}, "fail", True),
-            ("idle", {"code": None, "signal": "SIGTERM"}, "pass", False),
-            ("busy", {"code": 0, "signal": "EOF"}, "pass", False),
-            ("busy", {"code": 143, "signal": None}, "fail", True),
-            ("busy", {"code": 143, "signal": "EOF"}, "fail", True),
+        for turn_state, exit_record, expected, custody_changed, custody_unknown in [
+            ("busy", {"code": None, "signal": "SIGTERM"}, "fail", True, False),
+            ("unknown", {"code": None, "signal": "SIGTERM"}, "needs_decision", False, True),
+            ("idle", {"code": None, "signal": "SIGTERM"}, "pass", False, False),
+            ("busy", {"code": 0, "signal": "EOF"}, "pass", False, False),
+            ("busy", {"code": 143, "signal": None}, "fail", True, False),
+            ("unknown", {"code": 143, "signal": None}, "needs_decision", False, True),
+            ("busy", {"code": 137, "signal": None}, "fail", True, False),
+            ("unknown", {"code": 137, "signal": None}, "needs_decision", False, True),
+            ("busy", {"code": 143, "signal": "EOF"}, "fail", True, False),
         ]:
             with self.subTest(turn_state=turn_state, exit_record=exit_record):
                 self.setUp()
@@ -1060,6 +1064,7 @@ class CheckoutIntegration(unittest.TestCase):
                 custody = result["relaunch"]["hosts"][0]
                 self.assertEqual(custody["exit"]["stopPath"], "startup-adoption-cleanup")
                 self.assertEqual(result["relaunch"]["custodyChanged"], custody_changed)
+                self.assertEqual(result["relaunch"]["custodyUnknown"], custody_unknown)
                 self.assertEqual(self.service_commands(), [])
 
     def test_a_stale_or_wrong_launcher_receipt_cannot_settle_relaunch(self):

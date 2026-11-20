@@ -1901,11 +1901,15 @@ class Checkout:
                 detail["exit"] = {"code": exit_record.get("code"), "signal": exit_record.get("signal"),
                                   "stopPath": (stop or {}).get("path")}
                 exit_signal = detail["exit"]["signal"]
-                interrupted_busy_turn = (before["work"].get("turnState") == "busy"
-                                         and (isinstance(exit_signal, str) and exit_signal.upper() != "EOF"
-                                              or exit_record.get("code") == 143))
-                if interrupted_busy_turn:
-                    evidence["custodyChanged"] = True
+                signal_exit = (isinstance(exit_signal, str) and exit_signal.upper() != "EOF"
+                               or type(exit_record.get("code")) is int
+                               and 128 < exit_record["code"] < 128 + signal.NSIG)
+                captured_turn = before["work"].get("turnState")
+                if signal_exit and captured_turn != "idle":
+                    if captured_turn == "busy":
+                        evidence["custodyChanged"] = True
+                    else:
+                        evidence["custodyUnknown"] = True
                 if detail["exit"]["signal"] and not detail["exit"]["stopPath"]:
                     evidence["custodyChanged"] = True
                     if scope and evidence["unitLeftActive"] and scope not in evidence["scopeStopped"]:
