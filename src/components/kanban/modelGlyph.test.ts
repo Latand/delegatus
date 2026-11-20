@@ -7,6 +7,8 @@ import { GLYPH_STATE, GLYPH_TURN_MS, glyphTier, modelGlyphKind, modelGlyphName }
 test("every catalogued Claude and Codex model has its glyph, by family", () => {
   expect(ENGINE_MODELS.claude.map((option) => modelGlyphKind("claude", option.id))).toEqual(["opus", "fable", "fable", "fable", "sonnet", "sonnet", "haiku", "haiku", "haiku"]);
   expect(ENGINE_MODELS.codex.map((option) => [option.id, modelGlyphKind("codex", option.id)])).toEqual([
+    ["gpt-6.2-sol", "sol"],
+    ["gpt-6.2-astra", "astra"],
     ["gpt-6-astra", "astra"],
     ["gpt-6.1-sol", "sol"],
     ["gpt-6.1-terra", "terra"],
@@ -72,4 +74,11 @@ test("only an applied priority or ultrafast tier speeds a Codex glyph up; anythi
   /* Claude has no tier: a stray value on its entry changes nothing. */
   expect(glyphTier("claude", "ultrafast")).toBe("ordinary");
   expect(glyphTier("copilot", "priority")).toBe("ordinary");
+});
+
+test("GPT-6.2 models retain their family glyph and catalogue label", () => {
+  expect(modelGlyphKind("codex", "gpt-6.2-sol")).toBe("sol");
+  expect(modelGlyphKind("codex", "gpt-6.2-astra")).toBe("astra");
+  expect(modelGlyphName("codex", "gpt-6.2-sol")).toBe("GPT-6.2-Sol");
+  expect(modelGlyphName("codex", "gpt-6.2-astra")).toBe("GPT-6.2-Astra");
 });

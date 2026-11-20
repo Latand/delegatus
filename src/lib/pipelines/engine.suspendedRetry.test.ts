@@ -104,18 +104,27 @@ test.each(["stop", "delivery", "withdrawal"] as const)("explicit suspended retry
   const f = await suspendedFixture();
   await f.override();
   let held = true;
+  let resident = fence !== "delivery";
   const stop = f.h.ports.stopStageAgent;
-  f.h.ports.stopStageAgent = async (...args) => fence === "stop" && held
-    ? { outcome: "unconfirmed", operationId: args[1]!.operationId!, detail: "pending" } : stop(...args);
+  f.h.ports.stageHostResident = async () => resident;
+  f.h.ports.stopStageAgent = async (...args) => {
+    if (fence === "stop" && held) return { outcome: "unconfirmed", operationId: args[1]!.operationId!, detail: "pending" };
+    resident = false;
+    return stop(...args);
+  };
   f.h.ports.conversationDeliveryOutstanding = () => fence === "delivery" && held;
   f.h.ports.invalidateProviderContinuation = async () => { if (fence === "withdrawal" && held) throw Error("host unavailable"); };
+  const stopCount = () => f.h.calls.filter(call => call.startsWith("stop-host:")).length;
+  const before = stopCount();
   expect((await f.retry()).error).toBeUndefined();
   await tickPipelines([], f.h.ports);
   expect(f.attempts()).toHaveLength(1);
   expect(f.h.spawnInputs).toHaveLength(1);
+  if (fence === "withdrawal") expect(stopCount()).toBe(before + 1);
   held = false;
   await tickPipelines([], f.h.ports); await tickPipelines([], f.h.ports);
   expect(f.attempts()).toHaveLength(2);
+  if (fence === "withdrawal") expect(stopCount()).toBe(before + 1);
   expect(f.h.spawnInputs[1]!.role.engine).toBe("claude");
 });
 
@@ -123,8 +132,17 @@ test.each([1, 2])("a report recorded at suspended retry stop %s wins over its re
   const f = await suspendedFixture();
   await f.override();
   const stop = f.h.ports.stopStageAgent;
+  const evidence = f.h.ports.durableTurnEvidence;
   let stops = 0;
+  let resident = true;
+  f.h.ports.stageHostResident = async () => resident;
+  f.h.ports.durableTurnEvidence = async (...args) => {
+    const observed = await evidence(...args);
+    if (reportAt === 2 && stops === 1) resident = true;
+    return observed;
+  };
   f.h.ports.stopStageAgent = async (...args) => {
+    resident = false;
     if (++stops === reportAt) f.h.durableTurns.set(f.attempts()[0]!.agentPath!, { turn: "terminal", message: { text: PASS_TEXT, ts: Date.parse(f.h.ports.now()) + 1 } });
     return stop(...args);
   };
@@ -186,8 +204,17 @@ test("target binding revoked during the last stop holds the retry until it is re
   const f = await suspendedFixture();
   await f.override();
   const stop = f.h.ports.stopStageAgent;
+  const resolve = f.h.ports.resolveProjectSpawn!;
   let stops = 0;
+  let resident = true;
+  f.h.ports.stageHostResident = async () => resident;
+  f.h.ports.resolveProjectSpawn = (...args) => {
+    const selection = resolve(...args);
+    if (stops === 1) resident = true;
+    return selection;
+  };
   f.h.ports.stopStageAgent = async (...args) => {
+    resident = false;
     if (++stops === 2) f.pools.claude.length = 0;
     return stop(...args);
   };

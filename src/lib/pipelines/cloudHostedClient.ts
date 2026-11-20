@@ -1,3 +1,5 @@
+import { CODEX_CLOUD_MODEL_IDS, CODEX_GPT61_SOL_MODEL } from "@/lib/agent/models";
+import { effortScale } from "@/lib/agent/efforts";
 import { setTimeout as delay } from "node:timers/promises";
 import { cloudInputTurn, splitCloudInput } from "./cloudStageInput";
 import { spawn } from "node:child_process";
@@ -15,7 +17,6 @@ import { CLOUD_STAGE_TIMEOUT_MS, validCloudThreadReference, type CloudStageClien
 
 // Desktop app protocol, verified against the hosted service; not a public API.
 const ENDPOINT = "https://codex-cloud-backend.chatgpt.com";
-const MODEL = "gpt-6.1-sol";
 const MAX_FRAME = 16 * 1024 * 1024;
 type Row = Record<string, unknown>;
 type Auth = { token: string; account?: string };
@@ -30,7 +31,7 @@ export type HostedCloudGuard = Pick<Input, "signal" | "assertCurrent">;
 export class CloudSubmissionNotStartedError extends HostedCloudError {
   environmentFailure?: "environment_offline" | "environment_connect_failed" | "environment_missing";
 }
-class CloudEnvironmentMissingError extends HostedCloudError {
+export class CloudEnvironmentMissingError extends HostedCloudError {
   constructor() { super("Codex Cloud environment missing", "cloud-limit", true); }
 }
 export type HostedCloudDependencies = {
@@ -380,7 +381,8 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     return result.stdout;
   }
   async function status(client: HostedConnection, input: CloudTaskAccess) {
-    requireCloud(validCloudThreadReference(input.thread) && input.thread.hosted?.model === MODEL && input.taskId === input.thread.threadId
+    const model = input.thread?.hosted?.model;
+    requireCloud(typeof model === "string" && CODEX_CLOUD_MODEL_IDS.includes(model) && validCloudThreadReference(input.thread) && input.taskId === input.thread.threadId
       && /^[a-f0-9]{40}$/i.test(input.headSha), "thread receipt missing");
     const threadId = input.thread.threadId;
     client.watch(threadId);
@@ -391,15 +393,15 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
     const environment = row(environments[0]);
     requireCloud((environment.environmentConfigId == null || environment.environmentConfigId === input.environmentId)
       && environment.environmentId === input.thread.hosted!.environmentId && environment.cwd === input.thread.hosted!.cwd, "thread environment mismatch");
-    requireCloud((result.model == null || result.model === MODEL) && (thread.model == null || thread.model === MODEL), "resolved model mismatch");
+    requireCloud((result.model == null || result.model === model) && (thread.model == null || thread.model === model), "resolved model mismatch");
     let cursor: unknown;
     for (let page = 0; page < 100; page++) {
       const turns = await client.rpc("thread/turns/list", { threadId, itemsView: "notLoaded", limit: 20, sortDirection: "desc", ...(cursor ? { cursor } : {}) });
       requireCloud(Array.isArray(turns.data), "turn list changed");
       const turn = turns.data.map(row).find(turn => turn.id === input.thread!.turnId || turn.rootTurnId === input.thread!.turnId);
       if (turn) {
-        requireCloud(turn.model == null || turn.model === MODEL, "turn model mismatch");
-        return { threadId, environment, turn, model: MODEL };
+        requireCloud(turn.model == null || turn.model === model, "turn model mismatch");
+        return { threadId, environment, turn, model };
       }
       if (!turns.nextCursor) break;
       requireCloud(JSON.stringify(cursor) !== JSON.stringify(turns.nextCursor), "turn cursor repeated");
@@ -427,7 +429,8 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
         throw error;
       }
     },
-    supportsModel: (model, effort) => model === MODEL && (effort === null || ["none", "minimal", "low", "medium", "high", "xhigh"].includes(effort)),
+    supportsModel: (model, effort) => CODEX_CLOUD_MODEL_IDS.includes(model) && (effort === null ||
+      (model === CODEX_GPT61_SOL_MODEL ? ["none", "minimal", "low", "medium", "high", "xhigh"] : effortScale("codex", model)!).includes(effort)),
     submit: input => {
       if (input.serviceTier != null) return Promise.reject(new CloudSubmissionNotStartedError("Codex Cloud explicit service tier unsupported", "invalid"));
       let turnRequested = false;
@@ -435,7 +438,7 @@ export function createHostedCloudStageClient(dependencies: HostedCloudDependenci
       if (input.environmentPrincipal !== undefined && input.environmentPrincipal !== hostedCloudPrincipal(auth)) {
         throw new CloudSubmissionNotStartedError("Codex Cloud environment account identity changed", "account-limit");
       }
-      requireCloud(input.model === MODEL && input.allowProviderModelFallback === false, "explicit model unsupported");
+      requireCloud(CODEX_CLOUD_MODEL_IDS.includes(input.model) && input.allowProviderModelFallback === false, "explicit model unsupported");
       requireCloud(/^(?:[A-Za-z0-9_-]+~)?asenvcfg_[A-Za-z0-9_-]+$/.test(input.environmentId), "environment must be an ASB configuration");
       requireCloud(/^[a-f0-9]{40}$/i.test(input.headSha), "submission input invalid");
       guard(input);

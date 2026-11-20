@@ -57,24 +57,52 @@ export class CheckAdmission {
     } catch (error) { this.db.close(); throw error; }
   }
 
+  /** Positive exit proof retires an owner even if its identity probe is
+   * inconclusive. Unknown owners without that proof retain their policy. */
+  ownerStatus(owner: ProcessIdentity) {
+    const status = this.observer.status(owner), exited = this.observer.exited(owner);
+    return status === "dead" || exited ? "dead" : status;
+  }
+
   claim(owner: ProcessIdentity, capacity: number, lineage: readonly ProcessIdentity[] = []): boolean {
     if (!owner.startIdentity || !owner.bootEpoch || !Number.isSafeInteger(capacity) || capacity < 1) throw new Error("check admission needs a verified owner and positive capacity");
     const identity = JSON.stringify(owner);
     return this.db.transaction(() => {
       if (this.observer.status(owner) !== "alive" || this.observer.exited(owner)) throw new CheckAdmissionOwnerExitedError();
+      const eligible = new Set<string>([identity]);
+      const rows: Row[] = [];
       for (const row of this.db.query<Row, []>("SELECT * FROM checks ORDER BY seq").all()) {
         const previous = JSON.parse(row.owner) as ProcessIdentity;
-        if (this.observer.status(previous) === "dead" || this.observer.exited(previous)) this.db.query("DELETE FROM checks WHERE seq = ?").run(row.seq);
+        const status = this.ownerStatus(previous);
+        if (status === "dead") this.db.query("DELETE FROM checks WHERE seq = ?").run(row.seq);
+        else {
+          rows.push(row);
+          if (status === "alive") eligible.add(row.owner);
+        }
       }
-      this.db.query("INSERT OR IGNORE INTO checks(owner, capacity, lineage) VALUES (?, ?, ?)").run(identity, capacity, JSON.stringify(lineage));
-      const rows = this.db.query<Row, []>("SELECT * FROM checks ORDER BY seq").all();
-      const own = rows.find(row => row.owner === identity)!;
-      if (own.held) return true;
+      let own = rows.find(row => row.owner === identity);
+      if (!own) {
+        // Even an ignored AUTOINCREMENT insert writes sqlite_sequence.
+        // Register once under the same writer lock used for reclamation.
+        own = this.db.query<Row, [string, number, string]>(
+          "INSERT INTO checks(owner, capacity, lineage) VALUES (?, ?, ?) RETURNING seq, owner, capacity, held, lineage",
+        ).get(identity, capacity, JSON.stringify(lineage))!;
+        rows.push(own);
+      }
       // A stricter concurrent caller cannot be overridden by a sibling's env.
       const limit = Math.min(...rows.map(row => row.capacity));
-      if (rows.filter(row => row.held).length >= limit || rows.find(row => !row.held)?.seq !== own.seq) return false;
-      this.db.query("UPDATE checks SET held = 1 WHERE seq = ?").run(own.seq);
-      return true;
+      let free = limit - rows.filter(row => row.held).length;
+      // Reserve every available permit in FIFO order in this transaction.
+      // Peers observe their own durable grant on their next poll; an unknown
+      // waiter stays queued until its identity can be positively verified.
+      for (const row of rows) {
+        if (free <= 0) break;
+        if (row.held || !eligible.has(row.owner)) continue;
+        this.db.query("UPDATE checks SET held = 1 WHERE seq = ?").run(row.seq);
+        row.held = 1;
+        free--;
+      }
+      return own.held === 1;
     }).immediate();
   }
 

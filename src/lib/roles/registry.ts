@@ -132,6 +132,9 @@ export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamVa
   const original = renderScaffold(definition, params, project, deferWorkerLimit);
   const rendered = definition.id === "orchestrator" || original.includes(OPERATOR_CORRECTION_RULE)
     ? original : `${OPERATOR_CORRECTION_RULE}\n\n${original}`;
+  if (definition.id === "merger") {
+    return rendered + "\n\nIf the batch driver is still running after it prints runId, call the native wait_for_check once with that runId and the phase as reason. Keep the turn open. If the first command response precedes the ID, collect its startup output once. The driver owns its forge checks. Report its terminal result or an actionable interruption. While the wait is pending, skip periodic status messages and process, terminal or forge probes. Preserve the original batch on an unknown result.";
+  }
   if (definition.id !== "builder") return rendered;
   const fixRound = params.mode === "apply-fixes";
   const frontend = params.domain === "frontend";

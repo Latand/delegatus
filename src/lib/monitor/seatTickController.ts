@@ -58,7 +58,7 @@ import {
 import type { ProposalIssue } from "./githubEvidence";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
-import { recordedProjectRemote } from "@/lib/projects/aliases";
+import { recordedProjectRemote, projectAliasSnapshot, withProjectAliasSnapshot } from "@/lib/projects/aliases";
 import { appendSeatTickRecord, appendSeatTickRecordAsync, readSeatTickAlarmRecords, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
@@ -419,7 +419,9 @@ export function ensureSeatTickCard(project: string, card: SeatTickCard, at: stri
      only a real create, close or rewrite takes the write below, which rebuilds
      and fingerprints every task under the lease (#1987). A card that changes
      between this read and a later check is simply seen by that check. */
-  if (seatTickCardIsCurrent(project, card, at, loadTasksForList(file))) return true;
+  const tasks = loadTasksForList(file);
+  // Only the read preflight shares aliases; the writer takes fresh authority.
+  if (withProjectAliasSnapshot(projectAliasSnapshot(), (): boolean => seatTickCardIsCurrent(project, card, at, tasks))) return true;
   return mutateTasksFile<boolean>((loaded) => {
     const absorbed = closeAttemptCards(loaded.tasks, project, card);
     const state = { ...loaded, tasks: absorbed ?? loaded.tasks };

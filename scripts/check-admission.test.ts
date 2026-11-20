@@ -37,6 +37,28 @@ test("sandbox homes, state and gate locks cannot split the default machine pool"
   expect(checkAdmissionFile({ LLV_CHECK_ADMISSION_FILE: "fixture.sqlite" })).toBe("fixture.sqlite");
 });
 
+test("an unchanged saturated queue checks liveness without committing another database write", () => {
+  const f = fixture();
+  const queue = new CheckAdmission(f.file, { status: () => "alive", exited: () => false });
+  const reader = new Database(f.file, { readonly: true });
+  const counter = () => reader.query("SELECT seq FROM sqlite_sequence WHERE name='checks'").get();
+  const version = () => reader.query("PRAGMA data_version").get();
+  try {
+    const holder = identity(101), waiter = identity(102);
+    expect(queue.claim(holder, 1)).toBe(true);
+    expect(queue.claim(waiter, 1)).toBe(false);
+    const initialVersion = version(), initialSequence = counter();
+    for (let n = 0; n < 5; n++) expect(queue.claim(waiter, 1)).toBe(false);
+    expect(version()).toEqual(initialVersion);
+    expect(counter()).toEqual(initialSequence);
+    queue.cancel(holder);
+    expect(queue.claim(waiter, 1)).toBe(true);
+    expect(version()).not.toEqual(initialVersion);
+  } finally {
+    reader.close(); queue.close(); f.close();
+  }
+});
+
 test("FIFO persists through reopen; unknown holders stay and dead or reused owners are reclaimed", () => {
   const f = fixture();
   const state = new Map<string, ProcessIdentityStatus>();
@@ -62,9 +84,9 @@ test("FIFO persists through reopen; unknown holders stay and dead or reused owne
   } finally { queue.close(); f.close(); }
 });
 
-test("strictest concurrent capacity wins and an exited waiter cannot hold the FIFO head", () => {
+for (const status of ["alive", "unverified"] as const) test(`strictest concurrent capacity wins and an exited ${status} waiter cannot hold the FIFO head`, () => {
   const f = fixture(), exited = new Set<number>();
-  const queue = new CheckAdmission(f.file, { status: () => "alive", exited: owner => exited.has(owner.pid) });
+  const queue = new CheckAdmission(f.file, { status: owner => exited.has(owner.pid) ? status : "alive", exited: owner => exited.has(owner.pid) });
   try {
     expect(queue.claim(identity(101), 2)).toBe(true);
     expect(queue.claim(identity(102), 1)).toBe(false);
@@ -73,6 +95,67 @@ test("strictest concurrent capacity wins and an exited waiter cannot hold the FI
     expect(queue.claim(identity(103), 2)).toBe(true);
   } finally { queue.close(); f.close(); }
 });
+
+test("one claim reserves K free slots for the first K verified FIFO waiters", () => {
+  const f = fixture(), state = new Map<number, ProcessIdentityStatus>(), exited = new Set<number>();
+  const queue = new CheckAdmission(f.file, { status: owner => state.get(owner.pid) ?? "alive", exited: owner => exited.has(owner.pid) });
+  const rows = () => queue.db.query<{ owner: string; held: number }, []>("SELECT owner, held FROM checks ORDER BY seq").all()
+    .map(row => [JSON.parse(row.owner).pid, row.held]);
+  try {
+    expect(queue.claim(identity(100), 1)).toBe(true);
+    for (let pid = 101; pid <= 107; pid++) expect(queue.claim(identity(pid), 3)).toBe(false);
+    state.set(101, "unverified"); state.set(102, "dead"); exited.add(103);
+    queue.cancel(identity(100));
+    // The tail caller fills every free slot even though it cannot enter yet.
+    expect(queue.claim(identity(107), 3)).toBe(false);
+    expect(rows()).toEqual([[101, 0], [104, 1], [105, 1], [106, 1], [107, 0]]);
+    expect(queue.claim(identity(106), 3)).toBe(true);
+    expect(rows()).toEqual([[101, 0], [104, 1], [105, 1], [106, 1], [107, 0]]);
+    // Restored proof preserves the original FIFO position.
+    state.set(101, "alive"); queue.cancel(identity(104));
+    expect(queue.claim(identity(107), 3)).toBe(false);
+    expect(rows()).toEqual([[101, 1], [105, 1], [106, 1], [107, 0]]);
+  } finally { queue.close(); f.close(); }
+});
+
+test("two real claimers racing reserve one FIFO batch without duplicate or lost tickets", async () => {
+  const f = fixture(), observer = { status: () => "alive" as const, exited: () => false };
+  const queue = new CheckAdmission(f.file, observer), children: ReturnType<typeof spawn>[] = [];
+  try {
+    expect(queue.claim(identity(100), 1)).toBe(true);
+    for (let pid = 101; pid <= 105; pid++) expect(queue.claim(identity(pid), 3)).toBe(false);
+    const source = path.join(f.root, "claim.ts");
+    fs.writeFileSync(source, `import fs from "node:fs";
+      import { CheckAdmission } from ${JSON.stringify(path.join(import.meta.dir, "check-admission.ts"))};
+      import { admissionLockWait } from ${JSON.stringify(path.join(import.meta.dir, "cpu-admission-lock.ts"))};
+      const retry=admissionLockWait(), queue=await retry(()=>new CheckAdmission(process.env.FILE,{status:()=>"alive",exited:()=>false}));
+      fs.writeFileSync(process.env.READY,"ready");
+      while(!fs.existsSync(process.env.GO)) await Bun.sleep(1);
+      const pid=Number(process.env.OWNER);
+      const admitted=await retry(()=>queue.claim({pid,startIdentity:pid+":1",bootEpoch:"fixture"},3));
+      console.log(JSON.stringify({admitted,rows:queue.db.query("SELECT seq, owner, held FROM checks ORDER BY seq").all()}));queue.close();`);
+    const runs = [104, 105].map(pid => {
+      const child = spawn(process.execPath, [source], { env: { ...process.env, FILE: f.file, OWNER: String(pid), READY: path.join(f.root, `${pid}.ready`), GO: path.join(f.root, "go") }, stdio: ["ignore", "pipe", "pipe"] });
+      children.push(child);
+      let output = "", error = "";
+      child.stdout!.on("data", data => output += data); child.stderr!.on("data", data => error += data);
+      return { code: new Promise(resolve => child.once("close", resolve)), output: () => output, error: () => error };
+    });
+    await until(() => [104, 105].every(pid => fs.existsSync(path.join(f.root, `${pid}.ready`))));
+    queue.cancel(identity(100)); fs.writeFileSync(path.join(f.root, "go"), "go");
+    for (const run of runs) {
+      expect(await run.code, run.error()).toBe(0);
+      const result = JSON.parse(run.output());
+      expect(result.admitted).toBe(false);
+      expect(result.rows.map((row: { owner: string; held: number }) => [JSON.parse(row.owner).pid, row.held]))
+        .toEqual([[101, 1], [102, 1], [103, 1], [104, 0], [105, 0]]);
+      expect(new Set(result.rows.map((row: { seq: number }) => row.seq)).size).toBe(5);
+    }
+    queue.cancel(identity(101)); queue.cancel(identity(102));
+    expect(queue.claim(identity(105), 3)).toBe(true);
+    expect(queue.db.query("SELECT held FROM checks ORDER BY seq").all()).toEqual([{ held: 1 }, { held: 1 }, { held: 1 }]);
+  } finally { await Promise.all(children.map(child => stopFixtureProcess(child))); queue.close(); f.close(); }
+}, 30_000);
 
 test("legacy admission rows and new service lineage survive reopen in both readers", () => {
   const f = fixture(), first = identity(101), second = identity(102), third = identity(103);

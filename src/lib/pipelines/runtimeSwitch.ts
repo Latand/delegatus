@@ -96,9 +96,10 @@ export function attemptAccountPin(stage: PipelineStage, attempt: PipelineStageAt
 export { switchOperationKey };
 
 export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effectBatch" | "operationStatus">, conversationId: string, since: string, ignoredOperationIds: readonly string[] = [], operatorOnly = false): Promise<boolean> {
+  const kinds = operatorOnly ? ["runtime.kill-boundary", "runtime.interrupt-boundary", "runtime.stop-boundary"] : ["runtime.kill-boundary"];
   let cursor = 0;
   while (true) {
-    const page = await client.effectBatch(operatorOnly ? ["runtime.kill-boundary", "runtime.interrupt-boundary", "runtime.stop-boundary"] : ["runtime.kill-boundary"], cursor);
+    const page = await client.effectBatch(kinds, cursor, { conversationId });
     for (const effect of page) {
       if (effect.payload.conversationId !== conversationId || typeof effect.payload.operationId !== "string" || ignoredOperationIds.includes(effect.payload.operationId)) continue;
       // Admission time survives receipt compaction in both modes. Ordinary

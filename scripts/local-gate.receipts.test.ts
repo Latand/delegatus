@@ -12,6 +12,35 @@ const roots: string[] = [];
 afterEach(() => { for (const directory of roots.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 const hookFixture = () => createHookFixture(root, roots);
 
+test("a standalone typecheck supplies only its exact pass to the later native push", () => {
+  const f = hookFixture();
+  writeFileSync(path.join(f.dir, ".gitignore"), "commands.jsonl\nadmission.sqlite*\nllv-heavy-gate.*\nbudget-*/\n");
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
+  f.git("add", ".gitignore", "example.ts"); f.git("commit", "-m", "fixture change");
+  // Native Git adds this directory to PATH before it invokes a hook.
+  const fixtureEnv: NodeJS.ProcessEnv = f.env;
+  const env = { ...fixtureEnv, PATH: f.git("--exec-path").toString().trim() + path.delimiter + (fixtureEnv.PATH ?? "") };
+  const run = (args: string[], extra = {}) => spawnSync(args[0]!, args.slice(1), { cwd: f.dir, env: { ...env, ...extra }, encoding: "utf8" });
+  const check = [process.execPath, "scripts/local-gate.ts", "check-step", "types"];
+  const first = run(check);
+  expect(first.status, first.stderr).toBe(0);
+  expect(f.calls().filter(row => row.args[0] === "tsc")).toHaveLength(1);
+  expect(f.calls().some(row => row.args[0] === "scripts/privacy-publication-gate.ts")).toBeFalse();
+  const before = f.calls().length;
+  const push = run(["bash", ".githooks/pre-push"]);
+  expect(push.status, push.stderr).toBe(0);
+  const actual = f.calls().slice(before);
+  expect(actual.some(row => row.args[0] === "tsc"), push.stderr).toBeFalse();
+  expect(actual.some(row => row.args[0] === "scripts/privacy-publication-gate.ts")).toBeTrue();
+  expect(actual.some(row => row.args[0] === "scripts/eslint-changes.ts")).toBeTrue();
+  expect(run(check, { LLV_GATE_PUBLICATION_RECEIPT: path.join(f.dir, ".git", "publication.json") }).status).not.toBe(0);
+  expect(run([...check.slice(0, -1), "privacy"]).status).not.toBe(0);
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 3;\n");
+  const changed = run(check);
+  expect(changed.status, changed.stderr).toBe(0);
+  expect(f.calls().filter(row => row.args[0] === "tsc")).toHaveLength(2);
+}, 120_000);
+
 test("prose-only skips name their reason and a subsequent code change runs the checks", () => {
   const f = hookFixture();
   writeFileSync(path.join(f.dir, "notes.md"), "A documentation change.\n");
@@ -127,6 +156,21 @@ test("stopped, deferred, cancelled and failed steps never write a pass; the runt
   for (const file of readdirSync(directory)) rmSync(path.join(directory, file));
   expect(held.reused(runtime[1]!)).toBeTrue();
   expect(open(runtime).reused(runtime[0]!)).toBeFalse();
+});
+
+test("a warm group requires every exact pass and a fresh input check", () => {
+  const f = hookFixture();
+  const base = f.git("rev-parse", "origin/main").toString().trim();
+  const steps = [{ name: "types", command: ["bunx", "tsc", "--noEmit"] }, { name: "eslint", command: ["bun", "lint"] }];
+  const passes = stepPasses(f.dir, base, steps, () => {});
+  passes.passed(steps[0]!);
+  expect(passes.allReused(steps)).toBeFalse();
+  passes.passed(steps[1]!);
+  expect(passes.allReused(steps)).toBeTrue();
+  expect(passes.allReused([...steps, { name: "privacy", command: ["bun", "scan"] }])).toBeFalse();
+  expect(passes.allReused(steps, Date.now() - 1)).toBeFalse();
+  writeFileSync(path.join(f.dir, "example.ts"), "export const changed = true;\n");
+  expect(passes.allReused(steps)).toBeFalse();
 });
 
 test("privacy, frozen install and advisory audit execute on both pushes of one dependency tree", () => {
