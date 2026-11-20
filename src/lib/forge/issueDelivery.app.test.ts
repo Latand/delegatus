@@ -22,6 +22,7 @@ const landingPermissions = { contents: "read", metadata: "read" };
 test.skipIf(process.platform === "win32").each([
   "close", "part", "missing-pr", "missing-issues", "manual-batch", "missing-landing", "cold-batch",
   "associated-batch", "associated-reverted-before", "associated-restored-later", "associated-reverted-after",
+  "associated-merge", "associated-merge-reverted-before",
 ] as const)("private App issue settlement handles %s through the production scheduler", async mode => {
   const directory = path.join(root, mode);
   const granted: Record<string, string> = { ...required };
@@ -177,7 +178,7 @@ process.stdout.write(route.includes("/branches/") ? String(result) : JSON.string
         expect(app.tokens()).toEqual([]);
         expect(calls).toEqual([]);
       }
-    } else if (associated && mode !== "associated-batch") {
+    } else if (associated && (mode.includes("reverted") || mode === "associated-restored-later")) {
       expect(calls.some(call => call.args.includes("--method"))).toBe(false);
       expect(saved.issue.state).toBe("open");
       expect(saved.comments).toEqual([]);

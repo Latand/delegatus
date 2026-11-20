@@ -28,10 +28,12 @@ async function patchPresent(repoDir: string, head: string, landing: string, base
     if (missing.length) await checked(["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "origin", ...missing]);
     const parents = (await checked(["rev-list", "--parents", "-n", "1", landing])).split(" ");
     if (allowCompanions ? parents.length < 2 : parents.length !== 2) return false;
-    const fork = await checked(["merge-base", allowCompanions ? landing : parents[1]!, head]);
+    const firstParent = parents[1]!;
+    // A merge commit may already contain the reviewed head through another parent.
+    const fork = await checked(["merge-base", allowCompanions && parents.length === 2 ? landing : firstParent, head]);
     // Git's three-way replay preserves which occurrence was reviewed while
     // incorporating nearby edits and line shifts from the landing parent.
-    const replayed = await git(["-c", "merge.renames=false", "merge-tree", "--write-tree", "--no-messages", `--merge-base=${fork}`, allowCompanions ? landing : parents[1]!, head]);
+    const replayed = await git(["-c", "merge.renames=false", "merge-tree", "--write-tree", "--no-messages", `--merge-base=${fork}`, allowCompanions ? landing : firstParent, head]);
     if (replayed.code !== 0 || replayed.stdout.trim() !== await checked(["rev-parse", `${landing}^{tree}`])) return false;
     const patch = async (from: string, to: string, name: string) => {
       const file = path.join(scratch, name);
@@ -42,7 +44,7 @@ async function patchPresent(repoDir: string, head: string, landing: string, base
         .map((line) => line.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/, "@@")).join("\n") };
     };
     const reverseBase = allowCompanions ? head : landing;
-    const reverseParent = allowCompanions ? fork : parents[1]!;
+    const reverseParent = allowCompanions ? fork : firstParent;
     const expectedReverse = await patch(reverseBase, reverseParent, "expected-reverse.diff");
     if (!expectedReverse.signature.trim()) return false;
     for (const base of new Set(bases)) {
