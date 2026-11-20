@@ -109,18 +109,22 @@ export function readPassAuthority(id: string): CuratorPass | null {
     return row?.kind === "pass" ? row : null;
   });
 }
-/** Tick-safe warning lookup: this keyed row stays constant-sized as pass history grows. */
-export function curationNoAccountWarning(project: string) {
-  const row = curationCollection()?.get(`w:${canonicalProject(project)}`);
-  return row?.kind === "no-account-warning" ? { episode: row.episode, passId: row.passId } : null;
+/** Tick-safe keyed lookups over keys resolved by the caller's project snapshot. */
+export function curationNoAccountWarning(projects: string | readonly string[]) {
+  const collection = curationCollection();
+  const keys = typeof projects === "string" ? [projects] : projects;
+  for (const project of keys) {
+    const row = collection?.get(`w:${project}`);
+    if (row?.kind === "no-account-warning") return { project: row.project, episode: row.episode, passId: row.passId };
+  }
+  return null;
 }
 /** A delivered seat wake acknowledges the exact retained warning episode. */
 export function acknowledgeCurationNoAccountWarning(project: string, episode: string): boolean {
-  const canonical = canonicalProject(project);
   return curationCollection()?.boundedPatch(4, tx => {
-    const row = tx.get(`w:${canonical}`);
+    const row = tx.get(`w:${project}`);
     if (row?.kind !== "no-account-warning" || row.episode !== episode) return false;
-    tx.delete(`w:${canonical}`);
+    tx.delete(`w:${project}`);
     return true;
   }) ?? false;
 }
@@ -641,9 +645,10 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     if (next.state === "failed" && next.failure === "no-account") {
       const warningKey = `w:${next.project}`;
       const warning = tx.get(warningKey);
-      if (warning?.kind !== "no-account-warning") tx.put({
+      const episode = next.noAccountEpisode ?? next.id;
+      if (warning?.kind !== "no-account-warning" || warning.episode !== episode) tx.put({
         kind: "no-account-warning", project: next.project,
-        episode: next.noAccountEpisode ?? next.id, passId: next.id,
+        episode, passId: next.id,
       });
     }
     if (!passIsLive(next)) {

@@ -2435,8 +2435,8 @@ function childRegistry(name: string): ChildRegistry {
   };
 }
 
-function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typeof sources>[0] = {}, state: SeatTickProjectState = emptySeatTickState()) {
-  return gatherSeatTickInput(fixture.project, state, DEFAULT_SEAT_TICK_POLICY, sources({
+function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typeof sources>[0] = {}, state: SeatTickProjectState = emptySeatTickState(), project = fixture.project) {
+  return gatherSeatTickInput(project, state, DEFAULT_SEAT_TICK_POLICY, sources({
     registry: fixture.registry,
     seatConversationId: fixture.seatId,
     pipelines: [],
@@ -2667,13 +2667,18 @@ test("a readable page limit keeps catch-up debt when another child ledger has a 
   let gathered = await childGather(f, {}, { ...emptySeatTickState(), unreachableSince: backlog, unreachableBacklogSince: backlog });
   expect(gathered.childrenCatchUpPending).toBe(true);
   expect(gathered.children).toEqual(expect.arrayContaining([expect.objectContaining({ conversationId: f.workers[1]!.id })]));
-  const outcomes = new Set(gathered.children.map(child => child.outcomeId).filter((id): id is string => !!id));
+  const outcomesByWorker = new Map(f.workers.map(worker => [worker.id, new Set<string>()]));
+  const record = (children: typeof gathered.children) => {
+    for (const child of children) if (child.outcomeId) outcomesByWorker.get(child.conversationId)?.add(child.outcomeId);
+  };
+  record(gathered.children);
   for (let pass = 0; gathered.childrenCatchUpPending && pass < 20; pass++) {
     gathered = await childGather(f, {}, gathered.state);
-    for (const child of gathered.children) if (child.outcomeId) outcomes.add(child.outcomeId);
+    record(gathered.children);
   }
   expect(gathered.childrenCatchUpPending).toBe(false);
-  expect(outcomes.size).toBeGreaterThanOrEqual(257);
+  expect(outcomesByWorker.get(f.workers[0]!.id)?.size).toBe(257);
+  expect(outcomesByWorker.get(f.workers[1]!.id)?.size).toBe(1);
 });
 
 test("a deferred no-account warning survives another failure and is acknowledged after delivery", async () => {
@@ -2732,6 +2737,86 @@ test("the tick reads a fixed-size curator warning record as pass history grows",
     expect(reads).toEqual([{ key: `w:${f.project}`, bytes: expect.any(Number) }]);
     expect(reads[0]!.bytes).toBeLessThan(200);
   } finally { observed.mockRestore(); }
+});
+
+test("curator warnings survive project succession before and after settlement", async () => {
+  const f = replayChildren("curator-warning-succession", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning } = await import("@/lib/memory/curation/store");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { seatTickSignalVersion } = await import("./seatTick");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Keep the account warning through project succession.", why: "The successor seat must acknowledge it." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (project: string, repoDir: string, now: number) => {
+    const pass = claimPass({ project, repoDir, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: "failed", endedAt: new Date(now).toISOString(), failure: "no-account" });
+    return pass;
+  };
+
+  const firstPass = finish(f.project, f.cwd, f.now);
+  expect(persistProjectAliases([{ source: f.project, target: "repo-curator-successor", displayName: "successor" }])).toBe(true);
+  const successorGather = await childGather(f, {}, emptySeatTickState(), "repo-curator-successor");
+  const successorSignal = successorGather.signals.find(signal => signal.id === "curator-no-account");
+  expect(successorSignal).toMatchObject({ episode: firstPass.id });
+  const successorVersion = seatTickSignalVersion(successorSignal!, successorGather.seat);
+  const successorSettled = await childGather(f, {}, {
+    ...successorGather.state, itemsShown: [...(successorGather.state.itemsShown ?? []), successorVersion],
+  }, "repo-curator-successor");
+  expect(successorSettled.signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+  expect(curationNoAccountWarning(f.project)).toBeNull();
+
+  // A warning settled under its predecessor key stays cleared when its alias is added later.
+  const g = replayChildren("curator-warning-succession-after-settlement", []);
+  leaveOperatorLessons({ source: { origin: "operator", project: g.project, roleId: null, fixRound: false, conversationId: g.seatId },
+    lessons: [{ scope: "project", rule: "Keep a settled warning cleared across later succession.", why: "A successor must not resurrect it." }],
+    now: new Date(g.now).toISOString() });
+  const settledPass = finish(g.project, g.cwd, g.now);
+  const predecessorGather = await childGather(g);
+  const predecessorSignal = predecessorGather.signals.find(signal => signal.id === "curator-no-account");
+  expect(predecessorSignal).toMatchObject({ episode: settledPass.id });
+  const predecessorVersion = seatTickSignalVersion(predecessorSignal!, predecessorGather.seat);
+  const predecessorSettled = await childGather(g, {}, {
+    ...predecessorGather.state, itemsShown: [...(predecessorGather.state.itemsShown ?? []), predecessorVersion],
+  });
+  expect(predecessorSettled.signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+  expect(curationNoAccountWarning(g.project)).toBeNull();
+  expect(persistProjectAliases([{ source: g.project, target: "repo-curator-successor-after-settlement", displayName: "successor" }])).toBe(true);
+  expect((await childGather(g, {}, emptySeatTickState(), "repo-curator-successor-after-settlement")).signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+});
+
+test("a delayed acknowledgement cannot erase a newer no-account episode", async () => {
+  const f = replayChildren("curator-warning-delayed-ack", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning, acknowledgeCurationNoAccountWarning } = await import("@/lib/memory/curation/store");
+  const { CURATION_INTERVAL_MS } = await import("@/lib/memory/roleTypes");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Retain the latest account warning episode.", why: "A late delivery must not clear it." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (now: number, failure: string) => {
+    const pass = claimPass({ project: f.project, repoDir: f.cwd, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: failure === "succeeded" ? "succeeded" : "failed", endedAt: new Date(now).toISOString(), failure });
+    return pass;
+  };
+  const oldPass = finish(f.now, "no-account");
+  const gatheredOld = await childGather(f);
+  const oldWarningSignal = gatheredOld.signals.find(signal => signal.id === "curator-no-account")!;
+  const { seatTickSignalVersion } = await import("./seatTick");
+  const oldVersion = seatTickSignalVersion(oldWarningSignal, gatheredOld.seat);
+  finish(f.now + CURATION_INTERVAL_MS, "succeeded");
+  const newPass = finish(f.now + 2 * CURATION_INTERVAL_MS, "no-account");
+  const newWarning = curationNoAccountWarning(f.project)!;
+  expect(newPass.id).not.toBe(oldPass.id);
+  expect(newWarning.episode).not.toBe(oldWarningSignal.episode);
+  const delayed = await childGather(f, {}, { ...gatheredOld.state, itemsShown: [...(gatheredOld.state.itemsShown ?? []), oldVersion] });
+  expect(delayed.signals).toEqual(expect.arrayContaining([expect.objectContaining({ id: "curator-no-account", episode: newWarning.episode })]));
+  expect(acknowledgeCurationNoAccountWarning(f.project, oldWarningSignal.episode!)).toBe(false);
+  expect(curationNoAccountWarning(f.project)).toEqual(newWarning);
+  const repeat = finish(f.now + 3 * CURATION_INTERVAL_MS, "no-account");
+  expect(repeat.noAccountEpisode).toBe(newWarning.episode);
+  expect(curationNoAccountWarning(f.project)?.episode).toBe(newWarning.episode);
 });
 
 test("an expired launch without a conversation is a named failure owed until its wake lands", async () => {

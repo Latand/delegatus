@@ -785,9 +785,16 @@ export async function settleRecordFromJournal(
   return sendReceiptFor(registry.readOnlySnapshot(), target.operationId);
 }
 
-function seatProjectResolver(): (project: string) => string {
-  const resolve = projectAliasResolver();
-  return project => resolve(project.trim());
+type SeatProjectResolver = ((project: string) => string) & { keys(project: string): string[] };
+function seatProjectResolver(): SeatProjectResolver {
+  const snapshot = projectAliasSnapshot();
+  const resolve = projectAliasResolver(snapshot);
+  const resolver = ((project: string) => resolve(project.trim())) as SeatProjectResolver;
+  resolver.keys = (project: string) => {
+    const canonical = resolve(project.trim());
+    return [canonical, ...Object.keys(snapshot.aliases).filter(key => key !== canonical && resolve(key) === canonical)];
+  };
+  return resolver;
 }
 
 export function defaultSeatTickSources(): SeatTickSources {
@@ -1603,17 +1610,17 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
   return { covered: false, sweeps };
 }
 
-function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources, shown: readonly string[] = []): SeatTickSignalInput[] {
+function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources, shown: readonly string[] = [], projectKeys: readonly string[] = [project]): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
   if (seat) {
     try {
-      const warning = curationNoAccountWarning(project);
+      const warning = curationNoAccountWarning(projectKeys);
       if (warning) {
         const signal = {
           id: "curator-no-account", episode: warning.episode, actionable: true,
           label: "The role memory curator could not run because no account was available for this project (no-account).",
         };
-        if (shown.includes(seatTickSignalVersion(signal, seat))) acknowledgeCurationNoAccountWarning(project, warning.episode);
+        if (shown.includes(seatTickSignalVersion(signal, seat))) acknowledgeCurationNoAccountWarning(warning.project, warning.episode);
         else found.push(signal);
       }
     } catch { /* An unreadable curation store leaves other wake evidence available. */ }
@@ -2680,7 +2687,10 @@ async function childWork(
     child.generationIndex = (child.generationIndex + 1) % generations.length;
     /* Resume budget-limited healthy reads first. A damaged ledger keeps its
        cursor and rotates so it cannot repeatedly hold up healthy children. */
-    const cut = !ledgerGap && !read.cursor.atEnd && (read.bytes >= budget || read.outcomes.length >= OUTCOME_LIMIT);
+    // A readable page of a damaged ledger still owes a bounded continuation.
+    // Keep that ticket ahead of the frozen catch-up cutoff until the readable
+    // prefix is exhausted; healthy children retain their independent tickets.
+    const cut = !read.cursor.atEnd && (read.bytes >= budget || read.outcomes.length >= OUTCOME_LIMIT);
     if (child.input.status === "terminal" && read.bytes === 0 && read.outcomes.length === 0 && read.cursor.atEnd
       && child.generationIndex === previousGeneration && JSON.stringify(previousCursor) === JSON.stringify(read.cursor)
       && JSON.stringify(previousInput) === JSON.stringify(child.input)) coldVisits.push(child);
@@ -3571,7 +3581,7 @@ async function gatherSeatTickInputWork(
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? []), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,
