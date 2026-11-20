@@ -7,8 +7,8 @@ import path from "node:path";
  * The completed scanner projection at production shape (#845).
  *
  * `operator_snapshot` and `/api/agent/snapshot` share the completed scanner
- * generation. The probe drives `completedFileScan` through concurrent reads
- * and cancellation to check reuse and reader isolation.
+ * generation. The probe checks that concurrent `completedFileScan` readers
+ * reuse the warm generation and receive separate file arrays.
  *
  * ## Isolation, and why it needs proving rather than asserting
  *
