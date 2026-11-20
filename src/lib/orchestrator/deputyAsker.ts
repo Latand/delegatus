@@ -1,8 +1,7 @@
 import type { NextRequest } from "next/server";
 
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, registryLiveRootSession } from "@/lib/agent/registry";
 import { callerConversationId, directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
-import { liveRootSession } from "@/lib/root/adopt";
 
 import type { DeputyAskOrigin } from "./deputies";
 
@@ -34,13 +33,8 @@ export type DeputyAskerAdmission =
 
 type RootResolver = () => string | null;
 
-const productionRoot: RootResolver = () => {
-  const snapshot = agentRegistry().readOnlySnapshot();
-  return liveRootSession({
-    conversations: Object.values(snapshot.conversations),
-    configuredRootId: process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null,
-  })?.conversationId ?? null;
-};
+const productionRoot: RootResolver = () =>
+  registryLiveRootSession(agentRegistry(), process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null)?.conversationId ?? null;
 
 let resolveRoot: RootResolver = productionRoot;
 

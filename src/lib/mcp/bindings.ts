@@ -28,8 +28,8 @@ import { ExternalRelayError as RelayAnswerError } from "@/lib/externalRelay/clie
 import { DocumentRefusal as RelayDocumentRefusal } from "@/lib/telegram/bot/documents";
 import { relayServiceToolsOp } from "@/lib/externalRelay/ownerServiceTools";
 import { readHistoryProjection, historyFleetLimitWaits } from "@/lib/state/historyProjection";
-import { registryReceiptsForConversation } from "@/lib/agent/registry";
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryLiveRootSession, registryReceiptsForConversation } from "@/lib/agent/registry";
+import { registryConversationsForPath, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
@@ -1338,11 +1338,15 @@ function mcpSenderOrigin(
  * step with what the registry actually stamps.
  */
 function rootSessionSource(): RootSessionSource {
-  const snapshot = agentRegistry().readOnlySnapshot();
-  return {
-    conversations: Object.values(snapshot.conversations),
-    configuredRootId: process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null,
-  };
+  const root = registryLiveRootSession(agentRegistry(), process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null);
+  return root ? {
+    conversations: [{
+      id: root.conversationId,
+      updatedAt: "",
+      generations: root.path ? [{ path: root.path, launchProfile: { role: "root" } }] : [],
+    }],
+    configuredRootId: root.conversationId,
+  } : { conversations: [], configuredRootId: null };
 }
 
 /**
@@ -6464,11 +6468,6 @@ async function boardSnapshot(
   const liveOnly = args.liveOnly === true;
   const limit = Math.max(1, Math.min(200, integer(args.limit, 100)));
   const snapshot = dependencies.registrySnapshot();
-  const conversationsByPath = new Map<string, RegistrySnapshot["conversations"][string]>();
-  for (const conversation of Object.values(snapshot.conversations)) {
-    for (const generation of conversation.generations) conversationsByPath.set(generation.path, conversation);
-    for (const pathname of conversation.continuityPaths ?? []) conversationsByPath.set(pathname, conversation);
-  }
   const files = (await dependencies.completedFileScan()).snapshot.files;
   const conversations = files
     .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
@@ -6479,7 +6478,7 @@ async function boardSnapshot(
     .map((entry) => {
       const conversation = entry.conversationId
         ? snapshot.conversations[entry.conversationId]
-        : conversationsByPath.get(entry.path);
+        : registryConversationsForPath(snapshot, entry.path).at(-1);
       const conversationId = conversation?.id ?? entry.conversationId ?? null;
       const edge = conversationId ? snapshot.lineageEdges[conversationId] : undefined;
       return {

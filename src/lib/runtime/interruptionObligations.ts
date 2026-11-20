@@ -6,6 +6,7 @@ import path from "node:path";
 
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { killedBackgroundWorkNotice } from "@/lib/pipelines/backgroundTasks";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
@@ -447,7 +448,12 @@ export function submittedContinuationOutcome(
   },
   canonical: (conversationId: ViewerConversationId) => string,
 ): SubmittedContinuationOutcome | null {
-  const reservation = Object.values(snapshot.heldDeliveries).find((delivery) =>
+  const reservation = registryRowsMatching(
+    snapshot as unknown as Pick<RegistryFile, "heldDeliveries">,
+    "heldDeliveries",
+    "clientMessageId",
+    obligation.id,
+  ).find((delivery) =>
     delivery.clientMessageId === obligation.id
       && canonical(delivery.conversationId) === canonical(obligation.conversationId));
   const owner = obligation.operationId ? snapshot.deliveryOperationOwners[obligation.operationId] : undefined;

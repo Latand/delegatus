@@ -10,7 +10,7 @@ import { normalizeCleanerSandboxObservation, type CleanerSandboxObservation } fr
 import { assertMemberLaunchAllowed, memberLaunchRevocationId } from "@/lib/team/memberLaunchAuthority";
 import { worktreeProtection, type WorktreeProtection } from "./worktreeProtection";
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
-import { liveRootSession } from "@/lib/root/adopt";
+import { liveRootSession, type RootSessionCandidate } from "@/lib/root/adopt";
 import { hostExitWriterPending, readHostExit, reclaimHostExit, type HostExitRecord } from "@/lib/runtime/hostExit";
 import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -4181,7 +4181,7 @@ function adoptContinuityPathProvenance(
   conversation: RegistryConversation,
   pathname: string,
 ): void {
-  const provisionalOwner = Object.values(file.conversations).find((candidate) =>
+  const provisionalOwner = registryConversationsForPath(file, pathname).find((candidate) =>
     candidate.id !== conversation.id && candidate.engine === conversation.engine && conversationOwnsPath(candidate, pathname));
   if (provisionalOwner && !adoptProvisionalOwner(file, provisionalOwner, conversation, pathname)) {
     throw new Error("migration continuity path has another durable owner");
@@ -7293,6 +7293,16 @@ export class AgentRegistry {
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
   }
 
+  liveRootSession(configuredRootId: string | null = process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null): RootSessionCandidate | null {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      const indexed = withViewerOperation("registry.read", () =>
+        performanceSpans.sync("registry.keyed", () => this.sqliteStore!.liveRootSession(configuredRootId)));
+      if (indexed !== undefined) return indexed;
+    }
+    const snapshot = this.readOnlySnapshot();
+    return liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId });
+  }
+
   async prepareNativeCallerArtifacts(): Promise<void> {
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
       await this.sqliteStore?.prepareNativeCallerArtifacts();
@@ -8744,7 +8754,7 @@ export class AgentRegistry {
       return conflict("spawn_identity_conflict");
     }
     if (receipt.purpose === "migration-successor") {
-      const provisionalOwner = Object.values(file.conversations).find((candidate) => candidate.id !== conversation.id
+      const provisionalOwner = registryConversationsForPath(file, entry.artifactPath).find((candidate) => candidate.id !== conversation.id
         && candidate.engine === conversation.engine && conversationOwnsPath(candidate, entry.artifactPath));
       if (provisionalOwner && !adoptProvisionalOwner(file, provisionalOwner, conversation, entry.artifactPath)) {
         return conflict("spawn_artifact_conflict");
@@ -8752,14 +8762,14 @@ export class AgentRegistry {
       addConversationContinuityPath(conversation, entry.artifactPath);
     }
     if (receipt.purpose === "launch") {
-      const provisionalOwner = Object.values(file.conversations).find((candidate) => candidate.id !== conversation.id
+      const provisionalOwner = registryConversationsForPath(file, entry.artifactPath).find((candidate) => candidate.id !== conversation.id
         && candidate.engine === conversation.engine && conversationOwnsPath(candidate, entry.artifactPath));
       if (provisionalOwner && !adoptProvisionalOwner(file, provisionalOwner, conversation, entry.artifactPath)) {
         return conflict("spawn_artifact_conflict");
       }
     }
     if (receipt.purpose === "resume-successor" && !conversationOwnsPath(conversation, entry.artifactPath)) {
-      const provisionalOwner = Object.values(file.conversations).find((candidate) => candidate.id !== conversation.id
+      const provisionalOwner = registryConversationsForPath(file, entry.artifactPath).find((candidate) => candidate.id !== conversation.id
         && candidate.engine === conversation.engine && conversationOwnsPath(candidate, entry.artifactPath));
       if (provisionalOwner && !adoptProvisionalOwner(file, provisionalOwner, conversation, entry.artifactPath)) {
         return conflict("spawn_artifact_conflict");
@@ -10218,7 +10228,7 @@ export class AgentRegistry {
       remain an interoperability detail and can change on every account move. */
   ensureConversation(engine: AgentEngine, artifactPath: string, accountId: string | null): RegistryConversation {
     return this.mutate((file) => {
-      const existing = Object.values(file.conversations).find((conversation) => conversation.engine === engine && conversationOwnsPath(conversation, artifactPath));
+      const existing = registryConversationsForPath(file, artifactPath).find((conversation) => conversation.engine === engine && conversationOwnsPath(conversation, artifactPath));
       if (existing) return clone(existing);
       const createdAt = now();
       const conversation: RegistryConversation = {
@@ -12800,7 +12810,8 @@ export class AgentRegistry {
           if (!sameHandOff(taken)) throw new DeliveryReservationConflictError();
           return clone(taken);
         }
-        if (Object.values(file.heldDeliveries).some((delivery) => delivery.command.operationId === operationId)) {
+        if (file.heldDeliveries[operationId]?.command.operationId === operationId
+          || registryKeysMatching(file, "heldDeliveries", "command.operationId", operationId).length > 0) {
           throw new DeliveryReservationConflictError();
         }
         const owner: DeliveryOperationOwner = { ...ownerFor(identity, operationId), directAdmission: "native-queue-add" };
@@ -12812,7 +12823,9 @@ export class AgentRegistry {
       const previous = file.deliveryOperationOwners[previousOperationId];
       const delivery = previous
         ? file.heldDeliveries[previous.deliveryId]
-        : Object.values(file.heldDeliveries).find((candidate) => candidate.command.operationId === previousOperationId);
+        : (file.heldDeliveries[previousOperationId]?.command.operationId === previousOperationId
+          ? file.heldDeliveries[previousOperationId]
+          : registryRowsMatching(file, "heldDeliveries", "command.operationId", previousOperationId)[0]);
       if (recorded) {
         /* The id a retry mints can already name another request's row: a
            Queue-for-Codex hand-off that supplied it, or another send's attempt.
@@ -13215,7 +13228,9 @@ export class AgentRegistry {
       const owner = file.deliveryOperationOwners[operationId];
       const delivery = owner
         ? file.heldDeliveries[owner.deliveryId]
-        : Object.values(file.heldDeliveries).find((candidate) => candidate.command.operationId === operationId);
+        : (file.heldDeliveries[operationId]?.command.operationId === operationId
+          ? file.heldDeliveries[operationId]
+          : registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)[0]);
       if (!delivery || delivery.command.operationId !== operationId) return null;
       /* Network replay after the first mutation converges on the same parked or
          assigned reservation. A terminal unverified settlement is the same
@@ -13244,9 +13259,13 @@ export class AgentRegistry {
     return this.mutate((file) => {
       const canonicalId = resolveConversationAlias(file, conversationId);
       const owner = file.deliveryOperationOwners[operationId];
+      const legacyDirect = !owner && file.heldDeliveries[operationId]?.command.operationId === operationId
+        && resolveConversationAlias(file, file.heldDeliveries[operationId]!.conversationId) === canonicalId
+        ? file.heldDeliveries[operationId]
+        : undefined;
       const delivery = owner
         ? file.heldDeliveries[owner.deliveryId]
-        : Object.values(file.heldDeliveries).find((candidate) =>
+        : legacyDirect ?? registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId).find((candidate) =>
           candidate.command.operationId === operationId
           && resolveConversationAlias(file, candidate.conversationId) === canonicalId);
       // A legacy failure with no disposition retains duplicate risk, exactly
@@ -13323,7 +13342,7 @@ export class AgentRegistry {
       if (!migration || !IN_FLIGHT_MIGRATION_PHASES.has(migration.phase)) return 0;
       const carried = new Set(operationIds);
       let handed = 0;
-      for (const delivery of Object.values(file.heldDeliveries)) {
+      for (const delivery of conversationRows(file, "heldDeliveries", canonicalId)) {
         if (delivery.state !== "delivery-uncertain"
           || !carried.has(delivery.command.operationId)
           || delivery.generationId !== migration.sourceGenerationId
@@ -13395,7 +13414,7 @@ export class AgentRegistry {
       settleStoppedMigration(file, conversation);
       const migration = conversation?.migration;
       if (!conversation || !migration || migration.phase !== "rolled-back" || migration.intentId !== intentId) return false;
-      const hasPendingDelivery = Object.values(file.heldDeliveries).some((delivery) =>
+      const hasPendingDelivery = conversationRows(file, "heldDeliveries", conversation.id).some((delivery) =>
         resolveConversationAlias(file, delivery.conversationId) === conversation.id
         && ["held", "assigned", "delivery-uncertain"].includes(delivery.state));
       if (hasPendingDelivery) return false;
@@ -13418,6 +13437,18 @@ export function agentRegistry(): AgentRegistry {
   registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.open", () =>
     new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true, deferColdKeyInitialization: true })));
   return registryProcessState.__llvAgentRegistry;
+}
+
+/** Uses the indexed root lookup on a full registry while still working with
+    partial test doubles that only expose `readOnlySnapshot`. */
+export function registryLiveRootSession(
+  registry: Pick<AgentRegistry, "readOnlySnapshot"> & Partial<Pick<AgentRegistry, "liveRootSession">>,
+  configuredRootId: string | null = process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null,
+  snapshot?: RegistryFile,
+): RootSessionCandidate | null {
+  if (typeof registry.liveRootSession === "function") return registry.liveRootSession(configuredRootId);
+  const file = snapshot ?? registry.readOnlySnapshot();
+  return liveRootSession({ conversations: Object.values(file.conversations), configuredRootId });
 }
 
 /** Open the entire constructor under one asynchronous lock deadline.
