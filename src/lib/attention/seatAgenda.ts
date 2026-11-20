@@ -159,7 +159,7 @@ export function seatAgendaAsks(
         asks.push({ key: route.key, id: task.id, waitingTaskIds: [task.id],
           label: clip(`«${clip(cleanTitle(task.text, 90), 90)}» (task ${task.id}) — ${route.why}. ${route.action}`, LABEL_MAX),
           sinceMs: Date.parse(task.hold?.since ?? task.statusBy?.at ?? task.updatedAt) || null });
-      } else if (task.status === "blocked") {
+      } else {
         const tasks = route.rule === "pause-ready" ? pauseWaitingTasks : waitingLaneTasks;
         const linked = tasks.get(route.laneId);
         if (linked) linked.push(task.id);
@@ -176,15 +176,15 @@ export function seatAgendaAsks(
       if (state.owner !== "seat" || !route) return [];
       const kind = laneNeedKind(pipeline)?.replace("lane-", "") ?? pipeline.state;
       const waitingTaskIds = waitingLaneTasks.get(pipeline.id)?.sort();
-      const waiting = waitingTaskIds?.length
-        ? `After settling this lane, move Waiting task(s) ${waitingTaskIds.slice(0, 4).join(", ")}${waitingTaskIds.length > 4 ? ` and ${waitingTaskIds.length - 4} more on this lane` : ""} by re-sending or clearing their holds. `
-        : "";
-      const key = agendaKey(route) + (waitingTaskIds ? `@waiting:${waitingTaskIds.length}:${waitingTaskIds.slice(0, 4).join(",")}` : "");
-      return [{ key, id: pipeline.id, label: clip(waiting + returnedNote(route) + laneLine(pipeline), LABEL_MAX),
-        ...(waitingTaskIds ? { waitingTaskIds } : {}),
-        sinceMs: state.sinceMs,
-        seatOwnedLane: { id: pipeline.id, title: pipeline.task || pipeline.id, sinceMs: state.sinceMs,
-          reason: `${kind}: ${pipeline.merge?.state === "blocked" ? pipeline.merge.reason ?? "merge stopped" : pipeline.stateDetail ?? state.stop?.kind ?? pipeline.state}` } }];
+      const pages = waitingTaskIds?.length ? Array.from({ length: Math.ceil(waitingTaskIds.length / 4) }, (_, page) => waitingTaskIds.slice(page * 4, page * 4 + 4)) : [undefined];
+      return pages.map((page, index) => {
+        const waiting = page?.length ? `After settling this lane, move Waiting task(s) ${page.join(", ")} by re-sending or clearing their holds. ` : "";
+        const key = agendaKey(route) + (page ? `@waiting:${index + 1}:${waitingTaskIds!.length}:${page.join(",")}` : "");
+        return { key, id: pipeline.id, label: clip(waiting + returnedNote(route) + laneLine(pipeline), LABEL_MAX),
+          ...(page ? { waitingTaskIds: page } : {}), sinceMs: state.sinceMs,
+          seatOwnedLane: { id: pipeline.id, title: pipeline.task || pipeline.id, sinceMs: state.sinceMs,
+            reason: `${kind}: ${pipeline.merge?.state === "blocked" ? clip(pipeline.merge.reason ?? "merge stopped", 120) : pipeline.stateDetail ?? state.stop?.kind ?? pipeline.state}` } };
+      });
     });
   const ordered: SeatTickWorkerAskInput[] = [...asks, ...lanes];
   return ordered.sort((a, b) => {

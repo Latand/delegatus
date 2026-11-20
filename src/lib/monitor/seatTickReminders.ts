@@ -149,7 +149,7 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
     const parsed = Date.parse(since ?? "");
     const firstDue = Number.isFinite(parsed) ? parsed : input.now;
     const waiting = input.pauseWaitingTasks?.[pipeline.id] ?? [];
-    const taskLine = waiting.length ? `Waiting task(s) ${waiting.slice(0, 4).join(", ")}${waiting.length > 4 ? ` and ${waiting.length - 4} more on this lane` : ""}: re-send or clear their holds when you resolve the pause. ` : "";
+    const taskLine = waiting.length ? `Waiting task(s) ${waiting.map(id => `\`${id}\``).join(", ")}: re-send or clear their holds when you resolve the pause. ` : "";
     items.push({ dueAt: last === undefined ? firstDue : Math.max(firstDue, last + SEAT_REMINDER_REPEAT_MS), item: {
       kind: "pipeline", reminderKind: "pause", id: pipeline.id, occurredAt: since,
       itemVersion: `${key}@${input.now}`,

@@ -53,7 +53,7 @@ test.each([...TASK_HOLD_KINDS])("routes %s across lane states", kind => {
     [lane(row.id, "draft"), withOpenLane],
     [routed(lane(row.id, "needs_decision"), "seat"), { owner: "seat", rule: "lane-stop", carriedBy: "lane" }],
     [routed(lane(row.id, "needs_review"), "seat"), { owner: "seat", rule: "lane-stop", carriedBy: "lane" }],
-    [routed(lane(row.id, "completed", { merge: merge("blocked") }), "seat"), { owner: "seat", rule: "lane-stop", carriedBy: "lane" }],
+    [routed(lane(row.id, "completed", { closedAt: at(-1), merge: merge("blocked") }), "seat"), { owner: "seat", rule: "lane-stop", carriedBy: "lane" }],
     [routed(lane(row.id, "needs_decision"), "form"), { owner: "operator", rule: "form" }],
     [routed(lane(row.id, "needs_decision"), "system"), ["issue", "pr"].includes(kind) ? { owner: "agents", rule: "dependency" } :
       kind === "postponed" ? base : { owner: "agents", rule: "lane" }],
@@ -81,6 +81,11 @@ test("structured dates and refs tell a cleared wait from an open prerequisite", 
   const held = task("ref", "task", { ref: dependency.id });
   const finished = { owner: "seat", rule: "wait-cleared", carriedBy: "task" };
   expect(classify(held, [], [dependency])).toMatchObject({ owner: "agents", rule: "dependency" });
+  expect(classify(held, [], [{ ...dependency, status: "inbox" }])).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
+  const cycleA = task("cycle-a", "task", { ref: "cycle-b" });
+  const cycleB = task("cycle-b", "task", { ref: "cycle-a" });
+  const cycleIndex = waitingRouteIndex([cycleA, cycleB], []);
+  expect(waitingRoute(cycleA, cycleIndex, NOW)).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
   expect(classify(held, [], [{ ...dependency, status: "done" }])).toMatchObject(finished);
   expect(classify(held)).toMatchObject(finished);
   expect(classify(task("ref", "task", { ref: "unknown prerequisite" }))).toMatchObject({ owner: "seat", rule: "unowned" });
@@ -101,7 +106,8 @@ test("operator forms and provenance take priority, and an answered form goes bac
   expect(classify({ ...row, prototypeReview: form(at(-60)) }, [running])).toEqual({ owner: "operator", rule: "operator-hold" });
   const answered = { ...row, prototypeReview: form(at(-1)) };
   expect(classify(answered, [running])).toMatchObject({ owner: "seat", rule: "form-answered", carriedBy: "task", action: expect.stringContaining("fixture-round") });
-  expect(classify(task("operator-written", "resource", { by: "operator" }), [running])).toEqual({ owner: "operator", rule: "operator-written" });
+  expect(classify(task("operator-written", "resource", { by: "operator" }))).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
+  expect(classify(task("elapsed-operator-limit", "limit", { by: "operator", until: at(-1) }))).toMatchObject({ owner: "seat", rule: "wait-cleared" });
   expect(classify(task("old-status", null))).toMatchObject({ owner: "seat", rule: "unowned" });
   expect(classify({ ...row, status: "done" })).toBeNull();
   expect(classify({ ...task("open", null), status: "assigned" })).toBeNull();

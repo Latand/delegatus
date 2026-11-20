@@ -173,11 +173,11 @@ for (const [name, observation] of [
   ["turn-error", { state: "ended", turnError: "engine error", finalText: "Starting the inventory" }],
   ["agent-fail", { state: "ended", finalText: "forge unavailable\nVerdict: fail" }],
   ["timed-out", { state: "running" }],
-] as const) test(`${name} settles blocked and visible`, async () => {
+] as const) test(`${name} settles resumable maintenance failure in Inbox`, async () => {
   const h = harness(); await h.controller.launchIfDue(input()); const run = h.run(); h.observe(observation as MaintenanceObservation);
   if (name === "timed-out") h.now(NOW + 91 * 60000);
   await h.controller.reconcile(PROJECT); const ended = readMaintenanceRun(run.runId)!;
-  expect(ended.failure?.kind).toBe(name); expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "blocked", board: "shown" });
+  expect(ended.failure?.kind).toBe(name); expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "inbox", board: "shown" });
 });
 
 
@@ -226,7 +226,7 @@ test("needs_decision remains blocked and visible with its operator reason", asyn
   const ended = readMaintenanceRun(run.runId)!;
   expect(ended).toMatchObject({ state: "failed", failure: { kind: "needs-decision" }, log: { verdict: "needs_decision" } });
   expect(ended.failure?.detail).toContain("operator access");
-  expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "blocked", board: "shown" });
+  expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "blocked", board: "shown", hold: { kind: "operator" } });
   expect(h.archived).toHaveLength(0);
 });
 
@@ -275,7 +275,7 @@ test("superseding a failed run archives its linked worker and removes its hidden
   expect(boardFor(PROJECT).prefs.hidden).toContain(transcriptPath);
   const cardAfter = tasks().find(t => t.id === oldTaskId)!;
   expect(taskShowsOnBoard(cardAfter, false)).toBe(false);
-  expect(tasks().find(t => t.id === latest.taskId)).toMatchObject({ status: "blocked", board: "shown" });
+  expect(tasks().find(t => t.id === latest.taskId)).toMatchObject({ status: "inbox", board: "shown" });
 });
 
 

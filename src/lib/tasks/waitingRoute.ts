@@ -16,7 +16,7 @@ export type WaitingRoute =
 type WaitingTask = Pick<BoardTask, "id" | "status" | "hold" | "prototypeReview" | "prototypeReviews" | "prototypeReviewReplica" | "doneAt" | "updatedAt">;
 
 /** Index the same snapshot once for the whole project's routing pass. */
-export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status">[], pipelines: readonly Pipeline[]) {
+export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status" | "assignments">[], pipelines: readonly Pipeline[]) {
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   const lanesById = new Map<string, Pipeline>();
   const lanesByTask = new Map<string, Set<Pipeline>>();
@@ -24,7 +24,6 @@ export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status
   for (const lane of pipelines) {
     const owner = mergeSuccessor(lane, successors) ?? lane;
     lanesById.set(lane.id, owner);
-    if (owner.hiddenAt) continue;
     for (const taskId of lane.taskIds ?? []) {
       let linked = lanesByTask.get(taskId);
       if (!linked) lanesByTask.set(taskId, linked = new Set());
@@ -35,7 +34,9 @@ export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status
 }
 
 function laneOpen(lane: Pipeline): boolean {
-  if (lane.closedAt || lane.hiddenAt || lane.state === "closed" || laneWaitCleared(lane)) return false;
+  // Engine completion stamps closedAt before merge settlement. A blocked merge
+  // remains actionable even when the stage lifecycle is already closed.
+  if (lane.hiddenAt || lane.state === "closed" || laneWaitCleared(lane)) return false;
   if (lane.state !== "completed") return true;
   return !!lane.merge && lane.merge.state !== "merged" && lane.merge.state !== "cancelled";
 }
@@ -83,7 +84,6 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
     }
     return { owner: "operator", rule: "operator-hold" };
   }
-  if (hold?.by === "operator") return { owner: "operator", rule: "operator-written" };
   if (open.some(laneActive) || liveMember) return { owner: "agents", rule: "running", action: "Let the current work continue." };
   const stopped = routed.find(({ route }) => route?.owner === "seat");
   if (stopped) return seat("lane-stop", "its lane waits on the seat", "Follow the lane’s wake item and move the task out of Waiting.", stopped.lane);
@@ -109,7 +109,10 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
     return seat("wait-cleared", "its recorded prerequisite cleared", "Start or continue the work, then clear the hold.");
   }
   if (until > now || hold?.kind === "postponed") return { owner: "agents", rule: "dated", action: "Keep the recorded postponement or reset time." };
-  if (dependency || dependencyLane || open.length && (hold?.kind === "pr" || hold?.kind === "issue")) {
+  const dependencyHasOwner = !!dependency && (dependency.status === "assigned" || dependency.assignments.some(a => a.state === "delivered" || a.state === "spawning" || a.state === "handoff" || a.state === "linked")
+    || dependency.status === "blocked" && [...(input.lanesByTask.get(dependency.id) ?? [])].some(laneActive))
+    || !!dependencyLane && laneActive(dependencyLane);
+  if (dependencyHasOwner || open.length && (hold?.kind === "pr" || hold?.kind === "issue")) {
     return { owner: "agents", rule: "dependency", action: "Keep the hold while its prerequisite is open." };
   }
   if (paused.length || routed.some(({ route }) => route?.owner === "system")) {

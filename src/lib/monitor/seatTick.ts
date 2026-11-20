@@ -1992,7 +1992,9 @@ function wakeItems(context: {
     items.push({ kind: "maintenance", id: run.taskId ?? run.runId, occurredAt: run.endedAt, label: maintenanceItemLabel(run), maintenance: { runId: run.runId } });
   }
   for (const pipeline of seatPausedLanes(input)) {
-    items.push({ kind: "pipeline", id: pipeline.id, label: `${pipeline.title} — paused by you; resume it with pipeline_action resume once what you paused it for is done` });
+    const waiting = input.pauseWaitingTasks?.[pipeline.id] ?? [];
+    const taskLine = waiting.length ? `Waiting task(s) ${waiting.map(id => `\`${id}\``).join(", ")}: carry them back to work when you resume. ` : "";
+    items.push({ kind: "pipeline", id: pipeline.id, label: `${taskLine}${pipeline.title} — paused by you; resume it with pipeline_action resume once what you paused it for is done` });
   }
   /* A wait routed to the seat holds a worker up and is on nobody else's list,
      so it comes before the seat's own news. */

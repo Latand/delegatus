@@ -90,7 +90,7 @@ export function maintenanceItemLabel(run: Pick<MaintenanceRun, "state" | "endedA
   const c = run.counts;
   const decisions = run.log.attention.filter(maintenanceDecision);
   const seat = run.log.seat ?? [];
-  const handoffs = seat.length ? ` For the seat (${seat.length}): ${seat.slice(0, 5).map(a => `${a.taskId}: ${a.reason.slice(0, 35)} — ${a.action.slice(0, 65)}`).join(". ").slice(0, 650)}.` : "";
+  const handoffs = seat.length ? ` For the seat (${seat.length}): ${seat.slice(0, 6).map(a => `${a.taskId}: ${a.reason.slice(0, 100)} — ${a.action.slice(0, 300)}`).join(". ")}.` : "";
   if (run.state === "failed") {
     const prefix = `board maintenance failed ${run.endedAt}: ${run.failure?.kind}: ${run.failure?.detail}. ${c.tasks} task(s) changed in ${c.writes} write(s) (status ${c.status}, closed ${c.closed}, created ${c.created}, text ${c.text}, details ${c.details}, looks ${c.looks}); for the operator (${decisions.length}): `;
     const attention = decisions.slice(0, 5).map(a => `${a.taskId}: ${a.text}${a.options.length ? ` [${a.options.join(" / ")}]` : ""}`).join("; ");

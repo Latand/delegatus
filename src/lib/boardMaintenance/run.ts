@@ -120,12 +120,12 @@ function settle(run: MaintenanceRun, patch: Partial<MaintenanceRun>, ports: Boar
   if (!fresh || !maintenanceRunIsLive(fresh)) return;
   const next = { ...fresh, ...patch, ...(patch.log ? { log: { ...fresh.log, attention: patch.log.attention, leftAlone: patch.log.leftAlone, seat: patch.log.seat, verdict: patch.log.verdict } } : {}), endedAt: new Date(ports.sources.now()).toISOString() };
   if (next.failure) next.failure = { ...next.failure, detail: redactMonitorText(next.failure.detail).replace(/\s+/g, " ").slice(0, 300) };
-  if (next.taskId) patchCard(next.taskId, { text: maintenanceCardText((ports.locale ?? (() => operatorLocale() ?? "uk"))(), next, ports.timeZone?.() ?? operatorTimeZone() ?? undefined), status: next.state === "succeeded" ? "done" : "blocked", board: next.state === "succeeded" ? "hidden" : "shown", appendLine: `Result: ${next.state} ${next.endedAt}; ${next.failure ? `${next.failure.kind}: ${next.failure.detail}` : `${next.counts.writes} writes on ${next.counts.tasks} tasks${next.log.verdict ? "" : "; no verdict line"}`}.` });
+  if (next.taskId) patchCard(next.taskId, { text: maintenanceCardText((ports.locale ?? (() => operatorLocale() ?? "uk"))(), next, ports.timeZone?.() ?? operatorTimeZone() ?? undefined), status: next.state === "succeeded" ? "done" : next.failure?.kind === "no-account" || next.failure?.kind === "needs-decision" ? "blocked" : "inbox", ...(next.state !== "succeeded" && (next.failure?.kind === "no-account" || next.failure?.kind === "needs-decision") ? { hold: { kind: "operator", note: next.failure.detail } } : { hold: null }), board: next.state === "succeeded" ? "hidden" : "shown", appendLine: `Result: ${next.state} ${next.endedAt}; ${next.failure ? `${next.failure.kind}: ${next.failure.detail}` : `${next.counts.writes} writes on ${next.counts.tasks} tasks${next.log.verdict ? "" : "; no verdict line"}`}.` });
   if (next.state === "succeeded") (ports.archive ?? (r => archiveRun(r, ports.sources)))(next);
   const superseded: string[] = [];
   const tasks = loadTasksForList(statePath("tasks.json"));
   for (const old of maintenanceRuns(run.project)) {
-    if (old.runId === run.runId || !old.taskId || tasks.find(t => t.id === old.taskId)?.status !== "blocked") continue;
+    if (old.runId === run.runId || !old.taskId || tasks.find(t => t.id === old.taskId)?.status === "done") continue;
     if (old.conversationId || old.transcriptPath) (ports.archive ?? (r => archiveRun(r, ports.sources)))(old);
     patchCard(old.taskId, { status: "done", board: "hidden", appendLine: `Superseded by maintenance run ${run.runId} (card ${run.taskId}).` });
     superseded.push(old.taskId);

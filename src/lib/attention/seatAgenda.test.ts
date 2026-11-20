@@ -140,7 +140,7 @@ test("Waiting tasks travel by their task ask, lane ask or pause reminder", () =>
     held("unowned", "external"), held("operator", "operator"), held("dated", "postponed"),
     held("with-merge", "external"), held("with-pause", "external"), held("elsewhere", "external", "project-b"),
   ];
-  const merge = { ...mergeLane("merge", "checks did not finish in 90 min"), taskIds: ["with-merge"] };
+  const merge = { ...mergeLane("merge", "checks did not finish in 90 min"), taskIds: ["with-merge"], closedAt: at };
   const pause = { ...mergeLane("pause", ""), taskIds: ["with-pause"], attentionRoute: undefined, merge: undefined,
     state: "paused" as const, pausedAt: new Date(now * 1000 - 86_400_000).toISOString() };
   const waits = new Map<string, string[]>();
@@ -155,4 +155,18 @@ test("Waiting tasks travel by their task ask, lane ask or pause reminder", () =>
   expect(mergeAsk.label).toContain("pipeline_action retry-merge");
   expect(mergeAsk.key).not.toBe(seatAgendaAsks({ files: [], pipelines: [merge] }, now, "project-a")[0]!.key);
   expect([...waits]).toEqual([["pause", ["with-pause"]]]);
+});
+
+test("lane handoffs page every linked task and retain a task moved to Inbox", () => {
+  const tasks: BoardTask[] = Array.from({ length: 5 }, (_, i) => ({
+    id: `waiting-${i + 1}`, project: "project-a", text: `Resume ${i + 1}`,
+    status: i === 4 ? "inbox" : "blocked", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind: "external", by: "agent", since: at, note: "Parked publication" },
+  }));
+  const lane = { ...mergeLane("publication", "a publication reason"), taskIds: tasks.map(task => task.id) };
+  const asks = seatAgendaAsks({ files: [], pipelines: [lane], tasks }, now, "project-a");
+  expect(asks).toHaveLength(2);
+  expect(asks.map(ask => ask.waitingTaskIds).flat()).toEqual(tasks.map(task => task.id));
+  expect(asks.map(ask => ask.label).join(" ")).toContain("waiting-5");
+  expect(asks.every(ask => ask.label.includes("pipeline_action retry-merge"))).toBe(true);
 });

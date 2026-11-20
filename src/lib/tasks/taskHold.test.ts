@@ -78,7 +78,7 @@ test("omitted until is quiet and malformed holds keep their forgiving normalizat
 test("a hold moves work to Waiting, preserves its age on edits, and clears by the owner rule", () => {
   const original = task();
   const waiting = ok(patchTask([original], original.id, { hold: { kind: "worker", note: "Wait for a free worker", since: "2000-01-01", by: "migration" } }, NOW));
-  expect(waiting.task.status).toBe("blocked");
+  expect(waiting.task.status).toBe("inbox");
   expect(waiting.task.hold).toEqual({ kind: "worker", note: "Wait for a free worker", since: NOW, by: "operator" });
   const edited = ok(patchTask(waiting.tasks, original.id, { hold: { kind: "resource", note: "Wait for memory" } }, LATER, { actor: "agent" }));
   expect(edited.task.hold?.since).toBe(NOW);
@@ -132,8 +132,10 @@ test("explicit blocked writes are clamped with their reason and completion alway
   expect(done.task.status).toBe("done");
   expect(done.task.hold).toBeUndefined();
   expect(ok(createTask([], input, [], { now: () => NOW, id: () => "operator-wait" })).task).toMatchObject({
-    status: "blocked", hold: { kind: "unstated", by: "operator" },
+    status: "inbox", hold: { kind: "unstated", by: "operator" },
   });
+  expect(ok(createTask([], { ...input, hold: { kind: "operator", note: "Choose a setting" } }, [],
+    { now: () => NOW, id: () => "operator-action" })).task.status).toBe("blocked");
 });
 
 

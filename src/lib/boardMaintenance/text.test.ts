@@ -53,6 +53,10 @@ test("card texts for both locales and states, item label bounded", () => {
   for (const runWithHandoff of [done, failed]) {
     const label = maintenanceItemLabel({ ...runWithHandoff, log: { ...runWithHandoff.log, seat: [handoff] } });
     expect(label).toContain("ddeeffaa: Lane settled — Check the running build");
-    expect(label.length).toBeLessThanOrEqual(1200);
+    expect(label.length).toBeLessThanOrEqual(3500);
   }
+  const six = { ...done, log: { ...done.log, seat: Array.from({ length: 6 }, (_, i) => ({ taskId: `task-${i + 1}`, reason: "Lane settled", action: `Retry step ${i + 1} ${"detail ".repeat(28)}` })) } };
+  const rendered = maintenanceItemLabel(six);
+  expect(rendered).toContain("task-6: Lane settled — Retry step 6");
+  expect(rendered).toContain("detail ".repeat(28));
 });

@@ -35,6 +35,7 @@ import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { liveFreshObservation } from "@/lib/accounts/accountProjection";
+import { pauseReminderDue, pausedByOperator } from "@/lib/pipelines/pauseReminder";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import fs from "node:fs";
 import path from "node:path";
@@ -861,7 +862,41 @@ export function defaultSeatTickSources(): SeatTickSources {
     retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
     workerAsks: (project, seatConversationId) => withViewerOperation("seat-tick.worker-asks", () => performanceSpans.wait("seat-tick.worker-asks", async () => {
       const { operatorSeatAgenda } = await import("@/app/api/files/operatorProjection");
-      return operatorSeatAgenda(project, seatConversationId);
+      const result = await operatorSeatAgenda(project, seatConversationId);
+      if (!result || !("asks" in result)) return result;
+      const now = admission.now();
+      const tasks = projectRows(loadTasksForList(), project).filter(task => task.status === "blocked" || !!task.hold);
+      const tasksById = new Map(tasks.map(task => [task.id, task] as const));
+      const pipelines = projectRows(loadPipelinesForList(), project).filter(lane => lane.state === "paused");
+      const observations = new Map<string, readonly DurableQuotaObservation[]>();
+      const pauseWaitingTasks: Record<string, string[]> = { ...result.pauseWaitingTasks };
+      for (const lane of pipelines) {
+        const condition = lane.pause?.resumeCondition;
+        let met = false;
+        if (condition?.kind === "account-usage" && !pausedByOperator(lane)) {
+          if (!observations.has(condition.engine)) {
+            try { observations.set(condition.engine, admission.registry().quotaObservations(condition.engine)); }
+            catch { observations.set(condition.engine, []); }
+          }
+          const row = observations.get(condition.engine)?.find(item => item.accountId === condition.accountId);
+          const window = row?.limits?.[condition.window];
+          met = liveFreshObservation(row, now) && !!window && Number.isFinite(window.usedPercent)
+            && window.usedPercent >= 0 && window.usedPercent < condition.belowPercent;
+        }
+        if (!pauseReminderDue(lane.pause, lane.pausedAt ?? lane.createdAt, now, met)) continue;
+        const ids = (lane.taskIds ?? []).filter(id => tasksById.has(id));
+        if (ids.length) pauseWaitingTasks[lane.id] = [...new Set([...(pauseWaitingTasks[lane.id] ?? []), ...ids])].sort();
+      }
+      const linked = new Set(result.asks.flatMap(ask => ask.waitingTaskIds ?? []));
+      const relevantArchived = projectRows(loadArchivedPipelinesForList(), project)
+        .filter(lane => lane.taskIds?.some(id => tasksById.has(id)));
+      let asks = [...result.asks];
+      if (relevantArchived.length) {
+        const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
+        asks = asks.concat(seatAgendaAsks({ files: [], pipelines: relevantArchived, tasks }, now / 1000, project)
+          .filter(ask => !ask.waitingTaskIds?.every(id => linked.has(id))));
+      }
+      return { ...result, asks, ...(Object.keys(pauseWaitingTasks).length ? { pauseWaitingTasks } : {}) };
     })),
     openPullRequests: (options) => openPullRequestsForRepo(options),
     /* One rule for both halves: ask, and act on, the layer that is actually
@@ -3345,12 +3380,14 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   if (current?.conversationId !== seat.conversationId || current?.seatEpoch !== seat.seatEpoch) return null;
   const settings = effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
   let workerAsksObserved = true;
+  let workerAsks: SeatTickCheckInput["workerAsks"];
   let decisionForms: SeatTickCheckInput["decisionForms"];
+  let pauseWaitingTasks: SeatTickCheckInput["pauseWaitingTasks"];
   if (sources.workerAsks) {
     try {
       const read = await sources.workerAsks(project, seat.conversationId ?? undefined);
       workerAsksObserved = read !== null;
-      if (read && "asks" in read) decisionForms = read.forms;
+      if (read && "asks" in read) { workerAsks = read.asks; decisionForms = read.forms; pauseWaitingTasks = read.pauseWaitingTasks; }
     } catch (error) {
       workerAsksObserved = false;
       console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown");
@@ -3370,7 +3407,7 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   }, { batchSize: 4, timeBudgetMs: 8 });
   return { project, now: sources.now(), seat, state, policy, settings,
     pipelines, tasks: [], events: [], children: [], childrenUnavailable: null,
-    workerAsksObserved, ...(decisionForms ? { decisionForms } : {}),
+    workerAsksObserved, ...(workerAsks ? { workerAsks } : {}), ...(pauseWaitingTasks ? { pauseWaitingTasks } : {}), ...(decisionForms ? { decisionForms } : {}),
     instructionReview: instructionReviewFor(project, sources.now(), settings, sources.pipelines(), sources.tasks(), seat),
     ownLanes: [], pullRequests: [], pullRequestsUnavailable: null, pullRequestsObserved: false,
     signals: [], settledDeploys, deploySettlementWakeDue: true, ...(observedReports ? { reports: observedReports } : {}),

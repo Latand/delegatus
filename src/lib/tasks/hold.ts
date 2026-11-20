@@ -7,7 +7,7 @@ export const TASK_HOLD_NOTE_LIMIT = 200;
 export const TASK_HOLD_REF_LIMIT = 500;
 
 /** The Waiting column records a next step reserved for the operator. */
-export const holdParks = (hold: TaskHold): boolean => hold.kind === "operator" || hold.by === "operator";
+export const holdParks = (hold: TaskHold): boolean => hold.kind === "operator";
 
 export function normalizeHoldKind(kind: unknown): unknown {
   return typeof kind === "string" ? kind.trim().toLowerCase() : kind;
