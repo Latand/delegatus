@@ -2381,12 +2381,16 @@ export class SqliteAgentRegistryStore {
 
   private prepareReadOnlySnapshotWork(signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    if (this.preparedReader) {
-      const cached = this.preparedReader.readOnlyCache;
+    const reader = this.preparedReader;
+    if (reader?.readOnlyCache) {
+      // The stamp query can reopen the database and clear the cached view.
+      // A replacement can have the same counters, so take the cache afterward.
+      const stamp = reader.storeStamp();
+      const cached = reader.readOnlyCache;
       /* A warm archive/write invalidation must enter the cooperative reader
          preparation below. Calling readOnlySnapshot here drains its header and
          projection generators synchronously on the serving loop. */
-      if (cached && cached.stamp === this.preparedReader.storeStamp()) {
+      if (cached?.stamp === stamp) {
         return Promise.resolve(cached);
       }
       /* A few journalled commits are replayed on the published reader, the
@@ -2396,7 +2400,7 @@ export class SqliteAgentRegistryStore {
          view a caller still held. */
       if (cached) {
         let replayed: StampedSnapshot | null = null;
-        try { replayed = this.preparedReader.replayBoundedJournal(); }
+        try { replayed = reader.replayBoundedJournal(); }
         catch (error) {
           // The cooperative preparation below takes over; the class of the
           // refusal is logged so a replay that always fails is visible.
