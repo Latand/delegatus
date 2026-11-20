@@ -3273,7 +3273,7 @@ test.each(["task note edits", "maintenance timestamps", "details appends", "repo
   const ports = sources({ laneRows: [livenessRow({ lifecycle: "running" })] });
   ports.tasks = () => [task] as never;
   let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
-  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: reports as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
   let state = baseline.state;
@@ -3376,7 +3376,7 @@ test("gated PR reads and report writes cannot invent digest movement", async () 
   const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()], pullRequestCalls,
     laneRows: [livenessRow({ lifecycle: "running" })] });
   let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
-  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: reports as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
@@ -3446,7 +3446,7 @@ test("first recovered PR evidence preserves unreported board movement", async ()
 test("observing an old report without a board baseline cannot invent digest movement", async () => {
   const ports = sources({});
   const reportedAt = new Date(NOW - 2 * 60 * 60_000).toISOString();
-  ports.reports = { log: () => [{ id: "fixture-report", project: PROJECT, at: reportedAt, origin: { kind: "manager" } }] as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [{ id: "fixture-report", project: PROJECT, at: reportedAt, origin: { kind: "manager" } }] as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const first = seatTickDecision(await gatherSeatTickInput(PROJECT, { ...emptySeatTickState(), seatEpoch: 7 }, DEFAULT_SEAT_TICK_POLICY, ports));
   expect(first.verdict.kind).toBe("wake");
   if (first.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");

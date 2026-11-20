@@ -1069,8 +1069,9 @@ test("a recorded wake report settles its delivered set and its key is skipped on
     expect(filed).toMatchObject({ recorded: true, replayed: false, seq: 1,
       destinations: { telegram: { state: "sent", messageIds: [71] } } });
     expect(readBridgeReportLog().reports[0]).toMatchObject({
-      id: scopedReportId(PROJECT, firstKey), coversOwedAt: at(NOW + MINUTE),
+      id: scopedReportId(PROJECT, firstKey), at: at(NOW + MINUTE),
     });
+    expect(readBridgeReportLog().reports[0]).not.toHaveProperty("coversOwedAt");
     const unchanged = await tick(NOW + 2 * MINUTE, [parked, second]);
     expect(unchanged.sent).toEqual([]);
     expect(state().reportsOwed).toEqual([]);
@@ -1085,7 +1086,7 @@ test("a recorded wake report settles its delivered set and its key is skipped on
     expect(state().reportsOwed?.map(entry => entry.key)).toEqual([laterKey]);
     expect(state().announcedLanes).toContain("park-first:needs_review");
 
-    expect(await fileReport(firstKey, "first-wake-report", NOW + 72 * MINUTE)).toEqual({ ...filed, replayed: true });
+    expect(await fileReport(firstKey, "first-wake-report", NOW + 72 * MINUTE, false)).toEqual({ ...filed, replayed: true });
     expect(await fileReport(firstKey, "duplicate-wake-report", NOW + 72 * MINUTE)).toMatchObject({
       recorded: false, alreadyRecorded: true, seq: 1, reportId: filed.ok ? filed.reportId : undefined,
     });
@@ -1093,7 +1094,7 @@ test("a recorded wake report settles its delivered set and its key is skipped on
     expect(stillOwed.sent).toEqual([]);
     expect(state().reportsOwed?.map(entry => entry.key)).toEqual([laterKey]);
     expect(sends).toHaveLength(1);
-    expect(readBridgeReportLog().reports.map(row => row.coversOwedAt)).toEqual([at(NOW + MINUTE)]);
+    expect(readBridgeReportLog().reports.map(row => row.coversOwedAt)).toEqual([undefined]);
 
     expect(await fileReport(laterKey, "later-wake-report", NOW + 74 * MINUTE)).toMatchObject({ recorded: true, seq: 2,
       destinations: { telegram: { state: "sent", messageIds: [72] } } });

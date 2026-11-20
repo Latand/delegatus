@@ -93,7 +93,9 @@ for (const backend of ["legacy", "sqlite-hot", "sqlite-cold"] as const) test(`ru
       const reports = bridge.readBridgeReportLog().reports;
       const before = reports.filter(row => row.origin?.kind === "manager" && !!row.project && canonical(row.project) === project)
         .map(({ id, project, origin, at, covers, coversOwedAt }) => ({ id, project, origin, at, covers, coversOwedAt }));
-      expect(JSON.stringify(seatTickReportRows(project))).toBe(JSON.stringify(before));
+      const seatRows = seatTickReportRows(project);
+      expect(JSON.stringify(seatRows.reports)).toBe(JSON.stringify(before));
+      expect(seatRows.reservedIds).toEqual(log.retired);
     }
   } finally {
     for (const restore of restores.reverse()) restore();
