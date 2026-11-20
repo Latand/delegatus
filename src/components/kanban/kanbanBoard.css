@@ -472,14 +472,15 @@
    chevron and × come up over the title's right end while the card is hovered
    or holds focus, and are out of the way, unclickable, until then (the × was
    already hidden at rest). The seat's lock is a mark with no action and stays
-   in the row. */
+   in the row. A chat PR badge leaves the controls on their own row so they
+   cannot cover the badge while the card is hovered. */
 .kb .board.narrow .card.shelf .head { flex-wrap: wrap; }
 .kb .board.narrow .card.shelf .tools { flex: 0 0 100%; justify-content: flex-end; margin-top: 0; }
 @media (hover: hover) and (pointer: fine) {
-  .kb .board.narrow .card.shelf .head { position: relative; flex-wrap: nowrap; }
-  .kb .board.narrow .card.shelf .tools { flex: none; justify-content: flex-start; margin-top: -4px; }
-  .kb .board.narrow .card.shelf .tools .icon-btn.fold,
-  .kb .board.narrow .card.shelf .tools .icon-btn.hide {
+  .kb .board.narrow .card.shelf:not([data-card-chat-pr]) .head { position: relative; flex-wrap: nowrap; }
+  .kb .board.narrow .card.shelf:not([data-card-chat-pr]) .tools { flex: none; justify-content: flex-start; margin-top: -4px; }
+  .kb .board.narrow .card.shelf:not([data-card-chat-pr]) .tools .icon-btn.fold,
+  .kb .board.narrow .card.shelf:not([data-card-chat-pr]) .tools .icon-btn.hide {
     position: absolute; top: -4px; z-index: 1; right: 54px; opacity: 0; pointer-events: none;
     background: var(--surface-card); box-shadow: 0 0 0 1px var(--border-default);
   }

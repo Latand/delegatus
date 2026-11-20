@@ -25171,6 +25171,10 @@ describe("chat pull requests on the board and in the project rail", () => {
         expect(await card.getAttribute("data-collapsed")).toBe("1");
         await boardBadge.hover({ timeout: 5000 });
         await panel.waitFor();
+        expect(await boardBadge.evaluate(node => {
+          const box = node.getBoundingClientRect();
+          return node.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+        })).toBe(true);
         expect(await panel.getByRole("link").count()).toBe(2);
         await page.mouse.down();
         const box = await panel.boundingBox();

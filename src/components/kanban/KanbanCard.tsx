@@ -462,6 +462,7 @@ function SeatTickNoticeButton({ project }: { project: string }) {
 export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const { card, status, pending, collapsed, nowMs, editing, failedEdit, incomingEdit } = props;
   const { chatTranscript, watchChatPullRequests, chatPullRequests } = props;
+  const visibleChatPullRequests = chatPullRequests?.items.length ? chatPullRequests : null;
   const chatRef = useCallback((node: HTMLElement | null) => {
     if (chatTranscript) return watchChatPullRequests?.(chatTranscript, node);
   }, [chatTranscript, watchChatPullRequests]);
@@ -617,6 +618,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       data-color={card.color ?? "none"}
       data-attention={attention}
       data-protected={protectedSeat ? "1" : undefined}
+      data-card-chat-pr={visibleChatPullRequests ? "" : undefined}
       style={style}
       tabIndex={0}
       aria-label={protectedSeat ? `${aria}, ${t("kanban.staysOnBoard")}` : aria}
@@ -687,7 +689,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           </h3>
         )}
         <div className="tools">
-          {chatPullRequests?.items.length ? <ChatPullRequestBadge title={title} requests={chatPullRequests} /> : null}
+          {visibleChatPullRequests ? <ChatPullRequestBadge title={title} requests={visibleChatPullRequests} /> : null}
           <button
             type="button"
             className="icon-btn fold"
