@@ -314,6 +314,44 @@ test("a runtime-host transport failure becomes actionable on the structured spaw
   });
 });
 
+test("a Cleaner drain after runtime admission keeps the durable launch replayable", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_runtime_reply_drain", "off", true);
+  const claimed = store.claimStartingStructuredSpawn(receipt.launchId);
+  expect(claimed.claimed).toBe(true);
+  const saved = claimed.receipt.queuedPinnedSpawn;
+  let draining = false, starts = 0;
+  const client = {
+    command: async () => {
+      draining = true;
+      return {
+        operationId: receipt.launchId,
+        replayed: false,
+        receipt: { operationId: receipt.launchId, idempotencyKey: receipt.launchId,
+          conversationId: receipt.conversationId, kind: "spawn" as const, status: "queued" as const,
+          reason: null, at: receipt.createdAt, revision: 1 },
+      };
+    },
+    transitionOperation: async () => { throw new Error("drain-held launch must retain its queued operation"); },
+  } as unknown as RuntimeHostClient;
+  const account = { engine: "codex" as const, accountId: "account-a", kind: "managed" as const,
+    home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } };
+  try {
+    await expect(spawnStructuredConversation({
+      engine: "codex", receipt: claimed.receipt, spec: saved!.spec, account, prompt: saved!.prompt,
+      registry: store, client,
+      authorize: () => {
+        if (draining) { const error = new Error("Cleaner admission held by update drain"); error.name = "CleanerDrainHold"; throw error; }
+      },
+    }, { startHost: async () => { starts++; throw new Error("host must not start during drain"); } }))
+      .rejects.toThrow("Cleaner admission held by update drain");
+    expect(starts).toBe(0);
+    const after = store.spawnReceipt(receipt.launchId);
+    expect(after).toMatchObject({ state: "starting", clientAttemptId: receipt.clientAttemptId,
+      admissionOwner: null });
+    expect(after?.queuedPinnedSpawn).toMatchObject({ prompt: saved!.prompt, spec: saved!.spec, imageRefs: saved!.imageRefs });
+  } finally { store.close(); }
+});
+
 test("a stale dead-evidence structured launch converges to durable retry-safe failed exactly once", async () => {
   const store = registry();
   const receipt = staleStructuredReceipt(store, "stale_20260719_a1");

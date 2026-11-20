@@ -3429,6 +3429,7 @@ export async function spawnStructuredConversation(
     };
   } catch (error) {
     caughtFailure = error;
+    if (error instanceof Error && error.name === "CleanerDrainHold" && !host && !hostStartRequested) throw error;
     try { return await withoutOperationLease(async () => {
         clearDurableSetupTimeout();
         const pending = input.registry.spawnReceipt(operationId) ?? undefined;

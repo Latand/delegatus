@@ -39,25 +39,36 @@ export function startDiskPressureWatch(ports: {
   const cleaner = ports.cleaner;
   const actions = ports.actions ?? productionDiskPressureActions();
   const now = ports.now ?? Date.now;
-  let trafficSince = cleaner && actions.active() ? releaseTrafficSince(now()) : null;
+  const watchStartedAt = now();
+  let trafficSince = cleaner && actions.active()
+    ? process.env.PORT?.trim() ? releaseTrafficSince(watchStartedAt) : watchStartedAt
+    : null;
   const observe = ports.observe ?? (async () => {
     if (cleaner) {
       if (!actions.active()) trafficSince = null;
-      else trafficSince ??= releaseTrafficSince(now());
+      else if (process.env.PORT?.trim()) trafficSince = releaseTrafficSince(now());
+      else trafficSince ??= now();
     }
     let pressure = null;
     try {
       pressure = await (ports.readPressure ?? readDiskPressure)();
-      if (cleaner) trafficSince = actions.active() ? releaseTrafficSince(now()) : null;
+      if (cleaner && actions.active()) {
+        if (process.env.PORT?.trim()) trafficSince = releaseTrafficSince(now());
+        else trafficSince ??= now();
+      }
+      else if (cleaner) trafficSince = null;
       await reconcileDiskPressure(pressure, { ...actions, cleaner });
     } finally {
       // Startup deliberately supplies no launcher until the guarded tools
       // ship. The pressure observer alone creates no cleaner run or receipt.
       if (cleaner && trafficSince !== null) {
-        try { await cleaner.reconcile(); }
+        try {
+          await cleaner.reconcile();
+          if (pressure) await reconcileDiskPressure(pressure, { ...actions, cleaner });
+        }
         finally { await cleaner.launchCleanerIfDue(actions.project, () => {
           if (!actions.active()) return now();
-          return releaseTrafficSince(now());
+          return trafficSince ?? now();
         }, pressure); }
       }
     }

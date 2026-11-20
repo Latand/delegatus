@@ -24,6 +24,7 @@ export type CleanerRun = {
   launchAcknowledged: boolean; launchId: string | null; conversationId: string | null; transcriptPath: string | null;
   evidence: CleanerDiskEvidence; removalJournal: []; report: CleanerReport | null;
   settledAt: string | null; failure: { kind: string; detail: string } | null;
+  quiescedAt?: string | null;
 };
 type Schedule = {
   kind: "schedule"; mode: "dry-run"; activeRunId: string | null; lastDailyClaimAt: number | null;
@@ -49,6 +50,7 @@ function decode(value: unknown): Row | null {
     && Array.isArray(row.pendingCards) && row.pendingCards.length <= row.runIds.length) return row;
   if (row.kind === "run" && typeof row.runId === "string" && typeof row.taskId === "string"
     && typeof row.trigger === "string" && Number.isFinite(Date.parse(row.claimedAt))
+    && (row.quiescedAt == null || Number.isFinite(Date.parse(row.quiescedAt)))
     && Array.isArray(row.removalJournal) && (!row.launchBody || row.launchBody.clientAttemptId === row.runId)) return row;
   return null;
 }
@@ -158,7 +160,10 @@ export function updateActiveCleanerRun(
     const next = change(run);
     if (!next) return run;
     tx.put(next);
-    if (next.settledAt) tx.put({ ...held, activeRunId: null, pendingCards: [...held.pendingCards, runId] });
+    if (next.settledAt) {
+      tx.put({ ...held, activeRunId: next.quiescedAt ? null : held.activeRunId,
+        pendingCards: held.pendingCards.includes(runId) ? held.pendingCards : [...held.pendingCards, runId] });
+    }
     return next;
   });
 }

@@ -71,6 +71,7 @@ const controller = createCleanerController({
     }
     if (!receipts()[run.runId]) return { state: "running" };
     const conversationId = `conversation_${run.taskId}`;
+    if (fault === "quiesce-after-timeout") return { state: "ended", conversationId, finalText: "" };
     if (fault === "host-died") return { state: "failed", conversationId, failure: { kind: "host-died", detail: "Fixture host exited." } };
     if (fault === "success" || fault === "settlement-crash" || fault === "card-receipt-crash" || fault === "demote-on-observe") {
       return { state: "ended", conversationId, finalText: [

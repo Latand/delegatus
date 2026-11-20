@@ -129,6 +129,59 @@ test("an accepted disk cleaner request stays replayable when a drain starts afte
   } finally { releaseDrain(drainFile(), "cleaner-after-202"); }
 });
 
+test("a drain during runtime admission retries a refused lease release and replays the same launch", async () => {
+  let held = false, deferred: (() => Promise<void>) | undefined, refusals = 1;
+  let actuations = 0;
+  const id = "cleaner_runtime_admission_drain_retry";
+  const originalWrite = registry.deliveryWrite.bind(registry);
+  const releaseSpy = spyOn(registry, "deliveryWrite").mockImplementation(async (correlation, write, correlate) => {
+    if (correlation.label === "spawn.cleaner-drain-hold" && refusals-- > 0) return { acquired: false };
+    return originalWrite(correlation, write, correlate);
+  });
+  const accepted = await launch(id, {}, {
+    held: () => held,
+    defer: work => { deferred = work; },
+    spawn: async input => {
+      held = true;
+      writeDrain(drainFile(), { id: "cleaner-during-runtime-admission", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 });
+      await input.authorize?.();
+      actuations++;
+      return { state: "running" } as never;
+    },
+  });
+  try {
+    expect(accepted.status).toBe(202);
+    await deferred!();
+    expect(refusals).toBe(-1);
+    expect(releaseSpy).toHaveBeenCalledTimes(2);
+    expect(registry.spawnReceiptForClientAttempt(id)).toMatchObject({
+      state: "starting", clientAttemptId: id, queuedPinnedSpawn: accepted.receipt?.queuedPinnedSpawn,
+    });
+    expect(actuations).toBe(0);
+    held = false;
+    releaseDrain(drainFile(), "cleaner-during-runtime-admission");
+    const options = {
+      resolveSpawnAccount: () => ({ engine: "codex" as const, accountId: "fixture-codex", kind: "managed" as const,
+        home: path.join(root, "codex"), transcriptRoot: path.join(root, "codex", "sessions"), env: { NODE_ENV: "test" as const } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible" as const, basis: "current" as const, stale: false, retryAt: null }),
+      spawnStructuredConversation: async (input: Parameters<NonNullable<SpawnCommandDependencies["spawnStructuredConversation"]>>[0]) => {
+        actuations++;
+        expect(input.receipt.clientAttemptId).toBe(id);
+        return { state: "running" } as never;
+      },
+    };
+    await terminalizeStaleStructuredSpawns(registry, { effectBatch: async () => [], operationStatus: async () => null,
+      snapshot: async () => ({ revision: 0, sessions: [] }) } as unknown as RuntimeHostClient, options);
+    await terminalizeStaleStructuredSpawns(registry, { effectBatch: async () => [], operationStatus: async () => null,
+      snapshot: async () => ({ revision: 0, sessions: [] }) } as unknown as RuntimeHostClient, options);
+    expect(actuations).toBe(1);
+  } finally {
+    releaseSpy.mockRestore();
+    held = false;
+    releaseDrain(drainFile(), "cleaner-during-runtime-admission");
+  }
+});
+
 test("disk cleaner admission persists a read-only profile and the Viewer grant", async () => {
   const result = await launch("cleaner_disk_admission");
   expect(result.status).toBe(202);

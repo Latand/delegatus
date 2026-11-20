@@ -228,18 +228,38 @@ test("expiry after claim crash restores the timed-out card and its reason", asyn
   expect(loadTasksForList(path.join(state, "tasks.json")).filter(row => row.id === claimed.taskId)).toHaveLength(1);
 });
 
-test("the same attempt survives transient refusal and settles at exactly 90 minutes", async () => {
-  const { tick, history, card } = fixture();
-  const started = (await tick(0, "ready", "retryable"))!.active!;
-  expect(started.launchAcknowledged).toBe(false);
+test("pressure alarm links the recovered timed-out card without dispatching", async () => {
+  const { tick, history, card, state } = fixture();
+  await tick(0, "ready", "claim-crash", 71);
+  const claimed = history()[0]!;
+  const recovered = (await tick(90 * minute, "ready"))!;
+  const notice = JSON.parse(fs.readFileSync(path.join(state, "disk-pressure-actions.json"), "utf8"));
+  expect(card(claimed.taskId)).toMatchObject({ id: claimed.taskId, status: "blocked" });
+  expect(notice).toMatchObject({ cleanerTaskId: claimed.taskId, cleaner: true, card: true, report: true });
+  expect(notice.card).toBe(true);
+  expect(recovered.ledger).toEqual({});
+  expect(history()).toHaveLength(1);
+});
+
+test("timeout settles the card but fences a new turn until the old host is observed quiescent", async () => {
+  const { tick, history, card, target } = fixture();
+  target(0);
+  const started = (await tick(0, "ready"))!.active!;
+  expect(started.launchAcknowledged).toBe(true);
   const live = (await tick(90 * minute - 1, "ready"))!.active!;
   expect(live.launchedAt).toBe(started.launchedAt);
   expect(live.runId).toBe(started.runId);
   const ended = (await tick(90 * minute, "ready"))!;
-  expect(ended.active).toBeNull();
-  expect(history()[0]).toMatchObject({ settledAt: at(90 * minute), failure: { kind: "timed-out" } });
+  expect(ended.active).toMatchObject({ runId: started.runId, settledAt: at(90 * minute), quiescedAt: null });
+  expect(history()[0]).toMatchObject({ settledAt: at(90 * minute), failure: { kind: "timed-out" }, quiescedAt: null });
   expect(card(started.taskId)?.status).toBe("blocked");
   expect(ended.ledger[started.runId]?.calls).toBe(1);
+  const fenced = (await tick(day, "ok"))!;
+  expect(fenced.active?.runId).toBe(started.runId);
+  expect(history()).toHaveLength(1);
+  const recovered = (await tick(day, "ok", "quiesce-after-timeout"))!;
+  expect(recovered.active?.trigger).toBe("daily:2031-02-02");
+  expect(history()).toHaveLength(2);
 });
 
 test("definitive launch refusal and host death settle with their own reason", async () => {
@@ -262,7 +282,8 @@ test("pruning keeps the active run and unacknowledged card, with durable clocks 
   const input = { cwd: process.cwd(), project, now: () => current, allowed, evidence: { categories: [], volumes: [] } };
   const first = await claimCleanerRun({ ...input, episode: at(0) });
   if (typeof first === "string") throw new Error(first);
-  const settle = (id: string) => updateActiveCleanerRun(id, allowed, run => ({ ...run, settledAt: at(current - start) }));
+  const settle = (id: string) => updateActiveCleanerRun(id, allowed, run => ({ ...run,
+    settledAt: at(current - start), quiescedAt: at(current - start) }));
   await settle(first.runId);
   let oldestFinished: string | null = null;
   for (let index = 0; index < 62; index++) {

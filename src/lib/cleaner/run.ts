@@ -97,9 +97,12 @@ export function createCleanerController(ports: CleanerPorts) {
   } = {}) =>
     updateActiveCleanerRun(run.runId, ownsTraffic, current => {
       if (options.unadmittedOnly && (current.launchAcknowledged || current.launchId || current.conversationId)) return null;
+      const quiescent = !current.launchedAt || options.unadmittedOnly === true
+        || options.observed?.state === "ended" || options.observed?.state === "failed";
       return {
         ...current, ...(options.observed ? observedBinding(current, options.observed) : {}),
         settledAt: new Date(now()).toISOString(), report: options.report ?? null,
+        quiescedAt: quiescent ? new Date(now()).toISOString() : current.quiescedAt ?? null,
         failure: failure ? { kind: failure.kind, detail: redactBounded(failure.detail, 300) } : null,
       };
     });
@@ -168,6 +171,14 @@ export function createCleanerController(ports: CleanerPorts) {
       observed = null;
     }
     if (!ownsTraffic()) return;
+    if (run.settledAt) {
+      if (observed?.state === "ended" || observed?.state === "failed") {
+        await updateActiveCleanerRun(run.runId, ownsTraffic, current => ({
+          ...current, ...observedBinding(current, observed), quiescedAt: new Date(now()).toISOString(),
+        }));
+      }
+      return;
+    }
     if (observed?.state === "failed") {
       await settle(run, observed.failure ?? { kind: "launch-failed", detail: "Launch failed." }, { observed });
     } else if (observed?.state === "ended") {
@@ -196,7 +207,8 @@ export function createCleanerController(ports: CleanerPorts) {
     },
     pressureCard(episode: string): string | null {
       const run = cleanerPressureRun(episode);
-      return run?.launchBody ? run.taskId : null;
+      if (!run) return null;
+      return loadPrototypeTask(run.taskId, statePath("tasks.json")) ? run.taskId : null;
     },
     async launchCleanerIfDue(project: () => Promise<string | null>, trafficSince: number | (() => number), pressure: DiskPressure | null): Promise<void> {
       const currentTrafficSince = () => typeof trafficSince === "function" ? trafficSince() : trafficSince;

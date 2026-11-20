@@ -1337,13 +1337,15 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         });
         const releaseCleanerAdmission = async () => {
           if (!diskCleaner || !dependencies.autonomousAdmissionHeld?.()) return false;
-          const current = registry.spawnReceipt(receipt.launchId);
-          if (current?.state === "starting" && current.admissionOwner && receipt.admissionOwner
-            && sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)) {
-            await registry.deliveryWrite({ label: "spawn.cleaner-drain-hold" }, () =>
+          while (true) {
+            const current = registry.spawnReceipt(receipt.launchId);
+            if (current?.state !== "starting" || !current.admissionOwner || !receipt.admissionOwner
+              || !sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)) return true;
+            const released = await registry.deliveryWrite({ label: "spawn.cleaner-drain-hold" }, () =>
               registry.releaseSpawnActuation(receipt.launchId, receipt.admissionOwner!));
+            if (released.acquired) return true;
+            await new Promise(resolve => setTimeout(resolve, 25));
           }
-          return true;
         };
         try { authorizeLaunch(receipt); }
         catch {
@@ -1386,7 +1388,15 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
                 imageRefs,
                 registry,
                 client: runtimeClient,
-                authorize: () => authorizeLaunch(receipt),
+                authorize: () => {
+                  try { authorizeLaunch(receipt); }
+                  catch (error) {
+                    if (diskCleaner && dependencies.autonomousAdmissionHeld?.()) {
+                      throw new CleanerDrainHold("cleaner launch held by update drain", { cause: error });
+                    }
+                    throw error;
+                  }
+                },
               });
             } catch (error) {
               // The launcher may already have settled its own failure. That
