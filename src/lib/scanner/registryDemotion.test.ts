@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry, setAgentRegistryForTests } from "../agent/registry";
 import { archivedTranscriptPaths, hostedTranscriptPaths, pinnedPathsFor } from "./index";
@@ -65,9 +65,12 @@ test("a live transcript reached through a symlinked account home is not its own 
         fixture.sharedForm("predecessor.jsonl"),
       ];
       await writeFile(fixture.registryFile, JSON.stringify(snapshot));
-      setAgentRegistryForTests(new AgentRegistry(fixture.registryFile));
+      const reader = new AgentRegistry(fixture.registryFile);
+      setAgentRegistryForTests(reader);
+      const reads = spyOn(reader, "readOnlySnapshot");
 
       const archived = archivedTranscriptPaths();
+      expect(reads).toHaveBeenCalledTimes(1);
       /* The live transcript keeps its cap slot; a genuinely different
          predecessor still demotes below current transcripts. */
       expect(archived.has(fixture.sharedForm("live.jsonl"))).toBe(false);
