@@ -337,13 +337,59 @@ function fixture() {
   cleanup.push(() => { process.env.PATH = previousPath; });
   process.env.PATH = bin;
   const authority: typeof attemptTempAuthority = (owner, inventory) => attemptTempAuthority(owner, inventory, () => NOW);
-  const sweep = (scan = () => ({ ownNamespace: null, processes: [] as Array<{ pid: number; namespace: null; stamped: boolean; paths: string[] }> })) =>
+  const sweep = (scan = () => ({ ownNamespace: null, processes: [] as Array<{ pid: number; namespace: null; stamped: boolean; paths: string[] }> }), options: { capBytes?: number } = {}) =>
     sweepAttemptTemps(store, { now: () => NOW, maxRoots: 1, authority,
-      state: async (owner, inventory) => (await authority(owner, inventory)).state, scan });
+      state: async (owner, inventory) => (await authority(owner, inventory)).state, scan, ...options });
   const journal = () => JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8")) as { trash: string };
   const retainedRoot = () => fs.existsSync(attemptTempJournalPath(directory)) ? journal().trash : directory;
   return { parent, directory, cache, store, sweep, journal, retainedRoot, lane };
 }
+
+test.skipIf(process.platform !== "linux")("closed-lane pressure retirement keeps a nested pin added at its mount observation", async () => {
+  const f = fixture(); fs.chmodSync(f.cache, 0o755); f.store.measure(f.directory, 12288);
+  const readFile = fs.readFileSync.bind(fs);
+  let injected = false;
+  const read = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+    const value = readFile(file, options as BufferEncoding);
+    if (!injected && file === "/proc/self/mountinfo" && String(new Error().stack).includes("at removeAttemptTree")) {
+      const trash = JSON.parse(readFile(attemptTempJournalPath(f.directory), "utf8")).trash;
+      plantKeepMarker(path.join(trash, "cache", ".delegatus-keep")); injected = true;
+    }
+    return value;
+  }) as typeof fs.readFileSync);
+  cleanup.push(() => { read.mockRestore(); });
+  const report = await f.sweep(undefined, { capBytes: 0 });
+  expect(injected).toBeTrue(); expect(report).toMatchObject({ removed: 0, errors: 0 });
+  expect(fs.readFileSync(path.join(f.retainedRoot(), "cache", "payload"), "utf8")).toBe("retained cache");
+  expect(fs.existsSync(path.join(f.retainedRoot(), "cache", ".delegatus-keep"))).toBeTrue();
+});
+
+test.skipIf(process.platform !== "linux")("closed-lane pressure retirement keeps a nested pin added during final process validation", async () => {
+  const f = fixture();
+  fs.chmodSync(f.cache, 0o755);
+  f.store.measure(f.directory, 12288);
+  const readFile = fs.readFileSync.bind(fs);
+  let checkingMounts = false, injected = false;
+  const read = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+    const value = readFile(file, options as BufferEncoding);
+    const stack = String(new Error().stack);
+    if (file === "/proc/self/mountinfo" && stack.includes("at removeAttemptTree")
+      && !stack.includes("at attemptMutationCurrent") && !stack.includes("at repairAttemptPermissions")) checkingMounts = true;
+    return value;
+  }) as typeof fs.readFileSync);
+  cleanup.push(() => { read.mockRestore(); });
+  const report = await f.sweep(() => {
+    if (checkingMounts && !injected && String(new Error().stack).includes("at attemptMutationCurrent")) {
+      plantKeepMarker(path.join(f.journal().trash, "cache", ".delegatus-keep"));
+      injected = true;
+    }
+    return { ownNamespace: null, processes: [] };
+  }, { capBytes: 0 });
+  expect(injected).toBeTrue();
+  expect(report).toMatchObject({ removed: 0, errors: 0 });
+  expect(fs.readFileSync(path.join(f.retainedRoot(), "cache", "payload"), "utf8")).toBe("retained cache");
+  expect(fs.existsSync(path.join(f.retainedRoot(), "cache", ".delegatus-keep"))).toBeTrue();
+});
 
 test.skipIf(process.platform !== "linux").each(["owner", "pipeline", "hold"] as const)(
   "a relevant database change during the final protection read preserves permissions (%s)", mutation => {

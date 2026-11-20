@@ -7,7 +7,7 @@ test("the supported window uses the retained reviewed schema inventory", () => {
   const retained = fs.readdirSync(path.join(import.meta.dir, "protocol")).filter(version => /^\d+\.\d+\.\d+$/.test(version));
   expect(CODEX_PROTOCOL_MANIFESTS.map(pin => pin.version).toSorted()).toEqual(retained.toSorted());
   expect(SUPPORTED_CODEX_VERSIONS).toEqual(latestCodexVersions(retained));
-  expect(SUPPORTED_CODEX_VERSIONS).toEqual(["0.169.0", "0.168.0", "0.167.0"]);
+  expect(SUPPORTED_CODEX_VERSIONS).toEqual(["0.170.0", "0.169.0", "0.168.0"]);
   expect(SUPPORTED_CODEX_VERSIONS).toEqual(retained.sort((a, b) => b.localeCompare(a, "en", { numeric: true })).slice(0, 3));
 });
 
