@@ -6,11 +6,9 @@ import path from "node:path";
 /**
  * The completed scanner projection at production shape (#845).
  *
- * `operator_snapshot` and `/api/agent/snapshot` both walk the whole corpus through
- * `observeFiles`, and it used to walk once per CALLER. Twenty concurrent warm
- * control-plane reads therefore meant twenty full walks racing each other and the
- * coordinator's own scan generation — and a client that gave up left its walk
- * running against files nobody would read.
+ * `operator_snapshot` and `/api/agent/snapshot` share the completed scanner
+ * generation. The probe drives `completedFileScan` through concurrent reads
+ * and cancellation to check reuse and reader isolation.
  *
  * ## Isolation, and why it needs proving rather than asserting
  *

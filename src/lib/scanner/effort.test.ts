@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -193,58 +193,47 @@ test("a scrolled-out tier uses the durable profile for the pill without reviving
   expect(entryServiceTier(entry(file, { mtime: 2 }))).toBe("priority");
 });
 
-test("a scan indexes durable tiers once for registered and missing paths, then refreshes on the next scan", async () => {
-  const { agentRegistry } = await import("../agent/registry");
-  const { durableServiceTierIndex, entryServiceTier } = await import("./effort");
-  const registry = agentRegistry();
-  const file = writeJsonl(".codex/indexed-tier.jsonl", []);
-  const alias = writeJsonl(".codex/indexed-alias.jsonl", []);
-  const missing = writeJsonl(".codex/indexed-missing.jsonl", []);
-  const conversation = registry.ensureConversation("codex", file, null);
-  registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" });
-  const snapshot = structuredClone(registry.readOnlySnapshot());
-  const original = snapshot.conversations[conversation.id]!;
-  const synthetic = { ...snapshot, conversations: { [original.id]: { ...original, continuityPaths: [alias] } }, receipts: {} };
-  for (let i = 0; i < 2000; i += 1) {
-    synthetic.conversations[`conversation_synthetic-${i}`] = { ...original, id: `conversation_synthetic-${i}`, generations: [{ ...original.generations[0]!, path: `synthetic/${i}.jsonl` }], continuityPaths: [] };
-  }
-  const receipt = { artifactPath: file, launchProfile: { serviceTier: "priority" } };
-  synthetic.receipts = Object.fromEntries(Array.from({ length: 4000 }, (_, i) => [`receipt-${i}`, { ...receipt, artifactPath: i === 0 ? file : `receipt/${i}.jsonl` }])) as typeof snapshot.receipts;
-  const reads = spyOn(registry, "readOnlySnapshot").mockReturnValue(synthetic);
-  const lookup = spyOn(registry, "launchProfileForPath").mockImplementation(() => { throw new Error("scan performed a linear lookup"); });
-  try {
-    const tiers = durableServiceTierIndex(registry);
-    const registeredEntry = entry(file), missingEntry = entry(missing);
-    for (let i = 0; i < 2000; i += 1) {
-      expect(entryServiceTier(i % 2 ? missingEntry : registeredEntry, tiers)).toBe(i % 2 ? null : "ultrafast");
-    }
-    expect(entryServiceTier(entry(alias), tiers)).toBe("ultrafast");
-    expect(tiers.get("receipt/1.jsonl")).toBe("priority");
-    expect(reads).toHaveBeenCalledTimes(1);
-    expect(lookup).not.toHaveBeenCalled();
-    synthetic.conversations[original.id]!.generations[0]!.launchProfile = { ...original.generations[0]!.launchProfile, serviceTier: "default" };
-    const refreshed = durableServiceTierIndex(registry);
-    expect(entryServiceTier(entry(file), refreshed)).toBe("default");
-  } finally {
-    reads.mockRestore(); lookup.mockRestore();
-  }
-});
-
-
-test("the scanner resolves current paths in bounded slices and observes a later profile", async () => {
+test("the scanner reads recorded tiers for generation, alias and receipt paths and sees profile updates", async () => {
   const { AgentRegistry } = await import("@/lib/agent/registry");
   const { durableServiceTierIndexForPaths } = await import("./effort");
-  const registry = new AgentRegistry(path.join(SANDBOX, "keyed-tiers.json"), undefined, undefined, { sqliteMode: "sqlite" });
-  const pathname = writeJsonl(".codex/current-tier.jsonl", []);
+  const filename = path.join(SANDBOX, "keyed-tiers.json");
+  const generation = writeJsonl(".codex/generation-tier.jsonl", []);
+  const alias = writeJsonl(".codex/alias-tier.jsonl", []);
+  const receiptPath = writeJsonl(".codex/receipt-tier.jsonl", []);
+  const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  const conversation = seed.ensureConversation("codex", generation, null);
+  seed.updateConversationLaunchProfile(conversation.id, { model: null, effort: null, fast: true, serviceTier: "ultrafast" });
+  const begun = seed.beginSpawnRequest({ engine: "codex", cwd: SANDBOX, launchProfile: { serviceTier: "priority" } });
+  const snapshot = seed.snapshot();
+  seed.close();
+  snapshot.conversations[conversation.id]!.continuityPaths.push(alias);
+  snapshot.receipts[begun.receipt.launchId]!.artifactPath = receiptPath;
+  fs.writeFileSync(filename, JSON.stringify(snapshot));
+
+  let snapshotLoads = 0;
+  const registry = new AgentRegistry(filename, undefined, undefined, {
+    sqliteMode: "sqlite",
+    onSqliteSnapshotLoad: () => { snapshotLoads += 1; },
+  });
   try {
-    const conversation = registry.ensureConversation("codex", pathname, null);
-    registry.updateConversationLaunchProfile(conversation.id, { model: null, effort: null, fast: false, serviceTier: "priority" });
-    const paths = Array.from({ length: 33 }, (_, n) => n ? `/fixture/missing-${n}.jsonl` : pathname);
-    const tiers = await durableServiceTierIndexForPaths(paths, registry);
-    expect(tiers.size).toBe(33);
-    expect(tiers.get(pathname)).toBe("priority");
-    expect(tiers.get(paths[32]!)).toBeNull();
+    const missing = Array.from({ length: 30 }, (_, index) => path.join(SANDBOX, `missing-${index}.jsonl`));
+    const paths = [generation, ...missing.slice(0, 15), receiptPath, ...missing.slice(15), alias];
+    const readTiers = async () => {
+      const loadsBefore = snapshotLoads;
+      const tiers = await durableServiceTierIndexForPaths(paths, registry);
+      expect(snapshotLoads).toBe(loadsBefore);
+      expect(tiers.size).toBe(paths.length);
+      for (const pathname of missing) expect(tiers.get(pathname)).toBeNull();
+      expect(tiers.get(receiptPath)).toBe("priority");
+      return tiers;
+    };
+    const tiers = await readTiers();
+    expect(tiers.get(generation)).toBe("ultrafast");
+    expect(tiers.get(alias)).toBe("ultrafast");
+
     registry.updateConversationLaunchProfile(conversation.id, { model: null, effort: null, fast: false, serviceTier: "default" });
-    expect((await durableServiceTierIndexForPaths([pathname], registry)).get(pathname)).toBe("default");
+    const refreshed = await readTiers();
+    expect(refreshed.get(generation)).toBe("default");
+    expect(refreshed.get(alias)).toBe("default");
   } finally { registry.close(); }
 });

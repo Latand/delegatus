@@ -113,8 +113,7 @@ files. A repository-wide replacement would dominate phase 1 while preserving
 its current behavior. Phase 1 changes only the viewing call sites that must
 accept OpenClaw:
 
-- `src/lib/scanner/index.ts:300` and `src/lib/scanner/observe.ts:76` decide
-  whether to derive authoritative turn state.
+- `src/lib/scanner/index.ts` decides whether to derive authoritative turn state.
 - `src/lib/scanner/scanCache.ts:173` primes persisted turn evidence.
 - `src/lib/scanner/projectCatalog.ts:582` decides whether a transcript enters
   the complete list/search catalog.
@@ -162,7 +161,7 @@ The root-specific viewing work is bounded:
 OpenClaw. The false arm expects Claude records whose top-level type is
 `assistant`; OpenClaw wraps assistant messages in a top-level `message` record.
 The replacement parameter is `engine: "codex" | "claude" | "openclaw"`.
-`activity.ts`, `scanner/index.ts`, `scanner/observe.ts`, and the persisted cache
+`activity.ts`, `scanner/index.ts`, and the persisted cache
 pass that value without another boolean conversion.
 
 ### The seam
@@ -573,7 +572,7 @@ analogue on disk — so the title is the first prompt through the existing
 **4. Turn state.** Replace the boolean discriminator and cache field in
 `src/lib/accounts/migration/turnState.ts` and
 `src/lib/scanner/activity.ts`. Add explicit OpenClaw arms in
-`src/lib/scanner/index.ts:300`, `src/lib/scanner/observe.ts:76`, and the
+`src/lib/scanner/index.ts` and the
 persisted-evidence path in `src/lib/scanner/scanCache.ts:173`. The OpenClaw arm
 reads `stopReason` from the newest assistant record whose provider is real —
 the same predicate item 5 applies to the model — so a synthetic record appended
