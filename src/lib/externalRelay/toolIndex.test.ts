@@ -5,6 +5,8 @@ import { requestSchema } from "./protocol";
 import { x1Dir } from "./toolLoop.fixture";
 import { destinationRelay } from "./ownerDestination.fixture";
 import { startTestRelay } from "./testRelay";
+import { answerPrompt } from "./prompt";
+import { callableTools } from "./toolLoop";
 import * as index from "./toolIndex";
 const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(x1Dir, name + ".json"), "utf8"));
 
@@ -80,4 +82,21 @@ test("compact and describe respect audiences and truncate at whole tool boundari
   expect(described.tools.length).toBeGreaterThan(0);
   expect(described.tools.length).toBeLessThan(16);
   expect(Buffer.byteLength(JSON.stringify(described))).toBeLessThanOrEqual(65_536);
+});
+
+test("a trigger with a cleared owner flag cannot expose owner-only tools", async () => {
+  const request = requestSchema.parse(fixture("claimed_tools_on_demand_owner").request);
+  request.input.requester!.is_owner = false;
+  request.input.tools = request.input.tools!.filter(tool => tool.audience === "owner");
+  const names = request.input.tools.map(tool => tool.name);
+  expect(names.length).toBeGreaterThan(0);
+  expect(index.compactToolIndex(request)).toEqual([]);
+  expect(index.describeToolIndex(request, names)).toMatchObject({ tools: [], missing: names });
+  expect(callableTools(request)).toEqual([]);
+  expect(answerPrompt(request)).not.toContain("<tools>\n");
+  const result = await index.hydrateToolIndex(destinationRelay(), request, {
+    signal: new AbortController().signal, ack: async () => { throw new Error("unexpected lookup"); },
+    lose: () => { throw new Error("unexpected lease loss"); },
+  });
+  expect(result.guidance).toEqual([]);
 });

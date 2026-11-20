@@ -3022,7 +3022,7 @@ for (const engine of ["codex", "claude"] as const)
       request.input.request_text = task === "react" ? "React with 👍 to message m_b40b71a0a9d43622ee0e2e6a." : "When is the meetup?";
       request.input.short_term_memory = null;
       request.input.documents = [];
-      request.input.conversation = [];
+      request.input.conversation = request.input.conversation.filter(message => message.id === request.input.respond_to);
       const run = await runLoopCase({ request, live: { engine, home: accountHome }, response: (body) => {
         if ("tool" in body && body.tool === "react_to_message") return actionResponse("action_ok", body);
         return { body: { ...x1Results.ok, call_id: body.call_id, output: "The meetup is Friday." } };
