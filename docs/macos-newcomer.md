@@ -53,8 +53,9 @@ could pass the presence check and still fail when connecting an account.
 ## Automated rehearsal
 
 `.github/workflows/macos-newcomer.yml` runs manually, for relevant pull requests
-and on `v*` release tags. A branch/PR packs its exact checkout with `npm pack`;
-a tag waits, bounded, for its exact package version on npm and installs that.
+and after successful npm publication. A branch/PR packs its exact checkout with
+`npm pack`. A release rehearsal waits for its exact package version on npm and
+uses the workflow revision's driver with the release checkout's prompts.
 The build uses runner tools. The visitor rehearsal then starts with a separate
 empty home, config, state and PATH, installs Bun through the site's command and
 installs the selected package with the prompt's global-install command.
@@ -76,8 +77,14 @@ limit. The driver substitutes an ephemeral port for 8898 and a tracked backgroun
 process for `nohup`. It deliberately leaves out downloading real agent CLIs:
 the missing case is the regression, and the stubs exercise discovery and MCP
 registration without authentication. The report artifact records each case,
-the API response, the first-start message and the bounded startup logs. The
-job has a 35-minute limit; each first start has a 60-second limit.
+the API response, the first-start message and the bounded startup logs. It
+identifies the installed package by source, version and `gitHead` when present.
+The job has a 30-minute limit and each startup has a 60-second readiness check.
+After readiness in `neither-cli`, the driver waits up to 130 seconds for a
+terminal retention receipt from that fresh state directory before stopping the
+launcher. The case retains HTTP 200 and records the receipt timestamp and error
+count, or a fixed reason when the receipt is unavailable. A nonzero count or an
+unavailable receipt fails the rehearsal. The raw receipt stays in private state.
 
 Run after packing on a Mac:
 
