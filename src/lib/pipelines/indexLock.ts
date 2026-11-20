@@ -15,9 +15,9 @@ const within = (target: string, directory: string) => target === directory || ta
 const missing = (error: unknown) => ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "");
 const syncFile = promisify(fs.fsync);
 
-/** A failed probe is distinct from an empty scan. Linux exposes descriptors
-    and cwd in the Viewer's PID namespace. Include visible processes of other
-    users and treat inaccessible processes of the service account as unknown. */
+/** Linux exposes descriptors and cwd in the Viewer's PID namespace. A process
+    tied to this checkout or an uninspectable Git writer of the service account
+    can block recovery even when its descriptors cannot be read. */
 async function indexLockHolder(lock: string, gitDir: string, worktree: string, index: fs.BigIntStats,
   signal?: AbortSignal): Promise<string | null> {
   if (process.platform !== "linux" || procBackend.name !== "linux") return "open-file evidence is unavailable on this platform";
@@ -33,13 +33,16 @@ async function indexLockHolder(lock: string, gitDir: string, worktree: string, i
     const identity = captureProcessIdentity(pid);
     if (!processIdentityMayRun(identity)) continue;
     const proc = `/proc/${pid}`;
+    const argv = procBackend.readArgv(pid);
+    const git = /^git(?:-|$)/.test(path.basename(argv[0] ?? ""));
+    let cwd: string | undefined;
     try {
-      const cwd = await fs.promises.readlink(`${proc}/cwd`);
+      cwd = await fs.promises.readlink(`${proc}/cwd`);
       let held = within(cwd, gitDir) ? "the worktree Git directory" : null;
       // Git may close its descriptor before installing the index. Retain a
       // live Git writer's claim while it is still bound to this checkout.
       let gitInCheckout = false;
-      if (!held && /^git(?:-|$)/.test(path.basename(procBackend.readArgv(pid)[0] ?? ""))) {
+      if (!held && git) {
         const dir = procBackend.readEnvVar(pid, "GIT_DIR");
         const checkout = procBackend.readEnvVar(pid, "GIT_WORK_TREE");
         gitInCheckout = dir ? path.resolve(cwd, dir) === gitDir : within(path.resolve(cwd, checkout ?? "."), worktree);
@@ -62,6 +65,10 @@ async function indexLockHolder(lock: string, gitDir: string, worktree: string, i
       checkDeadline();
       if (!processIdentityMayRun(identity)) continue;
       if (!["EACCES", "EPERM", "ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      const bound = (cwd && within(cwd, worktree)) || argv.some(arg => path.isAbsolute(arg)
+        && (within(arg, gitDir) || within(arg, worktree)));
+      if (bound) { unreadablePid ??= pid; continue; }
+      if (argv.length && !git) continue;
       const status = await fs.promises.readFile(`${proc}/status`, "utf8").catch(error => {
         if (!missing(error)) throw error;
         return "";

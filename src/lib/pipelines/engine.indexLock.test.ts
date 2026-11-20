@@ -56,7 +56,7 @@ linuxTest.each(["reset", "commit", "switch"] as const)("recovers a stale lane in
     };
     await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "Finished")], h.ports);
     const settled = loadPipelines().find(row => row.id === id)!;
-    expect(settled.state).toBe("completed");
+    expect(settled.state, settled.stateDetail ?? undefined).toBe("completed");
     expect(exits.slice(0, 2)).toEqual([128, 0]);
     expect(exits.filter(code => code !== 0)).toHaveLength(1);
     expect(fs.existsSync(lock)).toBe(false);
