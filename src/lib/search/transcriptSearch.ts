@@ -161,6 +161,31 @@ const CHAT_REFERENCE_WINDOW = 384;
 const CHAT_REFERENCE_BODY = 16 * 1024;
 const CODEX_CHAT_REFERENCE_WINDOW = 4096;
 
+/** Two bounded index seeks per displayed row. The last message is only
+ * authoritative when the index has caught up with the transcript. */
+export function hydrateIndexedChatTimes(
+  files: { path: string; size: number; mtime: number; firstMessageAt?: number | null; lastMessageAt?: number | null }[],
+  filename = statePath("transcript-search.sqlite"),
+): void {
+  if (!files.length) return;
+  let db: Database | undefined;
+  try {
+    db = new (sqliteDatabase())(filename, { readonly: true, strict: true });
+    const times = db.query<{ size: number; mtime_ms: number; first: number | null; last: number | null }, [string]>(`
+      SELECT size, mtime_ms,
+        (SELECT timestamp FROM transcript_messages WHERE transcript_path=f.path ORDER BY message_index LIMIT 1) AS first,
+        (SELECT timestamp FROM transcript_messages WHERE transcript_path=f.path ORDER BY message_index DESC LIMIT 1) AS last
+      FROM transcript_files f WHERE f.path=?`);
+    for (const file of files) {
+      const row = times.get(file.path);
+      if (!row) continue;
+      file.firstMessageAt = row.first;
+      if (row.size === file.size && Math.abs(row.mtime_ms - file.mtime * 1000) <= 1) file.lastMessageAt = row.last;
+    }
+  } catch { /* creation time and file update time are available without the index */ }
+  finally { db?.close(); }
+}
+
 /** Read the existing index for the already authorized catalog rows. This
  * never opens a transcript or starts the index writer for a sidebar request. */
 export function readTranscriptPullRequests(

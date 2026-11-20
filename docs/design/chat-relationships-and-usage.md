@@ -5,8 +5,9 @@
 The desktop **Chats** list pages main chats by recent activity in each family.
 The branch badge shows the full count of direct dependent chats in the scoped
 catalog. Each expanded branch has its own **Load more dependent chats**
-control. The rail uses **Load more main chats** for the top-level list. The
-larger Chats menu can also load its next page of main chats as you scroll.
+control. Main and dependent chats load 15 rows per page. The rail uses
+**Load more main chats** for the top-level list. The larger Chats menu
+loads its next page of main chats as you reach the end.
 Paging keeps existing rows and counts in place. A folded branch keeps its
 loaded pages while the list is open. Each row shows the conversation engine
 and opens its own conversation.
@@ -25,6 +26,10 @@ parent thread, even when a subagent worked in another project. Opening
 the subagent uses its own project and transcript. The Chats list indents
 child rows, and a Codex subagent's row identifies it on hover and focus.
 Project-restricted views keep their existing access rules.
+Resting over a chat for 100 ms or focusing its row shows the title, creation
+time and last message time. If the message index is missing or behind, the
+tooltip labels the transcript's modification time as **Updated**. Creation
+falls back to the time recorded in the session header.
 
 Reloading an existing focus entry on desktop starts on its project board
 with the open-agent list retained. Pasting a conversation link or traversing
@@ -64,6 +69,14 @@ chat or the card's sole linked conversation. The branch count in **Chats**
 counts dependent conversations. The PR badge counts the selected chat's links.
 Subagent PR badges use that subagent's own indexed chat history and its
 project's access checks.
+
+The PR badge reads the local index and forge cache. Opening its panel shows
+12 references immediately. After a brief hover, it asks GitHub for just the
+missing or stale states in that page. **Show more** opens the next 12.
+Updates share one bounded queue and a short cache across panels. Known
+merged states are reused, and failed reads pause for a minute before retry.
+Shared readers see the cached state. The request to GitHub contains only
+repository names and PR numbers.
 
 ## Token usage on task cards
 

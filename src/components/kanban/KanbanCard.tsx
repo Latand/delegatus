@@ -689,7 +689,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           </h3>
         )}
         <div className="tools">
-          {visibleChatPullRequests ? <ChatPullRequestBadge title={title} requests={visibleChatPullRequests} /> : null}
+          {visibleChatPullRequests ? <ChatPullRequestBadge title={title} requests={visibleChatPullRequests} transcript={chatTranscript} project={card.project} /> : null}
           <button
             type="button"
             className="icon-btn fold"

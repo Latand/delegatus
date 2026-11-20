@@ -170,6 +170,9 @@ export interface FileEntry {
   cwd?: string | null;
   /** Identity-bound session creation time parsed from the transcript header. */
   sessionStartedAt?: string | null;
+  /** Message times read from the local transcript index (Unix seconds). */
+  firstMessageAt?: number | null;
+  lastMessageAt?: number | null;
   /** Native Codex identity used by the paginated conversation catalog. */
   nativeThreadId?: string | null;
   /** Native Codex parent thread parsed from the identity-bound transcript header. */

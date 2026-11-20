@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { NextRequest } from "next/server";
@@ -13,10 +13,12 @@ import { replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 import { resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests } from "@/lib/scanner/scanCache";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { indexTranscriptSources } from "@/lib/search/transcriptSearch";
+import * as chatStatus from "@/lib/forge/chatPullRequestStatus";
 import { writeSessionTitle } from "@/lib/session/titleStore";
 
 import { GET } from "./route";
 import { GET as pullRequests } from "./pull-requests/route";
+import { POST as refreshPullRequests } from "./pull-requests/route";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-conversations-route-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
@@ -616,6 +618,44 @@ test("chat PR lookup is scoped to cataloged transcripts in the selected project"
   expect(await response.json()).toEqual({ [allowed.path]: {
     partial: false, items: [{ repository: "sample/reports", number: 7, url: "https://github.com/sample/reports/pull/7", state: null }],
   } });
+});
+
+test("a PR refresh only submits the authorized page and chat dates come from the index", async () => {
+  const file = path.join(sandbox, "dated-prs.jsonl");
+  const records = Array.from({ length: 16 }, (_, index) => ({
+    type: "user", timestamp: new Date(Date.UTC(2026, 4, 1, index)).toISOString(),
+    message: { content: `Review https://github.com/sample/paged/pull/${index + 1}` },
+  }));
+  fs.writeFileSync(file, records.map(item => JSON.stringify(item)).join("\n") + "\n");
+  const stat = fs.statSync(file);
+  const row = { path: file, project: "paged-project", root: "claude-projects" as const, name: path.basename(file),
+    title: "Review reports", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const,
+    size: stat.size, mtime: stat.mtimeMs / 1000 };
+  replaceConversationCatalog([row]);
+  await indexTranscriptSources([{ ...row, mtimeMs: stat.mtimeMs }]);
+  const branch = () => GET(new Request(`http://localhost/api/conversations?view=tree&branch=roots&project=${row.project}`));
+  expect(await (await branch()).json()).toMatchObject({ items: [{
+    firstMessageAt: Date.UTC(2026, 4, 1) / 1000, lastMessageAt: Date.UTC(2026, 4, 1, 15) / 1000,
+  }] });
+  const check = spyOn(chatStatus, "refreshChatPullRequestStatus").mockImplementation(async items => [...items]);
+  try {
+    const open = (project: string, offset: number) => refreshPullRequests(new NextRequest(
+      `http://localhost/api/conversations/pull-requests?${new URLSearchParams({ project, transcript: file, offset: String(offset) })}`,
+      { method: "POST", headers: { host: "localhost" } },
+    ));
+    expect((await (await open(row.project, 0)).json()).map((item: { number: number }) => item.number)).toEqual(
+      [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5],
+    );
+    expect(await (await open(row.project, 12)).json()).toHaveLength(4);
+    expect(await (await open("other-project", 0)).json()).toEqual({});
+    expect(check).toHaveBeenCalledTimes(2);
+  } finally {
+    check.mockRestore();
+  }
+  fs.appendFileSync(file, "{}\n");
+  const stale = (await (await branch()).json()).items[0];
+  expect(stale.lastMessageAt).toBeUndefined();
+  expect(stale.firstMessageAt).toBe(Date.UTC(2026, 4, 1) / 1000);
 });
 
 test("chat PR history uses Claude attachments outside the indexed message window", async () => {

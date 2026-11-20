@@ -1,6 +1,7 @@
 import { boundedRepository, normalizeWorkLinkInput, workLinkUrl, type ForgeCacheView, type PullRequestState } from "./workLinks";
 
 export const CHAT_PULL_REQUEST_BATCH = 8;
+export const CHAT_PULL_REQUEST_PAGE_SIZE = 12;
 export const MAX_CHAT_PULL_REQUESTS = 128;
 
 export interface ChatPullRequest {
@@ -18,6 +19,8 @@ export interface ChatPullRequests {
   /** Most recently mentioned first; each PR appears at most once. */
   items: ChatPullRequest[];
   partial: boolean;
+  /** Shared readers can see cached states without initiating GitHub reads. */
+  refresh?: boolean;
 }
 
 

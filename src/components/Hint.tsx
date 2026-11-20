@@ -103,11 +103,17 @@ export function Hint({
   label,
   side = "top",
   align = "center",
+  delayMs = SHOW_DELAY_MS,
+  className = "relative inline-flex",
+  bubbleClassName = HINT_BUBBLE_CLASS,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   side?: "top" | "bottom";
   align?: "center" | "left" | "right";
+  delayMs?: number;
+  className?: string;
+  bubbleClassName?: string;
   children: ReactNode;
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -120,12 +126,12 @@ export function Hint({
 
   useEffect(() => {
     if (!active) return;
-    const timer = window.setTimeout(() => setRested(true), SHOW_DELAY_MS);
+    const timer = window.setTimeout(() => setRested(true), delayMs);
     return () => {
       window.clearTimeout(timer);
       setRested(false);
     };
-  }, [active]);
+  }, [active, delayMs]);
 
   useEffect(() => {
     if (shownScope.current === scope) return;
@@ -173,7 +179,7 @@ export function Hint({
   return (
     <span
       ref={anchorRef}
-      className="relative inline-flex"
+      className={className}
       onPointerEnter={() => send("enter")}
       onPointerLeave={() => send("leave")}
       onPointerMove={() => send("arrive")}
@@ -197,7 +203,7 @@ export function Hint({
           anchorRef={anchorRef}
           side={side}
           align={align}
-          className={HINT_BUBBLE_CLASS}
+          className={bubbleClassName}
         >
           {label}
         </TooltipBubble>

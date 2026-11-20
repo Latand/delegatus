@@ -536,6 +536,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
       path: file.path,
       root: file.rootName,
       name: path.relative(raw[index]!.root, file.path),
+      sessionStartedAt: file.sessionStartedAt,
       project: file.project || "other",
       projectName: file.projectName,
       projectUnresolved: file.projectUnresolved,

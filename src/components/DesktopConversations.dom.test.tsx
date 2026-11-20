@@ -137,7 +137,7 @@ test("a row a later page returns again is listed once, and the end says how many
   serveCatalog(120, { overlap: 5 });
   const host = mount();
   await settle();
-  for (let page = 0; page < 6; page += 1) await reachEnd();
+  for (let page = 0; page < 16 && rowPaths(host).length < 120; page += 1) await reachEnd();
   const paths = rowPaths(host);
   expect(new Set(paths).size).toBe(paths.length);
   expect(paths).toHaveLength(120);
@@ -146,11 +146,11 @@ test("a row a later page returns again is listed once, and the end says how many
 
 test("a page that fails keeps the rows, says so, and Retry reads that page again", async () => {
   let failing = true;
-  const served = serveCatalog(160, { fail: (cursor) => (cursor === "50" && failing ? 503 : null) });
+  const served = serveCatalog(160, { fail: (cursor) => (cursor === String(DESKTOP_CONVERSATIONS_PAGE_SIZE) && failing ? 503 : null) });
   const host = mount();
   await settle();
   await reachEnd();
-  expect(rowPaths(host)).toHaveLength(50);
+  expect(rowPaths(host)).toHaveLength(DESKTOP_CONVERSATIONS_PAGE_SIZE);
   expect(tail(host).querySelector('[data-desktop-conversations-state="failed"]')?.textContent).toBe("Could not load conversations");
   /* Failure does not page on by itself. */
   const asked = served.urls.length;
@@ -160,24 +160,24 @@ test("a page that fails keeps the rows, says so, and Retry reads that page again
   failing = false;
   flushSync(() => (tail(host).querySelector('[data-desktop-conversations-retry="retry"]') as HTMLButtonElement).click());
   await settle();
-  expect(served.urls.at(-1)).toContain("cursor=50");
-  expect(rowPaths(host)).toHaveLength(100);
+  expect(served.urls.at(-1)).toContain(`cursor=${DESKTOP_CONVERSATIONS_PAGE_SIZE}`);
+  expect(rowPaths(host)).toHaveLength(DESKTOP_CONVERSATIONS_PAGE_SIZE * 2);
 });
 
 test("an expired snapshot keeps the rows, says the list changed, and Reload starts the chain again from the top", async () => {
   let expired = true;
-  const served = serveCatalog(160, { fail: (cursor) => (cursor === "50" && expired ? 409 : null) });
+  const served = serveCatalog(160, { fail: (cursor) => (cursor === String(DESKTOP_CONVERSATIONS_PAGE_SIZE) && expired ? 409 : null) });
   const host = mount();
   await settle();
   await reachEnd();
-  expect(rowPaths(host)).toHaveLength(50);
+  expect(rowPaths(host)).toHaveLength(DESKTOP_CONVERSATIONS_PAGE_SIZE);
   expect(tail(host).querySelector('[data-desktop-conversations-state="expired"]')).not.toBeNull();
 
   expired = false;
   flushSync(() => (tail(host).querySelector('[data-desktop-conversations-retry="reload"]') as HTMLButtonElement).click());
   await settle();
   expect(served.urls.at(-1)).not.toContain("cursor=");
-  expect(rowPaths(host)).toHaveLength(50);
+  expect(rowPaths(host)).toHaveLength(DESKTOP_CONVERSATIONS_PAGE_SIZE);
   expect(tail(host).querySelector('[data-desktop-conversations-state="expired"]')).toBeNull();
 });
 

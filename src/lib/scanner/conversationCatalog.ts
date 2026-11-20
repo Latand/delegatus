@@ -16,6 +16,7 @@ export interface ConversationCatalogEntry {
   /** Display project for an authorized cross-project Codex subagent family. */
   treeProject?: string;
   projectName?: string;
+  sessionStartedAt?: string | null;
   projectUnresolved?: true;
   worktree?: string;
   parent?: string;
@@ -296,6 +297,7 @@ export function catalogEntryToFileEntry(entry: ConversationCatalogEntry, nowMs: 
     project: entry.project,
     worktree: entry.worktree,
     title: entry.title,
+    sessionStartedAt: entry.sessionStartedAt,
     engine: entry.engine,
     kind: entry.kind,
     fmt: entry.fmt,

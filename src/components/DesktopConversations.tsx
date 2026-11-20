@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import { createPortal } from "react-dom";
 
 import { ChevronRight, Loader2 } from "@/components/icons";
+import { intlLocale } from "@/components/activity/format";
 import { useChatPullRequests } from "@/hooks/useChatPullRequests";
 import { useConversationCatalog, type ConversationCatalogData } from "@/hooks/useConversationCatalog";
 import { cleanTitle } from "@/lib/title";
@@ -11,12 +12,14 @@ import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 import { EngineMark } from "./EngineMark";
+import { Hint } from "./Hint";
 import { QuietFileRow } from "./ProjectTrash";
 import { engineBadgeFor } from "./utils";
 import { ChatPullRequestBadge } from "./workLinks/ChatPullRequestBadge";
 
-export const DESKTOP_CONVERSATIONS_PAGE_SIZE = 50;
-export const DESKTOP_CONVERSATIONS_CHILD_PAGE_SIZE = 12;
+export const DESKTOP_CONVERSATIONS_PAGE_SIZE = 15;
+export const DESKTOP_CONVERSATIONS_CHILD_PAGE_SIZE = DESKTOP_CONVERSATIONS_PAGE_SIZE;
+const CHAT_HINT_CLASS = "max-w-[min(22rem,calc(100vw_-_1rem))] rounded-[8px] border border-border bg-card px-2.5 py-2 text-[11px] text-primary shadow-2";
 
 interface ChatListProps {
   project: string;
@@ -78,7 +81,7 @@ function ChatList({ catalog, parent, ...props }: ChatListProps & { catalog: Conv
     if (!enabled || !autoPage || !node || !nextCursor || loading || error || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(entries => {
       if (entries.some(entry => entry.isIntersecting)) loadMore();
-    }, { root: node.closest("[data-desktop-conversations-scroll]"), rootMargin: "0px 0px 320px 0px" });
+    }, { root: node.closest("[data-desktop-conversations-scroll]") });
     observer.observe(node);
     return () => observer.disconnect();
   }, [enabled, autoPage, nextCursor, loading, error, loadMore]);
@@ -156,6 +159,7 @@ function ChatBranch({ file, ...props }: ChatListProps & { file: FileEntry }) {
   const prs = requests[file.path];
   const count = file.directChildCount ?? 0;
   const subagent = file.engine === "codex" && Boolean(file.nativeParentThreadId);
+  const hint = <ChatHintDetails file={file} title={title} subagent={subagent} />;
   const dependentLabel = t("list.chatBranches", { title, count });
   const toggle = count > 0 ? (
     <button type="button" aria-label={dependentLabel} title={dependentLabel} aria-expanded={expanded}
@@ -171,24 +175,27 @@ function ChatBranch({ file, ...props }: ChatListProps & { file: FileEntry }) {
       <div ref={rowRef} className="flex min-w-0 items-center gap-1">
         {compact ? (
           <>
-            <button type="button" title={subagent ? `${title} · ${t("kind.subagent")}` : title}
+            <Hint label={hint} delayMs={100} align="left" className="flex min-w-0 flex-1" bubbleClassName={CHAT_HINT_CLASS}>
+            <button type="button"
               aria-description={subagent ? t("kind.subagent") : undefined}
               data-desktop-chat-open onClick={() => onOpen(file)}
               className="flex min-h-8 min-w-0 flex-1 items-center gap-1.5 rounded-control px-1.5 text-left text-[12.5px] text-primary hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               <EngineMark engine={file.engine} size={14} label={engineBadgeFor(file.engine).label} />
               <span className="min-w-0 truncate">{title}</span>
             </button>
+            </Hint>
             {toggle}
           </>
         ) : (
           <>
             {toggle}
             <div className="min-w-0 flex-1">
-              <QuietFileRow file={file} activeSubtree={false} showEngineMark onOpen={onOpen} />
+              <QuietFileRow file={file} activeSubtree={false} showEngineMark
+                chatHint={{ content: hint, bubbleClassName: CHAT_HINT_CLASS }} onOpen={onOpen} />
             </div>
           </>
         )}
-        {prs?.items.length ? <ChatPullRequestBadge title={title} requests={prs} /> : null}
+        {prs?.items.length ? <ChatPullRequestBadge title={title} requests={prs} transcript={file.path} project={file.project} /> : null}
       </div>
       {count > 0 && disclosure !== "unopened" && (
         <div id={groupId} hidden={!expanded} className={depth < 4 ? "ms-2 border-s border-border ps-1.5" : "border-s border-border"}>
@@ -196,5 +203,21 @@ function ChatBranch({ file, ...props }: ChatListProps & { file: FileEntry }) {
         </div>
       )}
     </li>
+  );
+}
+
+function ChatHintDetails({ file, title, subagent }: { file: FileEntry; title: string; subagent: boolean }) {
+  const { locale, t } = useLocale();
+  const format = new Intl.DateTimeFormat(intlLocale(locale), { dateStyle: "medium", timeStyle: "short" });
+  const created = file.firstMessageAt != null ? file.firstMessageAt * 1000 : Date.parse(file.sessionStartedAt ?? "");
+  const latest = (file.lastMessageAt ?? file.mtime) * 1000;
+  return (
+    <>
+      <span className="block font-semibold [overflow-wrap:anywhere]">{title}{subagent ? ` · ${t("kind.subagent")}` : ""}</span>
+      {Number.isFinite(created) ? <span className="mt-1 block text-muted">{t("list.chatCreated", { time: format.format(created) })}</span> : null}
+      {Number.isFinite(latest) && latest > 0 ? <span className="mt-0.5 block text-muted">
+        {t(file.lastMessageAt == null ? "list.chatUpdated" : "list.chatLastMessage", { time: format.format(latest) })}
+      </span> : null}
+    </>
   );
 }

@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { intlLocale } from "@/components/activity/format";
 import { Z } from "@/components/layers";
-import type { ChatPullRequests } from "@/lib/forge/chatPullRequests";
+import { CHAT_PULL_REQUEST_PAGE_SIZE, type ChatPullRequest, type ChatPullRequests } from "@/lib/forge/chatPullRequests";
 import { useLocale } from "@/lib/i18n";
 
 import { WorkLinkGlyph } from "./WorkLinkChips";
@@ -13,18 +13,33 @@ import { WorkLinkGlyph } from "./WorkLinkChips";
 const TONE_ORDER = ["open", "draft", "merged", "closed"] as const;
 const EDGE = 8;
 const HOVER_GRACE = 220;
+const numberFormats = {
+  en: new Intl.NumberFormat(intlLocale("en")),
+  uk: new Intl.NumberFormat(intlLocale("uk")),
+};
 
-export function ChatPullRequestBadge({ title, requests }: { title: string; requests: ChatPullRequests }) {
+export function ChatPullRequestBadge({ title, requests, transcript, project }: {
+  title: string; requests: ChatPullRequests; transcript?: string | null; project?: string;
+}) {
   const { locale, t } = useLocale();
   const id = useId();
   const anchor = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const refreshSession = useRef<AbortController | null>(null);
   const [mode, setMode] = useState<"hover" | "pinned" | null>(null);
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [updates, setUpdates] = useState<Record<string, ChatPullRequest>>({});
+  const open = mode !== null;
+  const items = useMemo(() => requests.items.map(item => {
+    const updated = updates[item.url];
+    return updated && item.state !== "merged" && (!item.checkedAt || (updated.checkedAt ?? "") >= item.checkedAt) ? updated : item;
+  }), [requests.items, updates]);
+  const visible = items.slice(0, offset + CHAT_PULL_REQUEST_PAGE_SIZE);
   const label = t("chatPullRequests.label", { title });
-  const tone = TONE_ORDER.find(state => requests.items.some(item => item.state === state)) ?? "unknown";
-  const format = new Intl.NumberFormat(intlLocale(locale));
+  const tone = TONE_ORDER.find(state => items.some(item => item.state === state)) ?? "unknown";
+  const format = numberFormats[locale];
 
   const keepOpen = () => clearTimeout(closeTimer.current);
   const leave = () => {
@@ -33,6 +48,27 @@ export function ChatPullRequestBadge({ title, requests }: { title: string; reque
   };
 
   useEffect(() => () => clearTimeout(closeTimer.current), []);
+  useEffect(() => {
+    if (!open || !project || !transcript || requests.refresh === false) return;
+    const abort = new AbortController();
+    refreshSession.current = abort;
+    return () => { abort.abort(); refreshSession.current = null; };
+  }, [open, project, requests.refresh, transcript]);
+  useEffect(() => {
+    const abort = refreshSession.current;
+    if (!open || !abort || !project || !transcript) return;
+    const timer = setTimeout(async () => {
+      const query = new URLSearchParams({ project, transcript, offset: String(offset) });
+      try {
+        const response = await fetch(`/api/conversations/pull-requests?${query}`, { method: "POST", signal: abort.signal });
+        if (!response.ok) return;
+        const rows: unknown = await response.json();
+        if (!Array.isArray(rows) || abort.signal.aborted) return;
+        setUpdates(previous => ({ ...previous, ...Object.fromEntries((rows as ChatPullRequest[]).map(row => [row.url, row])) }));
+      } catch { /* cached history remains usable */ }
+    }, offset === 0 ? 150 : 0);
+    abort.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+  }, [open, offset, project, requests.refresh, transcript]);
   useLayoutEffect(() => {
     const button = anchor.current;
     const surface = panel.current;
@@ -53,6 +89,8 @@ export function ChatPullRequestBadge({ title, requests }: { title: string; reque
     measure();
     window.addEventListener("resize", measure);
     window.addEventListener("scroll", measure, true);
+    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    resize?.observe(surface);
     const focus = mode === "pinned" ? requestAnimationFrame(() => surface.querySelector("a")?.focus({ preventScroll: true })) : null;
     const outside = (event: PointerEvent) => {
       if (event.target instanceof Node && !button.contains(event.target) && !surface.contains(event.target)) setMode(null);
@@ -72,6 +110,7 @@ export function ChatPullRequestBadge({ title, requests }: { title: string; reque
       if (focus !== null) cancelAnimationFrame(focus);
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
+      resize?.disconnect();
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("keydown", escape);
       document.removeEventListener("focusin", focusLeaves);
@@ -86,10 +125,11 @@ export function ChatPullRequestBadge({ title, requests }: { title: string; reque
         onPointerEnter={event => {
           if (event.pointerType !== "mouse") return;
           keepOpen();
+          if (!mode) setOffset(0);
           setMode(current => current ?? "hover");
         }}
         onPointerLeave={leave}
-        onClick={() => { keepOpen(); setMode(current => current === "pinned" ? null : "pinned"); }}
+        onClick={() => { keepOpen(); if (!mode) setOffset(0); setMode(current => current === "pinned" ? null : "pinned"); }}
       >
         <WorkLinkGlyph tone={tone} />
         {requests.items.length}{requests.partial ? "+" : ""}
@@ -103,8 +143,8 @@ export function ChatPullRequestBadge({ title, requests }: { title: string; reque
         >
           <h3 className="px-2 py-1 text-[13px] font-semibold text-primary">{t("chatPullRequests.heading")}</h3>
           <ol className="min-h-0 space-y-0.5 overflow-y-auto overscroll-contain">
-            {requests.items.map(pr => (
-              <li key={pr.url}>
+            {visible.map((pr, index) => (
+              <li key={pr.url} data-chat-pr-index={index}>
                 <a href={pr.url} target="_blank" rel="noopener noreferrer"
                   className="block rounded-control px-2 py-1.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent">
                   {pr.title ? <span className="block break-words text-[13px] text-primary">{pr.title}</span> : null}
@@ -120,6 +160,20 @@ export function ChatPullRequestBadge({ title, requests }: { title: string; reque
                 </a>
               </li>
             ))}
+            {visible.length < items.length ? (
+              <li>
+                <button type="button" className="w-full rounded-control px-2 py-1.5 text-left text-[12px] font-semibold text-accent hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+                  onClick={(event) => {
+                    const next = offset + CHAT_PULL_REQUEST_PAGE_SIZE;
+                    setOffset(next);
+                    if (event.detail === 0) requestAnimationFrame(
+                      () => panel.current?.querySelector<HTMLElement>(`[data-chat-pr-index="${next}"] a`)?.focus(),
+                    );
+                  }}>
+                  {t("chatPullRequests.more", { count: Math.min(CHAT_PULL_REQUEST_PAGE_SIZE, items.length - visible.length) })}
+                </button>
+              </li>
+            ) : null}
           </ol>
           {requests.partial ? <p className="px-2 pt-1.5 text-[11px] text-muted">{t("chatPullRequests.partial")}</p> : null}
         </div>,

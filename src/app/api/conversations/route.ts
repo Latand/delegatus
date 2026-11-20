@@ -9,6 +9,7 @@ import { overlayConversationLineage } from "@/lib/agent/lineageMarkers";
 import { deputyConversationRefs } from "@/lib/orchestrator/deputies";
 import { overlaySessionProjects, overlaySessionTitles, searchSessionTitleProjector, sessionProjectProjection } from "@/lib/session/titleProjection";
 import { cleanTitle } from "@/lib/title";
+import { hydrateIndexedChatTimes } from "@/lib/search/transcriptSearch";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -131,6 +132,7 @@ async function workspaceGET(request: Request): Promise<Response> {
           ? item : { ...item, parent: null };
       });
     }
+    if (branch) hydrateIndexedChatTimes(shown);
     page = { ...page, items: shown, total: Math.max(0, page.total - (page.items.length - shown.length)) };
     return Response.json(page);
   } catch (error) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Archive, GitBranch, Trash2 } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -12,6 +12,7 @@ import { cleanTitle } from "@/lib/title";
 import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 
 import { EngineMark } from "./EngineMark";
+import { Hint } from "./Hint";
 import { DeleteFileButton } from "./DeleteFileButton";
 import { OVERVIEW } from "./projectModel";
 import { activityDot, engineBadge, fmtAge } from "./utils";
@@ -101,6 +102,7 @@ export function QuietFileRow({
   activeSubtree,
   showProject = false,
   showEngineMark = false,
+  chatHint,
   deletable = true,
   onOpen,
 }: {
@@ -108,6 +110,7 @@ export function QuietFileRow({
   activeSubtree: boolean;
   showProject?: boolean;
   showEngineMark?: boolean;
+  chatHint?: { content: ReactNode; bubbleClassName: string };
   /** False for a conversation the operator may read and never delete (a relay chat's). */
   deletable?: boolean;
   onOpen: (file: FileEntry) => void;
@@ -125,8 +128,7 @@ export function QuietFileRow({
       </div>
     );
   }
-  return (
-    <div className="flex min-w-0 items-center gap-2 rounded-[8px] border border-border bg-card px-3 py-1.5 shadow-1">
+  const button = (
       <button
         type="button"
         className={`flex min-w-0 flex-1 items-center gap-2 rounded-[6px] text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${isMobile ? "min-h-11" : "h-full"}`}
@@ -140,7 +142,7 @@ export function QuietFileRow({
             {badge.label}
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold" title={file.path}>
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold" title={chatHint ? undefined : file.path}>
           {cleanTitle(file.title, 90)}
         </span>
         {showProject ? (
@@ -164,6 +166,12 @@ export function QuietFileRow({
           </>
         )}
       </button>
+  );
+  return (
+    <div className="flex min-w-0 items-center gap-2 rounded-[8px] border border-border bg-card px-3 py-1.5 shadow-1">
+      {chatHint ? <Hint label={chatHint.content} align="left" delayMs={100} className="flex min-w-0 flex-1" bubbleClassName={chatHint.bubbleClassName}>
+        {button}
+      </Hint> : button}
       {deletable ? <DeleteFileButton file={file} onDeleted={() => setGone(true)} /> : null}
     </div>
   );
