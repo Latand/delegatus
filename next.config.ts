@@ -1,4 +1,6 @@
 import type { NextConfig } from "next";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
 
 /* DELEGATUS_STANDALONE and DELEGATUS_DEV_ORIGINS fold into the LLV_ names
@@ -6,6 +8,9 @@ import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants
 import "./bin/envAlias.mjs";
 
 const nextConfig: NextConfig = {
+  // The first microphone press can install the audio processor from the
+  // already loaded client bundle. The public file also serves restrictive CSPs.
+  env: { NEXT_PUBLIC_DICTATION_WORKLET_SOURCE: readFileSync(join(__dirname, "public/audio/dictation-capture.js"), "utf8") },
   // Conditional standalone output keeps `bun run build && bun start` warning-free while packaging can still opt in.
   output: process.env.LLV_STANDALONE === "1" ? "standalone" : undefined,
   // Dev-only: hosts allowed to reach dev resources cross-origin (Tailscale/LAN preview).

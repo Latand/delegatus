@@ -766,10 +766,11 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         publishDictationTrace(trace);
         return token === "deadline" ? null : token;
       });
-      prepared = prepareDictationInput();
+      prepared = prepareDictationInput(DICTATION_BUFFER_SAMPLES);
+      const worklet = await prepared.ready;
+      if (!mountedRef.current || discardRef.current || generation !== startGenerationRef.current) return;
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
       rememberMicGrant();
-      const worklet = await prepared.ready;
       if (!mountedRef.current || discardRef.current || generation !== startGenerationRef.current) return;
       setLiveText("");
       const capture = new DictationSession(stream, trace, {
