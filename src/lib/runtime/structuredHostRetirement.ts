@@ -624,9 +624,8 @@ const CLAUSE_CHECKS: Record<
     if (subject.structuredHostOperationId !== null
       && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState ?? "")
       && !subject.settledOperation
-      && (seatWasRevoked(subject) && (subject.key.engine === "claude" || subject.key.engine === "codex")
-        || !subject.structuredHostOperationReceiptAbandoned
-        && !(subject.nativeTurnSettled && subject.structuredHostOperationReceiptState === null))) {
+      && !subject.structuredHostOperationReceiptAbandoned
+      && !(subject.nativeTurnSettled && subject.structuredHostOperationReceiptState === null)) {
       return refuses(`operation ${subject.structuredHostOperationId} has no settlement proof (registry: ${subject.structuredHostOperationReceiptState ?? "absent"})`);
     }
     return subject.openOperations > 0

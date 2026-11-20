@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { constants } from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { structuredClaimIdentity, type AgentRegistry } from "@/lib/agent/registry";
 import { registryHasStructuredProcess, registryKeysMatchingBounded } from "@/lib/agent/sqliteRegistryStore";
@@ -13,6 +13,7 @@ import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
 import { recordedOwnerHeld } from "@/lib/recordedChecks/store";
 import type { RuntimeHostClient } from "./client";
 import type { RuntimeOperationCommand } from "@/lib/runtime/contracts";
+import type { RuntimeRetirementClaim } from "@/lib/runtime/contracts";
 import { readHostExit, readHostExitWriterBinding, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { idleRetirementSession, OPEN_RETIREMENT_DELIVERIES, OPEN_SPAWN_RECEIPTS,
@@ -136,7 +137,7 @@ interface OrphanSweepPorts {
   ready(): boolean;
   noLocalWork(key: SessionKey, conversationId: string): boolean;
   treeIdle(identity: ProcessIdentity): boolean;
-  client: Pick<RuntimeHostClient, "readSession" | "operationStatus" | "command">;
+  client: Pick<RuntimeHostClient, "readSession" | "operationStatus" | "command" | "transitionOperation">;
   pids?: AsyncIterable<number>;
   now?: () => number;
   idleMs: number;
@@ -282,45 +283,108 @@ export async function reconcileUnregisteredAgentProcesses(ports: OrphanSweepPort
         return authorized() && !!session && idleRetirementSession(session, launch.conversationId, launch.key, launch.artifactPath);
       } catch { return false; }
     };
+    const retirementId = `unregistered-retirement-${launch.launchId}`;
+    let retirementClaim: RuntimeRetirementClaim | null = null;
+    let retirementClaimed = false;
+    const operationIsClaimed = (result: Awaited<ReturnType<typeof ports.client.operationStatus>>) => !!result && !!retirementClaim
+      && result.operationId === retirementId && result.receipt.operationId === retirementId
+      && result.receipt.conversationId === launch.conversationId && result.receipt.status === "delivering"
+      && result.receipt.retirementClaim?.executorId === retirementClaim.executorId
+      && !!result.receipt.retirementClaim.process
+      && sameRecordedProcessIdentity(result.receipt.retirementClaim.process, retirementClaim.process);
+    const failUnclaimed = async (reason: string) => {
+      try {
+        await ports.client.transitionOperation(retirementId, "failed", { reason }, { fromStatuses: ["pending", "queued"] });
+      } catch { /* Another executor may have claimed or settled the operation. */ }
+    };
+    const settleClaimed = async (status: "delivered" | "failed", reason?: string) => {
+      if (!retirementClaimed || !retirementClaim) return false;
+      try {
+        const result = await ports.client.transitionOperation(retirementId, status,
+          reason ? { reason } : {}, { retirementClaim, fromStatuses: ["delivering"] });
+        retirementClaimed = false;
+        return result.receipt.status === status;
+      } catch { return false; }
+    };
     const send = async (signal: "SIGTERM" | "SIGKILL") => {
       if (pidfds === undefined) pidfds = openPidfdLibrary();
       const libc = pidfds;
-      if (!libc || !authorized() || !await verifyRuntime() || !authorized()) return false;
-      // The journal transaction is the admission fence: a send that committed
-      // first makes this idle-only kill refuse; once this kill is pending,
-      // retirementInProgress prevents new sends until this exact signal ends.
-      const session = await readSession({ conversationId: launch.conversationId, artifactPath: launch.artifactPath }, { timeoutMs: 500 });
-      if (!authorized() || !session || !idleRetirementSession(session, launch.conversationId, launch.key, launch.artifactPath)
-        || session.retirementBlocked !== false || !Number.isSafeInteger(session.revision) || !session.writerClaim) return false;
-      const retirementId = `unregistered-retirement-${launch.launchId}`;
-      let admitted;
-      try {
-        admitted = await ports.client.command({
-          kind: "kill", operationId: retirementId, idempotencyKey: retirementId,
-          conversationId: launch.conversationId, sessionKey: launch.key,
-          onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim },
-        } satisfies RuntimeOperationCommand);
-      } catch { return false; }
-      if (!authorized() || !["pending", "queued", "delivering", "delivered"].includes(admitted.receipt.status)) return false;
-      const latest = await ports.client.operationStatus(retirementId, { timeoutMs: 500 });
-      if (!authorized() || !latest || latest.operationId !== retirementId
-        || latest.receipt.operationId !== retirementId
-        || !["pending", "queued", "delivering", "delivered"].includes(latest.receipt.status)) return false;
-      return ports.registry.deliveryWriteOrBusy({ label: "registry.unregistered-agent-stop", operationId: launch.launchId }, () => {
-        if (!authorized()) return false;
-        const fd = libc.symbols.pidfd_open(pid, 0);
-        if (fd < 0) return false;
+      if (!libc || !authorized()) return false;
+      if (!retirementClaimed) {
+        if (!await verifyRuntime() || !authorized()) return false;
+        // Admission precedes the claim: work that wins this transaction keeps
+        // the orphan alive, while a delivering claim excludes later work.
+        const session = await readSession({ conversationId: launch.conversationId, artifactPath: launch.artifactPath }, { timeoutMs: 500 });
+        if (!authorized() || !session || !idleRetirementSession(session, launch.conversationId, launch.key, launch.artifactPath)
+          || session.retirementBlocked !== false || !Number.isSafeInteger(session.revision) || !session.writerClaim) return false;
+        let admitted;
         try {
-          if (!authorized()) return false;
-          const origin = { path: "unregistered-agent-reconciliation", operationId: launch.launchId };
-          const withdraw = withHostStopOrigin(origin, () => recordHostStop(native, signal, origin.path));
-          const recorded = readHostExit(native)?.stop;
-          if (recorded?.path === origin.path && recorded.operationId === origin.operationId && recorded.signal === signal
-            && authorized() && libc.symbols.pidfd_send_signal(fd, constants.signals[signal], null, 0) === 0) return true;
-          withdraw?.();
+          admitted = await ports.client.command({
+            kind: "kill", operationId: retirementId, idempotencyKey: retirementId,
+            conversationId: launch.conversationId, sessionKey: launch.key,
+            onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim },
+          } satisfies RuntimeOperationCommand);
+        } catch {
+          await failUnclaimed("orphan retirement admission could not be confirmed");
           return false;
-        } finally { fs.closeSync(fd); }
-      });
+        }
+        if (!["pending", "queued"].includes(admitted.receipt.status)) return false;
+        const executorProcess = captureProcessIdentity(globalThis.process.pid);
+        if (!authorized() || !executorProcess.bootEpoch || !executorProcess.startIdentity) {
+          await failUnclaimed("orphan retirement authority changed before claim");
+          return false;
+        }
+        retirementClaim = { executorId: `orphan-sweep:${randomUUID()}`, process: executorProcess };
+        let claimed;
+        try {
+          claimed = await ports.client.transitionOperation(retirementId, "delivering", {},
+            { retirementClaim, fromStatuses: ["pending", "queued"] });
+        } catch {
+          await failUnclaimed("orphan retirement claim was refused");
+          const latest = await ports.client.operationStatus(retirementId, { timeoutMs: 500 }).catch(() => null);
+          if (operationIsClaimed(latest)) {
+            retirementClaimed = true;
+            await settleClaimed("failed", "orphan retirement claim response was lost");
+          }
+          return false;
+        }
+        retirementClaimed = operationIsClaimed(claimed);
+        if (!authorized() || !retirementClaimed) {
+          if (retirementClaimed) await settleClaimed("failed", "orphan retirement authority changed after claim");
+          if (["pending", "queued"].includes(claimed.receipt.status)) await failUnclaimed("orphan retirement claim was refused");
+          return false;
+        }
+      }
+      // Re-read after every wait, immediately before entering the synchronous
+      // signal section. A competing drain that won admission has no local
+      // claim token and therefore cannot authorize this signal.
+      const latest = await ports.client.operationStatus(retirementId, { timeoutMs: 500 });
+      if (!authorized() || !operationIsClaimed(latest)) {
+        await settleClaimed("failed", "orphan retirement claim changed before signal");
+        return false;
+      }
+      let signalled = false;
+      try {
+        signalled = await ports.registry.deliveryWriteOrBusy({ label: "registry.unregistered-agent-stop", operationId: launch.launchId }, () => {
+          // The delivering journal claim cannot be released by the queue while
+          // this executor process remains alive. Recheck its local token and
+          // all synchronous process/registry evidence at the signal boundary.
+          if (!retirementClaimed || !retirementClaim || !authorized()) return false;
+          const fd = libc.symbols.pidfd_open(pid, 0);
+          if (fd < 0) return false;
+          try {
+            if (!authorized()) return false;
+            const origin = { path: "unregistered-agent-reconciliation", operationId: launch.launchId };
+            const withdraw = withHostStopOrigin(origin, () => recordHostStop(native, signal, origin.path));
+            const recorded = readHostExit(native)?.stop;
+            if (recorded?.path === origin.path && recorded.operationId === origin.operationId && recorded.signal === signal
+              && authorized() && libc.symbols.pidfd_send_signal(fd, constants.signals[signal], null, 0) === 0) return true;
+            withdraw?.();
+            return false;
+          } finally { fs.closeSync(fd); }
+        });
+      } catch { signalled = false; }
+      return signalled;
     };
     const gone = async () => {
       const until = performance.now() + GRACE_MS;
@@ -331,12 +395,26 @@ export async function reconcileUnregisteredAgentProcesses(ports: OrphanSweepPort
     };
     try {
       const result = await withRecordedHostFence(native, async () => {
-        if (!await send("SIGTERM")) return null;
-        if (await gone() || await send("SIGKILL") && await gone()) return "stopped";
+        if (!await send("SIGTERM")) {
+          await settleClaimed("failed", "orphan retirement signal was refused");
+          return null;
+        }
+        if (await gone()) {
+          return await settleClaimed("delivered") ? "stopped" : "unresolved";
+        }
+        if (!await send("SIGKILL")) {
+          await settleClaimed("failed", "orphan retirement signal was refused");
+          return "unresolved";
+        }
+        if (await gone()) {
+          return await settleClaimed("delivered") ? "stopped" : "unresolved";
+        }
+        await settleClaimed("failed", "orphan process did not exit after retirement signals");
         return "unresolved";
       }, { waitMs: 50 });
       if (result) outcomes.push({ launchId: launch.launchId, key: sessionKeyId(launch.key), process: native, outcome: result });
     } catch {
+      await settleClaimed("failed", "orphan retirement sweep failed");
       if (readHostExit(native)?.stop?.operationId === launch.launchId) {
         outcomes.push({ launchId: launch.launchId, key: sessionKeyId(launch.key), process: native, outcome: "unresolved" });
       }

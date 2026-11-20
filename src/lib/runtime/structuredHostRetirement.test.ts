@@ -906,6 +906,21 @@ test("a revoked seat is retired however recently it wrote — the self-tick stop
   expect(retired.seatRevoked).toBe(true);
 });
 
+test("a revoked seat retains the abandoned-receipt escape for its operation stamp", async () => {
+  const abandoned = new Date(NOW - RETIREMENT_ABANDONED_RECEIPT_MS - 60_000).toISOString();
+  const probe = await sweep({
+    ...rotatedAway,
+    snapshot: () => snapshot({
+      entries: { [`claude:${SESSION}`]: entry({ structuredHostOperationId: "launch-1" }) },
+      receipts: { "launch-1": { launchId: "launch-1", conversationId: CONVERSATION, key: null,
+        state: "path-pending", engine: "claude", createdAt: abandoned } },
+    }),
+  });
+  expect(probe.report.refused).toEqual([]);
+  expect(probe.report.retired[0]!.passed).toContain("no-open-operation");
+  expect(probe.terminated).toHaveLength(1);
+});
+
 test("a retirement under the ordinary threshold never claims the revoked-seat rule", async () => {
   const probe = await sweep();
   expect(probe.report.retired[0]!.seatRevoked).toBeUndefined();

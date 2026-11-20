@@ -2965,12 +2965,11 @@ export class RuntimeJournal {
       SELECT 1 AS present FROM operations WHERE conversation_id = ?
         AND json_extract(request_json, '$.kind') = 'kill'
         AND json_type(request_json, '$.onlyIfIdle') = 'object'
-        AND json_extract(receipt_json, '$.status') IN ('pending', 'queued', 'delivering') LIMIT 1
+        AND json_extract(receipt_json, '$.status') = 'delivering' LIMIT 1
     `).get(conversationId);
   }
 
-  /** A queued retirement fences new work, while only a delivering owner may
-   * exclude another retirement from taking its delivery claim. */
+  /** Only a delivering retirement owns the reservation against new work. */
   private retirementClaimInProgress(conversationId: string): boolean {
     return !!this.db.query<{ present: number }, [string]>(`
       SELECT 1 AS present FROM operations WHERE conversation_id = ?

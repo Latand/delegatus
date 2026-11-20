@@ -4331,15 +4331,10 @@ test.each(["work-first", "retirement-first"])("automatic retirement claim serial
     expect(journal.operationResult("work-first")!.receipt.status).toBe("queued");
   } else {
     journal.executeOperation({ kind: "kill", operationId: "retire-claim", idempotencyKey: "retire-claim", conversationId, sessionKey: key, onlyIfIdle });
-    expect(send("racing-send").receipt).toMatchObject({ status: "rejected", reason: "idle-retirement-in-progress" });
-    expect(journal.transitionOperation("retire-claim", "delivering").receipt.status).toBe("delivering");
-    const native = journal.executeOperation({ kind: "native-queue", operationId: "racing-native", idempotencyKey: "racing-native",
-      conversationId, action: "add", binding: { threadId: key.sessionId, accountId: null }, text: "new native work" });
-    expect(native.receipt.status).toBe("rejected");
-    expect(journal.nativeQueueRead(conversationId)).toEqual([]);
-    expect(journal.effectBatch(100).every(effect => effect.payload.operationId === "retire-claim")).toBe(true);
-    // A refused teardown releases its admission barrier, allowing a retry.
-    journal.transitionOperation("retire-claim", "failed", { reason: "idle-retirement-deferred" });
+    expect(send("racing-send").receipt.status).toBe("queued");
+    expect(journal.transitionOperation("retire-claim", "delivering").receipt)
+      .toMatchObject({ status: "failed", reason: "idle-retirement-deferred" });
+    expect(journal.operationResult("racing-send")!.receipt.status).toBe("queued");
     expect(send("work-after-release").receipt.status).toBe("queued");
   }
   journal.close();
@@ -4362,12 +4357,10 @@ test("automatic retirement claim blocks in-place retry without consuming its act
     const session = journal.readSession({ conversationId })!;
     journal.executeOperation({ kind: "kill", operationId: "retry-retire", idempotencyKey: "retry-retire", conversationId,
       sessionKey: key, onlyIfIdle: { revision: session.revision, writerClaim: "fixture:1" } });
-    expect(journal.transitionOperation("retry-retire", "delivering").receipt.status).toBe("delivering");
-    expect(() => journal.retryOperation("retry-send")).toThrow("idle-retirement-in-progress");
-    expect(journal.operationResult("retry-send")!.receipt.status).toBe("failed");
-    expect(journal.effectBatch(100).every(effect => effect.payload.operationId === "retry-retire")).toBe(true);
-    journal.transitionOperation("retry-retire", "failed", { reason: "idle-retirement-deferred" });
     expect(journal.retryOperation("retry-send").receipt.status).toBe("queued");
+    expect(journal.transitionOperation("retry-retire", "delivering").receipt)
+      .toMatchObject({ status: "failed", reason: "idle-retirement-deferred" });
+    expect(journal.operationResult("retry-send")!.receipt.status).toBe("queued");
   } finally {
     journal.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -4394,18 +4387,17 @@ test.each(["before-admission", "before-claim"])("automatic retirement protects a
       sessionKey: key, onlyIfIdle: { revision: session.revision, writerClaim: "fixture:1" } };
     if (timing === "before-claim") expect(journal.executeOperation(kill).receipt.status).toBe("queued");
     if (timing === "before-claim") {
-      expect(() => journal.retryOperation("retry-parent")).toThrow("idle-retirement-in-progress");
-      expect(journal.operationResult("retry-parent")!.receipt.status).toBe("failed");
-      expect(journal.transitionOperation("parent-retire", "delivering").receipt.status).toBe("delivering");
+      expect(journal.retryOperation("retry-parent").receipt.status).toBe("queued");
+      expect(journal.operationResult("retry-parent")!.receipt.status).toBe("queued");
+      expect(journal.transitionOperation("parent-retire", "delivering").receipt)
+        .toMatchObject({ status: "failed", reason: "idle-retirement-deferred" });
     } else {
       expect(journal.retryOperation("retry-parent").receipt.status).toBe("queued");
       expect(journal.readSession({ conversationId })!.retirementBlocked).toBe(true);
       expect(journal.executeOperation(kill).receipt).toMatchObject({ status: "rejected", reason: "idle-retirement-deferred" });
     }
-    expect(journal.effectBatch(100, ["runtime.kill"])).toEqual(timing === "before-claim"
-      ? [expect.objectContaining({ payload: expect.objectContaining({ operationId: "parent-retire" }) })]
-      : []);
-    expect(journal.operationResult("retry-parent")!.receipt.status).toBe(timing === "before-claim" ? "failed" : "queued");
+    expect(journal.effectBatch(100, ["runtime.kill"])).toEqual([]);
+    expect(journal.operationResult("retry-parent")!.receipt.status).toBe("queued");
   } finally {
     journal.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -4451,7 +4443,7 @@ test.each(["live", "unverified", "dead"])("automatic retirement claim protects t
       await child.exited;
       expect(journal.transitionOperation("exclusive-retire", "queued", {}, { retirementClaim: contender }).receipt.retirementClaim).toBeNull();
       expect(journal.executeOperation({ kind: "send", operationId: "owner-held-send", idempotencyKey: "owner-held-send",
-        conversationId, policy: "queue", text: "after actuation" }).receipt.status).toBe("rejected");
+        conversationId, policy: "queue", text: "after actuation" }).receipt.status).toBe("queued");
       journal.transitionOperation("exclusive-retire", "failed", { reason: "fixture-released" }, { fromStatuses: ["queued"] });
     } else {
       // The executor releases only after its own actuation has returned.
