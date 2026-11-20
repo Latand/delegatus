@@ -149,8 +149,13 @@ else {const sid=a[a.indexOf(a.includes('--resume')?'--resume':'--session-id')+1]
     const media = JSON.parse(prompt.split("<inbound_media>")[1]!.split("</inbound_media>")[0]!) as { ref: string; local_path?: string }[];
     for (const item of media) if (item.local_path) { paths.push(item.local_path); if (live) expect(fs.readFileSync(item.local_path)).toEqual(bytes); }
   };
+  let ownerLaunches = 0;
   const ports: OwnerRunPorts = {
-    launch: async body => { inspect(String(body.prompt)); return { status: 202, body: { conversationId: "conversation_history" } }; },
+    launch: async body => {
+      ownerLaunches++;
+      inspect(String(body.prompt));
+      return { status: 202, body: { conversationId: "conversation_history" } };
+    },
     continue: async (turn, prompt) => { inspect(prompt); return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId }; },
     observe: async () => ({ state: "ended", finalText: "Done." }), stop: async () => {}, pollMs: 1,
   };
@@ -165,8 +170,38 @@ else {const sid=a[a.indexOf(a.includes('--resume')?'--resume':'--session-id')+1]
     }
     return result;
   };
-  return { raw, downloads, completions, prompts, paths, run, cloudCalls: () => cloudCalls, close: server.close };
+  return { raw, downloads, completions, prompts, paths, run, cloudCalls: () => cloudCalls, ownerLaunches: () => ownerLaunches, close: server.close };
 }
+
+for (const role of ["group", "owner"] as const) for (const invocation of ["mention", "reply"] as const)
+  test(`${role}: a photo on a group ${invocation} reaches the relay model`, async () => {
+    const f = await runnerCase(role, "claude");
+    const request = f.raw, parent = request.input.conversation[0]!, trigger = request.input.conversation[3]!;
+    request.features = ["requester_context", "relay_media_in", "relay_owner_tools"];
+    request.input.request_text = invocation === "mention" ? "@fixturebot" : null;
+    trigger.text = request.input.request_text ?? "";
+    trigger.reply_to = invocation === "reply" ? parent.id : null;
+    request.input.conversation = [trigger];
+    if (invocation === "reply") {
+      delete parent.media;
+      parent.author = { key: "assistant", name: "Fixture", self: true };
+      request.input.conversation.unshift(parent);
+    }
+    if (role === "group") request.input.tools = [{
+      name: "owner_history_lookup", summary: "Read owner history", audience: "owner", mode: "direct",
+      effect: "read", parameters: { type: "object" },
+    }];
+
+    try {
+      const result = await f.run(request);
+      expect(result).toMatchObject({ outcome: "answered" });
+      expect(f.completions).toEqual([result]);
+      expect(f.downloads).toEqual(["photo_3"]);
+      expect(f.paths).toHaveLength(1);
+      expect(f.ownerLaunches()).toBe(role === "owner" ? 1 : 0);
+      if (role === "group") expect(f.prompts.join()).not.toContain("owner_history_lookup");
+    } finally { await f.close(); }
+  }, 30_000);
 
 for (const role of ["owner", "group", "guest"] as const) for (const engine of ["claude", "codex", "codex-cloud"] as const)
   test(`${role}/${engine}: real runner preserves item refs, markers and download authority`, async () => {
