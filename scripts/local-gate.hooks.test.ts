@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createGateSandbox, discover, endingOf, gateTemporaryRoot, isolatedEnvironment, NoVerdict, plan, pushDeadline, requiresMediaTools, runPushPair, runSteps, SUPERVISOR_MARGIN_MS } from "./local-gate";
+import { createGateSandbox, discover, endingOf, gateTemporaryRoot, isolatedEnvironment, NoVerdict, plan, pushDeadline, runPushPair, runSteps, SUPERVISOR_MARGIN_MS } from "./local-gate";
 import { createHookFixture } from "./local-gate.fixture";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
@@ -68,15 +68,6 @@ test("repository default budgets follow current changes across fresh hook proces
   expectBudget(run(String(now + 30_000)), now + 30_000, 30_000);
 }, 120_000);
 
-test("media deferral recognizes disguised raster magic without loading the privacy gate", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "gate-media-")); roots.push(dir);
-  const disguised = path.join(dir, "capture.dat");
-  writeFileSync(disguised, Buffer.from("89504e470d0a1a0a", "hex"));
-  expect(requiresMediaTools(disguised)).toBeTrue();
-  const text = path.join(dir, "note.md"); writeFileSync(text, "plain text");
-  expect(requiresMediaTools(text)).toBeFalse();
-});
-
 test("the gate temp root cannot inherit a pipeline's operator scratch TMPDIR", () => {
   const original = process.env.TMPDIR;
   try {
@@ -93,7 +84,7 @@ test("a push that changes nothing checks every pushed commit for privacy and run
   // the merge base is empty whatever main has become since.
   const steps = plan("pre-push", [], context({ linux: true, runtime: true, native: true }));
   expect(steps.map(step => step.name)).toEqual(["privacy"]);
-  expect(steps[0]!.command).toEqual(["bun", "scripts/privacy-publication-gate.ts", "--base", "base", "--require-known-values", "--check-commits", "--added-lines", "--defer-unavailable-media"]);
+  expect(steps[0]!.command).toEqual(["bun", "scripts/privacy-publication-gate.ts", "--base", "base", "--require-known-values", "--check-commits", "--added-lines"]);
   expect(discover(root, "HEAD", []).linux).toBeFalse();
 });
 test("a push that changes one document keeps privacy and leaves main's types and tests alone", () => {

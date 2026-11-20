@@ -6,6 +6,7 @@ strace and gdb work; seccomp TRACE optimizations (including rr) cannot observe
 calls held by USER_NOTIF. Admission relies on cooperative callers.
 The broker retains ticket, deadline and cleanup authority.
 """
+import array
 import ctypes as c
 import errno
 import json
@@ -402,7 +403,9 @@ def main():
         receiver.close()
         command_identity(os.getppid())
         listener = install_filter()
-        socket.send_fds(sender, [b"1"], [listener])
+        # Python 3.14's send_fds imports array on first use. An import here
+        # can wait for the very listener the parent is still waiting to receive.
+        sender.sendmsg([b"1"], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [listener]))])
         os.close(listener)
         sender.close()
         os.execvp(sys.argv[1], sys.argv[1:])

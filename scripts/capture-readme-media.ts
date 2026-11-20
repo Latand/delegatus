@@ -19,16 +19,14 @@
  * byte for byte inside the gate, and a browser screenshot cannot be
  * reproduced that way. Chrome prints the frame to PDF and poppler turns the
  * page into an SVG whose glyphs are paths, so the file carries no raster and
- * no font dependency. The gate does not OCR an SVG, so the driver runs the
- * gate's own checks before it keeps one: the frame's text goes through the
- * gate's sensitive-text classifier, the full-frame PNG through its raster
- * inspection (OCR included), and the text must not contain this machine's
- * home, user name or host name. Every shot also declares
+ * no font dependency. The driver checks the visible text for sensitive values,
+ * inspects PNG metadata and compares the rendered vector with the screenshot.
+ * It also checks for this machine's home, user name and host name. Each shot declares
  * the text it must and must not show.
  *
  * Flags: --serve keeps the server up for inspection instead of capturing.
  * --seed-only checks the complete seed without a build or browser.
- * --check-layout checks every frame in the built Viewer without vector/OCR work
+ * --check-layout checks every frame in the built Viewer without vector conversion
  * or changing repository media; PNGs and bounds stay in its private capture root.
  * Requirements: a completed `bun run build`, Chrome (CHROME_BIN, default
  * /usr/bin/google-chrome-stable) and poppler's `pdftocairo`.
@@ -609,10 +607,8 @@ export function cropSvg(svg: string, crop: CropRect): string {
   return svg.replace(root[0], cropped);
 }
 
-/** Returns how many raster tiles the vector frame embeds. Chrome prints CSS
-    gradients (the board's dot grid, column washes) as image patterns; they
-    carry no text, and the full-frame PNG they are rendered into is what the
-    gate's OCR reads before the SVG is kept. */
+/** Count embedded raster tiles in the vector frame. Chrome can print CSS
+    gradients as image patterns. The render-back check compares the full frame. */
 export function pdfToSvg(pdf: Buffer, target: string, scratchParent: string): number {
   const scratch = fs.mkdtempSync(path.join(scratchParent, "svg-"));
   try {
@@ -1182,14 +1178,9 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       }
       await assertTextWhole(page, shot, crop);
       const frame = await page.screenshot({ path: png, ...(crop ? { clip: crop } : {}) });
-      /* A browser raster never carries provenance, so those two classes are
-         expected here; anything else the gate finds in the pixels is not.
-         OCR is a second reader of a finished frame and never a capture
-         prerequisite: without tesseract the frame goes unread by OCR, and
-         the person committing it looks at every PNG themselves. */
-      const rasterClasses = [...inspectPaths([png]).keys()];
-      if (rasterClasses.includes("tool_unavailable")) process.stdout.write(`${shot.id}: no OCR on this machine; look at ${png} before committing its SVG\n`);
-      const rasterFindings = rasterClasses.filter((finding) => !finding.startsWith("provenance_") && finding !== "tool_unavailable");
+      // The private screenshot has no publication manifest. Its metadata still
+      // passes the same content checks as a published PNG.
+      const rasterFindings = [...inspectPaths([png]).keys()].filter(finding => !finding.startsWith("provenance_"));
       if (rasterFindings.length) throw new Error(`${shot.id}: the gate finds ${rasterFindings.join(", ")} in the rendered frame`);
       await page.emulateMedia({ media: "screen", colorScheme: "dark" });
       /* The print is one page the size of the screen: a card that crosses its

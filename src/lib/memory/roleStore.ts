@@ -588,11 +588,22 @@ function taskCounter(all: readonly RoleMemoryRow[], byId: ReadonlyMap<string, Ro
   };
 }
 
-function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMemoryRule>, history: RoleMemoryScopeRow["history"], tasks: number): RuleView {
-  const agentRevision = history.filter(change => change.by === "agent" && (change.added.includes(row.id) || change.merged.some(item => item.into === row.id) || change.rewritten?.some(item => item.id === row.id)))
-    .reduce((latest, change) => Math.max(latest, change.revision), 0);
-  const curatorRevision = history.filter(change => change.by === "curator" && !change.revertedAt)
-    .reduce((latest, change) => Math.max(latest, change.revision), 0);
+/** Curation compares each visible rule with the latest changes in its scope. */
+function curationRevisions(history: RoleMemoryScopeRow["history"]) {
+  let curator = 0;
+  const agent = new Map<string, number>();
+  const changed = (id: string, revision: number) => agent.set(id, Math.max(agent.get(id) ?? 0, revision));
+  for (const change of history) {
+    if (change.by === "curator" && !change.revertedAt) curator = Math.max(curator, change.revision);
+    if (change.by !== "agent") continue;
+    for (const id of change.added) changed(id, change.revision);
+    for (const merge of change.merged) changed(merge.into, change.revision);
+    for (const rewrite of change.rewritten ?? []) changed(rewrite.id, change.revision);
+  }
+  return { agent, curator };
+}
+
+function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMemoryRule>, tasks: number, agentRevision = 0, curatorRevision = 0): RuleView {
   const awaitingCuration = !row.curatedAt || row.state === "active" && pendingCorrection(row) || (agentRevision && curatorRevision ? agentRevision > curatorRevision
     : row.revisedBy?.by === "agent" && row.revisedBy.at > row.curatedAt);
   /* A text equal to the one in force is not an earlier text: returning to it would change nothing. */
@@ -769,17 +780,19 @@ function buildProjectView(context: ReturnType<typeof projectViewContext>, now: n
     const active = (held?.active ?? []).flatMap((id) => { const found = rulesById.get(id); return found ? [found] : []; });
     const left = (leftByScope.get(scope) ?? [])
       .sort((a, b) => b.changedAt.localeCompare(a.changedAt));
+    const revisions = curationRevisions(active.length || left.length ? held?.history ?? [] : []);
+    const render = (row: RoleMemoryRule) => view(row, now, rulesById, ruleTasks(row.id), revisions.agent.get(row.id), revisions.curator);
     return {
       scope, kind: scopeKind(scope), roleId: scopeRole(scope), revision: held?.revision ?? 0,
       chars: scopeChars(active), bound: ROLE_MEMORY_BOUND,
       addedToday: active.filter((row) => now - Date.parse(row.createdAt) < DAY_MS).length,
-      active: active.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))), left: left.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))),
+      active: active.map(render), left: left.map(render),
     };
   });
   if (swarmRulesEnabled()) for (const role of SWARM_ROLE_IDS) {
     const active = swarmRulesForRole(role);
     scopes.push({ scope: swarmScope(role), kind: "swarm", roleId: role, revision: 0, chars: scopeChars(active), bound: SWARM_ROLE_BOUND, addedToday: 0,
-      active: active.map(row => ({ ...view(row, now, rulesById, [], 0), fresh: false, awaitingCuration: false })), left: [] });
+      active: active.map(row => ({ ...view(row, now, rulesById, 0), fresh: false, awaitingCuration: false })), left: [] });
   }
   const value = { project: canonical, enabled, ...(!enabled && roleMemorySelectorEnabled() ? { pausedBy: "memorySource" as const } : {}), scopes, curation: curationView(canonical, now, all.flatMap(row => row.kind === "scope" ? [row] : []), false) };
   const completed = version();
