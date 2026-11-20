@@ -141,6 +141,7 @@ interface OrphanSweepPorts {
   pids?: AsyncIterable<number>;
   now?: () => number;
   attemptId?: (launchId: string, revision: number) => string;
+  observeExit?: typeof observeAgentProcess;
   idleMs: number;
 }
 
@@ -231,6 +232,7 @@ export async function reconcileUnregisteredAgentProcesses(ports: OrphanSweepPort
   const readSession = ports.client.readSession.bind(ports.client);
   const outcomes: UnregisteredAgentOutcome[] = [];
   const now = ports.now ?? Date.now;
+  const observeExit = ports.observeExit ?? observeAgentProcess;
   const protectedPids = new Set<number>();
   let ancestor: number | null = process.pid;
   while (ancestor !== null && protectedPids.size < 32) {
@@ -400,10 +402,10 @@ export async function reconcileUnregisteredAgentProcesses(ports: OrphanSweepPort
     };
     const gone = async () => {
       const until = performance.now() + GRACE_MS;
-      while (ports.ready() && observeAgentProcess(native) === "alive" && performance.now() < until) {
+      while (ports.ready() && observeExit(native) === "alive" && performance.now() < until) {
         await new Promise(resolve => setTimeout(resolve, 25));
       }
-      return observeAgentProcess(native) === "dead";
+      return observeExit(native) === "dead";
     };
     try {
       const result = await withRecordedHostFence(native, async () => {

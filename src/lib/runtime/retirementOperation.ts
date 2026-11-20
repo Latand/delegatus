@@ -7,7 +7,6 @@ export const OPEN_SPAWN_RECEIPTS = ["starting", "path-pending", "pane-bound", "h
 export const OPEN_RETIREMENT_DELIVERIES = ["held", "assigned", "delivery-uncertain"];
 
 export type RetirementOperationRead = Pick<RuntimeHostClient, "operationStatus">["operationStatus"];
-export type RetirementSessionRead = NonNullable<RuntimeHostClient["readSession"]>;
 type JournalStatus = RuntimeReceiptStatus | "absent";
 export type RetirementJournalEvidence =
   | { settled: true; operation: JournalStatus; firstMessage: JournalStatus }

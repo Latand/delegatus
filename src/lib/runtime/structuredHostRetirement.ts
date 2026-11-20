@@ -4,7 +4,7 @@ import { AGENT_STATE_POLICY } from "@/lib/agentState/model";
 import { entryRevision, subjectId } from "@/lib/agentState/store";
 import { fileSignature, NATIVE_SIZE_REFUSALS } from "@/lib/agentState/transcript";
 import { servingAgentStateService } from "@/lib/agentState/service";
-import { resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
+import { structuredClaimIdentity } from "@/lib/agent/registry";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
@@ -15,8 +15,7 @@ import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt,
-  type StructuredTerminationCapture } from "@/lib/agent/registry";
+import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { registryConversationsForEntryKey, registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
@@ -42,14 +41,12 @@ import {
 } from "./structuredDeliveryController";
 import {
   terminateStructuredHostTree,
-  type StructuredHostTerminationDependencies,
   type StructuredHostTerminationOutcome,
 } from "./structuredHostControl";
 import { realtimeBoundConversationIds } from "./voiceViewBinding";
 import { runtimeHostClient } from "./client";
 import { reconcileUnregisteredAgentProcesses, type UnregisteredAgentOutcome } from "./unregisteredAgentProcesses";
-import { idleRetirementSession, OPEN_RETIREMENT_DELIVERIES, OPEN_SPAWN_RECEIPTS, retirementJournalEvidence, TERMINAL_SPAWN_RECEIPTS,
-  type RetirementJournalEvidence, type RetirementOperationRead, type RetirementSessionRead } from "./retirementOperation";
+import { OPEN_RETIREMENT_DELIVERIES, OPEN_SPAWN_RECEIPTS, TERMINAL_SPAWN_RECEIPTS } from "./retirementOperation";
 
 /**
  * Automatic retirement of finished and idle structured hosts (#747).
@@ -448,7 +445,6 @@ export interface StructuredHostRetirementSubject {
       receipt is missing or there is no stamp. */
   structuredHostOperationReceiptState: SpawnReceipt["state"] | null;
   structuredHostOperationReceiptAbandoned: boolean;
-  settledOperation?: SettledRetirementOperation;
   nativeTurnSettled?: boolean;
   abandonedTurn?: boolean;
   /** Undetermined when the handoff queue could not be read: an unreadable
@@ -617,13 +613,12 @@ const CLAUSE_CHECKS: Record<
     (count) => (count > 0 ? `${count} undelivered handoff entr(ies) name this key` : null)),
 
   "no-open-operation": (subject) => {
-    if (subject.pendingAction !== null && !subject.settledOperation) {
+    if (subject.pendingAction !== null) {
       const stamp = subject.structuredHostOperationId ? ` for operation ${subject.structuredHostOperationId}` : "";
       return refuses(`a ${subject.pendingAction} action is pending${stamp}`);
     }
     if (subject.structuredHostOperationId !== null
       && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState ?? "")
-      && !subject.settledOperation
       && !subject.structuredHostOperationReceiptAbandoned
       && !(subject.nativeTurnSettled && subject.structuredHostOperationReceiptState === null)) {
       return refuses(`operation ${subject.structuredHostOperationId} has no settlement proof (registry: ${subject.structuredHostOperationReceiptState ?? "absent"})`);
@@ -745,7 +740,6 @@ export interface StructuredHostUnflushedEvents {
 
 export interface StructuredHostRetirementRecord {
   reason?: "abandoned turn";
-  settledOperation?: SettledRetirementOperation;
   /** Set when the host retired with events its dead owner never flushed. */
   unflushedEvents?: StructuredHostUnflushedEvents;
   key: string;
@@ -893,8 +887,6 @@ export interface StructuredHostRetirementDependencies {
   owned?: (key: SessionKey) => boolean;
   /** Liveness of the recorded owner; the agent state's own check by default. */
   ownerProcess?: (identity: ProcessIdentity) => "alive" | "dead" | "unverified";
-  readOperation?: RetirementOperationRead;
-  readSession?: RetirementSessionRead;
   terminate?: (ref: StructuredHostKillRef) => Promise<StructuredHostTerminationOutcome>;
   record?: (report: StructuredHostRetirementReport) => void;
   now?: () => number;
@@ -1272,74 +1264,6 @@ function deadRecordedOwner(entry: RegistryFile["entries"][string], readers: Reti
   return readers.ownerProcess(owner) === "dead" ? owner : undefined;
 }
 
-interface ObsoleteOperation {
-  operationId: string;
-  conversationId: string;
-  owner: ProcessIdentity;
-  receipt: SpawnReceipt | null;
-  migration: RegistryFile["conversations"][string]["migration"];
-  key: SessionKey;
-  artifactPath: string;
-}
-
-interface SettledRetirementOperation {
-  operationId: string;
-  ownerPid: number;
-  registryState: SpawnReceipt["state"] | "absent";
-  journal: Extract<RetirementJournalEvidence, { settled: true }>;
-}
-
-/** The operation stamp is also used for migration successors. A missing
- * spawn receipt, by itself, says nothing about ongoing setup or delivery. */
-function obsoleteOperation(
-  entry: RegistryFile["entries"][string],
-  inputs: RetirementInputs,
-  subject: StructuredHostRetirementSubject,
-  readers: RetirementReaders,
-): ObsoleteOperation | null {
-  const { deadOwner, structuredHostOperationId: operationId, keyId } = subject;
-  const conversation = inputs.conversationsBySession.get(keyId);
-  if (!deadOwner?.bootEpoch || !seatWasRevoked(subject) || !operationId || !conversation || !entry.artifactPath
-    || entry.structuredHost?.writerClaimEpoch !== entry.claimEpoch
-    || !inputs.seatConversations.determined || inputs.seatConversations.value.has(conversation.id)
-    || (entry.key.engine !== "codex" && entry.key.engine !== "claude")) return null;
-  const receipt = inputs.file.receipts[operationId] ?? null;
-  if (receipt && (receipt.launchId !== operationId || receipt.transport !== "structured"
-    || !receipt.key || sessionKeyId(receipt.key) !== keyId || receipt.artifactPath !== entry.artifactPath
-    || receipt.engine !== entry.key.engine || resolveConversationAlias(inputs.file, receipt.conversationId) !== conversation.id
-    || receipt.queuedPinnedSpawn || receipt.pendingSpawnCapability
-    || receipt.admissionOwner && (!receipt.admissionOwner.bootEpoch || readers.ownerProcess(receipt.admissionOwner) !== "dead")
-    || receipt.hostSetup?.adoptionClaimEpoch !== undefined && !receipt.hostSetup.cleanupConfirmed)) return null;
-  if (entry.pendingAction !== null && (entry.pendingAction !== "spawn" || !receipt)) return null;
-  const migration = conversation.migration;
-  if (migration && migration.phase !== "committed" && migration.phase !== "rolled-back") return null;
-  const delivery = inputs.file.deliveryOperationOwners[`spawn_message_${operationId}`];
-  if (delivery && (!delivery.terminalState || resolveConversationAlias(inputs.file, delivery.conversationId) !== conversation.id)) return null;
-  return { operationId, conversationId: conversation.id, owner: deadOwner, receipt, migration,
-    key: entry.key, artifactPath: entry.artifactPath };
-}
-
-function withSettledOperation(
-  subject: StructuredHostRetirementSubject,
-  candidate: ObsoleteOperation,
-  journal: SettledRetirementOperation["journal"],
-): StructuredHostRetirementSubject {
-  // The exact matched nonterminal receipt contributed one unit to this
-  // index. Other launches, messages and handoffs retain their own fences.
-  const discount = candidate.receipt && !TERMINAL_RECEIPT_STATES.has(candidate.receipt.state)
-    && !subject.structuredHostOperationReceiptAbandoned ? 1 : 0;
-  return {
-    ...subject,
-    openOperations: subject.openOperations - discount,
-    settledOperation: {
-      operationId: candidate.operationId,
-      ownerPid: candidate.owner.pid,
-      registryState: candidate.receipt?.state ?? "absent",
-      journal,
-    },
-  };
-}
-
 /** Candidate rows: registry-recorded structured hosts only. */
 function retirementCandidates(file: RegistryFile) {
   return registryLivenessRows(file).entries
@@ -1684,31 +1608,11 @@ export async function runStructuredHostRetirementSweep(
   };
   const memoryOf = dependencies.processMemory ?? ((pids: Iterable<number>) => procBackend.processMemory(pids));
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
-  const publicationState = dependencies.publicationState ?? structuredDeliveryPublicationState;
   const client = dependencies.snapshot ? null : runtimeHostClient();
-  const readOperation = dependencies.readOperation ?? client?.operationStatus.bind(client);
-  const readSession = dependencies.readSession ?? client?.readSession?.bind(client);
-  type CheckedOperation = { candidate: ObsoleteOperation; journal: SettledRetirementOperation["journal"] };
-  const unsafeOperation = (checked: CheckedOperation | null, entry: RegistryFile["entries"][string],
-    inputs: RetirementInputs, subject: StructuredHostRetirementSubject) => checked !== null
-      && !isDeepStrictEqual(obsoleteOperation(entry, inputs, subject, readers), checked.candidate);
-  const readSettlement = async (candidate: ObsoleteOperation, current: () => boolean): Promise<RetirementJournalEvidence> => {
-    if (!readOperation || !readSession) return { settled: false, reason: "the runtime journal is unavailable" };
-    const evidence = await retirementJournalEvidence(readOperation, candidate.operationId, candidate.conversationId, current);
-    if (!evidence.settled) return evidence;
-    if (!current()) return { settled: false, reason: "operation custody changed" };
-    try {
-      const { conversationId, artifactPath, key } = candidate;
-      const session = await readSession({ conversationId, artifactPath }, { timeoutMs: 500 });
-      if (current() && session && idleRetirementSession(session, conversationId, key, artifactPath)) return evidence;
-    } catch { /* Unreadable session evidence retains custody. */ }
-    return { settled: false, reason: "runtime session work or custody is unresolved" };
-  };
   // Keep the original capture even if a concurrent release clears its durable
   // copy. Empty termination diagnostics alone do not prove a tree has exited.
   const captures = new Map<string, { identities: readonly ProcessIdentity[]; authorizeGone: () => { error: string } | null }>();
-  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs,
-    transcriptSignature: string | null, checked: CheckedOperation | null) => {
+  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs, transcriptSignature: string | null) => {
     // Retain the evidence that first qualified this target. Reading a
     // new snapshot here could adopt a reopened turn as the original target.
     const observed = originalInputs.file.entries[`${ref.engine}:${ref.sessionId}`];
@@ -1773,55 +1677,27 @@ export async function runStructuredHostRetirementSweep(
         // The original native closure still binds the unchanged transcript and
         // turn. Queue, seat, event and operation evidence must be current.
         subject.nativeTurnSettled = originalSubject.nativeTurnSettled;
-        if (unsafeOperation(checked, cleared ? observed : entry, inputs, subject)) return denied("operation custody");
-        const authorized = checked ? withSettledOperation(subject, checked.candidate, checked.journal) : subject;
         for (const clause of STRUCTURED_HOST_RETIREMENT_CLAUSES) {
           if (clause === "process-identity" || clause === "turn-settled" || clause === "host-idle-or-dead") continue;
-          const answer = CLAUSE_CHECKS[clause](authorized, { now: now(), idleMs });
+          const answer = CLAUSE_CHECKS[clause](subject, { now: now(), idleMs });
           if (!answer.determined || answer.value !== null) return denied(`verdict ${clause}: ${answer.determined ? answer.value : answer.why}`);
         }
         return null;
       }
-      const subject = retirementSubject(entry, inputs, readers, observed);
-      if (unsafeOperation(checked, entry, inputs, subject)) return denied("operation custody");
-      const verdict = structuredHostRetirementVerdict(
-        checked ? withSettledOperation(subject, checked.candidate, checked.journal) : subject, { now: now(), idleMs });
+      const verdict = structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers,
+        observed), { now: now(), idleMs });
       if (!verdict.retire) return denied(`verdict ${verdict.clause}: ${verdict.reason}`);
       return null;
     };
     // A failed capture must keep the cause observed inside writer admission,
     // even if that condition changes again while its promise settles.
     let captureRefusal: ReturnType<typeof authorize> = null;
-    const operationCaptures: StructuredTerminationCapture[] = [];
-    const authorizeCurrent = () => captureRefusal ?? authorize(!!checked && observeAgentProcess(originalSubject.process) === "dead");
     return terminateStructuredHostTree(ref, {
-      authorize: authorizeCurrent,
-      authorizeAsync: checked ? async () => {
-        // The journal and registry have separate owners. Re-read the journal
-        // before each signal and recheck the current registry after every read.
-        const evidence = await readSettlement(checked.candidate, () => !authorizeCurrent());
-        return evidence.settled && isDeepStrictEqual(evidence, checked.journal)
-          ? null : { status: 409, error: "scope retirement target changed: operation journal" };
-      } : undefined,
+      authorize: () => captureRefusal ?? authorize(),
       stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
       orphanAlarmRegistry: agentRegistry(),
       graceMs,
       deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
-      ...(checked ? {
-        retireRegistryEntry: (key, expected, confirmed, custody, confirmedScope) =>
-          agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-settle" }, () =>
-            !authorize(true) && agentRegistry().terminateStructuredHost(key, expected, confirmed, custody, confirmedScope)),
-        registryCustody: { claimEpoch: observed.claimEpoch, claimOwner: observed.claimOwner,
-          writerClaimEpoch: observed.structuredHost?.writerClaimEpoch ?? null, process: originalSubject.process },
-        scope,
-        withdrawCapturedTree: async () => {
-          if (!operationCaptures.length) return;
-          await agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-withdraw" }, () => {
-            for (const capture of operationCaptures.reverse()) agentRegistry().withdrawStructuredTerminationSurvivors(
-              observed.key, originalSubject.process, capture, "idle-retirement-sweep");
-          });
-        },
-      } satisfies Partial<StructuredHostTerminationDependencies> : {}),
       persistCapturedTree: identities => {
         captures.set(`${ref.engine}:${ref.sessionId}`, {
           identities: identities.map(identity => ({ ...identity })), authorizeGone: () => authorize(true),
@@ -1829,13 +1705,6 @@ export async function runStructuredHostRetirementSweep(
         return ref.sessionId !== null && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
           captureRefusal = authorize();
           if (captureRefusal) return false;
-          if (checked) {
-            const capture = agentRegistry().captureStructuredTerminationSurvivors(
-              observed.key, originalSubject.process, identities, "idle-retirement-sweep");
-            if (!capture) return false;
-            operationCaptures.push(capture);
-            return true;
-          }
           return agentRegistry().recordStructuredTerminationSurvivors(
             { engine: ref.engine, sessionId: ref.sessionId! },
             { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
@@ -1846,6 +1715,7 @@ export async function runStructuredHostRetirementSweep(
     });
   });
   const record = dependencies.record ?? recordRetirementReport;
+  const publicationState = dependencies.publicationState ?? structuredDeliveryPublicationState;
   const pidAlive = dependencies.pidAlive ?? observedPidAlive;
   const measurePss = dependencies.treePss ?? treePss;
   const processStatus = (process: ProcessIdentity, alive = pidAlive(process.pid)) => {
@@ -1982,7 +1852,7 @@ export async function runStructuredHostRetirementSweep(
   const planned = retirementInputs({ ...sources, snapshot: () => file }, startedAtMs, candidates.map(entry => sessionKeyId(entry.key)));
   report.evaluated = candidates.length;
 
-  const qualified: Array<{ subject: StructuredHostRetirementSubject; transcriptSignature: string | null; operation: ObsoleteOperation | null }> = [];
+  const qualified: Array<{ subject: StructuredHostRetirementSubject; transcriptSignature: string | null }> = [];
   const goneCandidates: typeof candidates = [];
   let continuationCount = candidates.length;
   for (const [index, entry] of candidates.entries()) {
@@ -2006,20 +1876,7 @@ export async function runStructuredHostRetirementSweep(
       refuse(report, subject, { retire: false, clause: "process-identity", reason: alive.why, undetermined: true }, false);
       continue;
     }
-    const initial = structuredHostRetirementVerdict(subject, { now: startedAtMs, idleMs });
-    // A terminal registry receipt is only a launch-side stamp. On a revoked
-    // seat, still join the keyed runtime journal/session even when that stamp
-    // looks complete: queued sends can arrive independently of the registry.
-    const retiredSeatStamp = seatWasRevoked(subject) && !!subject.structuredHostOperationId
-      && (subject.key.engine === "claude" || subject.key.engine === "codex");
-    const operation = ((!initial.retire && initial.clause === "no-open-operation") || retiredSeatStamp)
-      && readOperation && readSession
-      ? obsoleteOperation(entry, planned, subject, readers) : null;
-    // Admit the bounded journal probe only after every other clause passes.
-    const verdict = operation
-      ? structuredHostRetirementVerdict(withSettledOperation(subject, operation,
-        { settled: true, operation: "absent", firstMessage: "absent" }), { now: startedAtMs, idleMs })
-      : initial;
+    const verdict = structuredHostRetirementVerdict(subject, { now: startedAtMs, idleMs });
     if (!verdict.retire) {
       refuse(report, subject, verdict, false, identity === "alive");
       continue;
@@ -2036,7 +1893,7 @@ export async function runStructuredHostRetirementSweep(
     let transcriptSignature: string | null = null;
     try { transcriptSignature = fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })); }
     catch { /* The default authorizer refuses before capture or any effect. */ }
-    qualified.push({ subject, transcriptSignature, operation });
+    qualified.push({ subject, transcriptSignature });
   }
 
   const visited = new Set(candidates.slice(0, continuationCount).map(entry => sessionKeyId(entry.key)));
@@ -2080,7 +1937,7 @@ export async function runStructuredHostRetirementSweep(
   }
 
   let parents: Map<number, number> | null = null;
-  for (const { subject: planning, transcriptSignature, operation } of qualified) {
+  for (const { subject: planning, transcriptSignature } of qualified) {
     const publication = publicationState();
     if (publication !== "ready") { report.standDown = publication; break; }
     // Kernel PSS accounting may be slow. Do it off the event loop and re-prove
@@ -2117,7 +1974,7 @@ export async function runStructuredHostRetirementSweep(
     }
     // Planning may have observed a live host before the asynchronous memory
     // read. Its disappearance cannot admit a scope stop or a native release.
-    let subject = retirementSubject(fresh, current, readers);
+    const subject = retirementSubject(fresh, current, readers);
     if (processStatus(freshProcess) === "dead") {
       await reconcileGoneAndReport(fresh, planning.conversationId, unflushedEvents(subject));
       continue;
@@ -2126,32 +1983,6 @@ export async function runStructuredHostRetirementSweep(
       planned.conversationsBySession.get(planning.keyId)?.turn)) {
       refuse(report, subject, { retire: false, clause: "turn-settled", reason: "conversation turn changed" }, true);
       continue;
-    }
-    let checked: CheckedOperation | null = null;
-    if (operation) {
-      const stillCurrent = () => {
-        if (publicationState() !== "ready") return false;
-        const inputs = retirementInputs(sources, now(), [planning.keyId]);
-        const entry = inputs.file.entries[planning.keyId];
-        if (!entry || !isDeepStrictEqual(entry, fresh)
-          || !isDeepStrictEqual(inputs.conversationsBySession.get(planning.keyId)?.turn,
-            planned.conversationsBySession.get(planning.keyId)?.turn)) return false;
-        try {
-          if (fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) !== transcriptSignature) return false;
-        } catch { return false; }
-        subject = retirementSubject(entry, inputs, readers);
-        return isDeepStrictEqual(obsoleteOperation(entry, inputs, subject, readers), operation);
-      };
-      const evidence = await readSettlement(operation, stillCurrent);
-      if (!evidence.settled || !stillCurrent()) {
-        const authority = publicationState();
-        if (authority !== "ready") { report.standDown = authority; break; }
-        refuse(report, subject, { retire: false, clause: "no-open-operation",
-          reason: `operation ${operation.operationId} (registry: ${operation.receipt?.state ?? "absent"}): ${evidence.settled ? "operation custody changed" : evidence.reason}` }, true, true);
-        continue;
-      }
-      checked = { candidate: operation, journal: evidence };
-      subject = withSettledOperation(subject, operation, evidence);
     }
     const verdict = structuredHostRetirementVerdict(subject, { now: now(), idleMs });
     if (!verdict.retire) {
@@ -2188,7 +2019,7 @@ export async function runStructuredHostRetirementSweep(
 
     let outcome: StructuredHostTerminationOutcome;
     try {
-      outcome = await terminate(ref, planned, transcriptSignature, checked);
+      outcome = await terminate(ref, planned, transcriptSignature);
     } catch (error) {
       const reason = safeReason(error);
       report.failed.push({ key: subject.keyId, conversationId: subject.conversationId,
@@ -2244,7 +2075,6 @@ export async function runStructuredHostRetirementSweep(
     const unflushed = unflushedEvents(subject);
     report.retired.push({
       ...(subject.abandonedTurn ? { reason: "abandoned turn" as const } : {}),
-      ...(subject.settledOperation ? { settledOperation: subject.settledOperation } : {}),
       ...(unflushed ? { unflushedEvents: unflushed } : {}),
       key: subject.keyId,
       engine: subject.key.engine,

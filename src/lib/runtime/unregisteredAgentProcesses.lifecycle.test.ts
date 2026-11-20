@@ -8,7 +8,7 @@ import { AgentRegistry, type SpawnReceipt } from "@/lib/agent/registry";
 import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, fixtureRecords, fixtureRegistry, at } from "@/lib/agentState/testFixture";
 import { observeAgentProcess } from "@/lib/agentState/process";
 import { captureProcessIdentity } from "@/lib/processIdentity";
-import { stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { fixtureReport, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeOperationCommand } from "./contracts";
@@ -34,8 +34,10 @@ for (const engine of ["claude", "codex"] as const) {
     "dead-row", "dead-session", "absent-row", "live-row", "other-live-row", "ambiguous-owner", "open-journal", "probe-limit",
     "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission",
     "send-wins-runtime-admission", "missing-launch-proof", "drain-fails-kill-before-signal",
+    "ignores-sigterm", "survives-sigkill",
   ] as const)(`${engine} unregistered process reconciliation: %s`, async condition => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-orphan-"));
+    const ignoresSigterm = condition === "ignores-sigterm" || condition === "survives-sigkill";
     const binary = path.join(root, engine);
     // Use a versioned native image behind the CLI symlink in the absent-row
     // case. Linux reports the executable's target name through /proc.
@@ -45,7 +47,17 @@ for (const engine of ["claude", "codex"] as const) {
     if (executable !== binary) fs.symlinkSync(executable, binary);
     const capability = createHash("sha256").update("fixture native launch").digest("base64url");
     const env = { ...process.env, ["LLV_SPAWN_" + "CAPABILITY"]: capability };
-    const native = spawnNativeWaitOwner(binary, ["60"], { env, stdio: "pipe" });
+    const script = path.join(root, `${engine}.mjs`);
+    if (ignoresSigterm) {
+      fs.writeFileSync(script, [
+        'process.on("SIGTERM", () => {});',
+        'console.log(JSON.stringify({ ready: true }));',
+        'setInterval(() => {}, 1000);',
+      ].join("\n"));
+    }
+    const native = ignoresSigterm
+      ? spawnNativeWaitOwner(process.execPath, ["--no-env-file", script], { env, stdio: "pipe" })
+      : spawnNativeWaitOwner(binary, ["60"], { env, stdio: "pipe" });
     const waiter = captureProcessIdentity(native.pid!);
     const nativeClosed = new Promise<void>(resolve => native.once("close", () => resolve()));
     const peer = spawn(binary, ["60"], { env, stdio: "ignore" });
@@ -53,9 +65,15 @@ for (const engine of ["claude", "codex"] as const) {
     let registry: AgentRegistry | undefined;
     let journal: RuntimeJournal | undefined;
     try {
-      await native.spawnReady;
+      if (ignoresSigterm) {
+        const [, ready] = await Promise.all([native.spawnReady, fixtureReport<{ ready: boolean }>(native, "orphan native CLI", [])]);
+        expect(ready).toEqual({ ready: true });
+      } else {
+        await native.spawnReady;
+      }
       const identity = captureProcessIdentity(native.pid!);
       expect(identity).not.toEqual(waiter);
+      expect(observeAgentProcess(identity)).toBe("alive");
       if (condition === "absent-row") expect(fs.readlinkSync(`/proc/${identity.pid}/exe`)).toBe(fs.realpathSync(binary));
       native.retainExit(true);
       const file = fixtureRegistry(root, engine, identity, null);
@@ -139,8 +157,19 @@ for (const engine of ["claude", "codex"] as const) {
       let pulled = 0;
       let operationReads = 0;
       let failedDrainOnce = false;
+      let observedSurvivor = false;
       const ports = {
         registry, idleMs, now: () => now, ready: () => ready, noLocalWork: () => true, treeIdle: treeHasOnlyMcpChildren,
+        observeExit: condition === "survives-sigkill" ? (target: typeof identity) => {
+          const alive = observeAgentProcess(target);
+          if (readHostExit(target)?.stop?.signal === "SIGKILL") {
+            // Simulate a kernel that still reports the target alive after the
+            // real signal. Discovery and signal authorization stay real.
+            observedSurvivor = true;
+            return "alive" as const;
+          }
+          return alive;
+        } : undefined,
         pids: { [Symbol.asyncIterator]: async function* () {
           const candidates = condition === "probe-limit"
             ? Array<number>(5).fill(identity.pid)
@@ -197,7 +226,22 @@ for (const engine of ["claude", "codex"] as const) {
       if (condition === "writer-admission") expect(writerAdmissions).toBe(1);
       expect(observeAgentProcess(peerIdentity)).toBe("alive");
       expect(readHostExit(peerIdentity)?.stop).toBeNull();
-      if (condition === "dead-row" || condition === "dead-session" || condition === "absent-row") {
+      if (ignoresSigterm) {
+        const survived = condition === "survives-sigkill";
+        expect(observedSurvivor).toBe(survived);
+        expect(outcomes).toEqual([{ launchId, key: keyId, process: identity, outcome: survived ? "unresolved" : "stopped" }]);
+        const attempt = journal.snapshot().recentOperations.find(row => row.operationId.startsWith(`unregistered-retirement-${launchId}-`));
+        expect(attempt).toBeDefined();
+        const result = journal.operationResult(attempt!.operationId);
+        expect(result?.receipt).toMatchObject(survived
+          ? { status: "failed", reason: "orphan process did not exit after retirement signals" }
+          : { status: "delivered" });
+        await nativeClosed;
+        expect(observeAgentProcess(waiter)).toBe("dead");
+        expect(observeAgentProcess(identity)).toBe("dead");
+        expect(readHostExit(identity)).toMatchObject({ stop: { operationId: launchId,
+          path: "unregistered-agent-reconciliation", signal: "SIGKILL" }, exit: { signal: "SIGKILL" } });
+      } else if (condition === "dead-row" || condition === "dead-session" || condition === "absent-row") {
         expect(outcomes).toEqual([{ launchId, key: keyId, process: identity, outcome: "stopped" }]);
         expect(journal.snapshot().recentOperations.find(row => row.operationId.startsWith(`unregistered-retirement-${launchId}-`))?.status)
           .toBe("delivered");
