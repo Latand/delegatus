@@ -86,12 +86,25 @@ export function cleanerAttemptMayStart(id: string, now = Date.now()): boolean {
   if (!run || held.activeRunId !== id || run.settledAt) return false;
   return now - Date.parse(run.launchedAt ?? run.claimedAt) < CLEANER_RUN_TIMEOUT_MS;
 }
-/** Cleaner run ids are allocated by this controller and persisted into the
- * launch body before dispatch. Their namespace lets recovery retain the fence
- * even if the run row was pruned or damaged; ordinary manual attempt ids do
- * not enter the scheduled-run policy. */
-export function isScheduledCleanerAttemptId(id: string | null): id is string {
-  return typeof id === "string" && (id.startsWith("cleaner_") || id.startsWith("cleaner_pressure_"));
+/** The spawn route stamps this provenance only after matching the incoming
+ * request to the active controller's durable launch body. The receipt then
+ * retains it across restart even if the run row later disappears. */
+export function scheduledCleanerRunProvenance(id: string | null, request: {
+  role?: unknown; roleParams?: unknown; taskId?: unknown; cwd?: unknown; project?: unknown;
+  prompt?: unknown; mcpServers?: unknown; notifyLauncher?: unknown;
+}): string | null {
+  if (!id) return null;
+  const run = readCleanerRun(id);
+  const expected = run?.launchBody;
+  if (!run || schedule().activeRunId !== id || run.settledAt || !expected
+    || request.role !== "cleaner" || (request.roleParams as { mode?: unknown } | undefined)?.mode !== "disk"
+    || request.cwd !== expected.cwd
+    || request.taskId !== expected.taskId || request.project !== expected.project
+    || request.prompt !== expected.prompt
+    || JSON.stringify(request.mcpServers) !== JSON.stringify(expected.mcpServers)
+    || request.notifyLauncher !== expected.notifyLauncher
+    || expected.clientAttemptId !== id) return null;
+  return id;
 }
 export function activeCleanerRun(): CleanerRun | null {
   const id = schedule().activeRunId;

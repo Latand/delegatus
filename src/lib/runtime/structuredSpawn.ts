@@ -81,7 +81,7 @@ import { roleMemoryDeferralReason, RoleMemoryChanged, RoleMemoryPreparationDefer
 import { AttemptTempStore, type AttemptTempOwner } from "./attemptTempRetention";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE } from "@/lib/memory/roleStore";
-import { cleanerAttemptMayStart, isScheduledCleanerAttemptId } from "@/lib/cleaner/store";
+import { cleanerAttemptMayStart } from "@/lib/cleaner/store";
 
 export type SpawnedStructuredHost = EngineHost & {
   /** Effective MCP transport when account config constrained the preference. */
@@ -1096,8 +1096,9 @@ async function actuateQueuedPinnedSpawn(
 ): Promise<SpawnReceipt> {
   const queued = queuedPinnedSpawnForReceipt(receipt);
   const diskCleaner = receipt.agentRole === "cleaner" && receipt.launchProfile.agentMemoryRoleParams?.mode === "disk";
-  const scheduledCleaner = diskCleaner && isScheduledCleanerAttemptId(receipt.clientAttemptId);
+  const scheduledCleaner = diskCleaner && typeof receipt.scheduledCleanerRunId === "string";
   const cleanerAttemptActive = () => scheduledCleaner && typeof receipt.clientAttemptId === "string"
+    && receipt.scheduledCleanerRunId === receipt.clientAttemptId
     && cleanerAttemptMayStart(receipt.clientAttemptId, (options.now ?? Date.now)());
   const admittedAuthority = readHotStateAuthority(path.dirname(registry.filename));
   const assertActive = () => {

@@ -13,6 +13,7 @@ import { createCleanerController } from "./run";
 import { activeCleanerRun, pendingCleanerCard, readCleanerRun } from "./store";
 
 const [fault, at, space] = process.argv.slice(2);
+const minute = 60_000;
 const clock = statePath("fixture-clock.json");
 const now = () => {
   try { return Date.parse(JSON.parse(fs.readFileSync(clock, "utf8")).at); }
@@ -80,16 +81,19 @@ const controller = createCleanerController({
       });
     }
     const conversationId = `conversation_${run.taskId}`;
-    if (fault === "failed-live") return { state: "failed", conversationId, quiescent: false, failure: { kind: "launch-failed", detail: "Host cleanup pending." } };
+    if (fault === "failed-live") return { state: "failed", conversationId,
+      quiescent: fs.existsSync(statePath("fixture-retired")), failure: { kind: "launch-failed", detail: "Host cleanup pending." } };
     if (fault === "quiesce-after-timeout") return { state: "ended", conversationId,
       completedAt: new Date(Date.parse(run.launchedAt ?? run.claimedAt) + 90 * minute).toISOString(), finalText: "" };
     if (!receipts()[run.runId]) return { state: "running" };
     if (fault === "host-died") return { state: "failed", conversationId, quiescent: false, failure: { kind: "host-died", detail: "Fixture host exited." } };
-    if (fault === "success" || fault === "settlement-crash" || fault === "card-receipt-crash" || fault === "demote-on-observe" || fault === "hold-success-observe") {
+    if (fault === "success" || fault === "success-observed-late" || fault === "settlement-crash" || fault === "card-receipt-crash" || fault === "demote-on-observe" || fault === "hold-success-observe") {
       return { state: "ended", conversationId, finalText: [
         'Inventory summary\n```json\n{"items":1}\n```',
         'Done.\n```json\n{"verdict":"pass","kept":[{"target":"fixture","reason":"keep"}],"notes":"Checked.","removed":["invented"]}\n```',
-      ].join("\n"), completedAt: observedAt };
+      ].join("\n"), completedAt: fault === "success-observed-late"
+        ? new Date(Date.parse(run.launchedAt ?? run.claimedAt) + 89 * minute).toISOString()
+        : observedAt };
     }
     return { state: "running", conversationId };
   },

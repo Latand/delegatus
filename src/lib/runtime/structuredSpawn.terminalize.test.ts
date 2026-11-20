@@ -1282,7 +1282,7 @@ async function cleanerAttemptFixture(ageMs = 0) {
   } };
 }
 
-function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off", cleaner = false) {
+function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off", cleaner = false, scheduledCleanerRunId?: string) {
   const store = registry(mode);
   const cwd = path.dirname(store.filename);
   const profile = emptyLaunchProfile({ cwd, title: cleaner ? "Cleaner queue fixture" : curator ? "Role memory curation" : "Owner queue fixture",
@@ -1292,7 +1292,8 @@ function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: st
   const begun = store.beginSpawnRequest({ engine, cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
     ...(cleaner ? { role: "cleaner" } : {}),
     ...(curator ? { role: "curator", explicitProject: curator.receiptProject ?? curator.project } : {}),
-    clientAttemptId: attemptId ?? curator?.id ?? `relay-owner-queued-${transport}`, launchProfile: profile });
+    clientAttemptId: attemptId ?? curator?.id ?? `relay-owner-queued-${transport}`,
+    ...(scheduledCleanerRunId ? { scheduledCleanerRunId } : {}), launchProfile: profile });
   if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw Error("queued owner fixture unavailable");
   const prompt = "Owner queue fixture instruction";
   store.queuePinnedSpawn(begun.receipt.launchId, { version: 1, retryAt: new Date(0).toISOString(), accountId: "account-a", locale: "en",
@@ -1304,7 +1305,7 @@ function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: st
 
 test.serial("queued cleaner recovery holds its saved attempt throughout an update drain", async () => {
   const cleanerSeed = await cleanerAttemptFixture();
-  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true);
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true, cleanerSeed.runId);
   const saved = store.spawnReceipt(receipt.launchId)?.queuedPinnedSpawn;
   let actuations = 0;
   const options = {
@@ -1335,7 +1336,7 @@ test.serial("queued cleaner recovery holds its saved attempt throughout an updat
 });
 
 test.serial("queued manual guarded disk Cleaner resumes without scheduled-run state", async () => {
-  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "manual-cleaner-attempt", "off", true);
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_manual_prefix_spoof", "off", true);
   let actuations = 0;
   try {
     await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
@@ -1350,7 +1351,7 @@ test.serial("queued manual guarded disk Cleaner resumes without scheduled-run st
 
 test.serial("queued cleaner recovery fences a reservation after its durable run deadline", async () => {
   const cleanerSeed = await cleanerAttemptFixture(91 * 60_000);
-  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true);
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true, cleanerSeed.runId);
   let actuations = 0;
   try {
     await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
@@ -1367,6 +1368,21 @@ test.serial("queued cleaner recovery fences a reservation after its durable run 
     fs.rmSync(cwd, { recursive: true, force: true });
     cleanerSeed.cleanup();
   }
+});
+
+test.serial("queued scheduled cleaner with a missing run record refuses actuation", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_missing_run", "off", true, "cleaner_missing_run");
+  let actuations = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      resolveSpawnAccount: () => ({ engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async () => { actuations++; throw Error("missing scheduled run must not start"); },
+    });
+    expect(actuations).toBe(0);
+    expect(store.spawnReceipt(receipt.launchId)).toMatchObject({ state: "failed", scheduledCleanerRunId: "cleaner_missing_run" });
+    expect(store.spawnReceipt(receipt.launchId)?.error).toContain("disk cleaner run expired");
+  } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
 });
 
 test("a launch queued by a release with the terminal transport ends failed and starts nothing", async () => {

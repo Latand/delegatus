@@ -18,7 +18,7 @@ import { defaultStartHost, structuredHostWorkingDirectory, materializeStructured
 import { CLEANER_SANDBOX_READY } from "@/lib/runtime/cleanerSandboxProbe";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
-import { claimCleanerRun } from "@/lib/cleaner/store";
+import { claimCleanerRun, updateActiveCleanerRun } from "@/lib/cleaner/store";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cleaner-launch-"));
 const env = {
@@ -62,7 +62,11 @@ async function cleanerAttempt(episode: string) {
   const run = await claimCleanerRun({ project: "repo-test", cwd, now: Date.now,
     evidence: { volumes: [], categories: [] }, allowed: () => true, episode });
   if (typeof run === "string") throw new Error(`failed to seed Cleaner controller run: ${run}`);
-  return { runId: run.runId, cleanup() {
+  await updateActiveCleanerRun(run.runId, () => true, current => ({ ...current, launchedAt: new Date().toISOString(), launchBody: {
+    role: "cleaner", roleParams: { mode: "disk" }, cwd, project: "repo-test", taskId: current.taskId,
+    clientAttemptId: current.runId, prompt: "Inspect temporary work.", mcpServers: ["viewer"], notifyLauncher: false,
+  } }));
+  return { runId: run.runId, taskId: run.taskId, project: run.project, cleanup() {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
   } };
 }
@@ -112,6 +116,7 @@ test("an accepted disk cleaner request stays replayable when a drain starts afte
     },
   });
   expect(accepted.status).toBe(202);
+  expect(accepted.receipt?.scheduledCleanerRunId).toBeUndefined();
   expect(deferred).toBeDefined();
   const payload = accepted.receipt!.queuedPinnedSpawn;
   held = true;
@@ -141,6 +146,15 @@ test("an accepted disk cleaner request stays replayable when a drain starts afte
     expect(actuations).toBe(1);
     expect(registry.spawnReceiptForClientAttempt(id)?.clientAttemptId).toBe(id);
   } finally { releaseDrain(drainFile(), "cleaner-after-202"); cleanerSeed.cleanup(); }
+});
+
+test("manual Cleaner launch cannot claim scheduled provenance by reusing the active run id", async () => {
+  const cleanerSeed = await cleanerAttempt("cleaner-provenance-shape-mismatch");
+  try {
+    const accepted = await launch(cleanerSeed.runId, {});
+    expect(accepted.status).toBe(202);
+    expect(accepted.receipt?.scheduledCleanerRunId).toBeUndefined();
+  } finally { cleanerSeed.cleanup(); }
 });
 
 test("a drain during runtime admission retries a refused lease release and replays the same launch", async () => {

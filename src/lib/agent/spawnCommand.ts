@@ -28,6 +28,7 @@ import { NoCopilotAccountError, UnknownCopilotAccountError } from "@/lib/account
 import { agentRegistry, prepareAgentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnLauncher, type SpawnRequest } from "@/lib/agent/registry";
 import { reasoningFromBody } from "@/lib/agent/efforts";
 import { guardedDiskCleanerProfile } from "./cleanerLaunchPolicy";
+import { scheduledCleanerRunProvenance } from "@/lib/cleaner/store";
 import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHEDULED_REPORT_SESSION_CLASS, type McpSessionClass } from "@/lib/agent/mcpAllowlist";
 import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUGINS, sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
@@ -902,6 +903,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       launcher: launcher.value,
       launchProfile,
       clientAttemptId,
+      scheduledCleanerRunId: scheduledCleanerRunProvenance(clientAttemptId, body),
       requestDigest,
       ...(taskIds?.length ? { taskIds } : {}),
       /* Durable launch DISPLAY payload (issue #614/#615): the RAW operator

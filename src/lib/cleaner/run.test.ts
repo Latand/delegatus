@@ -9,7 +9,7 @@ import { readBridgeReportLog } from "@/lib/bridge/store";
 import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { loadPrototypeTask, loadTasksForList } from "@/lib/tasks/store";
 import { cleanerCompletionIsOnTime, createCleanerController } from "./run";
-import { activeCleanerRun, claimCleanerRun, cleanerAttemptMayStart, pendingCleanerCard, readCleanerRun, recordCleanerCardAttempt, updateActiveCleanerRun, type CleanerRun } from "./store";
+import { activeCleanerRun, claimCleanerRun, cleanerAttemptMayStart, pendingCleanerCard, readCleanerRun, recordCleanerCardAttempt, scheduledCleanerRunProvenance, updateActiveCleanerRun, type CleanerRun } from "./store";
 
 const start = Date.parse("2031-02-01T11:00:00.000Z");
 const minute = 60_000;
@@ -214,6 +214,17 @@ test("a passing report completed after the deadline settles as timed out", async
   expect(history()).toHaveLength(1);
 });
 
+test("an on-time completion first observed after the deadline can settle successfully", async () => {
+  const { tick, history, card } = fixture();
+  const started = (await tick(15 * minute, "ready"))!.active!;
+  await tick(105 * minute + 1, "ready", "success-observed-late");
+  expect(readCleanerRun(started.runId)).toMatchObject({
+    settledAt: at(105 * minute + 1), failure: null, report: { verdict: "pass" },
+  });
+  expect(card(started.taskId)?.status).toBe("done");
+  expect(history()).toHaveLength(1);
+});
+
 test("terminal evidence completed at the deadline remains eligible when observed later", () => {
   const launchedAt = at(15 * minute);
   expect(cleanerCompletionIsOnTime(launchedAt, at(105 * minute))).toBe(true);
@@ -328,9 +339,11 @@ test("timeout settles the card but fences a new turn until the old host is obser
   const fenced = (await tick(day, "ok"))!;
   expect(fenced.active?.runId).toBe(started.runId);
   expect(history()).toHaveLength(1);
+  target(day);
   const recovered = (await tick(day, "ok", "quiesce-after-timeout"))!;
-  expect(recovered.active?.trigger).toBe("daily:2031-02-02");
-  expect(history()).toHaveLength(2);
+  expect(recovered.active).toBeNull();
+  expect(readCleanerRun(started.runId)?.quiescedAt).toBe(at(day));
+  expect(history()).toHaveLength(1);
 });
 
 test("definitive launch refusal and host death settle with their own reason", async () => {
@@ -387,4 +400,36 @@ test("pruning keeps the active run and unacknowledged card, with durable clocks 
   expect(readCleanerRun(first.runId)).toBeNull();
   expect(await claimCleanerRun({ ...input, episode: at(0) })).toBe("already-claimed");
   expect(history()).toHaveLength(60);
+});
+
+test("scheduled Cleaner provenance requires the exact active persisted launch shape", async () => {
+  const { state } = fixture();
+  const run = await claimCleanerRun({ project, cwd: state, now: () => start,
+    episode: "scheduled-provenance", evidence: { volumes: [], categories: [] }, allowed: () => true });
+  if (typeof run === "string") throw new Error(`failed to claim scheduled provenance fixture: ${run}`);
+  const body = { role: "cleaner" as const, roleParams: { mode: "disk" }, cwd: state, project,
+    taskId: run.taskId, clientAttemptId: run.runId, prompt: "Persisted Cleaner prompt.",
+    mcpServers: ["viewer"], notifyLauncher: false };
+  await updateActiveCleanerRun(run.runId, () => true, current => ({ ...current,
+    launchedAt: at(0), launchBody: body }));
+  expect(scheduledCleanerRunProvenance(run.runId, body)).toBe(run.runId);
+  expect(scheduledCleanerRunProvenance(run.runId, { ...body, taskId: undefined })).toBeNull();
+  expect(scheduledCleanerRunProvenance(run.runId, { ...body, prompt: "Changed request" })).toBeNull();
+  expect(scheduledCleanerRunProvenance(run.runId, { ...body, project: "repo-other" })).toBeNull();
+});
+
+test("a failed Cleaner receipt holds its slot until retained process custody is retired", async () => {
+  const { tick, history, card, state } = fixture();
+  const running = (await tick(15 * minute, "ready"))!.active!;
+  await tick(16 * minute, "ready", "failed-live");
+  expect(readCleanerRun(running.runId)).toMatchObject({
+    settledAt: at(16 * minute), quiescedAt: null, failure: { kind: "launch-failed" },
+  });
+  expect(card(running.taskId)?.status).toBe("blocked");
+  expect((await tick(day, "ok"))!.active?.runId).toBe(running.runId);
+  expect(history()).toHaveLength(1);
+  fs.writeFileSync(path.join(state, "fixture-retired"), "retired");
+  await tick(day + minute, "ok", "failed-live");
+  expect(readCleanerRun(running.runId)?.quiescedAt).toBe(at(day + minute));
+  expect((await tick(day + 2 * minute, "ok"))!.active?.runId).not.toBe(running.runId);
 });
