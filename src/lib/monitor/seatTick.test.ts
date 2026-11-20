@@ -2662,7 +2662,7 @@ describe("waits routed to the seat", () => {
     const decision = seatTickDecision(input({
       tasks: [{ id: boardTask.id, title: boardTask.text, status: "blocked", updatedAt: since, owned: false }],
       pipelines: [lane({ id: pipeline.id, title: "Paused work", state: "inert", updatedAt: since, pausedBy: "other", pausedAt: since,
-        pauseConditionMet: true })],
+        pause: pipeline.pause, pauseConditionMet: true })],
       pauseWaitingTasks: Object.fromEntries(waits), workerAsks,
     }));
     expect(workerAsks).toEqual([]);
