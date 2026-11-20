@@ -11,7 +11,7 @@ import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
 
 import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SEAT_TICK_SETTINGS_REF } from "./cards";
 import { evidenceStallReason } from "./classify";
-import { seatTickReminders, taskHasBlocker, taskIsOverdue, reminderDeliveredVersion, pauseReminderReady, recentReminderVersion, retainedWaitingSweepVersion } from "./seatTickReminders";
+import { seatTickReminders, taskIsOverdue, reminderDeliveredVersion, pauseReminderReady, recentReminderVersion, retainedWaitingSweepVersion } from "./seatTickReminders";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
@@ -277,7 +277,7 @@ function childStallToken(child: SeatTickChildInput): string {
  * out on its own once nobody touches it.
  */
 function isUnstarted(task: SeatTickTaskInput, now: number, backlogAfterMs: number): boolean {
-  if (task.accepted || taskHasBlocker(task, now) || task.status !== "assigned" || task.owned || task.runsOn) return false;
+  if (task.accepted || task.hold || task.status !== "assigned" || task.owned || task.runsOn) return false;
   const movedAt = task.updatedAt ? Date.parse(task.updatedAt) : Number.NaN;
   /* A card with no readable movement instant cannot be shown to be recent, and
      the whole failure being fixed here is a reason that can never stop being
@@ -286,9 +286,9 @@ function isUnstarted(task: SeatTickTaskInput, now: number, backlogAfterMs: numbe
 }
 
 /**
- * Work the seat could still carry: an open lane, a board card that is neither
- * blocked (a recorded stop) nor done, or a pull request a finished lane left
- * open.
+ * Work the seat could still carry: an open lane, a card available for work,
+ * or a pull request a finished lane left open. Holds record a stop in any
+ * column. The task agenda owns those stops.
  *
  * The third clause is #1289. Counting only lanes and cards made "the work
  * finished" and "the work finished and left three approved pull requests
@@ -306,7 +306,7 @@ function isUnstarted(task: SeatTickTaskInput, now: number, backlogAfterMs: numbe
 function hasOpenWork(input: SeatTickCheckInput): boolean {
   return input.pipelines.some(isOpenLane)
     || input.signals.some(signal => signal.actionable)
-    || input.tasks.some((task) => task.status === "inbox" || task.status === "assigned")
+    || input.tasks.some(task => !task.hold && (task.status === "inbox" || task.status === "assigned"))
     || input.pullRequests.length > 0
     || ownSettledLanes(input).length > 0
     || seatSettledDeploys(input).length > 0
@@ -1270,8 +1270,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     .sort((a, b) => (a.sinceMs ?? Number.POSITIVE_INFINITY) - (b.sinceMs ?? Number.POSITIVE_INFINITY) || a.id.localeCompare(b.id));
   const overdueIds = new Set((input.overdueTasks ?? []).map(task => task.id));
   const unstarted = input.tasks.filter((task) => !overdueIds.has(task.id) && !taskIsOverdue(task, input.now) && (isUnstarted(task, input.now, input.policy.backlogAfterMs)
-    || autonomous && !task.accepted && !taskHasBlocker(task, input.now) && task.status === "inbox" && !task.owned && !task.runsOn));
-  const backlog = input.tasks.filter((task) => !task.accepted && !taskHasBlocker(task, input.now) && task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.filter(task => task.status === "assigned").length;
+    || autonomous && !task.accepted && !task.hold && task.status === "inbox" && !task.owned && !task.runsOn));
+  const backlog = input.tasks.filter(task => !task.accepted && !task.hold && task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.filter(task => task.status === "assigned").length;
   const taskPage = seatTickTaskPage(input, unstarted);
   const openWork = hasOpenWork(input) || seatOwnedLanes.length > 0 || (taskPage?.due ?? 0) > 0;
   /* The bound shortens while the seat's own children are moving (#1881): a
@@ -1382,7 +1382,10 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const asks = input.workerAsks ?? [];
   if (asks.length > 0) {
     const more = asks.length > 1 ? ` and ${asks.length - 1} more` : "";
-    candidates.push({ kind: "worker-ask", detail: `a worker or stage waits on you first and is off the operator's list${more}: answer each where it asked, ${autonomous ? "decide yourself and record the decision with an undo path" : "or ask the operator in a decision form (publish_prototype_review) and dismiss_attention escalate {reviewId}"}` });
+    const taskAsk = asks.some(ask => ask.waitingTaskIds?.includes(ask.id) && !ask.seatOwnedLane);
+    candidates.push({ kind: "worker-ask", detail: taskAsk
+      ? "A task or agent needs the seat’s next step. Follow the action on each Waiting on seat line."
+      : `a worker or stage waits on you first and is off the operator's list${more}: answer each where it asked, ${autonomous ? "decide yourself and record the decision with an undo path" : "or ask the operator in a decision form (publish_prototype_review) and dismiss_attention escalate {reviewId}"}` });
   }
   // A newly owed outcome is due on the next check, including after a recent
   // interval wake. Delivery accounting still discharges it exactly once.

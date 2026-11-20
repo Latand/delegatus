@@ -2,6 +2,7 @@ import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import type { BoardTask } from "@/lib/tasks/types";
+import { normalizeHoldKind } from "@/lib/tasks/hold";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { canonicalOrchestratorProject, orchestratorSeatForOrUnknown, revokedOrchestratorSeatConversationsOrUnknown } from "@/lib/orchestrator/seats";
 import { maintenanceRunForConversation, maintenanceRunIdForConversation, readMaintenanceRun, bindMaintenanceConversation } from "./store";
@@ -71,6 +72,12 @@ export function maintainerTaskWriteRefusal(input: { caller: MaintainerCaller; ar
   const project = input.create ? args.project : task?.project;
   if (!caller.project || typeof project !== "string" || canonicalOrchestratorProject(project) !== canonicalOrchestratorProject(caller.project) || args.project !== undefined && canonicalOrchestratorProject(String(args.project)) !== canonicalOrchestratorProject(caller.project)) {
     return refuse("maintainer_project_refused", `This run maintains ${caller.project ?? "an unknown project"}; task ${task?.id ?? "new"} belongs to ${String(project)}.`);
+  }
+  const hold = args.hold;
+  const operatorHold = hold && typeof hold === "object" && !Array.isArray(hold)
+    && normalizeHoldKind((hold as { kind?: unknown }).kind) === "operator";
+  if (args.status === "blocked" || operatorHold) {
+    return refuse("maintainer_park_refused", "A maintenance run cannot park a task in Waiting. Report an operator decision as an attention line and hand resumable work to the seat.", args.status === "blocked" ? "status" : "hold.kind");
   }
   const retiring = input.retiredSeat && (args.status ?? task?.status) === "done" && !input.openPipeline && !input.liveAgent;
   const deleting = ["removeLine", "detachLinks", "assignments", "groupHidden", "origin", "sources", "workLinks"].find(field => args[field] !== undefined)

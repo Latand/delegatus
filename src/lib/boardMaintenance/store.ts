@@ -12,8 +12,10 @@ const cache = new Map<string, SqliteStateCollection<Row>>();
 function decode(value: unknown): Row | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Row;
-  return row.kind === "run" && typeof row.runId === "string" && Array.isArray(row.log?.changes)
-    || row.kind === "project" && typeof row.project === "string" && Array.isArray(row.runIds)
+  if (row.kind === "run" && typeof row.runId === "string" && Array.isArray(row.log?.changes)) {
+    return { ...row, log: { ...row.log, seat: Array.isArray(row.log.seat) ? row.log.seat : [] } };
+  }
+  return row.kind === "project" && typeof row.project === "string" && Array.isArray(row.runIds)
     || row.kind === "conversation" && typeof row.conversationId === "string" && typeof row.runId === "string" ? row : null;
 }
 function collection(create = false): SqliteStateCollection<Row> | null {

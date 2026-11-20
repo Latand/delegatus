@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { seatAgendaAsks } from "./seatAgenda";
@@ -128,4 +129,30 @@ test("only the successor delivery owner asks for a shared PR merge", () => {
   owner.merge!.blockedAt = later;
   owner.attentionRoute!.key = `lane:owner:merge:${later}`;
   expect(seatAgendaAsks({ files: [], pipelines: [old, olderWithoutMerge, owner] }, now + 180, "project-a").map(ask => ask.id)).toEqual([owner.id]);
+});
+
+test("Waiting tasks travel by their task ask, lane ask or pause reminder", () => {
+  const held = (id: string, kind: "external" | "operator" | "postponed", project = "project-a"): BoardTask => ({
+    id, project, status: "blocked", text: `Check ${id}`, placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind, since: at, by: "agent", note: "Fixture wait" },
+  });
+  const includes = [
+    held("unowned", "external"), held("operator", "operator"), held("dated", "postponed"),
+    held("with-merge", "external"), held("with-pause", "external"), held("elsewhere", "external", "project-b"),
+  ];
+  const merge = { ...mergeLane("merge", "checks did not finish in 90 min"), taskIds: ["with-merge"] };
+  const pause = { ...mergeLane("pause", ""), taskIds: ["with-pause"], attentionRoute: undefined, merge: undefined,
+    state: "paused" as const, pausedAt: new Date(now * 1000 - 86_400_000).toISOString() };
+  const waits = new Map<string, string[]>();
+  const asks = seatAgendaAsks({ files: [], pipelines: [merge, pause], tasks: includes }, now, "project-a", waits);
+  expect(asks.map(ask => ask.id).sort()).toEqual(["merge", "unowned"]);
+  expect(asks.find(ask => ask.id === "unowned")).toMatchObject({
+    key: expect.stringMatching(/^task:unowned:unowned:/), waitingTaskIds: ["unowned"],
+    label: expect.stringContaining("«Check unowned» (task unowned)"),
+  });
+  const mergeAsk = asks.find(ask => ask.id === "merge")!;
+  expect(mergeAsk.label).toContain("with-merge");
+  expect(mergeAsk.label).toContain("pipeline_action retry-merge");
+  expect(mergeAsk.key).not.toBe(seatAgendaAsks({ files: [], pipelines: [merge] }, now, "project-a")[0]!.key);
+  expect([...waits]).toEqual([["pause", ["with-pause"]]]);
 });

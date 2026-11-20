@@ -81,6 +81,12 @@ async function waitForFileCount(directory: string, prefix: string, count: number
   return fs.readdirSync(directory).filter((entry) => entry.startsWith(prefix)).length >= count;
 }
 
+// Both stress fixtures start twenty Bun children behind a barrier. Bound each
+// child's worker pool so CPU-count-dependent threads fit within the gate's task limit.
+function concurrentReceiptEnvironment(stateDir: string): NodeJS.ProcessEnv {
+  return { ...process.env, LLV_STATE_DIR: stateDir, UV_THREADPOOL_SIZE: "2" };
+}
+
 function recoveryArtifacts(directory: string): string[] {
   return fs.readdirSync(directory)
     .filter((entry) => entry.includes(".recovering") || entry.includes(".recovery-owner"));
@@ -201,7 +207,7 @@ describe("MCP tool service", () => {
         String(index),
       ],
       cwd: import.meta.dir,
-      env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state", String(index)) },
+      env: concurrentReceiptEnvironment(path.join(directory, "state", String(index))),
       stdout: "pipe",
       stderr: "pipe",
     })));
@@ -319,7 +325,7 @@ describe("MCP tool service", () => {
           path.join(directory, `${schema.name}-result-${index}.json`), String(index), key,
         ],
         cwd: import.meta.dir,
-        env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state", schema.name, String(index)) },
+        env: concurrentReceiptEnvironment(path.join(directory, "state", schema.name, String(index))),
         stdout: "pipe",
         stderr: "pipe",
       })));

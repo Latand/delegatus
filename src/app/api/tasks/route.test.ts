@@ -131,10 +131,15 @@ test("REST creates, patches, lists and undoes a hold without changing another hi
   expect(moved.hold).toBeUndefined();
   const restoredResponse = await send(moved, { status: "blocked", restoreHold: created.hold });
   expect(restoredResponse.status).toBe(200);
-  expect((await restoredResponse.json()).task.hold).toEqual(created.hold);
+  const restored = (await restoredResponse.json()).task;
+  expect(restored.hold).toEqual(created.hold);
+  const editedResponse = await send(restored, { hold: { kind: "external", note: "I will check the prerequisite" } });
+  expect(editedResponse.status).toBe(200);
+  const edited = (await editedResponse.json()).task as BoardTask;
+  expect(edited).toMatchObject({ status: "blocked", hold: { kind: "external", by: "operator" } });
   const listed = await route.GET(new NextRequest("http://localhost/api/tasks"));
   const rows = (await listed.json()).tasks as BoardTask[];
-  expect(rows.find(row => row.id === created.id)?.hold).toEqual(created.hold);
+  expect(rows.find(row => row.id === created.id)?.hold).toEqual(edited.hold);
   expect(rows.find(row => row.id === hidden.id)?.hold).toBeUndefined();
   expect(rows.find(row => row.id === hidden.id)?.groupHidden).toEqual(hidden.groupHidden);
 });
