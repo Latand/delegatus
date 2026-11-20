@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import filesystem, { chmodSync, lstatSync, promises as fs, readlinkSync, type BigIntStats } from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { setImmediate as yieldToEventLoop, setTimeout as delay } from "node:timers/promises";
 import { tryLockFenceExclusive } from "../../runtime-host/fenceLock";
 import type { ExecPort, ExecResult } from "../workflows/provision";
 
@@ -47,6 +47,7 @@ async function inBatches<T>(values: readonly T[], visit: (value: T) => Promise<v
     // Settle peer reads before releasing the fence on a refusal.
     const results = await Promise.allSettled(values.slice(i, i + 32).map(visit));
     for (const result of results) if (result.status === "rejected") throw result.reason;
+    await yieldToEventLoop();
   }
 }
 
