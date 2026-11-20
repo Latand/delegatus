@@ -7,7 +7,7 @@ import { captureProcessIdentity } from "../processIdentity";
 import { withoutInheritedGate } from "../testing/inheritedGateEnv";
 import { realExec } from "../workflows/provision";
 import { CpuAdmissionQueue, CPU_QUEUE_SPACING_MS, CPU_STAGE_POLL_MS } from "./cpuAdmission";
-import { hasStartupCpuHeadroom, urgentStageCapacitySampler } from "./urgentStageCapacity";
+import { evaluateStartupCpuHeadroom, hasStartupCpuHeadroom, recentUrgentStageCapacityEvidence, urgentStageCapacitySampler, type UrgentCapacityMeasurement } from "./urgentStageCapacity";
 
 const first = `stage:${"a".repeat(64)}:fixture-first:build:3`;
 const second = `stage:${"a".repeat(64)}:fixture-second:build:1`;
@@ -209,3 +209,154 @@ test.each(["head", "last-admission", "new-revision", "no-budget", "expired"] as 
       expect(f.queue.lastAdmission()).toBe(change === "last-admission" ? start + 250 : null);
     } finally { measured.resolve(false); f.close(); }
   });
+
+test("evaluateStartupCpuHeadroom distinguishes exhaustion, throttling, quota changes, invalid samples and deadline misses (#4224)", () => {
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, nextCpuSample, 24, 300, 260)).toEqual({
+    hasCapacity: true,
+    reason: "ok",
+    hostSpareCores: 6,
+    workSpareCores: 4,
+    requiredCores: 3,
+    throttledDelta: 0,
+    sampleElapsedMs: 250,
+    probeElapsedMs: 260,
+  });
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, { ...nextCpuSample, idle: 1_025 }, 24, 300, 260)).toMatchObject({
+    hasCapacity: false,
+    reason: "host-exhausted",
+    hostSpareCores: 1,
+    workSpareCores: 4,
+    requiredCores: 3,
+    throttledDelta: 0,
+  });
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, { ...nextCpuSample, usageUsec: 3_000_000 }, 24, 300, 260)).toMatchObject({
+    hasCapacity: false,
+    reason: "work-slice-exhausted",
+    hostSpareCores: 6,
+    workSpareCores: 0,
+    requiredCores: 3,
+    throttledDelta: 0,
+  });
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, { ...nextCpuSample, idle: 1_025, usageUsec: 3_000_000 }, 24, 300, 260)).toMatchObject({
+    hasCapacity: false,
+    reason: "both-exhausted",
+    hostSpareCores: 1,
+    workSpareCores: 0,
+  });
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, { ...nextCpuSample, throttled: 11 }, 24, 300, 260)).toMatchObject({
+    hasCapacity: false,
+    reason: "throttled",
+    throttledDelta: 2,
+    hostSpareCores: 6,
+    workSpareCores: 4,
+  });
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, { ...nextCpuSample, quota: 120_000 }, 24, 300, 260)).toMatchObject({
+    hasCapacity: false,
+    reason: "quota-changed",
+  });
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, { ...nextCpuSample, usageUsec: 0 }, 24, 300, 260)).toMatchObject({
+    hasCapacity: false,
+    reason: "invalid-sample",
+  });
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, nextCpuSample, 24, 300, 1_000).hasCapacity).toBe(true);
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, nextCpuSample, 24, 300, 1_000.1).reason).toBe("deadline-missed");
+  // Sufficient headroom that missed the 1 s deadline still records headroom alongside deadline-missed.
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, nextCpuSample, 24, 300, 1_150)).toMatchObject({
+    hasCapacity: false,
+    reason: "deadline-missed",
+    hostSpareCores: 6,
+    workSpareCores: 4,
+    probeElapsedMs: 1_150,
+  });
+});
+
+test("urgentStageCapacitySampler records bounded evidence for exhaustion, deadline misses, discards and eligible wakes (#4224)", async () => {
+  const f = queueFixture();
+  const logs: string[] = [];
+  let nextMeasurement: UrgentCapacityMeasurement = evaluateStartupCpuHeadroom(firstCpuSample, { ...nextCpuSample, idle: 1_025 }, 24, 300, 255);
+  let revision = f.revision;
+  const sampler = urgentStageCapacitySampler(async () => nextMeasurement, f.now, { log: line => logs.push(line) });
+  try {
+    f.poll(first, f.capacity(first, false));
+    // 1. Repeated host exhaustion records bounded evidence and rate-limits identical log lines.
+    await sampler.refresh(f.queue, first, { currentRevision: () => revision, makeDue: async r => r, wake() {} });
+    f.at(2_000);
+    await sampler.refresh(f.queue, first, { currentRevision: () => revision, makeDue: async r => r, wake() {} });
+    expect(logs).toHaveLength(1);
+    expect(sampler.recentEvidence().at(-1)).toMatchObject({
+      disposition: "held-no-capacity",
+      probeReason: "host-exhausted",
+      hostSpareCores: 1,
+      workSpareCores: 4,
+      requiredCores: 3,
+      throttledDelta: 0,
+      revision,
+    });
+
+    // 2. Transition to deadline-missed logs immediately.
+    f.at(4_000);
+    nextMeasurement = evaluateStartupCpuHeadroom(firstCpuSample, nextCpuSample, 24, 300, 1_240);
+    await sampler.refresh(f.queue, first, { currentRevision: () => revision, makeDue: async r => r, wake() {} });
+    expect(logs).toHaveLength(2);
+    expect(sampler.recentEvidence().at(-1)).toMatchObject({
+      disposition: "held-no-capacity",
+      probeReason: "deadline-missed",
+      hostSpareCores: 6,
+      workSpareCores: 4,
+      probeElapsedMs: 1_240,
+    });
+
+    // 3. Revision change during probe is recorded as discarded-revision-changed.
+    f.at(6_000);
+    nextMeasurement = evaluateStartupCpuHeadroom(firstCpuSample, nextCpuSample, 24, 300, 260);
+    const changingSampler = urgentStageCapacitySampler(async () => {
+      revision = "rev-after-probe";
+      return nextMeasurement;
+    }, f.now, { log: line => logs.push(line) });
+    await changingSampler.refresh(f.queue, first, { currentRevision: () => revision, makeDue: async r => r, wake() {} });
+    expect(changingSampler.recentEvidence().at(-1)).toMatchObject({
+      disposition: "discarded-revision-changed",
+      probeReason: "ok",
+      revision: f.revision,
+    });
+
+    // 4. First eligible wake records host/work spare cores, throttling, sample age and ticket revision.
+    f.at(8_000);
+    let woke = false;
+    await sampler.refresh(f.queue, first, {
+      currentRevision: () => revision,
+      async makeDue(observed) {
+        f.at(8_040);
+        return observed;
+      },
+      wake() {
+        woke = true;
+      },
+    });
+    expect(woke).toBe(true);
+    expect(sampler.recentEvidence().at(-1)).toMatchObject({
+      disposition: "woke-eligible",
+      probeReason: "ok",
+      hasCapacity: true,
+      hostSpareCores: 6,
+      workSpareCores: 4,
+      requiredCores: 3,
+      throttledDelta: 0,
+      sampleAgeMs: 40,
+      revision,
+      dueRevision: revision,
+    });
+    expect(recentUrgentStageCapacityEvidence().at(-1)).toMatchObject({ disposition: "woke-eligible", dueRevision: revision });
+
+    // 5. Ring remains strictly bounded (<= 64 entries) over sustained holds.
+    nextMeasurement = evaluateStartupCpuHeadroom(firstCpuSample, { ...nextCpuSample, idle: 1_025 }, 24, 300, 255);
+    for (let i = 0; i < 80; i += 1) {
+      f.at(10_000 + i * 2_000);
+      await sampler.refresh(f.queue, first, { currentRevision: () => revision, makeDue: async r => r, wake() {} });
+    }
+    expect(sampler.recentEvidence().length).toBeLessThanOrEqual(64);
+    expect(recentUrgentStageCapacityEvidence().length).toBeLessThanOrEqual(64);
+  } finally {
+    f.close();
+  }
+});
