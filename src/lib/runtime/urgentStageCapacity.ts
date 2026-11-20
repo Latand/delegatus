@@ -144,7 +144,7 @@ export function evaluateStartupCpuHeadroom(
       requiredCores, throttledDelta, sampleElapsedMs, probeElapsedMs: elapsedMs,
     };
   }
-  if (elapsedMs !== null && elapsedMs > sampleDeadlineMs) {
+  if (probeElapsedMs !== null && probeElapsedMs > sampleDeadlineMs) {
     return {
       hasCapacity: false, reason: "deadline-missed", hostSpareCores, workSpareCores,
       requiredCores, throttledDelta, sampleElapsedMs, probeElapsedMs: elapsedMs,
@@ -244,7 +244,6 @@ function stageLabelFromKey(key: string): string {
 const defaultEvidenceLog = (line: string) => console.warn(line);
 
 export type UrgentStageCapacitySamplerOptions = {
-  onEvidence?: (entry: UrgentCapacityEvidence) => void;
   log?: ((line: string) => void) | null;
 };
 
@@ -261,10 +260,10 @@ export function urgentStageCapacitySampler(
   const lastLogged = new Map<string, { at: number; signature: string }>();
   const log = options.log === undefined ? defaultEvidenceLog : options.log;
   const record = (entry: UrgentCapacityEvidence): void => {
+    Object.freeze(entry);
     pushBounded(ring, entry);
     const shared = globalEvidenceHost[globalEvidenceSymbol] ??= [];
     pushBounded(shared, entry);
-    options.onEvidence?.(entry);
     if (!log) return;
     const signature = `${entry.disposition}:${entry.probeReason}`;
     const previous = lastLogged.get(entry.key);
@@ -341,14 +340,14 @@ export function urgentStageCapacitySampler(
         }
         const expiresAt = sampledAt + CPU_STAGE_POLL_MS;
         const dueRevision = await poll.makeDue(revision, expiresAt);
+        const currentAtWake = dueRevision === null ? null : poll.currentRevision();
+        const lastAtWake = queue.lastAdmission();
         const wakeAt = now();
         const sampleAgeMs = Math.max(0, wakeAt - sampledAt);
-        const lastAtWake = queue.lastAdmission();
         if (dueRevision === null) {
           record({ ...base, at: wakeAt, lastAfterProbe: lastAtWake, dueRevision: null, disposition: "discarded-make-due-refused", sampleAgeMs, expiresAt });
           return;
         }
-        const currentAtWake = poll.currentRevision();
         if (currentAtWake !== dueRevision || lastAtWake !== lastBeforeProbe) {
           record({ ...base, at: wakeAt, lastAfterProbe: lastAtWake, dueRevision, disposition: "discarded-changed-after-due", sampleAgeMs, expiresAt });
           poll.wake();

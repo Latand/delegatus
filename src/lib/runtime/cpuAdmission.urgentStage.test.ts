@@ -258,6 +258,8 @@ test("evaluateStartupCpuHeadroom distinguishes exhaustion, throttling, quota cha
     hasCapacity: false,
     reason: "invalid-sample",
   });
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, nextCpuSample, 24, 300, 1_000).hasCapacity).toBe(true);
+  expect(evaluateStartupCpuHeadroom(firstCpuSample, nextCpuSample, 24, 300, 1_000.1).reason).toBe("deadline-missed");
   // Sufficient headroom that missed the 1 s deadline still records headroom alongside deadline-missed.
   expect(evaluateStartupCpuHeadroom(firstCpuSample, nextCpuSample, 24, 300, 1_150)).toMatchObject({
     hasCapacity: false,
