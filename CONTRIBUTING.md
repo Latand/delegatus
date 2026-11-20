@@ -383,7 +383,7 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests run the branch first, up to eight explicit head files at once, each
+Touched tests run the branch first. Selections with gate-harness or privacy suites use at most two file workers, or one when Linux portable runners share their parent service. Other selections use up to eight explicit head files, each
 in its own owned process and isolated roots. A green branch skips the baseline
 entirely. For a red branch, only failing files run on the merge base, filtered
 to failing assertions; runner diagnostics need the whole file. Both kinds share
@@ -727,9 +727,7 @@ script also publishes its own batch branch and deferred resolutions after
 trusted privacy with hooks skipped, like the engine's base updates; publish
 integration branches through the script. A fetch failure uses
 the last `origin/main`; a missing merge base fails the push. The hook warns
-when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to
-CI OCR. The two required privacy checks remain strict and unchanged; local
-hooks do not replace trusted CI enforcement. macOS and Windows CI keep scoped
+when main is ahead. The local hook and both required privacy checks inspect media metadata and provenance. macOS and Windows CI keep scoped
 jobs with timeouts, and Bun verification remains available by dispatch.
 Docker PR builds are limited to image inputs, push nothing, end at the
 45-minute job timeout, and are cancelled when superseded or closed. Merge-batch branches skip image verification. App changes verify

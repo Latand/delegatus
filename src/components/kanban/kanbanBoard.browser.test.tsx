@@ -46494,6 +46494,7 @@ describe("Relay targets answered by another install", () => {
             const relay = { id: "fixture-relay", origin: "https://relay.example", name: "Relay", description: "", paused: false,
               owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-11-17T12:00:00Z", targets };
             const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+            let refusals = 0;
             const writes: unknown[] = [];
             Object.assign(window, { relayOwnershipWrites: writes });
             let fetcher = window.fetch;
@@ -46505,6 +46506,8 @@ describe("Relay targets answered by another install", () => {
                 if (url.pathname.startsWith("/api/external-relay/")) {
                   if (init?.method === "PATCH" && url.pathname.endsWith("/targets/clone-0")) {
                     const patch = JSON.parse(String(init.body)); writes.push(patch);
+                    // The first confirmed move meets the relay's refusal; the clone stays with the other install.
+                    if (refusals++ === 0) return new Response(JSON.stringify({ error: "answered_elsewhere" }), { status: 409, headers: { "content-type": "application/json" } });
                     Object.assign(targets[0]!, { answered_by: "install", answered_elsewhere: false });
                     return json({ target: targets[0] });
                   }
@@ -46566,11 +46569,39 @@ describe("Relay targets answered by another install", () => {
           await (phone ? confirmation.locator("[data-external-relay-move-cancel]").tap() : confirmation.locator("[data-external-relay-move-cancel]").click());
           await confirmation.waitFor({ state: "detached" });
           expect(await writes()).toEqual([]);
+          const go = () => phone ? confirmation.locator("[data-external-relay-move-go]").tap() : confirmation.locator("[data-external-relay-move-go]").click();
+          const refusedNotice = page.locator("[data-external-relay-move-refused]");
           await press();
           await confirmation.waitFor();
-          await (phone ? confirmation.locator("[data-external-relay-move-go]").tap() : confirmation.locator("[data-external-relay-move-go]").click());
-          await page.waitForFunction(() => document.querySelector("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]")?.getAttribute("aria-checked") === "true");
+          await go();
+          await refusedNotice.waitFor();
+          await confirmation.waitFor({ state: "detached" });
           expect(await writes()).toEqual([{ answered_by: "install", confirmTakeover: true }]);
+          expect(await refusedNotice.textContent()).toBe(lang === "en"
+            ? "Not moved. Switch off “Answered by this install” on the other install first, then switch it on here."
+            : "Не перенесено. Спочатку вимкніть «Відповідає ця інсталяція» на іншій інсталяції, потім увімкніть тут.");
+          expect(await refusedNotice.getAttribute("role")).toBe("alert");
+          expect(await page.locator("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]").getAttribute("aria-checked")).toBe("false");
+          expect(await page.locator("[data-external-relay-release-elsewhere]").count()).toBe(0);
+          expect(await page.locator("[data-external-relay] [role=alert]").count()).toBe(1);
+          await refusedNotice.scrollIntoViewIfNeeded();
+          const refusedBox = await refusedNotice.evaluate(el => {
+            const range = document.createRange(); range.selectNodeContents(el.querySelector("span")!);
+            const text = range.getBoundingClientRect(); const own = el.getBoundingClientRect();
+            const row = el.closest("[data-external-relay-target]")!.getBoundingClientRect();
+            const next = el.closest("[data-external-relay-target]")!.nextElementSibling?.getBoundingClientRect() ?? null;
+            return { inside: own.left >= 0 && own.right <= innerWidth && own.top >= 0 && own.bottom <= innerHeight,
+              textWhole: text.left >= own.left && text.right <= own.right && text.top >= own.top && text.bottom <= own.bottom,
+              inRow: own.bottom <= row.bottom + 1, clearOfNext: next === null || own.bottom <= next.top + 1, scrollClipped: el.scrollWidth > el.clientWidth + 1 };
+          });
+          expect(refusedBox).toEqual({ inside: true, textWhole: true, inRow: true, clearOfNext: true, scrollClipped: false });
+          await page.screenshot({ path: path.join(out, `refused-${frame}`), fullPage: true });
+          await press();
+          await confirmation.waitFor();
+          expect(await refusedNotice.count()).toBe(0);
+          await go();
+          await page.waitForFunction(() => document.querySelector("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]")?.getAttribute("aria-checked") === "true");
+          expect(await writes()).toEqual([{ answered_by: "install", confirmTakeover: true }, { answered_by: "install", confirmTakeover: true }]);
           expect(nativeDialogs).toEqual([]);
           readings.push({ frame, width, lang, scheme, geometry });
         } finally { await context.close(); }
