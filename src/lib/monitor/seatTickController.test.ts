@@ -966,7 +966,7 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
     rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
     await runSeatTickCheck(PROJECT, rig.deps);
     expect(rig.sent.at(-1)!.text.length).toBeLessThanOrEqual(wakeLimit);
-    expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed);
+    expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed.map(entry => ({ ...entry, requestedBy: [reportsOwed[0]!.key] })));
     expect(rig.sent.at(-1)!.text).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
   }
   const bullet = `- [maintenance] ${run.taskId} — ${maintenanceItemLabel(run)}`;

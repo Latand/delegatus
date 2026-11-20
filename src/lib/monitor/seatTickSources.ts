@@ -959,11 +959,12 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
       && (report.project === project || canonicalOrchestratorProject(report.project) === project));
     const filedUnder = [...new Set([project, ...manager.map((report) => report.project!)])];
     const reportedIds = new Set<string>();
+    const coveredIds = new Set<string>();
     let lastReportAt: string | null = null;
     let latestCoversOwedAt: string | null = null;
     for (const report of manager) {
       reportedIds.add(report.id);
-      for (const id of report.covers ?? []) reportedIds.add(id);
+      for (const id of report.covers ?? []) coveredIds.add(id);
       if (!lastReportAt || Date.parse(report.at) > Date.parse(lastReportAt)) lastReportAt = report.at;
       if (report.coversOwedAt && (!latestCoversOwedAt || Date.parse(report.coversOwedAt) > Date.parse(latestCoversOwedAt))) latestCoversOwedAt = report.coversOwedAt;
     }
@@ -972,6 +973,7 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
       operatorLocale: port.operatorLocale(),
       lastReportAt,
       reportedIds: [...reportedIds],
+      coveredIds: [...coveredIds],
       reservedIds: log.reservedIds,
       reportIdsFor: (key) => filedUnder.map((filed) => scopedReportId(filed, key)),
       latestCoversOwedAt,

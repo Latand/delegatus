@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 
-import { DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
+import { DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickReportRequest, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
 import { defaultSeatTickSettings, effectiveSeatTickSettings, type SeatTickSettings } from "./seatTickSettings";
 import { seatTickStateForEpoch } from "./seatTickState";
 import { seatTickWakeMessage } from "./report";
@@ -97,7 +97,10 @@ function wakeOf(decision: ReturnType<typeof seatTickDecision>): Wake {
 function landed(check: SeatTickCheckInput): { state: SeatTickProjectState; wake: Wake } {
   const decision = seatTickDecision(check);
   const wake = wakeOf(decision);
-  const plan = seatTickWakeCommitPlan(wake, { fingerprint: check.changeFingerprint, eventsThrough: 0, bridgeReports: check.reports?.bridgeReports === true })!;
+  const plan = seatTickWakeCommitPlan(wake, { fingerprint: check.changeFingerprint, eventsThrough: 0,
+    bridgeReports: check.reports?.bridgeReports === true, reportCoverage: check.reports,
+    reportRequest: seatTickReportRequest(check, check.state, wake.items),
+    priorReportKeys: check.state.reportsOwed?.map(entry => entry.key) })!;
   return { state: seatTickWakeCommit(decision.state, plan, check.now), wake };
 }
 
@@ -156,8 +159,8 @@ test("a wake with a deploy and a lane owes one report naming both, in the operat
     "Nothing is running now: the report says so.",
   ]);
   expect(state.reportsOwed).toEqual([
-    { key: "deploy:aaaaaaaa:succeeded", label: "deploy aaaaaaaa succeeded", receivedAt: iso(T0) },
-    { key: "lane:pipeline_l1:completed", label: "lane pipeline completed", receivedAt: iso(T0) },
+    { key: "deploy:aaaaaaaa:succeeded", label: "deploy aaaaaaaa succeeded", receivedAt: iso(T0), requestedBy: ["deploy:aaaaaaaa:succeeded"] },
+    { key: "lane:pipeline_l1:completed", label: "lane pipeline completed", receivedAt: iso(T0), requestedBy: ["deploy:aaaaaaaa:succeeded"] },
   ]);
 });
 
@@ -250,6 +253,37 @@ test("a report under one requested wake key settles the complete delivered set w
   }));
   expect(settled.state.reportsOwed).toEqual([]);
   expect(settled.state.reportsAcknowledged).toEqual([firstKey, secondKey]);
+});
+
+test("a later wake binds carried and new debt to its requested key across distinct delivery times", () => {
+  const first = landed(input({ ownLanes: [laneSettled("pipeline_l1")] })).state;
+  const second = landed(input({ now: T0 + 70 * MINUTE, state: first,
+    ownLanes: [laneSettled("pipeline_l1"), laneSettled("pipeline_l2", "failed", T0 + 70 * MINUTE)] })).state;
+  expect(second.reportsOwed?.map(entry => [entry.key, entry.receivedAt, entry.requestedBy])).toEqual([
+    ["lane:pipeline_l1:completed", iso(T0), ["lane:pipeline_l1:completed"]],
+    ["lane:pipeline_l2:failed", iso(T0 + 70 * MINUTE), ["lane:pipeline_l1:completed"]],
+  ]);
+  const settled = seatTickDecision(input({ now: T0 + 71 * MINUTE, state: second,
+    reports: reports({ reportedIds: [idFor("lane:pipeline_l1:completed")] }) }));
+  expect(settled.state.reportsOwed).toEqual([]);
+});
+
+test("explicit coverage settles only its named outcome and retired keys stay owed", () => {
+  const firstKey = "lane:pipeline_l1:completed";
+  const secondKey = "lane:pipeline_l2:failed";
+  const delivered = landed(input({ ownLanes: [laneSettled("pipeline_l1"), laneSettled("pipeline_l2", "failed")] }));
+  const covered = seatTickDecision(input({ now: T0 + MINUTE, state: delivered.state,
+    reports: reports({ coveredIds: [idFor(secondKey)] }) }));
+  expect(covered.state.reportsOwed?.map(entry => entry.key)).toEqual([firstKey]);
+
+  const reserved = seatTickReportRequest(input({ state: delivered.state,
+    reports: reports({ reservedIds: [idFor(firstKey)] }) }), delivered.state, []);
+  expect(reserved).toEqual({ key: secondKey, outcomeKeys: [firstKey, secondKey] });
+  const reminder = seatTickDecision(input({ now: T0 + 70 * MINUTE, state: delivered.state,
+    reports: reports({ reservedIds: [idFor(firstKey)] }) }));
+  expect(reminder.state.reportsOwed?.map(entry => entry.key)).toEqual([firstKey, secondKey]);
+  expect(reminder.verdict.kind).toBe("wake");
+  if (reminder.verdict.kind === "wake") expect(reminder.verdict.reportLines?.[0]).toContain(`key ${secondKey}`);
 });
 
 test("coversOwed acknowledgment survives changed agenda presentation and retired key reservations", () => {

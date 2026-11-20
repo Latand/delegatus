@@ -1728,11 +1728,25 @@ function instant(value: string | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
-type ReportCoverage = Pick<SeatTickReportsInput, "reportedIds" | "reportIdsFor"> & { reservedIds?: readonly string[]; acknowledgedOutcomeKeys?: readonly string[] };
+type ReportCoverage = Pick<SeatTickReportsInput, "reportedIds" | "coveredIds" | "reportIdsFor"> & { reservedIds?: readonly string[]; acknowledgedOutcomeKeys?: readonly string[] };
+
+function reportKeyOccupied(reports: ReportCoverage | undefined, key: string): boolean {
+  if (!reports) return false;
+  return reports.reportIdsFor(key).some(id => reports.reportedIds.includes(id) || reports.reservedIds?.includes(id));
+}
+
+function reportRequestKey(owed: readonly SeatTickReportOwed[], reports: ReportCoverage | undefined, seatEpoch: number | null): string {
+  const available = owed.find(entry => !reportKeyOccupied(reports, entry.key));
+  if (available) return available.key;
+  const base = `catch-up:${seatEpoch ?? 0}:${Date.parse(owed[0]!.receivedAt) || 0}`;
+  let key = base;
+  for (let suffix = 2; reportKeyOccupied(reports, key); suffix++) key = `${base}:${suffix}`;
+  return key;
+}
 
 function outcomeReported(reports: ReportCoverage | undefined): (key: string) => boolean {
   if (!reports) return () => false;
-  const ids = new Set([...reports.reportedIds, ...(reports.reservedIds ?? [])]);
+  const ids = new Set([...reports.reportedIds, ...(reports.coveredIds ?? [])]);
   const acknowledged = new Set(reports.acknowledgedOutcomeKeys ?? []);
   return (key) => acknowledged.has(key) || reports.reportIdsFor(key).some((id) => ids.has(id));
 }
@@ -1754,9 +1768,10 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   const reported = outcomeReported(reports);
   const coveredThrough = instant(reports.latestCoversOwedAt);
   const prior = state.reportsOwed ?? [];
-  const acknowledgedTimes = new Set(prior.filter(entry => reported(entry.key)).map(entry => entry.receivedAt));
+  const directKeys = new Set(prior.filter(entry => reports.reportIdsFor(entry.key).some(id => reports.reportedIds.includes(id))).map(entry => entry.key));
+  const acknowledgedRequests = new Set(prior.filter(entry => directKeys.has(entry.key)).flatMap(entry => entry.requestedBy ?? []));
   const cleared = prior.filter(entry => reported(entry.key)
-    || acknowledgedTimes.has(entry.receivedAt)
+    || (entry.requestedBy ?? []).some(key => acknowledgedRequests.has(key))
     || (Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));
   const acknowledged = [...new Set([...(state.reportsAcknowledged ?? []), ...cleared.map(entry => entry.key)])].slice(-64);
   const owed = prior.filter(entry => !cleared.includes(entry));
@@ -1878,7 +1893,8 @@ export function seatTickReportLines(
     const named = compact ? `${owed.length} outcome(s)` : labels;
     const more = !compact && owed.length > OWED_NAMED_LIMIT ? `, and ${owed.length - OWED_NAMED_LIMIT} more` : "";
     const dropped = state.reportsOwedDropped ? ` (${state.reportsOwedDropped} older owed outcome(s) no longer listed)` : "";
-    lines.push(`Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${owed[0]!.key} and coversOwed: true.`);
+    const request = seatTickReportRequest(input, state, items);
+    lines.push(`Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${request?.key ?? owed[0]!.key} and coversOwed: true.`);
     if (!input.pipelines.some(isOpenLane) && owed.some((entry) => entry.key.startsWith("lane:"))) {
       lines.push("Nothing is running now: the report says so.");
     }
@@ -1901,13 +1917,35 @@ function recordOwed(
   dropped: number,
   outcomes: readonly { key: string; label: string }[],
   receivedAt: string,
+  request?: { key: string; outcomeKeys: string[] },
 ): { reportsOwed: SeatTickReportOwed[]; reportsOwedDropped: number } {
   const merged = [...before];
   for (const outcome of outcomes) {
     if (!merged.some((entry) => entry.key === outcome.key)) merged.push({ ...outcome, receivedAt });
   }
+  if (request) {
+    const set = new Set(request.outcomeKeys);
+    for (const entry of merged) if (set.has(entry.key)) {
+      entry.requestedBy = [...new Set([...(entry.requestedBy ?? []), request.key])].slice(-16);
+    }
+  }
   const over = Math.max(0, merged.length - SEAT_TICK_REPORTS_OWED_LIMIT);
   return { reportsOwed: merged.slice(over), reportsOwedDropped: dropped + over };
+}
+
+export function seatTickReportRequest(
+  input: SeatTickCheckInput,
+  state: SeatTickProjectState,
+  items: readonly SeatTickItem[],
+): { key: string; outcomeKeys: string[] } | undefined {
+  const reports = input.reports;
+  if (!reports?.bridgeReports) return undefined;
+  const owed = [...(state.reportsOwed ?? [])];
+  const reported = outcomeReported({ ...reports, acknowledgedOutcomeKeys: state.reportsAcknowledged });
+  for (const outcome of seatTickOwedOutcomes(items)) {
+    if (!reported(outcome.key) && !owed.some(entry => entry.key === outcome.key)) owed.push(outcome);
+  }
+  return owed.length ? { key: reportRequestKey(owed, reports, state.seatEpoch), outcomeKeys: owed.map(entry => entry.key) } : undefined;
 }
 
 function quiet(state: SeatTickProjectState, at: string): SeatTickProjectState {
@@ -2181,6 +2219,10 @@ export function seatTickWakeCommitPlan(
     bridgeReports?: boolean;
     /** Report coverage observed by the decision that composed this wake. */
     reportCoverage?: ReportCoverage;
+    /** Exact report key and debt set rendered into this wake. */
+    reportRequest?: { key: string; outcomeKeys: string[] };
+    /** Outcomes already owed before this wake's agenda was frozen. */
+    priorReportKeys?: readonly string[];
     /** Exact rendered payload, before reserving any outcome acknowledgments. */
     frozenText?: string;
   },
@@ -2236,6 +2278,11 @@ export function seatTickWakeCommitPlan(
   const reportsOwed = context.bridgeReports ? catchUp?.pending ? [] : catchUp
     ? [{ key: catchUp.key, label: `catch-up ${catchUp.from} through ${catchUp.through}` }]
     : seatTickOwedOutcomes(items).filter(outcome => !reported(outcome.key)) : [];
+  const deliveredReportKeys = new Set(seatTickOwedOutcomes(items).map(outcome => outcome.key));
+  const reportRequest = context.reportRequest ? {
+    key: context.reportRequest.key,
+    outcomeKeys: context.reportRequest.outcomeKeys.filter(key => context.priorReportKeys?.includes(key) || deliveredReportKeys.has(key)),
+  } : undefined;
   const owedKeys = new Set(reportsOwed.map(outcome => outcome.key));
   /* The stalls the wake actually names, never the check's whole stall list:
      one the per-wake bound cut was not reported. */
@@ -2265,6 +2312,7 @@ export function seatTickWakeCommitPlan(
   }
   return {
     ...(catchUp ? { catchUp } : {}),
+    ...(reportRequest?.outcomeKeys.length ? { reportRequest } : {}),
     ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}),
     ...(deployResumeThrough ? { deployResumeThrough } : {}),
     formPage,
@@ -2309,9 +2357,9 @@ export function seatTickWakeCommit(
   const formPageAfter = visibleFormCursor(state, commit);
   const at = new Date(now).toISOString();
   const received = reachedAt && Number.isFinite(Date.parse(reachedAt)) && Date.parse(reachedAt) <= now ? reachedAt : at;
-  const owed = commit.reportsOwed?.length
+  const owed = (commit.reportsOwed?.length || commit.reportRequest)
     ? recordOwed(commit.catchUp ? (state.reportsOwed ?? []).filter(entry => !commit.catchUp!.covers.includes(entry.key)) : state.reportsOwed ?? [],
-      state.reportsOwedDropped ?? 0, commit.reportsOwed, received)
+      state.reportsOwedDropped ?? 0, commit.reportsOwed ?? [], received, commit.reportRequest)
     : null;
   const clearsOutage = (!!commit.catchUp && !commit.catchUp.pending) || !state.unreachableSince
     || (commit.wakeIntervalMs !== undefined && Date.parse(received) - Date.parse(state.unreachableBacklogSince ?? state.unreachableSince) <= commit.wakeIntervalMs);
