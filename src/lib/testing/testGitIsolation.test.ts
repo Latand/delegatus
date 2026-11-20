@@ -30,7 +30,7 @@ test("preload isolates publication context while fixture hooks still enforce the
           const accepted = run({}, input);
           expect(accepted.status, accepted.stderr).toBe(0);
           expect(fixture.calls().map(call => call.args[0])).toEqual(["scripts/privacy-publication-gate.ts"]);
-          const wrongHead = { LLV_GATE_PUSH_HEAD: "b".repeat(40) };
+          const wrongHead = { LLV_GATE_PUSH_HEAD: fixture.git("commit-tree", "HEAD^{tree}", "-m", "unpublished head").toString().trim() };
           const refused = run(wrongHead);
           expect(refused.status).toBe(1);
           expect(refused.stderr).toContain("pushed head differs from checkout");
