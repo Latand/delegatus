@@ -2,6 +2,7 @@
 import argparse
 import contextlib
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -45,6 +46,10 @@ class BaselineReadinessError(RuntimeError):
                 failed.add(name)
         self.checks = [name for name in ["http", "runtimeSocket", "mcp", "service"] if name in failed]
         super().__init__("baseline serving health unavailable")
+
+
+class SwitchRefused(RuntimeError):
+    """A fixed, publishable admission refusal."""
 
 
 def census_environment(state):
@@ -172,11 +177,16 @@ def ready(serving, target, placement=True):
 
 
 def run_switch(adapter, target, samples=21, interval=15, timeout=180):
+    old, hosts = adapter.preflight()
+    if getattr(adapter, "switch_mode", None) == "relaunch":
+        result = observe_switch(adapter, target, samples, interval, timeout, old, hosts)
+        adapter.emit(result)
+        return result
     # Keep termination deferred through recovery and the final cleanup, too.
     with deferred_termination():
         result = None
         try:
-            result = observe_switch(adapter, target, samples, interval, timeout)
+            result = observe_switch(adapter, target, samples, interval, timeout, old, hosts)
         finally:
             relocation = getattr(adapter, "relocation", None)
             if relocation and relocation["stopSubmitted"]:
@@ -220,8 +230,10 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
         return result
 
 
-def observe_switch(adapter, target, samples, interval, timeout):
-    old, hosts = adapter.preflight()
+def observe_switch(adapter, target, samples, interval, timeout, old, hosts):
+    in_place = getattr(adapter, "switch_mode", None) == "relaunch"
+    if in_place:
+        old, hosts = adapter.capture_relaunch(hosts)
     started = utc()
     diagnostics = []
     serving = {}
@@ -229,10 +241,19 @@ def observe_switch(adapter, target, samples, interval, timeout):
     relocation = None
     # Even a publication call which raises after its atomic rename owes samples.
     try:
-        adapter.publish()
-        relocation = adapter.restart()
+        if in_place:
+            adapter.relaunch(old)
+        else:
+            adapter.publish()
+            relocation = adapter.restart()
+    except SwitchRefused as error:
+        diagnostics.append(str(error))
+        if in_place:
+            adapter.relaunch_evidence["result"] = "refused"
     except Exception as error:
         diagnostics.append(type(error).__name__)
+        if in_place:
+            adapter.relaunch_evidence["custodyUnknown"] = True
     finally:
         # A restart that raised after stopping still recorded what it did.
         relocation = relocation or getattr(adapter, "relocation", None)
@@ -269,9 +290,14 @@ def observe_switch(adapter, target, samples, interval, timeout):
                     raise RuntimeError("replacement not ready")
                 return serving
             try:
-                retry(read_serving, adapter.clock, timeout)
+                if in_place and adapter.relaunch_evidence["result"] != "done":
+                    serving = adapter.serving()
+                else:
+                    retry(read_serving, adapter.clock, timeout)
             except Exception as error:
                 diagnostics.append(type(error).__name__)
+            if in_place:
+                adapter.poll_relaunch_unit()
             try:
                 adapter.emit({"sample": index + 1, "serving": serving, "protected": protected})
             except Exception as error:
@@ -289,12 +315,29 @@ def observe_switch(adapter, target, samples, interval, timeout):
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
     unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
-    relocation_ready = (relocation is not None and relocation.get("released") is True
-                        and relocation.get("placement") == "placed" and relocation.get("started") is True)
-    verdict = "fail" if not healthy or "lost" in outcomes or not relocation_ready else "needs_decision" if unknown else "pass"
+    relaunch = None
+    if in_place:
+        relaunch = adapter.finish_relaunch(hosts, protected)
+        switch_failed = (relaunch["result"] in {"rolled-back", "fell-back", "refused", "request-refused"}
+                         or relaunch["unitLeftActive"] or relaunch["scopeStopped"]
+                         or relaunch["custodyChanged"] or bool(relaunch["generationSurvivors"]))
+        switch_unknown = relaunch["result"] != "done" or relaunch["unitUnknown"] or relaunch["custodyUnknown"]
+    else:
+        switch_failed = not (relocation is not None and relocation.get("released") is True
+                             and relocation.get("placement") == "placed" and relocation.get("started") is True)
+        switch_unknown = False
+    if switch_failed or "lost" in outcomes:
+        verdict = "fail"
+    elif switch_unknown:
+        verdict = "needs_decision"
+    elif not healthy:
+        verdict = "fail"
+    else:
+        verdict = "needs_decision" if unknown else "pass"
     result = {"verdict": verdict, "target": target, "serving": serving,
               "protected": protected, "interrupted": interrupted,
-              "interruptedUnreadable": unreadable, "relocation": relocation, "diagnostics": diagnostics}
+              "interruptedUnreadable": unreadable, "relocation": relocation,
+              "relaunch": relaunch, "diagnostics": diagnostics}
     adapter.last_result = result
     return result
 
@@ -382,6 +425,24 @@ def file_identity(path):
     except FileNotFoundError:
         return None
     return status.st_ino, status.st_size, status.st_mtime_ns
+
+
+def optional_json(path):
+    try:
+        value = json.loads(path.read_bytes())
+    except FileNotFoundError:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("expected a JSON object")
+    return value
+
+
+def path_present(path):
+    try:
+        path.lstat()
+        return True
+    except FileNotFoundError:
+        return False
 
 
 def obligation_places(directory, pending):
@@ -521,7 +582,7 @@ def interrupted_conversations(state, since, hosts=()):
     return sorted(listed, key=lambda entry: (entry["recordedAt"], entry["conversationId"])), unreadable
 
 
-def write_json(destination, body):
+def write_json(destination, body, *, exclusive=False):
     """Private atomic results remain readable if the launching turn disappears."""
     destination = pathlib.Path(destination)
     fd, name = tempfile.mkstemp(prefix=".deploy-", dir=destination.parent)
@@ -531,7 +592,10 @@ def write_json(destination, body):
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, destination)
+        if exclusive:
+            os.link(name, destination)
+        else:
+            os.replace(name, destination)
         directory = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)
@@ -635,6 +699,15 @@ RELEASE_WAIT = 30
 SIGNAL_WAIT = 5
 STOP_SETTLE = 300
 START_ATTEMPTS = 3
+RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1"
+CHECKOUT_HANDOFF = "delegatus-checkout-launcher-v2"
+REQUEST_WAIT = 120
+# bin/launcher-deadline.mjs exports 10-minute switch and rollback bounds.
+SWITCH_TIMEOUT = 600
+ROLLBACK_TIMEOUT = 600
+RELAUNCH_SETTLE = 60
+UNIT_FENCE_PROPERTIES = ("ActiveState", "MainPID", "NRestarts", "InvocationID",
+                         "InactiveEnterTimestampMonotonic")
 
 
 class LeftoverProcesses(RuntimeError):
@@ -881,6 +954,7 @@ class Checkout:
         self.signal_process = signal_process
         self.census_adapter = census
         self.relocation = None
+        self.switch_mode = None
         self.cgroup_root = pathlib.Path(cgroup_root)
         self.agents = {}
         self.retirement_roots = {}
@@ -911,6 +985,9 @@ class Checkout:
                 raise RuntimeError("plan paths must be absolute")
         self.pointer = self.state / "self-update" / ("release-" + self.install + ".json")
         self.record_file = self.pointer.with_name("launcher-" + self.install + ".json")
+        self.request_file = self.pointer.with_name("request-" + self.install + ".json")
+        self.trial_file = self.pointer.with_name("trial-" + self.install + ".json")
+        self.result_file = self.request_file.with_suffix(".json.result.json")
         environment = {}
         for line in pathlib.Path(self.plan["tokenFile"]).read_text().splitlines():
             if line.strip() and not line.lstrip().startswith("#") and "=" in line:
@@ -947,6 +1024,71 @@ class Checkout:
         output = self.command(["systemctl", "--user", "list-jobs", "--no-legend", "--no-pager", "--plain"])
         return [line for line in output.splitlines() if self.unit in line.split()]
 
+    def show(self, units, *properties):
+        return self.command(["systemctl", "--user", "show", *units,
+                             *[part for name in properties for part in ("-p", name)]])
+
+    def show_units(self, units, *properties):
+        if not units:
+            return {}
+        result = {}
+        for block in self.show(sorted(units), "Id", *properties).split("\n\n"):
+            values = systemd_properties(block)
+            name = values.pop("Id", None)
+            if name not in units or name in result or any(key not in values for key in properties):
+                raise RuntimeError("unit properties unreadable")
+            result[name] = values
+        if result.keys() != set(units):
+            raise RuntimeError("unit properties incomplete")
+        return result
+
+    def require_relocation_safe(self):
+        bound = systemd_properties(self.show([self.unit], "BoundBy")).get("BoundBy")
+        if bound is None:
+            raise SwitchRefused("bound units unreadable")
+        units = self.show_units(set(bound.split()), "ActiveState")
+        # An activating or reloading unit can already have members and can
+        # become active before systemd applies the dependency transaction.
+        active = sum(unit["ActiveState"] not in {"inactive", "failed"} for unit in units.values())
+        if active:
+            raise SwitchRefused("relocation would stop " + str(active) + " bound units")
+        if systemd_properties(self.show([self.unit], "BoundBy")).get("BoundBy") != bound:
+            raise SwitchRefused("bound units changed before relocation")
+
+    def require_relaunch_ready(self, record):
+        launcher = record["launcher"]
+        if type(launcher.get("relaunch")) is not int or launcher["relaunch"] != 1 or launcher.get("protocol") != RELAUNCH_PROTOCOL:
+            raise SwitchRefused("launcher cannot relaunch in place")
+        if pathlib.Path(record.get("requestFile") or "").resolve() != self.request_file:
+            raise SwitchRefused("checkout launcher topology differs from plan")
+        try:
+            supported = (RELAUNCH_PROTOCOL in (self.release / "bin/launcher-relaunch.mjs").read_text()
+                         and CHECKOUT_HANDOFF in (self.release / "bin/cli.mjs").read_text())
+        except (OSError, UnicodeError):
+            supported = False
+        if not supported:
+            raise SwitchRefused("target release cannot take a relaunch")
+        if (path_present(self.request_file) or path_present(self.trial_file)
+                or self.pending_update()):
+            raise SwitchRefused("launcher request or update already pending")
+        if launcher.get("state") != "healthy":
+            raise SwitchRefused("launcher not idle")
+        if self.target == self.baseline["sha"] or self.release == pathlib.Path(self.baseline["dir"]).resolve():
+            raise SwitchRefused("target already serving")
+
+    def pending_update(self):
+        try:
+            apply = optional_json(self.pointer.with_name("apply.json"))
+            gate = optional_json(self.pointer.with_name("auto-admission.json"))
+            return (apply is not None and (not isinstance(apply.get("state"), str)
+                                           or apply["state"] in {"building", "ready", "switching"})
+                    or gate is not None and (type(gate.get("until")) not in {int, float}
+                                             or not 0 <= gate["until"] < float("inf")
+                                             or not isinstance(gate.get("id"), str)
+                                             or gate["until"] > time.time() * 1000))
+        except (OSError, ValueError):
+            return True
+
     def preflight(self):
         if sys.platform != "linux":
             raise RuntimeError("this checkout procedure requires Linux user systemd")
@@ -957,7 +1099,8 @@ class Checkout:
         evidence = json.loads(pathlib.Path(self.plan["verificationFile"]).read_text())
         if evidence.get("sha") != self.target or evidence.get("runtimeHost") != "pass" or evidence.get("viewer") != "pass":
             raise RuntimeError("both isolated runtime rehearsals required")
-        if json.loads(self.pointer.read_text()) != self.baseline:
+        self.baseline_text = self.pointer.read_bytes().decode("utf-8")
+        if json.loads(self.baseline_text) != self.baseline:
             raise RuntimeError("baseline pointer changed")
         record = json.loads(self.record_file.read_text())
         if (pathlib.Path(record["checkout"]).resolve() != self.checkout
@@ -977,6 +1120,18 @@ class Checkout:
             answer = self.census(max(0, capture_deadline - self.clock.now()))
             return complete_activity(answer)
         rows = retry(capture, self.clock, 30)
+        hosts = self.capture_hosts(rows)
+        placement = self.placement()
+        self.switch_mode = "relaunch" if placement["actual"] == placement["expected"] else "relocation"
+        if self.switch_mode == "relaunch":
+            self.require_relaunch_ready(record)
+        else:
+            self.require_relocation_safe()
+        # Last, so the inventory is read immediately before publication.
+        self.fence()
+        return [record[role] for role in ["launcher", "web", "runtimeHost"]], hosts
+
+    def capture_hosts(self, rows):
         self.custody_rows = rows
         hosts = []
         self.agents = {}
@@ -992,9 +1147,7 @@ class Checkout:
                 hosts.append({**entry, "startIdentity": proc["startIdentity"] if proc else None,
                               "conversationId": row["conversationId"], "pipelineId": pipeline["pipelineId"],
                               "stageId": pipeline["stageId"], "attempt": pipeline["attempt"]})
-        # Last, so the inventory is read immediately before publication.
-        self.fence()
-        return [record[role] for role in ["launcher", "web", "runtimeHost"]], hosts
+        return hosts
 
     def placement(self):
         """Observed configuration and cgroup, against the required CPU slice.
@@ -1464,12 +1617,304 @@ class Checkout:
 
     def publish(self):
         # Repeat the immutability fences immediately before the atomic write.
-        if (json.loads(self.pointer.read_text()) != self.baseline
-                or self.head(self.checkout) != self.plan["checkoutHead"] or self.head(self.release) != self.target):
+        if (self.head(self.checkout) != self.plan["checkoutHead"] or self.head(self.release) != self.target
+                or self.pointer.read_bytes() != self.baseline_text.encode("utf-8")):
             raise RuntimeError("publication inputs changed")
         write_json(self.pointer, {"sha": self.target, "dir": str(self.release),
                                   "checkoutHead": self.plan["checkoutHead"], "publishedAt": utc()})
-        self.emit({"published": self.target})
+        if self.switch_mode != "relaunch":
+            self.emit({"published": self.target})
+
+    def unit_facts(self):
+        unit = systemd_properties(self.show([self.unit], *UNIT_FENCE_PROPERTIES))
+        jobs = self.jobs()
+        if any(key not in unit for key in UNIT_FENCE_PROPERTIES) or any(
+                not re.fullmatch(r"[0-9]+", unit[key])
+                for key in ("MainPID", "NRestarts", "InactiveEnterTimestampMonotonic")):
+            raise RuntimeError("service continuity properties unreadable")
+        if unit["ActiveState"] == "active" and not re.fullmatch(r"[0-9a-f]{32}", unit["InvocationID"]):
+            raise RuntimeError("active service invocation unreadable")
+        pid = int(unit["MainPID"])
+        try:
+            identity = start_identity(self.process_read(pid, "stat")) if pid else None
+        except (FileNotFoundError, ProcessLookupError):
+            identity = None
+        return {**unit, "MainPID": pid, "startIdentity": identity, "bootEpoch": self.boot_epoch, "jobs": jobs}
+
+    def poll_relaunch_unit(self):
+        evidence = self.relaunch_evidence
+        try:
+            fact = self.unit_facts()
+            changed = fact != evidence["unitBefore"]
+            # Losing the stat read alone does not prove an identity change.
+            unknown = fact["ActiveState"] == "active" and fact["startIdentity"] is None
+            if unknown:
+                changed = {**fact, "startIdentity": evidence["unitBefore"]["startIdentity"]} != evidence["unitBefore"]
+            evidence["unitAfter"] = fact
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            fact, changed, unknown = None, False, True
+        poll = {"at": utc(), "unit": fact}
+        evidence["polls"].append(poll)
+        if changed and not evidence["unitLeftActive"]:
+            evidence["unitLeftActive"] = poll
+        if unknown and not evidence["unitUnknown"]:
+            evidence["unitUnknown"] = poll
+        return not changed and not unknown
+
+    def capture_relaunch(self, hosts):
+        placement = self.placement()
+        if placement["actual"] != placement["expected"]:
+            raise SwitchRefused("service placement changed before relaunch")
+        unit = self.unit_facts()
+        if unit["ActiveState"] != "active" or unit["jobs"] or not unit["startIdentity"]:
+            raise SwitchRefused("agent preservation or idle service fence unavailable")
+        group = placement["actual"]
+        record = json.loads(self.record_file.read_bytes())
+        self.require_relaunch_ready(record)
+        ancestors = self.launcher_ancestors(record, group)
+        if ancestors.get(unit["MainPID"], (None,))[0] != unit["startIdentity"]:
+            raise SwitchRefused("service MainPID changed before relaunch")
+        captured = self.generation(group)
+        if json.loads(self.record_file.read_bytes()) != record:
+            raise SwitchRefused("launcher ownership changed before relaunch")
+        self.require_relaunch_ready(record)
+        self.relaunch_record = record
+        self.relaunch_hosts = self.relaunch_host_inventory()
+        scopes = self.show_units({entry["scope"] for entry in self.relaunch_hosts.values() if entry["scope"]},
+                                 "LoadState", "ActiveState", "InvocationID")
+        if any(scope["LoadState"] != "loaded" or scope["ActiveState"] != "active"
+               or not re.fullmatch(r"[0-9a-f]{32}", scope["InvocationID"]) for scope in scopes.values()):
+            raise SwitchRefused("host scope continuity unavailable")
+        # Repeat the last preflight fence against the refreshed census.
+        custody = self.helper_custody.copy()
+        self.fence()
+        self.helper_custody = {**custody, **self.helper_custody}
+        self.relaunch_evidence = {
+            "requestId": uuid.uuid4().hex, "result": "unsettled", "unitBefore": unit,
+            "unitAfter": unit, "unitLeftActive": None, "unitUnknown": None, "polls": [],
+            "scopes": {name: {"before": scope} for name, scope in scopes.items()},
+            "scopeStopped": [], "generationSurvivors": [], "signalled": [],
+            "custodyChanged": False, "custodyUnknown": False,
+            "launcherBefore": {"pid": record["launcher"]["pid"],
+                               "startIdentity": record["launcher"]["startIdentity"], "bootEpoch": self.boot_epoch},
+        }
+        # Include work admitted during the census refresh, retaining the
+        # original identity of work that had already been captured.
+        refreshed = {(entry["pid"], entry["startIdentity"]): entry for entry in self.refreshed_hosts}
+        refreshed.update({(entry["pid"], entry["startIdentity"]): entry for entry in hosts})
+        generation = [{"pid": pid, "startIdentity": identity} for pid, identity in captured.items()
+                      if pid not in ancestors]
+        if any({"pid": child["pid"], "startIdentity": child["startIdentity"]} not in generation
+               for child in (record["web"], record["runtimeHost"])):
+            raise SwitchRefused("serving generation changed before relaunch")
+        return generation, list(refreshed.values())
+
+    def relaunch(self, generation):
+        evidence = self.relaunch_evidence
+        request = {"requestId": evidence["requestId"], "role": "relaunch", "target": self.target,
+                   "rollbackPointer": self.baseline_text, "requestedAt": utc()}
+        with deferred_termination():
+            if not self.poll_relaunch_unit():
+                return
+            record = json.loads(self.record_file.read_bytes())
+            self.require_relaunch_ready(record)
+            if record != self.relaunch_record:
+                raise SwitchRefused("launcher ownership changed before relaunch")
+            self.publish()
+            try:
+                write_json(self.request_file, request, exclusive=True)
+            except FileExistsError:
+                evidence["result"] = "request-refused"
+                return
+        with contextlib.suppress(OSError):
+            self.emit({"published": self.target, "relaunchRequestId": request["requestId"]})
+        self.await_relaunch(request)
+        if evidence["result"] != "done":
+            return
+        deadline = self.clock.now() + RELEASE_WAIT
+        while True:
+            evidence["generationSurvivors"] = [
+                {**entry, "reason": "generation survivor"} for entry in generation
+                if self.identity_alive(entry)
+            ]
+            self.poll_relaunch_unit()
+            if not evidence["generationSurvivors"] or self.clock.now() >= deadline:
+                break
+            self.clock.sleep(min(1, deadline - self.clock.now()))
+
+    def await_relaunch(self, request):
+        evidence = self.relaunch_evidence
+        started = self.clock.now()
+        deadline = started + REQUEST_WAIT
+        wall_start = time.time()
+        owner = evidence["launcherBefore"]
+        while True:
+            self.poll_relaunch_unit()
+            try:
+                result = optional_json(self.result_file)
+                trial = optional_json(self.trial_file)
+                record = optional_json(self.record_file)
+                result = result if result and result.get("requestId") == request["requestId"] else {}
+                if result.get("state") == "rejected":
+                    evidence["lastRejectedReceipt"] = result
+                if (result.get("target") == self.target
+                        and result.get("launcherPid") == owner["pid"]
+                        and result.get("launcherIdentity") == owner["startIdentity"]):
+                    state = result.get("state")
+                    if state == "rolled-back" or state == "done" and result.get("revision") == self.target:
+                        evidence.update(result=state, receipt=result)
+                        return
+                if trial and trial.get("requestId") == request["requestId"] and trial.get("target") == self.target:
+                    # Translate the launcher's wall deadline once against the
+                    # dispatch clock. Neither torn reads nor restarts can
+                    # turn a trial into an unlimited wait.
+                    rollback = trial.get("state") == "rolled-back"
+                    bound = started + REQUEST_WAIT + SWITCH_TIMEOUT + RELAUNCH_SETTLE + (ROLLBACK_TIMEOUT if rollback else 0)
+                    expires = trial.get("switchDeadlineAt")
+                    if type(expires) in {int, float} and 0 < expires < float("inf"):
+                        deadline = max(deadline, min(bound, started + expires / 1000 - wall_start
+                                                     + RELAUNCH_SETTLE + (ROLLBACK_TIMEOUT if rollback else 0)))
+                launcher = (record or {}).get("launcher", {})
+                if (launcher.get("requestId") == request["requestId"]
+                        and launcher.get("pid") == owner["pid"]
+                        and launcher.get("startIdentity") == owner["startIdentity"]):
+                    error_kind = (launcher.get("error") or {}).get("kind")
+                    if error_kind == "message" and not trial and not path_present(self.request_file):
+                        evidence["result"] = "refused"
+                        return
+                    if (error_kind == "fell-back" and not trial and not path_present(self.request_file)
+                            and self.pointer.read_bytes() == self.baseline_text.encode("utf-8")):
+                        # The rollback receipt precedes removal of the trial.
+                        # Re-read if the first result read raced that removal.
+                        terminal = optional_json(self.result_file)
+                        if not terminal or terminal.get("requestId") != request["requestId"]:
+                            evidence["result"] = "fell-back"
+                            return
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+            remaining = deadline - self.clock.now()
+            if remaining <= 0 or evidence["unitLeftActive"]:
+                return
+            self.clock.sleep(min(1, remaining))
+
+    def identity_alive(self, entry):
+        try:
+            stat = self.process_read(entry["pid"], "stat")
+            return start_identity(stat) == entry["startIdentity"] and stat[stat.rfind(")") + 2] not in "ZX"
+        except (FileNotFoundError, ProcessLookupError):
+            return False
+
+    def relaunch_host_inventory(self):
+        evidence = {}
+        for row in self.custody_rows:
+            host = row["host"]
+            if host["state"] != "alive":
+                continue
+            pid = host["pid"]
+            identity = self.agents.get(pid)
+            if not identity:
+                raise SwitchRefused("host identity unavailable before relaunch")
+            key = (pid, identity)
+            if key in evidence:
+                continue
+            entry = {"pid": pid, "startIdentity": identity, "bootEpoch": self.boot_epoch}
+            native = host.get("process")
+            if native and (native["startIdentity"] != str(pid) + ":" + identity
+                           or native.get("bootEpoch") not in {None, self.boot_epoch}):
+                raise SwitchRefused("host identity changed before relaunch")
+            group = kernel_cgroup(self.process_read(pid, "cgroup"))
+            if not self.identity_alive(entry):
+                raise SwitchRefused("host identity changed before relaunch")
+            scope = next((segment for segment in reversed(group.split("/")) if segment.endswith(".scope")), None)
+            # This is the host-exits slot key used by hostExit.ts. A legacy
+            # census row can lack its registry identity, so no slot is guessed.
+            slots = {}
+            writer = host.get("exitWriter")
+            if native:
+                name = hashlib.sha256(json.dumps([pid, native["startIdentity"], native.get("bootEpoch")],
+                                                 separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+                slots = {kind: self.state / "host-exits" / (name + "." + kind + ".json")
+                         for kind in ("writer", "exit", "stop")}
+            if writer and (not slots or pathlib.Path(writer["exitFile"]).resolve() != slots["exit"]
+                           or optional_json(slots["writer"]) != writer["process"]):
+                raise SwitchRefused("host exit writer changed before relaunch")
+            helpers = [{key: member[key] for key in ("pid", "startIdentity", "role")}
+                       for member in self.helper_custody.values() if member["hostPid"] == pid
+                       and member["hostStartIdentity"] == identity]
+            # A current Viewer's descendants may not yet need W1–W8 to pass
+            # the inventory. Keep their custody proof when generation found it.
+            work = {field: row.get(field) for field in ("conversationId", "pipeline", "turnState")}
+            evidence[key] = {"process": entry, "scope": scope, "cgroup": group, "slots": slots, "work": work,
+                             "writer": writer["process"] if writer else None, "helpers": helpers}
+        return evidence
+
+    def finish_relaunch(self, hosts, protected):
+        evidence = self.relaunch_evidence
+        scopes = evidence["scopes"]
+        try:
+            current = self.show_units(scopes, "LoadState", "ActiveState", "InvocationID")
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            current = {}
+            evidence["custodyUnknown"] = True
+        for name, fact in current.items():
+            scopes[name]["after"] = fact
+        host_evidence = {}
+        for key, before in self.relaunch_hosts.items():
+            process, scope, slots = before["process"], before["scope"], before["slots"]
+            detail = {"process": process, "scope": scope, "cgroup": before["cgroup"],
+                      "writerBefore": before["writer"], "helpersBefore": before["helpers"], "work": before["work"]}
+            host_evidence[key] = detail
+            try:
+                alive = self.identity_alive(process)
+                detail["alive"] = alive
+                after = current.get(scope)
+                if after is not None and (after["LoadState"] == "loaded" and (
+                        after["InvocationID"] and after["InvocationID"] != scopes[scope]["before"]["InvocationID"]
+                        or alive and (after["ActiveState"] != "active" or not after["InvocationID"]))
+                        or after["LoadState"] == "not-found" and alive):
+                    if scope not in evidence["scopeStopped"]:
+                        evidence["scopeStopped"].append(scope)
+                elif after is not None and after["LoadState"] not in {"loaded", "not-found"}:
+                    evidence["custodyUnknown"] = True
+                if alive and kernel_cgroup(self.process_read(process["pid"], "cgroup")) != before["cgroup"]:
+                    evidence["custodyChanged"] = True
+                detail["helpersAfter"] = [p for p in before["helpers"] if self.identity_alive(p)]
+                detail["writerAfter"] = optional_json(slots["writer"]) if slots else None
+                if alive:
+                    writer = before["writer"]
+                    writer_live = not writer or (writer.get("bootEpoch") in {None, self.boot_epoch}
+                        and writer["startIdentity"].startswith(str(writer["pid"]) + ":")
+                        and self.identity_alive({"pid": writer["pid"],
+                                                 "startIdentity": writer["startIdentity"].split(":", 1)[1]}))
+                    if (detail["helpersAfter"] != before["helpers"] or detail["writerAfter"] != writer
+                            or not writer_live or slots and optional_json(slots["exit"]) is not None):
+                        evidence["custodyChanged"] = True
+                    continue
+                exit_record = optional_json(slots["exit"]) if slots else None
+                stop = optional_json(slots["stop"]) if slots else None
+                if stop and stop.get("active") == 0:
+                    stop = stop.get("prior")
+                if (exit_record is None or not (type(exit_record.get("code")) is int
+                                               or isinstance(exit_record.get("signal"), str))):
+                    evidence["custodyUnknown"] = True
+                    continue
+                detail["exit"] = {"code": exit_record.get("code"), "signal": exit_record.get("signal"),
+                                  "stopPath": (stop or {}).get("path")}
+                if detail["exit"]["signal"] and not detail["exit"]["stopPath"]:
+                    evidence["custodyChanged"] = True
+                    if scope and evidence["unitLeftActive"] and scope not in evidence["scopeStopped"]:
+                        evidence["scopeStopped"].append(scope)
+            except (OSError, ValueError, RuntimeError, KeyError, IndexError):
+                evidence["custodyUnknown"] = True
+        evidence["hosts"] = list(host_evidence.values())
+        for entry, outcome in zip(hosts, protected):
+            custody = host_evidence.get((entry["pid"], entry["startIdentity"]))
+            if custody:
+                outcome["custody"] = custody
+            elif outcome["outcome"] == "preserved":
+                evidence["custodyUnknown"] = True
+        self.poll_relaunch_unit()
+        return evidence
 
     def active_state(self):
         return systemd_properties(self.command(["systemctl", "--user", "show", self.unit, "-p", "ActiveState"])).get("ActiveState")
@@ -1484,13 +1929,9 @@ class Checkout:
         whose parents still reach them, can later be proven leftovers."""
         record = json.loads(self.record_file.read_text())
         rows = complete_activity(self.census())
-        self.custody_rows = rows
-        for row in rows:
-            host = row.get("host") or {}
-            if host.get("state") == "alive" and isinstance(host.get("pid"), int):
-                proc = self.process({"pid": host["pid"]})
-                if proc:
-                    self.agents[host["pid"]] = proc["startIdentity"]
+        previous_agents = self.agents
+        self.refreshed_hosts = self.capture_hosts(rows)
+        self.agents = {**previous_agents, **self.agents}
         owners = {pid: ("agent", identity) for pid, identity in self.agents.items()}
         for key in ["launcher", "web", "runtimeHost"]:
             owners[record[key]["pid"]] = ("current", record[key].get("startIdentity"))
@@ -1711,7 +2152,8 @@ class Checkout:
             return self.relocate()
 
     def relocate(self):
-        group = self.placement()["actual"]
+        placement = self.placement()
+        group = placement["actual"]
         relocation = {"from": group, "stopSubmitted": False, "released": False, "survivors": [],
                       "signalled": [], "started": False, "startAttempts": 0,
                       "outcome": None, "placement": None, "diagnostics": []}
@@ -1725,6 +2167,10 @@ class Checkout:
                 relocation["diagnostics"].append("generation:" + type(error).__name__)
             relocation["captured"] = len(captured)
             self.retirement_capture = captured
+            if self.switch_mode == "relocation":
+                if group == placement["expected"] or self.placement()["actual"] != group:
+                    raise SwitchRefused("service placement changed before relocation")
+                self.require_relocation_safe()
             # Marked before submission: a submission that times out may still stop.
             relocation["stopSubmitted"] = True
             self.command(["systemctl", "--user", "--no-block", "stop", self.unit])
@@ -1749,6 +2195,9 @@ class Checkout:
                     relocation["signalled"] = self.retire(survivors, group)
                     relocation["released"] = self.await_release(group, RELEASE_WAIT)
                     relocation["outcome"] = "released-after-retirement" if relocation["released"] else "not-released"
+        except SwitchRefused as error:
+            relocation["diagnostics"].append(str(error))
+            relocation["outcome"] = "stop-refused"
         except Exception as error:
             relocation["diagnostics"].append("relocation:" + type(error).__name__)
             relocation["outcome"] = relocation["outcome"] or "stop-incomplete"
@@ -1890,6 +2339,8 @@ class Checkout:
             relocation = event.get("relocation")
             if relocation:
                 serving += " relocation=" + str(relocation.get("outcome"))
+            if event.get("relaunch"):
+                serving += " relaunch=" + event["relaunch"]["result"]
             recovery = event.get("recovery")
             if recovery:
                 serving += " recovery=" + recovery["state"] + " ownerPid=" + str(recovery["ownerPid"])
@@ -1924,6 +2375,7 @@ def main():
                 waiters = sum(member["role"] == "wait-owner" for member in adapter.helper_custody.values())
                 print("Protected helper custody: " + str(waiters) + " wait owners and "
                       + str(len(adapter.helper_custody) - waiters) + " helpers of live agent hosts")
+            print("Switch mode: " + ("relaunch in place" if adapter.switch_mode == "relaunch" else "relocation (stop and start)"))
             print("Preflight: pass; no switch performed")
             return 0
         if args.start:
@@ -1954,12 +2406,15 @@ def main():
         if adapter and adapter.run_dir:
             observed = result or getattr(adapter, "last_result", None)
             if observed is None:
-                adapter.emit({"verdict": "needs_decision", "serving": {}, "diagnostics": [type(error).__name__],
+                diagnostic = str(error) if isinstance(error, SwitchRefused) else type(error).__name__
+                adapter.emit({"verdict": "needs_decision", "serving": {}, "diagnostics": [diagnostic],
                               "phase": "before-switch", **({"leftovers": leftovers} if leftovers else {})})
         for line in leftover_lines(leftovers or []):
             print(line, file=sys.stderr)
         if isinstance(error, BaselineReadinessError):
             print("Procedure stopped: " + ", ".join(error.checks), file=sys.stderr)
+        elif isinstance(error, SwitchRefused):
+            print("Procedure stopped: " + str(error), file=sys.stderr)
         else:
             print("Procedure stopped: " + type(error).__name__, file=sys.stderr)
         return 2
