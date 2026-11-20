@@ -11533,7 +11533,6 @@ export class AgentRegistry {
       if (guardEvidence && previousGuard?.evidence === guardEvidence
         && (!sourceEntry || sourceEntry.status === "dead" || sourceEntry.status === "unhosted")
         && file.migrationIntents[previousGuard.intentId]?.state === "stopped") return clone(conversation);
-      if (!guardEvidence && previousGuard) delete conversation.creditGuardReseat;
       /* A pane's profile and reseat commit together. A refused writer or a
          failed reseat leaves both untouched, with no separate rollback. */
       if (profile) writeConversationLaunchProfile(file, conversation, source, profile);
@@ -11567,6 +11566,11 @@ export class AgentRegistry {
         queueAbandonedMigrationCleanup(file, conversation, changedAt);
         conversation.migration = { ...conversation.migration, pendingContinuityPaths: [] };
       }
+
+      // An explicit reseat that joins an existing migration is a no-op. Keep
+      // the automatic dead-generation receipt until a new operation is truly
+      // accepted, or cleanup can make the unchanged guard retry it again.
+      if (!guardEvidence && previousGuard) delete conversation.creditGuardReseat;
 
       const changedAt = now();
       /* Naming the target withdraws the opt-out from it, written already or

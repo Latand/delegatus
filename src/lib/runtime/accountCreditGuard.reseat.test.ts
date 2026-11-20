@@ -7,6 +7,7 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { MIGRATION_INTENT_PROGRESS_TIMEOUT_MS } from "@/lib/accounts/migration/intentLiveness";
 import { accountManager } from "@/lib/accounts/manager";
+import * as orchestratorSeats from "@/lib/orchestrator/seats";
 import { terminalizeStaleUndeliverableHeldDeliveries } from "@/lib/reaperRuntime";
 import { enforceAccountCreditGuard } from "./accountCreditGuard";
 import { FakeEngineHost } from "./fixtures/fakeEngineHost";
@@ -23,7 +24,7 @@ function observe(registry: AgentRegistry, accountId: string, usedPercent: number
     limits: { session: null, weekly: { usedPercent, resetsAt: null, observedAt: Date.now() / 1000, source: "live" }, plan: "pro", capturedAt: Date.now() / 1000,
       credits: { hasCredits: true, balance: "10", unlimited: false } } });
 }
-function fixture(mode: "off" | "sqlite" = "sqlite") {
+function fixture(mode: "off" | "sqlite" = "sqlite", seat?: { project: string; seatEpoch: number }) {
   clock(0);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-reseat-")); roots.push(root);
   const registry = new AgentRegistry(path.join(root, "registry.json"), () => false, undefined, { sqliteMode: mode, sqliteWriterDeadlineMs: 60 });
@@ -45,7 +46,7 @@ function fixture(mode: "off" | "sqlite" = "sqlite") {
   const store = interruptionObligationStore(interruptionObligationDirectory(registry.filename));
   const cut = store.record({ conversationId: conversation.id, engine: "codex", hostKey: `codex:${generation.id}`,
     path: transcript, owner: null, claimEpoch: 1, turnRef: "interrupted-turn", boundary: "paid-credit-guard",
-    reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: epoch }, seat: null }).obligation;
+    reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: epoch }, seat: seat ?? null }).obligation;
   const poll = () => enforceAccountCreditGuard(registry, [], async () => { throw new Error("unexpected host stop"); },
     async () => false, async () => null);
   return { root, registry, conversation, key, store, cut, poll, mode };
@@ -223,6 +224,87 @@ test("a failed onward guard reseat keeps the original cut owed after reaper clea
         .toMatchObject([{ id: f.cut.id, state: "delivered", attempts: 1 }]);
     } finally { reopened.close(); }
   } finally { select.mockRestore(); }
+});
+
+test("restored capacity on the current successor delivers the preserved cut through stopped guard lineage", async () => {
+  const f = fixture(); const select = selection(f.root);
+  try {
+    await f.poll();
+    const first = f.registry.conversation(f.conversation.id)!.migration!;
+    f.registry.transitionConversationMigration(f.conversation.id, first.revision, ["waiting-turn", "requested"], { phase: "preparing" });
+    f.registry.transitionConversationMigration(f.conversation.id, first.revision, ["preparing"], { phase: "successor-starting" });
+    const successor = path.join(f.root, "successor-b.jsonl"); fs.writeFileSync(successor, "");
+    const receipt = { operationId: first.operationId, nativeId: "successor-b", path: successor, continuityPaths: [successor],
+      historyHash: "fixture-b", host: { kind: "codex-app-server" as const, identity: "fixture-b", epoch: 1, verifiedAt: new Date().toISOString() } };
+    f.registry.persistMigrationProviderReceipt(f.conversation.id, first.revision, first.operationId, receipt);
+    f.registry.commitSuccessor(f.conversation.id, { id: receipt.nativeId, path: successor, accountId: "account-b",
+      historyHash: receipt.historyHash, host: receipt.host }, first.revision, first.operationId, receipt);
+    observe(f.registry, "account-b", 99);
+    select.mockReturnValue({ kind: "available", account: { engine: "codex", accountId: "account-c", kind: "managed",
+      home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } });
+    await f.poll();
+    expect(f.registry.conversation(f.conversation.id)?.migration).toMatchObject({ creditGuard: true, sourceGenerationId: "successor-b", targetId: "account-c" });
+    await stopAndClean(f);
+    observe(f.registry, "account-b", 1);
+    observe(f.registry, "account-c", 1);
+    select.mockImplementation((engine, request) => ({ kind: "available", account: { engine,
+      accountId: request?.requestedId ?? "account-b", kind: "managed", home: f.root, transcriptRoot: f.root,
+      env: { NODE_ENV: "test" } } }));
+    await enforceAccountCreditGuard(f.registry, [], async () => { throw new Error("unexpected host stop"); }, async () => false,
+      async () => null);
+    const queued = Object.values(f.registry.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries)
+      .filter(delivery => delivery.clientMessageId === f.cut.id);
+    expect(queued).toHaveLength(1);
+    expect(f.store.list()).toMatchObject([{ id: f.cut.id, state: "submitted", attempts: 1 }]);
+    f.registry.recordDeliveryOutcome(queued[0]!.id, "delivered");
+    await enforceAccountCreditGuard(f.registry, [], async () => { throw new Error("unexpected host stop"); }, async () => false,
+      async () => null);
+    expect(f.store.list()).toMatchObject([{ id: f.cut.id, state: "delivered", attempts: 1 }]);
+  } finally { select.mockRestore(); f.registry.close(); }
+});
+
+test("seat rotation during reseat writer admission leaves no stale-seat migration", async () => {
+  const f = fixture("sqlite", { project: "fixture-project", seatEpoch: 4 });
+  const select = selection(f.root);
+  let currentSeat = { project: "fixture-project", seatEpoch: 4, conversationId: f.conversation.id };
+  const seatRead = spyOn(orchestratorSeats, "activeOrchestratorSeats").mockImplementation(() => [currentSeat as never]);
+  try {
+    await f.poll(); await stopAndClean(f);
+    const write = f.registry.deliveryWriteOrBusy.bind(f.registry);
+    const admission = spyOn(f.registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, callback) => {
+      if (correlation.label === "account-credit-guard.reseat") {
+        currentSeat = { ...currentSeat, seatEpoch: 5, conversationId: "conversation_successor" };
+      }
+      return write(correlation, callback);
+    });
+    try {
+      await expect(f.poll()).rejects.toThrow("lost orchestrator seat custody");
+      expect(f.registry.conversation(f.conversation.id)?.migration).toBeNull();
+      expect(Object.values(f.registry.readOnlySnapshot().migrationIntents).filter(intent =>
+        intent.requestIds.some(requestId => requestId.startsWith(`reseat:${f.conversation.id}:`)))).toHaveLength(1);
+      expect(Object.values(f.registry.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries)
+        .filter(delivery => delivery.clientMessageId === f.cut.id)).toHaveLength(0);
+    } finally { admission.mockRestore(); }
+  } finally { seatRead.mockRestore(); select.mockRestore(); f.registry.close(); }
+});
+
+test("an explicit reseat joining an in-flight guard operation preserves its automatic retry receipt", async () => {
+  const f = fixture(); const select = selection(f.root);
+  try {
+    await f.poll();
+    expect(f.registry.conversation(f.conversation.id)?.migration).toMatchObject({ targetId: "account-b", creditGuard: true });
+    const joined = f.registry.requestConversationReseat(f.conversation.id, "account-c");
+    expect(joined.migration).toMatchObject({ targetId: "account-b", creditGuard: true });
+    expect(joined.creditGuardReseat).toBeDefined();
+    const before = Object.keys(f.registry.readOnlySnapshot().migrationIntents);
+    await stopAndClean(f);
+    for (const interval of [2, 3]) {
+      clock(interval * MIGRATION_INTENT_PROGRESS_TIMEOUT_MS);
+      await f.poll();
+      expect(Object.keys(f.registry.readOnlySnapshot().migrationIntents)).toEqual(before);
+      expect(f.store.list()).toMatchObject([{ id: f.cut.id, state: "owed", attempts: 0 }]);
+    }
+  } finally { select.mockRestore(); f.registry.close(); }
 });
 
 test("new work on a revived host rearms recovery even when the stop returns the same generation to dead", async () => {

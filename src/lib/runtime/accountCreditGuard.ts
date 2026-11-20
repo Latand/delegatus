@@ -209,7 +209,15 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     }
     if (selection.kind !== "available" || !selection.account.accountId) continue;
     const target = selection.account.accountId;
+    const assertSeatEpoch = () => {
+      if (obligation.seat && !activeOrchestratorSeats().some(seat => seat.project === obligation.seat!.project
+        && seat.seatEpoch === obligation.seat!.seatEpoch && seat.conversationId?.startsWith("conversation_")
+        && registry.canonicalConversationId(seat.conversationId as ViewerConversationId) === conversation.id)) {
+        throw new Error("paid-credit recovery lost orchestrator seat custody");
+      }
+    };
     const authorizeTarget = () => {
+      assertSeatEpoch();
       if (!eligible()) throw new Error("paid-credit recovery lost pipeline custody");
       const latest = registry.conversation(conversation.id);
       if (!latest || latest.supersededBy || latest.reconfigure?.status === "applying"
@@ -235,7 +243,8 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     }
     if (obligation.state === "submitted") continue;
     const current = registry.conversation(conversation.id);
-    if (current?.generations.at(-1)?.accountId !== target || moved && current.migration?.phase !== "committed") continue;
+    if (current?.generations.at(-1)?.accountId !== target
+      || moved && current.migration?.phase !== "committed" && !retainedGuardLineage) continue;
     authorizeTarget();
     const deliveries = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
     const newerDelivery = Object.values(deliveries.heldDeliveries).some(delivery => delivery.clientMessageId !== obligation.id
