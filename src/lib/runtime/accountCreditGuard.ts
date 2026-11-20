@@ -167,7 +167,14 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     const migrationSourceIndex = conversation.generations.findIndex(item => item.id === conversation.migration?.sourceGenerationId);
     // Each guard reseat starts at the latest generation. The cut and its
     // continuation identity still belong to the original interrupted turn.
-    if (moved && (!conversation.migration?.creditGuard || sourceIndex < 0 || migrationSourceIndex < sourceIndex)) {
+    const guardReseatIntent = conversation.creditGuardReseat
+      ? registry.migrationIntent(conversation.creditGuardReseat.intentId)
+      : undefined;
+    const retainedGuardLineage = guardReseatIntent?.scope === "conversation"
+      && guardReseatIntent.state === "stopped"
+      && guardReseatIntent.requestIds.some(request => request.startsWith(`reseat:${conversation.id}:`));
+    if (moved && !retainedGuardLineage
+      && (!conversation.migration?.creditGuard || sourceIndex < 0 || migrationSourceIndex < sourceIndex)) {
       await store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "another runtime selection moved the conversation" });
       continue;
     }
@@ -202,7 +209,15 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     }
     if (selection.kind !== "available" || !selection.account.accountId) continue;
     const target = selection.account.accountId;
+    const assertSeatEpoch = () => {
+      if (obligation.seat && !activeOrchestratorSeats().some(seat => seat.project === obligation.seat!.project
+        && seat.seatEpoch === obligation.seat!.seatEpoch && seat.conversationId?.startsWith("conversation_")
+        && registry.canonicalConversationId(seat.conversationId as ViewerConversationId) === conversation.id)) {
+        throw new Error("paid-credit recovery lost orchestrator seat custody");
+      }
+    };
     const authorizeTarget = () => {
+      assertSeatEpoch();
       if (!eligible()) throw new Error("paid-credit recovery lost pipeline custody");
       const latest = registry.conversation(conversation.id);
       if (!latest || latest.supersededBy || latest.reconfigure?.status === "applying"
@@ -217,16 +232,19 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     };
     authorizeTarget();
     if (target !== generation.accountId) {
-      await registry.deliveryWriteOrBusy({ label: "account-credit-guard.reseat", operationId: obligation.id }, () => {
+      const reseated = await registry.deliveryWriteOrBusy({ label: "account-credit-guard.reseat", operationId: obligation.id }, () => {
         authorizeTarget();
-        return registry.requestConversationReseat(conversation.id, target, undefined, undefined, true);
+        return registry.requestConversationReseat(conversation.id, target, undefined, undefined, true, obligation.id);
       });
-      requestAccountMigrationTick();
+      // A stopped attempt on unchanged dead evidence leaves this obligation
+      // owed. Its durable receipt survives hygiene and the next process.
+      if (reseated.migration && !["committed", "rolled-back"].includes(reseated.migration.phase)) requestAccountMigrationTick();
       continue;
     }
     if (obligation.state === "submitted") continue;
     const current = registry.conversation(conversation.id);
-    if (current?.generations.at(-1)?.accountId !== target || moved && current.migration?.phase !== "committed") continue;
+    if (current?.generations.at(-1)?.accountId !== target
+      || moved && current.migration?.phase !== "committed" && !retainedGuardLineage) continue;
     authorizeTarget();
     const deliveries = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
     const newerDelivery = Object.values(deliveries.heldDeliveries).some(delivery => delivery.clientMessageId !== obligation.id
