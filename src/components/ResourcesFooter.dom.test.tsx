@@ -374,6 +374,9 @@ test("the System panel names the low volume, the largest consumers first, and th
     consumers: [
       { kind: "state" as const, bytes: 2 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
       { kind: "worktrees" as const, bytes: 90 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
+      { kind: "temp" as const, bytes: GiB, measuredAt: "2026-10-06T10:04:00Z" },
+      { kind: "dockerImages" as const, bytes: 3 * GiB, measuredAt: "2026-10-06T10:04:00Z" },
+      { kind: "dockerCache" as const, bytes: 4 * GiB, measuredAt: "2026-10-06T10:04:00Z" },
     ],
   };
   flushSync(() => { root.render(<DiskPressureNotice pressure={pressure} />); });
@@ -382,7 +385,8 @@ test("the System panel names the low volume, the largest consumers first, and th
   expect(notice.textContent).toContain("Disk space low");
   expect(notice.textContent).toContain("State / Worktrees: 1.5 GiB free");
   expect(notice.textContent).not.toContain("Temp:");
-  expect(notice.textContent).toContain("Most space: Worktrees 90 GiB, State 2.0 GiB");
+  expect([...notice.querySelectorAll("div[title] > div")].map(row => row.textContent))
+    .toEqual(["Worktrees 90 GiB", "Docker build cache 4.0 GiB", "Docker images 3.0 GiB", "State 2.0 GiB", "Temporary files (including scratch) 1.0 GiB"]);
   expect(notice.textContent).not.toContain("lower bound");
   expect(notice.textContent).toContain("New checkouts wait for space");
   flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ roles: ["temp"], freeBytes: 0.5 * GiB, level: "critical" }] }} />); });

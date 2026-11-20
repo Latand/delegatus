@@ -502,3 +502,18 @@ score of at least 500; the container restart policy still handles a dead core.
 drop-in needed by an existing host user-service install is in
 [Agent memory](guide/operations.md#agent-memory-and-cpu); the
 [agent memory design](design/agent-memory-isolation.md) has the reasoning.
+
+### Managed release disk retention
+
+The runtime host builds release and gate images with a private Buildx
+docker-container builder for the install. After the promoted Viewer passes
+health checks, retention asks BuildKit to trim unused cache last accessed
+before the successful build started. Set `LLV_RELEASE_BUILD_CACHE_BYTES` in
+the runtime host service environment to change the 8 GiB cache target. Zero
+removes all eligible records. Records used by the latest build can exceed
+the target. The default builder's pre-upgrade cache remains visible in the
+system disk report.
+
+Retention removes older deployment and gate tags linked to local deployment
+directories. The current and rollback image IDs and tags are protected.
+The latest result is in `state/deployments/docker-retention.json`.

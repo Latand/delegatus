@@ -830,7 +830,9 @@ test.skipIf(process.platform === "win32")("scratch, nested worktrees and other r
   process.env.LLV_STATE_DIR = state;
   const caches = new Map();
   const worktrees = [worktree, tempWorktree, nested, alias, path.join(alias, "nested")];
-  const options = { caches, worktrees, tempRoots: [{ path: scratch, via: "" }, { path: temp, via: "" }],
+  const options = { caches, worktrees, dockerUsage: async () => [
+    { kind: "dockerImages" as const, bytes: 4 * GiB }, { kind: "dockerCache" as const, bytes: GiB },
+  ], tempRoots: [{ path: scratch, via: "" }, { path: temp, via: "" }],
     roots: [{ role: "state", directory: state }], now: () => Date.parse("2026-10-06T12:00:00Z"),
     probe: () => ({ volume: "fixture", freeBytes: GiB }) };
   try {
@@ -840,12 +842,17 @@ test.skipIf(process.platform === "win32")("scratch, nested worktrees and other r
     expect(measured.consumers.find(row => row.kind === "worktrees")?.bytes)
       .toBe(await exclusiveBytes(worktree) + await exclusiveBytes(tempWorktree));
     expect(measured.consumers.find(row => row.kind === "temp")?.bytes)
-      .toBe(fs.statSync(path.join(other, "role.log")).blocks * 512);
+      .toBeGreaterThanOrEqual(288 * 1024);
     // The durable report itself is written during measurement. Its small
     // allocation does not affect the distinct 256 KiB scratch-file assertion.
     const stateBytes = measured.consumers.find(row => row.kind === "state")!.bytes;
-    expect(stateBytes).toBeGreaterThanOrEqual(256 * 1024);
-    expect(stateBytes).toBeLessThan(320 * 1024);
+    expect(stateBytes).toBeLessThan(256 * 1024);
+    expect(measured.consumers.find(row => row.kind === "dockerImages")?.bytes).toBe(4 * GiB);
+    expect(measured.consumers.find(row => row.kind === "dockerCache")?.bytes).toBe(GiB);
+    const du = Bun.spawnSync(["du", "-sk", state, other]).stdout.toString();
+    const total = du.trim().split("\n").reduce((sum, line) => sum + parseInt(line, 10) * 1024, 0);
+    const accounted = measured.consumers.filter(row => !row.kind.startsWith("docker")).reduce((sum, row) => sum + row.bytes, 0);
+    expect(Math.abs(accounted - total)).toBeLessThan(32 * 1024);
   } finally {
     await Promise.all([...caches.values()].map(row => row.measuring));
     if (original === undefined) delete process.env.LLV_STATE_DIR;

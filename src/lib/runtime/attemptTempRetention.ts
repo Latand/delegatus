@@ -749,7 +749,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         catch (error) {
           const code = (error as NodeJS.ErrnoException).code;
           if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
-            disposition = "live";
+            disposition = "operator";
             // The detail names what vanished or refused: a process cwd or a
             // consumer checkout whose process is still alive.
             reason = `consumer checkout became unreadable during retirement: ${attemptTempFailureDetail(error)}`.slice(0, 512);
