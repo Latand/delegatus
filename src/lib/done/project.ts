@@ -6,7 +6,7 @@ import type { LimitSample } from "@/lib/types";
 
 import { doneCandidates, type DoneCandidate, type DoneDeployment } from "./candidates";
 import { lookupDoneFrame, type DoneFramePorts } from "./frames";
-import { doneActivation, doneDatabase, doneFloor, readDoneMemory, readDoneRows, writeDoneProjection } from "./store";
+import { doneActivation, doneDatabase, doneFloor, readDoneMemory, readDoneRowsReadonly, writeDoneProjection } from "./store";
 import type { DoneItemV1 } from "./types";
 
 /*
@@ -82,7 +82,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
     repositoryProject: (repository) => world.repositoryProject(repository),
     accountLabel: (engine, accountId) => world.accountLabel(engine, accountId),
   });
-  const held = new Map(readDoneRows().map((row) => [row.key, row] as const));
+  const held = new Map(readDoneRowsReadonly().map((row) => [row.key, row] as const));
   const at = new Date(now).toISOString();
   const upserts: DoneItemV1[] = [];
   let albumLookups = 0;

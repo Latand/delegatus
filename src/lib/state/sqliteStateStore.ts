@@ -1,4 +1,4 @@
-import { installTaskTimes, prepareTaskTimes, taskTimesReady } from "./taskTimes";
+import { installTaskTimes, prepareTaskTimes, taskTimePendingCursor, taskTimesReady } from "./taskTimes";
 import { observeRegistryWriter } from "@/lib/agent/registryWriter";
 import { assertOperationLease, awaitLeasedOperation } from "@/lib/operationLease";
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
@@ -962,21 +962,18 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
   noteWriterAdmitted();
   const holdStart = performance.now();
   try {
-    const pendingExists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_time_pending'");
-    let pendingBefore = 0;
-    try {
-      if (pendingExists.get()) {
-        const pendingCursor = db.prepare<{ rowid: number }, []>("SELECT COALESCE(MAX(rowid), 0) AS rowid FROM task_time_pending");
-        try { pendingBefore = pendingCursor.get()!.rowid; }
-        finally { pendingCursor.finalize(); }
-      }
-    } finally { pendingExists.finalize(); }
+    const pendingBefore = taskTimePendingCursor(db);
     const before = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     const result = operation();
     if (result instanceof Promise) throw new Error("state SQL transactions must be synchronous");
     // Publish only task rows changed in this transaction. Older projection
     // backlog is prepared by readers in bounded, independently committed pages.
-    prepareTaskTimes(db, Number.MAX_SAFE_INTEGER, pendingBefore);
+    if (pendingBefore !== null) {
+      const pendingAfter = taskTimePendingCursor(db);
+      if (pendingAfter !== null && pendingAfter > pendingBefore) {
+        prepareTaskTimes(db, Number.MAX_SAFE_INTEGER, pendingBefore);
+      }
+    }
     const after = db.query<{ changes: number }, []>("SELECT total_changes() AS changes").get()!.changes;
     injectWriteFault("commit", collection);
     assertOperationLease();
