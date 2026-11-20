@@ -191,7 +191,11 @@ test("the scanner reads recorded tiers for generation, alias and receipt paths a
   const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
   const conversation = seed.ensureConversation("codex", generation, null);
   seed.updateConversationLaunchProfile(conversation.id, { model: null, effort: null, fast: true, serviceTier: "ultrafast" });
-  const begun = seed.beginSpawnRequest({ engine: "codex", cwd: SANDBOX, launchProfile: { serviceTier: "priority" } });
+  const begun = seed.beginSpawnRequest({
+    engine: "codex",
+    cwd: SANDBOX,
+    launchProfile: { title: "Record receipt tier", serviceTier: "priority" },
+  });
   const snapshot = seed.snapshot();
   seed.close();
   snapshot.conversations[conversation.id]!.continuityPaths.push(alias);
