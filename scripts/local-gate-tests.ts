@@ -490,10 +490,10 @@ function headCheckpointEnvironment(root: string, sandbox: string, inherited: Nod
     && inherited.XDG_RUNTIME_DIR === path.join(outer, "xdg_runtime_dir")
     && hasActiveGateSandbox(outer, inherited.LLV_GATE_SANDBOX_RECORD);
   const env = { ...inherited };
-  // /bin/bash -c reads BASH_ENV before running the owned worker command. Its
-  // pathname alone is insufficient: an external launcher can change while
-  // leaving every repository and environment value untouched. Unknown or
-  // unreadable startup inputs keep reusable per-file receipts cold.
+  // The gate-slot.sh bash wrappers read BASH_ENV before launching the
+  // comparator. Its bytes stand for startup effects outside the environment,
+  // such as umask, rlimits, and cwd. Unknown or unreadable startup inputs
+  // keep reusable per-file receipts cold.
   let bashEnv: readonly unknown[] | null = null;
   if (inherited.BASH_ENV !== undefined) {
     try {

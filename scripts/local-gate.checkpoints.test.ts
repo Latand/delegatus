@@ -207,16 +207,14 @@ serviceTest("local check-step invalidates warm and cold retries when BASH_ENV by
   env.PATH = bin + path.delimiter + env.PATH;
   env.BASH_ENV = startup;
   env.LLV_GATE_CHECK_ENV = "BASH_ENV";
-  writeFileSync(startup, "export CHECKPOINT_BASH_ENV=first\n");
+  writeFileSync(startup, "umask 022\n");
   writeFileSync(path.join(f.dir, "shims/bun"), '#!/bin/sh\nexec "$LLV_GATE_BUN" "$@"\n');
   symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
   writeFileSync(path.join(f.dir, "a.test.ts"), `
 import { appendFileSync } from "node:fs";
 import { expect, test } from "bun:test";
 test("startup input affects this head file", () => {
-  appendFileSync(${JSON.stringify(marker)}, "a\\n");
-  if (process.cwd() === ${JSON.stringify(f.dir)} && process.env.CHECKPOINT_BASH_ENV === "changed") expect(false).toBe(true);
-  else expect(true).toBe(true);
+  appendFileSync(${JSON.stringify(marker)}, "a:" + process.umask().toString(8) + "\\n");
 });`);
   writeFileSync(path.join(f.dir, "b.test.ts"), `
 import { appendFileSync } from "node:fs";
@@ -227,20 +225,22 @@ test("incomplete file", () => { appendFileSync(${JSON.stringify(marker)}, "b\\n"
   const run = () => spawnSync(process.execPath, ["scripts/local-gate.ts", "check-step", "touched tests"], {
     cwd: f.dir, env, encoding: "utf8", timeout: 30_000,
   });
-  const countA = () => readFileSync(marker, "utf8").split("\n").filter(value => value === "a").length;
+  const countA = () => readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:")).length;
   const first = run(); expect(first.status, first.stdout + first.stderr).toBe(1);
+  expect(readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:"))).toEqual(["a:22"]);
   const warm = run(); expect(warm.status, warm.stdout + warm.stderr).toBe(1);
   expect(warm.stdout + warm.stderr).toContain("reused complete green head file a.test.ts");
   expect(countA()).toBe(1);
 
   const beforeWarmChange = countA();
-  writeFileSync(startup, "export CHECKPOINT_BASH_ENV=changed\n");
+  writeFileSync(startup, "umask 077\n");
   const changedWarm = run(), changedOutput = changedWarm.stdout + changedWarm.stderr;
   expect(changedWarm.status, changedOutput).toBe(1);
   expect(changedOutput).not.toContain("reused complete green head file a.test.ts");
-  expect(changedOutput).toContain("NEW a.test.ts");
+  expect(changedOutput).toContain("head file a.test.ts:");
   const afterWarmChange = countA();
   expect(afterWarmChange).toBeGreaterThan(beforeWarmChange);
+  expect(readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:")).at(-1)).toBe("a:77");
 
   const cache = path.join(f.dir, ".git/delegatus-gate/head-files");
   rmSync(cache, { recursive: true, force: true });
@@ -248,8 +248,9 @@ test("incomplete file", () => { appendFileSync(${JSON.stringify(marker)}, "b\\n"
   const changedCold = run(), coldOutput = changedCold.stdout + changedCold.stderr;
   expect(changedCold.status, coldOutput).toBe(1);
   expect(coldOutput).not.toContain("reused complete green head file");
-  expect(coldOutput).toContain("NEW a.test.ts");
+  expect(coldOutput).toContain("head file a.test.ts:");
   expect(countA()).toBeGreaterThan(beforeColdChange);
+  expect(readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:")).at(-1)).toBe("a:77");
 }, 120_000);
 
 serviceTest("external roots with gate-shaped names retain their distinct checkpoint keys", () => {

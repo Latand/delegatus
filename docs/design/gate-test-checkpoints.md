@@ -20,10 +20,12 @@ becomes a passing receipt for the whole selection.
   custom variables that the publication wrapper normally strips. Identity,
   privacy and proxy/certificate values consumed by direct calls are bound too.
   The effective `BASH_ENV` startup file is also bound by its declared path,
-  resolved file identity and content digest, since the owned `/bin/bash -c`
-  reads it before starting the worker. An absent, unreadable or non-file
-  `BASH_ENV` input keeps reusable head receipts cold; a change during the run
-  invalidates checkpoint sealing or refuses reuse after a prior hit.
+  resolved file identity and content digest. The `bash` wrappers in
+  `gate-slot.sh` read it before launching the comparator; its bytes stand for
+  startup effects outside the environment, such as umask, resource limits, and
+  working directory. An absent, unreadable or non-file `BASH_ENV` input keeps
+  reusable head receipts cold; a change during the run invalidates checkpoint
+  sealing or refuses reuse after a prior hit.
   For head checkpoints only, an active sandbox journal entry binds the local
   gate allocation to its device and inode. The comparator can then omit the
   inherited `XDG_STATE_HOME` and `XDG_RUNTIME_DIR` paths that it replaces before
