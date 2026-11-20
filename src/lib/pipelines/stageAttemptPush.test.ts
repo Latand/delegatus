@@ -256,7 +256,7 @@ test.skipIf(process.platform === "win32").each([
       }
       await f.own("config", "core.hooksPath", hooks);
     }
-    const originalGit = Bun.which("git")!;
+    const originalGit = Bun.which("git", { PATH: process.env.PATH })!;
     const bin = path.join(f.root, "bin");
     await fs.mkdir(bin);
     const marker = path.join(f.root, "handoff");

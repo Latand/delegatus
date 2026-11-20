@@ -880,7 +880,8 @@ test.each(["direct", "provision"] as const)("portable base consumers fetch witho
     await git(source, "push", "origin", "main");
     const head = await git(source, "rev-parse", "HEAD");
     fs.mkdirSync(bin);
-    fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
+    // Use the PATH sanitized by the test preload, since Bun.which defaults to the startup PATH.
+    fs.symlinkSync(Bun.which("git", { PATH: process.env.PATH })!, path.join(bin, "git"));
     expect(Bun.which("timeout", { PATH: bin })).toBeNull();
     expect(Bun.which("gtimeout", { PATH: bin })).toBeNull();
     const calls: Array<{ command: string; args: string[]; timeoutMs?: number }> = [];
