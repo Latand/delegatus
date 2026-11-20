@@ -56,6 +56,7 @@ const controller = createCleanerController({
     }
     if (fault === "retryable") return { status: 503, body: { code: "spawn_preparing", retryable: true } };
     if (fault === "refused") return { status: 409, body: { code: "project_account_refused", error: "No account permitted." } };
+    if (fault === "failed-live") return { status: 409, body: { code: "spawn_failed", state: "failed", error: "Host cleanup pending." } };
     return withFileTransactionAsync(ledger, "fake launch", async () => {
       authorize?.();
       const rows = receipts();
@@ -68,6 +69,7 @@ const controller = createCleanerController({
     });
   },
   observe: async run => {
+    const observedAt = new Date(now()).toISOString();
     if (fault === "hold-success-observe") {
       writeJsonDurably(statePath("fixture-observer-held"), { runId: run.runId });
       while (!fs.existsSync(statePath("fixture-observer-release"))) await new Promise(resolve => setTimeout(resolve, 5));
@@ -77,15 +79,17 @@ const controller = createCleanerController({
         endpoint: "http://127.0.0.1:9231", revision: "a".repeat(40), hotStateBackend: "sqlite-v1",
       });
     }
-    if (!receipts()[run.runId]) return { state: "running" };
     const conversationId = `conversation_${run.taskId}`;
-    if (fault === "quiesce-after-timeout") return { state: "ended", conversationId, finalText: "" };
-    if (fault === "host-died") return { state: "failed", conversationId, failure: { kind: "host-died", detail: "Fixture host exited." } };
+    if (fault === "failed-live") return { state: "failed", conversationId, quiescent: false, failure: { kind: "launch-failed", detail: "Host cleanup pending." } };
+    if (fault === "quiesce-after-timeout") return { state: "ended", conversationId,
+      completedAt: new Date(Date.parse(run.launchedAt ?? run.claimedAt) + 90 * minute).toISOString(), finalText: "" };
+    if (!receipts()[run.runId]) return { state: "running" };
+    if (fault === "host-died") return { state: "failed", conversationId, quiescent: false, failure: { kind: "host-died", detail: "Fixture host exited." } };
     if (fault === "success" || fault === "settlement-crash" || fault === "card-receipt-crash" || fault === "demote-on-observe" || fault === "hold-success-observe") {
       return { state: "ended", conversationId, finalText: [
         'Inventory summary\n```json\n{"items":1}\n```',
         'Done.\n```json\n{"verdict":"pass","kept":[{"target":"fixture","reason":"keep"}],"notes":"Checked.","removed":["invented"]}\n```',
-      ].join("\n") };
+      ].join("\n"), completedAt: observedAt };
     }
     return { state: "running", conversationId };
   },

@@ -86,6 +86,13 @@ export function cleanerAttemptMayStart(id: string, now = Date.now()): boolean {
   if (!run || held.activeRunId !== id || run.settledAt) return false;
   return now - Date.parse(run.launchedAt ?? run.claimedAt) < CLEANER_RUN_TIMEOUT_MS;
 }
+/** Cleaner run ids are allocated by this controller and persisted into the
+ * launch body before dispatch. Their namespace lets recovery retain the fence
+ * even if the run row was pruned or damaged; ordinary manual attempt ids do
+ * not enter the scheduled-run policy. */
+export function isScheduledCleanerAttemptId(id: string | null): id is string {
+  return typeof id === "string" && (id.startsWith("cleaner_") || id.startsWith("cleaner_pressure_"));
+}
 export function activeCleanerRun(): CleanerRun | null {
   const id = schedule().activeRunId;
   return id ? readCleanerRun(id) : null;

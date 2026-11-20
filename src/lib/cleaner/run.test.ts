@@ -8,7 +8,7 @@ import { isolatedEnvironment } from "../../../scripts/local-gate";
 import { readBridgeReportLog } from "@/lib/bridge/store";
 import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { loadPrototypeTask, loadTasksForList } from "@/lib/tasks/store";
-import { createCleanerController } from "./run";
+import { cleanerCompletionIsOnTime, createCleanerController } from "./run";
 import { activeCleanerRun, claimCleanerRun, cleanerAttemptMayStart, pendingCleanerCard, readCleanerRun, recordCleanerCardAttempt, updateActiveCleanerRun, type CleanerRun } from "./store";
 
 const start = Date.parse("2031-02-01T11:00:00.000Z");
@@ -189,6 +189,36 @@ test("terminal proof arriving after timeout preserves the committed refusal and 
   expect(history()).toContainEqual(expect.objectContaining({ runId: started.runId, settledAt: at(90 * minute),
     quiescedAt: at(90 * minute + 1), failure: { kind: "timed-out", detail: expect.any(String) } }));
   expect(card(started.taskId)?.status).toBe("blocked");
+});
+
+test("a failed launch receipt reports failure while retained host custody holds the slot", async () => {
+  const { tick, history, card } = fixture();
+  const running = (await tick(15 * minute, "ready"))!.active!;
+  await tick(16 * minute, "ready", "failed-live");
+  expect(readCleanerRun(running.runId)).toMatchObject({
+    settledAt: at(16 * minute), quiescedAt: null, failure: { kind: "launch-failed" },
+  });
+  expect(card(running.taskId)?.status).toBe("blocked");
+  expect((await tick(day, "ok"))!.active?.runId).toBe(running.runId);
+  expect(history()).toHaveLength(1);
+});
+
+test("a passing report completed after the deadline settles as timed out", async () => {
+  const { tick, history, card } = fixture();
+  const started = (await tick(15 * minute, "ready"))!.active!;
+  await tick(105 * minute + 1, "ready", "success");
+  expect(readCleanerRun(started.runId)).toMatchObject({
+    settledAt: at(105 * minute + 1), failure: { kind: "timed-out" }, report: null,
+  });
+  expect(card(started.taskId)?.status).toBe("blocked");
+  expect(history()).toHaveLength(1);
+});
+
+test("terminal evidence completed at the deadline remains eligible when observed later", () => {
+  const launchedAt = at(15 * minute);
+  expect(cleanerCompletionIsOnTime(launchedAt, at(105 * minute))).toBe(true);
+  expect(cleanerCompletionIsOnTime(launchedAt, at(105 * minute + 1))).toBe(false);
+  expect(cleanerCompletionIsOnTime(launchedAt, null)).toBe(false);
 });
 
 test("pressure claim and dispatch are held outside ownership and during a drain", async () => {

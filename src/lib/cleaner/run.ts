@@ -96,7 +96,7 @@ export function createCleanerController(ports: CleanerPorts) {
   } = {}) =>
     updateActiveCleanerRun(run.runId, ownsTraffic, current => {
       if (current.settledAt) {
-        if (!options.observed || (options.observed.state !== "ended" && options.observed.state !== "failed")) return null;
+        if (!options.observed || (options.observed.state !== "ended" && !(options.observed.state === "failed" && options.observed.quiescent))) return null;
         return {
           ...current,
           ...observedBinding(current, options.observed),
@@ -105,7 +105,7 @@ export function createCleanerController(ports: CleanerPorts) {
       }
       if (options.unadmittedOnly && (current.launchAcknowledged || current.launchId || current.conversationId)) return null;
       const quiescent = !current.launchedAt || options.unadmittedOnly === true
-        || options.observed?.state === "ended" || options.observed?.state === "failed";
+        || options.observed?.state === "ended" || (options.observed?.state === "failed" && options.observed.quiescent === true);
       return {
         ...current, ...(options.observed ? observedBinding(current, options.observed) : {}),
         settledAt: new Date(now()).toISOString(), report: options.report ?? null,
@@ -190,21 +190,25 @@ export function createCleanerController(ports: CleanerPorts) {
       }
     }
     if (run.settledAt) {
-      if (observed?.state === "ended" || observed?.state === "failed") {
+      if (observed?.state === "ended" || (observed?.state === "failed" && observed.quiescent)) {
         await updateActiveCleanerRun(run.runId, ownsTraffic, current => ({
           ...current, ...observedBinding(current, observed), quiescedAt: new Date(now()).toISOString(),
         }));
       }
       return;
     }
-    if (observed?.state === "failed") {
-      await settle(run, observed.failure ?? { kind: "launch-failed", detail: "Launch failed." }, { observed });
-    } else if (observed?.state === "ended") {
+    if (observed?.state === "ended") {
       const report = parseCleanerReport(observed.finalText ?? "");
       const failure = observed.turnError ? { kind: "turn-error", detail: observed.turnError }
         : report?.verdict === "pass" ? null
           : { kind: report?.verdict ?? "invalid-report", detail: report?.notes || "Cleaner did not return a passing report." };
-      await settle(run, failure, { report, observed });
+      if (!cleanerCompletionIsOnTime(run.launchedAt ?? run.claimedAt, observed.completedAt)) {
+        await settle(run, { kind: "timed-out", detail: "Cleaner run reached its 90-minute deadline." }, { observed });
+      } else {
+        await settle(run, failure, { report, observed });
+      }
+    } else if (observed?.state === "failed") {
+      await settle(run, observed.failure ?? { kind: "launch-failed", detail: "Launch failed." }, { observed });
     } else if (expired(run)) {
       await timeOut(run);
     } else if (observed) {
@@ -266,3 +270,9 @@ function observedBinding(run: CleanerRun, observed: SpawnedTurnObservation) {
 }
 
 export type CleanerController = ReturnType<typeof createCleanerController>;
+
+export function cleanerCompletionIsOnTime(launchedAt: string, completedAt: string | null | undefined): boolean {
+  const deadline = Date.parse(launchedAt) + CLEANER_RUN_TIMEOUT_MS;
+  const completed = Date.parse(completedAt ?? "");
+  return Number.isFinite(completed) && completed <= deadline;
+}

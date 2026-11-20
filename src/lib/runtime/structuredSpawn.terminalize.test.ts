@@ -1334,6 +1334,20 @@ test.serial("queued cleaner recovery holds its saved attempt throughout an updat
   }
 });
 
+test.serial("queued manual guarded disk Cleaner resumes without scheduled-run state", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "manual-cleaner-attempt", "off", true);
+  let actuations = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      resolveSpawnAccount: () => ({ engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async input => { actuations++; return { state: "running", launchId: input.receipt.launchId } as never; },
+    });
+    expect(actuations).toBe(1);
+    expect(store.spawnReceipt(receipt.launchId)?.state).not.toBe("failed");
+  } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test.serial("queued cleaner recovery fences a reservation after its durable run deadline", async () => {
   const cleanerSeed = await cleanerAttemptFixture(91 * 60_000);
   const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true);

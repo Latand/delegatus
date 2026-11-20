@@ -81,7 +81,7 @@ import { roleMemoryDeferralReason, RoleMemoryChanged, RoleMemoryPreparationDefer
 import { AttemptTempStore, type AttemptTempOwner } from "./attemptTempRetention";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE } from "@/lib/memory/roleStore";
-import { cleanerAttemptMayStart } from "@/lib/cleaner/store";
+import { cleanerAttemptMayStart, isScheduledCleanerAttemptId } from "@/lib/cleaner/store";
 
 export type SpawnedStructuredHost = EngineHost & {
   /** Effective MCP transport when account config constrained the preference. */
@@ -1096,14 +1096,15 @@ async function actuateQueuedPinnedSpawn(
 ): Promise<SpawnReceipt> {
   const queued = queuedPinnedSpawnForReceipt(receipt);
   const diskCleaner = receipt.agentRole === "cleaner" && receipt.launchProfile.agentMemoryRoleParams?.mode === "disk";
-  const cleanerAttemptActive = () => typeof receipt.clientAttemptId === "string"
+  const scheduledCleaner = diskCleaner && isScheduledCleanerAttemptId(receipt.clientAttemptId);
+  const cleanerAttemptActive = () => scheduledCleaner && typeof receipt.clientAttemptId === "string"
     && cleanerAttemptMayStart(receipt.clientAttemptId, (options.now ?? Date.now)());
   const admittedAuthority = readHotStateAuthority(path.dirname(registry.filename));
   const assertActive = () => {
     options.signal?.throwIfAborted();
     options.assertActive?.();
-    if (diskCleaner && activeDrain()) throw new Error("disk cleaner launch held by update drain");
-    if (diskCleaner && !cleanerAttemptActive()) {
+    if (scheduledCleaner && activeDrain()) throw new Error("disk cleaner launch held by update drain");
+    if (scheduledCleaner && !cleanerAttemptActive()) {
       throw new Error("disk cleaner run expired before queued host actuation");
     }
     const authority = readHotStateAuthority(path.dirname(registry.filename));
@@ -1112,10 +1113,10 @@ async function actuateQueuedPinnedSpawn(
       throw new Error("queued launch lost Viewer release authority");
     }
   };
-  if (diskCleaner && !cleanerAttemptActive()) {
+  if (scheduledCleaner && !cleanerAttemptActive()) {
     return failQueuedPinnedSpawn(registry, receipt, "disk cleaner run expired before queued host actuation");
   }
-  if (diskCleaner && activeDrain()) return receipt;
+  if (scheduledCleaner && activeDrain()) return receipt;
   assertActive();
   const currentTime = (options.now ?? Date.now)();
   if (!queued || Date.parse(queued.retryAt) > currentTime) return receipt;
