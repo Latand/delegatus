@@ -612,6 +612,86 @@ test("a native call made through a Bun module is credited to the repository fram
   expect(JSON.stringify(categories)).not.toContain("sqlite");
 });
 
+const sourceFrame = (file: string, name: string, line: number, column: number) =>
+  ({ ...caller(line, column), name, sourceURL: path.join(root, "src/lib", file) });
+const readForward = "delegatusReadAttributionForward";
+const performanceSync = "delegatusPerformanceSync";
+const sqliteFrame = "delegatusSqliteInstrumentation";
+
+// Replayed from the Bun 1.4.0 source and SWC probes used to review caller attribution.
+test("snapshot work keeps its source position across deeper instrumentation wrappers", () => {
+  const categories = categorizeLoopProfile({ traces: [{ frames: [native("sort"),
+    sourceFrame("readAttribution.ts", "snapshot", 295, 22),
+    sourceFrame("stallReviewProbe.ts", "snapshot", 38, 39),
+    sourceFrame("readAttribution.ts", readForward, 257, 20),
+    sourceFrame("readAttribution.ts", readForward, 257, 20),
+    sourceFrame("performanceSpans.ts", performanceSync, 96, 36)] }] }, root);
+  expect(categories.callers).toEqual([
+    { native: "sort", positions: [["src/lib/readAttribution.ts:295:22", 1]] },
+  ]);
+});
+
+test("synchronous instrumentation credits native work to the application with recording on and off", () => {
+  const parse = [native("parse"), native("bound parse")];
+  const app = sourceFrame("stallReviewTwoWrappers.ts", "syncValue", 21, 37);
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [...parse,
+      sourceFrame("readAttribution.ts", readForward, 257, 20),
+      sourceFrame("performanceSpans.ts", performanceSync, 96, 36), app] },
+    { frames: [...parse, app] },
+    { frames: [...parse,
+      { ...caller(1, 36), name: readForward },
+      { ...caller(1, 53), name: performanceSync },
+      { ...caller(2, 11), name: "sync" }] },
+  ] }, root);
+  expect(categories.callers).toEqual([
+    { native: "parse", positions: [["src/lib/stallReviewTwoWrappers.ts:21:37", 2], [".next/server/chunks/57539.js:2:11", 1]] },
+  ]);
+});
+
+test("SQLite JSON parsing is credited to the row reader through instrumentation", () => {
+  const decode = sourceFrame("stallReviewProbe.ts", "decodeValue", 19, 34);
+  const parse = [native("parse"), native("bound parse")];
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [...parse, sourceFrame("readAttribution.ts", readForward, 257, 20), decode] },
+    { frames: [...parse, decode] },
+    { frames: [...parse, { ...caller(1, 203), name: readForward },
+      { ...caller(1, 403), name: sqliteFrame }, caller(5, 48)] },
+    { frames: [...parse, sourceFrame("sqliteReadAttribution.ts", sqliteFrame, 144, 26)] },
+  ] }, root);
+  expect(categories.callers).toEqual([
+    { native: "parse", positions: [["src/lib/stallReviewProbe.ts:19:34", 2], [".next/server/chunks/57539.js:5:48", 1], ["elsewhere", 1]] },
+  ]);
+});
+
+test("SWC SQLite samples cross forwarding calls and keep the bookkeeping caller", () => {
+  const emitted = (name: string, column: number) => ({ ...caller(58, column), name,
+    sourceURL: path.join(root, ".next/server/stallReviewSWC.js") });
+  const all = emitted("eS", 17810);
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [native("all"), native("bound #allNoArgs"), emitted(readForward, 2470), all] },
+    { frames: [native("get"), emitted("", 3426), emitted(readForward, 4713), all] },
+    { frames: [native("next"), native("bound next"), emitted(readForward, 2470),
+      emitted(sqliteFrame, 14731), emitted(sqliteFrame, 16584), emitted("ex", 17920)] },
+  ] }, root);
+  expect(categories.callers).toEqual([
+    { native: "all", positions: [[".next/server/stallReviewSWC.js:58:17810", 1]] },
+    { native: "get", positions: [[".next/server/stallReviewSWC.js:58:3426", 1]] },
+    { native: "next", positions: [[".next/server/stallReviewSWC.js:58:17920", 1]] },
+  ]);
+});
+
+test("SQLite prepare passes through Bun and compiled SQLite instrumentation", () => {
+  const categories = categorizeLoopProfile({ traces: [
+    { frames: [native("prepare"),
+      { ...caller(347, 37), name: "prepare", sourceURL: "bun:sqlite" },
+      { ...caller(1, 215), name: "delegatusSqliteInstrumentation" },
+      { ...caller(1, 307), name: readForward },
+      { ...caller(1, 418), name: "delegatusSqliteInstrumentation" }, caller(7, 12)] },
+  ] }, root);
+  expect(categories.callers).toEqual([{ native: "prepare", positions: [[".next/server/chunks/57539.js:7:12", 1]] }]);
+});
+
 test("the histogram stays within its byte budget for many files and callers", () => {
   const traces = Array.from({ length: 6000 }, (_, i) => i % 2
     ? { frames: [native(["structuredClone", "parse", "all", "stringify", "get"][i % 5]!), { name: "f", sourceURL: path.join(root, `.next/server/chunks/${"c".repeat(180)}${i % 300}.js`), line: 1, column: i + 1 }] }
