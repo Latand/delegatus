@@ -32,7 +32,7 @@ function members(group: string): ProcessIdentity[] {
   if (!group) return [];
   const directory = "/sys/fs/cgroup" + group;
   if (!fs.existsSync(directory)) return [];
-  return fs.readdirSync(directory, { recursive: true }).filter(file => path.basename(file) === "cgroup.procs")
+  return fs.readdirSync(directory, { encoding: "utf8", recursive: true }).filter(file => path.basename(file) === "cgroup.procs")
     .flatMap(file => fs.readFileSync(path.join(directory, file), "utf8").trim().split("\n").filter(Boolean).map(Number))
     .map(pid => captureProcessIdentity(pid)).filter(process => process.startIdentity);
 }
@@ -59,7 +59,7 @@ async function exercise(testCase: Case) {
   };
   const stateFd = fs.openSync(f.state, "r");
   const homeFd = fs.openSync(f.env.HOME!, "r");
-  const env = { ...f.env, HOME: `/proc/${process.pid}/fd/${homeFd}`,
+  const env: NodeJS.ProcessEnv = { ...f.env, HOME: `/proc/${process.pid}/fd/${homeFd}`,
     LLV_STATE_DIR: `/proc/${process.pid}/fd/${stateFd}`,
     XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? "/run/user/" + process.getuid!(),
     DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS ?? "unix:path=/run/user/" + process.getuid!() + "/bus",
