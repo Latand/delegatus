@@ -1023,19 +1023,24 @@ class CheckoutIntegration(unittest.TestCase):
                     self.assertEqual(proof["scopeStopped"], [group["scope"]["Id"]])
                 self.assertEqual(self.service_commands(), [])
 
-    def test_relaunch_rejects_busy_host_stop_receipt_but_allows_terminal_and_stdio_exits(self):
-        for turn_state, exit_record, expected, custody_changed, custody_unknown in [
-            ("busy", {"code": None, "signal": "SIGTERM"}, "fail", True, False),
-            ("unknown", {"code": None, "signal": "SIGTERM"}, "needs_decision", False, True),
-            ("idle", {"code": None, "signal": "SIGTERM"}, "pass", False, False),
-            ("busy", {"code": 0, "signal": "EOF"}, "pass", False, False),
-            ("busy", {"code": 143, "signal": None}, "fail", True, False),
-            ("unknown", {"code": 143, "signal": None}, "needs_decision", False, True),
-            ("busy", {"code": 137, "signal": None}, "fail", True, False),
-            ("unknown", {"code": 137, "signal": None}, "needs_decision", False, True),
-            ("busy", {"code": 143, "signal": "EOF"}, "fail", True, False),
+    def test_relaunch_requires_receipts_for_all_signal_shaped_host_exits(self):
+        for turn_state, exit_record, has_receipt, expected, custody_changed, custody_unknown in [
+            ("busy", {"code": None, "signal": "SIGTERM"}, True, "fail", True, False),
+            ("unknown", {"code": None, "signal": "SIGTERM"}, True, "needs_decision", False, True),
+            ("idle", {"code": None, "signal": "SIGTERM"}, True, "pass", False, False),
+            ("busy", {"code": 0, "signal": "EOF"}, False, "pass", False, False),
+            ("busy", {"code": 143, "signal": None}, True, "fail", True, False),
+            ("unknown", {"code": 143, "signal": None}, True, "needs_decision", False, True),
+            ("busy", {"code": 137, "signal": None}, True, "fail", True, False),
+            ("unknown", {"code": 137, "signal": None}, True, "needs_decision", False, True),
+            ("busy", {"code": 143, "signal": "EOF"}, True, "fail", True, False),
+            ("idle", {"code": 143, "signal": None}, False, "fail", True, False),
+            ("idle", {"code": 137, "signal": None}, False, "fail", True, False),
+            ("unknown", {"code": 143, "signal": None}, False, "fail", True, False),
+            ("idle", {"code": 143, "signal": None}, True, "pass", False, False),
+            ("idle", {"code": 0, "signal": None}, False, "pass", False, False),
         ]:
-            with self.subTest(turn_state=turn_state, exit_record=exit_record):
+            with self.subTest(turn_state=turn_state, exit_record=exit_record, has_receipt=has_receipt):
                 self.setUp()
                 group = self.helper_groups()[0]
                 group["row"]["turnState"] = turn_state
@@ -1046,8 +1051,9 @@ class CheckoutIntegration(unittest.TestCase):
                 def stop_host():
                     before = next(iter(self.adapter.relaunch_hosts.values()))
                     slots = before["slots"]
-                    deploy.write_json(slots["stop"], {
-                        "active": 1, "path": "startup-adoption-cleanup", "signal": "SIGTERM"})
+                    if has_receipt:
+                        deploy.write_json(slots["stop"], {
+                            "active": 1, "path": "startup-adoption-cleanup", "signal": "SIGTERM"})
                     deploy.write_json(slots["exit"], exit_record)
                     stopped["value"] = True
                     self.attempts = [{"n": 2, "state": "running", "conversationId": "synthetic-stage"}]
@@ -1062,7 +1068,7 @@ class CheckoutIntegration(unittest.TestCase):
                 result = deploy.run_switch(self.adapter, TARGET, samples=2, interval=1, timeout=0)
                 self.assertEqual(result["verdict"], expected)
                 custody = result["relaunch"]["hosts"][0]
-                self.assertEqual(custody["exit"]["stopPath"], "startup-adoption-cleanup")
+                self.assertEqual(custody["exit"]["stopPath"], "startup-adoption-cleanup" if has_receipt else None)
                 self.assertEqual(result["relaunch"]["custodyChanged"], custody_changed)
                 self.assertEqual(result["relaunch"]["custodyUnknown"], custody_unknown)
                 self.assertEqual(self.service_commands(), [])

@@ -1905,12 +1905,20 @@ class Checkout:
                                or type(exit_record.get("code")) is int
                                and 128 < exit_record["code"] < 128 + signal.NSIG)
                 captured_turn = before["work"].get("turnState")
-                if signal_exit and captured_turn != "idle":
-                    if captured_turn == "busy":
+                if signal_exit:
+                    # Every signal-shaped host exit needs the durable product
+                    # stop receipt. The exit code alone is not evidence that
+                    # an idle host was intentionally cleaned up.
+                    if not detail["exit"]["stopPath"]:
                         evidence["custodyChanged"] = True
-                    else:
+                    elif captured_turn == "busy":
+                        evidence["custodyChanged"] = True
+                    elif captured_turn != "idle":
+                        # The cleanup is receipted, but its effect on work we
+                        # could not classify is still uncertain.
                         evidence["custodyUnknown"] = True
-                if detail["exit"]["signal"] and not detail["exit"]["stopPath"]:
+                if (detail["exit"]["signal"] and detail["exit"]["signal"].upper() != "EOF"
+                        and not detail["exit"]["stopPath"]):
                     evidence["custodyChanged"] = True
                     if scope and evidence["unitLeftActive"] and scope not in evidence["scopeStopped"]:
                         evidence["scopeStopped"].append(scope)
