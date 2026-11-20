@@ -42,10 +42,10 @@ async function validateRequiredDependencies(modules: string, names: string[], ch
   });
 }
 
-async function inBatches<T>(values: readonly T[], visit: (value: T) => Promise<void>): Promise<void> {
-  for (let i = 0; i < values.length; i += 32) {
+async function inBatches<T>(values: readonly T[], visit: (value: T) => Promise<void>, batchSize = 32): Promise<void> {
+  for (let i = 0; i < values.length; i += batchSize) {
     // Settle peer reads before releasing the fence on a refusal.
-    const results = await Promise.allSettled(values.slice(i, i + 32).map(visit));
+    const results = await Promise.allSettled(values.slice(i, i + batchSize).map(visit));
     for (const result of results) if (result.status === "rejected") throw result.reason;
     await yieldToEventLoop();
   }
@@ -156,7 +156,7 @@ class ValidationReads {
       check?.();
       if (!sameVersion(seen, await statBigInt(filename))) throw new Error(message);
       check?.();
-    });
+    }, 8);
   }
 
   snapshot(): IterableIterator<[string, BigIntStats | undefined]> { return this.observed.entries(); }
