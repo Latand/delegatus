@@ -212,11 +212,23 @@ test.each(["needs-decision", "fix-running", "commit-repair", "runtime-switch", "
     if (kind === "different-generation") { attempt.sessionId = "previous-session"; attempt.agentPath = "/fixture/previous.jsonl"; }
     savePipelines([lane]);
     const file = snapshot();
-    if (kind === "undelivered") file.heldDeliveries["delivery-1"] = { id: "delivery-1", conversationId: CONVERSATION, runtimeConversationId: CONVERSATION, state: "held" } as RegistryFile["heldDeliveries"][string];
-    if (kind === "assigned-to-runtime") file.heldDeliveries["delivery-1"] = { id: "delivery-1", conversationId: "conversation_previous", runtimeConversationId: CONVERSATION, state: "assigned" } as RegistryFile["heldDeliveries"][string];
+    const runtimeConversationId = CONVERSATION as RegistryFile["heldDeliveries"][string]["runtimeConversationId"];
+    const command = { operationId: "operation-1", kind: "send", policy: "queue" } as const;
+    if (kind === "undelivered" || kind === "assigned-to-runtime") {
+      const assigned = kind === "assigned-to-runtime";
+      file.heldDeliveries["delivery-1"] = {
+        id: "delivery-1", conversationId: assigned ? "conversation_previous" : runtimeConversationId, runtimeConversationId,
+        text: "Fixture message", createdAt: lane.createdAt, clientMessageId: null, payloadKind: "text", runtimeImages: [],
+        contentDigest: null, artifactPaths: [], command, requestDigest: null, state: assigned ? "assigned" : "held",
+        generationId: assigned ? SESSION : null, attempts: 0, assignedAt: assigned ? lane.createdAt : null,
+        deliveredAt: null, error: null,
+      };
+    }
     if (kind === "in-flight") file.deliveryOperationOwners["operation-1"] = {
-      conversationId: CONVERSATION, runtimeConversationId: CONVERSATION, custodyState: "pending",
-    } as RegistryFile["deliveryOperationOwners"][string];
+      conversationId: runtimeConversationId, runtimeConversationId, clientMessageId: null, deliveryId: "delivery-1",
+      command, requestDigest: "fixture-request", contentDigest: null, targetGenerationId: SESSION, createdAt: lane.createdAt,
+      retryOfOperationId: null, terminalState: null, terminalDisposition: null, terminalReason: null, settledAt: null,
+    };
     if (kind === "attention") file.entries[`claude:${SESSION}`]!.structuredHost!.pendingAttention = ["pending-question"];
     if (kind === "busy") file.conversations[CONVERSATION]!.turn.state = "busy";
     const continuing = ["needs-decision", "fix-running", "commit-repair", "runtime-switch"].includes(kind);

@@ -15,12 +15,15 @@ afterEach(() => {
   if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+function buildFixtureLane(id: string) {
+  return buildPipeline({ id, task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
+    now: "2026-10-01T00:00:00Z", stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+}
 function setup() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-evidence-")); roots.push(root);
   process.env.LLV_STATE_DIR = root;
-  const lane = buildPipeline({ id: "owner", task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
-    now: "2026-10-01T00:00:00Z", stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
-      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+  const lane = buildFixtureLane("owner");
   lane.state = "running";
   lane.runs[0]!.attempts = [{ n: 1, state: "running", effectiveRole: lane.stages[0]!.effectiveRole,
     historical: false, launchId: "launch-owner", conversationId: "conversation_owner", sessionId: "session-owner", agentPath: "/fixture/owner.jsonl", paneId: null,
@@ -37,7 +40,7 @@ test("retirement target reads match the full predicate and warm decoding stays f
   try {
     for (const size of [10, 100]) {
       for (let n = 0; n < size; n++) {
-        const row = { ...buildPipeline({ ...f.lane, state: "provisioning", id: `history-${n}`, now: f.lane.createdAt }), state: "running", srcConversationId: null,
+        const row = { ...buildFixtureLane(`history-${n}`), state: "running", srcConversationId: null,
           runs: [{ stageId: "build", attempts: [{ ...f.lane.runs[0]!.attempts[0]!, conversationId: `conversation_history_${n}`, sessionId: `session-${n}`, agentPath: `/fixture/${n}.jsonl` }] }] };
         f.db.query("INSERT OR REPLACE INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,?,1,0)")
           .run(row.id, JSON.stringify(row), n);
@@ -87,7 +90,7 @@ test("a peer archive edit and deletion revoke old evidence and the next read ans
     f.db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='owner'").run(JSON.stringify({ ...f.lane, runs: [{ stageId: "build", attempts: [] }], state: "closed", cursor: null }));
     expect(() => first(target)).toThrow("changed");
     expect((await pipelineRetirementReader())(target)).toBe(false);
-    f.db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive','archived',?,1,1,0)").run(JSON.stringify({ ...buildPipeline({ ...f.lane, state: "provisioning", id: "archived", now: f.lane.createdAt }), state: "running", runs: f.lane.runs }));
+    f.db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive','archived',?,1,1,0)").run(JSON.stringify({ ...buildFixtureLane("archived"), state: "running", runs: f.lane.runs }));
     const archived = await pipelineRetirementReader(); expect(archived(target)).toBe(true);
     f.db.query("DELETE FROM state_rows WHERE collection='pipelines_archive'").run();
     expect(() => archived(target)).toThrow("changed");
@@ -220,7 +223,7 @@ test.each(["completed", "closed", "superseded"] as const)("the production projec
       if (protection === "publication") lane.publicationAdmission = { id: "publish", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
       if (protection === "activation") attempt.activation = { id: "activation", phase: "dispatching", clientAttemptId: "fixture", startedAt: lane.createdAt, fence: "fixture",
         input: { role: attempt.effectiveRole, prompt: "Build", cwd: "/fixture", project: "fixture", clientAttemptId: "fixture", title: "Fixture", runtimeProfile: {}, membership: {} } } as typeof attempt.activation;
-      const successor = { ...buildPipeline({ ...f.lane, state: "provisioning", id: "successor", now: f.lane.createdAt }), state: "paused",
+      const successor = { ...buildFixtureLane("successor"), state: "paused",
         srcConversationId: original.conversationId, srcPath: original.agentPath, runs: f.lane.runs.map(run => ({ ...run, attempts: [] })) } as Pipeline;
       if (protection === "source-publication") successor.publicationAdmission = { id: "publish", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
       const rows = [lane, successor];
@@ -246,7 +249,7 @@ test("released conversation aliases end source custody while independent paths a
   try {
     const lane = structuredClone(f.lane);
     lane.state = "completed"; lane.cursor = null;
-    const successor = { ...buildPipeline({ ...f.lane, state: "provisioning", id: "successor", now: f.lane.createdAt }), state: "paused",
+    const successor = { ...buildFixtureLane("successor"), state: "paused",
       srcConversationId: "conversation_alias", srcPath: "/fixture/independent.jsonl",
       runs: f.lane.runs.map(run => ({ ...run, attempts: [] })) } as Pipeline;
     savePipelines([lane, successor]);

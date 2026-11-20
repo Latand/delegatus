@@ -3,11 +3,12 @@ import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
 import * as retirement from "./hostRetirement";
-import { buildPipeline, savePipelines } from "./store";
+import { buildPipeline, isStoredPipeline, pipelineIdentity, savePipelines } from "./store";
 import { pipelineRetirementReader } from "./retirementEvidence";
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "@/lib/runtime/agentScope";
 import { blockingHostActivityFlags } from "@/lib/runtime/hostActivityFlags";
 import { terminateStructuredHostTree } from "@/lib/runtime/structuredHostControl";
 import type { Pipeline, PipelineStageAttempt } from "./types";
@@ -78,9 +79,10 @@ function fixture(engine: "codex" | "claude" = "codex") {
   let pipelineReads = 0;
   const deps = {
     ...retirement, runtimeIdleKillMatches, sameRecordedProcessIdentity, blockingHostActivityFlags, registryRowsMatching,
+    recordedAgentScope, recordedScopeProcess, sameAgentScope,
     stopped: false, state, queue, CONTROLLER_STOP_SOURCE: "controller-stop",
     client: { readSession: async () => session, operationStatus: async () => ({ receipt: { status: "delivering", retirementClaim: claim } }) },
-    registry: { readOnlySnapshot: () => snapshot, conversation: () => conversation,
+    registry: { readOnlySnapshot: () => snapshot, conversation: () => conversation, hostEntry: () => entry,
       deliveryWriteOrBusy: async (_context: unknown, write: () => unknown) => write(),
       terminateInactiveStructuredHost: () => false,
       recordStructuredTerminationSurvivors: (_key: unknown, _ref: unknown, identities: unknown[]) => { entry.structuredTerminationSurvivors = identities; return true; },
@@ -152,9 +154,12 @@ test("the production idle callback releases a passed review before its lane comp
   f.attempt.state = "passed";
   f.attempt.verdict = { status: "pass", findings: [] };
   f.attempt.completedAt = new Date(cut).toISOString();
-  const successor: Pipeline = { ...f.pipeline, id: "successor-review", worktreeDir: "/fixture-pipeline-successor", branch: "pipeline/fixture-successor", state: "paused",
+  delete f.attempt.providerWait;
+  const id = "successor-review";
+  const successor: Pipeline = { ...f.pipeline, id, ...pipelineIdentity(id, f.pipeline.task, f.pipeline.repoDir), state: "paused",
     runs: f.pipeline.runs.map(run => ({ ...run, attempts: [] })), srcConversationId: f.attempt.conversationId, srcPath: f.transcript };
   f.pipelines.push(successor);
+  expect(f.pipelines.every(isStoredPipeline)).toBe(true);
   expect(await f.retire()).toBe(true);
   expect(f.signals).toEqual([987001, 987002]);
 });
