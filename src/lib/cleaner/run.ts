@@ -48,7 +48,17 @@ async function writeCard(run: CleanerRun, allowed: () => boolean): Promise<boole
     const details = cleanerCardDetails(run, locale);
     if (run.settledAt) {
       const status = run.failure ? "blocked" : "done";
-      if (!task || (task.status === status && task.details === details)) return { state: undefined, result: true };
+      if (!task) {
+        const created = createTask(state.tasks, {
+          project: run.project, text: cleanerCardText(run, locale), details,
+          icon: "brush-cleaning", color: "slate", placement: "unplaced", clientRequestId: run.runId,
+        }, state.recentCreates, { now: () => run.claimedAt, id: () => run.taskId, allowBoardOverflow: true });
+        if (!created.ok) throw new Error(created.error);
+        const terminal = patchTask(created.tasks, run.taskId, { status, details }, run.settledAt, { allowBoardOverflow: true });
+        if (!terminal.ok) throw new Error(terminal.error);
+        return { state: { ...state, tasks: terminal.tasks, recentCreates: created.recentCreates }, result: true };
+      }
+      if (task.status === status && task.details === details) return { state: undefined, result: true };
       const result = patchTask(state.tasks, run.taskId, { status, details }, run.settledAt, { allowBoardOverflow: true });
       if (!result.ok) throw new Error(result.error);
       return { state: { ...state, tasks: result.tasks }, result: true };
@@ -188,11 +198,12 @@ export function createCleanerController(ports: CleanerPorts) {
       const run = cleanerPressureRun(episode);
       return run?.launchBody ? run.taskId : null;
     },
-    async launchCleanerIfDue(project: () => Promise<string | null>, trafficSince: number, pressure: DiskPressure | null): Promise<void> {
-      if (!allowed() || activeCleanerRun() || !cleanerDailyDue(now(), trafficSince)) return;
+    async launchCleanerIfDue(project: () => Promise<string | null>, trafficSince: number | (() => number), pressure: DiskPressure | null): Promise<void> {
+      const currentTrafficSince = () => typeof trafficSince === "function" ? trafficSince() : trafficSince;
+      if (!allowed() || activeCleanerRun() || !cleanerDailyDue(now(), currentTrafficSince())) return;
       const ownProject = await project();
       if (!ownProject) return;
-      const claimed = await claimCleanerRun({ project: ownProject, cwd, now, trafficSince, allowed, evidence: cleanerDiskEvidence(pressure) });
+      const claimed = await claimCleanerRun({ project: ownProject, cwd, now, trafficSince: currentTrafficSince, allowed, evidence: cleanerDiskEvidence(pressure) });
       if (typeof claimed !== "string") await dispatch(claimed);
     },
     async reconcile(): Promise<void> {

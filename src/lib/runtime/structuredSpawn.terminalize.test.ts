@@ -19,6 +19,7 @@ import { pruneSpawnNotices, readSpawnNoticeTurn, settleSpawnNotices } from "@/li
 import { LAUNCH_FAILURE_NOTICE_WINDOW_MS } from "@/lib/tasks/launchFailureReporting";
 import { closeStateMutationActivationForTests, openStateMutationActivation, stateMutationRefusal } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
+import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
@@ -1225,22 +1226,55 @@ test("the actuation cap bounds one cycle and the remainder converges on the next
   }
 });
 
-function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off") {
+function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off", cleaner = false) {
   const store = registry(mode);
   const cwd = path.dirname(store.filename);
-  const profile = emptyLaunchProfile({ cwd, title: curator ? "Role memory curation" : "Owner queue fixture",
+  const profile = emptyLaunchProfile({ cwd, title: cleaner ? "Cleaner queue fixture" : curator ? "Role memory curation" : "Owner queue fixture",
+    ...(cleaner ? { agentMemoryRoleParams: { mode: "disk" }, readOnly: true, sandbox: "restricted" as const, permissionMode: "never" as const, allowSubagents: false } : {}),
     ...(curator ? { project: curator.project, role: "curator" as never } : {}) });
-  const begun = store.beginSpawnRequest({ engine: "claude", cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
+  const engine = cleaner ? "codex" as const : "claude" as const;
+  const begun = store.beginSpawnRequest({ engine, cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
+    ...(cleaner ? { role: "cleaner" } : {}),
     ...(curator ? { role: "curator", explicitProject: curator.receiptProject ?? curator.project } : {}),
     clientAttemptId: attemptId ?? curator?.id ?? `relay-owner-queued-${transport}`, launchProfile: profile });
   if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw Error("queued owner fixture unavailable");
   const prompt = "Owner queue fixture instruction";
   store.queuePinnedSpawn(begun.receipt.launchId, { version: 1, retryAt: new Date(0).toISOString(), accountId: "account-a", locale: "en",
-    spec: { engine: "claude", command: "claude", cwd, windowName: "owner-fixture", launchProfile: profile },
+    spec: { engine, command: engine, cwd, windowName: "owner-fixture", launchProfile: profile },
     prompt, imageRefs: [], parentArtifactPath: null, pipelineSourceConversationId: null }, "Owner queue fixture");
   store.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner);
   return { store, cwd, receipt: begun.receipt };
 }
+
+test.serial("queued cleaner recovery holds its saved attempt throughout an update drain", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_recovery_drain", "off", true);
+  const saved = store.spawnReceipt(receipt.launchId)?.queuedPinnedSpawn;
+  let actuations = 0;
+  const options = {
+    resolveSpawnAccount: () => ({ engine: "codex" as const, accountId: "account-a", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } }),
+    resolvePinnedSpawnAdmission: async () => ({ kind: "admissible" as const, basis: "current" as const, stale: false, retryAt: null }),
+    spawnStructuredConversation: async (input: Parameters<typeof spawnStructuredConversation>[0]) => {
+      actuations++;
+      expect(input.receipt.clientAttemptId).toBe(receipt.clientAttemptId);
+      return { state: "running" } as never;
+    },
+  };
+  writeDrain(drainFile(), { id: "cleaner-recovery-drain", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 });
+  try {
+    const held = await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, options);
+    expect(held.examined).toBe(1);
+    expect(actuations).toBe(0);
+    expect(store.spawnReceipt(receipt.launchId)).toMatchObject({ state: "starting", admissionOwner: null, queuedPinnedSpawn: saved });
+    releaseDrain(drainFile(), "cleaner-recovery-drain");
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, options);
+    expect(actuations).toBe(1);
+    expect(store.spawnReceipt(receipt.launchId)?.clientAttemptId).toBe(receipt.clientAttemptId);
+  } finally {
+    releaseDrain(drainFile(), "cleaner-recovery-drain");
+    store.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 test("a launch queued by a release with the terminal transport ends failed and starts nothing", async () => {
   const { store, cwd, receipt } = queuedOwnerFixture("tmux", undefined, "queued-terminal-transport-fixture");

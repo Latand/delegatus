@@ -103,7 +103,7 @@ export function cleanerDailyDue(now: number, trafficSince: number): boolean {
 }
 
 type Claim = { project: string; cwd: string; now: () => number; evidence: CleanerDiskEvidence; allowed: () => boolean }
-  & ({ episode: string } | { trafficSince: number });
+  & ({ episode: string } | { trafficSince: number | (() => number) });
 
 /** The schedule and run commit together. The episode receipt survives run pruning. */
 export function claimCleanerRun(input: Claim): Promise<CleanerRun | "already-claimed" | "held"> {
@@ -113,12 +113,15 @@ export function claimCleanerRun(input: Claim): Promise<CleanerRun | "already-cla
       if (!input.allowed()) return "held";
       const held = (tx.get(SCHEDULE) as Schedule | null) ?? EMPTY;
       const now = input.now();
+      const trafficSince = "trafficSince" in input
+        ? (typeof input.trafficSince === "function" ? input.trafficSince() : input.trafficSince)
+        : null;
       const claimedAt = new Date(now).toISOString();
       const episode = "episode" in input ? input.episode : null;
       const trigger: CleanerTrigger = episode === null ? `daily:${claimedAt.slice(0, 10)}` : `disk-pressure:${episode}`;
       const pressureId = episode === null ? null : pressureRunId(episode);
       if (pressureId && (held.lastPressureEpisode === episode || tx.get(runKey(pressureId)))) return "already-claimed";
-      if (held.activeRunId || ("trafficSince" in input && !dailyCleanerDue(held.lastDailyClaimAt, now, input.trafficSince))) return "held";
+      if (held.activeRunId || (trafficSince !== null && !dailyCleanerDue(held.lastDailyClaimAt, now, trafficSince))) return "held";
       const runIds = [...held.runIds];
       if (runIds.length >= RETAIN_RUNS) {
         const index = runIds.findIndex(id => !held.pendingCards.includes(id));

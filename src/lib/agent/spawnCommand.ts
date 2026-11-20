@@ -103,6 +103,8 @@ const PIN_FALLBACK_TITLE_UK = typeof PIN_FALLBACK_TITLE_UK_MESSAGE === "string"
   ? PIN_FALLBACK_TITLE_UK_MESSAGE
   : PIN_FALLBACK_TITLE_EN;
 
+class CleanerDrainHold extends Error {}
+
 /** Viewer-authored task titles follow the operator's interface language
     (docs/design/orchestrator-reports.md §3.5, §4.2). The request's
     Accept-Language, which is the browser's language and ignores the toggle,
@@ -1333,8 +1335,19 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             && Boolean(receipt.admissionOwner && current.admissionOwner
               && sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)),
         });
+        const releaseCleanerAdmission = async () => {
+          if (!diskCleaner || !dependencies.autonomousAdmissionHeld?.()) return false;
+          const current = registry.spawnReceipt(receipt.launchId);
+          if (current?.state === "starting" && current.admissionOwner && receipt.admissionOwner
+            && sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)) {
+            await registry.deliveryWrite({ label: "spawn.cleaner-drain-hold" }, () =>
+              registry.releaseSpawnActuation(receipt.launchId, receipt.admissionOwner!));
+          }
+          return true;
+        };
         try { authorizeLaunch(receipt); }
         catch {
+          if (await releaseCleanerAdmission()) return;
           await failOwnedAdmission("autonomous launch authorization revoked");
           return;
         }
@@ -1359,6 +1372,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             }
             try { authorizeLaunch(receipt); }
             catch {
+              if (await releaseCleanerAdmission()) throw new CleanerDrainHold("cleaner launch held by update drain");
               await failOwnedAdmission("autonomous launch authorization revoked");
               throw new Error("autonomous launch authorization revoked");
             }
@@ -1386,6 +1400,10 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
           }, dependencies.runtimeAdmissionRetry);
           await recordActualSpawnAccountOffLoop(registry, receipt, launchAccount.accountId, response.path);
         } catch (error) {
+          if (error instanceof CleanerDrainHold) {
+            await releaseCleanerAdmission();
+            return;
+          }
           spawnDiagnosticError("[spawn] structured launch failed", {
             launchId: receipt.launchId,
             conversationId: receipt.conversationId,

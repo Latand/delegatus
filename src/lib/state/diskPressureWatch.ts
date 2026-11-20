@@ -48,13 +48,17 @@ export function startDiskPressureWatch(ports: {
     let pressure = null;
     try {
       pressure = await (ports.readPressure ?? readDiskPressure)();
+      if (cleaner) trafficSince = actions.active() ? releaseTrafficSince(now()) : null;
       await reconcileDiskPressure(pressure, { ...actions, cleaner });
     } finally {
       // Startup deliberately supplies no launcher until the guarded tools
       // ship. The pressure observer alone creates no cleaner run or receipt.
       if (cleaner && trafficSince !== null) {
         try { await cleaner.reconcile(); }
-        finally { await cleaner.launchCleanerIfDue(actions.project, trafficSince, pressure); }
+        finally { await cleaner.launchCleanerIfDue(actions.project, () => {
+          if (!actions.active()) return now();
+          return releaseTrafficSince(now());
+        }, pressure); }
       }
     }
   });

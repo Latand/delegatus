@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { drainFile, writeDrain } from "@/lib/selfUpdate/drain";
 import { observeDiskPressureReport } from "@/lib/state/diskPressure";
+import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { productionDiskPressureActions } from "@/lib/state/diskPressureActions";
 import { startDiskPressureWatch, stopDiskPressureWatch } from "@/lib/state/diskPressureWatch";
 import { writeJsonDurably } from "@/lib/state/durableJson";
@@ -92,6 +93,14 @@ const actions = productionDiskPressureActions();
 actions.project = async () => "repo-1234abcd";
 actions.early = () => fs.appendFileSync(statePath("fixture-sweeps"), `${at}\n`);
 const readPressure = async () => {
+  if (fault === "switch-owner-on-read") {
+    const file = statePath("viewer-release.json");
+    const revision = "a".repeat(40);
+    fs.writeFileSync(file, JSON.stringify({ endpoint: "http://127.0.0.1:9231", revision, hotStateBackend: "sqlite-v1" }));
+    fs.writeFileSync(file, JSON.stringify({ endpoint: "http://127.0.0.1:9230", revision, hotStateBackend: "sqlite-v1" }));
+    fs.utimesSync(file, new Date(now()), new Date(now()));
+    publishHotStateAuthority(statePath(), "sqlite", revision, { activationReadyAt: at! });
+  }
   const pressure = observeDiskPressureReport(statePath("disk-pressure-report.json"), () => [
     { roles: ["state"], freeBytes: (space === "ok" ? 500 : 10) * 1024 ** 3,
       totalBytes: 1000 * 1024 ** 3, level: space === "ok" ? "ok" : "critical" },

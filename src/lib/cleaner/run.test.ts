@@ -138,6 +138,18 @@ test("daily eligibility follows managed traffic time and the last daily claim ac
   expect(next?.claimedAt).toBe(at(day + 10 * minute + 10));
 });
 
+test("daily eligibility restarts at the restored traffic owner’s promotion time", async () => {
+  const { tick, target, history } = fixture();
+  target(0);
+  await tick(20 * minute, "ok", "switch-owner-on-read");
+  expect(history()).toEqual([]);
+  await tick(30 * minute - 1, "ok");
+  expect(history()).toEqual([]);
+  const eligible = (await tick(30 * minute, "ok"))!;
+  expect(eligible.active?.trigger).toBe("daily:2031-02-01");
+  expect(eligible.active?.claimedAt).toBe(at(30 * minute));
+});
+
 test("pressure claim and dispatch are held outside ownership and during a drain", async () => {
   const { tick, target, drain, history, env } = fixture();
   target(0, false);
@@ -200,6 +212,20 @@ test("claims, tasks, the launch request and the card result survive process exit
   const recovered = (await tick(20 * minute, "ready"))!;
   expect(recovered).toMatchObject({ active: null, pending: null, ledger: replay.ledger });
   expect(loadTasksForList(path.join(state, "tasks.json"))).toHaveLength(2);
+});
+
+test("expiry after claim crash restores the timed-out card and its reason", async () => {
+  const { tick, history, card, state } = fixture();
+  await tick(0, "ready", "claim-crash", 71);
+  const claimed = history()[0]!;
+  expect(card(claimed.taskId)).toBeNull();
+  const restarted = (await tick(90 * minute, "ready"))!;
+  const task = card(claimed.taskId);
+  expect(restarted.pending).toBeNull();
+  expect(task).toMatchObject({ id: claimed.taskId, status: "blocked" });
+  expect(task?.details).toContain("timed-out");
+  expect(task?.details).toContain("90-minute deadline");
+  expect(loadTasksForList(path.join(state, "tasks.json")).filter(row => row.id === claimed.taskId)).toHaveLength(1);
 });
 
 test("the same attempt survives transient refusal and settles at exactly 90 minutes", async () => {
