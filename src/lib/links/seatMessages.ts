@@ -62,6 +62,11 @@ export function resolveSeatMessageMachine(machine: string, project: string, opti
   const context = linkedContext();
   const wanted = machine.trim().toLowerCase();
   if (wanted === "here") return null;
+  // A revoked installation ID remains reserved even when another peer has
+  // since adopted that value as its display label.
+  if (UUID.test(wanted) && peerRows().some(peer => peer.state === "revoked" && (peer.id === wanted || peer.install === wanted))) {
+    refuse("link_revoked", `${machine} is no longer linked to this machine.`);
+  }
   // Full install IDs disambiguate labels and prefixes.
   const exact = context.links.filter(link => wanted === link.install);
   // Fresh selectors may be UUID-shaped labels. A previously bound remote
