@@ -1039,7 +1039,9 @@ export async function commitPipelineStage(
   return { ok: true, sha: commit.sha };
 }
 
-async function unstageControllerArtifacts(exec: ExecPort, worktreeDir: string): Promise<PipelineGitResult | null> {
+export const CONTROLLER_ARTIFACT_UNSTAGE_STEP = "unstaging controller pipeline artifacts";
+
+async function unstageControllerArtifacts(exec: ExecPort, worktreeDir: string, head = "HEAD"): Promise<PipelineGitResult | null> {
   try {
     await protectExistingControllerArtifacts(worktreeDir, exec);
   } catch (error) {
@@ -1047,10 +1049,28 @@ async function unstageControllerArtifacts(exec: ExecPort, worktreeDir: string): 
   }
   const result = await exec(
     "git",
-    ["reset", "--quiet", "HEAD", "--", ...CONTROLLER_ARTIFACT_GIT_PATHS],
+    ["reset", "--quiet", head, "--", ...CONTROLLER_ARTIFACT_GIT_PATHS],
     worktreeDir,
   );
-  return result.code === 0 ? null : failure("unstaging controller pipeline artifacts", result);
+  return result.code === 0 ? null : failure(CONTROLLER_ARTIFACT_UNSTAGE_STEP, result);
+}
+
+/** Retry artifact cleanup on the reported commit without creating a new one. */
+export async function retryStageArtifactUnstage(pipeline: Pipeline, expected: { head: string; branch: string }, exec: ExecPort): Promise<PipelineGitResult> {
+  const readOnly: ExecPort = (command, args, cwd, env, options) =>
+    exec(command, args, cwd, { ...env, GIT_OPTIONAL_LOCKS: "0" }, options);
+  const verify = async (): Promise<PipelineGitResult> => {
+    const current = await currentPipelineBranchHead(pipeline, readOnly, expected.branch);
+    return current.ok && current.sha !== expected.head
+      ? { ok: false, error: "the worktree HEAD differs from the saved pass report" } : current;
+  };
+  const before = await verify();
+  if (!before.ok) return before;
+  const ancestry = await exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, expected.head],
+    pipeline.worktreeDir, pipelineLiteralGitEnv());
+  if (ancestry.code !== 0) return { ok: false, error: "the reported HEAD does not preserve the accepted stage history" };
+  const unstage = await unstageControllerArtifacts(exec, pipeline.worktreeDir, expected.head);
+  return unstage ?? await verify();
 }
 
 export type PipelineWorktreeChanges =
@@ -1581,7 +1601,7 @@ export async function resetPipelineStage(pipeline: Pipeline, exec: ExecPort): Pr
 
 /** Returns the clean checked-out SHA only when this worktree still owns its
     persisted branch. Review evidence must name this exact revision. */
-export async function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPort): Promise<PipelineGitResult> {
+export async function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPort, expectedBranch?: string): Promise<PipelineGitResult> {
   const literalExec = withLiteralGitObjects(exec);
   if (!validPipelineBranch(pipeline.branch)) return { ok: false, error: "the pipeline branch is invalid" };
   const status = (await literalExec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
@@ -1594,6 +1614,9 @@ export async function currentPipelineBranchHead(pipeline: Pipeline, exec: ExecPo
     ? pipeline.delivery.target.branch.replace(/^refs\/heads\//, "") : null;
   if (checkedOut !== pipeline.branch && checkedOut !== deliveryBranch) {
     return { ok: false, error: "the pipeline worktree is not checked out on its pipeline or delivery branch" };
+  }
+  if (expectedBranch !== undefined && checkedOut !== expectedBranch) {
+    return { ok: false, error: "the worktree branch differs from the saved pass report" };
   }
   const head = (await literalExec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (head.code !== 0) return failure("resolving the pipeline branch HEAD", head);
