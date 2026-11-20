@@ -306,6 +306,20 @@ test("stale orphaned spawn and kill effects settle while live work remains pendi
   });
   sessionStatus(journal, "conversation_stale_kill", "thread-stale", "dead");
 
+  // The registry can prove that the writer exited before the journal's last
+  // hosted projection was changed. That stale projection must not pin the
+  // queued launch forever.
+  sessionStatus(journal, "conversation_stale_hosted", "thread-stale-hosted", "hosted");
+  journal.executeOperation({
+    kind: "spawn",
+    conversationId: "conversation_stale_hosted",
+    operationId: "operation_stale_hosted",
+    idempotencyKey: "stale-hosted-spawn",
+    engine: "claude",
+    cwd: "/repo",
+    ["prompt"]: "fixture",
+  });
+
   sessionStatus(journal, "conversation_live_kill", "thread-live", "hosted");
   journal.executeOperation({
     kind: "kill",
@@ -328,15 +342,16 @@ test("stale orphaned spawn and kill effects settle while live work remains pendi
   now += RUNTIME_PENDING_EFFECT_STALE_MS + 1;
   const states = new Map<string, "current" | "dead">([
     ["conversation_stale_kill", "dead"],
-    ["conversation_live_kill", "dead"],
+    ["conversation_live_kill", "current"],
     ["conversation_registered_spawn", "current"],
+    ["conversation_stale_hosted", "dead"],
   ]);
-  expect(journal.settleStalePendingEffects(states)).toEqual({ scanned: 4, settled: 0 });
+  expect(journal.settleStalePendingEffects(states)).toEqual({ scanned: 5, settled: 0 });
   now += RUNTIME_PENDING_EFFECT_STALE_MS;
   const result = journal.settleStalePendingEffects(states);
 
-  expect(result).toEqual({ scanned: 4, settled: 2 });
-  for (const operationId of ["operation_stale_spawn", "operation_stale_kill"]) {
+  expect(result).toEqual({ scanned: 5, settled: 3 });
+  for (const operationId of ["operation_stale_spawn", "operation_stale_kill", "operation_stale_hosted"]) {
     expect(journal.operationResult(operationId)?.receipt).toMatchObject({
       status: "failed",
       reason: expect.stringMatching(/^stale: /),

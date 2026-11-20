@@ -12,6 +12,7 @@ import { captureProcessIdentity, sameRecordedProcessIdentity, type ProcessIdenti
 import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
 import { recordedOwnerHeld } from "@/lib/recordedChecks/store";
 import type { RuntimeHostClient } from "./client";
+import type { RuntimeOperationCommand } from "@/lib/runtime/contracts";
 import { readHostExit, readHostExitWriterBinding, recordHostStop, withHostStopOrigin } from "./hostExit";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { idleRetirementSession, OPEN_RETIREMENT_DELIVERIES, OPEN_SPAWN_RECEIPTS,
@@ -105,14 +106,14 @@ function nativeAncestry(native: ProcessIdentity, waiter: ProcessIdentity): Nativ
   if (chain.some(identity => sameRecordedProcessIdentity(identity, waiter))) {
     return { identities: chain, scopeEngine: null };
   }
-  // A scope can keep a native process after it leaves the waiter's tree.
-  // Require the exact independent waiter in the same dedicated launch cell.
+  // A dedicated launch scope can keep the exact native CLI alive after its
+  // waiter exits. The scope is only a discovery hint: readLaunch below still
+  // requires the launch capability and durable native process identity.
   try {
-    if (observeAgentProcess(waiter) !== "alive") return null;
     const cgroup = (pid: number) => fs.readFileSync(`/proc/${pid}/cgroup`, "utf8").trim();
     const group = cgroup(native.pid);
     const engine = agentScopeEngine(group);
-    if (!engine || cgroup(waiter.pid) !== group || observeAgentProcess(waiter) !== "alive") return null;
+    if (!engine) return null;
     return { identities: [...chain, waiter], scopeEngine: engine };
   } catch { return null; }
 }
@@ -135,7 +136,7 @@ interface OrphanSweepPorts {
   ready(): boolean;
   noLocalWork(key: SessionKey, conversationId: string): boolean;
   treeIdle(identity: ProcessIdentity): boolean;
-  client: Pick<RuntimeHostClient, "readSession" | "operationStatus">;
+  client: Pick<RuntimeHostClient, "readSession" | "operationStatus" | "command">;
   pids?: AsyncIterable<number>;
   now?: () => number;
   idleMs: number;
@@ -285,6 +286,26 @@ export async function reconcileUnregisteredAgentProcesses(ports: OrphanSweepPort
       if (pidfds === undefined) pidfds = openPidfdLibrary();
       const libc = pidfds;
       if (!libc || !authorized() || !await verifyRuntime() || !authorized()) return false;
+      // The journal transaction is the admission fence: a send that committed
+      // first makes this idle-only kill refuse; once this kill is pending,
+      // retirementInProgress prevents new sends until this exact signal ends.
+      const session = await readSession({ conversationId: launch.conversationId, artifactPath: launch.artifactPath }, { timeoutMs: 500 });
+      if (!authorized() || !session || !idleRetirementSession(session, launch.conversationId, launch.key, launch.artifactPath)
+        || session.retirementBlocked !== false || !Number.isSafeInteger(session.revision) || !session.writerClaim) return false;
+      const retirementId = `unregistered-retirement-${launch.launchId}`;
+      let admitted;
+      try {
+        admitted = await ports.client.command({
+          kind: "kill", operationId: retirementId, idempotencyKey: retirementId,
+          conversationId: launch.conversationId, sessionKey: launch.key,
+          onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim },
+        } satisfies RuntimeOperationCommand);
+      } catch { return false; }
+      if (!authorized() || !["pending", "queued", "delivering", "delivered"].includes(admitted.receipt.status)) return false;
+      const latest = await ports.client.operationStatus(retirementId, { timeoutMs: 500 });
+      if (!authorized() || !latest || latest.operationId !== retirementId
+        || latest.receipt.operationId !== retirementId
+        || !["pending", "queued", "delivering", "delivered"].includes(latest.receipt.status)) return false;
       return ports.registry.deliveryWriteOrBusy({ label: "registry.unregistered-agent-stop", operationId: launch.launchId }, () => {
         if (!authorized()) return false;
         const fd = libc.symbols.pidfd_open(pid, 0);

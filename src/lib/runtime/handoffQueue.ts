@@ -102,6 +102,7 @@ export interface HandoffQueueStore {
   saveDrainingGenerations?(generations: readonly string[]): void;
   /** Runs one read-modify-write cycle while holding the store's durable lock. */
   transaction?<T>(mutation: (state: HandoffQueueStoreState) => T): T;
+  hasPendingForConversation?(conversationId: string): boolean;
 }
 
 export class InMemoryHandoffQueueStore implements HandoffQueueStore {
@@ -214,6 +215,12 @@ export class HandoffQueue {
 
   rows(): HandoffRow[] {
     return this.store.load().map((row) => structuredClone(row));
+  }
+
+  hasPendingForConversation(conversationId: string): boolean {
+    if (this.store.hasPendingForConversation) return this.store.hasPendingForConversation(conversationId);
+    return this.store.load().some(row => row.conversationId === conversationId
+      && row.pendingDeliveries.some(delivery => !row.replayedDeliveryIds.includes(delivery.deliveryId)));
   }
 
   /** Completed operation rows retained outside the one-row active lease set. */

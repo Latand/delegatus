@@ -867,6 +867,7 @@ export interface StructuredHostRetirementDependencies {
   /** Undetermined when the queue could not be read: silence is not a drained
       queue, and reading it as one strands the message it still holds. */
   handoffRows?: () => Determinable<readonly HandoffRow[]>;
+  handoffHasPending?: (conversationId: string) => Determinable<boolean>;
   durableEventTail?: (sessionId: string) => Determinable<number>;
   realtimeBound?: (conversationId: string) => Determinable<boolean>;
   /** Undetermined when the durable seat store could not be established — the
@@ -2007,7 +2008,13 @@ export async function runStructuredHostRetirementSweep(
       continue;
     }
     const initial = structuredHostRetirementVerdict(subject, { now: startedAtMs, idleMs });
-    const operation = !initial.retire && initial.clause === "no-open-operation" && readOperation && readSession
+    // A terminal registry receipt is only a launch-side stamp. On a revoked
+    // seat, still join the keyed runtime journal/session even when that stamp
+    // looks complete: queued sends can arrive independently of the registry.
+    const retiredSeatStamp = seatWasRevoked(subject) && !!subject.structuredHostOperationId
+      && (subject.key.engine === "claude" || subject.key.engine === "codex");
+    const operation = ((!initial.retire && initial.clause === "no-open-operation") || retiredSeatStamp)
+      && readOperation && readSession
       ? obsoleteOperation(entry, planned, subject, readers) : null;
     // Admit the bounded journal probe only after every other clause passes.
     const verdict = operation
@@ -2272,10 +2279,13 @@ export async function runStructuredHostRetirementSweep(
         const seats = sources.seatConversations();
         const voice = readers.realtimeBound(conversationId);
         if (!seats.determined || seats.value.has(conversationId) || !voice.determined || voice.value) return false;
-        const handoff = sources.handoffRows();
-        return handoff.determined && !handoff.value.some(row =>
-          (row.conversationId === conversationId || row.engine === key.engine && row.engineSessionId === key.sessionId)
-          && row.pendingDeliveries?.some(delivery => !row.replayedDeliveryIds?.includes(delivery.deliveryId)));
+        const handoff = dependencies.handoffHasPending
+          ? dependencies.handoffHasPending(conversationId)
+          : (() => {
+              try { return determined(handoffQueue().hasPendingForConversation(conversationId)); }
+              catch { return undetermined("handoff queue could not be queried by conversation"); }
+            })();
+        return handoff.determined && !handoff.value;
       },
     }).catch(error => {
       console.error("[host retirement] unregistered agent reconciliation deferred", safeReason(error));

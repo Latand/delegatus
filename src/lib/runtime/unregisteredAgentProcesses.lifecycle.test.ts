@@ -10,6 +10,7 @@ import { observeAgentProcess } from "@/lib/agentState/process";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { RuntimeJournal } from "@/runtime-host/journal";
+import type { RuntimeOperationCommand } from "./contracts";
 import { readHostExit } from "./hostExit";
 import { spawnNativeWaitOwner } from "./nativeWaitOwner";
 import { treeHasOnlyMcpChildren } from "./structuredHostRetirement";
@@ -30,7 +31,8 @@ test("orphan custody recognizes native scopes in both agent slices", () => {
 for (const engine of ["claude", "codex"] as const) {
   test.skipIf(process.platform !== "linux").each([
     "dead-row", "absent-row", "live-row", "other-live-row", "ambiguous-owner", "open-journal", "probe-limit",
-    "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission", "missing-launch-proof",
+    "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission",
+    "send-wins-runtime-admission", "missing-launch-proof",
   ] as const)(`${engine} unregistered process reconciliation: %s`, async condition => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-orphan-"));
     const binary = path.join(root, engine);
@@ -108,8 +110,9 @@ for (const engine of ["claude", "codex"] as const) {
       journal.append({ scope: { type: "session", id: FIXTURE_CONVERSATION }, kind: "session-status", payload: {
         conversationId: FIXTURE_CONVERSATION, sessionKey: key, artifactPath, cwd: root,
         hostKind: engine === "codex" ? "codex-app-server" : "claude-broker",
-        host: condition === "other-runtime-work" ? "hosted" : "unhosted",
+        host: "hosted",
         turn: "idle", activeTurnId: null, provenance: "structured",
+        writerClaim: `fixture-writer-${engine}`,
       } });
       if (condition === "open-journal" || condition === "probe-limit") journal.executeOperation({ kind: "spawn", operationId: launchId, idempotencyKey: launchId,
         conversationId: FIXTURE_CONVERSATION, engine, cwd: root, prompt: "fixture" });
@@ -146,6 +149,13 @@ for (const engine of ["claude", "codex"] as const) {
           }
         })(),
         client: {
+          command: async (command: RuntimeOperationCommand) => {
+            if (condition === "send-wins-runtime-admission") journal!.executeOperation({
+              kind: "send", operationId: "fixture-boundary-send", idempotencyKey: "fixture-boundary-send",
+              conversationId: FIXTURE_CONVERSATION, text: "boundary send",
+            });
+            return journal!.executeOperation(command);
+          },
           operationStatus: async (id: string) => {
             operationReads++;
             return journal!.currentRetryResult(id);
@@ -169,7 +179,7 @@ for (const engine of ["claude", "codex"] as const) {
         expect(pulled).toBe(4);
         expect(entryReads).toBeLessThan(32);
       }
-      if (["dead-row", "absent-row", "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission"].includes(condition)) {
+      if (["dead-row", "absent-row", "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission", "send-wins-runtime-admission"].includes(condition)) {
         expect(sessionReads).toBeGreaterThan(0);
       }
       if (condition === "writer-admission") expect(writerAdmissions).toBe(1);

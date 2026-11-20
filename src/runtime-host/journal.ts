@@ -1237,7 +1237,7 @@ export class RuntimeJournal {
         const session = this.entity<RuntimeSession>("session", command.conversationId);
         if (!runtimeIdleKillMatches(session, command.sessionKey, command.onlyIfIdle)
           || this.retirementBlocked(command.conversationId)
-          || (previous.status !== "delivering" && this.retirementInProgress(command.conversationId))) {
+          || (previous.status !== "delivering" && this.retirementClaimInProgress(command.conversationId))) {
           status = "failed";
           details = { ...details, reason: "idle-retirement-deferred" };
         }
@@ -2275,7 +2275,12 @@ export class RuntimeJournal {
         const receipt = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
         const session = this.entity<RuntimeSession>("session", row.conversation_id);
         const registryState = registryConversations.get(row.conversation_id);
-        if (session?.host === "hosted" || session?.host === "recovering" || registryState === "current") {
+        // Registry dead/superseded evidence can outlive a stale hosted journal
+        // projection after its writer exits. Keep current and ambiguous owners
+        // fenced, while allowing the existing continuous absence horizon to
+        // settle work whose registry owner is explicitly retired.
+        if (registryState === "current" || (registryState !== "dead" && registryState !== "superseded"
+          && (session?.host === "hosted" || session?.host === "recovering"))) {
           if (row.orphaned_since !== null) {
             this.db.query("UPDATE operations SET orphaned_since = NULL WHERE operation_id = ?")
               .run(row.operation_id);
@@ -2956,6 +2961,17 @@ export class RuntimeJournal {
   }
 
   private retirementInProgress(conversationId: string): boolean {
+    return !!this.db.query<{ present: number }, [string]>(`
+      SELECT 1 AS present FROM operations WHERE conversation_id = ?
+        AND json_extract(request_json, '$.kind') = 'kill'
+        AND json_type(request_json, '$.onlyIfIdle') = 'object'
+        AND json_extract(receipt_json, '$.status') IN ('pending', 'queued', 'delivering') LIMIT 1
+    `).get(conversationId);
+  }
+
+  /** A queued retirement fences new work, while only a delivering owner may
+   * exclude another retirement from taking its delivery claim. */
+  private retirementClaimInProgress(conversationId: string): boolean {
     return !!this.db.query<{ present: number }, [string]>(`
       SELECT 1 AS present FROM operations WHERE conversation_id = ?
         AND json_extract(request_json, '$.kind') = 'kill'

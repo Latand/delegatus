@@ -74,6 +74,30 @@ test("SQLite store survives a container replace and preserves an idempotent repl
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test("pending handoff authorization is keyed to one conversation", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-keyed-"));
+  const filename = path.join(directory, "handoff-queue.sqlite");
+  const store = new SqliteHandoffQueueStore(filename);
+  const queue = new HandoffQueue(store);
+  try {
+    queue.enqueue([
+      rowInput({ conversationId: "conversation_target", pendingDeliveries: [
+        { deliveryId: "delivery_target", clientMessageId: null, seq: 1 },
+      ] }),
+      ...Array.from({ length: 512 }, (_, index) => rowInput({
+        operationId: `handoff_unrelated_${index}`,
+        conversationId: `conversation_unrelated_${index}`,
+      })),
+    ]);
+    expect(queue.hasPendingForConversation("conversation_target")).toBe(true);
+    expect(queue.hasPendingForConversation("conversation_unrelated_511")).toBe(false);
+    expect(queue.hasPendingForConversation("conversation_absent")).toBe(false);
+  } finally {
+    store["db"].close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("resumes a handoff migration interrupted after adding conversation_id", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-handoff-migration-resume-"));
   const filename = path.join(directory, "handoff-queue.sqlite");
