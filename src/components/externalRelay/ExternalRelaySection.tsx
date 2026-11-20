@@ -392,6 +392,8 @@ type Actions = {
   busy: boolean;
   /** The clone whose move from another install awaits the operator's confirmation. */
   moving: string | null;
+  /** The clone whose confirmed move the relay refused because another install holds it. */
+  refused: string | null;
   cancelMove: () => void;
   confirmMove: (target: Target) => void;
   patchTarget: (target: Target, patch: Partial<Target>) => void;
@@ -464,6 +466,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
   const configured = target.engine !== null && target.model !== null;
   const load = [t("externalRelay.target.running", { count: running, max: target.concurrency }), limit ? t("externalRelay.target.perHour", { count: limit }) : null].filter(Boolean).join(" · ");
   const here = target.answered_by === "install";
+  const moveRefused = actions.refused === target.id && target.answered_elsewhere === true && !here;
   const name = (key: Parameters<TFunction>[0]) => `${t(key)} · ${target.name}`;
   return (
     <div data-external-relay-target={target.id} data-open={open ? "" : undefined} data-fresh={fresh ? "" : undefined} className={`flex min-w-0 flex-col border-t border-border first:border-t-0 ${fresh ? "rounded-control bg-accent-soft/60" : ""} ${open ? "pb-2.5" : ""}`}>
@@ -487,7 +490,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
               ) : <span className="min-w-0 truncate">{t("externalRelay.target.needsEngine")}</span>}
             </span>
             <span data-external-relay-answer-source="" className="text-caption leading-4 text-muted">{t(here ? "externalRelay.target.answeredHere" : target.answered_elsewhere ? "externalRelay.target.answeredElsewhere" : "externalRelay.target.answeredService")}</span>
-            {target.answered_elsewhere && canAnswer ? <span data-external-relay-release-elsewhere="" className="text-caption leading-4 text-muted">{t("externalRelay.target.releaseElsewhere")}</span> : null}
+            {target.answered_elsewhere && canAnswer && !moveRefused ? <span data-external-relay-release-elsewhere="" className="text-caption leading-4 text-muted">{t("externalRelay.target.releaseElsewhere")}</span> : null}
             {target.ownerTier === true ? <span data-external-relay-owner-tier-caption="" className="text-caption leading-4 text-muted">{t("externalRelay.target.ownerTierOn")}</span> : null}
           </span>
           {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}
@@ -506,6 +509,12 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
             <button type="button" data-external-relay-move-go="" disabled={actions.busy} onClick={() => actions.confirmMove(target)} className={PRIMARY}>{t("externalRelay.target.moveHere")}</button>
           </div>
         </div>
+      ) : null}
+      {moveRefused ? (
+        <p role="alert" data-external-relay-move-refused="" className="mb-1.5 flex min-w-0 items-start gap-1.5 rounded-control border border-warning bg-warning-soft p-2.5 text-ui text-primary">
+          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
+          <span className="min-w-0">{t("externalRelay.target.moveRefused")}</span>
+        </p>
       ) : null}
       {open ? (
         <div className="flex min-w-0 flex-col gap-1.5 pl-7 pt-1 max-sm:pl-1">
@@ -621,6 +630,7 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
   };
   const [warned, setWarned] = useState(false);
   const [moving, setMoving] = useState<string | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const cloneable = offersCloneCreate(relay);
   const clone = useCloneCreate({ relayId: relay.id, stored: relay.cloneRequest ?? null, created: relay.cloneCreated ?? null, onChanged });
@@ -628,10 +638,11 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
   const fresh = freshId ? relay.targets.find((target) => target.id === freshId) ?? null : null;
   const defaultEngine = "codex-cloud" as const;
   const setup = useCloneSetup({ relayId: relay.id, phase: clone.phase, recorded: relay.cloneCreated?.request_id ?? null, target: fresh, engine: defaultEngine, onChanged });
-  const act = async (url: string, method: string, body?: object) => {
+  const act = async (url: string, method: string, body?: object, claim?: { code: string; take: () => void }) => {
     setBusy(true); setError(null);
     const result = await call<{ warned?: boolean }>(url, method, body);
-    if (!result.ok) setError(result.error);
+    if (!result.ok && claim && result.error === claim.code) claim.take();
+    else if (!result.ok) setError(result.error);
     else if (result.value.warned) setWarned(true);
     await onChanged();
     setBusy(false);
@@ -641,12 +652,14 @@ function RelayCard({ relay: stored, status, signedIn, onChanged }: { relay: Rela
     busy,
     patchTarget: (target, patch) => void drawnWrite(target.id, patch, { target: { id: target.id, ...patch } }),
     moving,
-    cancelMove: () => setMoving(null),
+    refused,
+    cancelMove: () => { setMoving(null); setRefused(null); },
     confirmMove: (target) => {
-      setMoving(null);
-      void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install", confirmTakeover: true });
+      setMoving(null); setRefused(null);
+      void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: "install", confirmTakeover: true }, { code: "answered_elsewhere", take: () => setRefused(target.id) });
     },
     route: (target, answeredBy) => {
+      setRefused(null);
       if (answeredBy === "install" && target.answered_elsewhere === true) { setMoving(target.id); return; }
       setMoving(null);
       void act(`${base}/targets/${encodeURIComponent(target.id)}`, "PATCH", { answered_by: answeredBy });

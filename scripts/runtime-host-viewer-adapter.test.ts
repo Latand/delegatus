@@ -660,6 +660,7 @@ exit 1
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1 $2" = "compose --project-directory" ]; then printf '%s\\n' "$FAKE_COMPOSE"; exit 0; fi
+if [ "$1 $2" = "buildx inspect" ]; then exit 0; fi
 if [ "$1 $2" = "build --pull" ]; then
   printf '%s\\n' 'lookup registry.example.invalid: no such host; recovered' >&2
   printf '%s\\n' 'ERROR: failed to solve: failed to read dockerfile: open Dockerfile: no such file or directory' >&2
@@ -735,6 +736,7 @@ exit 1
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1 $2" = "compose --project-directory" ]; then printf '%s\\n' "$FAKE_COMPOSE"; exit 0; fi
+if [ "$1 $2" = "buildx inspect" ]; then exit 0; fi
 if [ "$1 $2" = "build --pull" ]; then
   count=$(grep -c '^build --pull' "$FAKE_DOCKER_LOG")
   if [ "$count" = 1 ]; then
@@ -1413,6 +1415,7 @@ exit 1
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1 $2" = "compose --project-directory" ]; then printf '%s\\n' "$FAKE_COMPOSE"; exit 0; fi
+if [ "$1 $2" = "buildx inspect" ]; then exit 0; fi
 if [ "$1 $2" = "build --pull" ]; then exit 0; fi
 if [ "$1 $2" = "build --target" ]; then exit 0; fi
 if [ "$1 $2" = "container ls" ]; then exit 0; fi
@@ -1604,6 +1607,42 @@ exit 1
   expect(result.dockerCalls).toContain("container stop --time 10 viewer-rollback");
   expect(result.dockerCalls).not.toContain("container stop --time 10 viewer-current");
   expect(result.dockerCalls).toContain("container rm -f viewer-obsolete");
+});
+
+test("managed retention prunes the install builder at the successful build cutoff and protects both release IDs", async () => {
+  const { releaseBuilderName, viewerCandidateContainerName, viewerCandidateImageName } = await import("../src/runtime-host/deploymentArtifacts");
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "managed-release-retention-"));
+  const state = path.join(sandbox, "state");
+  const make = (key: string, revision: string) => {
+    const container = viewerCandidateContainerName(key);
+    return { ...release, revision, container, image: viewerCandidateImageName(revision, container) };
+  };
+  const current = make("current", "a".repeat(40)), rollback = make("previous", "b".repeat(40));
+  const old = make("obsolete", "c".repeat(40)), foreign = make("foreign", "d".repeat(40));
+  const builder = releaseBuilderName(state), id = (char: string) => "sha256:" + char.repeat(64);
+  const result = await runAction({ action: "retain-only", sandbox, input: { releases: [current, rollback] },
+    environment: { LLV_RELEASE_BUILD_CACHE_BYTES: "1024" },
+    setupState: () => {
+      for (const key of ["current", "previous", "obsolete"]) fs.mkdirSync(path.join(state, "deployments", key));
+      fs.writeFileSync(path.join(state, "deployments/current/docker-build.json"),
+        JSON.stringify({ image: current.image, builder, startedAt: Date.now() - 120_000 }));
+    },
+    dockerScript: `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1 $2" in
+  "container ls"|"container inspect"|"container stop"|"buildx prune"|"image rm") exit 0 ;;
+  "image inspect") printf '%s\\n' '${id("a")}' '${id("b")}' ;;
+  "image ls") printf '%s\\n' '${id("a")} ${current.image}' '${id("b")} ${rollback.image}' '${id("b")} ${old.image}-gate' '${id("c")} ${old.image}' '${id("d")} ${foreign.image}' ;;
+  *) exit 1 ;;
+esac
+` });
+  expectAdapterSuccess(result);
+  expect(result.dockerCalls.filter(call => call.startsWith("image rm"))).toEqual([`image rm ${old.image}`]);
+  expect(result.dockerCalls).toContain(`image ls --no-trunc --filter before=${current.image} --format {{.ID}} {{.Repository}}:{{.Tag}}`);
+  const prune = result.dockerCalls.find(call => call.startsWith("buildx prune"));
+  expect(prune).toContain(`--builder ${builder} --force --all --filter until=`);
+  expect(Number(/until=(\d+)s/.exec(prune!)![1])).toBeGreaterThanOrEqual(120);
+  expect(prune).toEndWith("--max-used-space 1024");
 });
 
 test("a candidate that dies before readiness carries its container's own account into the evidence", async () => {

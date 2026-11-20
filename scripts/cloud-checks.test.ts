@@ -170,6 +170,19 @@ for (const catalog of ["environment", "repository"]) for (const refusal of [401,
   }
 });
 
+test("a verified provider execution limit permits one local run after confirmation", async () => {
+  let attempts = 0, local = 0;
+  const fake = fakeRpc("");
+  fake.rpc.call = async method => {
+    expect(method).toBe("thread/start");
+    attempts++;
+    throw rpcFailure({ data: { codexErrorInfo: "environmentTimeLimitExceeded" } }, { method });
+  };
+  const transport = new AppServerCloudTransport(config, async () => fake.rpc, () => {});
+  expect(await runCloudChecks(job, transport, async () => { local++; return 19; }, undefined, () => {})).toBe(19);
+  expect([attempts, local]).toEqual([2, 1]);
+});
+
 test("verified transfer outages retry twice before one local run", async () => {
   let connects = 0, local = 0;
   const fake = fakeRpc("");

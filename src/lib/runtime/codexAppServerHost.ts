@@ -1779,7 +1779,9 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       provisional.viewerMcpTransport = viewer?.enabled === true
         ? typeof viewer.command === "string" ? "stdio" : typeof viewer.url === "string" ? "http" : null
         : null;
-      config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
+      // A reconnected listener keeps its verified launch root across Viewer restarts.
+      config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy,
+        options.env ?? process.env, provisional.gateCheckRoot);
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;
       Object.assign(config.features as Record<string, unknown>, cleanup.features);
