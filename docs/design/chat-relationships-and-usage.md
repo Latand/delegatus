@@ -16,7 +16,15 @@ native Codex forks and registry-owned conversations. The flat catalog and
 conversation search retain their own pagination. A Codex subagent without a
 session title or a usable prompt takes the nickname from its own native
 header, including when copied parent metadata follows that header. Cached
-board rows with generic titles use the same fallback.
+board rows with generic titles use the same fallback. For unnamed Codex
+sessions, a bounded 512 KiB read can recover the first request after launch
+context. Saved and manually edited titles take precedence.
+
+The owner's desktop Chats lists nest Codex subagents under their native
+parent thread, even when a subagent worked in another project. Opening
+the subagent uses its own project and transcript. The Chats list indents
+child rows, and a Codex subagent's row identifies it on hover and focus.
+Project-restricted views keep their existing access rules.
 
 Reloading an existing focus entry on desktop starts on its project board
 with the open-agent list retained. Pasting a conversation link or traversing
@@ -54,6 +62,8 @@ recorded GitHub repository.
 On the board, including **In progress**, a badge represents the originating
 chat or the card's sole linked conversation. The branch count in **Chats**
 counts dependent conversations. The PR badge counts the selected chat's links.
+Subagent PR badges use that subagent's own indexed chat history and its
+project's access checks.
 
 ## Token usage on task cards
 

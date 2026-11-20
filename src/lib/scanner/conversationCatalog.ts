@@ -13,6 +13,8 @@ export interface ConversationCatalogEntry {
   root: RootKey;
   name: string;
   project: string;
+  /** Display project for an authorized cross-project Codex subagent family. */
+  treeProject?: string;
   projectName?: string;
   projectUnresolved?: true;
   worktree?: string;
@@ -182,9 +184,35 @@ function catalogFamilies(items: ConversationCatalogEntry[], branches: Conversati
   }).sort((a, b) => a.newest - b.newest);
 }
 
+/** Use native spawn metadata only. The caller supplies the visible catalog,
+ * so a missing or hidden parent leaves the child in its own project. */
+export function groupCodexSubagentProjects(items: ConversationCatalogEntry[]): ConversationCatalogEntry[] {
+  const threads = new Map<string, ConversationCatalogEntry>();
+  for (const entry of items) {
+    if (entry.engine !== "codex") continue;
+    const id = codexThreadIdFromPath(entry.path)?.toLowerCase();
+    if (id && !threads.has(id)) threads.set(id, entry);
+  }
+  return items.map(entry => {
+    if (entry.engine !== "codex" || !entry.nativeParentThreadId) return entry;
+    const seen = new Set([entry.path]);
+    let root = entry;
+    while (root.nativeParentThreadId) {
+      const parent = threads.get(root.nativeParentThreadId.toLowerCase());
+      if (!parent) break;
+      if (seen.has(parent.path)) return entry;
+      seen.add(parent.path);
+      root = parent;
+    }
+    return root.project === entry.project ? entry : { ...entry, treeProject: root.project };
+  });
+}
+
 function treeCatalog(items: ConversationCatalogEntry[], branch?: ConversationCatalogQuery["branch"]): ConversationCatalogEntry[] {
   const byPath = new Map(items.map(entry => [entry.path, entry]));
-  const roots = conversationTree(items.map(entry => catalogEntryToFileEntry(entry)));
+  const roots = conversationTree(items.map(entry =>
+    catalogEntryToFileEntry(entry.treeProject ? { ...entry, project: entry.treeProject } : entry),
+  ));
   const parent = branch?.parent;
   if (parent) {
     const pending = [...roots];
@@ -227,7 +255,7 @@ export function paginateConversationCatalog(
     }
   } else {
     const matching = catalog
-      .filter((entry) => !options.project || entry.project === options.project)
+      .filter((entry) => !options.project || (options.branch ? entry.treeProject ?? entry.project : entry.project) === options.project)
       .filter((entry) => matchesQuery(entry, options.query ?? ""))
       .sort((left, right) => right.mtime - left.mtime || left.path.localeCompare(right.path))
       .map((entry) => entry.firstPrompt ? { ...entry, firstPrompt: "" } : entry);

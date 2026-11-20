@@ -10,12 +10,12 @@ const EMPTY_REQUESTS: Record<string, ChatPullRequests> = {};
  * small batch without rereading the conversation catalog or polling GitHub. */
 export function useChatPullRequests(project: string, enabled: boolean) {
   const [snapshot, setSnapshot] = useState<{ project: string; requests: Record<string, ChatPullRequests> }>();
-  const tracked = useRef(new Map<Element, string>());
+  const tracked = useRef(new Map<Element, { path: string; project: string | undefined }>());
   const observe = useRef<((node: Element) => void) | null>(null);
   const unobserve = useRef<((node: Element) => void) | null>(null);
-  const watch = useCallback((path: string, node: Element | null) => {
+  const watch = useCallback((path: string, node: Element | null, sourceProject?: string) => {
     if (!node) return;
-    tracked.current.set(node, path);
+    tracked.current.set(node, { path, project: sourceProject });
     observe.current?.(node);
     return () => {
       tracked.current.delete(node);
@@ -27,7 +27,7 @@ export function useChatPullRequests(project: string, enabled: boolean) {
     if (!enabled) return;
     const subscribed = tracked.current;
     const attempted = new Map<string, number>();
-    const pending = new Set<string>();
+    const pending = new Map<string, string>();
     const abort = new AbortController();
     let scheduled: ReturnType<typeof setTimeout> | undefined;
     let reading = false;
@@ -37,9 +37,11 @@ export function useChatPullRequests(project: string, enabled: boolean) {
       reading = true;
       try {
         while (pending.size && !abort.signal.aborted) {
-          const paths = [...pending].slice(0, CHAT_PULL_REQUEST_BATCH);
+          const sourceProject = pending.values().next().value ?? project;
+          const paths = [...pending].filter(([, owner]) => owner === sourceProject)
+            .slice(0, CHAT_PULL_REQUEST_BATCH).map(([path]) => path);
           for (const path of paths) pending.delete(path);
-          const query = new URLSearchParams({ project });
+          const query = new URLSearchParams({ project: sourceProject });
           for (const path of paths) query.append("transcript", path);
           try {
             const response = await fetch(`/api/conversations/pull-requests?${query}`, { signal: abort.signal });
@@ -65,10 +67,12 @@ export function useChatPullRequests(project: string, enabled: boolean) {
     };
 
     const visible = (node: Element) => {
-      const path = subscribed.get(node);
-      if (!path || (attempted.get(path) ?? 0) > Date.now()) return;
+      const subscription = subscribed.get(node);
+      if (!subscription) return;
+      const { path } = subscription;
+      if ((attempted.get(path) ?? 0) > Date.now()) return;
       attempted.set(path, Date.now() + 5000);
-      pending.add(path);
+      pending.set(path, subscription.project ?? project);
       if (!reading && scheduled === undefined) scheduled = setTimeout(() => void flush(), 40);
     };
     const observer = typeof IntersectionObserver === "function" ? new IntersectionObserver(entries => {

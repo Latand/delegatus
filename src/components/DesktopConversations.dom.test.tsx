@@ -18,10 +18,11 @@ import { DESKTOP_CONVERSATIONS_PAGE_SIZE, DesktopConversations } from "./Desktop
 
 const dom = new Window();
 /* One controllable observer: the test decides when the end of the rows is in view. */
-const observers: { callback: (entries: { isIntersecting: boolean }[]) => void; targets: HTMLElement[] }[] = [];
+type TestIntersection = { isIntersecting: boolean; target?: HTMLElement };
+const observers: { callback: (entries: TestIntersection[]) => void; targets: HTMLElement[] }[] = [];
 class TestIntersectionObserver {
-  private entry: { callback: (entries: { isIntersecting: boolean }[]) => void; targets: HTMLElement[] };
-  constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
+  private entry: { callback: (entries: TestIntersection[]) => void; targets: HTMLElement[] };
+  constructor(callback: (entries: TestIntersection[]) => void) {
     this.entry = { callback, targets: [] };
     observers.push(this.entry);
   }
@@ -269,4 +270,36 @@ test("the compact Chats list keeps its root and branch pages independent while a
   await settle();
   expect(rowPaths(host)).toEqual([parent.path, child.path, fork.path, other.path]);
   expect(calls).toHaveLength(4);
+});
+
+test("a visible cross-project Codex subagent loads its own PR badge from its source project", async () => {
+  const parent = entry(1, { engine: "codex", title: "Parent thread", directChildCount: 1 });
+  const child = entry(2, {
+    engine: "codex", title: "Review worker", project: "source-project",
+    nativeParentThreadId: "parent-thread", parent: parent.path, directChildCount: 0,
+  });
+  const reads: [string | null, string[]][] = [];
+  previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/conversations/pull-requests") {
+      reads.push([url.searchParams.get("project"), url.searchParams.getAll("transcript")]);
+      return Response.json({ [child.path]: { items: [
+        { url: "https://github.com/example/reports/pull/8", repository: "example/reports", number: 8, state: "merged" },
+      ], partial: false } });
+    }
+    const items = url.searchParams.get("branch") === "children" ? [child] : [parent];
+    return Response.json({ items, total: items.length, nextCursor: null });
+  }) as typeof fetch;
+  const host = mount(() => {}, true);
+  await settle();
+  flushSync(() => host.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!.click());
+  await settle();
+  const row = host.querySelector("[data-native-subagent]")!;
+  const observed = row.firstElementChild as HTMLElement;
+  observers.find(observer => observer.targets.includes(observed))!.callback([{ isIntersecting: true, target: observed }]);
+  await new Promise(resolve => setTimeout(resolve, 70));
+  await settle();
+  expect(reads).toEqual([["source-project", [child.path]]]);
+  expect(row.querySelector("[data-chat-pr-badge]")?.textContent).toBe("1");
 });

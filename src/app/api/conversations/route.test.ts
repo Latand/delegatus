@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { NextRequest } from "next/server";
 import os from "node:os";
@@ -451,6 +452,34 @@ test("main chats and each branch have separate cursors and stable child totals",
   expect(await json(children(thread.path))).toMatchObject({ items: [{ path: fork.path, parent: thread.path, engine: "codex" }], total: 1 });
   expect(await json(children(one.path))).toMatchObject({ items: [{ path: nested.path, parent: one.path }], total: 1 });
   expect(await json(children("/absent/example.jsonl"))).toMatchObject({ items: [], nextCursor: null, total: 0 });
+});
+
+test("desktop branch lists keep cross-project Codex subagents under their native parent", async () => {
+  const parentId = randomUUID();
+  const make = (id: string, project: string, nativeParentThreadId?: string) => {
+    const pathname = path.join(sandbox, `rollout-${id}.jsonl`);
+    fs.writeFileSync(pathname, "{}\n");
+    return {
+      path: pathname, name: path.basename(pathname), root: "codex-sessions" as const,
+      project, title: id, firstPrompt: "", engine: "codex" as const,
+      kind: "session", fmt: "codex" as const, mtime: 1, size: 3, nativeParentThreadId,
+    };
+  };
+  const parent = make(parentId, "parent-project");
+  const child = make(randomUUID(), "child-project", parentId);
+  const orphan = make(randomUUID(), "child-project", randomUUID());
+  replaceConversationCatalog([parent, child, orphan]);
+  const page = async (project: string, parent?: string) => {
+    const query = new URLSearchParams({ project, view: "tree", branch: parent ? "children" : "roots" });
+    if (parent) query.set("parent", parent);
+    return (await GET(new Request(`http://127.0.0.1/api/conversations?${query}`))).json();
+  };
+  expect(await page("parent-project")).toMatchObject({ total: 1, items: [{ path: parent.path, directChildCount: 1 }] });
+  expect(await page("parent-project", parent.path)).toMatchObject({
+    total: 1, items: [{ path: child.path, project: "child-project", parent: parent.path }],
+  });
+  expect(await page("child-project")).toMatchObject({ total: 1, items: [{ path: orphan.path }] });
+  expect(await page("child-project", parent.path)).toMatchObject({ total: 0, items: [] });
 });
 
 test("ordinary cursor pages still hydrate their own transcript titles", async () => {

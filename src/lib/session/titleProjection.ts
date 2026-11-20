@@ -4,9 +4,9 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { registryRowProjection, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { claudeDesktopChatForPath, claudeDesktopChats } from "@/lib/scanner/claudeDesktop";
 import { codexIndexedChatTitle, nativeCodexSessionMetaResult } from "@/lib/scanner/codexNative";
-import { projectInfoFromCwd } from "@/lib/scanner/describe";
+import { projectInfoFromCwd, recoverCodexTranscriptTitle } from "@/lib/scanner/describe";
 import { projectResolutionStateKey } from "@/lib/scanner/projectState";
-import { isGenericSessionTitle } from "@/lib/title";
+import { cleanTitle, isGenericSessionTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
 import { resolveProjectAttribution } from "./projectResolution";
@@ -369,10 +369,11 @@ function sessionTitleProjector(
     if (entry.kind === "session") {
       const nativeTitle = nativeTitleFor(entry.engine, entry.path);
       if (nativeTitle) entry.title = nativeTitle;
-      else if (entry.engine === "codex" && entry.nativeParentThreadId && isGenericSessionTitle(entry.title)) {
-        // Previously cached scanner rows still carry the generic title.
-        const nickname = nativeCodexSessionMetaResult(entry.path, entry.size, entry.mtime * 1000).subagentTitle;
-        if (nickname) entry.title = nickname;
+      else if (entry.root === "codex-sessions" && entry.engine === "codex" && isGenericSessionTitle(entry.title)) {
+        const nickname = entry.nativeParentThreadId
+          ? nativeCodexSessionMetaResult(entry.path, entry.size, entry.mtime * 1000).subagentTitle : null;
+        const recovered = nickname ?? recoverCodexTranscriptTitle(entry.path);
+        if (recovered) entry.title = cleanTitle(recovered, 120);
       }
     }
     if (includeRenameEligibility) entry.renamable = isRenameableSessionEntry(entry);

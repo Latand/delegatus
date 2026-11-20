@@ -135,6 +135,26 @@ test("a cached Codex subagent title falls back to its own native nickname", () =
   expect(alreadyNamed.title).toBe("Existing chat title");
 });
 
+test("a cached Codex title recovers a brief after the CLI bootstrap records", () => {
+  const filename = path.join(stateDir, "bootstrap-session.jsonl");
+  const record = (role: string, text: string) => ({
+    type: "response_item", payload: { type: "message", role, content: [{ type: "input_text", text }] },
+  });
+  fs.writeFileSync(filename, [
+    record("user", "<environment_context>Private workspace context</environment_context>"),
+    record("developer", "x".repeat(200 * 1024)),
+    record("user", "# AGENTS.md instructions for /tmp/work\n<INSTRUCTIONS>Internal context</INSTRUCTIONS>"),
+    record("user", "# Product hero copy\nWrite a short title."),
+  ].map(value => JSON.stringify(value)).join("\n") + "\n");
+  const stat = fs.statSync(filename);
+  const cached = entry({
+    path: filename, engine: "codex", fmt: "codex", root: "codex-sessions",
+    title: "Codex session", size: stat.size, mtime: stat.mtimeMs / 1000,
+  });
+  overlaySessionTitles([cached]);
+  expect(cached.title).toBe("Product hero copy Write a short title.");
+});
+
 test("the resource projection applies identity and titles without transcript-head eligibility reads", () => {
   const pathname = `/home/user/.codex/sessions/2026/07/16/rollout-${UUID}.jsonl`;
   const registry = new AgentRegistry(path.join(stateDir, "agent-registry.json"));

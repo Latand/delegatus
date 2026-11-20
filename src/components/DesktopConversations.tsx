@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { ChevronRight, GitBranch, Loader2 } from "@/components/icons";
+import { ChevronRight, Loader2 } from "@/components/icons";
 import { useChatPullRequests } from "@/hooks/useChatPullRequests";
 import { useConversationCatalog, type ConversationCatalogData } from "@/hooks/useConversationCatalog";
 import { cleanTitle } from "@/lib/title";
@@ -50,7 +50,7 @@ export function DesktopConversations({
     </span>
   ) : null;
   return (
-    <div data-desktop-conversations-scroll className="min-h-0 flex-1 overflow-y-auto p-1.5">
+    <div data-desktop-conversations-scroll className={`min-h-0 flex-1 overflow-y-auto ${compact ? "p-0.5" : "p-1.5"}`}>
       {countSlot ? createPortal(count, countSlot) : count && !compact ? <div className="px-1 pb-1">{count}</div> : null}
       <ChatList key={project} project={project} enabled={enabled} catalog={catalog} onOpen={onOpen}
         compact={compact} pullRequests={pullRequests} depth={0} />
@@ -152,9 +152,10 @@ function ChatBranch({ file, ...props }: ChatListProps & { file: FileEntry }) {
   const groupId = useId();
   const title = cleanTitle(file.title, 160);
   const { requests, watch } = pullRequests;
-  const rowRef = useCallback((node: HTMLDivElement | null) => watch(file.path, node), [file.path, watch]);
+  const rowRef = useCallback((node: HTMLDivElement | null) => watch(file.path, node, file.project), [file.path, file.project, watch]);
   const prs = requests[file.path];
   const count = file.directChildCount ?? 0;
+  const subagent = file.engine === "codex" && Boolean(file.nativeParentThreadId);
   const dependentLabel = t("list.chatBranches", { title, count });
   const toggle = count > 0 ? (
     <button type="button" aria-label={dependentLabel} title={dependentLabel} aria-expanded={expanded}
@@ -162,16 +163,17 @@ function ChatBranch({ file, ...props }: ChatListProps & { file: FileEntry }) {
       onClick={() => setDisclosure(expanded ? "closed" : "open")}
       className="inline-flex min-h-8 shrink-0 items-center gap-0.5 rounded-control px-1.5 text-[11px] tabular-nums text-muted hover:bg-card hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
       <ChevronRight className={expanded ? "h-3.5 w-3.5 rotate-90" : "h-3.5 w-3.5"} aria-hidden />
-      {compact ? <GitBranch className="h-3 w-3 text-accent" aria-hidden /> : null}
       {count}
     </button>
   ) : null;
   return (
-    <li data-desktop-conversations-row={file.path}>
+    <li data-desktop-conversations-row={file.path} data-native-subagent={subagent ? "" : undefined}>
       <div ref={rowRef} className="flex min-w-0 items-center gap-1">
         {compact ? (
           <>
-            <button type="button" title={title} data-desktop-chat-open onClick={() => onOpen(file)}
+            <button type="button" title={subagent ? `${title} · ${t("kind.subagent")}` : title}
+              aria-description={subagent ? t("kind.subagent") : undefined}
+              data-desktop-chat-open onClick={() => onOpen(file)}
               className="flex min-h-8 min-w-0 flex-1 items-center gap-1.5 rounded-control px-1.5 text-left text-[12.5px] text-primary hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               <EngineMark engine={file.engine} size={14} label={engineBadgeFor(file.engine).label} />
               <span className="min-w-0 truncate">{title}</span>
@@ -189,7 +191,7 @@ function ChatBranch({ file, ...props }: ChatListProps & { file: FileEntry }) {
         {prs?.items.length ? <ChatPullRequestBadge title={title} requests={prs} /> : null}
       </div>
       {count > 0 && disclosure !== "unopened" && (
-        <div id={groupId} hidden={!expanded} className={depth < 4 ? "ms-2 border-s border-border ps-2" : "border-s border-border"}>
+        <div id={groupId} hidden={!expanded} className={depth < 4 ? "ms-2 border-s border-border ps-1.5" : "border-s border-border"}>
           <DependentChats parent={file.path} {...props} depth={depth + 1} />
         </div>
       )}

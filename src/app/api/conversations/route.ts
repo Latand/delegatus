@@ -1,5 +1,5 @@
 import { requestWorkspaceScope, filterWorkspaceRows, workspaceRoute } from "@/lib/team/workspaceRoute";
-import { scopeConversationCatalog, catalogEntryToFileEntry, conversationCatalogEntry, conversationCatalogReady, conversationCatalogSnapshot, ExpiredConversationCatalogCursorError, loadConversationCatalogPage } from "@/lib/scanner/conversationCatalog";
+import { scopeConversationCatalog, catalogEntryToFileEntry, conversationCatalogEntry, conversationCatalogReady, conversationCatalogSnapshot, ExpiredConversationCatalogCursorError, groupCodexSubagentProjects, loadConversationCatalogPage } from "@/lib/scanner/conversationCatalog";
 import { projectClaudeDesktopChats } from "@/lib/scanner/claudeDesktop";
 import { conversationSearchProjection } from "@/lib/scanner/conversationSearchProjection";
 import { searchTextForTranscript } from "@/lib/scanner/describe";
@@ -92,17 +92,21 @@ async function workspaceGET(request: Request): Promise<Response> {
       const projectByPath = new Map(projectEntries.map((entry) => [entry.path, entry.project]));
       let projected = filterWorkspaceRows(scope, source.map((entry) => ({ ...entry, project: projectByPath.get(entry.path) ?? entry.project })));
       if (tree) {
-        const candidates = projected.filter(entry => !options.project || entry.project === options.project);
+        const familyView = branch && (!scope || scope.owner);
+        const candidates = familyView ? projected : projected.filter(entry => !options.project || entry.project === options.project);
         const rows = candidates.map(entry => catalogEntryToFileEntry(entry));
         overlayConversationLineage(rows);
         const byPath = new Map(rows.filter(row => !row.conversationId || !hiddenIds.has(row.conversationId))
           .map(row => [row.path, row]));
-        projected = projectClaudeDesktopChats(candidates.flatMap(entry => {
+        const visible = candidates.flatMap(entry => {
           const row = byPath.get(entry.path);
           if (!row) return [];
           const parent = row.parent && byPath.get(row.parent)?.project === entry.project ? row.parent : undefined;
           return [{ ...entry, parent }];
-        }));
+        });
+        projected = projectClaudeDesktopChats(familyView ? groupCodexSubagentProjects(visible).filter(entry =>
+          (entry.treeProject ?? entry.project) === options.project,
+        ) : visible);
       }
       page = await loadConversationCatalogPage(projected, options, undefined, hydrateSearchText);
       overlaySessionTitles(page.items);
@@ -115,7 +119,9 @@ async function workspaceGET(request: Request): Promise<Response> {
        conversation id catches both. */
     const currentScope = requestWorkspaceScope(request);
     let shown = filterWorkspaceRows(currentScope, page.items).filter((item) =>
-      (!branch || item.project === project) && !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
+      (!branch || item.project === project || ((!currentScope || currentScope.owner) && branch.parent &&
+        item.engine === "codex" && item.nativeParentThreadId && item.parent === branch.parent)) &&
+      !hiddenPaths.has(item.path) && !(item.conversationId && hiddenIds.has(item.conversationId)));
     if (tree && currentScope && !currentScope.owner) {
       const ownership = sessionProjectProjection().projectByPath;
       shown = shown.map(item => {

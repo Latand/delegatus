@@ -282,11 +282,11 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
         }}
       />
       {!isMobile && onOpenChat && selected === summary.project ? (
-        <div data-rail-chats="" className="mb-1">
+        <div data-rail-chats="" className="mb-2 ms-2.5 mt-1">
           <button
             type="button"
             aria-expanded={chatsOpen === selected}
-            className={`flex min-h-8 w-full items-center gap-2 rounded-control px-2.5 text-left text-[12px] font-semibold text-muted hover:bg-canvas hover:text-primary ${FOCUS}`}
+            className={`flex min-h-8 w-full items-center gap-2 rounded-control px-1.5 text-left text-[12px] font-semibold text-muted hover:bg-canvas hover:text-primary focus-visible:ring-inset ${FOCUS}`}
             onClick={() => setChatsOpen(chatsOpen === selected ? null : selected)}
           >
             <MessagesSquare className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -294,7 +294,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
             <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${chatsOpen === selected ? "rotate-90" : ""}`} aria-hidden />
           </button>
           {chatsOpen === selected ? (
-            <div className="flex max-h-[min(55dvh,35rem)] min-h-0 flex-col rounded-control border border-border bg-canvas">
+            <div data-rail-chats-list="" className="ms-2.5 mt-1 flex max-h-[min(55dvh,35rem)] min-h-0 flex-col border-s border-border ps-1">
               <DesktopConversations key={selected} project={selected} enabled={loaded} onOpen={onOpenChat} compact />
             </div>
           ) : null}
@@ -425,7 +425,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           onCancel={() => setCreateOpen(false)}
         />
       ) : null}
-      <nav className="flex-1 overflow-y-auto px-2 pb-2 pt-1" aria-label={t("rail.projects")}>
+      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2 pt-1" aria-label={t("rail.projects")}>
         <button
           type="button"
           data-rail-overview=""
