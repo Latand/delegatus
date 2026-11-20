@@ -556,7 +556,7 @@ const DEFAULT_TERMINATION_CAPTURE_RETRY_MS = 1_000;
 
 /** Records the tree a stop read, and true only once it is durable (#2790). */
 export type TerminationCaptureListener = (root: number, tree: readonly ProcessIdentity[]) => boolean | Promise<boolean>;
-type ReleaseGuard = () => Promise<{ status: 403 | 409; error: string } | null>;
+type ReleaseGuard = () => Promise<{ status: 403 | 409 | 500; error: string } | null>;
 
 export { claudeHostEndText };
 

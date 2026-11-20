@@ -103,7 +103,7 @@ import {
 
 type ObservableEngineHost = EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
 type IdentityBoundEngineHost = ObservableEngineHost & {
-  releaseIfOwned?(expected: Readonly<ProcessIdentity>, authorizeAsync?: () => Promise<{ status: 403 | 409; error: string } | null>): Promise<boolean>;
+  releaseIfOwned?(expected: Readonly<ProcessIdentity>, authorizeAsync?: () => Promise<{ status: 403 | 409 | 500; error: string } | null>): Promise<boolean>;
 };
 type StructuredConversationRecovery = typeof import("./structuredRecovery")["recoverDeadStructuredConversation"];
 export interface StructuredDeliveryHost {
@@ -173,7 +173,7 @@ interface ControllerState {
   activeRegistrations: (() => readonly StructuredDeliveryHost[]) | null;
   republishActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   releaseActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
-  terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>, authorizeAsync?: () => Promise<{ status: 403 | 409; error: string } | null>, onAccepted?: () => void) => Promise<boolean>) | null;
+  terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>, authorizeAsync?: () => Promise<{ status: 403 | 409 | 500; error: string } | null>, onAccepted?: () => void) => Promise<boolean>) | null;
   detachRetiredActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   /* Optional: a controller published by a bundle realm built before #2515
      shares this object and has no such hook. */
@@ -3322,7 +3322,7 @@ export async function releaseStructuredDeliveryHostsForDemotion(
 export async function terminateStructuredDeliveryHost(
   key: SessionKey,
   expected?: Readonly<ProcessIdentity>,
-  authorizeAsync?: () => Promise<{ status: 403 | 409; error: string } | null>,
+  authorizeAsync?: () => Promise<{ status: 403 | 409 | 500; error: string } | null>,
   onAccepted?: () => void,
 ): Promise<boolean> {
   const process = expected ?? (state.activeRegistry ? startupHostSnapshot(state.activeRegistry, key).entries[sessionKeyId(key)]?.structuredHost?.process : undefined);
