@@ -44,10 +44,10 @@ export class DictationSession {
   private stopPromise: Promise<void> | null = null;
 
   constructor(private stream: MediaStream, private trace: DictationTrace, private callbacks: DictationSessionCallbacks,
-    ctx: AudioContext, worklet: boolean) {
+    ctx: AudioContext, worklet: AudioWorkletNode | null) {
     this.ctx = ctx;
     this.trace.sampleRate = ctx.sampleRate;
-    this.input = new DictationInput(ctx, stream, worklet, DICTATION_BUFFER_SAMPLES, chunk => {
+    this.input = new DictationInput(ctx, stream, worklet, chunk => {
       if (this.inputStopped || this.ended) return;
       const count = Math.min(chunk.length, DICTATION_BUFFER_SAMPLES - this.trace.bufferedSamples);
       if (count) {
