@@ -194,7 +194,7 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
   const deputyInk = useDeputyInk();
   /* The conversation's role, where the surface resolved one: its answers draw
      Delegatus in that role's costume. The engine keeps its own mark and name
-     beside the time, apart from the role (operator, 2026-10-11). A deputy's
+     in the header, apart from the role (operator, 2026-10-11). A deputy's
      rows are the seat's parallel self and keep their outline mark. */
   const conversationRole = useConversationRole();
   const role = deputyInk ? null : conversationRole;
@@ -262,6 +262,7 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
         </div>
       );
     }
+    const time = hhmm(item.ts);
     return (
       <div className="group/msg my-3 flex gap-2.5">
         {deputyInk ? <DeputyMark engine={item.engine} size={26} className="mt-1" /> : role ? <RoleAvatar role={role} size={26} className="mt-1 self-start" /> : (
@@ -278,11 +279,9 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
             the rest of it and stop at the next answer. The body wrapper is
             `display: contents`, so it changes no layout.
 
-            The answer is set at the reading measure (#2148), and its header
-            row sits inside it, so the time and the controls end where the text
-            ends. Tool calls and diffs are items of their own and keep the full
-            width. */}
-        <div className={`min-w-0 flex-1 ${READING_MEASURE} whitespace-pre-wrap break-words${deputyInk ? " text-secondary" : ""}`} data-tts-message={`${item.engine}:${item.ts}`}>
+            The prose retains its reading measure (#2148). The header uses the
+            feed width. The clock leaves the MCP outcome icon and gap at its edge. */}
+        <div className="min-w-0 flex-1" data-tts-message={`${item.engine}:${item.ts}`}>
           {/* Issue #698: this cluster used to be `absolute right-0 top-0` over a
               body with no reserved gutter — on a coarse pointer the 44px buttons
               sat permanently at 60% opacity on the first lines of the message,
@@ -290,21 +289,22 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
               now hold their own row above the text: they cover nothing at any
               width, and they are visible without a hover. */}
           <div className="mb-0.5 flex min-h-6 items-center gap-1">
-            {/* With the role's costume in the avatar column, the engine moves
-                beside the time in the phone header's form: glyph and name. */}
+            {/* The engine's own glyph and name identify the speaker. */}
             {role ? (
               <span data-message-engine className="flex shrink-0 items-center gap-1.5 text-label font-semibold text-secondary">
                 {avatarIcon("h-4 w-4 shrink-0")}
                 {ENGINE_LABEL[item.engine]}
               </span>
             ) : null}
-            {hhmm(item.ts) ? <span className="text-label tabular-nums text-muted">{role ? `· ${hhmm(item.ts)}` : hhmm(item.ts)}</span> : null}
             <span className="ml-auto flex shrink-0 items-center gap-0.5">
               {speakText ? <SpeakButton text={speakText} answerId={speakId} /> : null}
               <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
             </span>
+            {time ? <time data-message-clock className="ml-1 mr-5.5 shrink-0 text-caption tabular-nums text-muted">{time}</time> : null}
           </div>
-          <div className="contents" data-tts-body><MdMessageSourceContext.Provider value={sourceCwd}>{mdBlocks(item.text)}</MdMessageSourceContext.Provider></div>
+          <div className={`${READING_MEASURE} whitespace-pre-wrap break-words${deputyInk ? " text-secondary" : ""}`}>
+            <div className="contents" data-tts-body><MdMessageSourceContext.Provider value={sourceCwd}>{mdBlocks(item.text)}</MdMessageSourceContext.Provider></div>
+          </div>
         </div>
       </div>
     );

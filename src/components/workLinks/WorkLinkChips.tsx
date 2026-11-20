@@ -28,7 +28,7 @@ function toneOf(link: WorkLink): ChipTone {
   return link.kind === "pr" && link.state ? link.state : "unknown";
 }
 
-function Glyph({ tone }: { tone: ChipTone }) {
+export function WorkLinkGlyph({ tone }: { tone: ChipTone }) {
   const props = { className: "wl-glyph", "aria-hidden": true, size: 12, strokeWidth: 2.25 } as const;
   if (tone === "draft") return <GitPullRequestDraft {...props} />;
   if (tone === "merged") return <GitMerge {...props} />;
@@ -73,7 +73,7 @@ export function WorkLinkChip({ link }: { link: WorkLink }) {
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
-      <Glyph tone={tone} />
+      <WorkLinkGlyph tone={tone} />
       <span className="wl-num">#{link.number}</span>
     </a>
   );
@@ -96,7 +96,7 @@ export function WorkLinkText({ resolved, testId, className }: { resolved: Resolv
   const description = [workLinkDescription(t, lead), rest > 0 ? t("workLinks.moreAria", { count: rest }) : null].filter(Boolean).join(" · ");
   return (
     <span className={`wl-text${className ? ` ${className}` : ""}`} data-work-links-text={testId} data-tone={tone} title={description}>
-      <Glyph tone={tone} />
+      <WorkLinkGlyph tone={tone} />
       <span className="wl-num">#{lead.number}</span>
       {rest > 0 ? <span className="wl-rest">{t("workLinks.more", { count: rest })}</span> : null}
     </span>

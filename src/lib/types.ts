@@ -170,6 +170,11 @@ export interface FileEntry {
   cwd?: string | null;
   /** Identity-bound session creation time parsed from the transcript header. */
   sessionStartedAt?: string | null;
+  /** Message times read from the local transcript index (Unix seconds). */
+  firstMessageAt?: number | null;
+  lastMessageAt?: number | null;
+  /** Native Codex identity used by the paginated conversation catalog. */
+  nativeThreadId?: string | null;
   /** Native Codex parent thread parsed from the identity-bound transcript header. */
   nativeParentThreadId?: string | null;
   /** Source thread of a Codex provider `thread/fork` artifact (issue #708),
@@ -200,6 +205,8 @@ export interface FileEntry {
   fmt: Fmt;
   /** Absolute path of the parent node (tree link) or null for roots. */
   parent: string | null;
+  /** Direct descendants in the scoped catalog, before paginating a chat branch. */
+  directChildCount?: number;
   /** Durable lineage tombstone when the parent conversation transcript is gone. */
   parentRemoved?: { conversationId: string; path: string | null };
   /** How this conversation came to exist (issue #339 board provenance):

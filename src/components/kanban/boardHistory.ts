@@ -24,7 +24,7 @@ interface Settles {
 export type HistoryEntry = Settles & (
   | { kind: "status"; taskId: string; title: string; from: TaskStatus; to: TaskStatus; fromHold?: TaskHold | null; toHold?: TaskHold | null }
   /* The whole text field, since title and description are stored as one. */
-  | { kind: "text"; taskId: string; title: string; before: string; after: string }
+  | { kind: "text"; taskId: string; title: string; before: string; after: string; restorePendingTitle?: boolean }
   /* One entry for a single hide or a column's bulk hide: one Undo brings the
      whole bulk back, so Ctrl+Z never skips past part of it. `text` is what the
      hide's receipt said, which a redo of a bulk hide says again. */

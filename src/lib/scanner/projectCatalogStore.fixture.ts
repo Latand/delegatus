@@ -1,3 +1,5 @@
+import { PROJECT_SUMMARY_VERSION } from "./projectCatalogStore";
+
 /*
  * A synthetic project catalog shaped like the one on a busy installation
  * (2026-11-12: 19,951 records, 15.3 MB): three in four records are Codex
@@ -34,7 +36,7 @@ export function syntheticProjectCatalog(total = 19_951, resolutionVersion = 10):
           ? `/srv/agents/.claude/projects/-srv-agents-projects-repository-${String(repository).padStart(2, "0")}/${id.slice(4)}-1a2b-4c3d-8e9f-${id}.jsonl`
           : `/srv/agents/tasks/-srv-agents-projects-repository-${String(repository).padStart(2, "0")}/tasks/b${n.toString(36).padStart(8, "0")}.output`;
       files[pathname] = {
-        summaryVersion: 4,
+        summaryVersion: PROJECT_SUMMARY_VERSION,
         rootName,
         size: 40_000 + (n * 7_919) % 9_000_000,
         mtimeMs: 1_790_000_000_000 + n * 1_013.25,

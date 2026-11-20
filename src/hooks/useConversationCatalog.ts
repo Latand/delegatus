@@ -8,6 +8,7 @@ interface ConversationPage {
   items: FileEntry[];
   nextCursor: string | null;
   total: number;
+  projectTotal?: number;
 }
 
 export interface ConversationCatalogData extends ConversationPage {
@@ -38,22 +39,20 @@ export function conversationCatalogCursorExpired(cause: unknown): boolean {
   return cause instanceof ConversationCatalogRequestError && cause.status === 409;
 }
 
-function conversationCatalogUrl(project: string | undefined, query: string, cursor: string | null, pageSize: number): string {
+type CatalogBranch = "roots" | { parent: string };
+
+function conversationCatalogUrl(project: string | undefined, query: string, pageSize: number, tree: boolean, branch?: CatalogBranch): string {
   const params = new URLSearchParams({ limit: String(pageSize) });
   if (project) params.set("project", project);
+  if (tree || branch) params.set("view", "tree");
+  if (branch) params.set("branch", branch === "roots" ? "roots" : "children");
+  if (typeof branch === "object") params.set("parent", branch.parent);
   if (query.trim()) params.set("q", query.trim());
-  if (cursor) params.set("cursor", cursor);
   return `/api/conversations?${params}`;
 }
 
-async function fetchConversationPage(
-  project: string | undefined,
-  query: string,
-  cursor: string | null,
-  signal: AbortSignal,
-  pageSize: number,
-): Promise<ConversationPage> {
-  const response = await fetch(conversationCatalogUrl(project, query, cursor, pageSize), { signal });
+async function fetchConversationPage(url: string, cursor: string | null, signal: AbortSignal): Promise<ConversationPage> {
+  const response = await fetch(cursor ? `${url}&cursor=${encodeURIComponent(cursor)}` : url, { signal });
   if (!response.ok) throw new ConversationCatalogRequestError(response.status);
   return response.json() as Promise<ConversationPage>;
 }
@@ -106,16 +105,19 @@ export function clearRetainedConversationPages(): void {
 
 /** Each scope keeps one coherent cursor chain for this mounted consumer. */
 export function useConversationCatalog({
-  project, query = "", enabled = true, pageSize = 40, scopeKey,
+  project, query = "", enabled = true, pageSize = 40, scopeKey, tree = false, branch,
 }: {
   project?: string;
   query?: string;
   enabled?: boolean;
   pageSize?: number;
+  tree?: boolean;
+  branch?: CatalogBranch;
   /** The owning Home project, including when its query searches globally. */
   scopeKey?: string;
 }): ConversationCatalogData {
-  const key = JSON.stringify([scopeKey ?? null, project ?? null, query.trim(), pageSize]);
+  const url = conversationCatalogUrl(project, query, pageSize, tree, branch);
+  const key = JSON.stringify([scopeKey ?? null, url]);
   const perMount = useRef(new Map<string, CatalogSnapshot>());
   /* Scoped consumers read and write the retained map, so their pages survive an
      unmount; unscoped ones keep theirs for as long as they are up. */
@@ -134,7 +136,7 @@ export function useConversationCatalog({
     const token = { key, controller };
     flight.current = token;
     update();
-    void fetchConversationPage(project, query, cursor, controller.signal, pageSize)
+    void fetchConversationPage(url, cursor, controller.signal)
       .then((page) => {
         if (controller.signal.aborted || flight.current !== token || active.current.key !== key) return;
         const current = cache.current.get(key);
@@ -156,7 +158,7 @@ export function useConversationCatalog({
         flight.current = null;
         update();
       });
-  }, [key, project, query, pageSize, update]);
+  }, [key, url, update]);
 
   /**
    * Re-reads the pages a scoped consumer came back to (#1614).
@@ -188,7 +190,7 @@ export function useConversationCatalog({
         let items: FileEntry[] = [];
         let page: ConversationPage | null = null;
         for (let index = 0; index < REVALIDATE_MAX_PAGES; index += 1) {
-          page = await fetchConversationPage(project, query, cursor, controller.signal, pageSize);
+          page = await fetchConversationPage(url, cursor, controller.signal);
           const seen = new Set(items.map((item) => item.path));
           items = [...items, ...page.items.filter((item) => !seen.has(item.path))];
           cursor = page.nextCursor;
@@ -206,7 +208,7 @@ export function useConversationCatalog({
         }
       }
     })();
-  }, [key, project, query, pageSize, update]);
+  }, [key, url, update]);
 
   /* Coming back in, and only that: the scopes this mount INHERITED — pages
      some earlier mount left behind — are re-read once each. Pages this mount

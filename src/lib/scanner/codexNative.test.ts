@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  codexIndexedChatTitle,
   codexThreadIdFromPath,
   isNativeCodexSubagentTranscript,
   nativeCodexForkSourceThreadId,
@@ -90,4 +91,19 @@ test("an ordinary rollout and an unreadable path report no fork source", () => {
 test("the thread id of a rollout comes from its filename", () => {
   expect(codexThreadIdFromPath(`/sessions/2026/07/26/rollout-2026-07-26T01-37-15-${FORK_ID}.jsonl`)).toBe(FORK_ID);
   expect(codexThreadIdFromPath("/sessions/notes.txt")).toBeNull();
+});
+
+test("the desktop session index supplies the newest saved thread title for a rollout", () => {
+  const indexPath = path.join(SANDBOX, "session_index.jsonl");
+  fs.writeFileSync(indexPath, [
+    JSON.stringify({ id: FORK_ID, thread_name: "Old title" }),
+    "partial line",
+    JSON.stringify({ id: SOURCE_ID, thread_name: "Other chat" }),
+    JSON.stringify({ id: FORK_ID, thread_name: "Updated thread title" }),
+  ].join("\n"));
+  const sessions = path.join(SANDBOX, "sessions");
+  expect(codexIndexedChatTitle(path.join(sessions, `rollout-${FORK_ID}.jsonl`), [sessions]))
+    .toBe("Updated thread title");
+  expect(codexIndexedChatTitle(path.join(SANDBOX, "outside", `rollout-${FORK_ID}.jsonl`), [sessions]))
+    .toBeNull();
 });

@@ -252,8 +252,8 @@ test("the recent agents open under the header's icon, over the Board, and nothin
 
   const toggle = host.querySelector("header.bar [data-bar-recent-toggle]") as HTMLElement;
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(toggle.getAttribute("aria-label")).toBe("Recent agents");
-  expect(toggle.getAttribute("title")).toBe("Recent agents");
+  expect(toggle.getAttribute("aria-label")).toBe("Chats");
+  expect(toggle.getAttribute("title")).toBe("Chats");
   expect(host.querySelector("[data-desktop-conversations-scroll]")).toBeNull();
   click(toggle);
   await settle();

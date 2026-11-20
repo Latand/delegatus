@@ -129,3 +129,18 @@ test("the direct fallback reads credentials again after the CLI wait", async () 
     expect(request).toHaveBeenCalledTimes(1);
   } finally { request.mockRestore(); }
 });
+
+test("a slow CLI usage read can finish before any opt-in fallback is needed", async () => {
+  const file = isolated(false);
+  const result = await fetchClaudeLimits(file, () => 1_800_000_000_000, undefined, {
+    run: async ({ timeoutMs }) => timeoutMs < 17_000 ? { status: "timeout", records: [] } : {
+      status: "done", records: [
+        { type: "assistant", usage_report: { rate_limits: { limits: [
+          { kind: "weekly_all", percent: 42, resets_at: "2027-01-20T10:00:00Z" },
+        ] } } },
+        { type: "result", subtype: "success", local_command: "usage", num_turns: 0 },
+      ],
+    },
+  });
+  expect(result).toMatchObject({ source: "live", data: { weekly: { usedPercent: 42 } } });
+});

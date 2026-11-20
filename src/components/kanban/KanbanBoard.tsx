@@ -1,5 +1,7 @@
 "use client";
+import type { ChatTaskLink, ChatTaskLinks } from "./CardChatLinks";
 import { useMaterializedCreationIds } from "@/hooks/useFiles";
+import { useChatPullRequests } from "@/hooks/useChatPullRequests";
 
 import { History, ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin, Workflow } from "lucide-react";
 import { Component, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type RefObject } from "react";
@@ -360,6 +362,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const timelineShown = !props.overview && timeline.preference.view === "timeline";
   const toggleTimeline = () => timeline.update({ view: timelineShown ? "board" : "timeline" });
   const workLinks = useWorkLinks();
+  const chatPullRequests = useChatPullRequests(project, loaded && !props.overview && !timelineShown);
   const boardPaneRef = useBoardPaneRef();
   /* The bar's word on the server (#2071 D7): a reconnect in progress is a
      quiet note, a long outage the red alert it always was. */
@@ -571,6 +574,40 @@ export function KanbanBoard(props: KanbanBoardProps) {
     for (const card of model.unlinked) map.set(card.id, card);
     return map;
   }, [model]);
+  const [openChatLinks, setOpenChatLinks] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleChatLinks = useCallback((id: string) => {
+    setOpenChatLinks(open => {
+      const next = new Set(open);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const chatLinks = useMemo(() => {
+    const byCard = new Map<string, ChatTaskLinks>();
+    if (props.overview) return byCard;
+    const linksFor = (id: string) => {
+      let links = byCard.get(id);
+      if (!links) byCard.set(id, links = { parent: null, children: [] });
+      return links;
+    };
+    const link = (card: KanbanCardModel): ChatTaskLink => ({
+      id: card.id, title: card.titlePending ? t("kanban.untitled") : card.title, status: card.status,
+    });
+    const children = [...allTasks].filter(task => task.chatParentTaskId).sort((a, b) => {
+      const first = cardsById.get(`task:${a.id}`);
+      const second = cardsById.get(`task:${b.id}`);
+      return (second?.lastAgentWorkAtMs ?? 0) - (first?.lastAgentWorkAtMs ?? 0) || b.createdAt.localeCompare(a.createdAt);
+    });
+    for (const task of children) {
+      const child = cardsById.get(`task:${task.id}`);
+      const parent = cardsById.get(`task:${task.chatParentTaskId}`);
+      if (!child || !parent || child.project !== parent.project || child.id === parent.id) continue;
+      linksFor(child.id).parent = link(parent);
+      linksFor(parent.id).children.push(link(child));
+    }
+    return byCard;
+  }, [allTasks, cardsById, props.overview, t]);
   const timelineCards = useMemo(() => KANBAN_STATUSES.flatMap(status => model.columns[status].shown).filter(card => card.task), [model]);
   const timelineTasks = useMemo(() => timelineCards.map(card => card.task!), [timelineCards]);
   const timelineMembers = useMemo(() => [...KANBAN_STATUSES.flatMap(status => model.columns[status].shown)
@@ -950,7 +987,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
         ? { fenced: true, lineage: () => entry.lineages?.get(target.taskId), after: entry.settled, unless: () => entry.saved === false }
         : { fenced: true, lineage: entry.lineages?.get(target.taskId) };
       if (entry.kind === "status") outcome = await controller.move(raw, undoing ? entry.from : entry.to, { ...fence, ...(Object.hasOwn(entry, "fromHold") ? { restoreHold: undoing ? entry.fromHold ?? null : entry.toHold ?? null } : {}) });
-      else if (entry.kind === "text") outcome = await controller.edit(raw, { field: "text", value: undoing ? entry.before : entry.after }, fence);
+      else if (entry.kind === "text") outcome = await controller.edit(raw, {
+        field: "text", value: undoing ? entry.before : entry.after,
+        ...(undoing && entry.restorePendingTitle ? { restorePendingTitle: true } : {}),
+      }, fence);
       else {
         const write = controller.edit(raw, undoing ? { field: "hide", value: false } : { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { ...fence, after: inFlight ? Promise.all([chain, entry.settled]) : chain });
         chain = write;
@@ -1081,7 +1121,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* Drafts belong to the board, keyed by card, so a card that re-ranks, moves
      or re-renders keeps what the operator typed. A refused save keeps the
      draft for Retry; text an agent wrote meanwhile is offered beside it. */
-  const [editing, setEditing] = useState<ReadonlyMap<string, { field: EditField; draft: string; base: string }>>(NO_EDITS);
+  const [editing, setEditing] = useState<ReadonlyMap<string, { field: EditField; draft: string; base: string; initialTitle?: string }>>(NO_EDITS);
   const [failedEdits, setFailedEdits] = useState<ReadonlyMap<string, { field: EditField; draft: string; base: string; message: string }>>(NO_EDITS);
   const [incomingEdits, setIncomingEdits] = useState<ReadonlyMap<string, { field: EditField; value: string }>>(NO_EDITS);
   const editingRef = useRef(editing);
@@ -1106,11 +1146,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const retained = kept?.field === field ? kept : null;
     if (retained) setFailedEdits((current) => withEntry(current, card.id, undefined));
     setIncomingEdits((current) => withEntry(current, card.id, undefined));
+    const initialTitle = field === "title" ? (card.titlePending ? "" : card.title) : undefined;
     setEditing((current) => withEntry(current, card.id, retained
       ? { field, draft: retained.draft, base: retained.base }
-      /* A borrowed title (a placeholder no agent will name) is where the
-         rename starts, so accepting it as shown makes it the task's own. */
-      : { field, draft: field === "title" ? (card.titlePending ? "" : card.title) : base, base }));
+      : { field, draft: initialTitle ?? base, base, initialTitle }));
     if (field === "description" || field === "details") setCardFolds((current) => withCardOpen(current, card.id, true));
   }, []);
   /* `base` is the field as the edit found it: a save whose stored field still
@@ -1145,7 +1184,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }
       return;
     }
-    const currentText = effectiveById.current.get(raw.id)?.text ?? raw.text;
+    const currentTask = effectiveById.current.get(raw.id) ?? raw;
+    const currentText = currentTask.text;
     const found = base ?? textField(currentText, field);
     if (field === "title" && !value) {
       setFailedEdits((current) => withEntry(current, cardId, { field, draft, base: found, message: t("kanban.titleRequired") }));
@@ -1159,7 +1199,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const sent = withField(currentText, field, value);
     const newTitle = textField(sent, "title") || t("kanban.untitled");
     const written = settles();
-    const entry: HistoryEntry = { kind: "text", taskId: raw.id, title: clipTitle(newTitle), before: currentText, after: sent, settled: written.promise };
+    const entry: HistoryEntry = { kind: "text", taskId: raw.id, title: clipTitle(newTitle), before: currentText, after: sent,
+      restorePendingTitle: currentTask.origin?.refinement === "pending", settled: written.promise };
     historyRef.current.record(entry);
     const receiptId = show(t("kanban.edited", { title: entry.title }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
     entryReceipts.current.set(entry, receiptId);
@@ -1200,6 +1241,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (editor && editor.contains(document.activeElement)) pendingCardFocus.current = { cardId, fallback: null, always: true };
     setEditing((current) => withEntry(current, cardId, undefined));
     setIncomingEdits((current) => withEntry(current, cardId, undefined));
+    if (entry.initialTitle !== undefined && entry.draft.trim() === entry.initialTitle.trim()) return;
     void saveText(cardId, entry.field, entry.draft, entry.base);
   }, [saveText]);
   const cancelEdit = useCallback((cardId: string) => {
@@ -2495,6 +2537,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
     focusCard(`task:${taskId}`);
   }, [revealCard, focusCard]);
 
+  const jumpToChatCard = useStableCallback((cardId: string) => {
+    const card = cardsById.get(cardId);
+    if (card && !cardMatchesShown(model, card)) setReasonFilter(undefined);
+    revealCard(cardId);
+    focusCard(cardId);
+  });
+
   /* ── Presence: what the operator can actually see ────────────────────── */
   /* A card counts as seen when it intersects its column's scroll box, the
      board and the window, in a column that is displayed (one tab at a time on
@@ -3004,6 +3053,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
       actingByCard={actingByCard}
       newTask={status === "inbox" && composingTask && !props.overview ? <KanbanTaskComposer project={project} onCreated={taskCreated} onCancel={closeNewTask} /> : null}
       heldLaunches={heldLaunches}
+      chatLinks={chatLinks}
+      chatPullRequests={props.overview ? undefined : chatPullRequests}
+      openChatLinks={openChatLinks}
+      onToggleChatLinks={toggleChatLinks}
+      onJumpChatCard={jumpToChatCard}
       onColumnMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "column", status } })}
       cardProps={{
         onToggleCollapsed: toggleCollapsed,
@@ -3486,7 +3540,19 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
 > & { holdEditingId?: string | null };
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, draftsByCard, actingByCard, newTask, heldLaunches, onColumnMenu, cardProps }: {
+function cardChatTranscript(card: KanbanCardModel): string | null {
+  const conversations = [...card.members.map(member => member.file), ...card.mirrors.map(mirror => mirror.file), ...card.notLoadedRefs];
+  const origin = card.task?.origin;
+  if (origin?.kind === "conversation") {
+    const match = conversations.find(file => file.path && (file.path === origin.key || file.conversationId === origin.key));
+    if (match?.path) return match.path;
+    const assignment = card.task?.assignments.find(row => row.path && row.state !== "failed" && (row.path === origin.key || row.conversationId === origin.key));
+    if (assignment?.path) return assignment.path;
+  }
+  return card.conversations === 1 ? conversations.find(file => file.path)?.path ?? null : null;
+}
+
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, draftsByCard, actingByCard, newTask, heldLaunches, chatLinks, chatPullRequests, openChatLinks, onToggleChatLinks, onJumpChatCard, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
@@ -3495,6 +3561,11 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   newTask: ReactNode;
   /** Conversations of launches whose draft still stands for them. */
   heldLaunches: ReadonlySet<string>;
+  chatLinks: ReadonlyMap<string, ChatTaskLinks>;
+  chatPullRequests?: ReturnType<typeof useChatPullRequests>;
+  openChatLinks: ReadonlySet<string>;
+  onToggleChatLinks: (id: string) => void;
+  onJumpChatCard: (id: string) => void;
   editing: ReadonlyMap<string, { field: EditField; draft: string }>;
   failedEdits: ReadonlyMap<string, { field: EditField; draft: string; message: string }>;
   incomingEdits: ReadonlyMap<string, { field: EditField; value: string }>;
@@ -3528,26 +3599,36 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   const { holdEditingId, ...cardHandlers } = cardProps;
   const column = model.columns[status];
   const shown = column.shown;
-  const renderCard = (card: KanbanCardModel) => (
-    <KanbanCard
-      key={card.id}
-      card={card}
-      status={card.status}
-      pending={card.task ? pendingIds.pending(card.task.id) : false}
-      collapsed={collapsed.has(card.id)}
-      nowMs={nowMs}
-      remoteAgents={card.task ? remoteAgentsByTask.get(card.task.id) ?? NO_REMOTE_FOR_CARD : NO_REMOTE_FOR_CARD}
-      remote={card.task ? remoteCards.get(card.task.id) ?? null : null}
-      readerKeys={readerKeysByCard.get(card.id) ?? ""}
-      openDrafts={draftsByCard.get(card.id) ?? ""}
-      acting={actingByCard.get(card.id) ?? ""}
-      editing={editing.get(card.id) ?? null}
-      failedEdit={failedEdits.get(card.id) ?? null}
-      incomingEdit={incomingEdits.get(card.id) ?? null}
-      {...cardHandlers}
-      holdEditing={holdEditingId === card.id}
-    />
-  );
+  const renderCard = (card: KanbanCardModel) => {
+    const transcript = chatPullRequests ? cardChatTranscript(card) : null;
+    return (
+      <KanbanCard
+        key={card.id}
+        card={card}
+        status={card.status}
+        pending={card.task ? pendingIds.pending(card.task.id) : false}
+        collapsed={collapsed.has(card.id)}
+        nowMs={nowMs}
+        remoteAgents={card.task ? remoteAgentsByTask.get(card.task.id) ?? NO_REMOTE_FOR_CARD : NO_REMOTE_FOR_CARD}
+        remote={card.task ? remoteCards.get(card.task.id) ?? null : null}
+        readerKeys={readerKeysByCard.get(card.id) ?? ""}
+        openDrafts={draftsByCard.get(card.id) ?? ""}
+        acting={actingByCard.get(card.id) ?? ""}
+        editing={editing.get(card.id) ?? null}
+        failedEdit={failedEdits.get(card.id) ?? null}
+        incomingEdit={incomingEdits.get(card.id) ?? null}
+        {...cardHandlers}
+        holdEditing={holdEditingId === card.id}
+        chatLinks={chatLinks.get(card.id)}
+        chatTranscript={transcript}
+        watchChatPullRequests={chatPullRequests?.watch}
+        chatPullRequests={transcript ? chatPullRequests?.requests[transcript] : undefined}
+        chatLinksOpen={openChatLinks.has(card.id)}
+        onToggleChatLinks={onToggleChatLinks}
+        onJumpChatCard={onJumpChatCard}
+      />
+    );
+  };
   // The long-quiet stopped cards gather under the divider, in column order;
   // a card that stopped after recent work stays among the live ones.
   const parked = new Set(column.parked);

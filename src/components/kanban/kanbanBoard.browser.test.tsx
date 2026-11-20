@@ -21444,15 +21444,15 @@ describe("seat panel carries no internal noise", () => {
       return {
         height: Math.round(box(row).height),
         text: (title.textContent ?? "").trim(),
-        titleAttr: title.getAttribute("title"),
+        titleAttr: title.getAttribute("data-feed-summary-tooltip"),
         cut: title.scrollWidth > title.clientWidth,
         titleWidth: Math.round(box(title).width),
         links: links.map((el) => ({ text: (el.textContent ?? "").trim(), title: el.getAttribute("title"), inside: inside(el, row), width: Math.round(box(el).width), height: Math.round(box(el).height) })),
       };
     });
     const shellRows = [...root.querySelectorAll<HTMLElement>("[data-tool-row]")].filter((row) => (row.textContent ?? "").includes("ls -d /workspace")).map((row) => {
-      const label = [...row.querySelectorAll<HTMLElement>("span")].find((el) => (el.textContent ?? "").includes("ls -d /workspace") && el.getAttribute("title"))!;
-      return { height: Math.round(box(row).height), titleAttr: label.getAttribute("title"), cut: label.scrollWidth > label.clientWidth, inside: inside(label, row) };
+      const label = [...row.querySelectorAll<HTMLElement>("span")].find((el) => (el.textContent ?? "").includes("ls -d /workspace") && el.hasAttribute("data-feed-summary-tooltip"))!;
+      return { height: Math.round(box(row).height), titleAttr: label.getAttribute("data-feed-summary-tooltip"), cut: label.scrollWidth > label.clientWidth, inside: inside(label, row) };
     });
     return {
       text,
@@ -25156,6 +25156,157 @@ describe("state writes disk-full alert", () => {
  * `evidence/whole-card-drag/<label>-desktop.json`; the trace stays under
  * `.artifacts/whole-card-drag/`.
  */
+describe("chat pull requests on the board and in the project rail", () => {
+  browserTest("chat badges open an ordered PR panel by pointer and keyboard", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "chat-pull-requests");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=chat-prs`, { width: 1440, height: 900 }, "dark", "en");
+      try {
+        const panel = page.locator("[data-chat-pr-panel]");
+        const card = page.locator('.card[data-id="task:t-chat-pr"]');
+        const boardBadge = card.locator("[data-chat-pr-badge]");
+        await card.locator("button.fold[aria-expanded=true]").click();
+        expect(await card.getAttribute("data-collapsed")).toBe("1");
+        await boardBadge.hover({ timeout: 5000 });
+        await panel.waitFor();
+        expect(await boardBadge.evaluate(node => {
+          const box = node.getBoundingClientRect();
+          return {
+            unobstructed: node.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)),
+            border: getComputedStyle(node).borderTopWidth,
+          };
+        })).toEqual({ unobstructed: true, border: "1px" });
+        expect(await panel.getByRole("link").count()).toBe(2);
+        await page.mouse.down();
+        const box = await panel.boundingBox();
+        await page.mouse.move(box!.x + 36, box!.y + 54, { steps: 8 });
+        expect(await page.locator(".kb .card.ghost").count()).toBe(0);
+        await page.mouse.up();
+        await page.keyboard.press("Escape");
+        await panel.waitFor({ state: "hidden" });
+
+        await page.locator("[data-rail-chats] > button").click();
+        const chatTitle = page.locator("[data-rail-chats] [data-desktop-chat-open]").filter({ hasText: "Sort the reports" });
+        await chatTitle.hover();
+        const chatHint = page.getByRole("tooltip").filter({ hasText: "Last message" });
+        await chatHint.waitFor();
+        expect(await chatHint.innerText()).toMatch(/Last message[\s\S]+Created/);
+        const positions = await chatHint.locator("time").evaluateAll(nodes => nodes.map(node => ({
+          date: node.firstElementChild?.getBoundingClientRect().left,
+          clock: node.lastElementChild?.getBoundingClientRect().right,
+        })));
+        expect(positions[0]).toEqual(positions[1]);
+        await chatHint.screenshot({ path: path.join(out, "chat-tooltip.png") });
+        const badge = page.locator("[data-rail-chats] [data-chat-pr-badge]");
+        await badge.hover();
+        await panel.waitFor();
+        const rows = panel.getByRole("link");
+        expect(await rows.count()).toBe(2);
+        expect(await rows.first().getAttribute("href")).toBe("https://github.com/sample/widget/pull/7");
+        expect(await rows.last().getAttribute("href")).toBe("https://github.com/sample/widget/pull/5");
+        expect(await rows.last().locator("[data-tone]").getAttribute("data-tone")).toBe("merged");
+        await rows.first().getByText("Merge conflict").waitFor();
+        expect(await badge.getAttribute("aria-label")).toContain("Merge conflict");
+        await panel.screenshot({ path: path.join(out, "chat-pr-conflict.png") });
+        await rows.first().hover();
+        await page.waitForTimeout(260);
+        expect(await panel.isVisible()).toBe(true);
+        await page.screenshot({ path: path.join(out, "chat-pr-panel.png") });
+        await page.keyboard.press("Escape");
+        await panel.waitFor({ state: "hidden" });
+        await badge.focus();
+        await badge.press("Enter");
+        await page.waitForFunction(() => document.activeElement?.closest("[data-chat-pr-panel]") !== null);
+        await page.keyboard.press("Escape");
+        await panel.waitFor({ state: "hidden" });
+        expect(await badge.evaluate(node => node === document.activeElement)).toBe(true);
+
+        const rail = page.locator("[data-rail-chats]");
+        const branch = rail.getByRole("button", { name: /Dependent chats for Sort the reports/ });
+        const branchLabel = await branch.getAttribute("aria-label");
+        expect(await rail.locator("[data-engine-mark=claude]").count()).toBe(1);
+        await branch.click();
+        await rail.getByText("Review the report").waitFor();
+        await rail.getByRole("button", { name: "Load more dependent chats" }).click();
+        await rail.getByText("Test the report export").waitFor();
+        expect(await rail.locator("[data-engine-mark=codex]").count()).toBe(1);
+        expect(await rail.getByRole("button", { name: "Load more main chats" }).isVisible()).toBe(true);
+        await branch.click();
+        expect(await rail.getByText("Test the report export").isVisible()).toBe(false);
+        await rail.getByRole("button", { name: "Load more main chats" }).click();
+        await rail.getByText("Plan the next report").waitFor();
+        await branch.click();
+        expect(await rail.getByText("Test the report export").isVisible()).toBe(true);
+        expect(await branch.getAttribute("aria-label")).toBe(branchLabel);
+        expect(await rail.locator("[data-chat-pr-badge]").textContent()).toBe("2");
+        await page.screenshot({ path: path.join(out, "chat-branches.png") });
+        await rail.locator("[data-desktop-chat-open]").filter({ hasText: "Sort the reports" }).click();
+        const reader = page.getByRole("dialog").filter({ hasText: "Sort the reports" });
+        await reader.waitFor();
+        const deepLink = page.url();
+        await page.reload();
+        await page.getByRole("heading", { name: "In progress" }).waitFor();
+        const reopen = page.getByRole("button", { name: /Show the open agent|1 agent open/i }).first();
+        await reopen.waitFor();
+        expect(await reader.isVisible()).toBe(false);
+        await reopen.click();
+        await reader.waitFor();
+        const direct = await context.newPage();
+        try {
+          await direct.goto(deepLink);
+          await direct.getByRole("dialog").filter({ hasText: "Sort the reports" }).waitFor();
+        } finally { await direct.close(); }
+        expect(pageErrors).toEqual([]);
+        const { context: cadenceContext, page: cadence } = await openFixture(
+          browser, `${server.base}?scenario=chat-prs`, { width: 1440, height: 900 }, "dark", "en",
+        );
+        try {
+          await cadence.locator("[data-rail-chats] > button").click();
+          const cadenceBadge = cadence.locator("[data-rail-chats] [data-chat-pr-badge]");
+          await cadenceBadge.waitFor();
+          // A focused panel follows forge changes. A background panel waits,
+          // and closing it removes the scheduled read.
+          await cadence.clock.install();
+          await cadence.evaluate(() => {
+            let focused = true;
+            Object.defineProperty(document, "hasFocus", { value: () => focused });
+            const counters = { reads: 0 };
+            Object.defineProperty(window, "chatStatusEvidence", { value: counters });
+            window.addEventListener("blur", () => { focused = false; });
+            window.addEventListener("focus", () => { focused = true; });
+            window.fetch = new Proxy(window.fetch, {
+              apply(target, receiver, args: Parameters<typeof fetch>) {
+                const [input, init] = args;
+                if (typeof input === "string" && input.startsWith("/api/conversations/pull-requests?") && init?.method === "POST") counters.reads += 1;
+                return Reflect.apply(target, receiver, args);
+              },
+            });
+          });
+          const statusReads = () => cadence.evaluate(() => Reflect.get(window, "chatStatusEvidence").reads as number);
+          await cadenceBadge.press("Enter");
+          await cadence.clock.runFor(200);
+          expect(await statusReads()).toBe(1);
+          await cadence.evaluate(() => window.dispatchEvent(new Event("blur")));
+          await cadence.clock.fastForward(180_000);
+          expect(await statusReads()).toBe(1);
+          await cadence.evaluate(() => window.dispatchEvent(new Event("focus")));
+          await cadence.clock.runFor(20);
+          expect(await statusReads()).toBe(2);
+          await cadence.clock.fastForward(180_000);
+          expect(await statusReads()).toBe(3);
+          await cadence.keyboard.press("Escape");
+          await cadence.locator("[data-chat-pr-panel]").waitFor({ state: "hidden" });
+          await cadence.clock.fastForward(180_000);
+          expect(await statusReads()).toBe(3);
+        } finally { await cadenceContext.close(); }
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 75_000);
+});
+
 describe("whole-card drag rendered evidence", () => {
   const OUT = path.resolve(".artifacts/whole-card-drag");
   /* The orchestrator's panel fills the screen above the columns; `O` folds it, as an operator working the board does. */
@@ -25207,6 +25358,52 @@ describe("whole-card drag rendered evidence", () => {
         await card.locator("[data-rename]").first().click();
         expect(await page.locator(`.kb .card[data-id="${id}"] textarea, .kb .card[data-id="${id}"] input[type="text"]`).count(), "a click renames").toBeGreaterThan(0);
         expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+
+  browserTest("linked chat controls reveal the parent and children while the child moves independently", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? OUT);
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=drag-board&chatLinks=1`, { width: 1440, height: 900 }, "dark", "en");
+      try {
+        const parent = page.locator(deskCard("t-drag-0"));
+        const child = page.locator(deskCard("t-drag-1"));
+        await parent.waitFor();
+        await foldSeat(page);
+        const toggle = parent.locator("[data-chat-children]");
+        expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+        await toggle.click();
+        const childLink = parent.locator('[data-chat-task="task:t-drag-1"]');
+        await childLink.waitFor();
+        expect(await parent.locator("[data-chat-task]").count()).toBe(2);
+        await childLink.click();
+        await child.locator("[data-chat-parent]").click();
+        expect(await toggle.getAttribute("aria-expanded")).toBe("true");
+
+        await child.scrollIntoViewIfNeeded();
+        const title = (await child.locator("[data-rename]").boundingBox())!;
+        const strip = (await page.locator('.kb .column[data-status="blocked"]').boundingBox())!;
+        const from = { x: title.x + 25, y: title.y + title.height / 2 };
+        const target = { x: strip.x + strip.width / 2, y: from.y + 75 };
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(from.x + 64, from.y + 28, { steps: 5 });
+        await page.mouse.move(target.x, target.y, { steps: 10 });
+        await page.locator('.kb .column[data-status="blocked"][data-drop]').waitFor();
+        await page.mouse.up();
+
+        await page.locator(`.kb .column[data-status="blocked"] .card[data-id="task:t-drag-1"]`).waitFor();
+        await childLink.getByText("Waiting", { exact: true }).waitFor();
+        expect(await child.locator("[data-chat-parent]").count()).toBe(1);
+        expect(await page.locator('.kb .column[data-status="inbox"] [data-id="task:t-drag-0"]').count()).toBe(1);
+        const patches = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: Array<{ id: string; body: { status?: string } }> } }).evidence.taskPatches);
+        expect(patches.map(({ id, body }) => [id, body.status])).toEqual([["t-drag-1", "blocked"]]);
+        expect(pageErrors).toEqual([]);
+        await parent.screenshot({ path: path.join(out, "linked-chats-after-drag.png") });
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }
   }, 120_000);

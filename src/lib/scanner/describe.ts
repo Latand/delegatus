@@ -24,7 +24,7 @@ import {
 import type { Engine, Fmt, RootKey, TranscriptEngine } from "../types";
 import { cleanTitle } from "../title";
 import { globalCache } from "./caches";
-import { nativeCodexSessionMetaResult } from "./codexNative";
+import { codexSubagentTitleFromMeta, nativeCodexSessionMetaResult } from "./codexNative";
 import { HEAD_READ_CHUNK_BYTES, headFingerprint, readHead, type HeadReadResult } from "./head";
 import { readJsonResult, recordValue, recordsValue, stringValue } from "./json";
 import { openclawMessage } from "./openclawNative";
@@ -133,6 +133,7 @@ const cwdCache = globalCache<HeadMetadataCache<string | null>>("claude-cwd-v3");
 const sessionStartedAtCache = globalCache<HeadMetadataCache<string | null>>("session-started-at-v1");
 
 const HEAD_BYTES = HEAD_READ_CHUNK_BYTES;
+const CODEX_TITLE_HEAD_BYTES = 512 * 1024;
 
 function subagentSidecarPath(rootName: RootKey, pathname: string): string | null {
   if (rootName !== "claude-projects" || !path.basename(pathname).startsWith("agent-") || !pathname.endsWith(".jsonl")) {
@@ -1048,6 +1049,29 @@ function goodTitle(text: unknown): string | null {
   return val && !skipTitlePrefixes.some((prefix) => val.startsWith(prefix)) ? val : null;
 }
 
+/** Claude can prepend runtime instructions to the operator's message. */
+function claudePromptWithoutReminders(prompt: string): string {
+  const open = "<system-reminder>";
+  const close = "</system-reminder>";
+  let remaining = prompt.trimStart();
+  while (remaining.startsWith(open)) {
+    const end = remaining.indexOf(close, open.length);
+    if (end < 0) return "";
+    remaining = remaining.slice(end + close.length).trimStart();
+  }
+  return remaining;
+}
+
+function codexPromptForTitle(prompt: string): string {
+  if (prompt.startsWith("<environment_context>") || prompt.startsWith("# AGENTS.md instructions for ")) return "";
+  if (prompt.startsWith("# Files mentioned by the user:")) {
+    const request = /(?:^|\n)## My request:[ \t]*\r?\n/.exec(prompt);
+    if (!request) return "";
+    prompt = prompt.slice(request.index + request[0].length).trimStart();
+  }
+  return prompt.replace(/^#{1,6}[ \t]+/, "");
+}
+
 function userPromptFromRecord(obj: Record<string, unknown>, engine: TranscriptEngine): string | null {
   if (engine === "copilot") {
     /* `data.content` is what the operator typed; `transformedContent` adds
@@ -1095,34 +1119,14 @@ function userPromptFromRecord(obj: Record<string, unknown>, engine: TranscriptEn
   return null;
 }
 
-function titleFromLines(lines: string[], engine: TranscriptEngine): string | null {
-  for (const line of lines) {
-    let obj: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(line);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      obj = parsed;
-    } catch {
-      continue;
-    }
-    if (obj.type === "summary") {
-      const title = goodTitle(obj.summary);
-      if (title) return title;
-    }
-    if (obj.type === "ai-title") {
-      const title = goodTitle(obj.aiTitle);
-      if (title) return title;
-    }
-    const title = goodTitle(userPromptFromRecord(obj, engine));
-    if (title) return title;
-  }
-  return null;
-}
-
 function conversationTextFromLines(lines: string[], engine: TranscriptEngine): ConversationSearchText {
   let title: string | null = null;
   let firstPrompt: string | null = null;
+  let explicitTitle: string | null = null;
+  let codexHeaderSeen = false;
+  let codexSubagentTitle: string | null = null;
   for (const line of lines) {
+    if (title && firstPrompt && !line.includes('"custom-title"')) continue;
     let obj: Record<string, unknown>;
     try {
       const parsed = JSON.parse(line);
@@ -1131,6 +1135,14 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
     } catch {
       continue;
     }
+    if (engine === "codex" && obj.type === "session_meta" && !codexHeaderSeen) {
+      codexHeaderSeen = true;
+      codexSubagentTitle = codexSubagentTitleFromMeta(recordValue(obj.payload));
+    }
+    if (engine === "claude" && obj.type === "custom-title") {
+      explicitTitle = goodTitle(obj.customTitle) ?? explicitTitle;
+    }
+    if (title && firstPrompt) continue;
     if (obj.type === "summary") {
       title ??= goodTitle(obj.summary);
     }
@@ -1140,13 +1152,15 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
       title ??= goodTitle(obj.aiTitle);
     }
     const rawPrompt = userPromptFromRecord(obj, engine);
-    const prompt = rawPrompt ? redactMediaText(rawPrompt) : null;
+    const content = rawPrompt && (engine === "claude" ? claudePromptWithoutReminders(rawPrompt)
+      : engine === "codex" ? codexPromptForTitle(rawPrompt) : rawPrompt);
+    const prompt = content ? redactMediaText(content) : null;
     if (!prompt) continue;
     firstPrompt ??= prompt;
     title ??= goodTitle(prompt);
-    if (title && firstPrompt) return { title, firstPrompt };
+    if (engine !== "claude" && title && firstPrompt) break;
   }
-  return { title, firstPrompt };
+  return { title: explicitTitle ?? title ?? codexSubagentTitle, firstPrompt };
 }
 
 /** Parse the same bounded head for asynchronous catalog hydration. */
@@ -1164,10 +1178,11 @@ function reusableGrowingHead<T>(
   cached: HeadMetadataCache<T>,
   st: fs.Stats,
   head: HeadReadResult,
+  maxBytes = HEAD_BYTES,
 ): HeadMetadataCache<T> | null {
   if (st.size <= cached.size || !head.complete || !head.value || head.value.read < cached.headBytes) return null;
   const preserved = headFingerprint(head.value.bytes.subarray(0, cached.headBytes)) === cached.headFingerprint;
-  if (!preserved || (cached.value === null && cached.headBytes < HEAD_BYTES)) return null;
+  if (!preserved || (cached.value === null && cached.headBytes < maxBytes)) return null;
   return {
     size: st.size,
     mtimeMs: st.mtimeMs,
@@ -1255,18 +1270,35 @@ function scanJsonlTitle(pathname: string, st: fs.Stats, engine: TranscriptEngine
   if (cached?.size === st.size && cached.mtimeMs === st.mtimeMs) {
     return { value: cached.value, complete: true, headPreserved: true };
   }
-  const head = readHead(pathname, st.size, st.mtimeMs, { maxBytes: HEAD_BYTES });
+  const maxBytes = engine === "codex" ? CODEX_TITLE_HEAD_BYTES : HEAD_BYTES;
+  const head = readHead(pathname, st.size, st.mtimeMs, { maxBytes: Math.max(HEAD_BYTES, cached?.headBytes ?? 0) });
   if (!head.complete || !head.value) return { value: cached?.value ?? null, complete: false, headPreserved: false };
   if (cached) {
-    const reused = reusableGrowingHead(cached, st, head);
+    const reused = reusableGrowingHead(cached, st, head, maxBytes);
     if (reused) {
       titleCache.set(pathname, reused);
       return { value: reused.value, complete: true, headPreserved: true };
     }
   }
-  const title = titleFromLines(head.value.text.split("\n").slice(0, 151), engine);
-  titleCache.set(pathname, cacheHeadMetadata(st, head.value, title));
+  let title = conversationSearchText(head.value.text, engine).title;
+  let prefix = head.value;
+  if (!title && engine === "codex" && prefix.read < Math.min(st.size, maxBytes)) {
+    const extended = readHead(pathname, st.size, st.mtimeMs, { maxBytes });
+    if (!extended.complete || !extended.value) return { value: cached?.value ?? null, complete: false, headPreserved: false };
+    prefix = extended.value;
+    title = conversationSearchText(prefix.text, engine).title;
+  }
+  titleCache.set(pathname, cacheHeadMetadata(st, prefix, title));
   return { value: title, complete: true, headPreserved: false };
+}
+
+/** Recover a title for a generic Codex row retained in an older summary. */
+export function recoverCodexTranscriptTitle(pathname: string): string | null {
+  try {
+    return scanJsonlTitle(pathname, fs.statSync(pathname), "codex").value;
+  } catch {
+    return null;
+  }
 }
 
 /** Title and first-prompt hydration owned entirely by list/search requests. */

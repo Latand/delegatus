@@ -2074,11 +2074,13 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
     viewerPrefixed: number;
     cutTitles: string[];
     cutRowParts: string[];
+    trailingOffsets: number[];
+    clippedActionLabels: string[];
     wholeOutcomes: Record<string, number>;
     droppedMeta: number;
     replayedStarting: Array<{ titleWidth: number; badge: string; chip: string; outcome: string; time: string; glyphs: number }>;
     shortTargets: string[];
-    titleCutBeforeMeta: string[];
+    titleCutBeforeServer: string[];
     dotGaps: { header: number[]; card: number[] };
     overflowX: number;
   }
@@ -2153,7 +2155,7 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
             const cutTitles: string[] = [];
             for (const title of document.querySelectorAll<HTMLElement>("[data-mcp-title]")) {
               if (!visible(title)) continue;
-              if (title.scrollWidth > title.clientWidth + 1 && title.getAttribute("title") !== title.textContent) cutTitles.push(title.textContent ?? "");
+              if (title.scrollWidth > title.clientWidth + 1 && title.getAttribute("data-feed-summary-tooltip") !== title.textContent) cutTitles.push(title.textContent ?? "");
             }
             for (const chip of document.querySelectorAll<HTMLElement>("[data-link-pending]")) {
               if (chip.scrollWidth > chip.clientWidth + 1) cutTitles.push(`pending chip: ${chip.textContent}`);
@@ -2164,6 +2166,8 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
                A title or chip label that ends in an ellipsis is judged by its own
                box; screen-reader-only text is not drawn. */
             const cutRowParts: string[] = [];
+            const trailingOffsets: number[] = [];
+            const clippedActionLabels: string[] = [];
             const wholeOutcomes: Record<string, number> = {};
             let droppedMeta = 0;
             /* The window's side edges; the frames are full-page, so its height is not an edge. */
@@ -2211,7 +2215,15 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
               if (outcome && judge(outcome.getBoundingClientRect(), outcome, `outcome ${outcome.dataset.mcpOutcome}`) === "whole") {
                 const state = outcome.dataset.mcpOutcome ?? "";
                 wholeOutcomes[state] = (wholeOutcomes[state] ?? 0) + 1;
+                trailingOffsets.push(Math.abs(summary.getBoundingClientRect().right - outcome.getBoundingClientRect().right));
               }
+              for (const label of summary.querySelectorAll<HTMLElement>('[data-testid^="mcp-link-"] > span')) {
+                if (label.clientWidth <= 1 || label.scrollWidth > label.clientWidth + 1) clippedActionLabels.push(label.textContent ?? "");
+              }
+            }
+            for (const clock of document.querySelectorAll("[data-message-clock]")) {
+              const section = clock.closest("[data-evidence-surface]")!;
+              trailingOffsets.push(Math.abs(section.getBoundingClientRect().right - clock.getBoundingClientRect().right - 22));
             }
             /* The replayed spawn whose child is not listed yet is the row's densest
                state: replay badge, starting word, outcome glyph and the time. */
@@ -2241,9 +2253,9 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
                   glyphs: summary.querySelectorAll("svg").length,
                 };
               });
-            /* A title cut by its ellipsis while any part of its metadata or the
-               server label is still drawn gave its width to a lower-value fact. */
-            const titleCutBeforeMeta: string[] = [];
+            /* The server name gives way before the title. Timing can share
+               the row with an ellipsis when the pane has room for both. */
+            const titleCutBeforeServer: string[] = [];
             for (const summary of document.querySelectorAll<HTMLElement>("[data-testid=mcp-call-card] > details > summary")) {
               if (!visible(summary)) continue;
               const title = summary.querySelector<HTMLElement>("[data-mcp-title]")!;
@@ -2254,11 +2266,8 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
                 const area = clip.getBoundingClientRect();
                 return box.width > 0.5 && box.left < area.right - 0.5 && box.right > area.left + 0.5 && box.top < area.bottom - 0.5 && box.bottom > area.top + 0.5;
               };
-              const meta = summary.querySelector<HTMLElement>("[data-mcp-meta]");
-              const metaLeft = meta ? [...meta.querySelectorAll<HTMLElement>("span")].filter((span) => span.childElementCount === 0 && span.textContent?.trim() && drawn(span, meta)).map((span) => span.textContent!.trim()) : [];
               const server = summary.querySelector<HTMLElement>("[data-mcp-server]");
-              if (drawn(server, summary.querySelector<HTMLElement>("[data-mcp-heading]") ?? summary)) metaLeft.push(server!.textContent!.trim());
-              if (metaLeft.length) titleCutBeforeMeta.push(`«${title.textContent}» beside ${metaLeft.join(", ")}`);
+              if (drawn(server, summary.querySelector<HTMLElement>("[data-mcp-heading]") ?? summary)) titleCutBeforeServer.push(title.textContent ?? "");
             }
             /* The dot between a duration and its tokens sits as far from each on a
                group header as on the cards under it. */
@@ -2292,11 +2301,13 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
                 .filter((node) => /(^|\s)viewer · /.test(node.textContent ?? "")).length,
               cutTitles,
               cutRowParts,
+              trailingOffsets,
+              clippedActionLabels,
               wholeOutcomes,
               droppedMeta,
               replayedStarting,
               shortTargets,
-              titleCutBeforeMeta,
+              titleCutBeforeServer,
               dotGaps,
               overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
             };
@@ -2341,6 +2352,8 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
           // No part of a row is cut by its own edge: the starting spawn's word and glyph and the
           // retryable failure's badge and glyph are whole in every section, metadata leaves whole.
           expect(reading.cutRowParts).toEqual([]);
+          expect(reading.clippedActionLabels, key).toEqual([]);
+          expect(Math.max(...reading.trailingOffsets), key).toBeLessThanOrEqual(1);
           // The starting chip is the row's one clock: no outcome glyph repeats it.
           expect(reading.wholeOutcomes.starting ?? 0).toBe(0);
           expect(reading.wholeOutcomes.error).toBe(6);
@@ -2357,13 +2370,24 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
             expect(["whole", "hidden"]).toContain(row.time);
           }
           expect(reading.shortTargets).toEqual([]);
-          // A title keeps its natural width until the metadata and the server label have left.
-          expect(reading.titleCutBeforeMeta).toEqual([]);
+          expect(reading.titleCutBeforeServer).toEqual([]);
           // Header and cards space «880ms · ~4» alike.
           expect(reading.dotGaps.header.length).toBeGreaterThan(0);
           expect(reading.dotGaps.card.length).toBeGreaterThan(0);
           expect(new Set([...reading.dotGaps.header, ...reading.dotGaps.card]).size, JSON.stringify(reading.dotGaps)).toBe(1);
           expect(reading.overflowX).toBe(0);
+
+          if (key === "desktop-1440-en-light") {
+            const title = page.locator("[data-mcp-title]").first();
+            await title.evaluate(element => { (element as HTMLElement).style.maxWidth = "64px"; });
+            const label = await title.getAttribute("data-feed-summary-tooltip");
+            expect(await title.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+            await title.hover();
+            const hint = page.getByRole("tooltip").filter({ hasText: label! });
+            await hint.waitFor({ timeout: 500 });
+            await page.keyboard.press("Escape");
+            await hint.waitFor({ state: "hidden" });
+          }
 
           // The ready chip opens the child's conversation.
           await page.locator('a[data-testid="mcp-link-conversation"][href="#c=conversation_child_ready"]').first().click();

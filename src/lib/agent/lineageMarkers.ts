@@ -59,12 +59,21 @@ export function conversationLineageMarkers(
 export function overlayConversationLineage(
   entries: FileEntry[],
   snapshot: RegistryFile = agentRegistry().readOnlySnapshot(),
+  preserveParent = false,
 ): void {
   const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
   for (const entry of entries) {
     if (entry.engine !== "claude" && entry.engine !== "codex") continue;
     const conversation = lookup.conversationForPath(entry.path);
     if (!conversation || conversation.engine !== entry.engine) continue;
+    entry.conversationId ??= conversation.id;
+    const edge = snapshot.lineageEdges[conversation.id];
+    const parentId = edge ? lookup.canonicalConversationId(edge.parentConversationId) : null;
+    const parent = parentId && parentId !== conversation.id ? snapshot.conversations[parentId] : null;
+    const parentGeneration = parent?.generations.at(-1);
+    const parentProject = parent?.projectOwnership?.project ?? parentGeneration?.launchProfile.project;
+    // Shared catalog pages must not reveal paths from other projects.
+    if (!preserveParent && parentGeneration && parentProject === entry.project) entry.parent = parentGeneration.path;
     const markers = conversationLineageMarkers(snapshot, lookup, conversation, entry.path);
     if (markers.migratedTo) entry.migratedTo = markers.migratedTo;
     if (markers.supersededBy) entry.supersededBy = markers.supersededBy;

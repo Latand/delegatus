@@ -162,7 +162,7 @@ function onPhoneLayout(): boolean {
 
 type ScrollCause =
   | { kind: "programmatic" }
-  | { kind: "user"; fromBottom: number; direction: -1 | 1 | null };
+  | { kind: "user"; fromBottom: number; direction: -1 | 1 | null; continuing?: true };
 
 /* Scroll state per stable conversation, surviving pane remounts and native
    generation changes during account migration. */
@@ -715,7 +715,8 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     if (glueScrollFrameRef.current !== null) cancelAnimationFrame(glueScrollFrameRef.current);
   }, []);
   const markProgrammaticScroll = () => {
-    if (scrollCauseRef.current?.kind !== "user") {
+    const cause = scrollCauseRef.current;
+    if (cause?.kind !== "user" || cause.continuing) {
       scrollCauseRef.current = { kind: "programmatic" };
     }
     glueAtRef.current = nowMs();
@@ -996,6 +997,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     readerAnchor.current = null;
     gestureRestPending.current = false;
     autoAlignRef.current = null;
+    scrollCauseRef.current = null;
   }, [tailPath]);
 
   useLayoutEffect(() => {
@@ -1807,11 +1809,18 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const markUserScroll = (direction: number | null): void => {
     const el = scroller.current;
     if (!el) return;
+    const fromBottom = distanceFromBottom(el);
+    /* Momentum can already have reached the edge. A downward input at the
+       edge produces no scroll event for the follow handler to consume. */
+    if (direction !== null && direction > 0 && fromBottom <= 1 && !magnetRef.current) {
+      setMagnet(true);
+      return;
+    }
     autoAlignRef.current = null;
     if (direction !== null && direction !== 0) gestureRestPending.current = true;
     scrollCauseRef.current = {
       kind: "user",
-      fromBottom: distanceFromBottom(el),
+      fromBottom,
       direction: direction === null || direction === 0 ? null : direction < 0 ? -1 : 1,
     };
     if (direction !== null && direction < 0 && magnetRef.current) setMagnet(false);
@@ -1991,7 +2000,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           else if (["ArrowDown", "End", "PageDown"].includes(event.key)) markUserScroll(1);
           else if ([" ", "Spacebar"].includes(event.key)) markUserScroll(event.shiftKey ? -1 : 1);
         }}
-        onScrollEnd={(event) => settleGestureRest(event.currentTarget)}
+        onScrollEnd={(event) => {
+          if (scrollCauseRef.current?.kind === "user" && scrollCauseRef.current.continuing) scrollCauseRef.current = null;
+          settleGestureRest(event.currentTarget);
+        }}
         onScroll={(event) => {
           const el = event.currentTarget;
           const fromBottom = distanceFromBottom(el);
@@ -2012,7 +2024,13 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
              event; an opposite movement proves the tag did not cause it. A
              scrollbar press keeps its separate moving baseline until release. */
           if (scrollbarPointer) scrollbarPointer.fromBottom = fromBottom;
-          if (scrollbarPointer || cause?.kind !== "user" || userDelta !== 0) scrollCauseRef.current = null;
+          if (cause?.kind === "user" && !scrollbarPointer && userInitiated && userDelta < 0 && !atBottom) {
+            // A wheel or a touch gesture can coast to the tail across scroll
+            // events that have no new input event of their own.
+            scrollCauseRef.current = { ...cause, fromBottom, continuing: true };
+          } else if (scrollbarPointer || cause?.kind !== "user" || userDelta !== 0) {
+            scrollCauseRef.current = null;
+          }
           const settling = nowMs() - glueAtRef.current < GLUE_SETTLE_MS;
           const glueOwnScroll = glueScrollPendingRef.current;
           glueScrollPendingRef.current = false;

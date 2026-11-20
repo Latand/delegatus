@@ -139,6 +139,28 @@ test("REST creates, patches, lists and undoes a hold without changing another hi
   expect(rows.find(row => row.id === hidden.id)?.groupHidden).toEqual(hidden.groupHidden);
 });
 
+test("REST undo restores a pending title source with the current revision", async () => {
+  const { PATCH } = await import("./[id]/route");
+  const { taskRevision } = await import("@/lib/tasks/revision");
+  const row: BoardTask = {
+    id: "rename-undo-fixture", project: "viewer", text: "Claude session", status: "assigned",
+    placement: "unplaced", assignments: [], createdAt: "2026-07-19T00:00:00Z", updatedAt: "2026-07-19T00:00:00Z",
+    origin: { kind: "conversation", key: "conversation_demo", refinement: "pending" },
+  };
+  saveTasks([...loadTasks(), row]);
+  const current = loadTasks().find(task => task.id === row.id)!;
+  const send = (task: BoardTask, body: Record<string, unknown>) => PATCH(new NextRequest("http://localhost/api/tasks", {
+    method: "PATCH", headers: { "content-type": "application/json", host: "localhost" },
+    body: JSON.stringify({ ...body, expectedProject: task.project, expectedRevision: taskRevision(task) }),
+  }), { params: Promise.resolve({ id: row.id }) });
+  expect((await send(current, { text: "New title" })).status).toBe(200);
+  const renamed = loadTasks().find(task => task.id === row.id)!;
+  expect(renamed.origin?.refinement).toBe("titled");
+  expect((await send(current, { text: row.text, restorePendingTitle: true })).status).toBe(409);
+  expect((await send(renamed, { text: row.text, restorePendingTitle: true })).status).toBe(200);
+  expect(loadTasks().find(task => task.id === row.id)).toMatchObject({ text: row.text, origin: row.origin });
+});
+
 test("REST round-trips the 5-of-8 checklist through create, patch and list", async () => {
   const { PATCH } = await import("./[id]/route");
   const steps = [

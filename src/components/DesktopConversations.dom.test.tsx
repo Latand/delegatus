@@ -18,10 +18,11 @@ import { DESKTOP_CONVERSATIONS_PAGE_SIZE, DesktopConversations } from "./Desktop
 
 const dom = new Window();
 /* One controllable observer: the test decides when the end of the rows is in view. */
-const observers: { callback: (entries: { isIntersecting: boolean }[]) => void; targets: HTMLElement[] }[] = [];
+type TestIntersection = { isIntersecting: boolean; target?: HTMLElement };
+const observers: { callback: (entries: TestIntersection[]) => void; targets: HTMLElement[] }[] = [];
 class TestIntersectionObserver {
-  private entry: { callback: (entries: { isIntersecting: boolean }[]) => void; targets: HTMLElement[] };
-  constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
+  private entry: { callback: (entries: TestIntersection[]) => void; targets: HTMLElement[] };
+  constructor(callback: (entries: TestIntersection[]) => void) {
     this.entry = { callback, targets: [] };
     observers.push(this.entry);
   }
@@ -90,16 +91,18 @@ function serveCatalog(total: number, options: Partial<Served> = {}): Served {
   return served;
 }
 
-function mount(onOpen: (file: FileEntry) => void = () => {}) {
+function mount(onOpen: (file: FileEntry) => void = () => {}, compact = false) {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   roots.add(root);
-  flushSync(() => root.render(<DesktopConversations project="repo-board" enabled onOpen={onOpen} />));
+  flushSync(() => root.render(<DesktopConversations project="repo-board" enabled compact={compact} onOpen={onOpen} />));
   return host;
 }
 
-const rowPaths = (host: HTMLElement) => Array.from(host.querySelectorAll<HTMLElement>("[data-desktop-conversations-row]")).map((row) => row.getAttribute("data-desktop-conversations-row"));
+const rowPaths = (host: HTMLElement) => Array.from(host.querySelectorAll<HTMLElement>("[data-desktop-conversations-row]"))
+  .filter(row => !row.closest("[hidden]"))
+  .map(row => row.getAttribute("data-desktop-conversations-row"));
 const tail = (host: HTMLElement) => host.querySelector<HTMLElement>("[data-desktop-conversations-tail]")!;
 const reachEnd = async () => {
   for (const observer of [...observers]) {
@@ -113,7 +116,8 @@ test("every stored conversation is listed recent first, page by page as the end 
   const served = serveCatalog(total);
   const host = mount();
   await settle();
-  expect(served.urls[0]).toBe(`/api/conversations?limit=${DESKTOP_CONVERSATIONS_PAGE_SIZE}&project=repo-board`);
+  const params = new URL(served.urls[0]!, "http://localhost").searchParams;
+  expect(Object.fromEntries(params)).toMatchObject({ limit: String(DESKTOP_CONVERSATIONS_PAGE_SIZE), project: "repo-board", view: "tree", branch: "roots" });
   expect(rowPaths(host)).toHaveLength(DESKTOP_CONVERSATIONS_PAGE_SIZE);
   expect(host.querySelector("[data-desktop-conversations-count]")?.textContent).toBe(String(total));
   expect(host.querySelector("input")).toBeNull();
@@ -133,7 +137,7 @@ test("a row a later page returns again is listed once, and the end says how many
   serveCatalog(120, { overlap: 5 });
   const host = mount();
   await settle();
-  for (let page = 0; page < 6; page += 1) await reachEnd();
+  for (let page = 0; page < 16 && rowPaths(host).length < 120; page += 1) await reachEnd();
   const paths = rowPaths(host);
   expect(new Set(paths).size).toBe(paths.length);
   expect(paths).toHaveLength(120);
@@ -142,11 +146,11 @@ test("a row a later page returns again is listed once, and the end says how many
 
 test("a page that fails keeps the rows, says so, and Retry reads that page again", async () => {
   let failing = true;
-  const served = serveCatalog(160, { fail: (cursor) => (cursor === "50" && failing ? 503 : null) });
+  const served = serveCatalog(160, { fail: (cursor) => (cursor === String(DESKTOP_CONVERSATIONS_PAGE_SIZE) && failing ? 503 : null) });
   const host = mount();
   await settle();
   await reachEnd();
-  expect(rowPaths(host)).toHaveLength(50);
+  expect(rowPaths(host)).toHaveLength(DESKTOP_CONVERSATIONS_PAGE_SIZE);
   expect(tail(host).querySelector('[data-desktop-conversations-state="failed"]')?.textContent).toBe("Could not load conversations");
   /* Failure does not page on by itself. */
   const asked = served.urls.length;
@@ -156,24 +160,24 @@ test("a page that fails keeps the rows, says so, and Retry reads that page again
   failing = false;
   flushSync(() => (tail(host).querySelector('[data-desktop-conversations-retry="retry"]') as HTMLButtonElement).click());
   await settle();
-  expect(served.urls.at(-1)).toContain("cursor=50");
-  expect(rowPaths(host)).toHaveLength(100);
+  expect(served.urls.at(-1)).toContain(`cursor=${DESKTOP_CONVERSATIONS_PAGE_SIZE}`);
+  expect(rowPaths(host)).toHaveLength(DESKTOP_CONVERSATIONS_PAGE_SIZE * 2);
 });
 
 test("an expired snapshot keeps the rows, says the list changed, and Reload starts the chain again from the top", async () => {
   let expired = true;
-  const served = serveCatalog(160, { fail: (cursor) => (cursor === "50" && expired ? 409 : null) });
+  const served = serveCatalog(160, { fail: (cursor) => (cursor === String(DESKTOP_CONVERSATIONS_PAGE_SIZE) && expired ? 409 : null) });
   const host = mount();
   await settle();
   await reachEnd();
-  expect(rowPaths(host)).toHaveLength(50);
+  expect(rowPaths(host)).toHaveLength(DESKTOP_CONVERSATIONS_PAGE_SIZE);
   expect(tail(host).querySelector('[data-desktop-conversations-state="expired"]')).not.toBeNull();
 
   expired = false;
   flushSync(() => (tail(host).querySelector('[data-desktop-conversations-retry="reload"]') as HTMLButtonElement).click());
   await settle();
   expect(served.urls.at(-1)).not.toContain("cursor=");
-  expect(rowPaths(host)).toHaveLength(50);
+  expect(rowPaths(host)).toHaveLength(DESKTOP_CONVERSATIONS_PAGE_SIZE);
   expect(tail(host).querySelector('[data-desktop-conversations-state="expired"]')).toBeNull();
 });
 
@@ -195,4 +199,107 @@ test("a project with no stored conversations says so, and opening a row hands ov
   expect(row).not.toBeNull();
   flushSync(() => row!.click());
   expect(opened).toEqual([entry(1).path]);
+});
+
+test("the compact Chats list keeps its root and branch pages independent while a page is pending", async () => {
+  const parent = entry(2, { title: "Main chat", directChildCount: 2 });
+  const child = entry(1, { title: "Dependent chat", parent: parent.path, directChildCount: 0 });
+  const fork = entry(3, { title: "Codex fork", engine: "codex", parent: parent.path, directChildCount: 0 });
+  const other = entry(4, { title: "Other main chat", engine: "codex", directChildCount: 0 });
+  const calls: URLSearchParams[] = [];
+  let finishRoots!: (response: Response) => void;
+  let finishChildren!: (response: Response) => void;
+  previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname !== "/api/conversations") return Response.json({});
+    const params = url.searchParams;
+    calls.push(params);
+    if (params.get("branch") === "children") {
+      if (params.get("cursor")) return new Promise<Response>(resolve => { finishChildren = resolve; });
+      return Response.json({ items: [child], total: 2, projectTotal: 4, nextCursor: "children-next" });
+    }
+    if (params.get("cursor")) return new Promise<Response>(resolve => { finishRoots = resolve; });
+    return Response.json({ items: [parent], total: 2, projectTotal: 4, nextCursor: "roots-next" });
+  }) as typeof fetch;
+  const opened: FileEntry[] = [];
+  const host = mount((file) => { opened.push(file); }, true);
+  await settle();
+
+  expect(rowPaths(host)).toEqual([parent.path]);
+  const toggle = host.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+  const label = toggle.getAttribute("aria-label");
+  expect(toggle.textContent).toContain("2");
+  expect(calls).toHaveLength(1);
+  const rootMore = tail(host).querySelector<HTMLButtonElement>("[data-desktop-conversations-more]")!;
+  rootMore.focus();
+  flushSync(() => rootMore.click());
+  expect(tail(host).querySelector("[data-desktop-conversations-more]")).toBe(rootMore);
+  expect(document.activeElement).toBe(rootMore);
+  expect(rowPaths(host)).toEqual([parent.path]);
+  finishRoots(Response.json({ items: [other], total: 2, projectTotal: 4, nextCursor: null }));
+  await settle();
+  expect(rowPaths(host)).toEqual([parent.path, other.path]);
+  expect(document.activeElement).toBe(host.querySelector(`[data-desktop-conversations-row="${other.path}"] [data-desktop-chat-open]`));
+  expect(toggle.getAttribute("aria-label")).toBe(label);
+
+  flushSync(() => toggle.click());
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  await settle();
+  expect(rowPaths(host)).toEqual([parent.path, child.path, other.path]);
+  const childrenMore = host.querySelector<HTMLButtonElement>("[data-desktop-children-more]")!;
+  childrenMore.focus();
+  flushSync(() => childrenMore.click());
+  expect(host.querySelector("[data-desktop-children-more]")).toBe(childrenMore);
+  expect(document.activeElement).toBe(childrenMore);
+  expect(rowPaths(host)).toEqual([parent.path, child.path, other.path]);
+  finishChildren(Response.json({ items: [fork], total: 2, projectTotal: 4, nextCursor: null }));
+  await settle();
+  expect(rowPaths(host)).toEqual([parent.path, child.path, fork.path, other.path]);
+  expect(calls.map(params => [params.get("branch"), params.get("parent"), params.get("cursor")])).toEqual([
+    ["roots", null, null], ["roots", null, "roots-next"],
+    ["children", parent.path, null], ["children", parent.path, "children-next"],
+  ]);
+  const dependent = Array.from(host.querySelectorAll("button")).find(button => button.textContent?.includes(fork.title))!;
+  expect(document.activeElement).toBe(dependent);
+  flushSync(() => dependent.click());
+  expect(opened).toEqual([fork]);
+  flushSync(() => toggle.click());
+  expect(rowPaths(host)).toEqual([parent.path, other.path]);
+  flushSync(() => toggle.click());
+  await settle();
+  expect(rowPaths(host)).toEqual([parent.path, child.path, fork.path, other.path]);
+  expect(calls).toHaveLength(4);
+});
+
+test("a visible cross-project Codex subagent loads its own PR badge from its source project", async () => {
+  const parent = entry(1, { engine: "codex", title: "Parent thread", directChildCount: 1 });
+  const child = entry(2, {
+    engine: "codex", title: "Review worker", project: "source-project",
+    nativeParentThreadId: "parent-thread", parent: parent.path, directChildCount: 0,
+  });
+  const reads: [string | null, string[]][] = [];
+  previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/conversations/pull-requests") {
+      reads.push([url.searchParams.get("project"), url.searchParams.getAll("transcript")]);
+      return Response.json({ [child.path]: { items: [
+        { url: "https://github.com/example/reports/pull/8", repository: "example/reports", number: 8, state: "merged" },
+      ], partial: false } });
+    }
+    const items = url.searchParams.get("branch") === "children" ? [child] : [parent];
+    return Response.json({ items, total: items.length, nextCursor: null });
+  }) as typeof fetch;
+  const host = mount(() => {}, true);
+  await settle();
+  flushSync(() => host.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!.click());
+  await settle();
+  const row = host.querySelector("[data-native-subagent]")!;
+  const observed = row.firstElementChild as HTMLElement;
+  observers.find(observer => observer.targets.includes(observed))!.callback([{ isIntersecting: true, target: observed }]);
+  await new Promise(resolve => setTimeout(resolve, 70));
+  await settle();
+  expect(reads).toEqual([["source-project", [child.path]]]);
+  expect(row.querySelector("[data-chat-pr-badge]")?.textContent).toBe("1");
 });

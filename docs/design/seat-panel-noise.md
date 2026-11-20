@@ -381,21 +381,16 @@ the ordinary conversation feed alike, because none of these components is seat-o
   action does not shrink. The error sentence of a stopped launch keeps its own row under the line.
 - **b2 MCP task rows**, both surfaces that draw them: the transcript row
   (`src/components/runtime/McpCallCard.tsx`) and the live-turn row
-  (`src/components/conversation/LiveTurnRows.tsx`, `LiveMcpRow`). The row is `flex-nowrap`.
-  The title takes the leftover width (`flex-1 basis-0 truncate`) with a floor of 6 rem, so it
-  never collapses to a pixel (#1955); the entity chips (`Відкрити задачу` and the like) give way
-  first, cut their label with an ellipsis and carry it in their `title`. The chip stays a link.
-  The whole title is the row's `title`, and the transcript row's Details disclosure still holds
-  the ids and the payload.
+  (`src/components/conversation/LiveTurnRows.tsx`, `LiveMcpRow`). The outcome icon sits at
+  the trailing edge. Actions keep their full labels, with room to wrap in narrow panes.
+  The call title takes the remaining width and shows its full text on hover.
+  Details still holds the ids and the payload. On desktop, reply clocks align with
+  MCP clocks, and the adjacent read aloud and copy actions stay together. The prose
+  keeps its reading measure. See [chat relationships and usage](chat-relationships-and-usage.md#orchestrator-transcript).
 - **b3 Shell rows.** The collapsed row (`ToolLine`, `MobileRunRow`, the live tool row) was
   already `truncate` with the whole summary in `title`, and the whole command wrapped and
   copyable sits in the row's expanded body. It needed no change; a render test now pins it, and
   the rendered evidence measures it.
-
-This reverses the wrapping half of #1955 ("what no longer fits wraps whole"), by the operator's
-decision: a chip that no longer fits is now cut, not moved to a second line. The #1955 floors in
-`kanbanBoard.browser.test.tsx` ("live turn rows on a phone") are restated for the new layout: the
-title keeps at least 96 px and 25 % of its row, a chip at least 24 px in each direction.
 
 ### States to cover (point 3)
 

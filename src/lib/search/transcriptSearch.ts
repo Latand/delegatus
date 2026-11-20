@@ -1,3 +1,5 @@
+import { chatPullRequestForUrl, MAX_CHAT_PULL_REQUESTS, type ChatPullRequests } from "@/lib/forge/chatPullRequests";
+import type { ForgeCacheView } from "@/lib/forge/workLinks";
 import { redactMediaText } from "@/lib/externalRelay/mediaPrivacy";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite } from "@/lib/sqliteReadAttribution";
@@ -153,6 +155,90 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) throw new Error("Transcript search requires the Bun runtime");
   return sqlite.Database;
+}
+
+const CHAT_REFERENCE_WINDOW = 384;
+const CHAT_REFERENCE_BODY = 16 * 1024;
+const CODEX_CHAT_REFERENCE_WINDOW = 4096;
+
+/** Two bounded index seeks per displayed row. The last message is only
+ * authoritative when the index has caught up with the transcript. */
+export function hydrateIndexedChatTimes(
+  files: { path: string; size: number; mtime: number; firstMessageAt?: number | null; lastMessageAt?: number | null }[],
+  filename = statePath("transcript-search.sqlite"),
+): void {
+  if (!files.length) return;
+  let db: Database | undefined;
+  try {
+    db = new (sqliteDatabase())(filename, { readonly: true, strict: true });
+    const times = db.query<{ size: number; mtime_ms: number; first: number | null; last: number | null }, [string]>(`
+      SELECT size, mtime_ms,
+        (SELECT timestamp FROM transcript_messages WHERE transcript_path=f.path ORDER BY message_index LIMIT 1) AS first,
+        (SELECT timestamp FROM transcript_messages WHERE transcript_path=f.path ORDER BY message_index DESC LIMIT 1) AS last
+      FROM transcript_files f WHERE f.path=?`);
+    for (const file of files) {
+      const row = times.get(file.path);
+      if (!row) continue;
+      file.firstMessageAt = row.first;
+      if (row.size === file.size && Math.abs(row.mtime_ms - file.mtime * 1000) <= 1) file.lastMessageAt = row.last;
+    }
+  } catch { /* creation time and file update time are available without the index */ }
+  finally { db?.close(); }
+}
+
+/** Read the existing index for the already authorized catalog rows. This
+ * never opens a transcript or starts the index writer for a sidebar request. */
+export function readTranscriptPullRequests(
+  files: readonly { path: string; size: number; project?: string; engine?: string; mtime?: number }[],
+  forge: ForgeCacheView,
+  options: { filename?: string; requireCurrent?: boolean } = {},
+): Record<string, ChatPullRequests> {
+  const result: Record<string, ChatPullRequests> = Object.create(null);
+  if (!files.length) return result;
+  const filename = options.filename ?? statePath("transcript-search.sqlite");
+  let db: Database | undefined;
+  try {
+    db = new (sqliteDatabase())(filename, { readonly: true, strict: true });
+    const indexed = db.query<Pick<FileIdentityRow, "size" | "messages_count" | "project" | "engine" | "mtime_ms">, [string]>(
+      "SELECT size, messages_count, project, engine, mtime_ms FROM transcript_files WHERE path=?");
+    const mentions = db.query<{ body: string; clipped: number }, [number, number, string, number]>(`
+      SELECT substr(body, 1, ?) AS body, length(body) > ? AS clipped
+      FROM transcript_messages
+      WHERE transcript_path=? AND message_index >= ? AND instr(body, '/pull/') > 0
+      ORDER BY message_index DESC
+    `);
+    for (const file of files) {
+      const coverage = indexed.get(file.path);
+      if (!coverage) continue;
+      const mtimeMatches = file.mtime === undefined || Math.abs(coverage.mtime_ms - file.mtime * 1000) <= 1;
+      const matchesIdentity = coverage.size === file.size && mtimeMatches;
+      if (options.requireCurrent && (!matchesIdentity || coverage.project !== file.project || coverage.engine !== file.engine)) continue;
+      const window = file.engine === "codex" ? CODEX_CHAT_REFERENCE_WINDOW : CHAT_REFERENCE_WINDOW;
+      const from = Math.max(0, coverage.messages_count - window);
+      const rows = mentions.all(CHAT_REFERENCE_BODY, CHAT_REFERENCE_BODY, file.path, from);
+      const items: ChatPullRequests["items"] = [];
+      const keys = new Set<string>();
+      let partial = !matchesIdentity || from > 0;
+      for (const row of rows) {
+        partial ||= Boolean(row.clipped);
+        const matches = [...row.body.matchAll(/(?<![\w@.\/-])https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+(?=[/?#]|[^\w.-]|\.(?:\s|$)|$)/gi)];
+        for (const [url] of matches.reverse()) {
+          const pr = chatPullRequestForUrl(url, forge);
+          if (!pr || keys.has(pr.url)) continue;
+          keys.add(pr.url);
+          if (items.length >= MAX_CHAT_PULL_REQUESTS) { partial = true; break; }
+          items.push(pr);
+        }
+        if (keys.size > MAX_CHAT_PULL_REQUESTS) break;
+      }
+      result[file.path] = { items, partial };
+    }
+  } catch {
+    // The chat list works while the separate search index is absent or busy.
+  } finally {
+    db?.close();
+  }
+  return result;
 }
 
 const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 5;

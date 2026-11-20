@@ -67,7 +67,7 @@ const FILE_PREFIX = "f:";
 /** Project-summary semantic version. Bumped to 3 for issue #339 so a restart
     re-derives engine-native subagent titles and never replays a pre-#339
     generic title or a phantom bookkeeping card. */
-export const PROJECT_SUMMARY_VERSION = 4 as const;
+export const PROJECT_SUMMARY_VERSION = 5 as const;
 
 export type CachedProjectFile = {
   summaryVersion?: typeof PROJECT_SUMMARY_VERSION;
