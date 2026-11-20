@@ -530,6 +530,12 @@ export function allocatedBytes(directory: string, excludedDirectories: readonly 
   return measureDirectory(directory, excludedDirectories, seenEntries, false, MEASURE_ENTRY_LIMIT, identityLimit);
 }
 
+/** The disk panel runs off-thread. Finish its inventory even on large installs.
+ * Only directories and multiply linked files need cross-root identity tracking. */
+export function diskConsumerBytes(directory: string, excluded: readonly string[] = [], seen = new Set<string>()) {
+  return measureDirectory(directory, excluded, seen, false, Infinity);
+}
+
 async function measureDirectory(directory: string, excludedDirectories: readonly string[], seenEntries: Set<string>, singleLinksOnly: boolean,
   entryLimit = MEASURE_ENTRY_LIMIT, identityLimit = Number.POSITIVE_INFINITY): Promise<number> {
   const excluded = new Set<string>();
@@ -570,7 +576,7 @@ async function measureDirectory(directory: string, excludedDirectories: readonly
         } else if (!singleLinksOnly || stat.nlink <= 1) {
           const identity = `${stat.dev}:${stat.ino}`;
           if (seenEntries.has(identity)) continue;
-          seenEntries.add(identity);
+          if (entryLimit !== Infinity || stat.nlink > 1) seenEntries.add(identity);
           bytes += stat.blocks * 512;
         }
       } catch {
