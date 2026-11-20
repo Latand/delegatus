@@ -325,7 +325,7 @@ setInterval(() => {}, 60_000);`);
   fs.writeFileSync(reader, `import { runGateCheckTool } from ${JSON.stringify(path.join(import.meta.dir, "../src/lib/runtime/gateCheckTool.ts"))};
 const [binding, args] = process.argv.slice(2).map(JSON.parse);
 console.log(JSON.stringify(await runGateCheckTool(args, binding, new AbortController().signal)));`);
-  const read = (input = args): Awaited<ReturnType<typeof runGateCheckTool>> => {
+  const read = (input: { runId?: string; log?: string; reason: string } = args): Awaited<ReturnType<typeof runGateCheckTool>> => {
     const readerEnv = isolatedEnvironment(fs.mkdtempSync(path.join(evidence, "reader-")), env);
     readerEnv.LLV_GATE_LOCK_DIR = readerEnv.TMPDIR;
     readerEnv.PATH = process.env.PATH;
