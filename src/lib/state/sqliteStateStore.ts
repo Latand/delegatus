@@ -185,6 +185,12 @@ export interface SqliteStateCollectionOptions<T> {
   key(record: T): string;
   decode(value: unknown): T | null;
   clone(record: T): T;
+  /** Freshly parsed single-row reads (`get`, `keyPage`, `keyRange*`, bounded
+      `tx.get`) already allocate a detached object tree through `JSON.parse`.
+      Set to `false` only when `decode` returns that fresh tree without shared
+      references and `clone` performs no revival beyond cloning. Cached whole-
+      collection reads (`snapshot`, `loadReadonly`) still clone. */
+  cloneOnFreshDecode?: boolean;
   /** Controllers may cache decoded rows across turns; every mutable nested
       field in a detached controller copy must be independent of that cache. */
   cloneController?(record: T): T;
@@ -2674,7 +2680,8 @@ export class SqliteStateCollection<T> {
     return this.readDb.query<{ value_json: string }, [string, string, number]>(`
       SELECT value_json FROM state_rows
       WHERE collection = ? AND row_key > ? ORDER BY row_key LIMIT ?
-    `).all(this.options.collection, after, limit).map(row => this.decodeRow(row.value_json)).filter((row): row is T => row !== null).map(row => this.options.clone(row));
+    `).all(this.options.collection, after, limit).map(row => this.decodeRow(row.value_json)).filter((row): row is T => row !== null)
+      .map(row => this.options.cloneOnFreshDecode === false ? row : this.options.clone(row));
   }
 
   get(rowKey: string): T | null {
@@ -2683,7 +2690,7 @@ export class SqliteStateCollection<T> {
     ).get(this.options.collection, rowKey);
     if (!row) return null;
     const decoded = this.decodeRow(row.value_json);
-    return decoded === null ? null : this.options.clone(decoded);
+    return decoded === null ? null : this.options.cloneOnFreshDecode === false ? decoded : this.options.clone(decoded);
   }
 
   /** Cold history never warms the full collection cache. Pages are pinned by
@@ -2762,7 +2769,7 @@ export class SqliteStateCollection<T> {
     `).all(this.options.collection, after, through, limit).flatMap((row) => {
       const decoded = this.decodeRow(row.value_json);
       if (decoded === null && !this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
-      return decoded === null ? [] : [this.options.clone(decoded)];
+      return decoded === null ? [] : [this.options.cloneOnFreshDecode === false ? decoded : this.options.clone(decoded)];
     });
   }
 
@@ -2770,12 +2777,12 @@ export class SqliteStateCollection<T> {
       rows. The cursor advances over every key, while decoding stays bounded. */
   keyRangeEntries(after: string, through: string, limit: number): Array<{ key: string; value: T | null }> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 512) throw new Error("invalid state page limit");
-    return this.readDb.query<Pick<CollectionRow, "row_key" | "value_json">, [string, string, string, number]>(`
+    return this.readDb.query<Pick<CollectionRow, "value_json" | "row_key">, [string, string, string, number]>(`
       SELECT row_key, value_json FROM state_rows
       WHERE collection = ? AND row_key > ? AND row_key <= ? ORDER BY row_key LIMIT ?
     `).all(this.options.collection, after, through, limit).map((row) => {
       const decoded = this.decodeRow(row.value_json);
-      return { key: row.row_key, value: decoded === null ? null : this.options.clone(decoded) };
+      return { key: row.row_key, value: decoded === null ? null : this.options.cloneOnFreshDecode === false ? decoded : this.options.clone(decoded) };
     });
   }
 
@@ -2972,7 +2979,7 @@ export class SqliteStateCollection<T> {
                 if (!this.options.preserveRejectedRecords) throw new Error("invalid bounded state row");
                 return null;
               }
-              return this.options.clone(value);
+              return this.options.cloneOnFreshDecode === false ? value : this.options.clone(value);
             },
             pipelineGet: (key) => {
               consume();
