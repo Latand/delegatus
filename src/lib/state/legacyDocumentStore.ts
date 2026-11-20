@@ -89,6 +89,12 @@ export function setLegacyDocumentWriteHookForTests(hook: ((collection: string) =
 }
 
 const stores = new Set<{ collections: Map<string, SqliteStateCollection<DocumentRow>> }>();
+const resetHooks = new Set<() => void>();
+
+/** Register a companion reader/cache cleanup that runs beside store resets in tests. */
+export function onLegacyDocumentStoreReset(hook: () => void): void {
+  resetHooks.add(hook);
+}
 
 /** Test seam: forget every open collection, the way a restarted process would. */
 export function resetLegacyDocumentStoresForTests(): void {
@@ -96,6 +102,7 @@ export function resetLegacyDocumentStoresForTests(): void {
     for (const collection of store.collections.values()) collection.close();
     store.collections.clear();
   }
+  for (const hook of resetHooks) hook();
 }
 
 export class LegacyDocumentStore<D> {
@@ -322,6 +329,7 @@ export class LegacyDocumentStore<D> {
       key: (row) => row.key,
       decode: (value) => isDocumentRow(value) ? value : null,
       clone: (row) => structuredClone(row),
+      cloneOnFreshDecode: false,
       strictDecode: true,
       readCacheKey: "legacy-document-v1",
       decodeError: (error) => this.options.error(`invalid ${this.options.collection} row`, error),
