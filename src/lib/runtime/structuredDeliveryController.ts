@@ -1169,7 +1169,7 @@ export async function bindStructuredDeliveryQueue(
           || await sendFailureWarningSuppressedAsync(registry, operationId, async originalId => {
             const receipt = (await client.operationStatus(originalId, { currentRetryLeaf: true }))?.receipt;
             return receipt ? { kind: receipt.kind, conversationId: receipt.conversationId,
-              clientMessageId: receipt.idempotencyKey } : null;
+              clientMessageId: receipt.idempotencyKey, state: receipt.status } : null;
           });
       },
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
@@ -2509,7 +2509,7 @@ export async function bindStructuredDeliveryQueue(
           operationIdentity: async operationId => {
             const retained = (await client.operationStatus(operationId, { currentRetryLeaf: true }))?.receipt;
             return retained ? { kind: retained.kind, conversationId: retained.conversationId,
-              clientMessageId: retained.idempotencyKey } : null;
+              clientMessageId: retained.idempotencyKey, state: retained.status } : null;
           },
           recipient: sender => spawnNoticeRecipient(sender, {
             seats: readOrchestratorSeatFileOrNull, conversation: id => registry.conversation(id as ViewerConversationId),

@@ -665,7 +665,8 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
           client: { operationStatus: async operationId => journal.operationResult(operationId) } }),
         operationIdentity: async id => {
           const receipt = journal.operationResult(id)?.receipt;
-          return receipt ? { kind: receipt.kind, conversationId: receipt.conversationId, clientMessageId: receipt.idempotencyKey } : null;
+          return receipt ? { kind: receipt.kind, conversationId: receipt.conversationId,
+            clientMessageId: receipt.idempotencyKey, state: receipt.status } : null;
         },
         recipient: () => ({ kind: "deliver", conversationId: ${JSON.stringify(child.conversationId)}, path: ${JSON.stringify(child.transcriptPath)} }),
         fallback: () => ({ kind: "deliver", conversationId: ${JSON.stringify(active.conversationId)} }),
@@ -683,7 +684,7 @@ test(`real-writer pending warning across failed-owner retention: ${kind} ${recov
             || await m.sendFailureWarningSuppressedAsync(registry, id, async originalId => {
               const receipt = journal.operationResult(originalId)?.receipt;
               return receipt ? { kind: receipt.kind, conversationId: receipt.conversationId,
-                clientMessageId: receipt.idempotencyKey } : null;
+                clientMessageId: receipt.idempotencyKey, state: receipt.status } : null;
             }),
           transition: async (id, status, details) => journal.transitionOperation(id, status, details),
         }, () => host);
@@ -3934,6 +3935,153 @@ test("a permanent notice refusal becomes a durable seat alarm with its transport
     expect(readSendFailureNotice(operationId)).toBeNull();
     expect(sendFailureSignals(seat.conversationId).some(signal => signal.id === `send-failed:${operationId}`)).toBe(false);
   } finally { active.close(); }
+});
+
+test("a compacted warning admission fences replay while its original owner remains", async () => {
+  const active = fixture("warning-admission-retention", { sqlite: true });
+  try {
+    const sender = secondConversation(active, "warning-admission-sender");
+    const seat = secondConversation(active, "warning-admission-seat");
+    const { readSendFailureNotice, sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: "warning-admission-original",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    let admissions = 0;
+    const ports = { registry: active.registry, assertActive: () => {},
+      receipt: (id: string) => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
+      recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
+      fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+      deliver: async (request: Parameters<typeof acceptSend>[1]) => { admissions++; acceptSend(sender, request); return { ok: true }; } };
+    await sweepSendFailureNotices(ports);
+    expect(admissions).toBe(1);
+    expect(active.registry.deliverySnapshotForOperation(operationId).deliveryOperationOwners[operationId]).toBeDefined();
+    const admissionRead = active.registry.deliveryAdmissionForKey.bind(active.registry);
+    const compacted = spyOn(active.registry, "deliveryAdmissionForKey").mockImplementation((conversationId, key) =>
+      key.startsWith("send_failure_") ? { outcome: "unknown", reason: "warning recipient evidence compacted" } : admissionRead(conversationId, key));
+    try { await sweepSendFailureNotices(ports); }
+    finally { compacted.mockRestore(); }
+    expect(admissions).toBe(1);
+    expect(readSendFailureNotice(operationId)).toMatchObject({ state: "pending", warningAdmission: "admitted",
+      fallbackConversationId: seat.conversationId, reason: expect.stringContaining("admission remains uncertain") });
+    expect(sendFailureSignals(seat.conversationId).map(item => item.id)).toContain(`send-failed:${operationId}`);
+  } finally { active.close(); }
+});
+
+test("a proved pre-reservation 503 retries the warning and escalates to the project seat", async () => {
+  const active = fixture("warning-pre-reservation-503", { sqlite: true });
+  try {
+    const sender = secondConversation(active, "warning-503-sender");
+    const seat = secondConversation(active, "warning-503-seat");
+    const { readSendFailureNotice, sendFailureSignals, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const { operationId } = acceptSend(active, { clientMessageId: "warning-503-original",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    let attempts = 0;
+    const ports = { registry: active.registry, assertActive: () => {},
+      receipt: (id: string) => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
+      recipient: () => ({ kind: "deliver" as const, conversationId: sender.conversationId, path: sender.transcriptPath }),
+      fallback: () => ({ kind: "deliver" as const, conversationId: seat.conversationId }),
+      deliver: async () => { attempts++; return { ok: false, status: 503, error: "refused before reservation" }; } };
+    for (let pass = 0; pass < 4 && readSendFailureNotice(operationId)?.state !== "failed"; pass++) {
+      await sweepSendFailureNotices(ports);
+    }
+    expect(attempts).toBe(3);
+    expect(readSendFailureNotice(operationId)).toMatchObject({ state: "failed", attempts: 3,
+      warningAdmission: "refused", fallbackConversationId: seat.conversationId,
+      reason: expect.stringContaining("refused before reservation") });
+    expect(sendFailureSignals(seat.conversationId).map(item => item.id)).toContain(`send-failed:${operationId}`);
+  } finally { active.close(); }
+});
+
+test("startup suppression honors cancellation that lands during journal identity read", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(isolated, "warning-cancel-during-identity");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const active = fixture("warning-cancel-during-identity", { sqlite: true });
+  try {
+    const sender = secondConversation(active, "warning-cancel-sender");
+    const { cancelSendFailureNotice, recordSendFailureNotice, readSendFailureNotice,
+      sendFailureWarningSuppressedAsync } = await import("./sendFailureNotice");
+    const original = acceptSend(active, { clientMessageId: "warning-cancel-original",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    await resolveSendReceipt(original.operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    recordSendFailureNotice(active.registry, original.operationId, "uncertain", "confirmation unavailable");
+    const alarm = { ...readSendFailureNotice(original.operationId)!, recipientConversationId: sender.conversationId };
+    delete alarm.deliberate;
+    const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+    const store = new SqliteStateCollection<SendFailureNotice>(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), {
+      collection: "send_failure_notices", schemaVersion: 1, busyMessage: "fixture notices busy",
+      key: row => row.operationId, decode: (await import("./sendFailureNotice")).decodeSendFailureNotice,
+      clone: structuredClone, controllerActive: row => row.state === "pending" || row.state === "failed",
+    });
+    try { store.boundedPatch(2, tx => tx.put(alarm)); }
+    finally { store.close(); }
+    const warning = acceptSend(sender, { clientMessageId: alarm.clientMessageId, text: alarm.text,
+      origin: { kind: "agent", role: "delivery" } });
+    const snapshotForOperation = active.registry.deliverySnapshotForOperation.bind(active.registry);
+    const missingOriginal = spyOn(active.registry, "deliverySnapshotForOperation").mockImplementation(id => {
+      const snapshot = snapshotForOperation(id);
+      if (id === original.operationId) delete snapshot.deliveryOperationOwners[id];
+      return snapshot;
+    });
+    try {
+      const suppressed = await sendFailureWarningSuppressedAsync(active.registry, warning.operationId, async () => {
+        cancelSendFailureNotice(original.operationId);
+        return { kind: "send", conversationId: active.conversationId, clientMessageId: "warning-cancel-original", state: "failed" };
+      });
+      expect(suppressed).toBe(true);
+      expect(readSendFailureNotice(original.operationId)).toMatchObject({ state: "cancelled" });
+    } finally { missingOriginal.mockRestore(); }
+  } finally {
+    active.registry.close(); active.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
+test("journal-confirmed original delivery cancels its alarm after owner projection is gone", async () => {
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(isolated, "warning-journal-delivered-owner-gone");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const active = fixture("warning-journal-delivered-owner-gone", { sqlite: true });
+  try {
+    const sender = secondConversation(active, "warning-journal-delivered-sender");
+    const { readSendFailureNotice, recordSendFailureNotice, sweepSendFailureNotices } = await import("./sendFailureNotice");
+    const original = acceptSend(active, { clientMessageId: "warning-journal-delivered-original",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    await resolveSendReceipt(original.operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    recordSendFailureNotice(active.registry, original.operationId, "uncertain", "confirmation unavailable");
+    const snapshotForOperation = active.registry.deliverySnapshotForOperation.bind(active.registry);
+    const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
+    const { decodeSendFailureNotice } = await import("./sendFailureNotice");
+    const persisted = new SqliteStateCollection<SendFailureNotice>(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), {
+      collection: "send_failure_notices", schemaVersion: 1, busyMessage: "fixture notices busy",
+      key: row => row.operationId, decode: decodeSendFailureNotice, clone: structuredClone,
+      controllerActive: row => row.state === "pending" || row.state === "failed",
+    });
+    try {
+      const alarm = readSendFailureNotice(original.operationId)!;
+      delete alarm.deliberate;
+      persisted.boundedPatch(2, tx => tx.put({ ...alarm, state: "pending", settledAt: null }));
+    } finally { persisted.close(); }
+    const missingOwner = spyOn(active.registry, "deliverySnapshotForOperation").mockImplementation(id => {
+      const snapshot = snapshotForOperation(id);
+      if (id === original.operationId) delete snapshot.deliveryOperationOwners[id];
+      return snapshot;
+    });
+    try {
+      await sweepSendFailureNotices({ registry: active.registry, assertActive: () => {}, receipt: async () => null,
+        operationIdentity: async () => ({ kind: "send", conversationId: active.conversationId,
+          clientMessageId: "warning-journal-delivered-original", state: "delivered" }),
+        recipient: () => { throw new Error("confirmed arrival must cancel before recipient lookup"); },
+        deliver: async () => { throw new Error("confirmed arrival must not dispatch a warning"); } });
+      expect(readSendFailureNotice(original.operationId)).toMatchObject({ state: "cancelled" });
+    } finally { missingOwner.mockRestore(); }
+  } finally {
+    active.registry.close(); active.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
 });
 
 test("an admitted deliberate warning reconciles across canonical recipient adoption", async () => {
