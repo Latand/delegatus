@@ -29,6 +29,9 @@ for (const backend of ["legacy", "sqlite-hot", "sqlite-cold"] as const) test(`ru
     beginOrchestratorSeatIntent({ project: "current", mandate: "Run checks", clientRequestId: "read-seat", mode: "spawn", now: SEAT_READ_AT });
     completeOrchestratorSeatIntent({ project: "current", clientRequestId: "read-seat", conversationId: "conversation_seat", path: null, now: SEAT_READ_AT, preparedAuthCredentialBaseline: null });
     bridge.readBridgeReportLog(); bridge.readBridgeChannel();
+    const workerOutcomeKey = "lane:parked_fixture:parked";
+    bridge.appendBridgeReports([{ key: workerOutcomeKey, class: "status", at: SEAT_READ_AT, body: "Worker progress report",
+      origin: { kind: "agent", conversationId: "conversation_worker", role: "builder" }, project: "current" }]);
     // A real conversation supplies the legacy project fallback, including an
     // agent origin with no project and a record without authorship at all.
     const recipient = registry.ensureConversation("codex", "/fixtures/recipient.jsonl", "default");
@@ -97,6 +100,11 @@ for (const backend of ["legacy", "sqlite-hot", "sqlite-cold"] as const) test(`ru
       expect(JSON.stringify(seatRows.reports)).toBe(JSON.stringify(before));
       expect(seatRows.reservedIds).toEqual(log.retired);
       expect(seatRows.occupiedIds).toEqual(before.map(row => row.id));
+      if (project === "current") {
+        const workerReportId = bridge.scopedReportId(project, workerOutcomeKey);
+        expect(seatRows.reports.find(row => row.id === workerReportId)?.origin).toMatchObject({ kind: "agent" });
+        expect(seatRows.occupiedIds).toContain(workerReportId);
+      }
     }
   } finally {
     for (const restore of restores.reverse()) restore();
