@@ -164,8 +164,9 @@ class LoggedFailures(unittest.TestCase):
         switch.relocation.update({"released": True, "placement": "placed", "started": True,
                                   "stopSubmitted": True})
         switch.unit = "synthetic-viewer.service"
-        def unconfirmed(**_kwargs):
-            raise TimeoutError("owner deadline")
+        def unconfirmed(command_deadline=None, **_kwargs):
+            if command_deadline is not None:
+                raise TimeoutError("owner deadline")
         switch.recover_start = unconfirmed
         result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=5)
         self.assertEqual(result["verdict"], "needs_decision")
@@ -1018,7 +1019,11 @@ class CheckoutIntegration(unittest.TestCase):
                 row["conversationId"] = current.get("conversationId", "synthetic-stage")
                 for key, value in fixture.replacement_overrides.items():
                     if key == "host":
-                        row["host"].update(value)
+                        for host_key, host_value in value.items():
+                            if host_key == "process" and isinstance(host_value, dict):
+                                row["host"].setdefault("process", {}).update(host_value)
+                            else:
+                                row["host"][host_key] = host_value
                     elif key == "pipeline":
                         row["pipeline"].update(value)
                     else:
@@ -2382,6 +2387,13 @@ except BlockingIOError:
 
     def test_unit_failure_after_last_health_sample_cannot_keep_a_pass(self):
         self.relocating()
+        serving_samples = []
+        serving = self.adapter.serving
+        def record_serving():
+            result = serving()
+            serving_samples.append(result)
+            return result
+        self.adapter.serving = record_serving
         interrupted = self.adapter.interrupted
         def failed(since, hosts):
             answer = interrupted(since, hosts)
@@ -2390,7 +2402,10 @@ except BlockingIOError:
             return answer
         self.adapter.interrupted = failed
         result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=2, timeout=5)
-        self.assertTrue(result["serving"]["checks"]["service"])
+        self.assertTrue(any(sample["checks"]["service"] for sample in serving_samples))
+        self.assertFalse(result["serving"]["checks"]["service"])
+        self.assertTrue(self.active, {"remainingStartRefusals": self.start_refusals,
+                                      "relocation": result["relocation"]})
         self.assert_back_in_service(result)
         self.assertEqual(result["relocation"]["outcome"], "released")
         self.assertEqual(result["verdict"], "fail")
@@ -2821,8 +2836,8 @@ except BlockingIOError:
                           "error": "stage host was lost while its turn was open"},
                          {"n": 2, "state": "running", "conversationId": "synthetic-replacement"}]
         captured = {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1,
-                    "startIdentity": "203:old"}
-        self.replacement_overrides = {"host": {"process": {"startIdentity": "204:203:old"}}}
+                    "startIdentity": "42"}
+        self.replacement_overrides = {"host": {"process": {"startIdentity": "204:42"}}}
         outcome = self.adapter.stage(captured)
         self.assertEqual((outcome["outcome"], outcome.get("reason")),
                          ("unknown", "replacement-process-identity-not-fresh"))

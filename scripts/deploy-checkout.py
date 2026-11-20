@@ -203,7 +203,9 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=SAMPLE_TIMEOUT)
                         diagnostic = "exit-recovery:" + type(error).__name__
                         if diagnostic not in relocation["diagnostics"]:
                             relocation["diagnostics"].append(diagnostic)
-                    if relocation["started"]:
+                    if (relocation["started"]
+                            and relocation.get("launchEvidence") != "unknown"
+                            and relocation.get("settlementEvidence") != "unknown"):
                         break
                     pending = {"state": "pending", "ownerPid": os.getpid(), "unit": adapter.unit}
                     # Report failure while recovery is outstanding, even if
@@ -2238,6 +2240,8 @@ class Checkout:
                 if not self.jobs() and self.active_state() == "active":
                     relocation["started"] = True
                     relocation["outcome"] = relocation["stopOutcome"]
+                    relocation["launchEvidence"] = "observed-active"
+                    relocation["settlementEvidence"] = "settled"
                     return
             except Exception:
                 pass
@@ -2361,8 +2365,7 @@ class Checkout:
             identity = live.get("process")
             if (not census_identity(identity) or identity.get("bootEpoch") != self.boot_epoch
                     or identity.get("pid") != live.get("pid")
-                    or not identity["startIdentity"].startswith(str(live.get("pid")) + ":")
-                    or not identity["startIdentity"].split(":", 1)[1]):
+                    or not re.fullmatch(str(live.get("pid")) + r":[0-9]+", identity["startIdentity"])):
                 return {**outcome, "reason": "replacement-process-identity-unverified"}
             captured_identity = host.get("startIdentity")
             if (captured_identity is not None
