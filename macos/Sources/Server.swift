@@ -326,8 +326,7 @@ enum Server {
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard proc_pidinfo(Int32(pid), PROC_PIDTBSDINFO, 0, &info, size) == size,
-              info.pbi_pid == UInt32(pid), info.pbi_uid == getuid(), info.pbi_start_tvsec > 0,
-              executablePath(pid).map({ Installations.realPath(URL(fileURLWithPath: $0)) }) == Installations.realPath(install.bun) else { return nil }
+              info.pbi_pid == UInt32(pid), info.pbi_uid == getuid(), info.pbi_start_tvsec > 0 else { return nil }
         return ListenerIdentity(pid: pid, uid: info.pbi_uid, birth: "\(info.pbi_start_tvsec):\(info.pbi_start_tvusec)",
             bun: Installations.realPath(install.bun), cli: Installations.realPath(install.cli), package: Installations.realPath(package))
         #else
