@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterAll, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-linked-seat-tools-"));
 const previous = { ...process.env };
@@ -67,7 +68,8 @@ test("remote orchestrator recovery reads the queued outbound row after a lost re
 
 test("a linked-seat relay queues stored rules verbatim and replays the same operation", async () => {
   const { splitRelayMessageText } = await import("@/lib/orchestrator/relayText");
-  const { leaveLessons, lessonPublicationEnv, recordLessonRequest, roleMemoryCollection } = await import("@/lib/memory/roleStore");
+  const { leaveLessons, lessonPublicationEnv, recordLessonRequest, storedLessonTexts } = await import("@/lib/memory/roleStore");
+  const { withoutStoredLessonsAsync } = await import("@/lib/memory/privacy");
   const rule = "Inspect the current durable owner before replaying a saved acknowledgement.";
   const why = "A saved acknowledgement had changed owners.";
   const source = { project: project.project, pipelineId: "relay-fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: caller };
@@ -103,13 +105,18 @@ test("a linked-seat relay queues stored rules verbatim and replays the same oper
   });
   expect(posts).toHaveLength(1);
 
-  const read = spyOn(roleMemoryCollection()!, "snapshot").mockImplementation(() => { throw new Error("unreadable rule store"); });
+  const database = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
   try {
-    expect(await api.callTool("send_message_to_orchestrator", { ...args, clientRequestId: "unreadable-rule" })).toMatchObject({ ok: true, state: "queued" });
-    expect(posts).toHaveLength(2);
-    expect(posts[1]).toMatchObject({ project: project.project, machine: install, text });
-    expect(read).not.toHaveBeenCalled();
-  } finally { read.mockRestore(); }
+    database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'")
+      .run(JSON.stringify({ kind: "rule", id: 7, rule }));
+  } finally { database.close(); }
+  expect(() => storedLessonTexts()).toThrow(expect.objectContaining({ code: "LESSON_PRIVACY_UNAVAILABLE" }));
+  await expect(withoutStoredLessonsAsync(text)).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE" });
+
+  expect(await api.callTool("send_message_to_orchestrator", { ...args, clientRequestId: "unreadable-rule" }))
+    .toMatchObject({ ok: true, state: "queued" });
+  expect(posts).toHaveLength(2);
+  expect(posts[1]).toMatchObject({ project: project.project, machine: install, text });
 });
 
 for (const backend of ["memory", "file", "sqlite"] as const) {
