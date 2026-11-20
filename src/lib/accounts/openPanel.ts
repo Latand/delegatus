@@ -10,7 +10,7 @@
  * late-mounting block on mount.
  */
 
-export type AccountPanelEngine = "claude" | "codex" | "copilot";
+export type AccountPanelEngine = "claude" | "codex" | "copilot" | "antigravity";
 
 export interface AccountPanelRequest {
   engine: AccountPanelEngine;

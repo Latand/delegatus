@@ -79,6 +79,7 @@ export function memberLaunchCatalog(view: ProjectAccountsView | null): LaunchAcc
     claude: { active: "", accounts: rows("claude") },
     codex: { active: "", accounts: rows("codex") },
     copilot: { active: "", accounts: [] },
+    antigravity: { active: "", accounts: [] },
   } satisfies Record<LaunchEngine, { active: string; accounts: unknown[] }>;
 }
 

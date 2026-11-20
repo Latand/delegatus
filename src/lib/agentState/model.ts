@@ -53,7 +53,7 @@ export interface TranscriptVersion {
 }
 export interface AgentFacts {
   subject: string;
-  engine: "codex" | "claude" | "copilot";
+  engine: "codex" | "claude" | "copilot" | "antigravity";
   revision: string;
   process: Fact<{ status: "alive" | "dead"; identity: ProcessIdentity }>;
   owner: Fact<"held" | "other" | "absent">;
@@ -162,7 +162,7 @@ export interface AgentStateMetrics {
   unownedRssMeasured: number;
   unownedRssUnknown: number;
   stuckTurns: number;
-  stuckByEngine: { codex: number; claude: number; copilot: number };
+  stuckByEngine: { codex: number; claude: number; copilot: number; antigravity: number };
   stuckByReason: { silent: number; checking: number; providerWait: number };
   subjectsObserved: number;
   subjectsUnverified: number;
@@ -177,7 +177,7 @@ export interface AgentStateMetrics {
 }
 export function emptyAgentStateMetrics(): AgentStateMetrics {
   return { version: 1, revision: 0, at: 0, registryTranscriptDivergencesTotal: 0, registryTranscriptDivergencesCurrent: 0,
-    unownedHosts: 0, unownedRssBytes: null, unownedRssMeasured: 0, unownedRssUnknown: 0, stuckTurns: 0, stuckByEngine: { codex: 0, claude: 0, copilot: 0 }, stuckByReason: { silent: 0, checking: 0, providerWait: 0 },
+    unownedHosts: 0, unownedRssBytes: null, unownedRssMeasured: 0, unownedRssUnknown: 0, stuckTurns: 0, stuckByEngine: { codex: 0, claude: 0, copilot: 0, antigravity: 0 }, stuckByReason: { silent: 0, checking: 0, providerWait: 0 },
     subjectsObserved: 0, subjectsUnverified: 0, subjectsDeferred: 0, pendingProjectionPublications: 0,
     lastCompleteReconciliationAt: null, afterKey: null, journalRows: 0, terminalSubjects: 0, physicalAliasesUnverified: 0 };
 }

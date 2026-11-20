@@ -313,7 +313,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
   return {
     conversationId: typeof payload.conversationId === "string" ? payload.conversationId : id,
     sessionKey: {
-      engine: key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex",
+      engine: key.engine === "claude" || key.engine === "copilot" || key.engine === "antigravity" ? key.engine : "codex",
       sessionId: typeof key.sessionId === "string" ? key.sessionId : id,
     },
     hostKind: isStructuredHostKind(storedKind) ? storedKind as RuntimeSession["hostKind"] : "unhosted",
@@ -349,7 +349,7 @@ function baseSession(id: string, payload: Record<string, unknown>, revision: num
       } } : {}),
       imageInput: capabilities.imageInput && typeof capabilities.imageInput === "object"
         ? capabilities.imageInput as RuntimeSession["capabilities"]["imageInput"]
-        : runtimeImageCapability(key.engine === "claude" || key.engine === "copilot" ? key.engine : "codex", false),
+        : runtimeImageCapability(key.engine === "claude" || key.engine === "copilot" || key.engine === "antigravity" ? key.engine : "codex", false),
     },
     ...(payload.diagnostics && typeof payload.diagnostics === "object" ? { diagnostics: {
       executable: typeof record(payload.diagnostics).executable === "string" ? String(record(payload.diagnostics).executable).split(/[\\/]/).at(-1)!.slice(0, 80) : "unknown",

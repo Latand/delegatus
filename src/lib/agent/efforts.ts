@@ -9,12 +9,13 @@
  * copilot: `--reasoning-effort <level>`, verbatim from `copilot --help` (1.0.87).
  * There is no per-model scale; the CLI decides what a model supports.
  */
-export type AgentEngineName = "claude" | "codex" | "copilot";
+export type AgentEngineName = "claude" | "codex" | "copilot" | "antigravity";
 
 export const ENGINE_EFFORTS: Record<AgentEngineName, readonly string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh"],
   copilot: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+  antigravity: ["low", "medium", "high", "xhigh", "max"],
 };
 
 export function isEngineEffort(engine: AgentEngineName, value: string): boolean {
@@ -61,6 +62,31 @@ export function registerCopilotEffortScales(models: readonly { id: string; effor
   for (const model of models) if (model.efforts?.length) COPILOT_CATALOG_SCALES.set(model.id, [...model.efforts]);
 }
 
+/* Measured `agy 1.5.13` per-model `thought_level` ladders (docs/design/antigravity-engine.md §2.4).
+   Dynamic ACP / `agy models` refreshes can register additional or updated ladders at runtime. */
+const ANTIGRAVITY_MODEL_SCALES: Readonly<Record<string, readonly string[]>> = {
+  "gemini-4-neon": ["low", "medium", "high", "xhigh"],
+  "gemini-4-hydrogen": ["low", "medium", "high", "xhigh"],
+  "gemini-4-argon": ["low", "medium", "high"],
+  "gemini-3.8-flash": ["low", "medium", "high"],
+  "claude-opus-5-5": ["low", "medium", "high"],
+  "claude-sonnet-5-5": ["low", "medium", "high"],
+  "gpt-oss-120b-medium": ["medium"],
+};
+const ANTIGRAVITY_CATALOG_SCALES = new Map<string, readonly string[]>();
+const ANTIGRAVITY_EFFORT_SUFFIX = /-(low|medium|high|xhigh|max)$/;
+
+/** Seed per-model ladders discovered from Antigravity ACP `configOptions` or `agy models`. */
+export function registerAntigravityEffortScales(models: readonly { id: string; efforts: readonly string[] | null }[]): void {
+  for (const model of models) if (model.efforts?.length) ANTIGRAVITY_CATALOG_SCALES.set(model.id, [...model.efforts]);
+}
+
+function antigravityBaseModelKey(model: string): string {
+  const id = model.trim().toLowerCase();
+  if (!id || id === "gpt-oss-120b-medium" || id.startsWith("gemini-pro-orchestrator-")) return id;
+  return id.replace(ANTIGRAVITY_EFFORT_SUFFIX, "");
+}
+
 /* OpenClaw's `--thinking` ladder, kept out of ENGINE_EFFORTS because it is a
    display scale: the Viewer reads a recorded tier off the transcript and
    offers no OpenClaw selector. `off` is the bottom rung; `adaptive` hands the
@@ -79,6 +105,10 @@ export function effortScale(engine: string, model: string | null | undefined, co
   if (engine === "copilot") {
     const id = (model ?? "").trim().toLowerCase();
     return copilotModelEfforts ?? COPILOT_CATALOG_SCALES.get(id) ?? COPILOT_MODEL_SCALES[id] ?? ENGINE_EFFORTS.copilot;
+  }
+  if (engine === "antigravity") {
+    const id = antigravityBaseModelKey(model ?? "");
+    return ANTIGRAVITY_CATALOG_SCALES.get(id) ?? ANTIGRAVITY_MODEL_SCALES[id] ?? ENGINE_EFFORTS.antigravity;
   }
   if (engine !== "codex") return null;
   const id = (model ?? "").trim().toLowerCase();

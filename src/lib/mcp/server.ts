@@ -4248,7 +4248,7 @@ const pipelineStageSchema = z.object({
       .describe("Values for the role's declared parameters, substituted into its scaffold. Only the role's own keys, validated against the registry."),
   }).strict().optional()
     .describe("Role reference ONLY. Runtime overrides do not go here — put engine/model/effort/access on the stage itself."),
-  engine: z.enum(["claude", "codex"]).optional()
+  engine: z.enum(["claude", "codex", "antigravity"]).optional()
     .describe("Stage-level engine override; defaults to the role's registry engine."),
   model: z.string().nullable().optional()
     .describe("Stage-level model override, or null to inherit the role default. Must be a model the stage engine supports."),
@@ -4376,8 +4376,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
        own named violation, so that schema leaves the entries to it. */
     taskId: z.string().refine((value) => value.trim().length > 0, { message: "taskId must name a board task; omit the field to launch without one" }).optional()
       .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. The task must belong to the project resolved from cwd after project aliases are resolved; a task from another project is refused before any request is claimed or dispatched. Use a task on the target project's board, or omit taskId. Omitting it, the launch joins every task held by the parent this call names (parentConversationId, src or parent — this tool never infers one from the caller) and by the conversation it reviews; when the call names neither, or neither holds a task, it is given a named task of its own, which is a duplicate card. A reviewer that names a parent therefore joins that parent's card beside the reviewed work's, so pass taskId on reviewer spawns too — an explicit id wins over inheritance."),
-    engine: z.enum(["claude", "codex", "copilot"]).optional()
-      .describe("Agent CLI. copilot runs the GitHub Copilot CLI over ACP on the structured transport; its account is named or the selected one (no automatic pick), model auto or an id the account offers, effort none…max."),
+    engine: z.enum(["claude", "codex", "copilot", "antigravity"]).optional()
+      .describe("Agent CLI. copilot runs the GitHub Copilot CLI over ACP on the structured transport; antigravity runs the Antigravity CLI (`agy acp`) over ACP on the structured transport with models from `agy models` and effort low…max."),
     account: z.string().nullable().optional()
       .describe("Account this agent runs on, including role-preset spawns, or null to let the project's own selection choose. Honored only when the target project allows that account; an account outside the project's allowed set is refused with the allowed ones named. A project with no binding allows every account. The launch receipt records the account used."),
     model: z.string().optional(),

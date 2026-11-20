@@ -152,7 +152,7 @@ export class AgentStateService {
     const started = performance.now();
     const cursor = readAgentStateMetrics(registry).afterKey;
     const entries = registry.agentStateRead(file => registryRowsMatching(file, "entries", "structuredHost.kind",
-      ["codex-app-server", "claude-broker", "copilot-acp"]).filter(row => row.structuredHost?.process).map(row => copyAgentStateRow(row)))
+      ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"]).filter(row => row.structuredHost?.process).map(row => copyAgentStateRow(row)))
       .sort((a, b) => sessionKeyId(a.key).localeCompare(sessionKeyId(b.key)));
     const after = cursor === null ? 0 : entries.findIndex(row => sessionKeyId(row.key) > cursor);
     const start = after < 0 ? 0 : after;

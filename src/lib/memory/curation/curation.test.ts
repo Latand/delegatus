@@ -411,9 +411,9 @@ test.each([
   const before = loadRoleOverrides();
   fixture();
   const f = hostingFixture(); f.seat();
-  const ports = { ...f.ports, engineReadiness: (engine: "claude" | "codex", project: string | null) => {
+  const ports = { ...f.ports, engineReadiness: (engine: "claude" | "codex" | "antigravity", project: string | null) => {
     expect(project).toBe(PROJECT);
-    return scenario[engine];
+    return engine === "antigravity" ? "signed-out" as const : scenario[engine];
   } };
   expect(await productionCurationController(f.sources, ports).launchIfDue(f.tick)).toContain("launched");
   expect(f.bodies).toHaveLength(1);
@@ -431,7 +431,7 @@ test.each(["ENGINE_NOT_CONNECTED", "project_account_refused"])("curator selected
   fixture();
   const f = hostingFixture(); f.seat();
   const ports = { ...f.ports,
-    engineReadiness: (engine: "claude" | "codex") => engine === "claude" ? "connected" as const : "signed-out" as const,
+    engineReadiness: (engine: "claude" | "codex" | "antigravity") => engine === "claude" ? "connected" as const : "signed-out" as const,
     launch: async (body: Record<string, unknown>) => {
       f.bodies.push(body);
       // Credentials or account admission can change after runtime selection.
@@ -449,7 +449,7 @@ test("curator recovery replays its persisted engine after connection changes", a
   fixture();
   const f = hostingFixture(); f.seat();
   const firstPorts = { ...f.ports,
-    engineReadiness: (engine: "claude" | "codex") => engine === "claude" ? "connected" as const : "signed-out" as const,
+    engineReadiness: (engine: "claude" | "codex" | "antigravity") => engine === "claude" ? "connected" as const : "signed-out" as const,
     launch: async (body: Record<string, unknown>) => { f.bodies.push(body); return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } }; },
   };
   expect(await productionCurationController(f.sources, firstPorts).launchIfDue(f.tick)).toContain("held for the automatic update");

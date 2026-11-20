@@ -1640,11 +1640,11 @@ function text(value: unknown): string {
 function validateExplicitMcpLaunchModel(args: McpToolArgs, fallbackRole?: string): void {
   const model = text(args.model);
   if (!model) return;
-  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot") return;
+  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot" && args.engine !== "antigravity") return;
   const roleId = text(args.role) || fallbackRole;
   const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams, confirm: args.confirm }) : null;
-  let engine: "claude" | "codex" | "copilot" | null = null;
-  if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot") engine = args.engine;
+  let engine: "claude" | "codex" | "copilot" | "antigravity" | null = null;
+  if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot" || args.engine === "antigravity") engine = args.engine;
   else if (role?.ok && role.value) engine = role.value.config.engine;
   if (!engine) return;
   const validation = validateLaunchModel(engine, model);
@@ -3836,7 +3836,7 @@ async function conversationMessages(
 
   let transcriptPath = requestedPath;
   let conversationId: string | null = null;
-  let engine: "claude" | "codex" | "copilot" | null = null;
+  let engine: "claude" | "codex" | "copilot" | "antigravity" | null = null;
   if (requestedId) {
     const target = selectedConversationTarget({ conversationId: requestedId }, selectedDependencies);
     transcriptPath = target.path!;
@@ -3928,7 +3928,7 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   conversationId: string | null,
   transcriptPath: string,
   records: T[],
-  source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot"; redactText?: (text: string) => string },
+  source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot" | "antigravity"; redactText?: (text: string) => string },
 ): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
   if (!records.some((record) => record.role === "user")) return records;
   const context = readMessageAuthorContext(source, records);

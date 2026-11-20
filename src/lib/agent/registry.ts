@@ -189,7 +189,7 @@ export interface StructuredHostColumns {
   scope?: AgentScopeIdentity;
   /** Why the recorded host ended (#2790); kept with the terminal row. */
   ended?: HostEndCause;
-  kind: "codex-app-server" | "claude-broker" | "copilot-acp";
+  kind: "codex-app-server" | "claude-broker" | "copilot-acp" | "antigravity-acp";
   endpoint: string;
   process: ProcessIdentity | null;
   eventCursor: number;
@@ -558,7 +558,7 @@ export interface DurableConversationMembership {
       parse the materialized transcript with its owning engine. Pipeline
       stages run Claude or Codex; Copilot is not a stage engine yet. */
   runtime?: {
-    engine: Extract<AgentEngine, "claude" | "codex">;
+    engine: Extract<AgentEngine, "claude" | "codex" | "antigravity">;
     model: string | null;
     effort: string | null;
   } | null;
@@ -1459,9 +1459,9 @@ function migrationReadinessSignature(
   engine: AgentEngine,
   paths: ReadonlySet<string>,
 ): string {
-  /* Account migration covers Claude and Codex; Copilot has no migration scope
-     (docs/design/copilot-engine.md, slices 2–4). */
-  if (engine === "copilot") return "";
+  /* Account migration covers Claude and Codex; Copilot and Antigravity have no
+     migration scope. */
+  if (engine === "copilot" || engine === "antigravity") return "";
   const conversations = [...new Map([...paths].flatMap(path => registryConversationsForPath(file, path))
     .filter(conversation => conversation.engine === engine && paths.has(conversation.generations.at(-1)?.path ?? ""))
     .map(conversation => [conversation.id, conversation])).values()];
@@ -1507,7 +1507,7 @@ function advanceMigrationScopeRevision(
   previousSignature: string,
   paths: ReadonlySet<string>,
 ): void {
-  if (engine === "copilot") return;
+  if (engine === "copilot" || engine === "antigravity") return;
   if (migrationReadinessSignature(file, engine, paths) === previousSignature) return;
   file.conversationRevision[engine] += 1;
   file.engineRouting[engine].revision += 1;
@@ -2049,7 +2049,9 @@ function migrationEnrollmentAdmission(
   intent: MigrationIntent,
 ): MigrationEnrollmentAdmission {
   if (intent.origin !== "auto") return { kind: "accepted" };
-  if (conversation.engine === "copilot") return { kind: "refused", reason: "account migration does not cover Copilot conversations" };
+  if (conversation.engine === "copilot" || conversation.engine === "antigravity") {
+    return { kind: "refused", reason: `account migration does not cover ${conversation.engine === "antigravity" ? "Antigravity" : "Copilot"} conversations` };
+  }
   const project = conversationProjectKey(conversation.projectOwnership, source.launchProfile);
   try {
     const resolution = admitAutomaticAccountTarget({
@@ -2671,11 +2673,11 @@ const EMPTY: RegistryFile = {
   legacyResumePanes: { serverPid: null, panes: {} },
   conversations: {},
   conversationAliases: {},
-  conversationRevision: { claude: 0, codex: 0, copilot: 0 },
+  conversationRevision: { claude: 0, codex: 0, copilot: 0, antigravity: 0 },
   migrationIntents: {},
-  engineRouting: { claude: { activeAccountId: null, revision: 0 }, codex: { activeAccountId: null, revision: 0 }, copilot: { activeAccountId: null, revision: 0 } },
-  autoBalance: { claude: emptyPolicy(), codex: emptyPolicy(), copilot: emptyPolicy() },
-  quotaObservations: { claude: {}, codex: {}, copilot: {} },
+  engineRouting: { claude: { activeAccountId: null, revision: 0 }, codex: { activeAccountId: null, revision: 0 }, copilot: { activeAccountId: null, revision: 0 }, antigravity: { activeAccountId: null, revision: 0 } },
+  autoBalance: { claude: emptyPolicy(), codex: emptyPolicy(), copilot: emptyPolicy(), antigravity: emptyPolicy() },
+  quotaObservations: { claude: {}, codex: {}, copilot: {}, antigravity: {} },
   heldDeliveries: {},
   deliveryOperationOwners: {},
   deliveryEvidenceCompactions: {},
@@ -2829,7 +2831,7 @@ function normalizeProviderRetry(value: unknown): ProviderRetryEvidence | null {
 function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   if (!value || typeof value !== "object") return null;
   const host = value as Partial<StructuredHostColumns>;
-  if (host.kind !== "codex-app-server" && host.kind !== "claude-broker" && host.kind !== "copilot-acp") return null;
+  if (host.kind !== "codex-app-server" && host.kind !== "claude-broker" && host.kind !== "copilot-acp" && host.kind !== "antigravity-acp") return null;
   const eventCursor = (value as Record<string, unknown>).eventCursor;
   if (eventCursor !== undefined && (!Number.isSafeInteger(eventCursor) || (eventCursor as number) < 0)) {
     throw new Error("structured host event cursor is invalid");
@@ -2996,7 +2998,7 @@ function normalizeMemberships(value: unknown): RegistryFile["memberships"] {
         || typeof row.role !== "string" || !row.role
         || typeof row.slot !== "string" || !row.slot) return [];
       const runtime = row.runtime && typeof row.runtime === "object"
-        && (row.runtime.engine === "claude" || row.runtime.engine === "codex")
+        && (row.runtime.engine === "claude" || row.runtime.engine === "codex" || row.runtime.engine === "antigravity")
         ? {
             engine: row.runtime.engine,
             model: typeof row.runtime.model === "string" ? row.runtime.model : null,
@@ -4770,7 +4772,7 @@ function normalizeQueuedPinnedSpawn(value: unknown, policy?: McpGrantPolicy): Qu
     || !candidate.accountId
     || (candidate.locale !== "en" && candidate.locale !== "uk")
     || !spec
-    || (spec.engine !== "claude" && spec.engine !== "codex" && spec.engine !== "copilot")
+    || (spec.engine !== "claude" && spec.engine !== "codex" && spec.engine !== "copilot" && spec.engine !== "antigravity")
     || typeof spec.command !== "string"
     || typeof spec.cwd !== "string"
     || typeof spec.windowName !== "string"
@@ -4907,7 +4909,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     telegramSeatGrant: value.telegramSeatGrant === true,
     state,
     artifactLifecycle: value.artifactLifecycle === "materialized" ? "materialized" : "pending",
-    key: value.key && typeof value.key === "object" && (value.key.engine === "claude" || value.key.engine === "codex" || value.key.engine === "copilot") && typeof value.key.sessionId === "string" ? value.key : null,
+    key: value.key && typeof value.key === "object" && (value.key.engine === "claude" || value.key.engine === "codex" || value.key.engine === "copilot" || value.key.engine === "antigravity") && typeof value.key.sessionId === "string" ? value.key : null,
     pane,
     verifiedHost: value.verifiedHost && typeof value.verifiedHost === "object" && value.verifiedHost.kind === "tmux" ? value.verifiedHost : null,
     target: pane?.paneId ?? (typeof value.target === "string" && /^%\d+$/.test(value.target) ? value.target : null),
@@ -5060,6 +5062,7 @@ function upgradeV1(parsed: Omit<Partial<RegistryFile>, "version">, policy?: McpG
       claude: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
       codex: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
       copilot: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
+      antigravity: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
     },
     entries: (parsed.entries as RegistryFile["entries"]) ?? {},
     receipts: Object.fromEntries(Object.entries((parsed.receipts as RegistryFile["receipts"]) ?? {}).map(([id, receipt]) => [id, normalizeReceipt(receipt, policy)])),
@@ -5123,11 +5126,12 @@ export function normalizeRegistry(
       migrationIntents: parsed.migrationIntents && typeof parsed.migrationIntents === "object" ? parsed.migrationIntents : {},
       engineRouting: normalizeEngineRouting(parsed.engineRouting),
       autoBalance: parsed.autoBalance && typeof parsed.autoBalance === "object"
-        ? { claude: normalizePolicy(parsed.autoBalance.claude), codex: normalizePolicy(parsed.autoBalance.codex), copilot: normalizePolicy(parsed.autoBalance.copilot) }
+        ? { claude: normalizePolicy(parsed.autoBalance.claude), codex: normalizePolicy(parsed.autoBalance.codex), copilot: normalizePolicy(parsed.autoBalance.copilot), antigravity: normalizePolicy(parsed.autoBalance.antigravity) }
         : {
             claude: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
             codex: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
             copilot: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
+            antigravity: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
           },
       quotaObservations: parsed.quotaObservations && typeof parsed.quotaObservations === "object"
         ? normalizeQuotaObservations(parsed.quotaObservations)
@@ -7413,7 +7417,7 @@ export class AgentRegistry {
   /** Revocation inspects current hosted rows without loading cold history. */
   memberHostEntries(memberId: string): AgentRegistryEntry[] {
     return this.readKeyed(file => registryRowsMatching(file, "entries", "structuredHost.kind",
-      ["codex-app-server", "claude-broker", "copilot-acp"])
+      ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"])
       .filter(entry => !entry.launchProfile || entry.launchProfile.workspace?.memberId === memberId && !entry.launchProfile.workspace.fromMessage).map(entry => clone(entry)));
   }
 
@@ -7421,7 +7425,7 @@ export class AgentRegistry {
   structuredHostEntries(prepared?: RegistryFile): AgentRegistryEntry[] {
     const file = prepared ?? this.readOnlySnapshot();
     return registryRowsMatching(file, "entries", "structuredHost.kind",
-      ["codex-app-server", "claude-broker", "copilot-acp"]).map(entry => clone(entry));
+      ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"]).map(entry => clone(entry));
   }
 
   diagnosticSpawnAttempt(launchId?: string, conversationId?: string): string | undefined {
@@ -11360,7 +11364,7 @@ export class AgentRegistry {
     settleStoppedMigration(file, conversation);
     if (conversation.pinnedAccountId) return clone(conversation);
     /* Account migration covers Claude and Codex only. */
-    if (conversation.engine === "copilot") return clone(conversation);
+    if (conversation.engine === "copilot" || conversation.engine === "antigravity") return clone(conversation);
     const targetId = file.engineRouting[conversation.engine].activeAccountId;
     const source = conversation.generations.at(-1);
     if (!targetId || !source || source.accountId === null || source.accountId === targetId) return clone(conversation);
@@ -11477,7 +11481,9 @@ export class AgentRegistry {
       const canonicalId = resolveConversationAlias(file, id);
       const conversation = file.conversations[canonicalId];
       if (!conversation) throw new Error("viewer conversation is unknown");
-      if (conversation.engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
+      if (conversation.engine === "copilot" || conversation.engine === "antigravity") {
+        throw new Error(`account migration does not cover ${conversation.engine === "antigravity" ? "Antigravity" : "Copilot"} conversations`);
+      }
       settleStoppedMigration(file, conversation);
       if (reconfigureOwner
         && (conversation.reconfigure?.operationId !== reconfigureOwner.operationId

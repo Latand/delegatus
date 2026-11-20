@@ -258,7 +258,7 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
 const nativeCallerHostIndex = "registry_caller_native_host_artifact";
 const nativeCallerHostPath = "json_extract(value_json,'$.artifactPath')";
 const nativeCallerHost = `collection='entries'
-  AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp')
+  AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp','antigravity-acp')
   AND NOT COALESCE((
     json_extract(value_json,'$.status')='dead'
     AND json_extract(value_json,'$.structuredHost.endpoint')='stdio:released'
