@@ -1081,7 +1081,7 @@ export async function bindStructuredDeliveryQueue(
       checkoutMergerDispatchGuard: async (operationId, conversationId) => {
         const cut = checkoutMergerCutForOperation(registry.filename, conversationId, operationId);
         if (!cut) throw new StructuredSendRefusedError("checkout merger recovery window or inventory changed");
-        if (await hasRuntimeSwitchKill(client, conversationId, cut.capturedAt, [], true)) {
+        if (await hasRuntimeSwitchKill(client, conversationId, cut.capturedAt, [], true, true)) {
           throw new StructuredSendRefusedError("the merger was explicitly stopped");
         }
         return () => {

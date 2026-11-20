@@ -940,7 +940,7 @@ export async function recoverDeadStructuredConversation(
     if (!cut || !client) return null;
     const snapshot = () => registry.livenessConversationSnapshot(cut.conversationId);
     if (checkoutMergerCustody(snapshot(), cut) !== "ended"
-      || await hasRuntimeSwitchKill(client, cut.conversationId, cut.capturedAt, [], true)
+      || await hasRuntimeSwitchKill(client, cut.conversationId, cut.capturedAt, [], true, true)
       || checkoutMergerCustody(snapshot(), cut) !== "ended") return null;
     const authorize = () => {
       const file = snapshot();

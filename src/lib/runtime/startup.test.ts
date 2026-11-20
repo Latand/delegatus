@@ -2183,18 +2183,18 @@ async function restartCutSettled(predicate: () => boolean, what: string): Promis
 }
 
 test.each((["codex", "claude"] as const).flatMap(engine =>
-  (["interrupted", "unlocked", "release-record", "quiet", "finished", "stopped", "live", "unverified", "expired"] as const).map(mode => [engine, mode] as const)))(
+  (["interrupted", "legacy", "unlocked", "release-record", "quiet", "finished", "stopped", "stopped-before-capture", "live", "unverified", "expired"] as const).map(mode => [engine, mode] as const)))(
   "%s checkout standalone merger custody: %s", async (engine, mode) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-checkout-merger-"));
   const filename = path.join(directory, "agent-registry.json");
-  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
   const sessionId = ["c3000000", "0000", "4000", "8000", "000000000001"].join("-");
   const key = { engine, sessionId };
   const hostKey = `${engine}:${sessionId}`;
   const artifactPath = path.join(directory, `${sessionId}.jsonl`);
   const started = Date.now();
   const capturedAt = new Date(started - (mode === "expired" ? CHECKOUT_MERGER_WINDOW_MS + 5_000 : 5_000)).toISOString();
-  const at = new Date(started - (mode === "quiet" ? 6_000 : 4_000)).toISOString();
+  const at = new Date(started - (mode === "quiet" || mode === "stopped-before-capture" ? 6_000 : 4_000)).toISOString();
   // The old engine had time to report the tool interruption before exiting.
   const final = engine === "codex"
     ? [
@@ -2218,6 +2218,13 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
     claimOwner: `structured-host:${JSON.stringify(writer)}`, structuredHost: columns, pendingAction: null });
   registry.upsert({ ...entry, status: "dead", structuredHost: null, hostExitProcess: processIdentity, claimOwner: null,
     structuredHostOperationId: launch.receipt.launchId });
+  if (mode === "legacy") {
+    const persisted = structuredClone(registry.readOnlySnapshot());
+    delete persisted.conversations[conversationId].deliveryEvidenceTracked;
+    registry.close();
+    fs.writeFileSync(filename, JSON.stringify(persisted));
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  }
   const tmp = path.join(directory, "tmp");
   fs.mkdirSync(tmp);
   const state = { version: 3, branch: `merge-batch/${sessionId}`, landed: mode === "finished",
@@ -2228,7 +2235,7 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
   if (lockRetained) fs.mkdirSync(stateFile + ".lock");
   const stat = fs.statSync(directory);
   const cut: CheckoutMergerCut = { engine, sessionId, conversationId, path: artifactPath, claimEpoch: 2, process: processIdentity,
-    writer, capturedAt, boundary: `checkout-merger:${"a".repeat(32)}`,
+    writer, capturedAt, boundary: `checkout-merger:${"a".repeat(32)}`, admissionProof: "fresh-cut-v1",
     batch: { directory, identity: `${stat.dev}:${stat.ino}`, branch: state.branch } };
   fs.writeFileSync(path.join(directory, CHECKOUT_MERGER_CAPTURE), JSON.stringify([cut]));
   const interruptions = interruptionObligationStore(interruptionObligationDirectory(filename));
@@ -2236,14 +2243,20 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
     conversationId, engine, hostKey, path: artifactPath, owner: processIdentity, claimEpoch: 2, turnRef: "merger-turn",
     boundary: "ordinary-release", reason: "viewer-release", recordedAt: at, checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null,
   }).obligation : null;
-  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true,
+    ...(mode === "stopped-before-capture" ? { now: () => Date.parse(at) } : {}) });
   const client = runtimeJournalClient(journal);
-  if (mode === "stopped") {
+  if (mode === "stopped-before-capture" || mode === "stopped") {
     const effects = client.effectBatch;
     client.effectBatch = async (kinds, cursor, options) => kinds?.includes("runtime.stop-boundary")
       ? [{ id: "operator-stop-effect", kind: "runtime.stop-boundary", eventSeq: 1, payload: {
         conversationId, operationId: "operator-stop", admittedAt: at, origin: "operator", originAuthenticated: true,
       } }] : effects(kinds, cursor, options);
+    if (mode === "stopped-before-capture") client.operationStatus = async () => ({ receipt: { status: "queued" } } as never);
+  }
+  if (mode === "stopped-before-capture") {
+    const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
+    expect(await hasRuntimeSwitchKill(client, conversationId, capturedAt, [], true, true)).toBe(true);
   }
   const ledger = createFakeDeliveryLedger();
   const processOwner = captureProcessIdentity(process.pid);
@@ -2274,7 +2287,7 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
     await adoptStructuredHostsAtStartup(deps);
     await kickStructuredDeliveryQueue();
     const readCuts = () => interruptions.list().filter(obligation => obligation.boundary === cut.boundary);
-    if (mode !== "interrupted" && mode !== "unlocked" && mode !== "release-record") {
+    if (mode !== "interrupted" && mode !== "legacy" && mode !== "unlocked" && mode !== "release-record") {
       expect(recovery).not.toHaveBeenCalled();
       expect(ledger.writes).toEqual([]);
       expect(registry.readOnlySnapshot().entries[hostKey]?.claimEpoch).toBe(2);
@@ -2285,7 +2298,7 @@ test.each((["codex", "claude"] as const).flatMap(engine =>
         expect(structuredStartupDeferral()?.hostKeys).toContain(hostKey);
       } else {
         expect(readCuts()).toMatchObject([{ boundary: cut.boundary, state: "discharged",
-          resolution: mode === "stopped" ? "the merger was explicitly stopped" : "the captured merger turn settled" }]);
+          resolution: mode === "stopped" || mode === "stopped-before-capture" ? "the merger was explicitly stopped" : "the captured merger turn settled" }]);
       }
       return;
     }

@@ -321,7 +321,8 @@ def observe_switch(adapter, target, samples, interval, timeout):
             outcome["outcome"] = "unknown"
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
-    unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
+    unknown = ("unknown" in outcomes or interrupted is None or bool(unreadable)
+               or bool(relocation and relocation.get("mergerReconciliationUnknown")))
     relocation_ready = (relocation is not None and relocation.get("released") is True
                         and relocation.get("placement") == "placed" and relocation.get("started") is True)
     verdict = "fail" if not healthy or "lost" in outcomes or not relocation_ready else "needs_decision" if unknown else "pass"
@@ -1066,10 +1067,11 @@ class Checkout:
             captures = {row["conversationId"]: row for row in previous if parse_time(row["capturedAt"]) >= cutoff}
         except FileNotFoundError:
             pass
-        boundary = "checkout-merger:" + uuid.uuid4().hex
-        for host in hosts:
-            captures[host["conversationId"]] = {**host["merger"], "capturedAt": captured_at, "boundary": boundary}
+        boundary = getattr(self, "merger_boundary", None) or "checkout-merger:" + uuid.uuid4().hex
         self.merger_boundary = boundary
+        for host in hosts:
+            captures[host["conversationId"]] = {**host["merger"], "capturedAt": captured_at, "boundary": boundary,
+                                                 "admissionProof": "fresh-cut-v1"}
         if len(captures) > CHECKOUT_MERGER_LIMIT:
             raise RuntimeError("standalone merger inventory exceeds its bound")
         inventory = list(captures.values())
@@ -1093,6 +1095,8 @@ class Checkout:
                     and valid_identity(row.get("process")) and valid_identity(row.get("writer"))
                     and re.fullmatch(r"checkout-merger:[0-9a-f]{32}", row.get("boundary", ""))
                     and isinstance(row.get("capturedAt"), str) and parse_time(row["capturedAt"])
+                    and parse_time(row["capturedAt"]) <= parse_time(captured_at)
+                    and row.get("admissionProof") in [None, "fresh-cut-v1"]
                     and (batch is None or isinstance(batch, dict) and isinstance(batch.get("directory"), str)
                          and os.path.isabs(batch["directory"]) and isinstance(batch.get("identity"), str)
                          and isinstance(batch.get("branch"), str)))
@@ -1838,6 +1842,19 @@ class Checkout:
             # Marked before submission: a submission that times out may still stop.
             relocation["stopSubmitted"] = True
             self.command(["systemctl", "--user", "--no-block", "stop", self.unit])
+            # The Viewer can admit a standalone merger between the final
+            # census and systemd receiving the stop. Reconcile the durable
+            # registry once more while the named stop is pending; keep the
+            # same boundary so already recorded owners retain their key.
+            try:
+                late_rows = complete_activity(self.census())
+                known = {row.get("conversationId"): row for row in self.custody_rows}
+                known.update({row.get("conversationId"): row for row in late_rows})
+                self.custody_rows = list(known.values())
+                self.arm_merger_recovery()
+            except Exception as error:
+                relocation["diagnostics"].append("late-merger-census:" + type(error).__name__)
+                relocation["mergerReconciliationUnknown"] = True
             def stopped():
                 if self.jobs() or self.active_state() not in ["inactive", "failed"]:
                     raise RuntimeError("named stop pending")
@@ -1882,7 +1899,10 @@ class Checkout:
             rows = complete_activity(self.mcp.call("agent_activity", {"conversationId": identifier, "compact": False, "includeGone": True}))
             active = rows[0] if len(rows) == 1 and rows[0].get("conversationId") == identifier and not rows[0].get("pipeline") else {}
             if active.get("turnState") == "idle":
-                return {"kind": "standalone-merger", "conversationId": identifier, "outcome": "completed"}
+                # Idle activity can describe a successor that lost the
+                # original interrupted turn. Settlement needs the durable
+                # cut receipt, which run_switch reconciles after sampling.
+                return {"kind": "standalone-merger", "conversationId": identifier, "outcome": "unknown"}
             process = active.get("host") or {}
             outcome = "unknown"
             if process.get("kind") == "structured" and process.get("state") == "alive" and active.get("lifecycle") not in ["failed", "interrupted", "stalled"]:

@@ -95,7 +95,7 @@ export function attemptAccountPin(stage: PipelineStage, attempt: PipelineStageAt
 }
 export { switchOperationKey };
 
-export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effectBatch" | "operationStatus">, conversationId: string, since: string, ignoredOperationIds: readonly string[] = [], operatorOnly = false): Promise<boolean> {
+export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effectBatch" | "operationStatus">, conversationId: string, since: string, ignoredOperationIds: readonly string[] = [], operatorOnly = false, includePendingEarlierOperatorStop = false): Promise<boolean> {
   const kinds = operatorOnly ? ["runtime.kill-boundary", "runtime.interrupt-boundary", "runtime.stop-boundary"] : ["runtime.kill-boundary"];
   let cursor = 0;
   while (true) {
@@ -105,7 +105,15 @@ export async function hasRuntimeSwitchKill(client: Pick<RuntimeHostClient, "effe
       // Admission time survives receipt compaction in both modes. Ordinary
       // switch checks read completed physical kills; recovery reads stop intent.
       const admittedAt = typeof effect.payload.admittedAt === "string" ? Date.parse(effect.payload.admittedAt) : NaN;
-      if (Number.isFinite(admittedAt) && admittedAt < Date.parse(since)) continue;
+      if (Number.isFinite(admittedAt) && admittedAt < Date.parse(since)) {
+        if (operatorOnly && includePendingEarlierOperatorStop && effect.payload.origin === "operator"
+          && (effect.payload.originAuthenticated === true || effect.payload.originAuthenticated === 1)) {
+          const result = await client.operationStatus(effect.payload.operationId);
+          if (!result?.receipt) throw new Error("earlier authenticated stop has no retained receipt; continuation is fenced");
+          if (["pending", "queued", "delivering", "applying"].includes(result.receipt.status)) return true;
+        }
+        continue;
+      }
       if (!operatorOnly && Number.isFinite(admittedAt)) return true;
       if (operatorOnly && effect.payload.origin === "system") continue;
       if (operatorOnly && effect.payload.origin === "unknown") throw new Error("legacy stop authorship is unavailable; continuation is fenced");

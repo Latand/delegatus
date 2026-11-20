@@ -30,7 +30,7 @@ export type CheckoutMerger = {
   turnState?: "busy" | "idle";
 };
 
-export type CheckoutMergerCut = CheckoutMerger & { capturedAt: string; boundary: string };
+export type CheckoutMergerCut = CheckoutMerger & { capturedAt: string; boundary: string; admissionProof?: "fresh-cut-v1" };
 
 export function standaloneMerger(file: RegistryFile, id: ViewerConversationId): boolean {
   if ((file.memberships[id] ?? []).some(member => member.kind === "pipeline" || member.kind === "flow")) return false;
@@ -93,7 +93,8 @@ export function readCheckoutMergerCuts(directory: string, now = Date.now()): Che
         || typeof row.sessionId !== "string" || !row.sessionId || typeof row.path !== "string" || !path.isAbsolute(row.path)
         || row.turnState != null && row.turnState !== "busy" && row.turnState !== "idle"
         || !Number.isSafeInteger(row.claimEpoch) || row.claimEpoch < 1 || !hasIdentity(row.process) || !hasIdentity(row.writer)
-        || !/^checkout-merger:[0-9a-f]{32}$/.test(row.boundary) || typeof row.capturedAt !== "string"
+        || !/^checkout-merger:[0-9a-f]{32}$/.test(row.boundary) || row.admissionProof != null && row.admissionProof !== "fresh-cut-v1"
+        || typeof row.capturedAt !== "string"
         || !Number.isFinite(Date.parse(row.capturedAt)) || Date.parse(row.capturedAt) > now
         || row.batch !== null && (!row.batch || typeof row.batch.directory !== "string" || !path.isAbsolute(row.batch.directory)
           || typeof row.batch.identity !== "string" || typeof row.batch.branch !== "string")) throw new Error("invalid checkout merger row");

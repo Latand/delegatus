@@ -915,7 +915,53 @@ class CheckoutIntegration(unittest.TestCase):
             "pipeline": None, "evidenceSource": "transcript",
             "host": {"kind": "structured", "state": "dead", "pid": 104}}]}
         self.assertEqual(self.adapter.stage(host), {
-            "kind": "standalone-merger", "conversationId": conversation, "outcome": "completed"})
+            "kind": "standalone-merger", "conversationId": conversation, "outcome": "unknown"})
+
+    def test_future_previous_merger_cut_refuses_stop_before_successor_inventory_write(self):
+        conversation = "conversation_clock_step"
+        destination = self.state / deploy.CHECKOUT_MERGER_CAPTURE
+        process = {"pid": 104, "startIdentity": "104:104", "bootEpoch": self.adapter.boot_epoch}
+        previous = {"conversationId": "conversation_previous_cut", "engine": "codex", "sessionId": "fixture-merger",
+                    "path": str(self.root / "merger.jsonl"), "claimEpoch": 2, "process": process,
+                    "writer": {"pid": 102, "startIdentity": "102:102", "bootEpoch": self.adapter.boot_epoch},
+                    "batch": None, "capturedAt": "2099-01-01T00:00:00Z",
+                    "boundary": "checkout-merger:" + "a" * 32, "admissionProof": "fresh-cut-v1"}
+        destination.write_text(json.dumps([previous]))
+        self.adapter.merger_observed_at = "2026-11-20T00:00:00Z"
+        current = {**previous, "conversationId": conversation, "capturedAt": "2026-11-20T00:00:00Z",
+                   "boundary": "checkout-merger:" + "b" * 32}
+        self.adapter.custody_rows = [{"conversationId": conversation, "merger": current}]
+        self.adapter.census = lambda *args: {"conversations": [{"conversationId": conversation,
+            "host": {"kind": "structured", "state": "alive", "pid": 104, "process": process},
+            "turnState": "busy", "pipeline": None, "evidenceSource": "transcript", "merger": current}],
+            "unselectedCount": 0, "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                "recoveryTruncated": False, "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}
+        self.adapter.placement = lambda: {"actual": self.service_group, "expected": self.service_group}
+        self.adapter.generation = lambda group, rows=None: {}
+        with self.assertRaisesRegex(RuntimeError, "named service start refused"):
+            self.adapter.relocate()
+        self.assertEqual(self.service_commands(), [])
+        self.assertEqual(json.loads(destination.read_text()), [previous])
+
+    def test_merger_admitted_during_stop_submission_gets_a_durable_cut(self):
+        conversation = "conversation_late_merger"
+        process = {"pid": 104, "startIdentity": "104:104", "bootEpoch": self.adapter.boot_epoch}
+        merger = {"conversationId": conversation, "engine": "claude", "sessionId": "late-merger",
+                  "path": str(self.root / "late-merger.jsonl"), "claimEpoch": 2, "process": process,
+                  "writer": {"pid": 102, "startIdentity": "102:102", "bootEpoch": self.adapter.boot_epoch}, "batch": None}
+        row = {"conversationId": conversation, "host": {"kind": "structured", "state": "alive", "pid": 104,
+                "process": process}, "turnState": "busy", "evidenceSource": "transcript", "pipeline": None, "merger": merger}
+        self.inventory_overrides = lambda n: {"conversations": [row] if n >= 3 else [],
+            "selection": {"matched": 1 if n >= 3 else 0, "selected": 1 if n >= 3 else 0,
+                "recoveryPending": 0, "recoveryTruncated": False}}
+        self.recovery_overrides = {"conversations": [{"conversationId": conversation, "turnState": "busy",
+            "pipeline": None, "evidenceSource": "transcript", "host": {"kind": "structured", "state": "dead", "pid": 104}}]}
+        result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=1, timeout=2)
+        cuts = json.loads((self.state / deploy.CHECKOUT_MERGER_CAPTURE).read_text())
+        self.assertEqual([cut["conversationId"] for cut in cuts], [conversation])
+        self.assertEqual(cuts[0]["admissionProof"], "fresh-cut-v1")
+        self.assertEqual(result["protected"][0]["outcome"], "unknown")
+        self.assertEqual(result["verdict"], "needs_decision")
 
     def test_final_census_failure_leaves_the_original_service_running(self):
         self.inventory_overrides = lambda n: {"undescribedHostCount": 1} if n > 1 else {}
@@ -2333,7 +2379,7 @@ class CheckoutIntegration(unittest.TestCase):
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
         self.assertEqual(result["protected"][0]["outcome"], "recovered")
-        self.assertEqual(self.inventory_reads, 4)  # Three preflight reads, then retirement refresh.
+        self.assertEqual(self.inventory_reads, 5)  # Three preflight reads, retirement refresh and pending-stop census.
         self.assertEqual(self.service_commands(), ["stop", "start"])
 
     def test_preflight_failure_never_publishes_or_restarts(self):

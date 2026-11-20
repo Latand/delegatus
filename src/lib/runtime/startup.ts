@@ -913,7 +913,7 @@ async function restartCutTargets(
 }
 
 async function checkoutMergersForStartup(registry: AgentRegistry, store: InterruptionObligationStore,
-  scope: ReadonlySet<string> | null) {
+  scope: ReadonlySet<string> | null, client: RuntimeHostClient | null) {
   const cuts = readCheckoutMergerCuts(path.dirname(registry.filename));
   const captured = new Map<string, CheckoutMergerCut>();
   const waiting = new Set<string>();
@@ -956,9 +956,30 @@ async function checkoutMergersForStartup(registry: AgentRegistry, store: Interru
     // Expiry ends the unattended continuation and keeps the generic startup
     // nudge from reopening this same captured predecessor under another key.
     if (!checkoutMergerWithinWindow(cut)) return;
-    const turn = custody === "ended" ? await checkoutMergerTurn(cut) : null;
+    let explicitlyStopped = false;
+    if (custody === "ended") {
+      if (!client) { waiting.add(key); return; }
+      try {
+        explicitlyStopped = await hasRuntimeSwitchKill(client, cut.conversationId, cut.capturedAt, [], true, true);
+      } catch {
+        waiting.add(key);
+        return;
+      }
+      assertStartupReadActive();
+    }
+    const turn = custody === "ended" && !explicitlyStopped ? await checkoutMergerTurn(cut) : null;
     assertStartupReadActive();
     if (!checkoutMergerWithinWindow(cut)) return;
+    if (custody === "ended" && !explicitlyStopped) {
+      if (!client) { waiting.add(key); return; }
+      try {
+        explicitlyStopped = await hasRuntimeSwitchKill(client, cut.conversationId, cut.capturedAt, [], true, true);
+      } catch {
+        waiting.add(key);
+        return;
+      }
+      assertStartupReadActive();
+    }
     // Read again at the record write, including explicit stop and a successor
     // claim acquired while the transcript was being read.
     const latest = checkoutMergerCustody(current(), cut);
@@ -966,11 +987,11 @@ async function checkoutMergersForStartup(registry: AgentRegistry, store: Interru
       captured.delete(key);
       return;
     }
-    if (latest === "wait" || latest === "ended" && (turn === null || turn === "wait")) {
+    if (latest === "wait" || latest === "ended" && !explicitlyStopped && (turn === null || turn === "wait")) {
       waiting.add(key);
       return;
     }
-    const answeredBy = latest === "stopped" ? "the merger was explicitly stopped"
+    const answeredBy = latest === "stopped" || explicitlyStopped ? "the merger was explicitly stopped"
       : turn === "finished" ? "the captured merger turn settled" : undefined;
     const { obligation } = store.record({
       conversationId: cut.conversationId, engine: cut.engine, hostKey: key, path: cut.path,
@@ -1267,21 +1288,24 @@ async function deliverInterruptionContinuations(
       const current = currentCheckoutMerger(latest, checkout);
       const admission = registry.deliveryAdmissionForKey(checkout.conversationId, obligation.id);
       const sameReservation = admission.outcome === "admitted" && admission.operationId === checkoutMergerOperationId(checkout);
+      const freshCutAdmission = admission.outcome === "unknown" && checkout.admissionProof === "fresh-cut-v1";
       const ended = checkoutMergerCustody(latest, checkout) === "ended";
       if (!current || !checkoutMergerWithinWindow(checkout)
-        || !(ended && admission.outcome === "not-executed" || sameReservation && (ended || current.claimEpoch === checkout.claimEpoch + 1))
+        || !(ended && (admission.outcome === "not-executed" || freshCutAdmission)
+          || sameReservation && (ended || current.claimEpoch === checkout.claimEpoch + 1))
         || newerInterruptionMessages(registry, obligation, latest, new Map()).some(message => message.pending || message.delivered)) {
         throw new DeliveryAdmissionRefusedError("standalone merger recovery authority changed");
       }
     } : undefined;
     if (checkout && merger) {
       const prior = registry.deliveryAdmissionForKey(checkout.conversationId, obligation.id);
-      if (prior.outcome === "unknown" || prior.outcome === "not-executed" && checkoutMergerCustody(snapshot, checkout) !== "ended") return;
+      if (prior.outcome === "unknown" && checkout.admissionProof !== "fresh-cut-v1"
+        || prior.outcome === "not-executed" && checkoutMergerCustody(snapshot, checkout) !== "ended") return;
       if (typeof client.effectBatch !== "function") {
         failures.push(`${checkout.conversationId}: stop evidence is unavailable`);
         return;
       }
-      const stopped = await hasRuntimeSwitchKill(client, checkout.conversationId, checkout.capturedAt, [], true);
+      const stopped = await hasRuntimeSwitchKill(client, checkout.conversationId, checkout.capturedAt, [], true, true);
       assertActive();
       if (stopped) {
         store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "the merger was explicitly stopped" });
@@ -1302,7 +1326,8 @@ async function deliverInterruptionContinuations(
       conversationId: conversation.id,
       clientMessageId: obligation.id,
       text: interruptionContinuationText(obligation, checkout?.batch ? path.join(checkout.batch.directory, "tmp") : undefined),
-      ...(checkout && merger ? { operationId: checkoutMergerOperationId(checkout), policy: "queue" as const } : {}),
+      ...(checkout && merger ? { operationId: checkoutMergerOperationId(checkout), policy: "queue" as const,
+        ...(checkout.admissionProof === "fresh-cut-v1" ? { freshCheckoutCutAdmission: true as const } : {}) } : {}),
       images: [],
       origin: delegatusOriginForRecipient(snapshot, conversation.id, RECOVERY_NOTICE_ORIGIN.role ?? "runtime-host"),
       admissionGuard: checkoutAuthority,
@@ -2809,7 +2834,7 @@ async function adoptStructuredHostsPass(
      the agent resumed and the restart cut again is seen. */
   settleSubmittedInterruptionObligations(registry, interruptions,
     interruptions.list().filter(interruptionObligationUnresolved));
-  const checkout = await checkoutMergersForStartup(registry, interruptions, resumeDeferred);
+  const checkout = await checkoutMergersForStartup(registry, interruptions, resumeDeferred, client);
   const checkoutKeys = new Set(checkout.captured.keys());
   const recognition = await restartCutTargets(
     registry,
