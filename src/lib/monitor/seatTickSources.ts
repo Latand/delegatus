@@ -3486,11 +3486,17 @@ async function gatherSeatTickInputWork(
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
   let workerAsksObserved = true;
   let decisionForms: SeatTickCheckInput["decisionForms"];
+  let pauseWaitingTasks: SeatTickCheckInput["pauseWaitingTasks"];
   if (seat && (settings.enabled || pendingAutonomyReports(settings, now).length > 0) && sources.workerAsks) {
     try {
       const read = await sources.workerAsks(canonical, seat.conversationId ?? undefined);
       workerAsksObserved = read !== null;
-      if (read && "asks" in read) { workerAsks = read.asks; decisionForms = read.forms; }
+      if (read && "asks" in read) {
+        const remoteTasks = new Set(tasks.filter(task => task.runsOn).map(task => task.id));
+        workerAsks = read.asks.filter(ask => ask.seatOwnedLane || !ask.waitingTaskIds || !remoteTasks.has(ask.id));
+        decisionForms = read.forms;
+        pauseWaitingTasks = read.pauseWaitingTasks;
+      }
       else workerAsks = read ?? [];
     } catch (error) {
       workerAsksObserved = false;
@@ -3539,6 +3545,7 @@ async function gatherSeatTickInputWork(
     instructionReview: instructionReviewFor(canonical, now, settings, hotLanes, hotTasks, seat),
     workerAsksObserved,
     ...(decisionForms ? { decisionForms } : {}),
+    ...(pauseWaitingTasks ? { pauseWaitingTasks } : {}),
     ...(workerAsks.length ? { workerAsks } : {}),
     events,
     pullRequests,

@@ -958,6 +958,27 @@ test("task form currency survives the real board summary and notice builders", a
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 });
 
+test("the seat agenda worker returns a task ask and the task carried by a due pause", async () => {
+  const { seatAgendaInWorker } = await import("./filesResponseWorker");
+  const state = scratchState();
+  const now = Date.parse("2026-11-20T06:47:00Z");
+  const since = new Date(now - 86_400_000).toISOString();
+  const project = "project-a";
+  const tasks = ["resumable", "paused"].map(id => ({
+    id, project, text: `Check ${id}`, status: "blocked", placement: "unplaced", assignments: [],
+    createdAt: since, updatedAt: since, hold: { kind: "resource", by: "agent", note: "Wait for memory", since },
+  }));
+  const pipelines = [{ id: "due-pause", task: "Resume after the wait", project, taskIds: ["paused"],
+    state: "paused", stages: [], runs: [], pausedAt: since, createdAt: since }];
+  try {
+    const result = await seatAgendaInWorker(JSON.stringify({ files: [], tasks, pipelines }), project, now / 1000, runtimeFor(state));
+    expect(result.asks).toEqual([expect.objectContaining({
+      id: "resumable", waitingTaskIds: ["resumable"], label: expect.stringContaining("Verify the wait now"),
+    })]);
+    expect(result.pauseWaitingTasks).toEqual({ "due-pause": ["paused"] });
+  } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+});
+
 test("a cold project build gets a longer cap than a seat source read, and a runtime's own cap governs both", () => {
   const seat = { type: "seat-reports" as const, project: "fixture" };
   expect(filesResponseWorkerTimeoutMs(request, {})).toBe(FILES_PROJECTION_BUILD_TIMEOUT_MS);

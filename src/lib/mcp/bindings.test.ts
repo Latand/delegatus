@@ -4587,20 +4587,27 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
     });
     const operatorRead = await call("get_task", { clientRequestId: "step-operator-read", taskId: normalizedCreate.taskId });
     const statuses = [];
+    let clamped;
     for (const status of ["inbox", "assigned", "blocked", "done"]) {
       const changed = await call("update_task", { clientRequestId: "legacy-status-" + status, taskId: created.taskId, full: true, status });
       statuses.push(changed.task.status);
+      if (status === "blocked") clamped = changed;
     }
+    const parked = await call("update_task", {
+      clientRequestId: "operator-task-hold", taskId: normalizedCreate.taskId, full: true, hold: { kind: "operator", note: "Choose release" },
+    });
     console.log(JSON.stringify({ createdTask, updatedTask: updated.task, readTask: read.task,
       createNotes: normalizedCreate.notes, updateNotes: unknownUpdate.notes, normalizedCreate: normalizedCreate.task, unknownUpdate: unknownUpdate.task, normalizedUpdate: normalizedUpdate.task,
-      operatorUpdate: operatorUpdate.task, operatorRead: operatorRead.task, statuses, overageRefusals, overageNoWrites }));
+      operatorUpdate: operatorUpdate.task, operatorRead: operatorRead.task, statuses, clamped, parked: parked.task, overageRefusals, overageNoWrites }));
     } finally { await client.close(); await server.close(); }
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();
   // Cold schema admission can finish successfully after the telemetry threshold.
   assertStateChildSuccess(await child.exited, error);
-  const result = JSON.parse(output) as { createNotes: string[]; updateNotes: string[]; createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[]; overageRefusals: Array<{ ok: boolean; code: string; retryable: boolean; error: string; details: { field: string } }>; overageNoWrites: boolean[] };
+  const result = JSON.parse(output) as { createNotes: string[]; updateNotes: string[]; createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[]; clamped: { task: BoardTask; notes: string[] }; parked: BoardTask; overageRefusals: Array<{ ok: boolean; code: string; retryable: boolean; error: string; details: { field: string } }>; overageNoWrites: boolean[] };
+  expect(result.createdTask.status).toBe("inbox");
+  expect(result.updatedTask.status).toBe("inbox");
   expect(result.createdTask.hold).toMatchObject({ kind: "pr", by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
   expect(result.updatedTask.hold).toMatchObject({ kind: "issue", by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });
   expect(result.updatedTask.hold?.since).toBe(result.createdTask.hold?.since);
@@ -4628,7 +4635,10 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
     expect(refusal.error).toContain("200 UTF-16 code units");
     expect(refusal.error).toContain("actual length is 201");
   }
-  expect(result.statuses).toEqual(["inbox", "assigned", "blocked", "done"]);
+  expect(result.statuses).toEqual(["inbox", "assigned", "inbox", "done"]);
+  expect(result.clamped.task.hold).toMatchObject({ kind: "unstated", by: "agent" });
+  expect(result.clamped.notes).toEqual([expect.stringContaining('Use hold kind "operator"')]);
+  expect(result.parked).toMatchObject({ status: "blocked", hold: { kind: "operator", by: "agent", note: "Choose release" } });
 });
 
 

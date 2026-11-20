@@ -9,6 +9,7 @@ import { stampAttentionRoutes, type AttentionRoutingInputs } from "@/lib/attenti
 import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
 import type { FileEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { BoardTask } from "@/lib/tasks/types";
 import { laneState } from "@/components/kanban/cardState";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
@@ -2622,6 +2623,47 @@ describe("seat-owned parked lane wakes", () => {
 describe("waits routed to the seat", () => {
   const ask = { key: "reason:ask-1", id: "conversation_deployer", label: "deploy the release — deployer asks: «Roll out now?»; reply with send_message to conversation_deployer" };
   const lastWakeAt = new Date(NOW - 5 * MINUTE).toISOString();
+
+  test("a Waiting task takes one worker-ask line instead of a sweep row", () => {
+    const since = new Date(NOW - 2 * 86_400_000).toISOString();
+    const row: BoardTask = { id: "task-resumable", project: PROJECT, status: "blocked", text: "Continue the rollout",
+      placement: "unplaced", assignments: [], createdAt: since, updatedAt: since,
+      hold: { kind: "resource", by: "agent", note: "Wait for memory", since } };
+    const operatorTask = { ...row, id: "task-operator", hold: { ...row.hold!, kind: "operator" as const } };
+    const tasks = [row, operatorTask].map(task => ({ id: task.id, title: task.text, status: task.status, owned: false, hold: task.hold }));
+    const workerAsks = seatAgendaAsks({ files: [], tasks: [row, operatorTask], pipelines: [] }, NOW / 1000, PROJECT);
+    expect(workerAsks).toHaveLength(1);
+    const state = stateWith({ lastWakeAt });
+    const first = seatTickDecision(input({ tasks, workerAsks, state }));
+    expect(reasonsOf(first.verdict)).toEqual(["worker-ask"]);
+    if (first.verdict.kind !== "wake") throw new Error("expected a task wake");
+    expect(first.verdict.items).toEqual([expect.objectContaining({ kind: "ask", id: row.id, label: expect.stringContaining("Verify the wait now") })]);
+    expect(first.verdict.taskPage?.rows.map(page => page.item.id)).toEqual([operatorTask.id]);
+    const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+    const moved = tasks.map(task => task.id === row.id ? { ...task, status: "assigned" as const } : task);
+    const same = seatTickDecision(input({ now: NOW + MINUTE, tasks: moved, workerAsks, state: landed }));
+    expect(reasonsOf(same.verdict)).toEqual([]);
+  });
+
+  test("a due pause reminder carries its Waiting card id and the resume action", () => {
+    const since = new Date(NOW - 86_400_000).toISOString();
+    const boardTask: BoardTask = { id: "task-paused", project: PROJECT, status: "blocked", text: "Resume the paused work",
+      placement: "unplaced", assignments: [], createdAt: since, updatedAt: since };
+    const pipeline = { id: "paused-lane", project: PROJECT, state: "paused", taskIds: [boardTask.id], pausedAt: since,
+      createdAt: since, runs: [] } as unknown as Pipeline;
+    const waits = new Map<string, string[]>();
+    const workerAsks = seatAgendaAsks({ files: [], pipelines: [pipeline], tasks: [boardTask] }, NOW / 1000, PROJECT, waits);
+    const decision = seatTickDecision(input({
+      tasks: [{ id: boardTask.id, title: boardTask.text, status: "blocked", owned: false }],
+      pipelines: [{ id: pipeline.id, title: "Paused work", state: "running", updatedAt: since, stageActivity: null, pausedBy: "other", pausedAt: since }],
+      pauseWaitingTasks: Object.fromEntries(waits), workerAsks,
+    }));
+    expect(workerAsks).toEqual([]);
+    if (decision.verdict.kind !== "wake") throw new Error("expected a pause wake");
+    expect(decision.verdict.items).toContainEqual(expect.objectContaining({ id: pipeline.id, reminderKind: "pause",
+      label: expect.stringMatching(/task-paused.*pipeline_action resume/) }));
+    expect(decision.verdict.taskPage?.rows ?? []).toEqual([]);
+  });
 
   test("an ask wakes the seat on the next check, without waiting for the interval, and names the question and the way to answer", () => {
     const decision = seatTickDecision(input({ workerAsks: [ask], state: stateWith({ lastWakeAt }) }));

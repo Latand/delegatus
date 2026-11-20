@@ -162,14 +162,14 @@ async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<stri
     const { needsYouAnswer } = await import("@/lib/attention/needsYouProjection");
     // Imports and file IO finish before this synchronous projection. The scope
     // ends before result persistence or another request can observe it.
-    value = withProjectAliasSnapshot(projectAliasSnapshot(), (): {
-      asks: ReturnType<typeof seatAgendaAsks>;
-      forms: Pick<ReturnType<typeof needsYouAnswer>, "rows" | "count" | "routedToSeat">;
-    } => {
+    value = withProjectAliasSnapshot(projectAliasSnapshot(), (): import("@/lib/monitor/types").SeatTickAgendaInput => {
       const forms = needsYouAnswer({ ...body, files: [] }, null, request.now, request.project, {
         tasks: body.tasks ?? [], pipelines: body.pipelines ?? [], dismissals: [], reports: null, admissions: [], unavailable: [], workLinks: body.workLinks, seatConversationId: request.seatConversationId,
       }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
-      return { asks: seatAgendaAsks(body, request.now, request.project), forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
+      const pauses = new Map<string, string[]>();
+      const asks = seatAgendaAsks(body, request.now, request.project, pauses);
+      return { asks, ...(pauses.size ? { pauseWaitingTasks: Object.fromEntries(pauses) } : {}),
+        forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
     });
   } else if (request.type === "seat-reports") {
     const { seatTickReportRows } = await import("@/lib/monitor/seatTickReports");

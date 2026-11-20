@@ -5135,7 +5135,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.status.done": "Готові",
   "kanban.statusHint.inbox": "Ще не розпочато",
   "kanban.statusHint.assigned": "Розпочаті задачі та робота без руху",
-  "kanban.statusHint.blocked": "Очікує на рішення, залежність або вільний ресурс",
+  "kanban.statusHint.blocked": "Очікує на ваше рішення, доступ або налаштування",
   "kanban.statusHint.done": "Завершено. Історія лишається.",
   "kanban.empty.inbox.title": "Задач ще немає",
   "kanban.empty.inbox.body": "Оркестратор додає сюди задачу на кожне ваше прохання.",

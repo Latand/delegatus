@@ -9,6 +9,9 @@ import { laneStopKind } from "@/lib/pipelines/laneStop";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { cleanTitle } from "@/lib/title";
+import { isWorkingAgent } from "@/components/workingAgents";
+import { waitingRoute, waitingRouteIndex } from "@/lib/tasks/waitingRoute";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { laneNeedKind, laneWaitCleared } from "./routeTypes";
@@ -125,30 +128,65 @@ function returnedNote(route: { returnedFrom?: string }): string {
 }
 
 /** Every wait the board routes to this project's seat, oldest first. */
-export function seatAgendaAsks(body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[] }, now: number, project: string): SeatTickWorkerAskInput[] {
+export function seatAgendaAsks(
+  body: { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks?: readonly BoardTask[] },
+  now: number, project: string, pauseWaitingTasks: Map<string, string[]> = new Map(),
+): SeatTickWorkerAskInput[] {
   const canonical = canonicalOrchestratorProject(project);
-  const asks: (SeatTickWorkerAskInput & { since: number })[] = [];
+  const asks: SeatTickWorkerAskInput[] = [];
+  const working = new Set<string>();
   for (const file of withoutArchivedPredecessors([...body.files])) {
     if (canonicalOrchestratorProject(file.project) !== canonical) continue;
+    if (isWorkingAgent(file, now)) {
+      working.add(file.path);
+      if (file.conversationId) working.add(file.conversationId);
+    }
     const reason = attentionReason(file, now);
     if (!reason || reason.dismissal || reason.route?.owner !== "seat") continue;
-    asks.push({ key: agendaKey(reason.route), id: file.conversationId ?? file.path, label: clip(returnedNote(reason.route) + conversationLine(file, reason), LABEL_MAX), since: reason.since });
+    asks.push({ key: agendaKey(reason.route), id: file.conversationId ?? file.path, label: clip(returnedNote(reason.route) + conversationLine(file, reason), LABEL_MAX), sinceMs: reason.since * 1000 });
+  }
+  const projectLanes = body.pipelines.filter(pipeline => canonicalOrchestratorProject(pipeline.project) === canonical);
+  const waitingLaneTasks = new Map<string, string[]>();
+  if (body.tasks?.length) {
+    const index = waitingRouteIndex(body.tasks, projectLanes);
+    for (const task of body.tasks) {
+      if (task.status === "done" || (!task.hold && task.status !== "blocked")
+        || canonicalOrchestratorProject(task.project) !== canonical) continue;
+      const liveMember = task.assignments.some(a => working.has(a.conversationId ?? "") || working.has(a.path ?? ""));
+      const route = waitingRoute(task, index, now * 1000, liveMember);
+      if (route?.owner !== "seat") continue;
+      if (route.carriedBy === "task") {
+        asks.push({ key: route.key, id: task.id, waitingTaskIds: [task.id],
+          label: clip(`«${clip(cleanTitle(task.text, 90), 90)}» (task ${task.id}) — ${route.why}. ${route.action}`, LABEL_MAX),
+          sinceMs: Date.parse(task.hold?.since ?? task.statusBy?.at ?? task.updatedAt) || null });
+      } else if (task.status === "blocked") {
+        const tasks = route.rule === "pause-ready" ? pauseWaitingTasks : waitingLaneTasks;
+        const linked = tasks.get(route.laneId);
+        if (linked) linked.push(task.id);
+        else tasks.set(route.laneId, [task.id]);
+      }
+    }
   }
   const successorOwners = indexMergeSuccessors(body.pipelines);
-  const lanes = body.pipelines
-    .filter((pipeline) => canonicalOrchestratorProject(pipeline.project) === canonical)
+  const lanes = projectLanes
     .flatMap((pipeline) => {
       if (laneWaitCleared(pipeline) || mergeSuccessor(pipeline, successorOwners)) return [];
       const state = laneState(pipeline);
       const route = state.route;
       if (state.owner !== "seat" || !route) return [];
       const kind = laneNeedKind(pipeline)?.replace("lane-", "") ?? pipeline.state;
-      return [{ key: agendaKey(route), id: pipeline.id, label: clip(returnedNote(route) + laneLine(pipeline), LABEL_MAX),
+      const waitingTaskIds = waitingLaneTasks.get(pipeline.id)?.sort();
+      const waiting = waitingTaskIds?.length
+        ? `After settling this lane, move Waiting task(s) ${waitingTaskIds.slice(0, 4).join(", ")}${waitingTaskIds.length > 4 ? ` and ${waitingTaskIds.length - 4} more on this lane` : ""} by re-sending or clearing their holds. `
+        : "";
+      const key = agendaKey(route) + (waitingTaskIds ? `@waiting:${waitingTaskIds.length}:${waitingTaskIds.slice(0, 4).join(",")}` : "");
+      return [{ key, id: pipeline.id, label: clip(waiting + returnedNote(route) + laneLine(pipeline), LABEL_MAX),
+        ...(waitingTaskIds ? { waitingTaskIds } : {}),
         sinceMs: state.sinceMs,
         seatOwnedLane: { id: pipeline.id, title: pipeline.task || pipeline.id, sinceMs: state.sinceMs,
           reason: `${kind}: ${pipeline.merge?.state === "blocked" ? pipeline.merge.reason ?? "merge stopped" : pipeline.stateDetail ?? state.stop?.kind ?? pipeline.state}` } }];
     });
-  const ordered: SeatTickWorkerAskInput[] = [...asks.map((ask) => ({ key: ask.key, id: ask.id, label: ask.label, sinceMs: ask.since * 1000 })), ...lanes];
+  const ordered: SeatTickWorkerAskInput[] = [...asks, ...lanes];
   return ordered.sort((a, b) => {
     const age = (a.sinceMs ?? Number.POSITIVE_INFINITY) - (b.sinceMs ?? Number.POSITIVE_INFINITY);
     if (age) return age;

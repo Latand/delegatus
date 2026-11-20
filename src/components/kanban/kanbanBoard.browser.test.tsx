@@ -33452,6 +33452,51 @@ describe("queued hold kinds on the card", () => {
   }, 180_000);
 });
 
+describe("Waiting status hint", () => {
+  browserTest("Waiting explains the operator action on desktop and phone in both languages and themes", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "waiting-status-hint");
+    fs.mkdirSync(out, { recursive: true });
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "waiting-hint-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let browser: Browser | undefined;
+    try {
+      server = await serveEvidenceFixture(scratch);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="blocked"]').click();
+            await page.locator('[data-phone-card="task:hold-slot"]').click();
+            await page.locator("[data-phone-task-status-pill]").click();
+          } else {
+            const row = page.locator(card("hold-slot"));
+            await row.focus();
+            await row.press("s");
+          }
+          const expected = locale === "en" ? "Waiting for your decision, access or a setting you control"
+            : "Очікує на ваше рішення, доступ або налаштування";
+          const panel = page.locator(phone ? "[data-phone-task-status-sheet]" : ".kb .menu");
+          const hint = panel.getByText(expected, { exact: true });
+          await hint.waitFor({ state: "visible" });
+          expect(await hint.evaluate(node => node.scrollWidth <= node.clientWidth + 1 && node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser?.close();
+      server?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
+
 describe("issue report advisory preview", () => {
   /* PR #2530: the operator decides on this message, so it has to show which
      lines become public, that approving publishes them, and what each hint

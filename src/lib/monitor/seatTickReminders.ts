@@ -1,6 +1,7 @@
 import { redactMonitorText } from "./redact";
 import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 import { createHash } from "node:crypto";
+import { pauseReminderDue } from "@/lib/pipelines/pauseReminder";
 import type { SeatTickCheckInput, SeatTickItem, SeatTickTaskInput, SeatTickPipelineInput, SeatTickTaskPage } from "./types";
 
 export const SEAT_REMINDER_AFTER_MS = 60 * 60_000;
@@ -23,11 +24,7 @@ export function recentReminderVersion(version: string, now: number): boolean {
 
 export function pauseReminderReady(pipeline: SeatTickPipelineInput, now: number): boolean {
   if (!pipeline.pausedBy || pipeline.pausedBy === "operator" || pipeline.state === "terminal") return false;
-  const condition = pipeline.pause?.resumeCondition;
-  if (condition?.kind === "date") return Date.parse(condition.at) <= now;
-  if (condition?.kind === "account-usage") return pipeline.pauseConditionMet === true;
-  const since = Date.parse(pipeline.pausedAt ?? pipeline.updatedAt ?? "");
-  return Number.isFinite(since) && now - since >= SEAT_REMINDER_REPEAT_MS;
+  return pauseReminderDue(pipeline.pause, pipeline.pausedAt ?? pipeline.updatedAt, now, pipeline.pauseConditionMet);
 }
 
 export function taskHasBlocker(task: SeatTickTaskInput, now: number): boolean {
@@ -151,10 +148,12 @@ export function seatTickReminders(input: SeatTickCheckInput): SeatTickItem[] {
     if (last !== undefined && input.now - last < SEAT_REMINDER_REPEAT_MS) continue;
     const parsed = Date.parse(since ?? "");
     const firstDue = Number.isFinite(parsed) ? parsed : input.now;
+    const waiting = input.pauseWaitingTasks?.[pipeline.id] ?? [];
+    const taskLine = waiting.length ? `Waiting task(s) ${waiting.slice(0, 4).join(", ")}${waiting.length > 4 ? ` and ${waiting.length - 4} more on this lane` : ""}: re-send or clear their holds when you resolve the pause. ` : "";
     items.push({ dueAt: last === undefined ? firstDue : Math.max(firstDue, last + SEAT_REMINDER_REPEAT_MS), item: {
       kind: "pipeline", reminderKind: "pause", id: pipeline.id, occurredAt: since,
       itemVersion: `${key}@${input.now}`,
-      label: `${pipeline.title} — paused; reason: ${pipeline.pause?.reason ?? "not recorded"}; ${pipeline.pause?.resumeCondition ? "resume condition is met" : "no resume condition recorded; review the pause"}; use pipeline_action resume when ready` } });
+      label: taskLine + `${pipeline.title} — paused; reason: ${pipeline.pause?.reason ?? "not recorded"}; ${pipeline.pause?.resumeCondition ? "resume condition is met" : "no resume condition recorded; review the pause"}; use pipeline_action resume when ready` } });
   }
   return [...overdueItems, ...items.sort((a, b) => a.dueAt - b.dueAt || a.item.id.localeCompare(b.item.id) || a.item.kind.localeCompare(b.item.kind))
     .map(entry => entry.item)];
@@ -174,7 +173,9 @@ export function seatTickTaskPage(input: SeatTickCheckInput, legacy: readonly Sea
     used.add(task.id);
     all.push({ kind: "task", reminderKind: "task", id: task.id, label: task.title, itemVersion: `${taskKey(task.id, "task")}@${input.now}` });
   }
-  const waiting = input.tasks.filter(task => !used.has(task.id) && !taskIsOverdue(task, input.now) && task.status !== "done" && !task.owned && !task.runsOn && (task.status === "blocked" || !!task.hold));
+  const carried = new Set((input.workerAsks ?? []).flatMap(ask => ask.waitingTaskIds ?? []));
+  for (const ids of Object.values(input.pauseWaitingTasks ?? {})) for (const id of ids) carried.add(id);
+  const waiting = input.tasks.filter(task => !used.has(task.id) && !carried.has(task.id) && !taskIsOverdue(task, input.now) && task.status !== "done" && !task.owned && !task.runsOn && (task.status === "blocked" || !!task.hold));
   const rank = (task: SeatTickTaskInput) => task.hold?.until && Date.parse(task.hold.until) <= input.now ? 0 : !taskHasBlocker(task, input.now) ? 1 : 2;
   const position = (task: SeatTickTaskInput): WaitingCursor => [rank(task), Date.parse(task.hold?.since ?? task.waitingSince ?? task.updatedAt ?? "") || 0, task.id];
   waiting.sort((a, b) => compareWaiting(position(a), position(b)));

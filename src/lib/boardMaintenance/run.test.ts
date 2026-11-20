@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import { statePath } from "@/lib/configDir";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasks, saveTasks } from "@/lib/tasks/store";
+import type { BoardTask, TaskHoldKind } from "@/lib/tasks/types";
+import { buildPipeline } from "@/lib/pipelines/store";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { defaultSeatTickSources, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { productionBoardMaintenanceController, type BoardMaintenancePorts, type MaintenanceObservation } from "./run";
@@ -63,6 +65,31 @@ for (const enabled of [true, false]) test(`launch brief reads this project's mer
   expect(setMergeOnReview("other-project", !enabled, "fixture", new Date(NOW).toISOString())).not.toBeNull();
   await h.controller.launchIfDue(input());
   expect(String(h.bodies[0].prompt)).toContain(`Project mergeOnReview: ${enabled ? "on" : "off"}`);
+});
+test("the launch classifies this project's Waiting cards and the settled run carries the seat handoff", async () => {
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  const blocked = (id: string, kind: TaskHoldKind, project = PROJECT): BoardTask => ({
+    id, project, text: "Review fixture status", status: "blocked", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind, since: at, note: "Fixture wait", by: "agent" },
+  });
+  saveTasks([blocked("aabbccdd", "external"), blocked("aabbccee", "operator"), blocked("aabbccff", "external"),
+    blocked("bbccddee", "external", "other-project")], statePath("tasks.json"));
+  const running = buildPipeline({ id: "fixture-running", project: PROJECT, task: "Continue work", taskIds: ["aabbccff"], repoDir: "/fixtures/repository",
+    stages: [], srcPath: null, srcConversationId: null, now: at });
+  h.sources.pipelines = () => [{ ...running, state: "running" }];
+  await h.controller.launchIfDue(input());
+  const runId = h.run().runId;
+  const brief = String(h.bodies[0]!.prompt);
+  expect(brief).toContain("1 need the operator, 2 routed to the seat or agents");
+  expect(brief).toContain("aabbccdd | seat/unowned | Verify the wait");
+  expect(brief).toContain("aabbccff | agents/running | Let the current work continue.");
+  expect(brief).not.toContain("bbccddee");
+  h.observe({ state: "ended", finalText: "seat: aabbccdd | lane settled | check the running build\nVerdict: pass" });
+  await h.controller.reconcile(PROJECT);
+  expect(readMaintenanceRun(runId)).toMatchObject({ state: "succeeded", log: { seat: [
+    { taskId: "aabbccdd", reason: "lane settled", action: "check the running build" },
+  ] } });
 });
 test("card exists before spawn, with icon, colour, description and task binding in body", async () => {
   const h = harness(); await h.controller.launchIfDue(input());

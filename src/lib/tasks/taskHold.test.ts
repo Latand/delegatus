@@ -83,12 +83,57 @@ test("a hold moves work to Waiting, preserves its age on edits, and clears by th
   const edited = ok(patchTask(waiting.tasks, original.id, { hold: { kind: "resource", note: "Wait for memory" } }, LATER, { actor: "agent" }));
   expect(edited.task.hold?.since).toBe(NOW);
   expect(edited.task.hold?.by).toBe("agent");
+  expect(edited.task.status).toBe("inbox");
   const cleared = ok(patchTask(edited.tasks, original.id, { hold: null }, LATER));
   expect(cleared.task.status).toBe("inbox");
   expect(cleared.task.hold).toBeUndefined();
   const owned = task({ status: "assigned", assignments: [{ path: "/fixture/worker.jsonl", panePid: null, state: "delivered", error: null, at: NOW }] });
   const ownedWait = ok(patchTask([owned], owned.id, { hold: { kind: "limit", note: "Next usage window" } }, NOW));
   expect(ok(patchTask(ownedWait.tasks, owned.id, { hold: null }, LATER)).task.status).toBe("assigned");
+});
+
+test.each(TASK_HOLD_KINDS)("agent %s holds preserve the work column and migrate old Waiting writes by ownership", kind => {
+  const hold = { kind, note: "Fixture reason" };
+  const agent = { actor: "agent" as const };
+  const expected = kind === "operator" ? "blocked" : "inbox";
+  const created = ok(createTask([], { project: "fixture", text: "Record a wait", placement: "unplaced", hold }, [],
+    { ...agent, now: () => NOW, id: () => "created-hold" }));
+  expect(created.task.status).toBe(expected);
+  const owned = task({ status: "assigned", assignments: [{ path: null, panePid: null, state: "linked", error: null, at: NOW }] });
+  for (const starting of [task(), owned, { ...owned, status: "blocked" as const }]) {
+    const updated = ok(patchTask([starting], starting.id, { hold }, NOW, agent));
+    expect(updated.task.status).toBe(kind === "operator" ? "blocked" : starting.assignments.length ? "assigned" : "inbox");
+    expect(updated.task.hold?.kind).toBe(kind);
+  }
+});
+
+test("explicit blocked writes are clamped with their reason and completion always clears it", () => {
+  const options = { actor: "agent" as const, now: () => NOW, id: () => "clamped-hold" };
+  const input = { project: "fixture", text: "Record a wait", placement: "unplaced", status: "blocked" };
+  const original = task({ status: "blocked" });
+  for (const hold of [undefined, { kind: "resource", note: "Wait for capacity" }]) {
+    const fields = hold ? { hold } : {};
+    for (const result of [
+      ok(createTask([], { ...input, ...fields }, [], options)),
+      ok(patchTask([original], original.id, { status: "blocked", ...fields }, NOW, options)),
+    ]) {
+      expect(result.task.status).toBe("inbox");
+      expect(result.task.hold?.kind).toBe(hold?.kind ?? "unstated");
+      expect(result.notes).toEqual([expect.stringContaining('Use hold kind "operator"')]);
+    }
+  }
+  const moved = ok(patchTask([original], original.id, { status: "assigned", hold: { kind: "pr" } }, NOW, options));
+  expect(moved.task).toMatchObject({ status: "assigned", hold: { kind: "pr" } });
+  const legacyWait = { ...moved.task, status: "blocked" as const };
+  expect(ok(patchTask([legacyWait], original.id, { status: "blocked" }, LATER, options)).task)
+    .toMatchObject({ status: "inbox", hold: legacyWait.hold! });
+  expect(ok(patchTask(moved.tasks, original.id, { status: "inbox" }, LATER, options)).task.hold).toBeUndefined();
+  const done = ok(patchTask(moved.tasks, original.id, { status: "done", hold: { kind: "operator" } }, LATER, options));
+  expect(done.task.status).toBe("done");
+  expect(done.task.hold).toBeUndefined();
+  expect(ok(createTask([], input, [], { now: () => NOW, id: () => "operator-wait" })).task).toMatchObject({
+    status: "blocked", hold: { kind: "unstated", by: "operator" },
+  });
 });
 
 
