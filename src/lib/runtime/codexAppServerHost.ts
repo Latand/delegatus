@@ -23,8 +23,8 @@ import { isNonblockingCodexQuestion } from "./codexAttention";
 import { CodexPinnedProtocol, installedCodexVersion, resolveCodexProtocol, type CodexSchemaGenerator } from "@/lib/accounts/codexPinnedProtocol";
 import { parseAppServerMessage } from "@/lib/accounts/codexAppServerProtocol";
 import { decodeCodexServerRequest, encodeCodexServerResponse, resolveCodexAttentionResponse } from "./codexServerRequests";
-import { bindGateCheckRoot, gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV, prepareGateCheckTool, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
-import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV } from "./gateCheckRecord";
+import { bindGateCheckRoot, gateCheckTool, prepareGateCheckTool, runGateCheckTool, socketGateCheckRoot, type GateCheckRoot } from "./gateCheckTool";
+import { gateCheckLaunchEnvironment } from "./gateCheckRecord";
 import { codexAnswerMatchesDispatch, codexRequestDigest, codexRequestIdentity, sameCodexRequest, type CodexRequestReceipt } from "./codexRequestReceipt";
 import { normalizeCodexProtocolReceipt } from "./codexProtocolReceipt";
 import { assertCatalogOffersTier, codexTurnProfile } from "./codexTurnProfile";
@@ -1686,16 +1686,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
     const childEnv = { ...telegram.env };
     const gateCheckLaunchRoot = childEnv.TMPDIR ?? os.tmpdir();
-    const gateCheckLaunchBinding = bindGateCheckRoot(gateCheckLaunchRoot);
-    if (gateCheckLaunchBinding) {
-      childEnv[GATE_CHECK_LAUNCH_ROOT_ENV] = gateCheckLaunchBinding.root;
-      childEnv[GATE_CHECK_ROOT_ENV] = gateCheckLaunchBinding.physicalRoot;
-      childEnv[GATE_CHECK_ROOT_IDENTITY_ENV] = gateCheckLaunchBinding.rootDirectoryIdentity;
-    } else {
-      delete childEnv[GATE_CHECK_LAUNCH_ROOT_ENV];
-      delete childEnv[GATE_CHECK_ROOT_ENV];
-      delete childEnv[GATE_CHECK_ROOT_IDENTITY_ENV];
-    }
+    const gateCheckLaunchBinding = bindGateCheckRoot(gateCheckLaunchRoot, childEnv.LLV_EVIDENCE_DIR);
+    if (gateCheckLaunchBinding) Object.assign(childEnv, gateCheckLaunchEnvironment(gateCheckLaunchBinding));
     let child: CodexTransport;
     try {
       options.assertCurrent?.();
@@ -4838,8 +4830,8 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if ([...this.callbackReceipts.values()].some(receipt => receipt.identity.generation === this.callbackGeneration && receipt.identity.requestId === id)) {
       this.protocolAnomalies++; this.notifyStateListeners(); return;
     }
-    // Every gate receipt carries gateWait, so a refusal's reply is retained and
-    // replayed like a verdict; a refused wait just has no run id.
+    // Every gate receipt carries gateWait so its reply can be replayed even
+    // when the call could not be bound to a run id.
     let gateWait: NonNullable<CodexRequestReceipt["gateWait"]> = {};
     try { gateWait = { runId: prepareGateCheckTool(params.arguments, this.gateCheckRoot).runId }; }
     catch { /* The tool returns the precise refusal without reading foreign output. */ }

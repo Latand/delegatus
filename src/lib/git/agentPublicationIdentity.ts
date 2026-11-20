@@ -3,8 +3,7 @@ import { agentHistoryGuardEnv, type AgentEnvironment } from "./agentHistoryGuard
 import { agentForgeWriteEnv } from "./agentForgeCredentials";
 import { agentLessonPublicationEnv } from "@/lib/memory/roleStore";
 import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, type RepositoryCommitIdentity } from "./repositoryCommitIdentity";
-import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../runtime/gateCheckRecord";
-import type { GateCheckRoot } from "../runtime/gateCheckTool";
+import { gateCheckLaunchEnvironment, type GateCheckRoot } from "../runtime/gateCheckRecord";
 
 /** Publication settings belong to the launching process, before child-env
     filtering. Git identity variables from that process never choose an agent's
@@ -56,11 +55,7 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
   const shellBindings = source.LLV_GATE_CPU_PRIORITY_SOURCE === undefined
     ? {} : { LLV_GATE_CPU_PRIORITY_SOURCE: source.LLV_GATE_CPU_PRIORITY_SOURCE };
   const storage = Object.fromEntries(["TMPDIR", "LLV_EVIDENCE_DIR"].flatMap(key => source[key] === undefined ? [] : [[key, source[key]]]));
-  const gateBindings = gateRoot ? {
-    [GATE_CHECK_LAUNCH_ROOT_ENV]: gateRoot.root,
-    [GATE_CHECK_ROOT_ENV]: gateRoot.physicalRoot,
-    [GATE_CHECK_ROOT_IDENTITY_ENV]: gateRoot.rootDirectoryIdentity,
-  } : {};
+  const gateBindings = gateRoot ? gateCheckLaunchEnvironment(gateRoot) : {};
   const set = { ...identity, ...shellBindings, ...storage, ...gateBindings };
   const configured = policy && typeof policy === "object" && !Array.isArray(policy)
     ? policy as Record<string, unknown> : {};

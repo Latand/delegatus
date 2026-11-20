@@ -1,34 +1,43 @@
 import fs from "node:fs";
 import path from "node:path";
-import { readEnvelope, writeEnvelope } from "../recordedChecks/wire";
+import { digest, missingOwnedFile, physical, readEnvelope, writeEnvelope } from "../recordedChecks/wire";
 import { procBackend } from "@/lib/proc";
 import { codexSocketPath, verifiedCodexSocketOwner, type CodexSocketOwner } from "./codexSocketTransport";
-import { gateCompletionIdentity, waitForGateCompletion } from "./gateWait";
-import { GATE_CHECK_ROOT_IDENTITY_ENV, resolveGateRun } from "./gateCheckRecord";
+import { gateCompletionIdentity, GateRecorderLostError, gateRecorderExited, validateGateWaitTimeout, waitForGateCompletion } from "./gateWait";
+import { GATE_CHECK_EVIDENCE_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV,
+  lookupGateRun, readGateCheckEvidence, validateGateRunId, verifyGateRunTicket, type GateCheckRoot, type GateRunRecord } from "./gateCheckRecord";
 
 export const gateCheckTool = {
   type: "function", name: "wait_for_check",
-  description: "After recording starts, pass its runId and check reason (or the exact absolute log path for an older run) and keep the stage alive until this single wait returns.",
-  inputSchema: { type: "object", properties: { runId: { type: "string" }, log: { type: "string" }, reason: { type: "string" } }, required: ["reason"], additionalProperties: false },
+  description: "After recording starts, pass its runId and check reason (or the exact absolute log path for an older run). A wait can return queued, finished or lost. An optional timeoutMs bounds the wait without cancelling the check.",
+  inputSchema: { type: "object", properties: { runId: { type: "string" }, log: { type: "string" }, reason: { type: "string" },
+    timeoutMs: { type: "number" } }, required: ["reason"], additionalProperties: false },
 } as const;
 
-export type GateCheckRoot = Readonly<{ root: string; physicalRoot: string; rootDirectoryIdentity: string }>;
 type SavedGateCheckRoot = { identity?: unknown; root?: unknown; physicalRoot?: unknown; rootDirectoryIdentity?: unknown };
-export { GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckRecord";
+export { GATE_CHECK_ROOT_IDENTITY_ENV, type GateCheckRoot } from "./gateCheckRecord";
 
 /** Capture once at launch/adoption; callbacks must retain this physical binding. */
-export function bindGateCheckRoot(root: string): GateCheckRoot | null {
+export function bindGateCheckRoot(root: string, evidenceDirectory?: string): GateCheckRoot | null {
   try {
     if (!path.isAbsolute(root)) return null;
     const physicalRoot = fs.realpathSync(root);
     const stat = fs.statSync(physicalRoot);
-    return stat.isDirectory() ? Object.freeze({ root, physicalRoot, rootDirectoryIdentity: `${stat.dev}:${stat.ino}` }) : null;
+    if (!stat.isDirectory()) return null;
+    const evidence = evidenceDirectory ? { directory: evidenceDirectory, identity: physical(evidenceDirectory) } : undefined;
+    return Object.freeze({ root, physicalRoot, rootDirectoryIdentity: `${stat.dev}:${stat.ino}`, ...(evidence ? { evidence } : {}) });
   } catch { return null; }
 }
 
-function validateGateCheckRoot(binding: GateCheckRoot): void {
+function gateCheckRootPresent(binding: GateCheckRoot): boolean {
   const current = bindGateCheckRoot(binding.root);
-  if (!current || current.physicalRoot !== binding.physicalRoot || current.rootDirectoryIdentity !== binding.rootDirectoryIdentity)
+  if (current?.physicalRoot === binding.physicalRoot && current.rootDirectoryIdentity === binding.rootDirectoryIdentity) return true;
+  if (!fs.lstatSync(binding.root, { throwIfNoEntry: false }) && !fs.lstatSync(binding.physicalRoot, { throwIfNoEntry: false })) return false;
+  throw new Error(`stage temporary root identity changed (root=${JSON.stringify(binding.root)})`);
+}
+
+function validateGateCheckRoot(binding: GateCheckRoot): void {
+  if (!gateCheckRootPresent(binding))
     throw new Error(`stage temporary root identity changed (root=${JSON.stringify(binding.root)})`);
 }
 
@@ -72,9 +81,14 @@ export function socketGateCheckRoot(owner: CodexSocketOwner, launchBinding?: Gat
     // distinguishes the original directory from a replacement at that path.
     const launchDirectoryIdentity = procBackend.readEnvVar(owner.process.pid, GATE_CHECK_ROOT_IDENTITY_ENV);
     if (!launchDirectoryIdentity) return null;
-    const binding = bindGateCheckRoot(root);
-    if (!binding || binding.rootDirectoryIdentity !== launchDirectoryIdentity
-      || (saved && (binding.physicalRoot !== saved.physicalRoot || binding.rootDirectoryIdentity !== saved.rootDirectoryIdentity))) return null;
+    const evidence = readGateCheckEvidence(procBackend.readEnvVar(owner.process.pid, GATE_CHECK_EVIDENCE_ENV), launchDirectoryIdentity);
+    const liveBinding = bindGateCheckRoot(root);
+    const launchPhysicalRoot = liveBinding?.physicalRoot ?? procBackend.readEnvVar(owner.process.pid, GATE_CHECK_ROOT_ENV);
+    if (!launchPhysicalRoot || !path.isAbsolute(launchPhysicalRoot) || (!liveBinding && !evidence)) return null;
+    const binding = Object.freeze({ root, physicalRoot: launchPhysicalRoot, rootDirectoryIdentity: launchDirectoryIdentity,
+      ...(evidence ? { evidence } : {}) });
+    gateCheckRootPresent(binding);
+    if (saved && (binding.physicalRoot !== saved.physicalRoot || binding.rootDirectoryIdentity !== saved.rootDirectoryIdentity)) return null;
     if (!saved) writeEnvelope(filename, { identity, ...binding });
     return verifiedCodexSocketOwner(owner) ? binding : null;
   } catch { return null; }
@@ -82,15 +96,21 @@ export function socketGateCheckRoot(owner: CodexSocketOwner, launchBinding?: Gat
 
 /** A read-only tool bound to the native stage's own temporary root. */
 export function prepareGateCheckTool(args: unknown, binding: GateCheckRoot | null) {
-  const input = args as { runId?: unknown; log?: unknown; reason?: unknown } | null;
+  const input = args as { runId?: unknown; log?: unknown; reason?: unknown; timeoutMs?: unknown } | null;
   if (!input || (input.runId !== undefined ? typeof input.runId !== "string" : typeof input.log !== "string" || !path.isAbsolute(input.log))
     || typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 500)
     throw new Error("runId or an absolute log and a bounded check reason are required");
+  const { reason, timeoutMs } = input;
+  if (timeoutMs !== undefined) validateGateWaitTimeout(timeoutMs);
+  if (typeof input.runId === "string") validateGateRunId(input.runId);
   if (!binding) throw new Error(`stage temporary root is unavailable: the verified listener's launch TMPDIR or directory identity proof is unavailable or does not match (root=null, log=${JSON.stringify(input.log)})`);
   const { root, physicalRoot: ownerRoot } = binding;
+  if (typeof input.runId === "string") {
+    const record = lookupGateRun(ownerRoot, binding.rootDirectoryIdentity, input.runId, gateCheckRootPresent(binding), binding.evidence);
+    return { log: record.log, reason, runId: digest({ log: record.log, ticket: record }), record, timeoutMs, binding };
+  }
   validateGateCheckRoot(binding);
-  const record = typeof input.runId === "string" ? resolveGateRun(ownerRoot, input.runId) : null;
-  const requestedLog = record?.log ?? (input.log as string);
+  const requestedLog = input.log as string;
   let parent: string;
   try {
     parent = fs.realpathSync(path.dirname(requestedLog));
@@ -102,7 +122,47 @@ export function prepareGateCheckTool(args: unknown, binding: GateCheckRoot | nul
   if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative))
     throw new Error(`gate log is outside this stage's temporary root (root=${JSON.stringify(root)}, log=${JSON.stringify(input.log)}, resolvedRoot=${JSON.stringify(ownerRoot)}, resolvedLog=${JSON.stringify(log)})`);
   validateGateCheckRoot(binding);
-  return { log, reason: input.reason, runId: gateCompletionIdentity(log).runId, record };
+  return { log, reason, runId: gateCompletionIdentity(log).runId, record: null, timeoutMs, binding };
+}
+
+type PreparedGateCheck = ReturnType<typeof prepareGateCheckTool>;
+class GateScratchMissingError extends Error {}
+
+function recheckGateRunRecord(binding: GateCheckRoot, record: GateRunRecord): boolean {
+  const scratchPresent = gateCheckRootPresent(binding);
+  const current = lookupGateRun(binding.physicalRoot, binding.rootDirectoryIdentity, record.runId, scratchPresent, binding.evidence);
+  if (digest(current) !== digest(record)) throw new Error("gate run record changed during the wait");
+  return scratchPresent;
+}
+
+function recheckGateRun({ binding, record }: PreparedGateCheck): void {
+  if (!record) { validateGateCheckRoot(binding); return; }
+  if (!recheckGateRunRecord(binding, record)) throw new GateScratchMissingError("The recording's scratch directory is missing");
+  verifyGateRunTicket(record);
+}
+
+function lostGateReason(error: unknown, prepared: PreparedGateCheck): string | undefined {
+  const { binding, record, log } = prepared;
+  if (error instanceof GateRecorderLostError) {
+    try {
+      recheckGateRun(prepared);
+      if (gateCompletionIdentity(log).runId !== prepared.runId) throw new Error("gate completion run identity changed");
+      return "The recorder exited before publishing a terminal verdict";
+    } catch (recheckError) {
+      if (!(recheckError instanceof GateScratchMissingError) && (recheckError as NodeJS.ErrnoException).code !== "ENOENT") throw recheckError;
+      error = recheckError;
+    }
+  }
+  if (!(error instanceof GateScratchMissingError) && (error as NodeJS.ErrnoException).code !== "ENOENT") return;
+  if (!record || !gateRecorderExited(record.recorder)) return;
+  const { physicalRoot } = binding;
+  if (!recheckGateRunRecord(binding, record) || [log, path.join(`${log}.gate`, "owner.json"), path.join(`${log}.gate`, "completion.json")]
+    .some(file => missingOwnedFile(physicalRoot, path.relative(physicalRoot, file))))
+    return "The recording's scratch files are missing and its recorder exited without a readable verdict";
+}
+
+function gateAnswer(result: object) {
+  return { success: true, contentItems: [{ type: "inputText" as const, text: JSON.stringify(result) }] };
 }
 
 export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | null, signal: AbortSignal, expectedRunId?: string) {
@@ -112,15 +172,22 @@ export async function runGateCheckTool(args: unknown, binding: GateCheckRoot | n
     const { record } = prepared;
     const completionId = expectedRunId ?? prepared.runId;
     reportedRunId = record?.runId ?? completionId;
-    const result = await waitForGateCompletion(prepared.log, signal, completionId);
-    validateGateCheckRoot(binding!);
-    if (record && JSON.stringify(resolveGateRun(binding!.physicalRoot, record.runId)) !== JSON.stringify(record))
-      throw new Error("gate run record changed during the wait");
-    return { success: true, contentItems: [{ type: "inputText" as const, text: JSON.stringify({ reason: prepared.reason, ...result,
-      ...(record ? { runId: record.runId } : {}),
-      terminal: result.state.startsWith("finished"),
-      ...(!result.state.startsWith("finished") ? { outcome: "unknown", instruction: "No terminal result. Preserve this run and its evidence; do not poll or restart it." } : {}),
-    }) }] };
+    if (completionId !== prepared.runId) throw new Error("gate completion run identity changed");
+    try {
+      if (signal.aborted) throw new Error("gate completion wait cancelled; command result unknown");
+      recheckGateRun(prepared);
+      const result = await waitForGateCompletion(prepared.log, signal, completionId, prepared.timeoutMs);
+      recheckGateRun(prepared);
+      const terminal = result.state.startsWith("finished");
+      return gateAnswer({ reason: prepared.reason, ...result, runId: reportedRunId, terminal,
+        ...(!terminal ? { outcome: "unknown", instruction: "Preserve this run and its evidence. A later wait can read the same run." } : {}),
+      });
+    } catch (error) {
+      const reason = lostGateReason(error, prepared);
+      if (!reason) throw error;
+      return gateAnswer({ runId: reportedRunId, state: "lost", outcome: "lost", terminal: true, code: null, reason,
+        instruction: "Preserve the original evidence. Once the original work stops, you may rerun the check once with a fresh log." });
+    }
   } catch (error) {
     return { success: false, contentItems: [{ type: "inputText" as const, text: `Check result unknown${reportedRunId ? ` (runId=${reportedRunId})` : ""}: ${(error instanceof Error ? error.message : String(error)).slice(0, 8192)}. Preserve the original run and evidence.` }] };
   }

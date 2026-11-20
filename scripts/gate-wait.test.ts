@@ -14,7 +14,7 @@ import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
-import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { fixtureReport, stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { buildManifest, digest, writeEnvelope, readEnvelope, terminalSchema, descriptorSchema, reportSchema, physical } from "../src/lib/recordedChecks/wire";
 
 const roots: string[] = [];
@@ -166,7 +166,8 @@ function background(args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
   let stdout = "", stderr = "";
   let started!: () => void;
   const ticketReady = new Promise<void>(resolve => { started = resolve; });
-  child.stdout!.on("data", data => { stdout += data; if (stdout.includes("recording started")) started(); }); child.stderr!.on("data", data => { stderr += data; });
+  child.stdout!.on("data", data => { stdout += data; if (/^gate-slot: runId=[a-f0-9]{64}$/m.test(stdout)) started(); });
+  child.stderr!.on("data", data => { stderr += data; });
   const closed = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
   return { child, closed, ticketReady, output: () => ({ stdout, stderr }) };
 }
@@ -214,8 +215,9 @@ test.skipIf(process.platform !== "linux")("demonstration: a real queued gate fin
   expect(await duplicate.closed).toBe(2); expect(fs.readFileSync(f.log, "utf8")).toBe(original);
 }, 30_000);
 
-test.skipIf(process.platform !== "linux")("one native completion hold spans queue, progress and nonzero exit without model polls", async () => {
-  const f = fixture(), env = portableEnvironment(f);
+test.skipIf(process.platform !== "linux")("a recorded run with a missing scratch index waits through CPU admission", async () => {
+  const f = fixture(), env = portableEnvironment(f), evidence = fixture().root;
+  env.LLV_GATE_CHECK_EVIDENCE = JSON.stringify({ directory: evidence, identity: physical(evidence), rootDirectoryIdentity: physical(f.root) });
   const lock = spawn("/bin/bash", ["-c", 'exec 9>"$1"; /usr/bin/flock 9; echo ready; read -r release', "holder", path.join(f.root, "llv-heavy-gate.slot1.lock")], { stdio: ["pipe", "pipe", "ignore"] });
   children.push(lock); const lockClosed = once(lock, "close");
   await once(lock.stdout!, "data");
@@ -223,9 +225,17 @@ test.skipIf(process.platform !== "linux")("one native completion hold spans queu
   await recording.ticketReady;
   const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
   expect(runId).toHaveLength(64);
+  await observe(f.dir, () => fs.existsSync(path.join(f.dir, "queued")));
+  fs.unlinkSync(path.join(f.root, ".gate-runs", `${runId}.json`));
+  const binding = bindGateCheckRoot(f.root, evidence);
+  const args = { runId, reason: "queued recorded check" };
+  const signal = new AbortController().signal;
+  const queued = await runGateCheckTool({ ...args, timeoutMs: 10 }, binding, signal);
+  expect(queued.success, queued.contentItems[0].text).toBe(true);
+  expect(JSON.parse(queued.contentItems[0].text)).toMatchObject({ runId, terminal: false,
+    state: expect.stringMatching(/^queued position=1 reason=Waiting/), reason: expect.stringContaining("Still queued"), code: 124 });
   let settled = false;
-  const held = runGateCheckTool({ runId, log: path.join(f.root, "wrong/check.log"), reason: "queued recorded check" },
-    bindGateCheckRoot(f.root), new AbortController().signal).then(result => { settled = true; return result; });
+  const held = runGateCheckTool(args, binding, signal).then(result => { settled = true; return result; });
   for (let i = 0; i < 100; i++) fs.appendFileSync(f.log, `progress ${i}\n`);
   await Promise.resolve();
   expect(settled).toBe(false);
@@ -263,6 +273,71 @@ console.log(JSON.stringify(await runGateCheckTool({ runId, ...(log ? { log } : {
   }
   const foreign = fixture();
   expect((await runGateCheckTool({ runId, log: f.log, reason: "foreign run" }, bindGateCheckRoot(foreign.root), new AbortController().signal)).success).toBe(false);
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("a fresh waiter reports a lost recording after the recorder and its scratch disappear", async () => {
+  const f = fixture(), env = portableEnvironment(f), evidence = fixture().root;
+  env.LLV_GATE_CHECK_EVIDENCE = JSON.stringify({ directory: evidence, identity: physical(evidence), rootDirectoryIdentity: physical(f.root) });
+  const launch = path.join(evidence, "recorder.ts");
+  fs.writeFileSync(launch, `import { openGateRecording } from ${JSON.stringify(path.join(import.meta.dir, "gate-wait.ts"))};
+const { runId } = await openGateRecording(process.argv[2], ["/bin/true"]);
+console.log(JSON.stringify({ runId }));
+setInterval(() => {}, 60_000);`);
+  // Crash after the real recorder has published its ticket and before dispatch.
+  // No command or supervisor is started in this fault injection.
+  const recorder = spawn(process.execPath, [launch, f.log], { env, stdio: ["ignore", "pipe", "pipe"] });
+  children.push(recorder);
+  const closed = once(recorder, "close");
+  const { runId } = await fixtureReport<{ runId: string }>(recorder, "recorder before dispatch", []);
+  expect(runId).toHaveLength(64);
+  const binding = bindGateCheckRoot(f.root, evidence);
+  const args = { runId, reason: "restart recovery" };
+  const hidden = `${f.root}.retained`;
+  fs.renameSync(f.root, hidden);
+  try {
+    const live = await runGateCheckTool(args, binding, new AbortController().signal);
+    expect(live.success).toBeFalse();
+    expect(live.contentItems[0].text).toContain("Check result unknown");
+  } finally { fs.renameSync(hidden, f.root); }
+  const losingOwner = runGateCheckTool(args, binding, new AbortController().signal);
+  recorder.kill("SIGKILL");
+  await closed;
+  const activeAnswer = await losingOwner;
+  const reader = path.join(evidence, "reader.ts");
+  fs.writeFileSync(reader, `import { runGateCheckTool } from ${JSON.stringify(path.join(import.meta.dir, "../src/lib/runtime/gateCheckTool.ts"))};
+const [binding, args] = process.argv.slice(2).map(JSON.parse);
+console.log(JSON.stringify(await runGateCheckTool(args, binding, new AbortController().signal)));`);
+  const read = (input = args) => {
+    const readerEnv = isolatedEnvironment(fs.mkdtempSync(path.join(evidence, "reader-")), env);
+    readerEnv.LLV_GATE_LOCK_DIR = readerEnv.TMPDIR;
+    readerEnv.PATH = process.env.PATH;
+    const result = spawnSync(process.execPath, [reader, JSON.stringify(binding), JSON.stringify(input)], {
+      env: readerEnv, encoding: "utf8", timeout: 10_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return JSON.parse(result.stdout);
+  };
+  const withScratch = read();
+  fs.rmSync(f.dir, { recursive: true });
+  const withoutTicket = read();
+  fs.rmSync(f.root, { recursive: true });
+  const withoutScratch = read();
+  expect(fs.existsSync(f.root)).toBeFalse();
+  expect(withScratch.success, withScratch.contentItems[0].text).toBe(true);
+  expect(JSON.parse(withScratch.contentItems[0].text)).toMatchObject({ runId, terminal: true, state: "lost", outcome: "lost", code: null,
+    reason: expect.stringContaining("recorder exited") });
+  expect(activeAnswer).toEqual(withScratch);
+  for (const lost of [withoutTicket, withoutScratch]) {
+    expect(lost.success, lost.contentItems[0].text).toBe(true);
+    expect(JSON.parse(lost.contentItems[0].text)).toMatchObject({ runId, terminal: true, state: "lost", code: null,
+      reason: expect.stringContaining("scratch") });
+  }
+  const unknown = `${runId[0] === "0" ? "1" : "0"}${runId.slice(1)}`;
+  for (const [id, cause] of [["../check.log", "invalid"], [`${runId}\n`, "invalid"], [unknown, "unknown"]]) {
+    const refusal = read({ ...args, runId: id });
+    expect(refusal.success).toBe(false);
+    expect(refusal.contentItems[0].text).toContain(`${cause} gate run id`);
+  }
 }, 30_000);
 
 test.skipIf(process.platform !== "linux")("nested check TMPDIR publishes its run under the native launch root", async () => {
@@ -446,8 +521,8 @@ test.skipIf(process.platform !== "linux")("the original absolute deadline closes
   const terminal = terminalSchema.parse(readEnvelope(path.join(f.dir, "result.json")));
   expect(terminal.cancellation?.reason).toBe("deadline");
   expect(terminal.report?.phase).toBe("close");
-  expect(terminal.report?.commandExit).toBeNull();
-  expect(terminal.report?.commandSignal).toBe("SIGTERM");
+  // The supervised Bun process may exit on SIGTERM or handle it and exit 143.
+  expect([[null, "SIGTERM"], [143, null]]).toContainEqual([terminal.report?.commandExit, terminal.report?.commandSignal]);
   expect(terminal.report?.cleanup).toBe("confirmed");
   expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
 }, 45_000);
@@ -464,7 +539,7 @@ test.skipIf(process.platform !== "linux")("recorder death ends its original supe
       catch { return false; }
     });
     const report = reportSchema.parse(readEnvelope(path.join(f.dir, "portable.json")));
-    expect(report.commandSignal).toBe("SIGTERM");
+    expect([[null, "SIGTERM"], [143, null]]).toContainEqual([report.commandExit, report.commandSignal]);
     expect(report.cleanup).toBe("confirmed");
     expect(report.cancellation?.reason).toBe("owner");
     expect(fs.existsSync(path.join(f.dir, "result.json"))).toBeFalse();
