@@ -71,6 +71,10 @@ jobs:
           ran=0
           failed=0
           for file in "${selected[@]}"; do
+            if [[ $file == scripts/gate-slot.queue.test.ts ]]; then
+              # The mixed-release cases archive this exact legacy implementation.
+              git fetch --no-tags --depth=1 origin 2c7e437a553f56d81afa39e71878f60a1e6d73a3
+            fi
             test_root=$(mktemp -d "$TMPDIR/file.XXXXXX")
             mkdir -p "$test_root"/{home,config,cache,tmp,state}
             printf '\n::group::%s\n' "$file"

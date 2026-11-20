@@ -379,7 +379,11 @@ export function DiskPressureNotice({ pressure, density = "full" }: { pressure: D
   const low = pressure.volumes.filter((volume) => volume.level === "warning" || volume.level === "critical");
   if (!pressure.episode || low.length === 0) return null;
   const role = (name: string) => t(`resources.diskRole.${name}` as MessageKey);
-  const consumers = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes).map((consumer) => `${role(consumer.kind)} ${fmtBytes(consumer.bytes)}`).join(", ");
+  const rows = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes).map(consumer => {
+    const label = consumer.kind === "temp" ? t("resources.tempWithScratch") : role(consumer.kind);
+    return `${label} ${fmtBytes(consumer.bytes)}`;
+  });
+  const consumers = rows.join(", ");
   const waiting = low.some((volume) => volume.level === "critical" && (volume.provisioning || volume.roles.includes("state")));
   const volumeText = (volume: DiskPressure["volumes"][number]) => `${volume.roles.map(role).join(" / ")}: ${t("resources.free", { amount: fmtBytes(volume.freeBytes ?? 0) })}`;
   if (density !== "full") {
@@ -408,6 +412,11 @@ export function DiskPressureNotice({ pressure, density = "full" }: { pressure: D
             </span>
           );
         })}
+        {density === "detail" && rows.length ? (
+          <div className={NOTE} title={t("resources.diskConsumersHint")}>
+            {rows.map(row => <div key={row}>{row}</div>)}
+          </div>
+        ) : null}
         {!notes ? null : consumers
           ? <span data-meter-note="" className={`-mt-0.5 ${NOTE}`} title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</span>
           : <span data-meter-note="" className={`-mt-0.5 ${NOTE}`}>{t("resources.diskMeasuring")}</span>}
@@ -422,7 +431,9 @@ export function DiskPressureNotice({ pressure, density = "full" }: { pressure: D
         <div key={`${index}:${volume.roles.join("/")}`}>{volumeText(volume)}</div>
       ))}
       {consumers
-        ? <div title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</div>
+        ? <div title={t("resources.diskConsumersHint")}>{t("resources.diskConsumers")}
+          {rows.map(row => <div key={row}>{row}</div>)}
+        </div>
         : <div>{t("resources.diskMeasuring")}</div>}
       {waiting ? <div>{t("resources.diskWaiting")}</div> : null}
     </div>
