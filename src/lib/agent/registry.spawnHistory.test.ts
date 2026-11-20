@@ -77,9 +77,9 @@ test("pipeline history seeks the client-id index, and other lanes' receipts add 
         const plan = db.query<{ detail: string }, string[]>(`EXPLAIN QUERY PLAN ${sql}`).all(...values).map(row => row.detail);
         const searches = plan.filter(detail => detail.includes("registry_rows"));
         // The rows each branch may read: its index range, counted directly.
-        const id = "json_quote(json_extract(value_json,'$.clientAttemptId'))";
+        const id = "json_extract(value_json,'$.clientAttemptId')";
         const visited = db.query<{ rows: number }, string[]>(`SELECT count(*) AS rows FROM registry_rows
-          WHERE collection='receipts' AND (${id}=json_quote(?) OR (${id}>=? AND ${id}<?))`)
+          WHERE collection='receipts' AND (${id}=? OR (${id}>=? AND ${id}<?))`)
           .get(values[0]!, values[1]!, values[2]!)!.rows;
         const receipts = db.query<{ rows: number }, []>("SELECT count(*) AS rows FROM registry_rows WHERE collection='receipts'").get()!.rows;
         return { searches, visited, receipts };

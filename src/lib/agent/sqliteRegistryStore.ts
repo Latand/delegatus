@@ -389,7 +389,7 @@ const DEFERRED_LOOKUP_INDEXES = new Set([
 function registryLookupIndexes(): ReturnType<typeof declaredIndexes> {
   return declaredIndexes(Object.entries(LOOKUP_PATHS)
     .filter(([field]) => field !== "custodyState" && field !== "migration.custodyState" && !DEFERRED_LOOKUP_INDEXES.has(field))
-    .map(([field, jsonPath]) => `CREATE INDEX IF NOT EXISTS registry_lookup_${field.replaceAll(".", "_")} ON registry_rows(collection, ${field === "clientAttemptId" ? `json_quote(json_extract(value_json, '${jsonPath}'))` : `json_extract(value_json, '${jsonPath}')`}, row_order)${field === "alias" ? " WHERE collection = 'conversationAliases'" : ""}`));
+    .map(([field, jsonPath]) => `CREATE INDEX IF NOT EXISTS registry_lookup_${field.replaceAll(".", "_")} ON registry_rows(collection, json_extract(value_json, '${jsonPath}'), row_order)${field === "alias" ? " WHERE collection = 'conversationAliases'" : ""}`));
 }
 
 /** Archive storage retains each current row in registry_rows for older
@@ -414,12 +414,12 @@ export function pipelineSpawnHistorySelection(base: string): { sql: string; valu
   const prefix = "handshake_retry_";
   const patterns = Array.from({ length: 16 }, (_, index) => prefix + "[0-9]".repeat(index + 1)
     + `_${base}`.slice(0, 128 - prefix.length - index - 1));
-  const id = "json_quote(json_extract(value_json,'$.clientAttemptId'))";
+  const id = "json_extract(value_json,'$.clientAttemptId')";
   // Every pattern starts with the prefix and a digit; ":" follows "9".
-  return { sql: `SELECT row_key FROM registry_rows WHERE collection='receipts' AND ${id}=json_quote(?)
+  return { sql: `SELECT row_key FROM registry_rows WHERE collection='receipts' AND ${id}=?
     UNION ALL SELECT row_key FROM registry_rows WHERE collection='receipts' AND ${id}>=? AND ${id}<?
       AND (${patterns.map(() => `${id} GLOB ?`).join(" OR ")})
-    LIMIT 129`, values: [base, JSON.stringify(`${prefix}0`), JSON.stringify(`${prefix}:`), ...patterns.map(value => JSON.stringify(value))] };
+    LIMIT 129`, values: [base, `${prefix}0`, `${prefix}:`, ...patterns] };
 }
 
 const ROW_COLLECTIONS = [
@@ -1681,13 +1681,6 @@ export class SqliteAgentRegistryStore {
     registryRowIndexes.install(this.db, path.dirname(filename));
     // Recovery indexes are prepared separately with a yield between each
     // build; the remaining constructor indexes share the startup fence.
-    const attemptIndex = this.db.query<{ sql: string | null }, []>(
-      "SELECT sql FROM sqlite_master WHERE type='index' AND name='registry_lookup_clientAttemptId'",
-    ).get();
-    if (attemptIndex && !attemptIndex.sql?.includes("json_quote")) {
-      assertStateStartupMutation(path.dirname(filename), "exact spawn attempt index");
-      this.db.exec("DROP INDEX registry_lookup_clientAttemptId");
-    }
     registryLookupIndexes().install(this.db, path.dirname(filename));
     /* A receipt's grant decision selects the lineage edges its launch created.
        The archive indexes that field; without the hot half each decision parsed
@@ -4535,12 +4528,11 @@ export class SqliteAgentRegistryStore {
       // Decode the complete JSON string on the RHS so the expression index
       // still gets a scalar equality seek; filter its candidates by the
       // original JavaScript value below.
-      const parameter = exactSpawnAttempt ? "json_quote(json_extract(?, '$'))" : "?";
+      const parameter = exactSpawnAttempt ? "json_extract(?, '$')" : "?";
       const bindings = [exactSpawnAttempt ? JSON.stringify(value) : value];
       const match = (column: string) => {
         const extracted = `json_extract(${column},'${jsonPath}')`;
-        const expression = exactSpawnAttempt ? `json_quote(${extracted})` : extracted;
-        return exactSpawnAttempt ? `${expression} = ${parameter}` : `${expression} IN (${parameter})`;
+        return exactSpawnAttempt ? `${extracted} = ${parameter}` : `${extracted} IN (${parameter})`;
       };
       return mapped
         ? this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM registry_hot_rows
