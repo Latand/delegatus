@@ -1,4 +1,4 @@
-import { compareDeliveryAdmission, seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
+import { compareDeliveryAdmission, conversationLaunchProfileForPath, launchTierProfile, seatViewerMcpOwner, seatViewerMcpObservation, type LaunchTierProfile, type SeatTickConversation } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -19,7 +19,7 @@ import { deepFreeze } from "@/lib/deepFreeze";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, DatabaseReplacedError, openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
-import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import type { HeldDelivery, LaunchProfile, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -1777,37 +1777,63 @@ export class SqliteAgentRegistryStore {
       CREATE TABLE IF NOT EXISTS registry_conversation_paths (
         path TEXT NOT NULL, conversation_id TEXT NOT NULL, PRIMARY KEY(path, conversation_id)
       );
+      CREATE TABLE IF NOT EXISTS registry_receipt_paths (
+        path TEXT NOT NULL, receipt_id TEXT NOT NULL, PRIMARY KEY(path, receipt_id)
+      );
+      CREATE INDEX IF NOT EXISTS registry_receipt_paths_owner ON registry_receipt_paths(receipt_id);
     `);
     registryConversationPathIndexes.install(this.db, path.dirname(filename));
     // The outer UPSERT's conflict policy overrides a trigger's OR IGNORE.
     // Explicit UPSERT clauses keep overlapping generation/continuity paths
     // harmless, including writes from a predecessor release during handover.
-    if (this.meta("conversation_paths_trigger_version") !== "2") {
+    if (this.meta("conversation_paths_trigger_version") !== "3") {
       this.runAtomically([
         "DROP TRIGGER IF EXISTS registry_paths_insert",
         "DROP TRIGGER IF EXISTS registry_paths_update",
         "DROP TRIGGER IF EXISTS registry_paths_delete",
+        "DROP TRIGGER IF EXISTS registry_receipt_paths_insert",
+        "DROP TRIGGER IF EXISTS registry_receipt_paths_update",
+        "DROP TRIGGER IF EXISTS registry_receipt_paths_delete",
         `CREATE TRIGGER registry_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
           INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
           INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+          INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.migration.providerReceipt.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+          INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.migration.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
         END`,
         `CREATE TRIGGER registry_paths_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'conversations' BEGIN
           DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
           INSERT INTO registry_conversation_paths SELECT json_extract(value, '$.path'), NEW.row_key FROM json_each(NEW.value_json, '$.generations') WHERE json_extract(value, '$.path') IS NOT NULL ON CONFLICT(path, conversation_id) DO NOTHING;
           INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+          INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.migration.providerReceipt.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
+          INSERT INTO registry_conversation_paths SELECT value, NEW.row_key FROM json_each(NEW.value_json, '$.migration.continuityPaths') WHERE true ON CONFLICT(path, conversation_id) DO NOTHING;
         END`,
         `CREATE TRIGGER registry_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'conversations' BEGIN
           DELETE FROM registry_conversation_paths WHERE conversation_id = OLD.row_key;
         END`,
-        `INSERT INTO registry_meta(key, value) VALUES ('conversation_paths_trigger_version', '2')
+        `CREATE TRIGGER registry_receipt_paths_insert AFTER INSERT ON registry_rows WHEN NEW.collection = 'receipts' BEGIN
+          INSERT INTO registry_receipt_paths SELECT json_extract(NEW.value_json, '$.artifactPath'), NEW.row_key
+            WHERE json_type(NEW.value_json, '$.artifactPath')='text' ON CONFLICT(path, receipt_id) DO NOTHING;
+        END`,
+        `CREATE TRIGGER registry_receipt_paths_update AFTER UPDATE ON registry_rows WHEN NEW.collection = 'receipts' BEGIN
+          DELETE FROM registry_receipt_paths WHERE receipt_id = OLD.row_key;
+          INSERT INTO registry_receipt_paths SELECT json_extract(NEW.value_json, '$.artifactPath'), NEW.row_key
+            WHERE json_type(NEW.value_json, '$.artifactPath')='text' ON CONFLICT(path, receipt_id) DO NOTHING;
+        END`,
+        `CREATE TRIGGER registry_receipt_paths_delete AFTER DELETE ON registry_rows WHEN OLD.collection = 'receipts' BEGIN
+          DELETE FROM registry_receipt_paths WHERE receipt_id = OLD.row_key;
+        END`,
+        `INSERT INTO registry_meta(key, value) VALUES ('conversation_paths_trigger_version', '3')
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       ]);
     }
-    if (this.meta("conversation_paths_ready") !== "1") {
+    if (this.meta("conversation_paths_ready") !== "3") {
       this.runAtomically([
         "INSERT OR IGNORE INTO registry_conversation_paths SELECT json_extract(g.value, '$.path'), r.row_key FROM registry_rows r, json_each(r.value_json, '$.generations') g WHERE r.collection = 'conversations' AND json_extract(g.value, '$.path') IS NOT NULL",
         "INSERT OR IGNORE INTO registry_conversation_paths SELECT p.value, r.row_key FROM registry_rows r, json_each(r.value_json, '$.continuityPaths') p WHERE r.collection = 'conversations'",
-        "INSERT OR REPLACE INTO registry_meta(key, value) VALUES ('conversation_paths_ready', '1')",
+        "INSERT OR IGNORE INTO registry_conversation_paths SELECT p.value, r.row_key FROM registry_rows r, json_each(r.value_json, '$.migration.providerReceipt.continuityPaths') p WHERE r.collection = 'conversations'",
+        "INSERT OR IGNORE INTO registry_conversation_paths SELECT p.value, r.row_key FROM registry_rows r, json_each(r.value_json, '$.migration.continuityPaths') p WHERE r.collection = 'conversations'",
+        "INSERT OR IGNORE INTO registry_receipt_paths SELECT json_extract(value_json, '$.artifactPath'), row_key FROM registry_rows WHERE collection='receipts' AND json_type(value_json, '$.artifactPath')='text'",
+        "INSERT OR REPLACE INTO registry_meta(key, value) VALUES ('conversation_paths_ready', '3')",
       ]);
     }
     // Each generation's entry identity and path, so a grant decision finds the
@@ -4776,6 +4802,55 @@ export class SqliteAgentRegistryStore {
   terminationPathMatches(id: string, pathname: string): boolean {
     return Boolean(this.db.query<{ present: number }, [string, string]>(
       "SELECT 1 AS present FROM registry_termination_paths WHERE conversation_id=? AND path=?").get(id, pathname));
+  }
+
+  /** Only the requested paths participate in one read transaction. Normalize
+   * selected rows as usual and expose only tier fields, which are independent
+   * of the assembled MCP grant decision. */
+  launchTierProfilesForPaths(paths: readonly string[]): Map<string, LaunchTierProfile | null> {
+    const result = new Map<string, LaunchTierProfile | null>();
+    if (!paths.length) return result;
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) this.db.exec("BEGIN");
+    try {
+      const owners = this.db.query<{ conversation_id: string }, [string]>(conversationPathSql(this.recordsSource));
+      const row = this.db.query<{ value_json: string }, [string, string]>(
+        `SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`,
+      );
+      const read = <C extends "conversations" | "receipts">(collection: C, key: string): RegistryFile[C][string] | undefined => {
+        const stored = row.get(collection, key);
+        if (!stored) return undefined;
+        this.onRowPayloadRead?.(collection, 1);
+        this.onRowPayloadParse?.(collection, 1);
+        const normalized = this.normalizePartial({
+          version: 2, entries: {}, receipts: {}, [collection]: { [key]: parseSqliteJson(stored.value_json, this.db) },
+        });
+        return (normalized[collection] as Record<string, RegistryFile[C][string]>)[key];
+      };
+      for (const pathname of paths) {
+        if (result.has(pathname)) continue;
+        let profile: LaunchProfile | null = null;
+        for (const { conversation_id } of owners.all(pathname)) {
+          const conversation = read("conversations", conversation_id);
+          profile = conversation ? conversationLaunchProfileForPath(conversation, pathname) : null;
+          if (profile) break;
+        }
+        if (!profile) {
+          const key = this.db.query<{ receipt_id: string }, [string]>(`SELECT p.receipt_id FROM registry_receipt_paths p
+            JOIN registry_rows r ON r.collection='receipts' AND r.row_key=p.receipt_id
+            WHERE p.path=? ORDER BY r.row_order LIMIT 1`).get(pathname)?.receipt_id;
+          if (key !== undefined) profile = read("receipts", key)?.launchProfile ?? null;
+        }
+        result.set(pathname, profile ? launchTierProfile(profile) : null);
+      }
+      if (ownsTransaction) this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      if (ownsTransaction) {
+        try { this.db.exec("ROLLBACK"); } catch { /* preserve the read failure */ }
+      }
+      throw error;
+    }
   }
 
   read<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
