@@ -8,7 +8,7 @@ import { ChevronDown, Loader2, Mic, Play, Square, X } from "@/components/icons";
 import type { LucideIcon } from "lucide-react";
 import { useAutosizePinned } from "@/hooks/useAutosizePinned";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { watchComposerFocus } from "@/lib/composerFocus";
+import { COMPOSER_FIELD_RESIZE_EVENT, watchComposerFocus } from "@/lib/composerFocus";
 import { useLocale } from "@/lib/i18n";
 import { watchTypingLatency } from "@/lib/typingLatencyBeacon";
 import type { UseComposerReturn } from "@/hooks/useComposer";
@@ -32,7 +32,7 @@ import { Z } from "@/components/layers";
  * transcript on the draft here, and the grow-and-pin measurement runs beside
  * the text it measures.
  */
-function ComposerTextarea({ composer, ...props }: Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "ref"> & { composer: UseComposerReturn }) {
+function ComposerTextarea({ composer, ...props }: Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "defaultValue" | "ref"> & { composer: UseComposerReturn }) {
   const { subscribeText, getText, attachInput, autosize, dictation } = composer;
   const draft = useSyncExternalStore(subscribeText, getText, getText);
   const value = dictation.liveText ? (draft ? draft.trimEnd() + " " : "") + dictation.liveText : draft;
@@ -48,8 +48,25 @@ function ComposerTextarea({ composer, ...props }: Omit<React.TextareaHTMLAttribu
     focusWatch.current?.stop();
     focusWatch.current = document ? { document, stop: watchComposerFocus(document) } : null;
   }, [attachInput]);
+  // Native input already set the live value. Rewriting its default text on
+  // every key also mutates its child node and invalidates layout observers.
+  // History, restored drafts and dictation still synchronize before paint.
+  useLayoutEffect(() => {
+    const el = fieldRef.current;
+    if (el && el.value !== value) el.value = value;
+  }, [value, autosize.field]);
+  useLayoutEffect(() => {
+    const el = fieldRef.current;
+    const view = el?.ownerDocument.defaultView;
+    if (!el || !view?.ResizeObserver) return;
+    const observer = new view.ResizeObserver(() => {
+      el.dispatchEvent(new view.Event(COMPOSER_FIELD_RESIZE_EVENT, { bubbles: true }));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [autosize.field]);
   useAutosizePinned(fieldRef, value, autosize);
-  return <textarea ref={attach} value={value} data-composer-field="" {...props} />;
+  return <textarea ref={attach} data-composer-field="" {...props} />;
 }
 
 export interface SendMenuAction {

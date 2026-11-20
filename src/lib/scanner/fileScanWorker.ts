@@ -184,7 +184,7 @@ function collectFileScanAttempt(
   return new Promise<FileCatalogScan>((resolve, reject) => {
     let settled = false;
     let listening = false;
-    let stdout = "";
+    const frameParts: string[] = [];
     let stderr = "";
     let diagnosticLine = "";
     let outputBytes = 0;
@@ -213,12 +213,23 @@ function collectFileScanAttempt(
       terminate(new Error(message));
     };
     const onAbort = () => terminate(abortError(runtime.signal?.reason));
-    const consume = () => performanceSpans.sync("scanner.ipc-frame", () => {
+    const consume = (chunk: string, bytes: number) => performanceSpans.sync("scanner.ipc-frame", () => {
+      // Search each chunk once. A catalog line can span hundreds of pipe
+      // reads; join its fragments only when its terminating newline arrives.
+      let start = 0;
       while (true) {
-        const newline = stdout.indexOf("\n");
-        if (newline < 0) return;
-        const raw = stdout.slice(0, newline);
-        stdout = stdout.slice(newline + 1);
+        const newline = chunk.indexOf("\n", start);
+        if (newline < 0) {
+          if (start < chunk.length) frameParts.push(chunk.slice(start));
+          return;
+        }
+        let raw = chunk.slice(start, newline);
+        start = newline + 1;
+        if (frameParts.length) {
+          frameParts.push(raw);
+          raw = frameParts.join("");
+          frameParts.length = 0;
+        }
         if (!raw) continue;
         let parsed: unknown;
         try {
@@ -245,17 +256,18 @@ function collectFileScanAttempt(
           completed = snapshot;
         }
       }
-    });
+    }, 0, bytes);
     child.once("error", (error) => finish(error));
     child.stdout!.setEncoding("utf8");
     child.stdout!.on("data", (chunk: string) => {
-      outputBytes += Buffer.byteLength(chunk);
+      if (settled || terminationError) return;
+      const bytes = Buffer.byteLength(chunk);
+      outputBytes += bytes;
       if (outputBytes > FILE_SCAN_WORKER_OUTPUT_MAX_BYTES) {
         fail("file scanner worker exceeded output limit");
         return;
       }
-      stdout += chunk;
-      consume();
+      consume(chunk, bytes);
     });
     child.stderr!.setEncoding("utf8");
     child.stderr!.on("data", (chunk: string) => {
@@ -282,7 +294,6 @@ function collectFileScanAttempt(
         finish(terminationError);
         return;
       }
-      consume();
       if (code !== 0 || !completed) {
         const detail = stderr.trim() || inputError?.message || "";
         // Retry only a bootstrap refusal before any resource was published.
