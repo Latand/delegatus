@@ -6,7 +6,7 @@ import type { LimitSample } from "@/lib/types";
 
 import { doneCandidates, type DoneCandidate, type DoneDeployment } from "./candidates";
 import { lookupDoneFrame, type DoneFramePorts } from "./frames";
-import { doneActivation, doneDatabase, doneFloor, readDoneMemory, readDoneRows, writeDoneProjection } from "./store";
+import { doneActivation, doneDatabase, doneFloor, readDoneMemory, readDoneRowsReadonly, writeDoneProjection } from "./store";
 import type { DoneItemV1 } from "./types";
 
 /*
@@ -82,7 +82,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
     repositoryProject: (repository) => world.repositoryProject(repository),
     accountLabel: (engine, accountId) => world.accountLabel(engine, accountId),
   });
-  const held = new Map(readDoneRows().map((row) => [row.key, row] as const));
+  const held = new Map(readDoneRowsReadonly().map((row) => [row.key, row] as const));
   const at = new Date(now).toISOString();
   const upserts: DoneItemV1[] = [];
   let albumLookups = 0;
@@ -94,7 +94,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
     if (!row.frame || row.frame.unavailable || row.frame.src.startsWith("/api/image?done=") || row.acknowledgedAt || !world.preserveFrame || copies >= ALBUM_LOOKUPS_PER_PROJECTION) continue;
     copies += 1;
     migrated.add(row.key);
-    const saved = await world.preserveFrame(row.key, row.frame, row.refs);
+    const saved = await world.preserveFrame(row.key, structuredClone(row.frame), structuredClone(row.refs));
     const updated = { ...row, frame: saved.frame, frameCheckedAt: row.frameCheckedAt && saved.settled ? at : null };
     held.set(row.key, updated);
     upserts.push(updated);
@@ -126,7 +126,7 @@ export async function projectDoneItems(world: DoneWorld, options: { force?: bool
       if (frame && world.preserveFrame) {
         copies += 1;
         const replacingProvisional = Boolean(row?.frame && !row.frame.unavailable && row.frame.src.startsWith("/api/image?done=") && !row.frameCheckedAt && answer.settled);
-        const saved = await world.preserveFrame(candidate.key, frame, candidate.refs, replacingProvisional, now, replacingProvisional ? row?.frame?.src : undefined);
+        const saved = await world.preserveFrame(candidate.key, structuredClone(frame), candidate.refs, replacingProvisional, now, replacingProvisional ? row?.frame?.src : undefined);
         frame = saved.frame;
         frameCheckedAt = answer.settled && saved.settled ? at : null;
       }
