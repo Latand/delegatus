@@ -49,6 +49,7 @@ export function useRuntimeSelector<T>(
   selector: (state: RuntimeBusState) => T,
   inert: T,
   equal: (left: T, right: T) => boolean = Object.is,
+  active = true,
 ): T {
   const enabled = isRuntimeUiEnabled();
   const bus: RuntimeBus | null = enabled && typeof window !== "undefined" ? getRuntimeBus() : null;
@@ -65,8 +66,8 @@ export function useRuntimeSelector<T>(
   }, [bus]);
 
   const subscribe = useCallback(
-    (listener: () => void) => (bus ? bus.subscribe(listener) : () => {}),
-    [bus],
+    (listener: () => void) => (bus && active ? bus.subscribe(listener) : () => {}),
+    [bus, active],
   );
   const getSnapshot = useCallback(() => {
     if (!bus) return inertRef.current;

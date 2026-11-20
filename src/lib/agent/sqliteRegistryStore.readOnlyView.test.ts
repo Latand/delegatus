@@ -196,13 +196,13 @@ test("nested reservation guards enforce the total deadline without blocking and 
           for (;;) {
             const next = [...timers.values()].filter(timer => timer.at <= at).sort((a, b) => a.at - b.at)[0];
             if (!next) break;
-            clock = next.at;
+            clock = Math.max(clock, next.at);
             timers.delete(next);
             next.run();
             await flush();
           }
-          clock = at;
         }
+        if (command === "advance" || command === "elapse") clock = at;
         const state = registry.sqliteStore;
         process.send({ command, clock, pending, results, completedAt, admitted,
           reservations: Object.keys(registry.snapshot().heldDeliveries).length,
@@ -249,19 +249,32 @@ test("nested reservation guards enforce the total deadline without blocking and 
     expect((await request("ping")).pending).toBe(2);
     const beforeDeadline = await request("advance", 79);
     expect(beforeDeadline).toMatchObject({ clock: 79, pending: 2, results: null, reservations: 0 });
-    const expired = await request("advance", 80);
+    // Release after the cutoff, before the caller can run its overdue retry.
+    expect((await request("elapse", 81)).pending).toBe(2);
+    await holder.release();
+    const expired = await request("advance", 81);
+    const expiredKeys = Object.values(registry.snapshot().heldDeliveries).map(row => row.clientMessageId);
+
+    await holder.hold();
+    const queued = await request("accept");
+    await holder.release();
+    const accepted = await request("advance", 86);
+    const acceptedKeys = Object.values(registry.snapshot().heldDeliveries)
+      .sort((left, right) => left.admissionSeq! - right.admissionSeq!)
+      .map(row => row.clientMessageId);
+    console.info(JSON.stringify({ case: "nested-reservation-bound", beforeDeadline, expired, expiredKeys,
+      queued, accepted, acceptedKeys }));
     expect(expired).toMatchObject({
-      clock: 80, pending: 0, results: [null, null], completedAt: 80,
+      clock: 81, pending: 0, results: [null, null], completedAt: 81,
       admitted: [], reservations: 0, writerHeld: false, inTransaction: false,
     });
-    expect(Object.keys(registry.snapshot().heldDeliveries)).toEqual([]);
-    await holder.release();
-    const accepted = await request("accept");
+    expect(expiredKeys).toEqual([]);
+    expect(queued).toMatchObject({ pending: 2, results: null, reservations: 0 });
     expect(accepted).toMatchObject({
       pending: 0, results: ["assigned", "assigned"], admitted: ["first", "second"],
       reservations: 2, writerHeld: false, inTransaction: false,
     });
-    console.info(JSON.stringify({ case: "nested-reservation-bound", beforeDeadline, expired, accepted }));
+    expect(acceptedKeys).toEqual(["first", "second"]);
   } finally {
     // Kill only this recorded child, including a mutant stuck in synchronous SQLite.
     if (child.exitCode === null) child.kill("SIGKILL");

@@ -123,3 +123,17 @@ test("the first character replaces a wrapped placeholder and the field shrinks t
   expect(reads.filter((height) => height === "0px")).toEqual([]);
   expect(field.style.height).toBe(`${LINE_PX + 2}px`);
 });
+
+test("a field sized by the browser keeps its cap without reading its content height on edits", () => {
+  const sheet = document.createElement("style");
+  sheet.textContent = "textarea { field-sizing: content; }";
+  document.head.append(sheet);
+  try {
+    const { field, set } = mount("draft", 60);
+    expect(field.style.maxHeight).toBe("60px");
+    reads = [];
+    set("draft with another line");
+    expect(reads).toEqual([]);
+    expect(field.style.height).toBe("auto");
+  } finally { sheet.remove(); }
+});

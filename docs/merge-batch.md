@@ -18,6 +18,17 @@ bun scripts/merge-batch.ts gate            # add --browser to run full browser c
 bun scripts/merge-batch.ts land
 ```
 
+On a native Codex launch, `gate` and `land` print a fresh `runId` before
+starting work. If the command yields while still running, call the native
+`wait_for_check` once with that ID and the phase as its `reason`. The callback
+returns the exit code and report tail after the phase ends and releases any
+batch lock it owns. This includes a refusal because another run owns the
+lock, and runs that finish before the wait attaches. The driver owns the
+hosted check loop and schedules each heavy child. Run it directly to leave
+the shared slot available between checks. If the recorder exits without a
+terminal record, the wait reports an unknown result. Preserve the batch
+state and reconcile the worktree and forge before clearing a stale lock.
+
 `build` fetches fresh main and each listed PR, checks its open/non-draft/main
 base and reviewed head, and allocates a temporary worktree on a unique
 `merge-batch/…` branch. It leaves the caller's checkout untouched. In list

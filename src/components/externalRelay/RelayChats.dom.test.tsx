@@ -171,6 +171,21 @@ test("a relay whose only record is a single answer is a sidebar entry, and its a
   expect(relayChatsCatalog({ ...answersOnly, answers: [] })).toEqual([]);
 });
 
+test("a failed reply shows its diagnostic and the triggering message once", async () => {
+  const previous = globalThis.fetch;
+  const diagnostic = { message: "Conversation history is unavailable" };
+  const text = "Fixture request";
+  globalThis.fetch = Object.assign(async () => Response.json({ answer: { ...exchange, outcome: "failure_notice", diagnostic,
+    input: { respond_to: "message", request_text: text, conversation: [{ id: "message", text }] } } }), { preconnect: previous.preconnect });
+  try {
+    const host = await mount(<RelayChatsView relayId="relay-1" payload={answersOnly} />);
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-relay-answer] button")!.click());
+    const reader = host.querySelector("[data-relay-answer-reader]")!;
+    expect(reader.querySelector("[data-relay-answer-request]")?.textContent).toBe(text);
+    expect(reader.textContent).toContain(diagnostic.message);
+  } finally { globalThis.fetch = previous; }
+});
+
 test("a single answer is one row of the leaf and opens read only in the agent window, with no field to type into", async () => {
   const asked: string[] = [];
   const previous = globalThis.fetch;

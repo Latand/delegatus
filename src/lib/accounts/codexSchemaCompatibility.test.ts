@@ -7,6 +7,41 @@ import { codexSchemaBreaks } from "./codexSchemaCompatibility";
 const read = (version: string, name: string) => JSON.parse(fs.readFileSync(path.join(import.meta.dir, "protocol", version, `${name}.json`), "utf8"));
 
 describe("reviewed pins", () => {
+  test.each(["stable", "experimental"])("0.170.0 changes recovered answer display (%s)", name => {
+    const previous = read("0.169.0", name), current = read("0.170.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual([
+      "v2.AgentMessageDisplay.properties: removed",
+      "v2.AgentMessageDisplay.action: became optional",
+      "v2.AgentMessageDisplay: type changed",
+    ]);
+    const compile = (schema: typeof current) => new Ajv({ strict: false }).compile({
+      $ref: "#/definitions/v2/ItemCompletedNotification", definitions: schema.definitions,
+    });
+    const completion = (display: object | null) => ({
+      threadId: "thread", turnId: "turn", completedAtMs: 1,
+      item: { type: "agentMessage", id: "answer", text: "done", moderation: { moderated: true, display } },
+    });
+    const before = compile(previous), after = compile(current);
+    const legacy = completion({ action: "show" });
+    expect(before(legacy)).toBeTrue();
+    expect(after(legacy)).toBeFalse();
+    expect(before(completion(null))).toBeTrue();
+    expect(after(completion(null))).toBeTrue();
+    for (const display of [
+      { version: 1, mode: "show", trustedContacts: "skip" },
+      { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } },
+      { version: 1, mode: "block", reason: { kind: "cyber" } },
+    ]) {
+      expect(before(completion(display))).toBeFalse();
+      expect(after(completion(display))).toBeTrue();
+    }
+    expect(after(completion({ version: 1, mode: "show" }))).toBeFalse();
+    expect(after(completion({ version: 2, mode: "show", trustedContacts: "skip" }))).toBeFalse();
+    // The other changes are additive or annotations.
+    current.definitions.v2.AgentMessageDisplay = previous.definitions.v2.AgentMessageDisplay;
+    expect(codexSchemaBreaks(previous, current)).toEqual([]);
+  });
+
   test.each(["stable", "experimental"])("0.168.0 extends 0.167.0 additively (%s)", name => {
     expect(codexSchemaBreaks(read("0.167.0", name), read("0.168.0", name))).toEqual([]);
   });

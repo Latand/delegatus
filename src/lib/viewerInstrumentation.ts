@@ -1087,6 +1087,7 @@ export async function registerViewerRuntime(): Promise<void> {
     await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", async () => {
       const registry = await prepareAgentRegistry(startupAbort.signal);
       await registry.prepareReadOnlySnapshot(startupAbort.signal);
+      await registry.prepareNativeCallerArtifacts();
     }));
     assertStartupActive();
     const { cleanupFinishedWorkAtStartup } = await import("@/lib/attention/finishedWorkCleanup");

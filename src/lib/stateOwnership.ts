@@ -31,6 +31,10 @@ holdReleaseOf(import.meta.url);
     was missing rather than only that something was. */
 export const STATE_OWNER_ENV = "LLV_STATE_OWNER";
 
+/** The admitted deployment probe and its catalog worker read the serving
+    registry and leave catalog publication to the Viewer. */
+export const MCP_PROBE_READ_ONLY_ENV = "LLV_MCP_PROBE_READ_ONLY";
+
 /**
  * Process kinds that legitimately run against the operator's own directories:
  *

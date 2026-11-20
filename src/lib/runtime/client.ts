@@ -166,13 +166,13 @@ export interface RuntimeHostClient {
   append(event: RuntimeEventInput): Promise<unknown>;
   /** The RPC itself requires the host's transactional session revision fence.
       An incumbent without that method refuses it; callers never retry append. */
-  appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number }): Promise<unknown>;
+  appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number }, options?: RuntimeReadOptions): Promise<unknown>;
   operation(event: RuntimeEventInput): Promise<unknown>;
   command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult>;
   operationStatus(operationId: string, options?: RuntimeReadOptions & { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
   claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): Promise<RuntimeDeliveryActionClaim>;
   retryOperation(operationId: string, nextIdempotencyKey?: string, options?: RuntimeRetryOptions): Promise<RuntimeOperationResult>;
-  producerCursor(producerKind: string, eventKeyPrefix: string): Promise<number>;
+  producerCursor(producerKind: string, eventKeyPrefix: string, options?: RuntimeReadOptions): Promise<number>;
   effectPage?(kinds: readonly string[] | undefined, afterEventSeq: number, knownVersion?: string, options?: RuntimeReadOptions): Promise<RuntimeEffectPage>;
   effectBatch(kinds?: readonly string[], afterEventSeq?: number, options?: RuntimeReadOptions & { conversationId?: string }): Promise<RuntimePendingEffect[]>;
   transitionOperation(
@@ -258,8 +258,8 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
   waitEvents(after: number, timeoutMs = 15_000, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("wait", { after, timeoutMs }, timeoutMs + 1_000, signal) as Promise<RuntimeReplay>; }
   append(event: RuntimeEventInput): Promise<unknown> { return this.call("append", { event }); }
-  appendSessionFenced(event: RuntimeEventInput & { expectedSessionRevision: number }): Promise<unknown> {
-    return this.call("append-session-fenced", { event });
+  appendSessionFenced(event: RuntimeEventInput & { expectedSessionRevision: number }, options: RuntimeReadOptions = {}): Promise<unknown> {
+    return this.call("append-session-fenced", { event }, options.timeoutMs ?? this.timeoutMs, options.signal);
   }
   operation(event: RuntimeEventInput): Promise<unknown> { return this.call("operation", { event }); }
   command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult> {
@@ -287,7 +287,9 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
         : {}),
     }) as Promise<RuntimeOperationResult>;
   }
-  producerCursor(producerKind: string, eventKeyPrefix: string): Promise<number> { return this.call("producer-cursor", { producerKind, eventKeyPrefix }) as Promise<number>; }
+  producerCursor(producerKind: string, eventKeyPrefix: string, options: RuntimeReadOptions = {}): Promise<number> {
+    return this.call("producer-cursor", { producerKind, eventKeyPrefix }, options.timeoutMs ?? this.timeoutMs, options.signal) as Promise<number>;
+  }
   async effectPage(kinds: readonly string[] | undefined, afterEventSeq: number, knownVersion?: string, options: RuntimeReadOptions = {}): Promise<RuntimeEffectPage> {
     const result = await this.call("effect-batch", { kinds, afterEventSeq, conditional: true, knownVersion }, options.timeoutMs ?? this.timeoutMs, options.signal);
     // An incumbent listener ignores the optional fields and returns its array.
