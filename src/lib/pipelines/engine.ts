@@ -5187,7 +5187,7 @@ function queuePipelinePublication(pipeline: Pipeline, _exec: ExecPort, request: 
   const error = deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...delivery.target, active: true }) ?? pipeline);
   if (error) return { ok: false, error };
   let operation = delivery.operation;
-  if (operation?.state === "settled" && operation.result?.outcome === "superseded") {
+  if (operation?.state === "settled" && settledPublicationRefusal(pipeline)?.outcome === "superseded") {
     // The old admission executed nothing. Record its disposition before a
     // replacement is reserved under this tick's current ownership and fence.
     recordSettledPublicationFailure(pipeline, pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null,
@@ -5258,6 +5258,8 @@ function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
   return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
+const STAGE_SETTLEMENT_ADMISSION_SUPERSEDED = "publication admission superseded by the passed-stage settlement decision";
+
 type RefusedPublication = { ok?: false; error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed" | "superseded"; remote?: "unreachable" };
 
 /** A settled remote-read failure happened before any push. Pending reservations
@@ -5266,7 +5268,14 @@ function settledPublicationRefusal(pipeline: Pipeline): RefusedPublication | nul
   const operation = pipeline.delivery?.operation;
   const result = operation?.result;
   if (operation?.state !== "settled" || !result) return null;
-  if (!result.ok) return result;
+  if (!result.ok) {
+    // Older capacity parks saved only this exact reason for a reservation
+    // retired before any publisher or hook could run.
+    if (!result.outcome && !result.failure && result.error === STAGE_SETTLEMENT_ADMISSION_SUPERSEDED) {
+      return { ...result, outcome: "superseded" };
+    }
+    return result;
+  }
   return result.remote === "unreachable" && !result.uncertain
     ? { ok: false, error: result.detail, remote: "unreachable" } : null;
 }
@@ -5385,7 +5394,8 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
   const notLanded = publicationNotLanded(result);
   const deadlineOnly = failure?.retryableDeadline === true;
   recordPublicationFailure(pipeline, attempt ?? undefined, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
-    cause: failure?.retryableApp403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
+    cause: result.outcome === "superseded" ? "superseded" : failure?.retryableApp403 ? "app-git-403"
+      : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
     detail: (deadlineOnly ? publicationDeadlineCause(failure!)
       : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error).slice(0, 400),
     recoverable: result.remote === "unreachable" || recoverablePublication(result) },
@@ -6050,8 +6060,8 @@ const PUBLICATION_PRODUCER_REPAIR_LIMIT = 2;
 
 /** Only code-check refusals authorize another producer. Transport, privacy and
  * capacity failures retain their existing recovery paths. */
-function publicationCodeRepairDetail(pipeline: Pipeline, attempt: PipelineStageAttempt): string | null {
-  const refused = settledPublicationRefusal(pipeline);
+function publicationCodeRepairDetail(refused: RefusedPublication | null, attempt: PipelineStageAttempt): string | null {
+  if (refused?.outcome === "superseded") return null;
   const repair = attempt.publicationRepair;
   const failure: import("./types").PipelinePublicationFailure | undefined = refused?.failure ?? (repair ? { step: "publishing the pipeline branch", code: 1, signal: null,
     durationMs: 0, outputTail: repair.detail } : undefined);
@@ -6118,8 +6128,10 @@ async function reconcileParkedPublicationRepair(pipeline: Pipeline, ports: Pipel
   const attempt = stage && currentAttempt(pipeline, stage.id);
   if (pipeline.state !== "needs_decision" || !stage || !attempt
     || !passedStagePublicationPark(pipeline, attempt)) return false;
+  const refused = settledPublicationRefusal(pipeline);
+  if (refused?.outcome === "superseded") return false;
   const before = JSON.stringify([attempt.publicationRepair, attempt.publicationRepairAbandonment]);
-  const detail = publicationCodeRepairDetail(pipeline, attempt);
+  const detail = publicationCodeRepairDetail(refused, attempt);
   const evidence = await readRepairProducerEvidence(pipeline, stage, attempt, ports, !!detail);
   const refusal = publicationRepairProducerRefusal(pipeline, attempt, evidence, ports);
   const outcome = attempt.publicationRepair?.outcome;
@@ -14162,7 +14174,6 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
 // producer's report may precede its terminal turn, so its clock starts only
 // when this stage first asks for a job and capacity refuses it.
 const STAGE_SETTLEMENT_ADMISSION_WAIT_MS = 15 * 60_000;
-const STAGE_SETTLEMENT_ADMISSION_SUPERSEDED = "publication admission superseded by the passed-stage settlement decision";
 const STAGE_SETTLEMENT_PREPARATION_DETAIL = "passed-stage settlement is waiting for fresh branch ownership evidence";
 
 function stageSettlementPreparationIdentity(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
@@ -14262,7 +14273,7 @@ async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelineP
     const operation = current.delivery?.operation;
     if (operation?.state === "pending") {
       operation.state = "settled";
-      operation.result = { ok: false, error: STAGE_SETTLEMENT_ADMISSION_SUPERSEDED };
+      operation.result = { ok: false, error: STAGE_SETTLEMENT_ADMISSION_SUPERSEDED, outcome: "superseded" };
     }
     if (recorded.state === "passed") await park(current, `publishing the passed stage: ${detail}`);
     else await park(current, `settling the stage push: ${detail}\n${CUSTODY_ACCEPTANCE_RECOVERY}`, recorded);
@@ -17420,8 +17431,8 @@ async function applyPipelinePatch(
         // verdict. Replaying it would undo the renewed window after custody
         // succeeds. Real publication refusals retain their existing receipt.
         const expiredAdmission = operation?.state === "settled" && operation.epoch === current.delivery?.epoch
-          && operation.sha === current.lastPassedCommit && operation.result?.ok === false
-          && operation.result.error === STAGE_SETTLEMENT_ADMISSION_SUPERSEDED && !operation.result.failure;
+          && operation.sha === current.lastPassedCommit && settledPublicationRefusal(current)?.outcome === "superseded";
+        if (expiredAdmission) recordSettledPublicationFailure(current, attempt, ports);
         if (current.delivery && (operation?.state === "pending" || expiredAdmission)) delete current.delivery.operation;
         delete current.publicationAdmission;
         await persist(); requestPipelineTick();
@@ -18252,7 +18263,8 @@ async function applyPipelinePatch(
           const repairRefusal = publicationRepairProducerRefusal(pipeline, attempt, decisionProducerEvidence, ports);
           if (repairRefusal) return { error: repairRefusal, status: 409 };
         }
-        const codeRepair = publicationCodeRepairDetail(pipeline, attempt);
+        const refused = settledPublicationRefusal(pipeline);
+        const codeRepair = publicationCodeRepairDetail(refused, attempt);
         if (codeRepair) {
           if (!publicationProducerRepairReady(pipeline, attempt, decisionProducerEvidence, ports)) {
             return { error: "the producer repair turn may still be running or queued; recent transcript or background work is still held", status: 409 };
@@ -18267,7 +18279,7 @@ async function applyPipelinePatch(
         // A finished producer can retry the push in place. An undeliverable
         // repair needs a new identity, with the accepted commits and current
         // stage definition retained. Never reset the checkout to the base.
-        const unreachable = repair && repair.outcome?.status === "rejected"
+        const unreachable = refused?.outcome !== "superseded" && repair && repair.outcome?.status === "rejected"
           && (decisionProducerEvidence?.dead === true || decisionProducerEvidence?.hostGone === true
             || delivery?.state === "failed" && delivery.safeToReplace
             || delivery?.state === "unreserved" && delivery.safeToReplace && !repair.requestedAt
@@ -18293,7 +18305,7 @@ async function applyPipelinePatch(
           requestPipelineTick();
           return { pipeline };
         }
-        if (pipeline.delivery && settledPublicationRefusal(pipeline)) {
+        if (pipeline.delivery && refused) {
           recordSettledPublicationFailure(pipeline, attempt, ports);
           delete pipeline.delivery.operation;
           pipeline.publishedCommit = null;

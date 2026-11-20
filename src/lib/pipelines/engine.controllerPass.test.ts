@@ -245,10 +245,14 @@ test("settlement admission retries three timed out windows before parking the pr
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
 });
 
-test.each(["settles", "exhausts", "publish", "publish-head"] as const)("publication capacity retries retain the reservation: %s", async outcome => {
+test.each(["settles", "exhausts", "legacy-retry", "publish", "publish-head"] as const)("publication capacity retries retain the reservation: %s", async outcome => {
   const exhausted = outcome !== "settles";
+  const retryStage = outcome === "exhausts" || outcome === "legacy-retry";
+  const superseded = "publication admission superseded by the passed-stage settlement decision";
   const { h, lane } = await committing("remote-branch");
   const publication = publishHarness(h);
+  h.setConversationActive(false);
+  h.ports.publicationRepairProducerGone = async () => true;
   let now = Date.parse(h.ports.now());
   h.ports.now = () => new Date(now).toISOString();
   const release = latch();
@@ -268,6 +272,16 @@ test.each(["settles", "exhausts", "publish", "publish-head"] as const)("publicat
     await tickPipelinesController([], h.ports);
     await observed(() => current().runs[0]!.attempts[0]!.settlementAdmissionRetry?.failures === 0);
     const reservation = current().delivery!.operation!.id;
+    if (retryStage) await withPipelineMutation(async (pipelines, persist) => {
+      const saved = pipelines.find(row => row.id === lane.id)!;
+      const attempt = saved.runs[0]!.attempts[0]!;
+      const settledAt = h.ports.now();
+      attempt.publicationRepair = { sha: lane.lastPassedCommit, baseSha: lane.baseRef, operationId: "earlier-push",
+        stageId: "build", attempt: attempt.n, refusedAt: settledAt, detail: "pre-push: touched tests: failed (1)",
+        paths: [], messageTs: null, settledAt, outcome: { status: "rejected", reason: "Producer host is gone", source: "abandonment" },
+        committedSha: publication.passedSha, republishQueued: true };
+      await persist([saved]);
+    });
     for (const [n, delay] of [0, 60_000, 5 * 60_000].entries()) {
       now += 15 * 60_000 + delay;
       await tickPipelinesController([], h.ports);
@@ -284,9 +298,19 @@ test.each(["settles", "exhausts", "publish", "publish-head"] as const)("publicat
     expect(h.spawnInputs).toHaveLength(1);
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
   if (exhausted) {
+    const retired = current().delivery!.operation!;
+    if (outcome === "legacy-retry") await withPipelineMutation(async (pipelines, persist) => {
+      const saved = pipelines.find(row => row.id === lane.id)!;
+      saved.delivery!.operation!.result = { ok: false, error: superseded };
+      await persist([saved]);
+    });
     now += 24 * 60 * 60_000;
     await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
     expect(current().state).toBe("needs_decision");
+    expect(current().runs[0]!.attempts).toHaveLength(1);
+    expect(current().publicationProducerRepairs).toBeUndefined();
+    expect(current().delivery!.operation!.id).toBe(retired.id);
+    expect(retired.result).toEqual({ ok: false, error: superseded, outcome: "superseded" });
     const manualRelease = latch();
     try {
       for (let n = 0; n < 4; n++) expect(startPipelineControllerJob(`manual-publication-${n}`,
@@ -302,6 +326,10 @@ test.each(["settles", "exhausts", "publish", "publish-head"] as const)("publicat
     } finally { manualRelease.resolve(); await settlePipelineControllerJobs(); }
     await tickPipelinesController([], h.ports); await settlePipelineControllerJobs();
     await observed(() => current().delivery?.operation?.result?.ok === true);
+    expect(current().delivery!.operation!.id).not.toBe(retired.id);
+    expect(current().publicationRecovery?.[publication.passedSha]).toMatchObject({ totalAttempts: 0, failures: 0,
+      history: [{ operationId: retired.id, cause: "superseded", retryAt: null }] });
+    expect(current().runs[0]!.attempts).toHaveLength(1);
     expect(h.spawnInputs).toHaveLength(1);
   }
 });
