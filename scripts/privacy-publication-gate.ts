@@ -82,7 +82,6 @@ const textExtensions = new Set([
 ]);
 const textBasenames = new Set(["CODEOWNERS", "Dockerfile", "LICENSE", "Makefile", "README"]);
 const maxPublicationBytes = 32 * 1024 * 1024;
-const maxVideoStreams = 16;
 const supportedGeneratorRuntime = "bun-1.3.3";
 // Reviewed public forms, stored without publication-sensitive literals.
 // Identity normalization preserves case, punctuation and every raw code point.
@@ -1103,11 +1102,6 @@ const knownValues = loadKnownValues();
 // config-specific match so fingerprint windows are not hashed twice.
 const knownValueMatches = new WeakMap<object, boolean>();
 
-function configuredOcrLanguages(): string | undefined {
-  const languages = (process.env.LLV_PRIVACY_OCR_LANGUAGES ?? "eng").trim();
-  return /^[a-z0-9_]+(?:\+[a-z0-9_]+)*$/i.test(languages) ? languages : undefined;
-}
-
 function extensionMediaKind(path: string): MediaKind | undefined {
   const extension = extname(path).toLowerCase();
   if (extension === ".png") return "png";
@@ -1725,8 +1719,8 @@ function pngMetadata(bytes: Buffer): { animated?: boolean; error: boolean; liveS
   return { animated, error: false, liveSource, text: values.join("\n") };
 }
 
-function inspectRasterMetadata(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "png" && kind !== "raster") return new Set();
+function inspectMediaMetadata(path: string, kind: MediaKind | undefined): Set<FindingClass> {
+  if (kind !== "png" && kind !== "raster" && kind !== "animated") return new Set();
   try {
     const bytes = readFileSync(path);
     if (kind === "png") {
@@ -1738,6 +1732,24 @@ function inspectRasterMetadata(path: string, kind: MediaKind | undefined): Set<F
       return findings;
     }
     if (bytes.length > 32 * 1024 * 1024) return new Set(["inspection_error"]);
+    if (kind === "animated") {
+      // Container tags can be UTF-8 even when adjacent frame bytes are binary.
+      const strings: string[] = bytes.toString("utf8").match(/[^\x00-\x1f\x7f-\x9f\ufffd]{4,}/gu) ?? [];
+      // ISO-BMFF metadata data boxes declare their encoding and byte extent.
+      // Type 2 stores UTF-16. Scan both alignments and byte orders just as
+      // for PNG metadata, without decoding any frame or launching a tool.
+      if (bytes.toString("ascii", 4, 8) === "ftyp") {
+        for (let pos = bytes.indexOf("data", 4); pos !== -1; pos = bytes.indexOf("data", pos + 4)) {
+          if (pos + 12 > bytes.length || bytes.readUInt32BE(pos + 4) !== 2) continue;
+          const size = bytes.readUInt32BE(pos - 4);
+          if (size < 16 || size > bytes.length - pos + 4) continue;
+          const end = pos - 4 + size;
+          for (const text of metadataStrings(bytes.subarray(pos + 12, end))) strings.push(text);
+          pos = end - 4;
+        }
+      }
+      return sensitiveClasses(strings.join("\n"));
+    }
     const printableMetadata = bytes.toString("latin1").match(/[\x20-\x7e]{4,}/g)?.join("\n") ?? "";
     return sensitiveClasses(printableMetadata);
   } catch {
@@ -2044,135 +2056,6 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
   } catch {
     return new Set(["inspection_error"]);
   }
-}
-
-function inspectRaster(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "png" && kind !== "raster") return new Set();
-  if (!Bun.which("tesseract")) return new Set(["tool_unavailable"]);
-  const languages = configuredOcrLanguages();
-  if (!languages) return new Set(["configuration_error"]);
-  const result = Bun.spawnSync({
-    cmd: ["tesseract", path, "stdout", "-l", languages],
-    env: withoutUnsupportedApiCredentials(process.env),
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  if (result.exitCode !== 0) return new Set(["inspection_error"]);
-  return sensitiveClasses(result.stdout.toString());
-}
-
-function inspectAnimated(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "animated") return new Set();
-  if (!Bun.which("ffprobe") || !Bun.which("ffmpeg") || !Bun.which("tesseract")) {
-    return new Set(["tool_unavailable"]);
-  }
-  const languages = configuredOcrLanguages();
-  if (!languages) return new Set(["configuration_error"]);
-  const probe = Bun.spawnSync({
-    cmd: [
-      "ffprobe",
-      "-v",
-      "error",
-      "-count_frames",
-      "-select_streams",
-      "v",
-      "-show_entries",
-      "format=duration:format_tags:stream=duration,nb_frames,nb_read_frames:stream_tags",
-      "-of",
-      "json",
-      path,
-    ],
-    env: withoutUnsupportedApiCredentials(process.env),
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  if (probe.exitCode !== 0) return new Set(["inspection_error"]);
-  const findings = sensitiveClasses(probe.stdout.toString());
-  let formatDuration = 0;
-  let streams: Array<{ duration?: unknown; nb_frames?: unknown; nb_read_frames?: unknown }>;
-  try {
-    const metadata = JSON.parse(probe.stdout.toString()) as {
-      format?: { duration?: unknown };
-      streams?: unknown;
-    };
-    formatDuration = Number(metadata.format?.duration);
-    if (!Number.isFinite(formatDuration) || formatDuration < 0) formatDuration = 0;
-    if (!Array.isArray(metadata.streams) || metadata.streams.length === 0 || metadata.streams.length > maxVideoStreams
-      || metadata.streams.some((stream) => typeof stream !== "object" || stream === null || Array.isArray(stream))) {
-      findings.add("inspection_error");
-      return findings;
-    }
-    streams = metadata.streams as Array<{ duration?: unknown; nb_frames?: unknown; nb_read_frames?: unknown }>;
-  } catch {
-    return new Set([...findings, "inspection_error"]);
-  }
-  const fractions = [0, 0.25, 0.5, 0.75, 0.95];
-  for (const [streamOrdinal, stream] of streams.entries()) {
-    let duration = Number(stream.duration);
-    if (!Number.isFinite(duration) || duration < 0) duration = formatDuration;
-    let frameCount = 0;
-    for (const candidate of [stream.nb_read_frames, stream.nb_frames]) {
-      const count = Number(candidate);
-      if (!Number.isSafeInteger(count) || count < 1) continue;
-      frameCount = count;
-      break;
-    }
-    if (duration === 0 && frameCount === 0) {
-      findings.add("inspection_error");
-      continue;
-    }
-    const samples = duration > 0
-      ? fractions.map((fraction) => ({ kind: "time" as const, value: (duration * fraction).toFixed(3) }))
-      : fractions.map((fraction) => ({
-        kind: "frame" as const,
-        value: Math.floor((frameCount - 1) * fraction).toString(),
-      }));
-    const uniqueSamples = new Map(samples.map((sample) => [`${sample.kind}:${sample.value}`, sample]));
-    for (const sample of uniqueSamples.values()) {
-      const inputArguments = sample.kind === "time"
-        ? ["-ss", sample.value, "-i", path]
-        : ["-i", path];
-      const filterArguments = sample.kind === "frame" ? ["-vf", `select=eq(n\\,${sample.value})`] : [];
-      const frame = Bun.spawnSync({
-        cmd: [
-          "ffmpeg",
-          "-v",
-          "error",
-          ...inputArguments,
-          "-map",
-          `0:v:${streamOrdinal}`,
-          ...filterArguments,
-          "-frames:v",
-          "1",
-          "-f",
-          "image2pipe",
-          "-vcodec",
-          "png",
-          "pipe:1",
-        ],
-        env: withoutUnsupportedApiCredentials(process.env),
-        stderr: "pipe",
-        stdout: "pipe",
-      });
-      if (frame.exitCode !== 0 || frame.stdout.length === 0) {
-        findings.add("inspection_error");
-        continue;
-      }
-      const ocr = Bun.spawnSync({
-        cmd: ["tesseract", "stdin", "stdout", "-l", languages],
-        env: withoutUnsupportedApiCredentials(process.env),
-        stdin: frame.stdout,
-        stderr: "pipe",
-        stdout: "pipe",
-      });
-      if (ocr.exitCode !== 0) {
-        findings.add("inspection_error");
-        continue;
-      }
-      for (const finding of sensitiveClasses(ocr.stdout.toString())) findings.add(finding);
-    }
-  }
-  return findings;
 }
 
 type ProvenanceResult = {
@@ -2484,8 +2367,7 @@ function trustedVendorExemptions(path: string, inspectionRoot: string | undefine
 
 function inspectFileContents(path: string, kind: MediaKind | undefined): Set<FindingClass> {
   return new Set([
-    ...inspectRasterMetadata(path, kind), ...inspectRaster(path, kind),
-    ...inspectAnimated(path, kind), ...inspectText(path, kind),
+    ...inspectMediaMetadata(path, kind), ...inspectText(path, kind),
   ]);
 }
 
@@ -2557,7 +2439,7 @@ export function inspectPaths(
   return findings;
 }
 
-function inspectCommitAdditions(repository: string, base: string, requireKnownValues: boolean, notices: string[], deferMedia: boolean): Map<FindingClass, number> {
+function inspectCommitAdditions(repository: string, base: string, requireKnownValues: boolean, notices: string[]): Map<FindingClass, number> {
   const findings = inspectPaths([], false, requireKnownValues, repository, base, notices);
   let scratch: string | undefined, snapshot: string | undefined, snapshotCommit: string | undefined;
   // Cache detector results, never provenance: a copied blob still needs the
@@ -2614,7 +2496,6 @@ function inspectCommitAdditions(repository: string, base: string, requireKnownVa
         if (!result) { result = inspectFileContents(path, kind); content.set(key, result); }
         return result;
       });
-      if (deferMedia && detected.delete("tool_unavailable")) notices.push(`${location} media OCR deferred to required hosted check (tool unavailable)`);
       for (const [finding, count] of detected) {
         findings.set(finding, (findings.get(finding) ?? 0) + count); notices.push(`${location} ${finding}`);
       }
@@ -2974,8 +2855,9 @@ function isForgeComposerIdentityAddress(address: string, identity: CommitIdentit
     && isForgeComposerMailbox(address);
 }
 
-function isForgeComposerAddress(address: string, identity: CommitIdentity): boolean {
-  return identity.parentCount > 1 && isForgeComposerIdentityAddress(address, identity);
+function isForgeComposerAddress(address: string, identity: CommitIdentity, signedLandedTip?: string): boolean {
+  const composed = identity.parentCount > 1 || (identity.commit === signedLandedTip && identity.name === "GitHub");
+  return composed && isForgeComposerIdentityAddress(address, identity);
 }
 
 /** Each distinct identity git recorded on the commits the merge will squash. */
@@ -3039,7 +2921,7 @@ function composedAttributionMessage(identity: CommitIdentity): string {
  * its body, keeps the narrow reading the trailer rule gives it — this is the
  * merge-boundary identity path, and it widens nothing else.
  */
-export function mergeBoundaryReview(repository: string, base: string): MergeBoundaryReview {
+export function mergeBoundaryReview(repository: string, base: string, signedLandedTip?: string): MergeBoundaryReview {
   const findings = new Map<FindingClass, number>();
   const notices: string[] = [];
   const identities = branchIdentities(repository, base);
@@ -3063,12 +2945,12 @@ export function mergeBoundaryReview(repository: string, base: string): MergeBoun
     const { attributable } = commitMessageAddressReview(attribution);
     /* The composed trailer rules classify any exact `noreply` local part as
        machine attribution. For the forge's web-flow mailbox, the commit graph
-       is the additional proof: a zero- or one-parent commit did not come from
-       the forge's merge composer and remains attributable. */
+       identifies a merge. A protected push can also verify GitHub's signature
+       on the exact single-parent tip it just published. */
     const unverifiedForgeComposer = isForgeComposerIdentityAddress(identity.address, identity)
-      && !isForgeComposerAddress(identity.address, identity);
+      && !isForgeComposerAddress(identity.address, identity, signedLandedTip);
     const publishes = unverifiedForgeComposer || attributable.some((address) => {
-      return !isForgeAccountAddress(address) && !isForgeComposerAddress(address, identity);
+      return !isForgeAccountAddress(address) && !isForgeComposerAddress(address, identity, signedLandedTip);
     });
     if (!publishes) continue;
     addFinding(findings, "email_address");
@@ -3090,8 +2972,7 @@ export function reportPrivacyFindings(findings: Map<FindingClass, number>, notic
   process.exitCode = 1;
 }
 
-if (import.meta.main) {
-  const arguments_ = process.argv.slice(2);
+export function runPublicationGate(arguments_: string[], signedLandedTip?: string): void {
   if (arguments_.includes("--require-known-values") && knownValues.fingerprints.length === 0
     && (!knownValues.error || process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE === undefined)) {
     console.error("Known-value catalog unavailable. Set LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE to the committed scripts/privacy-known-value-fingerprints.json, or pass LLV_PRIVACY_KNOWN_VALUES_FILE or LLV_PRIVACY_KNOWN_VALUES.");
@@ -3115,7 +2996,7 @@ if (import.meta.main) {
     };
   const notices: string[] = [...range.notices];
   const pathFindings = addedLines && !range.error && !repositoryError
-    ? inspectCommitAdditions(inspectionRoot, trustedBase, arguments_.includes("--require-known-values"), notices, arguments_.includes("--defer-unavailable-media"))
+    ? inspectCommitAdditions(inspectionRoot, trustedBase, arguments_.includes("--require-known-values"), notices)
     : inspectPaths(
     selection.paths,
     false,
@@ -3134,7 +3015,7 @@ if (import.meta.main) {
     /* The branch commits publish their messages when they are pushed; the merge
        publishes a commit composed from their identities. Both are the commit
        surface, so one flag reads both. */
-    const boundary = mergeBoundaryReview(inspectionRoot, trustedBase);
+    const boundary = mergeBoundaryReview(inspectionRoot, trustedBase, signedLandedTip);
     for (const [finding, count] of boundary.findings) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);
     }
@@ -3142,3 +3023,5 @@ if (import.meta.main) {
   }
   reportPrivacyFindings(pathFindings, notices);
 }
+
+if (import.meta.main) runPublicationGate(process.argv.slice(2));

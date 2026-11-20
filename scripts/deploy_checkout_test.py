@@ -1051,7 +1051,7 @@ class CheckoutIntegration(unittest.TestCase):
             return b"synthetic"
         if route == "/api/tasks?project=":
             return b'{"tasks":[]}'
-        if route == "/api/self-update":
+        if route == "/api/self-update?work=0&readOnly=1":
             return json.dumps({"auto": {"enabled": False}, "serving": {r: {"sha": self.current} for r in ["web", "runtimeHost"]},
                                "processes": {r: {"state": "healthy"} for r in ["web", "runtimeHost"]}}).encode()
         raise AssertionError("unplanned HTTP read")
@@ -2280,6 +2280,7 @@ class CheckoutIntegration(unittest.TestCase):
             self.assertTrue(self.adapter.serving()["checks"]["http"])
             self.adapter.preflight()
             self.assertEqual(paths.count("/api/tasks?project="), 2)
+            self.assertEqual(paths.count("/api/self-update?work=0&readOnly=1"), 2)
             self.assertNotIn("/api/tasks", paths)
             self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
             self.assertEqual(self.service_commands(), [])

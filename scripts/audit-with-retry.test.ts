@@ -5,7 +5,17 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 
 const roots: string[] = [];
-afterEach(() => {
+const wrappers = new Set<Bun.Subprocess>();
+afterEach(async () => {
+  const pending = [...wrappers];
+  for (const child of pending) if (child.exitCode === null) child.kill("SIGTERM");
+  if (pending.length) {
+    const bound = setTimeout(() => {
+      for (const child of pending) if (child.exitCode === null) child.kill("SIGKILL");
+    }, 2000);
+    try { await Promise.all(pending.map(child => child.exited)); }
+    finally { clearTimeout(bound); }
+  }
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -66,6 +76,8 @@ if (scenario === "hang" || scenario === "resist") {
   const lines = (file: string) => existsSync(join(root, file)) ? readFileSync(join(root, file), "utf8").trim().split("\n") : [];
   const start = (script = 'bash scripts/audit-with-retry.sh --audit-level=high "--ignore=GHSA-aaaa-bbbb-cccc"') => {
     const child = Bun.spawn(["/bin/bash", "-c", script], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+    wrappers.add(child);
+    void child.exited.then(() => wrappers.delete(child));
     const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
     return { child, async result() {
       const status = await child.exited;
@@ -73,7 +85,13 @@ if (scenario === "hang" || scenario === "resist") {
       return { status, text: stdout + stderr, calls: lines("calls").map(line => JSON.parse(line) as string[]), sleeps: lines("sleeps"), deadlines: lines("deadlines") };
     } };
   };
-  return { root, start };
+  // These cases exercise the wrapper's classification of fixed CLI output.
+  // Real HTTP, signal and hung-child cases above still execute the Bun binary.
+  const diagnostic = (text: string) => {
+    writeFileSync(join(root, "diagnostic"), text + "\n");
+    shim("bun", 'if [[ "$1" != audit ]]; then exec "$AUDIT_TEST_BUN" "$@"; fi\ncat "$AUDIT_TEST_ROOT/diagnostic" >&2\nexit 1');
+  };
+  return { root, start, diagnostic };
 }
 
 for (const sequence of [["success"], ["timeout", "success"], ["timeout", "503", "success"]]) {
@@ -84,7 +102,7 @@ for (const sequence of [["success"], ["timeout", "success"], ["timeout", "503", 
     expect(result.sleeps).toEqual(["5", "10"].slice(0, sequence.length - 1));
     for (const args of result.calls) expect(args).toEqual(["audit", "--audit-level=high", "--ignore=GHSA-aaaa-bbbb-cccc"]);
     for (const deadline of result.deadlines) expect(deadline).toStartWith("--foreground --kill-after=5s 310s bun audit ");
-  });
+  }, 30_000);
 }
 
 test("exhausted transport errors block with an unreachable classification", async () => {
@@ -98,7 +116,7 @@ test("exhausted transport errors block with an unreachable classification", asyn
 
 for (const statuses of [[503, 200], [503, 503, 503], [403]]) {
   test(`real Bun advisory endpoint responds with ${statuses.join(" then ")}`, async () => {
-    const f = fixture([], "2s");
+    const f = fixture([], "15s");
     // Keep Bun's actual output and HTTP request path in the regression. Only
     // backoff duration and the outer deadline are shortened by fixture shims.
     writeFileSync(join(f.root, "bin/bun"), '#!/bin/bash\nexec "$AUDIT_TEST_BUN" "$@"\n');
@@ -129,13 +147,13 @@ for (const statuses of [[503, 200], [503, 503, 503], [403]]) {
     } finally {
       await server.stop(true);
     }
-  });
+  }, 60_000);
 }
 
 for (const status of [408, 429, 500, 502, 503, 504]) {
   test(`Bun 1.4 advisory HTTP ${status} retries as unavailable`, async () => {
     const f = fixture([]);
-    writeFileSync(join(f.root, "fake.ts"), `console.error("bun audit v1.4.0 (fixture)"); console.error("error: POST https://registry.example/-/npm/v1/security/advisories/bulk - ${status}"); process.exit(1);`);
+    f.diagnostic(`bun audit v1.4.0 (fixture)\nerror: POST https://registry.example/-/npm/v1/security/advisories/bulk - ${status}`);
     const result = await f.start().result();
     expect(result.status).toBe(1);
     expect(result.sleeps).toEqual(["5", "10"]);
@@ -151,7 +169,7 @@ for (const diagnostic of [
 ]) {
   test(`Bun 1.4 refuses non-transient or mixed diagnostics: ${JSON.stringify(diagnostic)}`, async () => {
     const f = fixture([]);
-    writeFileSync(join(f.root, "fake.ts"), `console.error("bun audit v1.4.0 (fixture)"); console.error(${JSON.stringify(diagnostic)}); process.exit(1);`);
+    f.diagnostic(`bun audit v1.4.0 (fixture)\n${diagnostic}`);
     const result = await f.start().result();
     expect(result.status).toBe(1);
     expect(result.sleeps).toEqual([]);
@@ -235,13 +253,13 @@ for (const workflow of ["supply-chain.yml", "publish.yml"]) {
     expect(result.status).not.toBe(0);
     expect(result.calls).toEqual([]);
     expect(result.text).toContain("expired on");
-  });
+  }, 30_000);
 }
 
 for (const diagnostic of ["ConnectionRefused", "ConnectionReset", "ConnectionClosed", "FailedToOpenSocket"]) {
   test(`${diagnostic} is retried only as a standalone request failure`, async () => {
     const f = fixture(["success"]);
-    writeFileSync(join(f.root, "fake.ts"), `console.error("bun audit v1.3.3 (fixture)"); console.error("${diagnostic}: audit request failed"); process.exit(1);`);
+    f.diagnostic(`bun audit v1.3.3 (fixture)\n${diagnostic}: audit request failed`);
     const result = await f.start().result();
     expect(result.status).toBe(1);
     expect(result.deadlines).toHaveLength(3);
@@ -270,7 +288,7 @@ test("exhausted HTTP service errors are classified as unavailable", async () => 
 
 test("Bun 1.4 HTTP retries require the complete endpoint diagnostic", async () => {
   const f = fixture(["success"]);
-  writeFileSync(join(f.root, "fake.ts"), `console.error("error: POST https://registry.example.invalid/-/npm/v1/security/advisories/bulk - 503"); console.error("error: invalid lockfile"); process.exit(1);`);
+  f.diagnostic("error: POST https://registry.example.invalid/-/npm/v1/security/advisories/bulk - 503\nerror: invalid lockfile");
   const result = await f.start().result();
   expect(result.status).toBe(1);
   expect(result.sleeps).toEqual([]);

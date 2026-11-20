@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 
 import { stateDir, statePath } from "@/lib/configDir";
 // eslint-disable-next-line no-restricted-imports -- The leased disk-pressure helper scans processes; injected ports keep direct test reads available.
-import { isOwnedTempConsumerName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
+import { isOwnedTempConsumerName, ownTempRoots, discoverSweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { attemptTempConfigParent } from "@/lib/runtime/attemptTempPaths";
@@ -300,7 +300,7 @@ export async function readDiskPressureInHelper(ports: {
   const pipelines = ports.roots || ports.worktrees ? [] : loadPipelinesForList();
   const sweep = ports.roots || ports.worktrees ? null : readWorktreeSweepReport();
   const worktrees = ports.worktrees ?? [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
-  const tempRoots = includeIdleHostViews(ports.tempRoots ?? (ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")])));
+  const tempRoots = includeIdleHostViews(ports.tempRoots ?? (ports.roots ? [] : discoverSweepRoots([...ownTempRoots(), statePath("scratch")])));
   const worktreeView = (directory: string) => tempViewFor(directory, tempRoots);
   const accessible = (directory: string) => (worktreeView(directory)?.via ?? "") + directory;
   const usesClaude = pipelines.some(pipeline => pipeline.stages.some(stage => stage.effectiveRole.engine === "claude"));
