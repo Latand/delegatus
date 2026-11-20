@@ -890,7 +890,7 @@ test.each(["child", "deploy", "maintenance", "stall"] as const)("legacy retained
     label: "Settlement ".padEnd(500, "s"),
     ...(kind === "child" ? { outcomeId: id, stateTokens: [`${id}@one`] } : {}),
     ...(kind === "deploy" ? { deploy: { deploymentId: id, phase: "succeeded", sha: "a".repeat(40), error: null } } : {}),
-    ...(kind === "maintenance" ? { maintenance: { runId: id } } : {}),
+    ...(kind === "maintenance" ? { maintenance: { runId: id, page: 0, pages: 1 } } : {}),
     ...(kind === "stall" ? { stallToken: `${id}@one` } : {}),
   }));
   const verdict: Extract<import("./types").SeatTickVerdict, { kind: "wake" }> = {
@@ -907,6 +907,7 @@ test.each(["child", "deploy", "maintenance", "stall"] as const)("legacy retained
   delete commit.acknowledgmentLines;
   delete commit.itemLines;
   delete commit.itemsShown;
+  if (kind === "maintenance") commit.announcedMaintenance = ids;
   const outstandingWake = {
     clientMessageId: `legacy-${kind}-wake`, conversationId: CONVERSATION, seatEpoch: 7, operationId: null,
     preparedAt: new Date(NOW - MINUTE).toISOString(), text, commit,
@@ -934,7 +935,10 @@ test.each(["child", "deploy", "maintenance", "stall"] as const)("legacy retained
   } });
   rig.deps.sources!.now = () => NOW + 2 * MINUTE;
   await runSeatTickCheck(PROJECT, rig.deps);
-  expect(ledger(rig.deps.readState!(PROJECT))).toEqual(keys(items));
+  const expected = kind === "maintenance"
+    ? [...keys(complete), ...keys(remaining).map(id => `${id}:page:0`)]
+    : keys(items);
+  expect(ledger(rig.deps.readState!(PROJECT))).toEqual(expected);
 });
 
 test.each([30, 200])("full report ledgers deliver a complete maintenance settlement within two wakes and retain unrelated debt (label chars: %s)", async labelChars => {
@@ -969,13 +973,13 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
     expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed);
     expect(rig.sent.at(-1)!.text).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
   }
-  const bullet = `- [maintenance] ${run.taskId} — ${maintenanceItemLabel(run)}`;
+  const bullet = `- [maintenance] ${run.taskId}:1 — ${maintenanceItemLabel(run)}`;
   expect(bullet.length).toBeGreaterThan(1_200);
   /* Both ledgers leave room for the whole item within the two wakes; the
      short labels fit it into the first. */
   expect(rig.sent.some(message => message.text.includes(`\n${bullet}\n`))).toBe(true);
   if (labelChars === 30) expect(rig.sent[0]!.text).toContain(`\n${bullet}\n`);
-  expect(rig.written.at(-1)!.announcedMaintenance).toEqual([run.runId]);
+  expect(rig.written.at(-1)!.announcedMaintenance).toEqual([`${run.runId}:page:0`]);
 });
 
 test("the controller keeps unpaid report reminders after the delivered agenda drains, until its matching bridge report lands", async () => {

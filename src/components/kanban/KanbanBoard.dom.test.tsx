@@ -304,7 +304,7 @@ test("a column names its cards' status, so a card draws no status pill; S opens 
   const field = form.querySelector<HTMLInputElement>("input")!;
   const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
   flushSync(() => { setter.call(field, "Choose the release"); field.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
-  click(form.querySelector('[type="submit"]'));
+  flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
   expect(columnOf(host, "a")).toBe("blocked");
   await tick();
   expect(patches).toEqual([{ id: "a", body: { status: "blocked", hold: { kind: "operator", note: "Choose the release" }, expectedProject: "fixture", expectedRevision: REV(1) } }]);

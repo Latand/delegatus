@@ -81,7 +81,10 @@ test("structured dates and refs tell a cleared wait from an open prerequisite", 
   const held = task("ref", "task", { ref: dependency.id });
   const finished = { owner: "seat", rule: "wait-cleared", carriedBy: "task" };
   expect(classify(held, [], [dependency])).toMatchObject({ owner: "seat", rule: "unowned" });
-  expect(classify(held, [], [{ ...dependency, assignments: [{ state: "delivered", path: null, conversationId: "conversation_live" }] }])).toMatchObject({ owner: "agents", rule: "dependency" });
+  const assigned = { ...dependency, assignments: [{
+    state: "delivered" as const, path: null, conversationId: "conversation_live", panePid: null, error: null, at: at(0),
+  }] };
+  expect(classify(held, [], [assigned])).toMatchObject({ owner: "agents", rule: "dependency" });
   expect(classify(held, [], [{ ...dependency, status: "inbox" }])).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
   const cycleA = task("cycle-a", "task", { ref: "cycle-b" });
   const cycleB = task("cycle-b", "task", { ref: "cycle-a" });

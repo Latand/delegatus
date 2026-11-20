@@ -188,11 +188,16 @@ test("a long returned-round lane wake keeps retry-stage and every task id before
   const ids = [1, 2, 3, 4].map(number => `waiting-task-fixture-with-long-id-0${number}`);
   const tasks = ids.map(id => ({ id, project: "project-a", text: "Retry publication", status: "blocked" as const, placement: "unplaced" as const,
     assignments: [], createdAt: at, updatedAt: at, hold: { kind: "external" as const, note: "Publication parked", since: at, by: "agent" as const } }));
-  const long = { ...mergeLane("publication", "stage failed"), state: "needs_decision" as const, taskIds: ids,
-    stages: [{ id: "publish", kind: "run" }], cursor: { stageId: "publish" },
-    runs: [{ stageId: "publish", attempts: [{ n: 1, state: "failed", error: "stage failed" }] }],
-    attentionRoute: { key: "", owner: "seat" as const, seat: "conversation_seat", returnedFrom: "round-returned-12345678901234567890" } };
-  long.attentionRoute.key = laneRouteKey(long as unknown as Pipeline, "lane-decision");
+  const effectiveRole = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const attentionRoute = { key: "", owner: "seat" as const, seat: "conversation_seat", returnedFrom: "round-returned-12345678901234567890" };
+  const long: Pipeline = { ...mergeLane("publication", "stage failed"), state: "needs_decision", taskIds: ids,
+    stages: [{ id: "publish", kind: "run", prompt: "Publish", next: null, effectiveRole }],
+    cursor: { stageId: "publish", state: "running", input: null, activatedBy: null },
+    runs: [{ stageId: "publish", attempts: [{ n: 1, state: "failed", error: "stage failed", effectiveRole,
+      launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+      startedAt: at, completedAt: at, input: null, activatedBy: null, output: null, verdict: null }] }],
+    attentionRoute };
+  attentionRoute.key = laneRouteKey(long, "lane-decision");
   const ask = seatAgendaAsks({ files: [], pipelines: [long], tasks }, now, "project-a").find(item => item.id === "publication")!;
   expect(ask.waitingTaskIds).toEqual(ids);
   expect(ask.label).toContain("pipeline_action retry-stage");
