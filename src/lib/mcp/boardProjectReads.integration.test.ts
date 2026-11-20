@@ -11,7 +11,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { AgentRegistry, type RegistryConversation, type RegistryFile } from "@/lib/agent/registry";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { projectAliasStore } from "@/lib/projects/persistence";
-import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
+import { archiveSettledPipelines, buildPipeline, loadArchivedPipelines, savePipelines } from "@/lib/pipelines/store";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -36,6 +36,7 @@ function retainedFile(project: string, projectName: string): FileEntry {
     parent: null, mtime: Date.parse(AT) / 1000, size: 0, activity: "idle", proc: null, pid: null,
     model: null, pendingQuestion: null, waitingInput: null };
 }
+
 let root: string;
 let previousState: string | undefined;
 const cursorStoreKey = Symbol.for("delegatus.mcp.pageCursors");
@@ -370,6 +371,70 @@ for (const tool of TOOLS) for (const workspace of [false, true]) {
     }
   }
 }
+
+test("a fresh production SDK reader resolves and reads an archive-only project by exact key", async () => {
+  const lane = buildPipeline({ id: "archive-only-lane", project: OWN, task: "Archived board lane", repoDir: root,
+    stages: [], state: "closed", srcPath: null, srcConversationId: null, now: AT });
+  lane.closedAt = AT;
+  savePipelines([lane]);
+  expect(await archiveSettledPipelines(Date.parse(AT) + 4 * 24 * 60 * 60 * 1000)).toBe(1);
+  expect(loadArchivedPipelines().map(row => row.id)).toEqual([lane.id]);
+  const child = String.raw`
+    import path from "node:path";
+    import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+    import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+    import { productionDomainDependencies, viewerMcpBindings } from "./src/lib/mcp/bindings.ts";
+    import { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } from "./src/lib/mcp/server.ts";
+    const own = ${JSON.stringify(OWN)}, foreign = ${JSON.stringify(FOREIGN)}, laneId = ${JSON.stringify(lane.id)};
+    const conversationId = "conversation_archive_reader";
+    const domain = { ...productionDomainDependencies,
+      callerAttribution: () => ({ kind: "manager", conversationId, role: "orchestrator" }),
+      attentionAuthority: () => ({ kind: "worker", conversationId, role: "orchestrator" }),
+      authorizedSeats: () => [{ conversationId, path: null, project: own }],
+      registrySnapshot: () => null, workspaceConversation: () => null,
+      lastCompletedCatalog: () => {
+        const current = productionDomainDependencies.lastCompletedCatalog() ?? { projectCatalog: [], files: [] };
+        return { ...current, projectCatalog: [...current.projectCatalog,
+          { project: own, displayName: "Shared Archive Board", smt: 1, conversations: 1 },
+          { project: foreign, displayName: "Shared Archive Board", smt: 1, conversations: 1 },
+        ] };
+      },
+    };
+    const bindings = viewerMcpBindings(undefined, {
+      post: async () => { throw new Error("unexpected control write"); },
+      get: async () => { throw new Error("unexpected control read"); },
+    }, domain);
+    const receipts = new SqliteMcpReceiptStore(path.join(process.env.LLV_STATE_DIR, "sdk-receipts.sqlite"));
+    const service = createMcpToolService(bindings, receipts);
+    const server = createViewerMcpServer({ callTool: (...args) => service.callTool(...args) });
+    const client = new Client({ name: "archive-board-reader", version: "1" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const read = async project => {
+      const result = await client.callTool({ name: "list_pipelines", arguments: {
+        project, ids: [laneId], includeClosed: true, limit: 1, full: true,
+      } });
+      return result.structuredContent ?? result.content;
+    };
+    const outcomes = {
+      own: await read(own), foreign: await read(foreign), unknown: await read("Unknown Archive Board"),
+      ambiguous: await read("Shared Archive Board"),
+    };
+    await client.close(); await server.close(); receipts.close();
+    process.stdout.write(JSON.stringify(outcomes));
+  `;
+  const home = path.join(root, "child-home"), config = path.join(root, "child-config"), tmp = path.join(root, "child-tmp");
+  for (const dir of [home, config, tmp]) fs.mkdirSync(dir, { recursive: true });
+  const run = Bun.spawnSync(["bun", "-e", child], { cwd: process.cwd(), timeout: 30_000,
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: config, TMPDIR: tmp, LLV_STATE_DIR: path.join(root, "state"), NODE_ENV: "test" },
+    stdout: "pipe", stderr: "pipe" });
+  expect(run.exitCode).toBe(0, new TextDecoder().decode(run.stderr));
+  const outcomes = JSON.parse(new TextDecoder().decode(run.stdout)) as Record<string, unknown>;
+  expect(outcomes.own).toMatchObject({ ok: true, total: 1, pipelines: [{ id: lane.id }] });
+  expect(outcomes.foreign).toMatchObject({ ok: false, code: "cross_project_refused", retryable: false });
+  expect(outcomes.unknown).toMatchObject({ ok: false, code: "unknown_project", retryable: false });
+  expect(outcomes.ambiguous).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false });
+});
 
 for (const workspace of [false, true]) for (const spelling of ["outer-alias", "legacy_board", "repo-33333333", "Historic Board"]) {
   for (const changed of [false, true]) test(`list_pipelines: alias-chain page await ${spelling} changed=${changed} workspace=${workspace}`, async () => {

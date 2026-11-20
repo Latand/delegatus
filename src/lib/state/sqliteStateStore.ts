@@ -1713,7 +1713,7 @@ export function readStateProjectKeys(filename: string): string[] {
     return db.query<{ project: string | null }, []>(`
       SELECT DISTINCT json_extract(value_json, '$.project') AS project
       FROM state_rows
-      WHERE collection IN ('tasks', 'pipelines', 'flows')
+      WHERE collection IN ('tasks', 'pipelines', 'pipelines_archive', 'flows')
         AND json_valid(value_json)
         AND json_type(value_json, '$.project') = 'text'
     `).all().flatMap(row => row.project ? [row.project] : []);

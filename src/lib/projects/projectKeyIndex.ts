@@ -20,13 +20,14 @@ export function projectKeyIndexSnapshot(): ReadonlySet<string> {
   const keys = new Set<string>();
   for (const projects of sources().values()) for (const project of projects) keys.add(project);
   const filename = statePath("state.sqlite");
-  const revisions = readStateCollectionRevisions(filename, ["tasks", "pipelines", "flows"]);
+  const collections = ["tasks", "pipelines", "pipelines_archive", "flows"] as const;
+  const revisions = readStateCollectionRevisions(filename, collections);
   let identity = "absent";
   try {
     const stat = fs.statSync(filename);
     identity = `${stat.dev}:${stat.ino}`;
   } catch { /* an uninitialized installation has no durable project rows */ }
-  const signature = `${identity}:${["tasks", "pipelines", "flows"].map(key => revisions.get(key) ?? "-").join(":")}`;
+  const signature = `${identity}:${collections.map(key => revisions.get(key) ?? "-").join(":")}`;
   if (store.__llvProjectKeyDatabase?.signature !== signature) {
     store.__llvProjectKeyDatabase = { signature, projects: new Set(readStateProjectKeys(filename)) };
   }
