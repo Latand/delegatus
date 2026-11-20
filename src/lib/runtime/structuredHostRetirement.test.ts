@@ -188,7 +188,9 @@ function finishedStage(file = snapshot()) {
 
 test("an unrelated pipeline write during measurement keeps ordinary idle retirement eligible", async () => {
   const unrelated = finishedStage(snapshot(manyCandidates(1)));
-  unrelated.runs[0]!.attempts[0]!.agentPath = "/fixture/unrelated.jsonl";
+  const attempt = unrelated.runs[0]!.attempts[0]!;
+  attempt.sessionId = "unrelated-session";
+  attempt.agentPath = "/fixture/unrelated.jsonl";
   savePipelines([unrelated]);
   const probe = await sweep({
     treePss: async () => {
