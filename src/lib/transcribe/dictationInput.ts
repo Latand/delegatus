@@ -1,14 +1,32 @@
 import { float32ToPcm16 } from "@/lib/audio";
 
-/** Start loading beside the permission prompt and token request. */
-export function prepareDictationInput() {
+async function prepareWorklet(ctx: AudioContext, maxSamples: number): Promise<AudioWorkletNode | null> {
+  if (!ctx.audioWorklet || typeof AudioWorkletNode !== "function") return null;
+  try {
+    const source = process.env.NEXT_PUBLIC_DICTATION_WORKLET_SOURCE;
+    let installed = false;
+    if (source && typeof URL.createObjectURL === "function") {
+      let url: string | undefined;
+      try {
+        url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+        await ctx.audioWorklet.addModule(url);
+        installed = true;
+      } catch { /* A content security policy can require the same-origin module. */ }
+      finally { if (url) URL.revokeObjectURL(url); }
+    }
+    if (!installed) await ctx.audioWorklet.addModule("/audio/dictation-capture.js");
+    return new AudioWorkletNode(ctx, "dictation-capture", { processorOptions: { maxSamples } });
+  } catch {
+    return null;
+  }
+}
+
+/** Prepare the recorder beside the token request, before opening the microphone. */
+export function prepareDictationInput(maxSamples: number) {
   let ctx: AudioContext;
   try { ctx = new AudioContext({ sampleRate: 16_000 }); }
   catch { ctx = new AudioContext(); }
-  const ready = ctx.audioWorklet && typeof AudioWorkletNode !== "undefined"
-    ? ctx.audioWorklet.addModule("/audio/dictation-capture.js").then(() => true, () => false)
-    : Promise.resolve(false);
-  return { ctx, ready };
+  return { ctx, ready: prepareWorklet(ctx, maxSamples) };
 }
 
 export class DictationInput {
@@ -18,11 +36,11 @@ export class DictationInput {
   private deadline: number | undefined;
   private closed = false;
 
-  constructor(private ctx: AudioContext, stream: MediaStream, worklet: boolean, maxSamples: number,
+  constructor(private ctx: AudioContext, stream: MediaStream, worklet: AudioWorkletNode | null,
     private samples: (chunk: Int16Array) => void, full: () => void, private failed: () => void) {
     this.source = ctx.createMediaStreamSource(stream);
     if (worklet) {
-      const node = new AudioWorkletNode(ctx, "dictation-capture", { processorOptions: { maxSamples } });
+      const node = worklet;
       node.port.onmessage = ({ data }) => {
         if (this.closed) return;
         if (data instanceof Int16Array) {
