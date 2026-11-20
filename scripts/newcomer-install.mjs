@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import vm from "node:vm";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -70,24 +71,32 @@ async function stop(child) {
   }
 }
 
-async function waitForRetention(file, launcherExited, timeoutMs) {
+async function waitForRetention(file, runId, terminal, launcherExited, timeoutMs) {
   const deadline = performance.now() + timeoutMs;
+  let report;
   while (performance.now() < deadline) {
     if (launcherExited()) return { status: "unavailable", reason: "launcher exited before retention receipt" };
     try {
-      const report = JSON.parse(readFileSync(file, "utf8"));
-      const at = typeof report?.at === "string" ? Date.parse(report.at) : NaN;
-      if (!Number.isFinite(at) || !Array.isArray(report.errors) || !report.errors.every((error) => typeof error === "string")
-        || !Array.isArray(report.removed) || !Array.isArray(report.kept)
-        || !Number.isFinite(report.reclaimedCacheBytes) || report.reclaimedCacheBytes < 0) {
+      const candidate = JSON.parse(readFileSync(file, "utf8"));
+      const at = typeof candidate?.at === "string" ? Date.parse(candidate.at) : NaN;
+      if (!Number.isFinite(at) || !Array.isArray(candidate.errors) || !candidate.errors.every((error) => typeof error === "string")
+        || !Array.isArray(candidate.removed) || !Array.isArray(candidate.kept)
+        || !Number.isFinite(candidate.reclaimedCacheBytes) || candidate.reclaimedCacheBytes < 0) {
         return { status: "unavailable", reason: "invalid retention receipt" };
       }
-      // The receipt may contain absolute paths and raw errors. Publish only
-      // the error count and the normalized timestamp recorded by the pass.
-      return { status: "completed", at: new Date(at).toISOString(), errorCount: report.errors.length };
+      report = candidate;
     } catch (error) {
       if (error instanceof SyntaxError) return { status: "unavailable", reason: "invalid retention receipt" };
       if (error.code !== "ENOENT") return { status: "unavailable", reason: "cannot read retention receipt" };
+    }
+    const completion = terminal();
+    if (completion) {
+      if (completion.runId !== runId) return { status: "unavailable", reason: "retention completion belongs to another launch" };
+      if (!report || report.runId !== runId) return { status: "unavailable", reason: "retention receipt belongs to another launch" };
+      const at = Date.parse(report.at);
+      // The receipt may contain absolute paths and raw errors. Publish only
+      // the error count and normalized pass timestamp.
+      return { status: "completed", at: new Date(at).toISOString(), errorCount: completion.errorCount };
     }
     await delay(Math.min(200, Math.max(0, deadline - performance.now())));
   }
@@ -96,6 +105,7 @@ async function waitForRetention(file, launcherExited, timeoutMs) {
 
 export async function startCase(label, env, expected, { directory, rows, retentionTimeoutMs = 130_000 }) {
   const receipt = label === "neither-cli" ? path.join(env.LLV_STATE_DIR, "self-update", "retention.json") : null;
+  const runId = receipt ? randomUUID() : undefined;
   const port = await availablePort();
   // The first case owns a fresh profile. Refuse any receipt that predates
   // its launcher, including during a replay with a previously used profile.
@@ -103,7 +113,7 @@ export async function startCase(label, env, expected, { directory, rows, retenti
   // Run the prompt's installed launcher in the background through a tracked
   // child handle, with an ephemeral port instead of the visitor's stable port.
   const child = spawn(path.join(env.HOME, ".bun/bin/delegatus"), ["--no-open", "--port", String(port)], {
-    env, stdio: ["ignore", "pipe", "pipe"], cwd: env.HOME,
+    env: runId ? { ...env, LLV_RETENTION_RUN_ID: runId } : env, stdio: ["ignore", "pipe", "pipe"], cwd: env.HOME,
   });
   let output = "";
   let spawnError;
@@ -134,18 +144,23 @@ export async function startCase(label, env, expected, { directory, rows, retenti
     if (JSON.stringify(presence) !== JSON.stringify(expected.presence)) throw new Error(`${label}: expected CLI presence ${JSON.stringify(expected.presence)}, got ${JSON.stringify(presence)}`);
     if (expected.installer && !output.includes(expected.installer)) throw new Error(`${label}: missing actionable installation command`);
     if (expected.available && output.includes("CLI were not found")) throw new Error(`${label}: available CLI still reported missing`);
-    const row = { case: label, rootStatus: 200, cli: presence, message: expected.message, passed: true };
+    const row = { case: label, rootStatus: 200, cli: presence, message: expected.message, passed: false };
     rows.push(row);
     if (receipt) {
       row.retention = preexistingReceipt
         ? { status: "unavailable", reason: "retention receipt predates launcher" }
-        : await waitForRetention(receipt, launcherExited, retentionTimeoutMs);
+        : await waitForRetention(receipt, runId, () => {
+          const matches = [...output.matchAll(/\[self-update\] retention pass ([^ ]+) complete; (\d+) error\(s\)/g)];
+          const match = matches.at(-1);
+          return match ? { runId: match[1], errorCount: Number(match[2]) } : null;
+        }, launcherExited, retentionTimeoutMs);
       row.passed = row.retention.status === "completed" && row.retention.errorCount === 0;
       if (!row.passed) {
         const reason = row.retention.reason ?? `retention completed with ${row.retention.errorCount} error(s)`;
         throw new Error(`${label}: ${reason}`);
       }
     }
+    row.passed = true;
   } catch (error) {
     failure = error;
     throw error;
@@ -157,6 +172,28 @@ export async function startCase(label, env, expected, { directory, rows, retenti
       if (failure) writeFileSync(path.join(directory, `${label}-error.txt`), publicFixtureText(String(failure.message), env.HOME) + "\n");
     }
   }
+}
+
+export async function runCases(cases, entries) {
+  const failures = [];
+  for (const [label, env, expected] of entries) {
+    try { await startCase(label, env, expected, cases); }
+    catch (error) { failures.push(publicFixtureText(error.message, cases.home)); }
+  }
+  return failures;
+}
+
+export function writeReport(directory, report) {
+  writeFileSync(path.join(directory, "report.json"), JSON.stringify(report, null, 2) + "\n");
+}
+
+export function finalizeCases(report, auditFile, home, caseFailures) {
+  const calls = readFileSync(auditFile, "utf8").trim().split("\n");
+  report.stubCommands = [...new Set(calls.map((call) => publicFixtureText(call, home)))];
+  const forbidden = calls.filter((call) => !safeStubCall(call));
+  if (forbidden.length) throw new Error(`Stub received unexpected commands: ${publicFixtureText(forbidden.join("; "), home)}`);
+  if (caseFailures.length) throw new Error(caseFailures.join("; "));
+  report.passed = true;
 }
 
 function stub(name, directory, audit) {
@@ -190,7 +227,7 @@ async function main() {
     DELEGATUS_TELEMETRY: "0",
   };
   const rows = [];
-  const cases = { directory: reportDirectory, rows };
+  const cases = { directory: reportDirectory, rows, home };
   const report = { platform: process.platform, arch: process.arch, source: target.endsWith(".tgz") ? "checkout tarball" : "npm release", rows, passed: false };
   try {
     const prompt = readInstallPrompt("claude", "en", promptRoot);
@@ -206,10 +243,10 @@ async function main() {
     report.package = installedPackageIdentity(env.BUN_INSTALL);
     report.globalBin = publicFixtureText(shell("bun pm bin -g", env), home);
     report.binEntries = readdirSync(path.join(home, ".bun/bin"));
-    await startCase("neither-cli", env, {
+    const entries = [["neither-cli", env, {
       message: "Claude Code CLI and Codex CLI were not found", presence: { claude: "missing", codex: "missing" },
       installer: "curl -fsSL https://claude.ai/install.sh | bash",
-    }, cases);
+    }]];
     const audit = path.join(fixture, "stub-calls.txt");
     for (const agent of ["claude", "codex"]) {
       const stubDirectory = path.join(fixture, `path-${agent}`);
@@ -218,25 +255,22 @@ async function main() {
       const variant = readInstallPrompt(agent, "en", promptRoot);
       shell(promptCommand(variant, `${agent} --version`), withStub);
       shell(promptCommand(variant, `${agent} mcp add viewer`), withStub);
-      await startCase(`path-${agent}`, withStub, {
+      entries.push([`path-${agent}`, withStub, {
         message: `Agent CLI: ${agent}. Sign in`, available: true,
         presence: { claude: agent === "claude" ? "found" : "missing", codex: agent === "codex" ? "found" : "missing" },
-      }, cases);
+      }]);
     }
     stub("codex", path.join(home, "Applications/Codex.app/Contents/Resources"), audit);
-    await startCase("desktop-bundle", env, {
+    entries.push(["desktop-bundle", env, {
       message: "Agent CLI: codex. Sign in", available: true, presence: { claude: "missing", codex: "found" },
-    }, cases);
-    const calls = readFileSync(audit, "utf8").trim().split("\n");
-    report.stubCommands = [...new Set(calls.map((call) => publicFixtureText(call, home)))];
-    const forbidden = calls.filter((call) => !safeStubCall(call));
-    if (forbidden.length) throw new Error(`Stub received unexpected commands: ${publicFixtureText(forbidden.join("; "), home)}`);
-    report.passed = true;
+    }]);
+    const caseFailures = await runCases(cases, entries);
+    finalizeCases(report, audit, home, caseFailures);
   } catch (error) {
     report.error = publicFixtureText(error.message.replaceAll(target, "<package subject>"), home);
     throw new Error(report.error);
   } finally {
-    writeFileSync(path.join(reportDirectory, "report.json"), JSON.stringify(report, null, 2) + "\n");
+    writeReport(reportDirectory, report);
   }
   console.log(JSON.stringify(report, null, 2));
 }
