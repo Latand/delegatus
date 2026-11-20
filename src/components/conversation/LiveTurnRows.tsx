@@ -200,16 +200,17 @@ export function LiveMcpLinkChip({
 }) {
   const { t } = useLocale();
   const label = mcpLinkLabel(t, link);
-  const shared = "inline-flex min-h-6 min-w-0 shrink items-center justify-center gap-1 max-[480px]:min-w-8 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold transition-colors [@media(pointer:coarse)]:min-h-8";
+  const shared = "inline-flex min-h-6 min-w-0 items-center justify-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold transition-colors [@media(pointer:coarse)]:min-h-8";
   if (link.kind === "conversation" && (!availability.loaded || !availability.ids.has(link.id))) {
     return (
       <span
         data-live-mcp-link={link.kind}
         aria-disabled="true"
+        title={label}
         className={`${shared} cursor-wait border-border bg-sunken text-muted opacity-60`}
       >
         <MessageCircle className="h-3 w-3 shrink-0" aria-hidden />
-        <span className="truncate max-[480px]:sr-only">{label}</span>
+        <span className="[overflow-wrap:anywhere]">{label}</span>
       </span>
     );
   }
@@ -223,10 +224,10 @@ export function LiveMcpLinkChip({
         event.preventDefault();
         window.dispatchEvent(new CustomEvent("llv:mcp-navigate", { detail: { kind: link.kind, id: link.id } }));
       }}
-      className={`${shared} border-accent/35 bg-accent-soft text-accent hover:border-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45`}
+      className={`${shared} border-accent/35 bg-accent-soft text-accent hover:border-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45`}
     >
       {link.kind === "conversation" ? <MessageCircle className="h-3 w-3 shrink-0" aria-hidden /> : <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />}
-      <span className="truncate max-[480px]:sr-only">{label}</span>
+      <span className="[overflow-wrap:anywhere]">{label}</span>
     </a>
   );
 }
@@ -269,14 +270,11 @@ function liveStateTone(state: LiveCallState): string {
    chips. The card is passed no result here because the live row has none —
    which is exactly the card's own state while the call is still out, so the
    line does not change when the transcript row replaces it. The card's
-   disclosure (ids, the whole payload) stays on the card: the live row is one
-   line, and what the call returned is not known yet.
+   disclosure (ids, the whole payload) stays on the card. What the call
+   returned is not known yet.
 
-   The row is one line and never wraps (operator decision,
-   docs/design/seat-panel-noise.md b2). The title is what the operator reads, so
-   it claims the leftover width with a floor of its own (#1955); the entity chips
-   give way first, cut their label with an ellipsis and keep the whole label in
-   their tooltip. */
+   The title takes the remaining width and keeps its full text on hover.
+   The entity actions keep their labels at narrow pane widths. */
 function LiveMcpRow({
   item,
   tool,
@@ -303,7 +301,7 @@ function LiveMcpRow({
       data-live-tool-status={tool.status}
       data-live-mcp={identity.toolName}
       data-live-mcp-state={state}
-      className="ml-9 flex min-w-0 items-start gap-x-2 rounded-control py-0.5 text-ui"
+      className="ml-9 flex min-w-0 items-center gap-x-2 rounded-control py-0.5 text-ui"
     >
       <div className="@container flex min-w-0 flex-1 flex-nowrap items-center gap-x-2 overflow-hidden">
         <Icon
@@ -316,14 +314,18 @@ function LiveMcpRow({
         </span>
         <span
           data-live-mcp-title
-          className="min-w-[6rem] flex-1 basis-0 truncate font-semibold text-secondary"
+          className="min-w-0 flex-1 basis-0 truncate font-semibold text-secondary"
           title={description.tooltip ?? description.title}
         >
           {description.title}
         </span>
-        {description.links.map((link) => (
-          <LiveMcpLinkChip key={`${link.kind}:${link.id}`} link={link} availability={availability} />
-        ))}
+        {description.links.length ? (
+          <span className="flex min-w-0 max-w-[60%] shrink-0 flex-wrap items-end justify-end gap-1 @max-[26rem]:flex-col">
+            {description.links.map((link) => (
+              <LiveMcpLinkChip key={`${link.kind}:${link.id}`} link={link} availability={availability} />
+            ))}
+          </span>
+        ) : null}
         {/* The only outcome that is a word rather than a mark. */}
         {state === "outcome-omitted" ? (
           <span data-live-mcp-outcome="omitted" className="shrink-0 text-caption font-semibold text-muted">
@@ -333,7 +335,7 @@ function LiveMcpRow({
       </div>
       {state === "outcome-omitted" ? null : (
         <span
-          className={`mt-0.5 inline-flex shrink-0 items-center ${tone}`}
+          className={`inline-flex shrink-0 items-center ${tone}`}
           role={state === "pending" ? "status" : undefined}
           aria-label={state === "pending" ? `${description.verb}…` : state}
         >

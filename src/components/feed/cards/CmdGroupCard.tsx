@@ -138,7 +138,7 @@ function MobileCmdGroup({ item }: { item: CmdGroupItem }) {
             ) : (
               <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
             )}
-            <span className="min-w-0 flex-1 truncate text-secondary">
+            <span className="min-w-0 flex-1 truncate text-secondary" title={tools}>
               {tools}
             </span>
             {range ? <span className="shrink-0 text-caption tabular-nums">{range}</span> : null}
@@ -263,7 +263,7 @@ function DesktopCmdGroup({ item }: { item: CmdGroupItem }) {
         <span className="flex min-w-0 flex-1 items-center gap-1 text-secondary">
           {/* The counts clip, the failure count never does: it is the one part
               of the header an operator must still read on a narrow group. */}
-          <span className="min-w-0 truncate">{tools}</span>
+          <span className="min-w-0 truncate" title={tools}>{tools}</span>
           {item.errCount ? (
             <span className="ml-1 inline-flex shrink-0 items-center gap-0.5 font-semibold text-danger">
               <StatusIcon status="err" className="h-3 w-3" />

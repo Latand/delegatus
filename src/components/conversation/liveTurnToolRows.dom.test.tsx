@@ -174,14 +174,12 @@ for (const { tool, args, chips } of MCP_CASES) {
     const cardRoot = createRoot(card);
     roots.add(cardRoot);
     flushSync(() => { cardRoot.render(<McpCallCard event={event} availableConversationIds={new Set()} />); });
-    /* Both surfaces name their action title. It claims the leftover width with a
-       floor of its own (#1955), and the row never wraps (operator decision,
-       docs/design/seat-panel-noise.md b2). On the card the title shares a
-       heading with the server label, which leaves before the title cuts. */
+    /* The action title uses the remaining width and has a hover title.
+       On the card the server label leaves before the title cuts. */
     const cardTitleNode = card.querySelector<HTMLElement>("[data-testid=mcp-call-card] summary > [data-mcp-heading] > [data-mcp-title]")!;
     const cardTitle = cardTitleNode.textContent;
     const heading = cardTitleNode.parentElement!;
-    expect(heading.className).toContain("min-w-[6rem]");
+    expect(heading.className).toContain("min-w-0");
     expect(cardTitleNode.className).toContain("truncate");
     expect(heading.parentElement!.className).toContain("flex-nowrap");
     expect(heading.parentElement!.className).not.toContain("flex-wrap");
@@ -200,10 +198,10 @@ for (const { tool, args, chips } of MCP_CASES) {
     expect(liveTitle.parentElement!.className).toContain("flex-nowrap");
     expect(liveTitle.parentElement!.className).not.toContain("flex-wrap");
     expect(cardTitleNode.getAttribute("title")).toBe(cardTitle);
-    /* A chip cuts its label with an ellipsis and keeps the whole label as its tooltip. */
+    /* The chip's full translated label stays visible. */
     for (const chip of live.querySelectorAll<HTMLElement>("[data-live-mcp-link]")) {
       expect(chip.getAttribute("title")).toBe(chip.textContent);
-      expect(chip.querySelector(".truncate")?.textContent).toBe(chip.textContent);
+      expect(chip.querySelector(".truncate, .sr-only")).toBeNull();
     }
     expect(row.textContent).toContain("MCP · viewer");
     /* The same entity chips, with the same labels and the same targets. */

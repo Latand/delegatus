@@ -288,7 +288,7 @@ export function PollRow({ events, session, elapsedMs, contextTokens }: { events:
     <div data-tool-row="poll" className="flex items-center gap-2 rounded-control py-0.5 text-ui text-muted/80">
       <span className="shrink-0 select-none text-muted" aria-hidden>↳</span>
       <GlyphIcon name="clock" className="h-3.5 w-3.5 shrink-0" />
-      <span className="min-w-0 flex-1 truncate tabular-nums text-caption">{detail}</span>
+      <span className="min-w-0 flex-1 truncate tabular-nums text-caption" title={detail}>{detail}</span>
       <ContextTokensCaption value={contextTokens} scope="calls" />
     </div>
   );

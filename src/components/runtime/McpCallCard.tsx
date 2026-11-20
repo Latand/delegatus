@@ -108,8 +108,7 @@ function LinkChip({
   const { t } = useLocale();
   const label = mcpLinkLabel(t, link);
   const disabled = conversationUnavailable(link, conversationAvailability);
-  const chip = "inline-flex min-h-6 items-center justify-center gap-1 max-[480px]:min-w-8 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold transition-colors [@media(pointer:coarse)]:min-h-8";
-  const shared = `${chip} min-w-0 shrink`;
+  const chip = "inline-flex min-h-6 min-w-0 items-center justify-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-semibold transition-colors [@media(pointer:coarse)]:min-h-8";
   if (disabled && starting) {
     /* The agent was accepted and does not exist yet: a word says so at every
        width, and nothing here links an id this Viewer has not listed. */
@@ -119,10 +118,10 @@ function LinkChip({
         data-link-pending
         aria-disabled="true"
         title={t("mcp.link.pendingHint")}
-        className={`${chip} shrink-0 cursor-wait border-border bg-sunken text-muted`}
+        className={`${chip} cursor-wait border-border bg-sunken text-muted`}
       >
         <Clock3 className="h-3 w-3 shrink-0" aria-hidden />
-        <span className="whitespace-nowrap">{t("mcp.link.pending")}</span>
+        <span className="[overflow-wrap:anywhere]">{t("mcp.link.pending")}</span>
       </span>
     );
   }
@@ -132,10 +131,10 @@ function LinkChip({
         data-testid={`mcp-link-${link.kind}`}
         aria-disabled="true"
         title={t("mcp.link.pendingHint")}
-        className={`${shared} cursor-wait border-border bg-sunken text-muted opacity-60`}
+        className={`${chip} cursor-wait border-border bg-sunken text-muted opacity-60`}
       >
         <MessageCircle className="h-3 w-3 shrink-0" aria-hidden />
-        <span className="truncate max-[480px]:sr-only">{label}</span>
+        <span className="[overflow-wrap:anywhere]">{label}</span>
       </span>
     );
   }
@@ -145,10 +144,10 @@ function LinkChip({
       href={link.href}
       title={label}
       onClick={(event) => navigateToEntity(event, link)}
-      className={`${shared} border-accent/35 bg-accent-soft text-accent hover:border-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45`}
+      className={`${chip} border-accent/35 bg-accent-soft text-accent hover:border-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45`}
     >
       {link.kind === "conversation" ? <MessageCircle className="h-3 w-3 shrink-0" aria-hidden /> : <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />}
-      <span className="truncate max-[480px]:sr-only">{label}</span>
+      <span className="[overflow-wrap:anywhere]">{label}</span>
     </a>
   );
 }
@@ -205,18 +204,10 @@ export function McpCallCard({
             className={`h-3.5 w-3.5 shrink-0 ${tone} ${state === "pending" ? "animate-pulse" : ""}`}
             aria-hidden
           />
-          {/* One line, never wrapped (operator decision, docs/design/seat-panel-noise.md
-              b2). The row gives way in a fixed order: the trailing metadata leaves
-              first (its shrink outweighs every other part's), then the server
-              label, then the title cuts with an ellipsis down to a floor of its
-              own (#1955), and the entity chips cut their label last. The whole
-              text stays in the title tooltip and the Details disclosure.
-              The label and the title share a one-line box that wraps: the title
-              is placed first, so a label that no longer fits beside the whole
-              title moves to the hidden second line and leaves no gap, and only
-              then does the title shrink. */}
-          <span data-mcp-heading className="flex h-[1lh] min-w-[6rem] flex-auto flex-row-reverse flex-wrap items-center gap-x-2 overflow-hidden max-[480px]:gap-x-1.5">
-            <span data-mcp-title className="min-w-[6rem] flex-auto truncate font-semibold text-secondary" title={description.tooltip ?? description.title}>
+          {/* The server mark falls off before the title elides. The action
+              labels keep their width and may wrap at narrow pane widths. */}
+          <span data-mcp-heading className="flex h-[1lh] min-w-0 flex-auto flex-row-reverse flex-wrap items-center gap-x-2 overflow-hidden max-[480px]:gap-x-1.5">
+            <span data-mcp-title className="min-w-0 flex-auto truncate font-semibold text-secondary" title={description.tooltip ?? description.title}>
               {description.title}
             </span>
             {/* Every card here is a Viewer call, so a narrow row also hides this
@@ -227,16 +218,34 @@ export function McpCallCard({
           </span>
           {replayed ? <span data-testid="mcp-replay" className="shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent">{t("mcp.call.replay")}</span> : null}
           {retryable ? <span className="shrink-0 rounded-full bg-danger-soft px-1.5 py-0.5 text-[10px] font-bold text-danger">{t("mcp.call.retryable")}</span> : null}
-          {description.links.map((link) => (
-            <LinkChip
-              key={`${link.kind}:${link.id}`}
-              link={link}
-              conversationAvailability={conversationAvailability}
-              starting={state === "success" && link.creates === true}
-            />
-          ))}
-          {/* A starting spawn's chip already reads "starting" with its clock,
-              so the row shows no second outcome glyph for the same fact. */}
+          {/* A wide row reserves space for its timing. In a narrow pane,
+              duration and tokens can leave together, then the clock. The
+              empty first item keeps wrapped metadata outside the one-line box. */}
+          {duration || event.contextTokens || time ? (
+            <span data-mcp-meta className="flex h-4 min-w-0 shrink-[1000000] flex-row-reverse flex-wrap items-center overflow-hidden leading-4 @min-[26rem]:shrink-0">
+              <span data-mcp-meta-floor className="h-4 w-0 shrink-0" aria-hidden />
+              {time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
+              {duration || event.contextTokens ? (
+                <span className={`flex shrink-0 items-center whitespace-nowrap ${time ? "mr-2 max-[480px]:mr-1.5" : ""}`}>
+                  {duration ? <span className="text-caption tabular-nums text-muted">{duration}</span> : null}
+                  <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+                </span>
+              ) : null}
+            </span>
+          ) : null}
+          {description.links.length ? (
+            <span className="flex min-w-0 max-w-[60%] shrink-0 flex-wrap items-end justify-end gap-1 @max-[26rem]:flex-col">
+              {description.links.map((link) => (
+                <LinkChip
+                  key={`${link.kind}:${link.id}`}
+                  link={link}
+                  conversationAvailability={conversationAvailability}
+                  starting={state === "success" && link.creates === true}
+                />
+              ))}
+            </span>
+          ) : null}
+          {/* The starting chip already carries its own clock. */}
           {starting ? null : (
             <span
               data-mcp-outcome={state}
@@ -249,24 +258,6 @@ export function McpCallCard({
                 : <CircleAlert className="h-3.5 w-3.5" aria-hidden />}
             </span>
           )}
-          {/* Duration, tokens and time are the row's least needed facts: when the
-              line is short they leave whole, duration with its tokens first, then
-              the time. Each one that does not fit wraps onto a second line this
-              one-line box never shows, so none is ever cut part way; the empty
-              first item lets even the time wrap away, and its full line height
-              keeps the first line tall, so the wrapped line starts below the box. */}
-          {duration || event.contextTokens || time ? (
-            <span data-mcp-meta className="flex h-4 min-w-0 shrink-[1000000] flex-row-reverse flex-wrap items-center overflow-hidden leading-4">
-              <span data-mcp-meta-floor className="h-4 w-0 shrink-0" aria-hidden />
-              {time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
-              {duration || event.contextTokens ? (
-                <span className={`flex shrink-0 items-center whitespace-nowrap ${time ? "mr-2 max-[480px]:mr-1.5" : ""}`}>
-                  {duration ? <span className="text-caption tabular-nums text-muted">{duration}</span> : null}
-                  <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
-                </span>
-              ) : null}
-            </span>
-          ) : null}
         </summary>
         <div className="ml-5 mt-1 text-[10.5px] text-muted">
           {description.subtitle ? (

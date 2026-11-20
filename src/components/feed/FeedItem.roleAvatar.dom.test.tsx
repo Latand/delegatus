@@ -151,7 +151,7 @@ describe("the conversation's costume on its answers", () => {
     expect(host.querySelector("[data-message-engine]")).toBeNull();
   });
 
-  test("desktop: a builder's answer draws the hard hat at 26 px and keeps the engine's glyph and name beside the time", () => {
+  test("desktop: a builder's answer has a 26 px role avatar, an engine label and a trailing clock", () => {
     const host = mount(<ConversationRoleScope value="builder"><FeedItem item={prose()} /></ConversationRoleScope>);
     const avatar = host.querySelector('[data-role-avatar="builder"]');
     expect(avatar?.getAttribute("width")).toBe("26");
@@ -162,7 +162,9 @@ describe("the conversation's costume on its answers", () => {
     expect(engine?.querySelector('[data-engine-mark="claude"]')).toBeTruthy();
     /* The role and the engine are separate elements: the picture, then the engine's own label. */
     expect(avatar!.contains(engine)).toBe(false);
-    expect(text(engine!.parentElement)).toContain(`Claude· ${clock({ hour: "numeric", minute: "numeric", second: "numeric" })}`);
+    const timestamp = engine!.parentElement!.lastElementChild;
+    expect(timestamp?.hasAttribute("data-message-clock")).toBe(true);
+    expect(text(timestamp)).toBe(clock({ hour: "numeric", minute: "numeric", second: "numeric" }));
   });
 
   test("desktop: a conversation with no role draws the agent in the tuxedo", () => {
