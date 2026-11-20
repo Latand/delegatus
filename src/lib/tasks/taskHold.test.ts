@@ -92,7 +92,7 @@ test("a hold moves work to Waiting, preserves its age on edits, and clears by th
   expect(ok(patchTask(ownedWait.tasks, owned.id, { hold: null }, LATER)).task.status).toBe("assigned");
 });
 
-test.each(TASK_HOLD_KINDS)("agent %s holds preserve the work column and migrate old Waiting writes by ownership", kind => {
+test.each([...TASK_HOLD_KINDS])("agent %s holds preserve the work column and migrate old Waiting writes by ownership", kind => {
   const hold = { kind, note: "Fixture reason" };
   const agent = { actor: "agent" as const };
   const expected = kind === "operator" ? "blocked" : "inbox";
@@ -111,7 +111,7 @@ test("explicit blocked writes are clamped with their reason and completion alway
   const options = { actor: "agent" as const, now: () => NOW, id: () => "clamped-hold" };
   const input = { project: "fixture", text: "Record a wait", placement: "unplaced", status: "blocked" };
   const original = task({ status: "blocked" });
-  for (const hold of [undefined, { kind: "resource", note: "Wait for capacity" }]) {
+  for (const hold of [undefined, { kind: "resource" as const, note: "Wait for capacity" }]) {
     const fields = hold ? { hold } : {};
     for (const result of [
       ok(createTask([], { ...input, ...fields }, [], options)),

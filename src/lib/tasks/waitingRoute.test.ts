@@ -40,7 +40,7 @@ const merge = (state: "blocked" | "merged" | "checking") => ({
 const classify = (row: BoardTask, lanes: Pipeline[] = [], dependencies: BoardTask[] = [], live = false) =>
   waitingRoute(row, waitingRouteIndex([row, ...dependencies], lanes), NOW, live);
 
-test.each(TASK_HOLD_KINDS)("routes %s across lane states", kind => {
+test.each([...TASK_HOLD_KINDS])("routes %s across lane states", kind => {
   const row = task("waiting", kind);
   const base = kind === "operator" ? { owner: "operator", rule: "operator-hold" } :
     kind === "postponed" ? { owner: "agents", rule: "dated" } :

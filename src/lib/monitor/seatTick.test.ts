@@ -2630,7 +2630,9 @@ describe("waits routed to the seat", () => {
       placement: "unplaced", assignments: [], createdAt: since, updatedAt: since,
       hold: { kind: "resource", by: "agent", note: "Wait for memory", since } };
     const operatorTask = { ...row, id: "task-operator", hold: { ...row.hold!, kind: "operator" as const } };
-    const tasks = [row, operatorTask].map(task => ({ id: task.id, title: task.text, status: task.status, owned: false, hold: task.hold }));
+    const tasks = [row, operatorTask].map(task => ({
+      id: task.id, title: task.text, status: task.status, updatedAt: task.updatedAt, owned: false, hold: task.hold,
+    }));
     const workerAsks = seatAgendaAsks({ files: [], tasks: [row, operatorTask], pipelines: [] }, NOW / 1000, PROJECT);
     expect(workerAsks).toHaveLength(1);
     const state = stateWith({ lastWakeAt });
@@ -2654,8 +2656,8 @@ describe("waits routed to the seat", () => {
     const waits = new Map<string, string[]>();
     const workerAsks = seatAgendaAsks({ files: [], pipelines: [pipeline], tasks: [boardTask] }, NOW / 1000, PROJECT, waits);
     const decision = seatTickDecision(input({
-      tasks: [{ id: boardTask.id, title: boardTask.text, status: "blocked", owned: false }],
-      pipelines: [{ id: pipeline.id, title: "Paused work", state: "running", updatedAt: since, stageActivity: null, pausedBy: "other", pausedAt: since }],
+      tasks: [{ id: boardTask.id, title: boardTask.text, status: "blocked", updatedAt: since, owned: false }],
+      pipelines: [lane({ id: pipeline.id, title: "Paused work", state: "inert", updatedAt: since, pausedBy: "other", pausedAt: since })],
       pauseWaitingTasks: Object.fromEntries(waits), workerAsks,
     }));
     expect(workerAsks).toEqual([]);
