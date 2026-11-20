@@ -230,7 +230,7 @@ import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan, lastScannedFiles, lastScannedProjectCatalog, type FileScanSnapshot } from "@/lib/scanner/scanCache";
 import { completedScanForMcp } from "./completedScan";
 import { readCachedResourceSessions, readResources, readResourcesWithDiagnostic } from "@/lib/resources";
-import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
+import { adoptLiveRootSession, conversationRole, type RootSessionSource } from "@/lib/root/adopt";
 import { appendRoleMappingAudit, changedMappingRows, type RoleMappingAuditRow, roleLaunchChoices, roleMappingViolations, roleRegistryAnswer } from "@/lib/roles/mcpMapping";
 import { listRoles, resolveSpawnRole } from "@/lib/roles/registry";
 import { spawnSizingRefusal } from "@/lib/roles/sizing";
@@ -313,6 +313,7 @@ import {
   type McpToolPayload,
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
+import { noWriterAdmitted } from "@/lib/state/admissionWitness";
 import { stateLockDeferral } from "@/lib/state/lockWait";
 import { RETRYABLE_TELEGRAM_BOT_CODES, readTelegramBotRefusals, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
@@ -1359,51 +1360,38 @@ function rootSessionSource(): RootSessionSource {
  * carried null pids while its host was alive resolved to "unidentified" and was
  * refused every manager-only tool.
  */
-type CallerHost = NonNullable<NonNullable<RegistrySnapshot["entries"][string]["structuredHost"]>["process"]>;
-interface CallerRecord { conversationId: string; role: string | null; hosts: (CallerHost | null)[] }
-function callerRecordsFromSnapshot(snapshot: Pick<RegistrySnapshot, "conversations" | "entries">): CallerRecord[] {
-  const owners = new Map<string, string>();
-  const hosted = new Map<string, CallerRecord>();
-  for (const conversation of Object.values(snapshot.conversations)) {
-    for (const generation of conversation.generations) owners.set(generation.path, conversation.id);
-    hosted.set(conversation.id, { conversationId: conversation.id, role: conversationRole(conversation), hosts: [] });
-  }
-  for (const entry of Object.values(snapshot.entries)) {
-    const owner = owners.get(entry.artifactPath);
-    if (owner) hosted.get(owner)!.hosts.push(entry.structuredHost?.process ?? null);
-  }
-  return [...hosted.values()];
-}
-function hostedFromRecords(records: CallerRecord[], probe?: ProcessIdentityProbe) {
-  return records.map(({ hosts, ...conversation }) => ({ ...conversation, pids: hosts.filter(host => {
-    if (!host || typeof host.pid !== "number" || host.pid <= 0) return false;
-    if (!probe) return true;
-    const startIdentity = probe.processIdentity(host.pid);
-    return host.startIdentity != null && startIdentity != null && probe.pidAlive(host.pid)
-      && sameRecordedProcessIdentity({ pid: host.pid, startIdentity, bootEpoch: probe.bootEpoch() }, host);
-  }).map(host => host!.pid) }));
-}
+interface HostedCallerRecord { conversationId: string; role: string | null; pids: number[] }
 export function hostedConversationsFromSnapshot(
   snapshot: Pick<RegistrySnapshot, "conversations" | "entries">,
   probe?: ProcessIdentityProbe,
-): { conversationId: string; role: string | null; pids: number[] }[] {
-  return performanceSpans.sync("mcp.caller-enumeration", () => hostedFromRecords(callerRecordsFromSnapshot(snapshot), probe));
-}
-
-/** One legacy enumeration owner across compiled bundles. Snapshot identity
- * includes revision and database replacement; each call still verifies PIDs. */
-const LEGACY_CALLER_KEY = Symbol.for("llv.mcp.legacyCallerRecords");
-function legacyCallerMemo(snapshot: RegistrySnapshot, probe: ProcessIdentityProbe) {
-  const holder = globalThis as typeof globalThis & { [LEGACY_CALLER_KEY]?: { snapshot: RegistrySnapshot; boot: string | null; configuredRootId: string | null; rootConversationId: string | null; records: CallerRecord[] } };
-  const boot = probe.bootEpoch();
-  const configuredRootId = process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null;
-  let cached = holder[LEGACY_CALLER_KEY];
-  if (!cached || cached.snapshot !== snapshot || cached.boot !== boot || cached.configuredRootId !== configuredRootId) {
-    cached = holder[LEGACY_CALLER_KEY] = { snapshot, boot, configuredRootId,
-      rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null,
-      records: performanceSpans.sync("mcp.caller-enumeration", () => callerRecordsFromSnapshot(snapshot)) };
-  }
-  return cached;
+): HostedCallerRecord[] {
+  return performanceSpans.sync("mcp.caller-enumeration", () => {
+    const hosted: HostedCallerRecord[] = [];
+    const owners = new Map<string, Set<HostedCallerRecord>>();
+    for (const conversation of Object.values(snapshot.conversations)) {
+      const record: HostedCallerRecord = { conversationId: conversation.id, role: conversationRole(conversation), pids: [] };
+      hosted.push(record);
+      for (const generation of conversation.generations) {
+        let matches = owners.get(generation.path);
+        if (!matches) owners.set(generation.path, matches = new Set());
+        matches.add(record);
+      }
+    }
+    for (const entry of Object.values(snapshot.entries)) {
+      const matches = owners.get(entry.artifactPath);
+      const host = entry.structuredHost?.process;
+      if (!matches || !host || typeof host.pid !== "number" || host.pid <= 0) continue;
+      if (probe) {
+        const startIdentity = probe.processIdentity(host.pid);
+        if (host.startIdentity == null || startIdentity == null || !probe.pidAlive(host.pid)
+          || !sameRecordedProcessIdentity({ pid: host.pid, startIdentity, bootEpoch: probe.bootEpoch() }, host)) continue;
+      }
+      // Every owner of the path sees the same live proof. Attribution refuses
+      // if that proof names more than one conversation.
+      for (const match of matches) match.pids.push(host.pid);
+    }
+    return hosted;
+  });
 }
 
 /** The value of the launch-injected spawn capability, resolved to the
@@ -1450,23 +1438,35 @@ export function attentionCallerSources(
   const callerAncestry = ancestry ?? (httpCaller ? () => httpCaller.nativePeer && processIdentityStatus(httpCaller.nativePeer) === "alive"
     ? processAncestry(httpCaller.nativePeer.pid, pid => procBackend.readPpid(pid)) : []
     : () => processAncestry(process.pid, pid => procBackend.readPpid(pid)));
+  const configuredRoot = () => process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null;
   let selected: ReturnType<typeof registry.mcpCallerSnapshot> | undefined;
-  const selection = () => selected ??= registry.mcpCallerSnapshot(callerId()!, callerAncestry(), process.env.LLV_ROOT_CONVERSATION_ID?.trim() || null);
+  const selection = () => selected ??= registry.mcpCallerSnapshot(callerId(), callerAncestry(), configuredRoot());
+  let nativeSelection: ReturnType<typeof registry.mcpNativeCallerSnapshot> | undefined;
   return {
     /* An HTTP call is served from the Viewer's own process, whose ancestry
        leads to no agent host; the capability alone names that caller, exactly
        as it does for a stdio agent whose host pids were never recorded. */
     ancestry: callerAncestry,
-    rootConversationId: () => callerId() ? selection().rootConversationId
-      : legacyCallerMemo(registry.readOnlySnapshot(), probe).rootConversationId,
-    hosted: () => callerId() ? hostedConversationsFromSnapshot(selection().snapshot, probe)
-      : hostedFromRecords(legacyCallerMemo(registry.readOnlySnapshot(), probe).records, probe),
+    rootConversationId: () => (nativeSelection ?? selection()).rootConversationId,
+    hosted: () => {
+      const snapshot = selection().snapshot;
+      return snapshot ? hostedConversationsFromSnapshot(snapshot, probe) : null;
+    },
     capabilityPresented: () => capability !== undefined,
     nativeCaller: () => {
       if (httpCaller && (!httpCaller.nativePeer || processIdentityStatus(httpCaller.nativePeer) !== "alive")) return nativeCallerRefusal("no-claude-ancestor");
       if (procBackend.name !== "linux") return nativeCallerRefusal("platform-unverified");
-      try { return resolveNativeCaller(nativeCallerSources(() => registry.readOnlySnapshot(), httpCaller?.nativePeer?.pid)); }
+      try {
+        return resolveNativeCaller(nativeCallerSources(sessionId => {
+          nativeSelection = registry.mcpNativeCallerSnapshot(sessionId, configuredRoot());
+          return nativeSelection.snapshot;
+        }, httpCaller?.nativePeer?.pid));
+      }
       catch { return nativeCallerRefusal("session-record-invalid"); }
+    },
+    nativeConversation: id => {
+      const conversation = nativeSelection?.snapshot?.conversations[id];
+      return conversation ? { conversationId: conversation.id, role: conversationRole(conversation), pids: [] } : null;
     },
     capabilityCallerConversationId: callerId,
   };
@@ -3003,6 +3003,14 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
   }
 }
 
+function rethrowStoreWriteError(error: unknown): never {
+  const deferred = stateLockDeferral(error);
+  if (deferred && noWriterAdmitted()) {
+    throw new McpUnadmittedRefusal(deferred.message, { code: "store_busy", retryable: true });
+  }
+  throw error;
+}
+
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   try {
     const caller = attributionOf(dependencies);
@@ -3042,7 +3050,8 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     if (error instanceof RoleMemoryRefusal) {
       throw new McpToolRefusal(error.message, { code: error.code, status: error.code === "LESSON_INVALID" ? 400 : 409, retryable: false });
     }
-    throw error;
+    // Scope joins can write before the lesson transaction takes its lease.
+    rethrowStoreWriteError(error);
   }
 }
 
@@ -4373,22 +4382,28 @@ async function bridgeReport(
     storedBody = `[${origin.kind === "gateway" ? "voice gateway" : origin.role ?? "agent"}${origin.conversationId ? ` ${origin.conversationId}` : ""} — not the manager] ${own}`;
   }
 
-  const appended = recordManagerReport({
-    key,
-    class: reportClass,
-    at: new Date().toISOString(),
-    origin,
-    project,
-    targetSeatConversationId: targetSeat?.conversationId ?? null,
-    body: storedBody,
-    complete,
-    correlatesDirective: text(args.correlatesDirective) || null,
-    ...(typeof args.answersDirective === "boolean" ? { answersDirective: args.answersDirective } : {}),
-    covers,
-    coversOwed,
-    telegram: telegramCopy,
-    outcome,
-  });
+  let appended: ReturnType<typeof recordManagerReport>;
+  try {
+    appended = recordManagerReport({
+      key,
+      class: reportClass,
+      at: new Date().toISOString(),
+      origin,
+      project,
+      targetSeatConversationId: targetSeat?.conversationId ?? null,
+      body: storedBody,
+      complete,
+      correlatesDirective: text(args.correlatesDirective) || null,
+      ...(typeof args.answersDirective === "boolean" ? { answersDirective: args.answersDirective } : {}),
+      covers,
+      coversOwed,
+      telegram: telegramCopy,
+      outcome,
+    });
+  } catch (error) {
+    // This path has yet to acknowledge an episode or send a Telegram copy.
+    rethrowStoreWriteError(error);
+  }
 
   /* A replay under the same key appends nothing, and says so rather than pretending
      to have delivered a second report. */

@@ -1055,6 +1055,12 @@ export interface RegistryFile {
   pendingSupersedence: Record<string, PendingSupersedence>;
 }
 
+export type McpCallerRegistryRows = Pick<RegistryFile, "conversations" | "entries"> & {
+  nativeGenerationAmbiguous?: true;
+  nativeHostsIncomplete?: true;
+  nativeArtifact?: string;
+};
+
 /** Compact read model for resolving the bounded `spawn:<launchId>` paths that
     can appear in one Viewer snapshot. It intentionally excludes launch profile,
     account, host, lineage, and membership data from the snapshot seam. */
@@ -7270,13 +7276,27 @@ export class AgentRegistry {
     });
   }
 
-  /** Caller identity reads only its generation keys, without a grant expansion. */
-  mcpCallerSnapshot(conversationId: string, ancestry: readonly number[], configuredRootId: string | null) {
+  /** Caller identity reads only the capability and ancestry candidates. */
+  mcpCallerSnapshot(conversationId: string | null, ancestry: readonly number[], configuredRootId: string | null) {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
       return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpCallerSnapshot(conversationId, ancestry, configuredRootId));
     }
     const snapshot = this.readOnlySnapshot();
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
+  }
+
+  mcpNativeCallerSnapshot(sessionId: string, configuredRootId: string | null) {
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpNativeCallerSnapshot(sessionId, configuredRootId));
+    }
+    const snapshot = this.readOnlySnapshot();
+    return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
+  }
+
+  async prepareNativeCallerArtifacts(): Promise<void> {
+    if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
+      await this.sqliteStore?.prepareNativeCallerArtifacts();
+    }
   }
 
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
@@ -7745,13 +7765,13 @@ export class AgentRegistry {
     const inherited = accountMutationHeld();
     const startedAt = performance.now();
     const totalWaitMs = options.waitMs ?? this.writerDeadlineMs ?? 2_000;
+    const deadline = startedAt + totalWaitMs;
     let waited = false;
     let refused = false;
     let acquiredAt: number | undefined;
     let backoffMs = 5;
     let correlation: BlockingWaitCorrelation = { label, operationId: options.operationId };
-    const run = async (remainingMs: number): Promise<{ acquired: true; value: T } | { acquired: false }> => {
-      const deadline = performance.now() + remainingMs;
+    const run = async (): Promise<{ acquired: true; value: T } | { acquired: false }> => {
       try {
         for (;;) {
           let result: { acquired: true; value: T } | { acquired: false };
@@ -7760,12 +7780,20 @@ export class AgentRegistry {
               guard?.();
               // Publish one correlated wait after admission supplies its operation
               // id; individual failed probes are part of this same wait.
-              const invoke = () => { acquiredAt = performance.now(); refused = false; return write(); };
+              const invoke = (): { acquired: true; value: T } | { acquired: false } => {
+                const admittedAt = performance.now();
+                // A retry or lease acquisition can finish after the cutoff.
+                if (admittedAt >= deadline) return { acquired: false };
+                acquiredAt = admittedAt;
+                refused = false;
+                return { acquired: true, value: write() };
+              };
               if (options.releaseBeforeWrite) {
                 const probe = this.deliveryWriteNow(correlation, () => undefined, { recordRefusal: false });
-                return probe.acquired ? { acquired: true, value: withWaitCorrelation(correlation, invoke) } : probe;
+                return probe.acquired ? withWaitCorrelation(correlation, invoke) : probe;
               }
-              return this.deliveryWriteNow(correlation, invoke, { recordRefusal: false });
+              const probe = this.deliveryWriteNow(correlation, invoke, { recordRefusal: false });
+              return probe.acquired ? probe.value : probe;
             }, {
               holder: label, caller: label,
               waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
@@ -7793,7 +7821,7 @@ export class AgentRegistry {
           durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
       }
     };
-    if (inherited) return withViewerOperation("registry.write", () => run(totalWaitMs));
+    if (inherited) return withViewerOperation("registry.write", run);
     return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(run, totalWaitMs, () => {
       refused = true;
       recordBlockingWait({ site: "registry-lock-async", synchronous: false,

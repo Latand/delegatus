@@ -196,13 +196,13 @@ test("nested reservation guards enforce the total deadline without blocking and 
           for (;;) {
             const next = [...timers.values()].filter(timer => timer.at <= at).sort((a, b) => a.at - b.at)[0];
             if (!next) break;
-            clock = next.at;
+            clock = Math.max(clock, next.at);
             timers.delete(next);
             next.run();
             await flush();
           }
-          clock = at;
         }
+        if (command === "advance" || command === "elapse") clock = at;
         const state = registry.sqliteStore;
         process.send({ command, clock, pending, results, completedAt, admitted,
           reservations: Object.keys(registry.snapshot().heldDeliveries).length,
@@ -249,19 +249,32 @@ test("nested reservation guards enforce the total deadline without blocking and 
     expect((await request("ping")).pending).toBe(2);
     const beforeDeadline = await request("advance", 79);
     expect(beforeDeadline).toMatchObject({ clock: 79, pending: 2, results: null, reservations: 0 });
-    const expired = await request("advance", 80);
+    // Release after the cutoff, before the caller can run its overdue retry.
+    expect((await request("elapse", 81)).pending).toBe(2);
+    await holder.release();
+    const expired = await request("advance", 81);
+    const expiredKeys = Object.values(registry.snapshot().heldDeliveries).map(row => row.clientMessageId);
+
+    await holder.hold();
+    const queued = await request("accept");
+    await holder.release();
+    const accepted = await request("advance", 86);
+    const acceptedKeys = Object.values(registry.snapshot().heldDeliveries)
+      .sort((left, right) => left.admissionSeq! - right.admissionSeq!)
+      .map(row => row.clientMessageId);
+    console.info(JSON.stringify({ case: "nested-reservation-bound", beforeDeadline, expired, expiredKeys,
+      queued, accepted, acceptedKeys }));
     expect(expired).toMatchObject({
-      clock: 80, pending: 0, results: [null, null], completedAt: 80,
+      clock: 81, pending: 0, results: [null, null], completedAt: 81,
       admitted: [], reservations: 0, writerHeld: false, inTransaction: false,
     });
-    expect(Object.keys(registry.snapshot().heldDeliveries)).toEqual([]);
-    await holder.release();
-    const accepted = await request("accept");
+    expect(expiredKeys).toEqual([]);
+    expect(queued).toMatchObject({ pending: 2, results: null, reservations: 0 });
     expect(accepted).toMatchObject({
       pending: 0, results: ["assigned", "assigned"], admitted: ["first", "second"],
       reservations: 2, writerHeld: false, inTransaction: false,
     });
-    console.info(JSON.stringify({ case: "nested-reservation-bound", beforeDeadline, expired, accepted }));
+    expect(acceptedKeys).toEqual(["first", "second"]);
   } finally {
     // Kill only this recorded child, including a mutant stuck in synchronous SQLite.
     if (child.exitCode === null) child.kill("SIGKILL");
@@ -1686,6 +1699,109 @@ test("a traversal of archived rows asks the filesystem for the file identity onc
     expect(traverse()).toBe(300);
     expect(stat.mock.calls.filter(call => call[0] === filename).length).toBeGreaterThan(0);
   } finally { stat.mockRestore(); }
+});
+
+test("the first prepared read after a same-counter database replacement sees the new rows", async () => {
+  const { open, filename, kept } = fixture();
+  let loads = 0;
+  const store = open({ onSnapshotLoad: () => { loads++; } });
+  const archived = "archived-replacement-receipt";
+  store.mutate(file => {
+    file.receipts[archived] = {
+      ...file.receipts[kept]!, launchId: archived, state: "failed", error: "original archive",
+      createdAt: "2020-01-01T00:00:00Z",
+    };
+  }, false);
+  expect(store.archiveInactive(1024)).toBeGreaterThan(0);
+  {
+    using checkpoint = new Database(filename);
+    checkpoint.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  }
+
+  const original = await store.prepareReadOnlySnapshot();
+  expect(original.file.receipts[archived]?.error).toBe("original archive");
+  const initialLoads = loads;
+  expect(await store.prepareReadOnlySnapshot()).toBe(original);
+  expect(loads).toBe(initialLoads);
+
+  // Replace one immutable payload in the copy, keeping the revision, journal
+  // counters and archive version IDs from the original database.
+  const replacement = `${filename}.replacement`;
+  fs.copyFileSync(filename, replacement);
+  {
+    using edited = new Database(replacement);
+    edited.exec("DROP TRIGGER registry_archive_immutable_update");
+    edited.query("UPDATE registry_archive SET value_json = replace(value_json, ?, ?)").run("original archive", "replacement archive");
+  }
+  const counters = (file: string) => {
+    using db = new Database(file, { readonly: true });
+    return db.query("SELECT (SELECT data_version FROM pragma_data_version) AS version, total_changes() AS changes").get();
+  };
+  expect(counters(replacement)).toEqual(counters(filename));
+  fs.renameSync(replacement, filename);
+
+  const first = await store.prepareReadOnlySnapshot();
+  expect(first.file.receipts[archived]?.error).toBe("replacement archive");
+  expect(() => original.file.receipts[archived]).toThrow(DatabaseReplacedError);
+  expect(first.revision).toBe(original.revision);
+  expect(loads - initialLoads).toBe(1);
+  expect(await store.prepareReadOnlySnapshot()).toBe(first);
+  expect(loads - initialLoads).toBe(1);
+});
+
+function stageReceiptReplacement({ filename, initial, kept }: ReturnType<typeof fixture>) {
+  const replacement = `${filename}.replacement`;
+  const next = new SqliteAgentRegistryStore(replacement, { initialSnapshot: initial, normalize: normalizeRegistry });
+  try {
+    next.mutate(file => { file.receipts[kept]!.error = "replacement receipt"; }, false);
+  } finally { next.close(); }
+  return () => {
+    const previous = `${filename}.old`;
+    fs.renameSync(filename, previous);
+    for (const suffix of ["-wal", "-shm"]) fs.renameSync(filename + suffix, previous + suffix);
+    fs.renameSync(replacement, filename);
+    return previous;
+  };
+}
+
+test("a database replaced inside prepared reading refuses the in-flight snapshot", async () => {
+  const setup = fixture();
+  const swap = stageReceiptReplacement(setup);
+  let replaced = false;
+  const store = setup.open({ onRowPayloadRead: (collection, count) => {
+    if (replaced || collection !== "receipts" || count === 0) return;
+    swap();
+    replaced = true;
+  } });
+  const prepare = () => store.prepareReadOnlySnapshot(undefined, { recoveryIndexes: false });
+  await expect(prepare()).rejects.toMatchObject({ code: "LLV_DATABASE_REPLACED" });
+  expect(replaced).toBe(true);
+  expect((await prepare()).file.receipts[setup.kept]?.error).toBe("replacement receipt");
+});
+
+test("a database replaced during an admitted mutation rolls back the moved writer", () => {
+  const setup = fixture();
+  const swap = stageReceiptReplacement(setup);
+  const store = setup.open();
+  const { filename, kept } = setup;
+  let previous: string | undefined;
+  expect(() => store.tryWriter(() => store.mutate(file => {
+    file.receipts[kept]!.error = "refused write";
+    previous = swap();
+  }, false))).toThrow(DatabaseReplacedError);
+  expect(previous).toBeDefined();
+
+  const receiptError = (file: string) => {
+    using db = new Database(file, { readonly: true });
+    return db.query<{ error: string | null }, [string]>(
+      "SELECT json_extract(value_json, '$.error') AS error FROM registry_rows WHERE collection='receipts' AND row_key=?",
+    ).get(kept)?.error;
+  };
+  expect(receiptError(previous!)).toBeNull();
+  expect(receiptError(filename)).toBe("replacement receipt");
+  store.mutate(file => { file.receipts[kept]!.error = "current write"; }, false);
+  expect(receiptError(filename)).toBe("current write");
+  expect(receiptError(previous!)).toBeNull();
 });
 
 for (const replacement of ["other payloads under the same version ids", "no archived versions"] as const) {

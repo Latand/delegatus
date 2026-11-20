@@ -3649,8 +3649,7 @@ export function createMcpToolService(
           && (claim.result.code === "outcome_unknown" && claim.result.details?.outcome === "unknown"
             || claim.result.code === "send_uncertain");
         // A recorded bridge report owns its row deduplication and bot send key.
-        // Re-enter its binding to reconcile pending Telegram bookkeeping; a
-        // refusal before the row was stored keeps its existing receipt behaviour.
+        // Re-enter its binding to reconcile pending Telegram bookkeeping.
         const bridgeTelegram = typedTool === "bridge_report" && claim.kind === "replay" && claim.result.ok
           && isRecord(claim.result.destinations) && isRecord(claim.result.destinations.telegram)
           ? claim.result.destinations.telegram : null;
@@ -3744,6 +3743,11 @@ export function createMcpToolService(
           };
           outcome = "success";
         } catch (error) {
+          if (retryBridgeReport && claim.kind === "replay" && error instanceof McpUnadmittedRefusal) {
+            // A refused recovery attempt cannot undo the recorded report.
+            outcome = "replay";
+            return { ...claim.result, replayed: true };
+          }
           const reason = context.signal?.aborted ? context.signal.reason : error;
           outcome = reason instanceof DeadlineExceededError
             ? "deadline"
@@ -4003,6 +4007,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes, import batch and any one-time machine budgetSweep candidate counts; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, unexplained sweep archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note: 1–1000 UTF-16 code units after schema trimming, recommended target 750. Rule/why bounds count normalized Unicode code points, 20–300/1–160. Role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Read always returns a fresh authorized observation. A committed apply returns its operation identity, revisions, placeholders, counts and maintenance status; exact-key replay returns that historical disposition. Changed arguments conflict. Pending maintenance grants no publication permission. For new work after CURATE_STALE, read again. An authority refusal can withhold a committed result. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
   leave_lesson: [
+    "If the answer is store_busy with details.nextAction set to retry-same-key, repeat the call with the same clientRequestId and identical arguments.",
     "When an operator corrects a result or reveals a misunderstood task, call in that same turn with correction:true and lesson, naming the misread in why and the preventing practice in rule at the narrowest true level. This includes seat-relayed corrections. Any recorded stage conversation, including a clean or review role, may leave corrections before stage_report or after settlement; each call is independent of the closing request. A registered role conversation outside a pipeline may also leave corrections, using its server-attributed role and project. Correction calls carry no applied/misled measurements. New work alone needs no correction lesson.",
     "Rule: 20–300 normalized Unicode code points; why/none: 1–160. Rule and why each need at least 16 letters or digits after NFKC matching normalization (this counter does not rewrite stored Unicode spelling). Recommended rule/why targets: 240/120; hard maxima: 300/160. Whitespace is trimmed and collapsed. Omit unused role; null is invalid. A length refusal names the field and actual length: rewrite without losing provenance, then submit the corrected payload with a new key after the no-effect refusal.",
     "Any stage answer may include applied and misled, each up to five distinct exact ids of rules this attempt received: applied changed what you did; misled was wrong or stale. An id may appear in only one field. These measurements are optional and may accompany none, lesson, rewrite or problem.",
@@ -4053,6 +4058,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A worker's ask, question, plan, memory kill or permission request and a parked lane in a project with a seat wait on that seat first and are off the operator's list; your wakes name them. Answer each where it asked (send_message to the conversation, conversation_action answer or permission, pipeline_action resolve-decision or accept-head). Only when the operator alone can decide, ask them in a decision form (publish_prototype_review with questions, in their language), then pass escalate {reviewId} with a conversation target and its reasonId, or a pipeline target: the form's row stands for the wait until they answer, and their answer comes to you to carry back. undo:true withdraws it.",
   ].join(" "),
   bridge_report: [
+    "If the answer is store_busy with details.nextAction set to retry-same-key, repeat the call with the same clientRequestId and identical arguments.",
     "The complete summary, headings and items joined by newlines must fit 8192 UTF-8 bytes (recommended target 6000). The displayed and Telegram copies omit over-limit items; only the complete voice copy retains them, with a warning. Preserve every owed decision in the displayed copy. On report_too_large, shorten whole items or split into complete reports with distinct keys after the no-effect refusal.",
     "Append one report to the durable bridge log: the report log beside the orchestrator chat, the voice relay, and, for the designated orchestrator of a project that set one, the project's Telegram chat, posted by Delegatus from the same report. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session. While the project's Bridge reports setting is off, nothing is stored and the answer says so (recorded:false, bridgeReports:false).",
     "Pass `summary` (one line, display limit 120 UTF-16 code units: what is now true, or the ask on blocked and question) and `sections` of short items: prod (on production), merged (merged, goes out with the next deploy), inProgress, queued (what comes next), decision (what the operator must answer or do). Each item is one or two plain sentences with a display limit of 200 UTF-16 code units; an item over 200 is omitted whole from the stored display body and Telegram, retained only in the complete voice copy, with a warning. Supply at most three decisions, each at most 200 units: further decisions appear only as a count in the displayed and Telegram copies. Name work by its title and #PR, a deploy by its 8-character sha, and no URLs. Delegatus renders the header, local time, emoji and, on a deploy report, task changes since the previous deploy; it shortens summaries and cuts whole items to fit the display budget. `body` is the older free-text form.",
@@ -5517,6 +5523,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
   const { withWorkspaceMcpFence } = await import("./workspaceFence");
+  const { prepareAgentRegistry } = await import("@/lib/agent/registry");
   const service = createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
@@ -5525,7 +5532,10 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
   );
-  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(service, productionDomainDependencies));
+  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(
+    service, productionDomainDependencies,
+    async () => (await prepareAgentRegistry()).prepareNativeCallerArtifacts(),
+  ));
 }
 
 /** The executor took the call and stopped before answering it. */
