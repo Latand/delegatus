@@ -447,6 +447,10 @@ for (const density of ["line", "detail"] as const) {
     const notes = [...notice.querySelectorAll<HTMLElement>("[data-meter-note]")];
     expect(notes.map((note) => note.textContent)).toEqual(density === "line" ? ["Most space: Worktrees 90 GiB, State 2.0 GiB", "New checkouts wait for space"] : []);
     expect(notes.map((note) => note.title)).toEqual(density === "line" ? ["Delegatus files, at least: Worktrees 90 GiB, State 2.0 GiB", "New checkouts wait for space and retry automatically."] : []);
+    if (density === "detail") {
+      expect([...notice.querySelectorAll("div[title] > div")].map(row => row.textContent))
+        .toEqual(["Worktrees 90 GiB", "State 2.0 GiB"]);
+    }
     /* Two volumes with the same roles are two keyed lines. */
     expect(errors.filter((args) => String(args[0]).includes("same key"))).toEqual([]);
     /* A warning admits new checkouts, so nothing waits; unmeasured consumers say so in the same line. */

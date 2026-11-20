@@ -412,6 +412,11 @@ export function DiskPressureNotice({ pressure, density = "full" }: { pressure: D
             </span>
           );
         })}
+        {density === "detail" && rows.length ? (
+          <div className={NOTE} title={t("resources.diskConsumersHint")}>
+            {rows.map(row => <div key={row}>{row}</div>)}
+          </div>
+        ) : null}
         {!notes ? null : consumers
           ? <span data-meter-note="" className={`-mt-0.5 ${NOTE}`} title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</span>
           : <span data-meter-note="" className={`-mt-0.5 ${NOTE}`}>{t("resources.diskMeasuring")}</span>}
