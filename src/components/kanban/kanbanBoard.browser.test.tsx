@@ -25168,13 +25168,17 @@ describe("chat pull requests on the board and in the project rail", () => {
         const panel = page.locator("[data-chat-pr-panel]");
         const card = page.locator('.card[data-id="task:t-chat-pr"]');
         const boardBadge = card.locator("[data-chat-pr-badge]");
+        await card.locator("button.fold[aria-expanded=true]").click();
         expect(await card.getAttribute("data-collapsed")).toBe("1");
         await boardBadge.hover({ timeout: 5000 });
         await panel.waitFor();
         expect(await boardBadge.evaluate(node => {
           const box = node.getBoundingClientRect();
-          return node.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
-        })).toBe(true);
+          return {
+            unobstructed: node.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)),
+            border: getComputedStyle(node).borderTopWidth,
+          };
+        })).toEqual({ unobstructed: true, border: "1px" });
         expect(await panel.getByRole("link").count()).toBe(2);
         await page.mouse.down();
         const box = await panel.boundingBox();

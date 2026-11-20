@@ -64,8 +64,8 @@
 /* The board's own controls start from nothing. The conversations and the
    orchestrator mounted inside it are the Viewer's components, styled by their
    own utilities, so none of these element rules reach into them. */
-.kb :where(button, input):not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)) { font: inherit; color: inherit; }
-.kb button:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)) { background: none; border: 0; padding: 0; }
+.kb :where(button, input):not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, [data-chat-pr-badge])) { font: inherit; color: inherit; }
+.kb button:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, [data-chat-pr-badge])) { background: none; border: 0; padding: 0; }
 .kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)) { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
 .kb :where(.seat-head, .conv-head) :where(.icon-btn), .kb :where(.rlatest) { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
 .kb .num { font-variant-numeric: tabular-nums; }
