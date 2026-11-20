@@ -32,6 +32,7 @@ import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 import {
   conversationDeliverabilityFromRecord,
   deliverabilityFailureMessage,
+  deliverabilityRequiresRecovery,
   type ConversationDeliverabilityCondition,
 } from "@/lib/conversation/deliverability";
 
@@ -48,7 +49,7 @@ import {
   runtimeIdleKillMatches,
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
-import { deadStageHostReason, recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
+import { deadStageHostReason, recoverDeadStructuredConversation, StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
 import { STAGE_ATTEMPT_SETTLED_CODE, StageAttemptSettledError } from "./stageGitEnvironment";
 import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
@@ -974,9 +975,12 @@ async function recoverReclaimedMessage(
         operationId: admitted.operationId,
       };
     }
+    /* An orphan held for its grace, or behind a refused stop, is still being
+       recovered; its own message says what it waits for. */
+    const orphanWait = error instanceof StructuredOrphanGraceError || error instanceof StructuredOrphanStopRefusedError;
     recordAdmissionWait(progress, registry, reservation, {
-      reason: "awaiting-host",
-      detail: `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
+      reason: orphanWait ? "recovering-host" : "awaiting-host",
+      detail: orphanWait ? error.message : `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
     });
     requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
     return {
@@ -1214,7 +1218,7 @@ async function deliverHeldAttempt(
        its message, attachments and operation id, and the reason (#1974). It
        used to be recorded `delivery-uncertain`, which settlement must treat
        as possibly executed, for a message that provably never left. */
-    if (deliverability.condition !== "reclaimed") {
+    if (!deliverabilityRequiresRecovery(deliverability.condition)) {
       return heldForRetry(deliverability.reason);
     }
     if (!request.reconcileUncertain && !operationId.startsWith("spawn_message_")) {
@@ -1614,7 +1618,7 @@ export async function enqueueStructuredMessage(
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
-    if (deliverability.condition === "reclaimed") {
+    if (deliverabilityRequiresRecovery(deliverability.condition)) {
       return recoverReclaimedMessage(request, registry, client, dependencies, rawImages);
     }
     return holdDuringRuntimeSynchronization(
@@ -1631,7 +1635,7 @@ export async function enqueueStructuredMessage(
       conversationId: request.conversationId,
       transcriptPath: request.path,
     });
-    if (deliverability.condition === "reclaimed") {
+    if (deliverabilityRequiresRecovery(deliverability.condition)) {
       return recoverReclaimedMessage(request, registry, client, dependencies, rawImages);
     }
     return ownershipUnavailable(deliverability.condition);

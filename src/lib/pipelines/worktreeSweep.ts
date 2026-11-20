@@ -14,7 +14,7 @@ import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { fsyncPath, writeJsonDurably } from "@/lib/state/durableJson";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { hostCommandArgs, openHostTempRoots, stageHostNamespace } from "@/lib/state/hostTempViews";
-import { inspectTree, mountPointsUnder, removeTreeViaTrash, finishTreeTrash, isOwnedTempName, ownTempRoots, resolvePhysicalPath, scanProcesses, sweepRoots, type ProcessScan, type TempSweepRoot } from "@/lib/tempSweep";
+import { inspectTree, mountPointsUnder, removeTreeViaTrash, finishTreeTrash, isOwnedTempName, ownTempRoots, resolvePhysicalPath, scanProcesses, discoverSweepRoots, type ProcessScan, type TempSweepRoot } from "@/lib/tempSweep";
 import type { ExecResult } from "@/lib/workflows/provision";
 
 import type { WorktreeSweepDiscovery, SweepInventory } from "./worktreeSweepDiscovery";
@@ -2031,7 +2031,7 @@ export async function productionWorktreeSweepPorts(
   ]);
   const pipelines = withArchived(await loadPipelinesForListAsync(), await loadArchivedPipelinesForListAsync());
   const repositories = projectCurationSnapshot().manualProjects.map((project) => project.root);
-  const view = await openHostTempRoots(sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]));
+  const view = await openHostTempRoots(discoverSweepRoots([...ownTempRoots(), statePath("scratch")]));
   const temp = view.roots;
   const access = hostTempWorktreeAccess(temp);
   return {

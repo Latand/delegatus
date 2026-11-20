@@ -3,6 +3,8 @@ import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { validCodexRequestReceipt } from "./codexRequestReceipt";
 import fs from "node:fs";
 import path from "node:path";
+import { open, stat } from "node:fs/promises";
+import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
@@ -14,6 +16,8 @@ import { normalizeVoiceDeliveries } from "./voiceDelivery";
 export interface RuntimeEventStore {
   load(threadId: string): RuntimeEvent[];
   append(threadId: string, event: RuntimeEvent): void;
+  /** Visit the validated prefix without retaining it; return its final cursor. */
+  scan?(threadId: string, visit: (event: RuntimeEvent) => void): Promise<number>;
 }
 
 export interface RuntimeEventCursorRecoveryDiagnostic {
@@ -551,6 +555,24 @@ export function readHostTurnRecord(
   }
 }
 
+/** Both readers use the same event validator, sequence check and torn-tail rule. */
+function parseLedgerEvent(line: string, partial: boolean, previous?: number): RuntimeEvent | null {
+  if (!line) throw new Error("runtime event ledger contains an empty record");
+  let parsed: unknown;
+  try { parsed = JSON.parse(line); } catch {
+    if (partial) return null;
+    throw new Error("runtime event ledger contains malformed JSON");
+  }
+  if (!validEvent(parsed)) {
+    if (partial) return null;
+    throw new Error("runtime event ledger contains an invalid event");
+  }
+  if (previous !== undefined && parsed.seq !== previous + 1) {
+    throw new Error(`runtime event ledger sequence gap after ${previous}`);
+  }
+  return parsed;
+}
+
 export class FileRuntimeEventStore implements RuntimeEventStore {
   /* The structured host claim makes this store the single writer of its
      ledger, so the durable tail (last sequence and byte length) is owned in
@@ -589,19 +611,8 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
     for (const [index, line] of lines.entries()) {
       if (!line && index === lines.length - 1 && hasTerminatingNewline) continue;
       if (!line) throw new Error("runtime event ledger contains an empty record");
-      let parsed: unknown;
-      try { parsed = JSON.parse(line); } catch {
-        if (index === lines.length - 1 && !hasTerminatingNewline) break;
-        throw new Error("runtime event ledger contains malformed JSON");
-      }
-      if (!validEvent(parsed)) {
-        if (index === lines.length - 1 && !hasTerminatingNewline) break;
-        throw new Error("runtime event ledger contains an invalid event");
-      }
-      const previous = events.at(-1);
-      if (previous && parsed.seq !== previous.seq + 1) {
-        throw new Error(`runtime event ledger sequence gap after ${previous.seq}`);
-      }
+      const parsed = parseLedgerEvent(line, index === lines.length - 1 && !hasTerminatingNewline, events.at(-1)?.seq);
+      if (!parsed) break;
       events.push(parsed);
     }
     try {
@@ -609,6 +620,67 @@ export class FileRuntimeEventStore implements RuntimeEventStore {
       if (sameLedgerIdentity(identity, after)) rememberLedger(filename, after, events);
     } catch { /* a concurrent replacement stays uncached */ }
     return events;
+  }
+
+  /** Read a fixed prefix from one descriptor. Memory is the retained window,
+   * one record and a 64 KiB read buffer, independent of journal length. No
+   * ledger cache or append-tail state is populated by this read-only path. */
+  async scan(threadId: string, visit: (event: RuntimeEvent) => void): Promise<number> {
+    const filename = this.filename(threadId);
+    let handle;
+    try { handle = await open(filename, "r"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+    const signal = AbortSignal.timeout(60_000);
+    let stream: fs.ReadStream | undefined;
+    try {
+      const before = await handle.stat();
+      if (!before.size) throw new Error("runtime event ledger contains an empty record");
+      // Bun can emit an unhandled stream error during construction when the
+      // signal already expired while stat was awaited.
+      signal.throwIfAborted();
+      stream = handle.createReadStream({ encoding: "utf8", highWaterMark: 64 * 1024,
+        end: before.size - 1, autoClose: false, signal });
+      let pending = "";
+      let previous: number | undefined;
+      let yieldedAt = performance.now();
+      const take = (line: string, partial = false) => {
+        const event = parseLedgerEvent(line, partial, previous);
+        if (event) { previous = event.seq; visit(event); }
+      };
+      for await (const chunk of stream) {
+        pending += chunk;
+        let start = 0;
+        let newline: number;
+        while ((newline = pending.indexOf("\n", start)) >= 0) {
+          take(pending.slice(start, newline));
+          start = newline + 1;
+          if (performance.now() - yieldedAt >= 4) {
+            await yieldToLoop(undefined, { signal });
+            yieldedAt = performance.now();
+          }
+        }
+        pending = pending.slice(start);
+      }
+      if (pending) take(pending, true);
+      // Concurrent appends belong to the live window. Replacements, truncation
+      // or edits of the prefix cannot publish a partially restored window.
+      const after = await handle.stat();
+      const onPath = await stat(filename);
+      if (before.dev !== onPath.dev || before.ino !== onPath.ino || after.size < before.size
+        || onPath.size < before.size || after.size === before.size && !sameLedgerIdentity(ledgerIdentity(before), ledgerIdentity(after))) {
+        throw new Error("runtime event ledger changed during window refill");
+      }
+      return previous ?? 0;
+    } catch (error) {
+      if (signal.aborted) throw new Error("runtime event window refill exceeded its read deadline", { cause: error });
+      throw error;
+    } finally {
+      stream?.destroy();
+      await handle.close();
+    }
   }
 
   append(threadId: string, event: RuntimeEvent): void {

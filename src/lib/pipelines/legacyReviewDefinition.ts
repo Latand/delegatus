@@ -1,3 +1,5 @@
+import { isLegacyReviewLoopStage } from "./legacyReviewShape";
+export { LEGACY_REVIEW_LOOP_KIND, MAX_LEGACY_REVIEW_CONVERSIONS, isLegacyReviewLoopStage, legacyReviewLoopShapeValid, legacyReviewLoopReachable, type LegacyReviewLoopStage } from "./legacyReviewShape";
 import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 
@@ -24,48 +26,11 @@ import type {
  * loading, rendering, export or GET path calls either.
  */
 
-export const LEGACY_REVIEW_LOOP_KIND = "review-loop" as const;
-
 /** The fallback when a legacy stage has no recorded review flow limit. */
 export const LEGACY_REVIEW_FLOW_ROUND_LIMIT = DEFAULT_REVIEW_ROUNDS;
 
-/** Conversion history a record keeps; the store refuses more, so the action refuses first. */
-export const MAX_LEGACY_REVIEW_CONVERSIONS = 32;
-
 /** The finite limit a refused preview offers in place of the recorded one. */
 export const RECOMMENDED_REVIEW_LIMIT = DEFAULT_REVIEW_ROUNDS;
-
-export type LegacyReviewLoopStage = PipelineStage & { kind: typeof LEGACY_REVIEW_LOOP_KIND };
-
-export function isLegacyReviewLoopStage<T extends { kind?: unknown }>(stage: T): stage is T & { kind: typeof LEGACY_REVIEW_LOOP_KIND } {
-  return stage.kind === LEGACY_REVIEW_LOOP_KIND;
-}
-
-/** The shape rules a stored review-loop stage keeps: it only ever reviewed,
-    declared no worktree outputs, and its flow owned every verdict, so it has
-    no fail edge. */
-export function legacyReviewLoopShapeValid(stage: PipelineStage): boolean {
-  return stage.outputs === undefined && !stage.onFail && stage.effectiveRole.access === "read-only";
-}
-
-/** Whether a run stage's pass chain reaches the review-loop, which reviewed
-    the session of such a run. Decoding does not require it: a draft written
-    before the rule existed still loads, and start refuses it. */
-export function legacyReviewLoopReachable(
-  stages: ReadonlyArray<Pick<PipelineStage, "id" | "kind" | "next">>,
-  stageId: string,
-): boolean {
-  const nextOf = new Map(stages.map((stage) => [stage.id, stage.next] as const));
-  return stages.some((candidate) => {
-    if (candidate.kind !== "run") return false;
-    let cursor: string | null = candidate.next;
-    for (let hops = 0; cursor !== null && hops <= stages.length; hops += 1) {
-      if (cursor === stageId) return true;
-      cursor = nextOf.get(cursor) ?? null;
-    }
-    return false;
-  });
-}
 
 /** How many times a reviewer with this fail edge runs when every review
     fails: `advance` reads `maxRounds` as the number of reviews, the last one's

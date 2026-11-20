@@ -11,6 +11,7 @@ import shlex
 import signal
 import socket
 import sqlite3
+import stat as stat_mode
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,12 @@ import uuid
 
 CPU_SLICE = "delegatus.slice"
 CPU_WEIGHT = "1000"
+
+
+def census_identity(value):
+    return (isinstance(value, dict) and type(value.get("pid")) is int and value["pid"] > 0
+            and isinstance(value.get("startIdentity"), str) and bool(value["startIdentity"])
+            and (value.get("bootEpoch") is None or isinstance(value["bootEpoch"], str)))
 
 
 class BaselineReadinessError(RuntimeError):
@@ -108,6 +115,12 @@ def protected_host_census(release, bun, state, target, timeout):
                     or (pipeline is not None and (not isinstance(pipeline, dict)
                         or not all(isinstance(pipeline.get(key), str) and pipeline[key] for key in ["pipelineId", "stageId"])
                         or type(pipeline.get("attempt")) is not int or pipeline["attempt"] < 1))):
+                raise RuntimeError("census row malformed")
+            process, writer = host.get("process"), host.get("exitWriter")
+            if ((process is not None and (not census_identity(process) or process["pid"] != host.get("pid")))
+                    or (writer is not None and (not isinstance(writer, dict)
+                        or not census_identity(writer.get("process"))
+                        or not isinstance(writer.get("exitFile"), str) or not os.path.isabs(writer["exitFile"])))):
                 raise RuntimeError("census row malformed")
         return answer
     finally:
@@ -276,7 +289,9 @@ def observe_switch(adapter, target, samples, interval, timeout):
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
     unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
-    verdict = "fail" if not healthy or "lost" in outcomes else "needs_decision" if unknown else "pass"
+    relocation_ready = (relocation is not None and relocation.get("released") is True
+                        and relocation.get("placement") == "placed" and relocation.get("started") is True)
+    verdict = "fail" if not healthy or "lost" in outcomes or not relocation_ready else "needs_decision" if unknown else "pass"
     result = {"verdict": verdict, "target": target, "serving": serving,
               "protected": protected, "interrupted": interrupted,
               "interruptedUnreadable": unreadable, "relocation": relocation, "diagnostics": diagnostics}
@@ -527,12 +542,23 @@ def write_json(destination, body):
             os.unlink(name)
 
 
-def proc_field(pid, field):
-    proc = pathlib.Path("/proc") / str(pid)
+def proc_field(pid, field, root="/proc"):
+    proc = pathlib.Path(root) / str(pid)
     if field == "cwd":
         return os.readlink(proc / field)
     if field == "cmdline":
         return (proc / field).read_bytes()
+    if field == "fds":
+        descriptors = []
+        for index, entry in enumerate((proc / "fd").iterdir()):
+            if index >= 64:
+                raise RuntimeError("process descriptor table exceeds its bound")
+            try:
+                info = entry.stat()
+            except FileNotFoundError:
+                continue
+            descriptors.append((int(entry.name), info.st_dev, info.st_ino, stat_mode.S_ISFIFO(info.st_mode)))
+        return descriptors
     return (proc / field).read_text()
 
 
@@ -644,6 +670,14 @@ def parent_pid(stat):
 
 def process_group(stat):
     return int(stat[stat.rfind(")") + 2:].split()[2])
+
+
+def process_session(stat):
+    return int(stat[stat.rfind(")") + 2:].split()[3])
+
+
+def boot_epoch():
+    return "linux:" + pathlib.Path("/proc/sys/kernel/random/boot_id").read_text().strip() + ":pidns:" + os.readlink("/proc/self/ns/pid")
 
 
 def kernel_cgroup(text):
@@ -842,7 +876,7 @@ class Checkout:
     def __init__(self, config, run_id=None, *, process_read=proc_field, http=http_read,
                  runtime=socket_health, execute=command, clock=None, mcp_factory=Mcp,
                  cgroup_root="/sys/fs/cgroup", signal_process=pidfd_signal,
-                 census=protected_host_census):
+                 census=protected_host_census, epoch=boot_epoch):
         self.clock = clock or Clock()
         self.signal_process = signal_process
         self.census_adapter = census
@@ -852,6 +886,9 @@ class Checkout:
         self.retirement_roots = {}
         self.viewer_group = None
         self.leftovers_found = []
+        self.helper_custody = {}
+        self.custody_rows = []
+        self.boot_epoch = epoch()
         self.process_read, self.http, self.runtime, self.command = process_read, http, runtime, execute
         self.config_file = pathlib.Path(config).resolve()
         self.plan = json.loads(self.config_file.read_text())
@@ -940,6 +977,7 @@ class Checkout:
             answer = self.census(max(0, capture_deadline - self.clock.now()))
             return complete_activity(answer)
         rows = retry(capture, self.clock, 30)
+        self.custody_rows = rows
         hosts = []
         self.agents = {}
         for row in rows:
@@ -1055,6 +1093,325 @@ class Checkout:
                 return True
         return False
 
+    def custody(self, group, candidates):
+        """Require custody links to survive a fresh proof before admission.
+
+        Process identities alone do not preserve the FIFO, host scope, or
+        private exit binding used by the first proof. Keep only members whose
+        complete proof is identical on two consecutive reads. If the second
+        read loses any link, that member remains in ``found`` and the normal
+        LeftoverProcesses fence refuses preflight.
+        """
+        try:
+            first = self._custody_once(group, candidates)
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
+            first = {}
+            for member in candidates:
+                member["reason"] = "custody evidence changed before final admission"
+        if not first:
+            return first
+        try:
+            second = self._custody_once(group, candidates)
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
+            second = {}
+        stable = {pid: evidence for pid, evidence in first.items()
+                  if second.get(pid) == evidence}
+        changed = set(first) - set(stable)
+        for member in candidates:
+            if member["pid"] in changed:
+                member["reason"] = "custody evidence changed before final admission"
+        return {pid: {key: value for key, value in evidence.items() if key != "proof"}
+                for pid, evidence in stable.items()}
+
+    def _custody_once(self, group, candidates):
+        """Read-only, bidirectional proof for otherwise unowned members.
+        Fixed diagnostics deliberately contain neither argv nor private paths.
+        No custody member can become a retirement root.
+        """
+        admitted, waiters, processes, observed_hosts = {}, {}, {}, {}
+        for member in candidates:
+            if member["reason"] == "older release in service cgroup":
+                continue
+            pid = member["pid"]
+            stat = self.process_read(pid, "stat")
+            processes[pid] = {"stat": stat, "args": [arg for arg in self.process_read(pid, "cmdline").decode().split("\0") if arg],
+                              "member": member}
+        if not processes:
+            return admitted
+
+        def unchanged(pid, identity):
+            current = self.process_read(pid, "stat")
+            before = processes.get(pid, {}).get("stat", observed_hosts.get(pid))
+            if (start_identity(current) != identity or before is not None
+                    and (parent_pid(current), process_group(current), process_session(current))
+                    != (parent_pid(before), process_group(before), process_session(before))):
+                raise RuntimeError("service cgroup member changed while it was read")
+
+        def admit(pid, role, host, proof=None):
+            unchanged(pid, processes[pid]["member"]["startIdentity"])
+            admitted[pid] = {"pid": pid, "startIdentity": processes[pid]["member"]["startIdentity"],
+                             "role": role, "hostPid": host["pid"], "hostStartIdentity": host["startIdentity"],
+                             "proof": {"parentPid": parent_pid(processes[pid]["stat"]),
+                                       "processGroup": process_group(processes[pid]["stat"]),
+                                       "session": process_session(processes[pid]["stat"]), **(proof or {})}}
+
+        # Scope properties are read together, once per inventory. Missing or
+        # contradictory blocks grant nothing.
+        scopes = {}
+        scope_names = set()
+        for row in self.custody_rows:
+            host = row.get("host", {})
+            if host.get("state") != "alive":
+                continue
+            try:
+                host_group = kernel_cgroup(self.process_read(host["pid"], "cgroup"))
+                match = re.fullmatch(r"(.+/(delegatus-agent-[A-Za-z0-9_.@-]+\.scope))(?:/agent)?", host_group)
+                if match:
+                    scope_names.add(match[2])
+            except (OSError, KeyError, RuntimeError):
+                pass
+        if scope_names:
+            try:
+                output = self.command(["systemctl", "--user", "show", *sorted(scope_names),
+                                       "-p", "Id", "-p", "BindsTo", "-p", "After", "-p", "ControlGroup", "-p", "ActiveState"])
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                output = ""
+            for block in output.strip().split("\n\n"):
+                values = systemd_properties(block)
+                name = values.get("Id")
+                if name in scopes:
+                    scopes[name] = {}
+                else:
+                    scopes[name] = values
+
+        for pid, proc in processes.items():
+            args, member = proc["args"], proc["member"]
+            # Accept both native launch formats, without comparing source text.
+            try:
+                index = args.index("-e")
+                if args[index + 2] != "--" or len(args) != index + 4:
+                    continue
+                launch = json.loads(args[-1])
+                command = launch.get("command") if isinstance(launch, dict) else launch
+                if not isinstance(command, list) or not command or not isinstance(command[0], str) or not os.path.isabs(command[0]):
+                    continue
+                directory = pathlib.Path(command[0])
+            except (ValueError, IndexError, TypeError):
+                continue
+            rows = [row for row in self.custody_rows if row.get("host", {}).get("state") == "alive"
+                    and (row["host"].get("exitWriter") or {}).get("process", {}).get("pid") == pid
+                    and row["host"]["exitWriter"]["process"].get("startIdentity") == str(pid) + ":" + member["startIdentity"]
+                    and row["host"]["exitWriter"]["process"].get("bootEpoch") == self.boot_epoch]
+            member["reason"] = "wait owner: no registry writer record names it"
+            if len(rows) != 1:
+                continue
+            host = rows[0]["host"]
+            identity = host.get("process")
+            member["reason"] = "wait owner: host identity differs from registry"
+            if not census_identity(identity) or identity["pid"] != host["pid"] or identity.get("bootEpoch") != self.boot_epoch:
+                continue
+            try:
+                host_stat = self.process_read(host["pid"], "stat")
+                if identity["startIdentity"] != str(host["pid"]) + ":" + start_identity(host_stat):
+                    continue
+                observed_hosts[host["pid"]] = host_stat
+                member["reason"] = "wait owner: host is not its child"
+                if parent_pid(host_stat) != pid:
+                    continue
+                member["reason"] = "wait owner: host not in an agent scope outside the service"
+                host_group = kernel_cgroup(self.process_read(host["pid"], "cgroup"))
+                match = re.fullmatch(r"(.+/(delegatus-agent-[A-Za-z0-9_.@-]+\.scope))(?:/agent)?", host_group)
+                if within(host_group, group) or not match:
+                    continue
+                member["reason"] = "wait owner: host scope not bound to the unit"
+                scope = scopes.get(match[2], {})
+                if (self.unit not in scope.get("BindsTo", "").split() or self.unit not in scope.get("After", "").split()
+                        or scope.get("ActiveState") != "active" or scope.get("ControlGroup") != match[1]):
+                    continue
+                member["reason"] = "wait owner: launch directory does not name the host's exit record"
+                # Hold the verified directory across the binding read; a
+                # pathname replacement cannot substitute another launch.
+                directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    launch_info = os.fstat(directory_fd)
+                    if launch_info.st_uid != os.getuid() or launch_info.st_mode & 0o077:
+                        continue
+                    fd = os.open("host-exit.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+                    try:
+                        info = os.fstat(fd)
+                        if not stat_mode.S_ISREG(info.st_mode) or info.st_size > 4096:
+                            continue
+                        data = os.read(fd, 4097)
+                        if len(data) > 4096:
+                            continue
+                        binding = json.loads(data)
+                    finally:
+                        os.close(fd)
+                    current = directory.lstat()
+                    if (current.st_dev, current.st_ino, current.st_mode, current.st_uid) != (
+                            launch_info.st_dev, launch_info.st_ino, launch_info.st_mode, launch_info.st_uid):
+                        continue
+                finally:
+                    os.close(directory_fd)
+                exit_file = host["exitWriter"]["exitFile"]
+                expected = self.state / "host-exits"
+                if (not isinstance(binding, dict) or "discard" in binding or not isinstance(binding.get("file"), str)
+                        or not os.path.isabs(binding["file"]) or not os.path.isabs(exit_file)
+                        or pathlib.Path(binding["file"]).name != pathlib.Path(exit_file).name
+                        or pathlib.Path(binding["file"]).parent.resolve() != expected.resolve()
+                        or pathlib.Path(exit_file).parent.resolve() != expected.resolve()):
+                    continue
+            except (OSError, ValueError, TypeError, KeyError):
+                continue
+            unchanged(host["pid"], start_identity(host_stat))
+            host_identity = {"pid": host["pid"], "startIdentity": start_identity(host_stat)}
+            wait_proof = {"hostCgroup": host_group, "scope": dict(scope),
+                          "directoryPath": str(directory),
+                          "directory": [launch_info.st_dev, launch_info.st_ino, launch_info.st_mode, launch_info.st_uid],
+                          "exitBindingFile": [info.st_dev, info.st_ino, info.st_mode, info.st_uid],
+                          "exitBinding": binding}
+            admit(pid, "wait-owner", host_identity, wait_proof)
+            waiters[pid] = {"directory": directory, "host": host_identity, "proof": wait_proof}
+
+        # The fd table is bounded, and a failed read grants no drain custody.
+        if not waiters:
+            return admitted
+        fds = {}
+        for pid in processes:
+            try:
+                fds[pid] = self.process_read(pid, "fds")
+            except (OSError, RuntimeError):
+                fds[pid] = []
+        fifo_owners = {}
+        for pid in waiters:
+            for fd, dev, inode, fifo in fds[pid]:
+                if fd == 2 and fifo:
+                    fifo_owners.setdefault((dev, inode), []).append(pid)
+                    waiters[pid]["proof"]["fifo"] = [fd, dev, inode, fifo]
+                    admitted[pid]["proof"]["fifo"] = [fd, dev, inode, fifo]
+        holders = {pid: {(dev, inode) for _, dev, inode, fifo in descriptors if fifo and (dev, inode) in fifo_owners}
+                   for pid, descriptors in fds.items() if pid not in admitted}
+        for fifo, owners in fifo_owners.items():
+            members = {pid: processes[pid] for pid in holders if fifo in holders[pid]}
+            if not members:
+                continue
+            if len(owners) != 1:
+                for proc in members.values():
+                    proc["member"]["reason"] = "stderr drain: ambiguous FIFO"
+                continue
+            waiter = waiters[owners[0]]
+            leaders = []
+            for pid, proc in members.items():
+                args, stat = proc["args"], proc["stat"]
+                if (process_group(stat) == process_session(stat) == pid and len(args) == 7
+                        and os.path.basename(args[0]) == "sh" and args[1] == "-c" and args[3] == "sh"
+                        and pathlib.Path(args[4]) == waiter["directory"] / "startup.fifo"
+                        and pathlib.Path(args[5]) == waiter["directory"] / "startup.stderr"):
+                    leaders.append(pid)
+            if len(leaders) != 1:
+                for proc in members.values():
+                    proc["member"]["reason"] = "stderr drain: no single leader for the owner's FIFO"
+                continue
+            leader = leaders[0]
+            subshells = [pid for pid, proc in members.items() if pid != leader
+                         and parent_pid(proc["stat"]) == leader and proc["args"] == members[leader]["args"]
+                         and process_group(proc["stat"]) == process_session(proc["stat"]) == leader]
+            for pid, proc in members.items():
+                stat, args, member = proc["stat"], proc["args"], proc["member"]
+                if len(holders[pid]) != 1:
+                    member["reason"] = "stderr drain: ambiguous FIFO"
+                elif process_group(stat) != leader or process_session(stat) != leader:
+                    member["reason"] = "stderr drain: process group differs from its leader"
+                elif pid != leader and (len(subshells) > 1 or parent_pid(stat) not in [leader, *subshells]):
+                    member["reason"] = "stderr drain: parent link outside the group"
+                elif pid != leader and pid not in subshells and (not args or os.path.basename(args[0]) not in ["dd", "tee", "wc", "cat"]):
+                    member["reason"] = "stderr drain: unexpected program"
+                else:
+                    admit(pid, "stderr-drain", waiter["host"],
+                          {"fifo": list(fifo), "waiterProof": waiter["proof"]})
+        # Recheck every admitted identity after the final filesystem/systemd
+        # read, so an earlier member cannot change while later proof runs.
+        # Mutable custody links receive their own complete reread here, after
+        # all candidates have been scanned. The initial and scan-time reads
+        # alone leave a window in which an earlier FIFO, scope or receipt can
+        # change while this proof is still processing later members.
+        self._validate_custody_links(admitted)
+        for pid, evidence in admitted.items():
+            unchanged(pid, evidence["startIdentity"])
+            unchanged(evidence["hostPid"], evidence["hostStartIdentity"])
+        return admitted
+
+    def _validate_custody_links(self, admitted):
+        """Re-read mutable external links at the completed proof boundary."""
+        owners = {}
+        expected_scopes = {}
+        for pid, evidence in admitted.items():
+            proof = evidence["proof"]
+            waiter = proof if evidence["role"] == "wait-owner" else proof.get("waiterProof")
+            if waiter is None:
+                raise RuntimeError("custody owner proof unavailable")
+            owners[pid] = proof.get("fifo")
+            if evidence["role"] == "wait-owner":
+                expected_scopes[waiter["scope"].get("Id")] = waiter["scope"]
+                try:
+                    host_group = kernel_cgroup(self.process_read(evidence["hostPid"], "cgroup"))
+                except (OSError, RuntimeError, KeyError):
+                    raise RuntimeError("custody host cgroup changed before final admission") from None
+                if host_group != waiter["hostCgroup"]:
+                    raise RuntimeError("custody host cgroup changed before final admission")
+                directory = pathlib.Path(waiter["directoryPath"])
+                try:
+                    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        directory_info = os.fstat(directory_fd)
+                        directory_identity = [directory_info.st_dev, directory_info.st_ino,
+                                              directory_info.st_mode, directory_info.st_uid]
+                        if directory_identity != waiter["directory"]:
+                            raise RuntimeError("custody launch directory changed before final admission")
+                        fd = os.open("host-exit.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                     dir_fd=directory_fd)
+                        try:
+                            info = os.fstat(fd)
+                            if [info.st_dev, info.st_ino, info.st_mode, info.st_uid] != waiter["exitBindingFile"]:
+                                raise RuntimeError("custody exit receipt changed before final admission")
+                            data = os.read(fd, 4097)
+                            if len(data) > 4096 or json.loads(data) != waiter["exitBinding"]:
+                                raise RuntimeError("custody exit receipt changed before final admission")
+                        finally:
+                            os.close(fd)
+                    finally:
+                        os.close(directory_fd)
+                except (OSError, ValueError, TypeError, KeyError, IndexError):
+                    raise RuntimeError("custody launch binding unreadable before final admission") from None
+        if expected_scopes:
+            try:
+                output = self.command(["systemctl", "--user", "show", *sorted(expected_scopes),
+                                       "-p", "Id", "-p", "BindsTo", "-p", "After", "-p",
+                                       "ControlGroup", "-p", "ActiveState"])
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                raise RuntimeError("custody host scope unreadable before final admission") from None
+            observed = {}
+            for block in output.strip().split("\n\n"):
+                value = systemd_properties(block)
+                name = value.get("Id")
+                if name in observed:
+                    raise RuntimeError("custody host scope ambiguous before final admission")
+                observed[name] = value
+            if observed != expected_scopes:
+                raise RuntimeError("custody host scope changed before final admission")
+        for pid, expected in owners.items():
+            if expected is None:
+                continue
+            try:
+                descriptors = self.process_read(pid, "fds")
+            except (OSError, RuntimeError):
+                raise RuntimeError("custody FIFO unreadable before final admission") from None
+            expected = tuple(expected)
+            matches = (expected in descriptors if len(expected) == 4 else
+                       any(fifo and (dev, inode) == expected for _, dev, inode, fifo in descriptors))
+            if not matches:
+                raise RuntimeError("custody FIFO changed before final admission")
+
     def leftovers(self, group):
         record = json.loads(self.record_file.read_text())
         owners = {pid: ("agent", identity) for pid, identity in self.agents.items()}
@@ -1088,6 +1445,8 @@ class Checkout:
             found.append({"pid": pid, "startIdentity": identity, "name": process_name(args),
                           "parentPid": parent_pid(stat), "since": self.clock.process_since(identity),
                           "reason": "older release in service cgroup" if older else "no current serving or agent owner"})
+        self.helper_custody = self.custody(group, found)
+        found = [member for member in found if member["pid"] not in self.helper_custody]
         if self.launcher_ancestors(record, group) != ancestors or json.loads(self.record_file.read_text()) != record:
             raise RuntimeError("launcher ownership changed during cgroup inventory")
         return found
@@ -1100,6 +1459,8 @@ class Checkout:
         if self.leftovers_found:
             self.emit({"leftovers": self.leftovers_found})
             raise LeftoverProcesses(self.leftovers_found)
+        if self.helper_custody:
+            self.emit({"custody": list(self.helper_custody.values())})
 
     def publish(self):
         # Repeat the immutability fences immediately before the atomic write.
@@ -1123,6 +1484,7 @@ class Checkout:
         whose parents still reach them, can later be proven leftovers."""
         record = json.loads(self.record_file.read_text())
         rows = complete_activity(self.census())
+        self.custody_rows = rows
         for row in rows:
             host = row.get("host") or {}
             if host.get("state") == "alive" and isinstance(host.get("pid"), int):
@@ -1148,6 +1510,8 @@ class Checkout:
             try:
                 stat = self.process_read(pid, "stat")
                 identity = start_identity(stat)
+                if self.helper_custody.get(pid, {}).get("startIdentity") == identity:
+                    continue
                 if self.agents.get(pid) == identity:
                     continue
                 if (self.retirement_roots.get(pid) == identity
@@ -1156,6 +1520,20 @@ class Checkout:
                     captured[pid] = identity
             except (FileNotFoundError, ProcessLookupError):
                 continue
+        candidates = []
+        for pid in self.members(group):
+            if pid in captured:
+                continue
+            try:
+                stat = self.process_read(pid, "stat")
+                candidates.append({"pid": pid, "startIdentity": start_identity(stat), "reason": "no current serving or agent owner"})
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+        # Keep earlier custody even if its host just ended. It must never
+        # acquire permission to be signalled during this switch.
+        self.helper_custody.update(self.custody(group, candidates))
+        if self.helper_custody:
+            self.emit({"custody": list(self.helper_custody.values())})
         return captured
 
     def group_state(self, group):
@@ -1208,7 +1586,12 @@ class Checkout:
                 stat = self.process_read(pid, "stat")
                 identity = start_identity(stat)
                 args = self.process_read(pid, "cmdline").decode().split("\0")
-                proven, reason = self.proof(pid, stat, captured)
+                custody = self.helper_custody.get(pid)
+                if custody and custody["startIdentity"] == identity:
+                    host = self.process({"pid": custody["hostPid"], "startIdentity": custody["hostStartIdentity"]})
+                    proven, reason = False, "protected helper custody; host " + ("alive" if host else "ended")
+                else:
+                    proven, reason = self.proof(pid, stat, captured)
                 if start_identity(self.process_read(pid, "stat")) != identity:
                     proven, reason = False, "identity changed while read"
             except (FileNotFoundError, ProcessLookupError):
@@ -1446,7 +1829,8 @@ class Checkout:
             # loads the board store, but its answer is independent of board size.
             if not isinstance(json.loads(self.http(port, "/api/tasks?project=", self.token)).get("tasks"), list):
                 raise RuntimeError("board read unavailable")
-            update = json.loads(self.http(port, "/api/self-update", self.token))
+            # Serving identity and auto-update state need only the installation snapshot.
+            update = json.loads(self.http(port, "/api/self-update?work=0&readOnly=1", self.token))
             if update["auto"]["enabled"] or update["auto"].get("drain"):
                 raise RuntimeError("automatic update competes with external switch")
             for role, key in [("viewer", "web"), ("runtimeHost", "runtimeHost")]:
@@ -1536,6 +1920,10 @@ def main():
         adapter = Checkout(args.config, args.worker)
         if args.preflight:
             adapter.preflight()
+            if adapter.helper_custody:
+                waiters = sum(member["role"] == "wait-owner" for member in adapter.helper_custody.values())
+                print("Protected helper custody: " + str(waiters) + " wait owners and "
+                      + str(len(adapter.helper_custody) - waiters) + " helpers of live agent hosts")
             print("Preflight: pass; no switch performed")
             return 0
         if args.start:

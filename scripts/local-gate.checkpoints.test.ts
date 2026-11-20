@@ -12,11 +12,11 @@ const serviceTest = test.skipIf(process.platform !== "linux"
   || spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status !== 0);
 
 test("shared comparator inputs retain every split test group in publication selection", () => {
-  const groups = ["scripts/local-gate-tests.test.ts", "scripts/local-gate-tests.retry.test.ts",
-    "scripts/local-gate-tests.rendezvous.test.ts", "scripts/local-gate-tests.baseline.test.ts"];
-  const publication = ["scripts/local-gate.hooks.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.test.ts"];
+  const groups = ["scripts/local-gate-tests.test.ts", "scripts/local-gate-tests.retry.test.ts", "scripts/local-gate-tests.recovery.test.ts", "scripts/local-gate-tests.teardown.test.ts",
+    "scripts/local-gate-tests.rendezvous.test.ts", "scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate-tests.dependencies.test.ts"];
+  const publication = ["scripts/local-gate.runtime.test.ts", "scripts/local-gate.execution.test.ts", "scripts/local-gate.groups.test.ts", "scripts/local-gate.invalidation.test.ts", "scripts/local-gate.git.test.ts", "scripts/local-gate.lint.test.ts", "scripts/local-gate.native.test.ts", "scripts/local-gate.binding.test.ts", "scripts/local-gate.hooks.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.test.ts"];
   const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/local-gate-tests.fixture.ts", "scripts/local-gate-tests.ts", "scripts/gate-cache.ts"]),
-    tests: [...groups, ...publication, "scripts/local-gate.checkpoints.test.ts", "scripts/unrelated.test.ts"], skippedMedia: [],
+    tests: [...groups, ...publication, "scripts/local-gate.checkpoints.test.ts", "scripts/unrelated.test.ts"],
     linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
   const selected = (file: string) => plan("pre-push", [file], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
   expect(selected("scripts/local-gate-tests.fixture.ts")).toEqual(groups.map(file => `./${file}`).sort());
@@ -24,6 +24,20 @@ test("shared comparator inputs retain every split test group in publication sele
     expect(selected(shared)).toEqual([...groups, ...publication, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
   }
   expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
+});
+
+test("shared compiler fixtures retain every owned launch matrix in publication selection", () => {
+  const groups = ["scripts/compiler-admission.test.ts", "scripts/compiler-admission.portable.test.ts", "scripts/compiler-admission.service.test.ts", "scripts/compiler-admission.budget.test.ts"];
+  const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/compiler-admission.fixture.ts"]), tests: [...groups, "scripts/unrelated.test.ts"], linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
+  const selected = plan("pre-push", ["scripts/compiler-admission.fixture.ts"], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
+  expect(selected).toEqual(groups.map(file => `./${file}`).sort());
+});
+
+test.each(["scripts/owned-runner.integration.fixture.ts", "scripts/owned-runner.cleanup.ts"])("shared runner input retains every owned lifecycle group in publication selection: %s", shared => {
+  const groups = ["integration", "portable", "fallback", "direct", "runner", "gate", "watchdog", "cleanup"].map(group => `scripts/owned-runner.${group}.test.ts`);
+  const context: PlanEnvironment = { base: "base", existing: new Set([shared]), tests: [...groups, "scripts/unrelated.test.ts"], linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
+  const selected = plan("pre-push", [shared], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
+  expect(selected).toEqual(groups.map(file => `./${file}`).sort());
 });
 
 function fixture() {

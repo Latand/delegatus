@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import http from "node:http";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { watch } from "node:fs";
 import fs from "node:fs/promises";
@@ -831,6 +832,9 @@ test.each(["mismatch", "decode", "executable", "archive"])("skipping a refused i
     const result = await prepareInboundMedia(f.relay, r, f.directory, { ...options(), skipRejected: true });
     expect(result.files.map(file => file.ref)).toEqual(["good"]);
     expect(await fs.readFile(result.files[0]!.path, "utf8")).toBe("hello");
+    const stat = await fs.stat(result.files[0]!.path);
+    expect(result.files[0]!.snapshot).toEqual({ dev: stat.dev, ino: stat.ino, size: stat.size,
+      sha256: createHash("sha256").update("hello").digest("hex") });
     const media = JSON.parse(result.prompt.split("<inbound_media>\n")[1]!.split("\n</inbound_media>")[0]!);
     expect(media[0]).toMatchObject({ ref: "bad", readable: false, reason: "unsupported_media_type" });
     expect(media[0]).not.toHaveProperty("local_path");

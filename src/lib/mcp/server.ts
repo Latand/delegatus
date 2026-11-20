@@ -1,3 +1,4 @@
+import { relayImages, relayImageGuard, relayImageNote, withRelayImages, MAX_RELAY_IMAGE_CONTENT_BYTES, RELAY_IMAGE_LIMIT_NOTE } from "@/lib/externalRelay/ownerToolContent";
 import { declaredClassSchema, repeatReasonSchema } from "@/lib/pipelines/accounting";
 import { taskDeclarationSchema, acceptTaskSchema } from "@/lib/tasks/accounting";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -7,7 +8,7 @@ import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
-import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { assertStateStartupMutation, mayRunStateStartupMutation, MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
@@ -2893,6 +2894,9 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        const images = relayImages(result);
+        const imageGuard = relayImageGuard(result);
+        const imageNote = relayImageNote(result);
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
         context.assertResult?.(result);
@@ -2900,11 +2904,12 @@ export function createMcpToolService(
         // Receipt identities and acknowledgement digests are protocol values.
         // The consumer must receive the exact bytes the custody ledger stores.
         // Media SHA-256 is content verification data used by the caller.
-        const exactHistoryMedia = typedTool === "relay_owner_history" && effectiveArgs.action === "media";
+        const exactHistoryMedia = typedTool === "relay_service_tools" || typedTool === "relay_owner_history" && effectiveArgs.action === "media";
         if (effectiveArgs.full !== true && typedTool !== "recorded_check" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }
+        withRelayImages(result, images, imageGuard, imageNote);
         const serializationStartedAt = performance.now();
         let resultSizeBytes: number | undefined;
         try {
@@ -4014,7 +4019,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   backfill_worktree_projects: "Read-only diagnostic for the automatic worktree project recovery that runs at Viewer startup and after full catalog rescans. dryRun defaults to true and writes nothing, including no MCP receipt. dryRun:false is refused. Optional project narrows the target repository. Reports corroborated folded candidates and leftAlone entries with reasons.",
   search_memory: "Search Claude and Codex memories, global instructions, single-fact skills and active learned role rules. Role rules use their exact r_ ids and are read live from the role-memory store. Supply query with optional project and kind; results rank by text relevance and include source paths, kinds, scopes and dates, bounded to 16 KB. Omit project for cross-project search. Supply a hit id in a second call to open its bounded body and record an opened outcome. Background information may be stale; verify the source before relying on it. The engines remain the only writers of their memory stores.",
   get_conversation: "Read a conversation summary and its recent messages and tools, newest kept within an answer budget: each record keeps its first maxChars characters with truncated:true when cut, and omitted counts the older records left out. full:true returns complete records and tail lines. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
-  conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
+  conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, orphaned (the engine runs but its recorded owner process is gone), synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with an omitted or fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
   deploy_exact_sha: "Deploy the serving Delegatus application by commit SHA or unique prefix of at least 7 characters on the tracked branch. Never a branch name. Only its server-attributed designated seat deploys; other projects cannot deploy through this tool. Idempotent by clientRequestId; deployments serialize at admission. Green means the tracked branch's required checks passed on the requested SHA. A not-green refusal gives outcome:not-executed, the green state and check names; retry the same key once green. A permanently closed key gives outcome:not-executed and nextAction:new-request-permitted. Checkout admission has a ten-second work budget plus admission-lock settlement, and waits up to one second for a transient holder at each custody observation. Busy names a live deployment, retention, update or pending restart, without a finished deployment id; it is not executed and the same key can be retried after its holder settles. A control timeout gets a separate five-second admission reconciliation budget: accepted names the deployment id; a fenced absence gives not-executed. If the reconciliation source itself is unavailable, preserve the original key for recovery. A matching SHA already deploying joins that deployment; a different SHA stays busy. An accepted deploy records wakeOnSettle:true for the seat: end the turn, and its next wake reports the terminal phase and paused lanes.",
   get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit. Use full:true for delivery ownership, closeReport, work links and retained bodies. Compact by default; full:true or compact:false returns the whole record, prompts, role scaffolds and attempt transcripts included. `stageId` narrows the answer to that stage and one attempt (the latest by default, or `attempt`): its verdict, findings, reported summary, conversation and error, with no prompts or transcripts. `compact: true` answers the list_pipelines compact row plus the digests.",
@@ -4136,7 +4141,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A secret, dot-directory or outside-roots refusal offers `details.confirmation` with an expiring Delegatus URL. The paired owner signs in and approves there; that action rechecks and sends this exact file to this exact chat and topic once. Show the owner the link and detector reasons. Agents cannot approve, and ordinary retries still run all detectors. The confirmation expires after ten minutes and becomes unavailable after Viewer restart. `document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. Success includes sentBy; per-bot refusals and selection follow telegram_bot_send. The post appears in telegram_bot_messages with kind document and its filename.",
   ].join(" "),
   relay_answer: relayAnswerDescription,
-  relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Refused in any other conversation and once answered.",
+  relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Ready photos and video frames include image content beside metadata; in code mode, forward image blocks with image(block). Reuse unexpired photo refs as seed_media_refs only on generate_image or update_self_profile_photo. Video frames cannot be seeds. relay_answer attachments can select media_ref from this request. Refused in any other conversation and once answered.",
   relay_owner_history: [
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. editsReported says whether the service reports edits; editedAt marks one. Media includes kind, fileName, mimeType, size, duration, dimensions and fetch availability when the service supplies them. Older services cannot report edits or all media facts. Telegram-side deletions may remain stored. Author ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
     "action media takes chat, messageId and optional directory: pass your LLV_EVIDENCE_DIR, an existing directory under the installation's evidence root; the default is evidence/relay-media. It streams one photo, document or video through the paired service, up to 2 GiB, and returns done with path, kind, mimeType, size and SHA-256 only after verification. Repeat the identical call on in_progress to join the same job. not_offered means the paired service must implement relay_owner_media first; too_large names the limit and how to lift it. Files, their contents and original names stay private to this conversation: never copy them into reports, messages to other agents, tasks, commits, pull requests, issues, lessons, Telegram hand-off folders or other chats.",
@@ -5264,10 +5269,32 @@ export function mcpTextResultClient(name: unknown): boolean {
 }
 
 export function mcpToolResponse(result: McpToolResult, textOnly: boolean) {
+  const supplied = result.ok && result.toolName === "relay_service_tools" ? relayImages(result) : [];
+  const actionSent = result.ok && result.actionSent === true;
+  let images = supplied;
+  let unavailable: string | undefined;
+  try { if (images.length) relayImageGuard(result)?.(); }
+  catch (error) {
+    images = [];
+    unavailable = error && typeof error === "object" && "code" in error && error.code === "lease_lost" ? "lease_lost" : "media_unavailable";
+  }
+  if (unavailable) return {
+    content: [{ type: "text" as const, text: JSON.stringify({ ok: false, toolName: result.toolName, code: unavailable,
+      clientRequestId: null, replayed: false, actionSent,
+      error: `Images unavailable: ${unavailable}.${actionSent ? " Service actions may already have run; do not repeat them." : ""}`, retryable: false }) }], isError: true,
+  };
+  const content = [{ type: "text" as const, text: JSON.stringify(result) }, ...images];
+  const note = relayImageNote(result);
+  if (note) content.push({ type: "text", text: note });
+  // Ten 1 MiB previews plus the bounded service text fit below 14 MiB.
+  if (images.length && Buffer.byteLength(JSON.stringify({ content })) > MAX_RELAY_IMAGE_CONTENT_BYTES) {
+    content.splice(1);
+    content.push({ type: "text", text: RELAY_IMAGE_LIMIT_NOTE });
+  }
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    ...(textOnly ? {} : { structuredContent: result }),
-    ...(result.ok ? {} : { isError: true }),
+    content,
+    ...(textOnly || supplied.length || note ? {} : { structuredContent: Object.fromEntries(Object.entries(result)) }),
+    ...(result.ok && !(result.toolName === "relay_service_tools" && result.status === "relay_tools_unavailable") ? {} : { isError: true }),
   };
 }
 
@@ -5420,6 +5447,9 @@ function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancel
  * Forwarded stdio calls use that same service and original request key.
  */
 export async function createProductionViewerMcpService(hostHealthProbe = false, stdio = false, taskExecutor = false): Promise<McpToolService> {
+  // The admitted probe and its file scanner share the incumbent's registry
+  // before promotion. Both must open it without running the new schema.
+  if (stdio && hostHealthProbe) process.env[MCP_PROBE_READ_ONLY_ENV] = "1";
   /* Forward before importing policy, bindings or receipts. The Viewer owns
      one service and rechecks authority before disclosing a saved result.
      Linux native clients prove their process through a per-call Unix peer
@@ -5487,6 +5517,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
   const { withWorkspaceMcpFence } = await import("./workspaceFence");
+  const { prepareAgentRegistry } = await import("@/lib/agent/registry");
   const service = createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
@@ -5495,7 +5526,10 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
   );
-  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(service, productionDomainDependencies));
+  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(
+    service, productionDomainDependencies,
+    async () => (await prepareAgentRegistry()).prepareNativeCallerArtifacts(),
+  ));
 }
 
 /** The executor took the call and stopped before answering it. */

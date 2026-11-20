@@ -165,7 +165,7 @@ test("the real bounded reader refuses symlinks, directories, oversized and malfo
 });
 
 test("every refusal gives the reason and continuation route without identity disclosure", () => {
-  const reasons: NativeCallerReason[] = ["platform-unverified", "no-claude-ancestor", "capability-unresolved", "capability-conflict", "foreign-host", "unknown-claude-home", "session-record-missing", "session-record-invalid", "session-kind", "process-identity-mismatch", "domain-mismatch", "record-predates-process", "session-held-twice", "session-not-scanned", "generation-ambiguous", "generation-not-current", "transcript-outside-home", "generation-hosted", "session-changed", "session-proof-unavailable", "approval-waiting", "approval-refused", "approval-unavailable"];
+  const reasons: NativeCallerReason[] = ["platform-unverified", "no-claude-ancestor", "capability-unresolved", "capability-conflict", "ancestry-ambiguous", "foreign-host", "unknown-claude-home", "session-record-missing", "session-record-invalid", "session-kind", "process-identity-mismatch", "domain-mismatch", "record-predates-process", "session-held-twice", "session-not-scanned", "generation-ambiguous", "generation-not-current", "transcript-outside-home", "generation-hosted", "session-changed", "session-proof-unavailable", "approval-waiting", "approval-refused", "approval-unavailable"];
   for (const reason of reasons) {
     const text = nativeAdmissionMessage({ reason, retryable: reason === "session-not-scanned" });
     expect(text).toContain(`[${reason}]`); expect(text).toContain("open the conversation in Delegatus");

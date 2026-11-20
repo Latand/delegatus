@@ -44,3 +44,7 @@ test("a pinned Claude id with the claude- prefix lands on its family's size clas
   const limits = { weekly: { usedPercent: 10 }, tiers: [{ tier: "seven_day_sonnet", usedPercent: 80 }] };
   expect(tightestHeadroom("claude", "claude-sonnet-5-5", limits)).toEqual(tightestHeadroom("claude", "sonnet", limits));
 });
+
+test("GPT-6.2 Sol and Astra retain the large model cost class", () => {
+  for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) expect(modelSizeClass(model)).toBe(3);
+});

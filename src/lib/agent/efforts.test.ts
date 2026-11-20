@@ -95,7 +95,7 @@ describe("effortMeter", () => {
 
 test("spawn reasoning admits model-specific top tiers for Astra and both Sols", async () => {
   const { reasoningFromBody } = await import("./efforts");
-  for (const model of ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-5.6-sol"]) {
+  for (const model of ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-5.6-sol"]) {
     for (const effort of ["max", "ultra"]) {
       expect(reasoningFromBody("codex", { model, effort })).toEqual({ effort, fast: null });
     }
@@ -109,3 +109,14 @@ test("Terra 6.1 exposes the observed six reasoning tiers", () => {
   expect(effortScale("codex", "gpt-6.1-terra")).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   expect(clampEffortToScale("codex", "gpt-6.1-terra", "ultra")).toBe("ultra");
 });
+
+for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+  test(`${model} preserves its full existing Codex reasoning scale`, () => {
+    const scale = ["low", "medium", "high", "xhigh", "max", "ultra"];
+    expect(effortScale("codex", model)).toEqual(scale);
+    for (const effort of scale) {
+      expect(clampEffortToScale("codex", model, effort)).toBe(effort);
+      expect(effortMeter("codex", model, effort)).toEqual({ level: scale.indexOf(effort) + 1, slots: 6 });
+    }
+  });
+}

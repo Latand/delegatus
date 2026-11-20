@@ -9,6 +9,15 @@ export const LOOP_PROFILE_STORE_BYTES = LOOP_PROFILE_STORED_CAP * (LOOP_PROFILE_
 type StoredProfile = { revision: string; capturedAt: number; profile: LoopGapProfile };
 type Ledger = { nextCaptureAt: number; pendingCapture?: { admittedAt: number; pid: number; beganAt?: number }; profiles: StoredProfile[] };
 
+class InvalidProfileStore extends Error {
+  readonly code = "PROFILE_INVALID";
+  constructor() { super("profile-store-invalid"); }
+}
+
+const validProfile = (row: StoredProfile) => row && typeof row.revision === "string" && /^[a-f0-9]{7,40}$/.test(row.revision)
+  && Number.isSafeInteger(row.capturedAt) && row.capturedAt >= 0
+  && row.profile?.status === "captured" && Buffer.byteLength(JSON.stringify(row.profile)) <= LOOP_PROFILE_BYTES;
+
 /** One bounded summary ring and a durable cooldown, independent of revision.
  * All I/O and lock waits are asynchronous; lock admission has a 100 ms bound. */
 export function createLoopProfileStore(directory: string, injected: { afterBeginCapturePersistence?: () => Promise<void> } = {}) {
@@ -19,17 +28,14 @@ export function createLoopProfileStore(directory: string, injected: { afterBegin
       handle = await fs.open(file, "r");
       const buffer = Buffer.alloc(LOOP_PROFILE_STORE_BYTES + 1);
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-      if (bytesRead > LOOP_PROFILE_STORE_BYTES) throw new Error("profile-store-invalid");
+      if (bytesRead > LOOP_PROFILE_STORE_BYTES) throw new InvalidProfileStore();
       const value = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
       if (!Number.isFinite(value.nextCaptureAt) || value.nextCaptureAt < 0 || !Array.isArray(value.profiles)
         || (value.pendingCapture !== undefined && (!Number.isSafeInteger(value.pendingCapture?.admittedAt) || value.pendingCapture.admittedAt < 0
           || !Number.isSafeInteger(value.pendingCapture?.pid) || value.pendingCapture.pid <= 0
           || (value.pendingCapture.beganAt !== undefined && (!Number.isSafeInteger(value.pendingCapture.beganAt) || value.pendingCapture.beganAt < value.pendingCapture.admittedAt))))
         || value.profiles.length > LOOP_PROFILE_STORED_CAP
-        || value.profiles.some((row: StoredProfile) => !row || typeof row.revision !== "string" || !/^[a-f0-9]{7,40}$/.test(row.revision)
-          || !Number.isSafeInteger(row.capturedAt) || row.capturedAt < 0
-          || !row.profile || row.profile.status !== "captured"
-          || Buffer.byteLength(JSON.stringify(row.profile)) > LOOP_PROFILE_BYTES)) throw new Error("profile-store-invalid");
+        || value.profiles.some((row: StoredProfile) => !validProfile(row))) throw new InvalidProfileStore();
       return value;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { nextCaptureAt: 0, profiles: [] };
@@ -38,7 +44,7 @@ export function createLoopProfileStore(directory: string, injected: { afterBegin
   };
   const write = async (ledger: Ledger) => {
     const text = JSON.stringify(ledger);
-    if (Buffer.byteLength(text) > LOOP_PROFILE_STORE_BYTES) throw new Error("profile-store-invalid");
+    if (Buffer.byteLength(text) > LOOP_PROFILE_STORE_BYTES) throw new InvalidProfileStore();
     await fs.writeFile(`${file}.next`, text, { mode: 0o600 });
     await fs.rename(`${file}.next`, file);
   };
@@ -48,7 +54,7 @@ export function createLoopProfileStore(directory: string, injected: { afterBegin
   };
   return {
     reserve: (at: number) => transaction(async () => {
-      if (!Number.isSafeInteger(at) || at < 0 || at > Number.MAX_SAFE_INTEGER - LOOP_PROFILE_COOLDOWN_MS) throw new Error("profile-store-invalid");
+      if (!Number.isSafeInteger(at) || at < 0 || at > Number.MAX_SAFE_INTEGER - LOOP_PROFILE_COOLDOWN_MS) throw new InvalidProfileStore();
       const ledger = await read();
       if (at < ledger.nextCaptureAt) return false;
       if (ledger.pendingCapture) {
@@ -68,7 +74,7 @@ export function createLoopProfileStore(directory: string, injected: { afterBegin
     }),
     beginCapture: async (at: number, admittedAt: number) => {
       if (!Number.isSafeInteger(at) || at < 0 || !Number.isSafeInteger(admittedAt) || admittedAt < 0
-        || admittedAt > Number.MAX_SAFE_INTEGER - LOOP_PROFILE_COOLDOWN_MS) throw new Error("profile-store-invalid");
+        || admittedAt > Number.MAX_SAFE_INTEGER - LOOP_PROFILE_COOLDOWN_MS) throw new InvalidProfileStore();
       const began = await transaction(async () => {
         const ledger = await read();
         if (ledger.pendingCapture?.admittedAt !== admittedAt || ledger.pendingCapture.pid !== process.pid || at < admittedAt) return false;
@@ -78,12 +84,20 @@ export function createLoopProfileStore(directory: string, injected: { afterBegin
       if (began) await injected.afterBeginCapturePersistence?.();
       return began;
     },
-    completeCapture: (startedAt: number, admittedAt: number) => transaction(async () => {
+    completeCapture: (startedAt: number, admittedAt: number, captured?: StoredProfile) => transaction(async () => {
       if (!Number.isSafeInteger(startedAt) || startedAt < 0 || startedAt > Number.MAX_SAFE_INTEGER - LOOP_PROFILE_COOLDOWN_MS
-        || !Number.isSafeInteger(admittedAt) || admittedAt < 0) throw new Error("profile-store-invalid");
+        || !Number.isSafeInteger(admittedAt) || admittedAt < 0 || (captured !== undefined && !validProfile(captured))) throw new InvalidProfileStore();
       const ledger = await read();
-      if (ledger.pendingCapture?.admittedAt !== admittedAt || ledger.pendingCapture.pid !== process.pid || ledger.pendingCapture.beganAt === undefined) return false;
+      if (ledger.pendingCapture?.admittedAt !== admittedAt || ledger.pendingCapture.pid !== process.pid || ledger.pendingCapture.beganAt === undefined) {
+        if (captured && !ledger.profiles.some(row => row.revision === captured.revision && row.capturedAt === captured.capturedAt
+          && row.profile.status === "captured" && captured.profile.status === "captured"
+          && row.profile.from === captured.profile.from && row.profile.to === captured.profile.to)) throw new InvalidProfileStore();
+        return false;
+      }
       ledger.nextCaptureAt = startedAt + LOOP_PROFILE_COOLDOWN_MS;
+      // The admission token commits the summary and cooldown together. Replays
+      // after a committed write cannot append the same capture a second time.
+      if (captured) ledger.profiles = [...ledger.profiles, captured].slice(-LOOP_PROFILE_STORED_CAP);
       delete ledger.pendingCapture;
       await write(ledger); return true;
     }),
@@ -94,8 +108,7 @@ export function createLoopProfileStore(directory: string, injected: { afterBegin
       await write(ledger); return true;
     }),
     save: (profile: LoopGapProfile, revision: string, capturedAt: number) => transaction(async () => {
-      if (profile.status !== "captured" || Buffer.byteLength(JSON.stringify(profile)) > LOOP_PROFILE_BYTES
-        || typeof revision !== "string" || !/^[a-f0-9]{7,40}$/.test(revision) || !Number.isSafeInteger(capturedAt) || capturedAt < 0) throw new Error("profile-store-invalid");
+      if (!validProfile({ profile, revision, capturedAt })) throw new InvalidProfileStore();
       const ledger = await read();
       ledger.profiles.push({ revision, capturedAt, profile });
       ledger.profiles = ledger.profiles.slice(-LOOP_PROFILE_STORED_CAP);

@@ -49,7 +49,7 @@ afterAll(() => fixturePullRequests.mockRestore());
 const { IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail } = engineModule;
 const { adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, patchPipeline: rawPatchPipeline, pipelineAttemptTargetForSource, pipelineClaudePermissionMode, setPipelineDismissal, terminalFlowStageVerdict, tickPipelines } = engineModule;
 const { verdictRoutesAsFail } = await import("./verdict");
-const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { AgentRegistry, closeAgentRegistryForTests, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { saveFlows } = await import("@/lib/flows/store");
 const rawCreatePipelineFromRequest = engineModule.createPipelineFromRequest;
 const createPipelineFromRequest: typeof rawCreatePipelineFromRequest = async (request, ports, options) =>
@@ -74,6 +74,7 @@ registerPipelineTick(async () => {});
 
 afterAll(async () => {
   await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
+  closeAgentRegistryForTests();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
 });
 

@@ -44,6 +44,17 @@ const FILE_BUDGET_MS = 5 * 60 * 1000;
 // confirmations after a slow full-file baseline. Bound head work to eight owned
 // runners in the shared CPU work slice; baseline and retries retain three.
 const HEAD_FILE_WORKERS = 8;
+
+/** Gate fixtures start their own suites and supervisors. Eight such files in
+ * one real publication exhausted the 768-task service limit before any verdict.
+ * Source-only selections keep their head parallelism and confirmation budget. */
+export function comparisonFileWorkers(files: readonly string[], ceiling: number, sharedPortable = false): number {
+  const nested = files.some(file => /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/")));
+  const nestedLimit = sharedPortable ? 1 : 2;
+  const workers = nested ? Math.min(nestedLimit, ceiling) : ceiling;
+  return Math.min(files.length, workers);
+}
+
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
 export class BudgetExhausted extends Error {}
@@ -136,7 +147,8 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
         // is that file's known state; only a diagnostic the first sample lacked
         // leaves the retry without usable evidence.
         const known = new Set((side === "base" ? base : head).failures.filter(site => site.kind === "error").map(key));
-        if (run.failures.some(site => site.kind === "error" && !known.has(key(site)))) throw new Error(`${side} rerun: incomplete runner or between-tests error`);
+        const newDiagnostics = run.failures.filter(site => site.kind === "error" && !known.has(key(site)));
+        if (newDiagnostics.length) throw new Error(`${side} rerun: incomplete runner or between-tests error: ${newDiagnostics.map(site => `${site.file}: ${diagnosticName(site)}`).join("; ")}`);
         for (const item of pending) {
           const first = side === "base" ? base : head;
           if (occurrenceCount(run.failures, item.site) + occurrenceCount(run.passed, item.site)
@@ -310,7 +322,10 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const results: TestRun[] = new Array(files.length);
   let next = 0;
-  const workers = await Promise.allSettled(Array.from({ length: Math.min(options.workers ?? 3, files.length) }, async () => {
+  const sharedPortable = process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0;
+  const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharedPortable);
+  if (files.length) options.log?.(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
+  const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
   while (next < files.length) {
     const index = next++, file = files[index]!;
     const fileStarted = performance.now();
@@ -377,10 +392,15 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       const message = survivors && !cause.includes(survivors) ? `${cause}; ${survivors}` : cause;
       if (filtered) {
         const detail = `${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`;
-        if (message === "runner did not finish (124)") throw new BudgetExhausted(detail);
+        if (message === "runner did not finish (124)") {
+          const budget = options.deadline === undefined ? "test run" : "flaky rerun";
+          throw new BudgetExhausted(`${detail}; ${budget} budget exhausted`);
+        }
         throw new Error(detail);
       }
-      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });
+      // A caller's TMPDIR may sit inside its checkout. Normalize the report
+      // sandbox before replacing that checkout prefix on only the head side.
+      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.replace(privateTestRoot, "<sandbox>").split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2

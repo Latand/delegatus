@@ -28,7 +28,7 @@
         "meanDifference": 0.23,
         "ringsClipped": 0
       },
-      "sha256": "de9ef2323b155b8eb23ec690fca417863dba10787de51434acf4f3fb60076f63"
+      "sha256": "4f39b8fa1e2675439f2e1a3393f4eff79655ee244a9960022752642affb10907"
     },
     {
       "path": "orchestrator.svg",
@@ -51,7 +51,7 @@
         "meanDifference": 0.613,
         "ringsClipped": 1
       },
-      "sha256": "8e5f49c32dbefaa57ead9345625090fa4142f4f1c82b6e4d3a6e463feef8f373"
+      "sha256": "49f964dcaf710d980544364ce4eefe56373b6ba2c74fd847fc5d899bec06a55a"
     },
     {
       "path": "conversation.svg",
@@ -74,7 +74,7 @@
         "meanDifference": 0.368,
         "ringsClipped": 2
       },
-      "sha256": "0452eb56ba9a9e012de9faa037324921967aaaba97a36bf8e5df3dc7557ef3b5"
+      "sha256": "e9f8f36ee0f5ae3ace5dadf2b8ac8868eea5c8671201caf6c7726e16924d78a3"
     },
     {
       "path": "pipeline.svg",
@@ -97,7 +97,7 @@
         "meanDifference": 0.369,
         "ringsClipped": 0
       },
-      "sha256": "4ee447c0189cdd56cb91af4e3f50a4ac939a3643f47d64b2878b3e5aefb75865"
+      "sha256": "1b64828f991c1570c8be75a82512b1db2093e00213bda66a13fd81327b8149cf"
     },
     {
       "path": "card-menu.svg",
@@ -120,7 +120,7 @@
         "meanDifference": 0.387,
         "ringsClipped": 0
       },
-      "sha256": "2394667fd7f5dee5f5e5c4df762653a16c0ffcbd9bf8d92086b45a2cb615d2f0"
+      "sha256": "63bdfbf0363400bd8a274d1b90bea0706c27039cbcfd2d7f68f5d7d3fff09cb5"
     },
     {
       "path": "accounts.svg",
@@ -140,10 +140,10 @@
       "renderBack": {
         "worstTileMean": 2.765,
         "changedTileShare": 0,
-        "meanDifference": 0.219,
+        "meanDifference": 0.218,
         "ringsClipped": 0
       },
-      "sha256": "550c234034dbb82265d6cf701da7d48776446dd35947e04ee650b2b3a6ae93c7"
+      "sha256": "daa5c788f903a41beb99c6bb0ba28a7bac0dda4a122ade47091b23cddf6dfdf6"
     },
     {
       "path": "phone-conversation.svg",
@@ -157,10 +157,10 @@
       "renderBack": {
         "worstTileMean": 11.912,
         "changedTileShare": 0.02,
-        "meanDifference": 0.745,
+        "meanDifference": 0.744,
         "ringsClipped": 0
       },
-      "sha256": "53751c876cb34277276c0f28d564ca9e29136e928ce5bc6730ad771b45f4bd81"
+      "sha256": "9ee0aa7bcf068dbc107183a9d64bc49a7be99431831b1d9dae4bde2a2e89fcf8"
     },
     {
       "path": "phone-board.svg",
@@ -177,7 +177,7 @@
         "meanDifference": 0.421,
         "ringsClipped": 0
       },
-      "sha256": "2c4e5638761ae6cdc947c1257096f72db87cdeb00711459b54d809869acabb8a"
+      "sha256": "0e262986402e05d76ab78b5949eda7d517c3107501e2aab39cbdf510c5b5fa74"
     }
   ]
 }

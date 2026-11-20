@@ -2,7 +2,7 @@ import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
 import { observeAgentProcess } from "@/lib/agentState/process";
 import { AGENT_STATE_POLICY } from "@/lib/agentState/model";
 import { entryRevision, subjectId } from "@/lib/agentState/store";
-import { fileSignature } from "@/lib/agentState/transcript";
+import { fileSignature, NATIVE_SIZE_REFUSALS } from "@/lib/agentState/transcript";
 import { servingAgentStateService } from "@/lib/agentState/service";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -1430,27 +1430,34 @@ function retirementSubject(
     && sameRetirementEvidence(entry, proof);
   if (central && (central.facts.revision === entryRevision(entry) || retainedProof)) {
     const facts = central.facts;
-    if (facts.turn.determined && facts.transcript.determined && facts.owner.determined && facts.attention.determined && facts.obligations.determined) {
+    // A Codex native record too large to recover leaves the turn unknown for size
+    // alone. It may be open, so only the abandoned-turn rule below can settle
+    // it, under the same owner, silence, attention, obligation and tree checks.
+    const unknownBySize = entry.key.engine === "codex" && !facts.turn.determined && NATIVE_SIZE_REFUSALS.has(facts.turn.why)
+      && facts.turn.evidence.source === "native-transcript";
+    if ((facts.turn.determined || unknownBySize) && facts.transcript.determined && facts.owner.determined && facts.attention.determined && facts.obligations.determined) {
       try {
         const owner = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
         const ownerValid = facts.owner.value === "held" ? hasStructuredDeliveryHost(entry.key)
           : facts.owner.value === "absent" && (entry.claimOwner === null || owner !== null && observeAgentProcess(owner) === "dead");
         if (ownerValid && fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) === facts.transcript.value.signature) {
           const memory = conversationId ? structuredDeliveryHostForConversation(conversationId)?.agentStateMemory?.() : null;
-          centralSettled = facts.turn.value.state !== "open"
+          const turnOpen = facts.turn.determined ? facts.turn.value.state === "open" : null;
+          centralSettled = turnOpen === false
             && !facts.obligations.value.some(obligation => obligation.startsWith("background:"))
             && (!memory || memory.activeTurnRef === null);
           currentAttention = memory?.pendingAttention ?? facts.attention.value;
           if (memory?.attentionUnverified) { centralSettled = null; centralWhy = "current attention cannot be verified"; }
-          if (finishedStage && facts.turn.value.state === "absent") pipelineStanding = determined(null);
-          if (centralSettled === false && facts.turn.value.state === "open" && facts.owner.value === "absent"
-            && !finishedStage
+          if (finishedStage && facts.turn.determined && facts.turn.value.state === "absent") pipelineStanding = determined(null);
+          if (!finishedStage && centralSettled === false && turnOpen !== false && facts.owner.value === "absent"
             && facts.obligations.value.length === 0 && currentAttention.length === 0
             && inputs.nowMs - facts.transcript.value.mtimeMs >= AGENT_STATE_POLICY.abandonedTurnMs
             && treeHasOnlyMcpChildren(hostProcess, retainedProof ? entry.structuredTerminationSurvivors : undefined)) {
             abandonedTurn = true;
             centralSettled = true;
           }
+          // Otherwise a turn unknown by size stays unknown, never busy.
+          if (!memory && !abandonedTurn && !facts.turn.determined) { centralSettled = null; centralWhy = facts.turn.why; }
         } else centralWhy = "central owner or transcript evidence changed";
       } catch { centralWhy = "central transcript identity unavailable"; }
     } else centralWhy = "central turn, transcript or ownership unverified";
@@ -1723,6 +1730,7 @@ export async function runStructuredHostRetirementSweep(
     return terminateStructuredHostTree(ref, {
       authorize: () => captureRefusal ?? authorize(),
       stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
+      orphanAlarmRegistry: agentRegistry(),
       graceMs,
       deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
       persistCapturedTree: identities => {
@@ -2061,17 +2069,17 @@ export async function runStructuredHostRetirementSweep(
       const staleIdentityRefusal = outcome.status === 409 && outcome.stale === true;
       const registryCasRefusal = outcome.status === 409
         && outcome.error === "structured host changed before registry retirement";
-      // Runtime release can leave the same scoped custody marked unhosted,
-      // which no longer passes the live retirement predicate. Prove collection
-      // and custody again without stopping anything before calling it failed.
+      // Runtime release can clear a claim or mark the scoped custody unhosted.
+      // Reconcile current custody after exit: the same target can settle gone,
+      // and a replacement gets a terminal changed result without being stopped.
       const scopeTargetRefusal = outcome.status === 409
         && ["scope retirement target changed",
           "scope retirement target changed: process identity",
+          "scope retirement target changed: claimOwner",
           "scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted"].includes(outcome.error);
       const missingIdentityRefusal = outcome.status === 409 && captures.has(subject.keyId)
         && /^scope retirement target changed: verdict process-identity: no kernel identity can be observed for pid \d+$/.test(outcome.error);
-      const concurrentCloseRefusal = (missingIdentityRefusal || outcome.status === 409
-        && outcome.error === "scope retirement target changed: claimOwner")
+      const concurrentCloseRefusal = missingIdentityRefusal
         && captures.has(subject.keyId) && !captures.get(subject.keyId)!.authorizeGone();
       const capture = captures.get(subject.keyId);
       const currentBoot = readers.bootEpoch();

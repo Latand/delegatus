@@ -9,7 +9,9 @@ const files = new Set([
   "tsconfig.json", "tsconfig.production.json", ".github/workflows/docker-image.yml",
   "scripts/whisper_transcribe.py", "scripts/published-image-entrypoint.sh",
   "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs",
-  "scripts/npm-package-smoke.mjs", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
+  "scripts/npm-package-smoke.mjs", "scripts/package-standalone.mjs", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
+  "scripts/check-worker-client.mjs",
+  "scripts/privacy-known-value-fingerprints.json", "scripts/cloud-checks.replay.fixture.json", "scripts/mac-app/smoke-platform.mjs",
   "scripts/fixtures/usage-metrics/recorded.json", "landing/site/demo/taskIcons.json",
   // Docker copies these root files; Next loads them with NODE_ENV=production.
   ".env", ".env.local", ".env.production", ".env.production.local",

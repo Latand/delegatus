@@ -154,9 +154,9 @@ test("collection and conversion failures release pending gap records and stop re
     if (kind === "collect") h.ports.collect = () => new Promise((_, fail) => { reject = fail; });
     const run = h.recorder.start(); await turn(); h.time(3000); expect(h.gap()).toBe(true);
     if (kind === "collect") reject(new Error("private diagnostic failure")); else h.finish({ stackTraces: null });
-    await run; expect(h.emitted).toEqual([{ status: "unavailable", reason: "capture-failed" }]);
+    await run; expect(h.emitted).toEqual([{ status: "unavailable", reason: "capture-failed", phase: kind, code: "UNKNOWN" }]);
     expect(h.gap()).toBe(true);
-    expect(h.emitted).toEqual(Array.from({ length: 2 }, () => ({ status: "unavailable", reason: "capture-failed" })));
+    expect(h.emitted).toEqual(Array.from({ length: 2 }, () => ({ status: "unavailable", reason: "capture-failed", phase: kind, code: "UNKNOWN" })));
   }
 });
 
