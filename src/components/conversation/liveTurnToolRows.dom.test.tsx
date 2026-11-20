@@ -193,11 +193,11 @@ for (const { tool, args, chips } of MCP_CASES) {
     const liveTitle = row.querySelector<HTMLElement>("[data-live-mcp-title]")!;
     expect(liveTitle.textContent).toBe(cardTitle);
     /* One line: the whole title is the tooltip, the row itself never wraps. */
-    expect(liveTitle.getAttribute("title")).toBe(cardTitle);
+    expect(liveTitle.getAttribute("data-feed-summary-tooltip")).toBe(cardTitle);
     expect(liveTitle.className).toContain("truncate");
     expect(liveTitle.parentElement!.className).toContain("flex-nowrap");
     expect(liveTitle.parentElement!.className).not.toContain("flex-wrap");
-    expect(cardTitleNode.getAttribute("title")).toBe(cardTitle);
+    expect(cardTitleNode.getAttribute("data-feed-summary-tooltip")).toBe(cardTitle);
     /* The chip's full translated label stays visible. */
     for (const chip of live.querySelectorAll<HTMLElement>("[data-live-mcp-link]")) {
       expect(chip.getAttribute("title")).toBe(chip.textContent);
@@ -311,7 +311,7 @@ for (const lang of ["en", "uk"] as const) {
       /* And the row is still an MCP row: the card's summary and both chips.
          The title's tooltip carries it in full, as the canonical card's does. */
       const title = row.querySelector("[data-live-mcp-title]")!;
-      expect(title.textContent ?? "").toBe(title.getAttribute("title") ?? "");
+      expect(title.textContent ?? "").toBe(title.getAttribute("data-feed-summary-tooltip") ?? "");
       expect((title.textContent ?? "").length).toBeGreaterThan(0);
       expect(chipsOf(row, "[data-live-mcp-link]")).toHaveLength(2);
       expect(row.textContent).toContain("MCP · viewer");

@@ -32,6 +32,7 @@ import {
   type McpCallLink,
 } from "@/lib/mcp/presentation";
 
+import { FeedSummaryText } from "../feed/FeedSummaryText";
 import { ContextTokensCaption } from "../feed/cards/ContextTokensCaption";
 import type { ToolEvent } from "../feed/parse";
 import { formatDuration, toolDurationMs } from "../feed/toolBlocks";
@@ -207,9 +208,9 @@ export function McpCallCard({
           {/* The server mark falls off before the title elides. The action
               labels keep their width and may wrap at narrow pane widths. */}
           <span data-mcp-heading className="flex h-[1lh] min-w-0 flex-auto flex-row-reverse flex-wrap items-center gap-x-2 overflow-hidden max-[480px]:gap-x-1.5">
-            <span data-mcp-title className="min-w-0 flex-auto truncate font-semibold text-secondary" title={description.tooltip ?? description.title}>
+            <FeedSummaryText data-mcp-title className="min-w-0 flex-auto truncate font-semibold text-secondary" label={description.tooltip ?? description.title} always={Boolean(description.tooltip)}>
               {description.title}
-            </span>
+            </FeedSummaryText>
             {/* Every card here is a Viewer call, so a narrow row also hides this
                 label outright. */}
             <span data-mcp-server className="shrink-0 whitespace-nowrap font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted @max-[26rem]:hidden">

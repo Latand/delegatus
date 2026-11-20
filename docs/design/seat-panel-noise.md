@@ -384,8 +384,9 @@ the ordinary conversation feed alike, because none of these components is seat-o
   (`src/components/conversation/LiveTurnRows.tsx`, `LiveMcpRow`). The outcome icon sits at
   the trailing edge. Actions keep their full labels, with room to wrap in narrow panes.
   The call title takes the remaining width and shows its full text on hover.
-  Details still holds the ids and the payload. On desktop, the answer header puts the
-  clock and actions at the feed edge while the prose keeps its reading measure.
+  Details still holds the ids and the payload. On desktop, reply clocks align with
+  MCP clocks, and the adjacent read aloud and copy actions stay together. The prose
+  keeps its reading measure. See [chat relationships and usage](chat-relationships-and-usage.md#orchestrator-transcript).
 - **b3 Shell rows.** The collapsed row (`ToolLine`, `MobileRunRow`, the live tool row) was
   already `truncate` with the whole summary in `title`, and the whole command wrapped and
   copyable sits in the row's expanded body. It needed no change; a render test now pins it, and

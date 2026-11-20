@@ -21444,15 +21444,15 @@ describe("seat panel carries no internal noise", () => {
       return {
         height: Math.round(box(row).height),
         text: (title.textContent ?? "").trim(),
-        titleAttr: title.getAttribute("title"),
+        titleAttr: title.getAttribute("data-feed-summary-tooltip"),
         cut: title.scrollWidth > title.clientWidth,
         titleWidth: Math.round(box(title).width),
         links: links.map((el) => ({ text: (el.textContent ?? "").trim(), title: el.getAttribute("title"), inside: inside(el, row), width: Math.round(box(el).width), height: Math.round(box(el).height) })),
       };
     });
     const shellRows = [...root.querySelectorAll<HTMLElement>("[data-tool-row]")].filter((row) => (row.textContent ?? "").includes("ls -d /workspace")).map((row) => {
-      const label = [...row.querySelectorAll<HTMLElement>("span")].find((el) => (el.textContent ?? "").includes("ls -d /workspace") && el.getAttribute("title"))!;
-      return { height: Math.round(box(row).height), titleAttr: label.getAttribute("title"), cut: label.scrollWidth > label.clientWidth, inside: inside(label, row) };
+      const label = [...row.querySelectorAll<HTMLElement>("span")].find((el) => (el.textContent ?? "").includes("ls -d /workspace") && el.hasAttribute("data-feed-summary-tooltip"))!;
+      return { height: Math.round(box(row).height), titleAttr: label.getAttribute("data-feed-summary-tooltip"), cut: label.scrollWidth > label.clientWidth, inside: inside(label, row) };
     });
     return {
       text,

@@ -34,6 +34,7 @@ import {
   type McpCallLink,
 } from "@/lib/mcp/presentation";
 import { GlyphIcon } from "@/components/icons";
+import { FeedSummaryText } from "@/components/feed/FeedSummaryText";
 import { ImageCard } from "@/components/feed/cards/ImageCard";
 import { StatusIcon } from "@/components/feed/cards/shared";
 import { MdMessageSourceContext, StreamingMd } from "@/components/feed/markdown";
@@ -312,13 +313,14 @@ function LiveMcpRow({
         <span className="shrink-0 font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted @max-[26rem]:hidden">
           MCP · {identity.serverName}
         </span>
-        <span
+        <FeedSummaryText
           data-live-mcp-title
           className="min-w-0 flex-1 basis-0 truncate font-semibold text-secondary"
-          title={description.tooltip ?? description.title}
+          label={description.tooltip ?? description.title}
+          always={Boolean(description.tooltip)}
         >
           {description.title}
-        </span>
+        </FeedSummaryText>
         {description.links.length ? (
           <span className="flex min-w-0 max-w-[60%] shrink-0 flex-wrap items-end justify-end gap-1 @max-[26rem]:flex-col">
             {description.links.map((link) => (
@@ -390,9 +392,9 @@ function LiveToolRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeL
       }`}
     >
       <GlyphIcon name={summary.icon} className="h-3.5 w-3.5 shrink-0" />
-      <span className={`min-w-0 flex-1 truncate ${isErr ? "font-semibold" : "text-secondary"}`} title={detail}>
+      <FeedSummaryText className={`min-w-0 flex-1 truncate ${isErr ? "font-semibold" : "text-secondary"}`} label={detail}>
         {detail}
-      </span>
+      </FeedSummaryText>
       {state !== "success" ? (
         <span className={`inline-flex shrink-0 items-center gap-1 text-caption font-semibold ${isErr ? "text-danger" : "text-muted"}`}>
           {tool.status === "unknown" ? null : <StatusIcon status={tool.status} className="h-3 w-3" />}

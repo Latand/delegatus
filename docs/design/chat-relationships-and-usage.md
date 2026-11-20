@@ -10,9 +10,12 @@ page adds no visible rows.
 
 Delegatus reads native session titles when available and preserves explicit
 Delegatus renames. An unnamed imported task can display the title of its
-originating conversation. A task card can link to its main chat's task and to
-dependent tasks in the same project. Moving a card between columns changes its
-task status independently of those relationships.
+originating conversation. Leaving the rename field with the same title leaves
+the task and its undo history alone. Undoing a real rename restores the previous
+title source and task text. Legacy imported session placeholders can recover
+their linked conversation's name on read. A task card can link to its main
+chat's task and to dependent tasks in the same project. Moving a card between
+columns changes its task status independently of those relationships.
 
 ## Pull requests in the project rail
 
@@ -41,3 +44,12 @@ A task's percentage estimates the equivalent share of one weekly allowance
 over its measured history. It requires quota history for calibration. The
 account's last weekly reading is a separate measurement. With insufficient
 history, the card can show processed tokens and an available account reading.
+
+## Orchestrator transcript
+
+The MCP outcome icon sits at the right edge. Timing and actions sit to its left.
+Open actions retain their labels and stack when a narrow pane has two actions.
+Clipped tool summaries reveal the full label after a short hover. On desktop,
+the reply clock aligns with MCP timing, and read aloud and copy stay together.
+The prose keeps its reading width. Scrolling back to the latest message restores
+the live tail and removes the fade and the Down button.

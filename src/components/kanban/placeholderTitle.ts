@@ -1,4 +1,5 @@
 import { taskTitle } from "@/components/tasks/taskModel";
+import { hasLegacySessionPlaceholder } from "@/lib/tasks/titleSource";
 import { UNTITLED_TASK_TEXT, type BoardTask } from "@/lib/tasks/types";
 import { firstMeaningfulPromptLine } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
@@ -28,6 +29,10 @@ export function awaitsName(task: Pick<BoardTask, "text" | "origin">): boolean {
 }
 
 export function placeholderTitle({ task, members, mirrors, failedLaunches }: PlaceholderTitleInput): PlaceholderTitle {
+  if (hasLegacySessionPlaceholder(task) && task.conversationTitle) {
+    const title = firstMeaningfulPromptLine(task.conversationTitle, TITLE_LIMIT);
+    if (title) return { pending: false, derived: title };
+  }
   if (!awaitsName(task)) return { pending: false, derived: null };
   const own = taskTitle(task.text);
   const brief = own === UNTITLED_TASK_TEXT ? null : firstMeaningfulPromptLine(own, TITLE_LIMIT);

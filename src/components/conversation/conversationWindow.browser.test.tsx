@@ -2155,7 +2155,7 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
             const cutTitles: string[] = [];
             for (const title of document.querySelectorAll<HTMLElement>("[data-mcp-title]")) {
               if (!visible(title)) continue;
-              if (title.scrollWidth > title.clientWidth + 1 && title.getAttribute("title") !== title.textContent) cutTitles.push(title.textContent ?? "");
+              if (title.scrollWidth > title.clientWidth + 1 && title.getAttribute("data-feed-summary-tooltip") !== title.textContent) cutTitles.push(title.textContent ?? "");
             }
             for (const chip of document.querySelectorAll<HTMLElement>("[data-link-pending]")) {
               if (chip.scrollWidth > chip.clientWidth + 1) cutTitles.push(`pending chip: ${chip.textContent}`);
@@ -2223,7 +2223,7 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
             }
             for (const clock of document.querySelectorAll("[data-message-clock]")) {
               const section = clock.closest("[data-evidence-surface]")!;
-              trailingOffsets.push(Math.abs(section.getBoundingClientRect().right - clock.getBoundingClientRect().right));
+              trailingOffsets.push(Math.abs(section.getBoundingClientRect().right - clock.getBoundingClientRect().right - 22));
             }
             /* The replayed spawn whose child is not listed yet is the row's densest
                state: replay badge, starting word, outcome glyph and the time. */
@@ -2376,6 +2376,18 @@ describe("Viewer MCP calls read the same in Claude and Codex conversations", () 
           expect(reading.dotGaps.card.length).toBeGreaterThan(0);
           expect(new Set([...reading.dotGaps.header, ...reading.dotGaps.card]).size, JSON.stringify(reading.dotGaps)).toBe(1);
           expect(reading.overflowX).toBe(0);
+
+          if (key === "desktop-1440-en-light") {
+            const title = page.locator("[data-mcp-title]").first();
+            await title.evaluate(element => { (element as HTMLElement).style.maxWidth = "64px"; });
+            const label = await title.getAttribute("data-feed-summary-tooltip");
+            expect(await title.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+            await title.hover();
+            const hint = page.getByRole("tooltip").filter({ hasText: label! });
+            await hint.waitFor({ timeout: 500 });
+            await page.keyboard.press("Escape");
+            await hint.waitFor({ state: "hidden" });
+          }
 
           // The ready chip opens the child's conversation.
           await page.locator('a[data-testid="mcp-link-conversation"][href="#c=conversation_child_ready"]').first().click();

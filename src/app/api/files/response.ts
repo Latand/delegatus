@@ -2,6 +2,7 @@ import { finishedWorkIndex } from "@/lib/attention/finishedWork";
 import { withFinishedAttention } from "@/lib/attention/finishedAttention";
 import { stateWriteHealth } from "@/lib/state/diskFull";
 import { filesReadSummary } from "@/lib/filesReadSummary";
+import { hasLegacySessionPlaceholder } from "@/lib/tasks/titleSource";
 import { withPrototypeReviewSummaries, withoutPrototypeReviews, prototypeReviewNotices, seatDecisionNotices } from "@/lib/prototypeReview/read";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { createHash } from "node:crypto";
@@ -969,7 +970,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   const nativeTitleFor = nativeSessionTitleProjector();
   const linkedProjects = registryProjectionForSnapshot(registrySnapshot).projectByPath;
   const titledTasks = boardTasks.map(task => {
-    if (task.origin?.refinement !== "pending" || task.origin.kind !== "conversation") return task;
+    if (task.origin?.kind !== "conversation" || (task.origin.refinement !== "pending" && !hasLegacySessionPlaceholder(task))) return task;
     for (const assignment of task.assignments) {
       if (!assignment.path || assignment.state === "failed" ||
           (task.origin.key !== assignment.conversationId && task.origin.key !== assignment.path)) continue;

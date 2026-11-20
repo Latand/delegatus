@@ -1,5 +1,6 @@
 "use client";
 
+import { FeedSummaryText } from "../FeedSummaryText";
 import { useState, type ReactNode } from "react";
 import { useCollapsedTools } from "../toolDisclosure";
 
@@ -288,7 +289,7 @@ export function PollRow({ events, session, elapsedMs, contextTokens }: { events:
     <div data-tool-row="poll" className="flex items-center gap-2 rounded-control py-0.5 text-ui text-muted/80">
       <span className="shrink-0 select-none text-muted" aria-hidden>↳</span>
       <GlyphIcon name="clock" className="h-3.5 w-3.5 shrink-0" />
-      <span className="min-w-0 flex-1 truncate tabular-nums text-caption" title={detail}>{detail}</span>
+      <FeedSummaryText className="min-w-0 flex-1 truncate tabular-nums text-caption" label={detail}>{detail}</FeedSummaryText>
       <ContextTokensCaption value={contextTokens} scope="calls" />
     </div>
   );
@@ -319,9 +320,9 @@ export function ToolBlockRow({ event, index, nested = false }: { event: ToolEven
         ) : null}
         {nested ? <span className="shrink-0 select-none text-muted" aria-hidden>↳</span> : null}
         <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-secondary" title={event.summary}>
+        <FeedSummaryText className="min-w-0 flex-1 truncate text-secondary" label={event.summary}>
           {event.summary}
-        </span>
+        </FeedSummaryText>
         <RowStatusChip event={event} />
         {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
         <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
@@ -406,9 +407,9 @@ export function ToolLine({
         ) : (
           <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
         )}
-        <span className="min-w-0 flex-1 truncate text-secondary" title={event.summary}>
+        <FeedSummaryText className="min-w-0 flex-1 truncate text-secondary" label={event.summary}>
           {isMobile && running ? tr("mobile2.feed.running", { summary: event.summary }) : event.summary}
-        </span>
+        </FeedSummaryText>
         {/* On the phone a running line already said "running …" with its
             spinner, so the status chip (a second spinner, "executing…") stays
             off it; the duration is the trailing word. */}
@@ -468,9 +469,9 @@ export function MobileRunRow({ event }: { event: ToolEvent }) {
       ) : (
         <GlyphIcon name={event.icon} className="h-3.5 w-3.5 shrink-0" />
       )}
-      <span className="min-w-0 flex-1 truncate" title={event.summary}>
+      <FeedSummaryText className="min-w-0 flex-1 truncate" label={event.summary}>
         {running ? tr("mobile2.feed.running", { summary: event.summary }) : event.summary}
-      </span>
+      </FeedSummaryText>
       {meta || tokens ? (
         <span className={`shrink-0 whitespace-nowrap text-caption tabular-nums ${isErr ? "text-danger" : "text-muted"}`}>
           {meta}

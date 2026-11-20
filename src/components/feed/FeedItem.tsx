@@ -280,7 +280,7 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
             `display: contents`, so it changes no layout.
 
             The prose retains its reading measure (#2148). The header uses the
-            feed width so its clock lines up with the tool rows. */}
+            feed width. The clock leaves the MCP outcome icon and gap at its edge. */}
         <div className="min-w-0 flex-1" data-tts-message={`${item.engine}:${item.ts}`}>
           {/* Issue #698: this cluster used to be `absolute right-0 top-0` over a
               body with no reserved gutter — on a coarse pointer the 44px buttons
@@ -300,7 +300,7 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
               {speakText ? <SpeakButton text={speakText} answerId={speakId} /> : null}
               <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
             </span>
-            {time ? <time data-message-clock className="ml-1 shrink-0 text-caption tabular-nums text-muted">{time}</time> : null}
+            {time ? <time data-message-clock className="ml-1 mr-5.5 shrink-0 text-caption tabular-nums text-muted">{time}</time> : null}
           </div>
           <div className={`${READING_MEASURE} whitespace-pre-wrap break-words${deputyInk ? " text-secondary" : ""}`}>
             <div className="contents" data-tts-body><MdMessageSourceContext.Provider value={sourceCwd}>{mdBlocks(item.text)}</MdMessageSourceContext.Provider></div>

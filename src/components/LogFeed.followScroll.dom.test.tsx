@@ -433,6 +433,30 @@ test("follow stays disarmed across further arrivals and resizes until the operat
   }
 });
 
+test("manual momentum returns to the visible tail without pressing Down", async () => {
+  const followChanges: boolean[] = [];
+  const host = render(true, (value) => followChanges.push(value), conversationFile("momentum-return"));
+  await settle(host, "[data-feed-key]");
+  const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
+  const geometry = setScrollerGeometry(scroller, 1_000, 200, 800);
+  const wheel = (deltaY: number) => scroller.dispatchEvent(new dom.WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY }) as unknown as Event);
+  const scroll = (top: number) => {
+    geometry.setTop(top);
+    scroller.dispatchEvent(new dom.Event("scroll", { bubbles: true }) as unknown as Event);
+  };
+  flushSync(() => { wheel(-400); scroll(400); });
+  await settle(host, "[data-feed-jump-strip]");
+  expect(followChanges).toEqual([false]);
+  expect(scroller.hasAttribute("data-feed-faded")).toBe(true);
+  flushSync(() => { wheel(100); scroll(500); });
+  expect(followChanges).toEqual([false]);
+  flushSync(() => { scroll(630); scroll(800); });
+  expect(followChanges).toEqual([false, true]);
+  await settle(host, "[data-live-tail-pill]");
+  expect(scroller.hasAttribute("data-feed-faded")).toBe(false);
+  expect(host.querySelector("[data-feed-jump-strip]")).toBeNull();
+});
+
 test("a pointer-driven scrollbar return to bottom re-arms follow without authorizing content clicks", () => {
   const followChanges: boolean[] = [];
   const host = render(true, (value) => followChanges.push(value), conversationFile("scrollbar-return"));

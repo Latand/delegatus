@@ -985,7 +985,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
         ? { fenced: true, lineage: () => entry.lineages?.get(target.taskId), after: entry.settled, unless: () => entry.saved === false }
         : { fenced: true, lineage: entry.lineages?.get(target.taskId) };
       if (entry.kind === "status") outcome = await controller.move(raw, undoing ? entry.from : entry.to, { ...fence, ...(Object.hasOwn(entry, "fromHold") ? { restoreHold: undoing ? entry.fromHold ?? null : entry.toHold ?? null } : {}) });
-      else if (entry.kind === "text") outcome = await controller.edit(raw, { field: "text", value: undoing ? entry.before : entry.after }, fence);
+      else if (entry.kind === "text") outcome = await controller.edit(raw, {
+        field: "text", value: undoing ? entry.before : entry.after,
+        ...(undoing && entry.restorePendingTitle ? { restorePendingTitle: true } : {}),
+      }, fence);
       else {
         const write = controller.edit(raw, undoing ? { field: "hide", value: false } : { field: "hide", value: true, replaces: raw.groupHidden?.at ?? null }, { ...fence, after: inFlight ? Promise.all([chain, entry.settled]) : chain });
         chain = write;
@@ -1116,7 +1119,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* Drafts belong to the board, keyed by card, so a card that re-ranks, moves
      or re-renders keeps what the operator typed. A refused save keeps the
      draft for Retry; text an agent wrote meanwhile is offered beside it. */
-  const [editing, setEditing] = useState<ReadonlyMap<string, { field: EditField; draft: string; base: string }>>(NO_EDITS);
+  const [editing, setEditing] = useState<ReadonlyMap<string, { field: EditField; draft: string; base: string; initialTitle?: string }>>(NO_EDITS);
   const [failedEdits, setFailedEdits] = useState<ReadonlyMap<string, { field: EditField; draft: string; base: string; message: string }>>(NO_EDITS);
   const [incomingEdits, setIncomingEdits] = useState<ReadonlyMap<string, { field: EditField; value: string }>>(NO_EDITS);
   const editingRef = useRef(editing);
@@ -1141,11 +1144,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const retained = kept?.field === field ? kept : null;
     if (retained) setFailedEdits((current) => withEntry(current, card.id, undefined));
     setIncomingEdits((current) => withEntry(current, card.id, undefined));
+    const initialTitle = field === "title" ? (card.titlePending ? "" : card.title) : undefined;
     setEditing((current) => withEntry(current, card.id, retained
       ? { field, draft: retained.draft, base: retained.base }
-      /* A borrowed title (a placeholder no agent will name) is where the
-         rename starts, so accepting it as shown makes it the task's own. */
-      : { field, draft: field === "title" ? (card.titlePending ? "" : card.title) : base, base }));
+      : { field, draft: initialTitle ?? base, base, initialTitle }));
     if (field === "description" || field === "details") setCardFolds((current) => withCardOpen(current, card.id, true));
   }, []);
   /* `base` is the field as the edit found it: a save whose stored field still
@@ -1180,7 +1182,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }
       return;
     }
-    const currentText = effectiveById.current.get(raw.id)?.text ?? raw.text;
+    const currentTask = effectiveById.current.get(raw.id) ?? raw;
+    const currentText = currentTask.text;
     const found = base ?? textField(currentText, field);
     if (field === "title" && !value) {
       setFailedEdits((current) => withEntry(current, cardId, { field, draft, base: found, message: t("kanban.titleRequired") }));
@@ -1194,7 +1197,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const sent = withField(currentText, field, value);
     const newTitle = textField(sent, "title") || t("kanban.untitled");
     const written = settles();
-    const entry: HistoryEntry = { kind: "text", taskId: raw.id, title: clipTitle(newTitle), before: currentText, after: sent, settled: written.promise };
+    const entry: HistoryEntry = { kind: "text", taskId: raw.id, title: clipTitle(newTitle), before: currentText, after: sent,
+      restorePendingTitle: currentTask.origin?.refinement === "pending", settled: written.promise };
     historyRef.current.record(entry);
     const receiptId = show(t("kanban.edited", { title: entry.title }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
     entryReceipts.current.set(entry, receiptId);
@@ -1235,6 +1239,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (editor && editor.contains(document.activeElement)) pendingCardFocus.current = { cardId, fallback: null, always: true };
     setEditing((current) => withEntry(current, cardId, undefined));
     setIncomingEdits((current) => withEntry(current, cardId, undefined));
+    if (entry.initialTitle !== undefined && entry.draft.trim() === entry.initialTitle.trim()) return;
     void saveText(cardId, entry.field, entry.draft, entry.base);
   }, [saveText]);
   const cancelEdit = useCallback((cardId: string) => {
