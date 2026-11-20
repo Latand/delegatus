@@ -8,7 +8,7 @@ import { describeTranscriptPath, type LivenessTranscript } from "../src/lib/life
 import { registryOwners, ownerProcessAlive, type RecordedOwner } from "../src/lib/lifecycle/owners";
 import { receiptProcessEvidence } from "../src/lib/agent/accountLiveness";
 import { normalizeRegistry, structuredClaimIdentity, type RegistryFile, type SpawnReceipt } from "../src/lib/agent/registry";
-import { SqliteAgentRegistryStore, registryLivenessRows, registryHasPathIndex, registryConversationsForEntryKey, registryConversationsForPath, registryRowsMatching } from "../src/lib/agent/sqliteRegistryStore";
+import { SqliteAgentRegistryStore, registryLivenessRows, registryRetiredHostRows, registryHasPathIndex, registryConversationsForEntryKey, registryConversationsForPath, registryRowsMatching } from "../src/lib/agent/sqliteRegistryStore";
 import { defaultRegistrySqliteFilename, resolveRegistryBackend } from "../src/lib/agent/registryBackendIdentity";
 import { historyInputSql, historyPipelineRef, historyProjectionReady } from "../src/lib/state/historyProjection";
 import { isStoredPipeline, pipelineStateCollectionSeeds } from "../src/lib/pipelines/store";
@@ -174,7 +174,8 @@ async function describeOwner(owner: CaptureOwner, registry: RegistryFile, flows:
 }
 
 export async function censusSnapshot(sources: AgentLivenessSources, registryRevision: number, targetRevision: string, remainingMs: number,
-  batchFor: (registry: RegistryFile, id: CheckoutMerger["conversationId"]) => CheckoutMerger["batch"] = () => null) {
+  batchFor: (registry: RegistryFile, id: CheckoutMerger["conversationId"]) => CheckoutMerger["batch"] = () => null,
+  cutBoundary?: string) {
   const deadline = performance.now() + remainingMs;
   const registry = sources.registrySnapshot() as RegistryFile;
   const flows = sources.flows?.() ?? [];
@@ -243,7 +244,8 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
   // the exact predecessor that the successor must reconcile.
   const representedConversations = new Set(snapshot.conversations.map(row => row.conversationId).filter(Boolean));
   const retiredMergers = [];
-  for (const entry of Object.values(registry.entries)) {
+  const retiredCandidates = registryRetiredHostRows(registry, 200);
+  for (const entry of retiredCandidates.entries) {
     if (retiredMergers.length >= 200) break;
     const process = entry.structuredHost?.process ?? entry.hostExitProcess;
     const conversation = registryConversationsForEntryKey(registry, `${entry.key.engine}:${entry.key.sessionId}`)[0];
@@ -252,8 +254,10 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
     if (!process || !id || !generation || generation.path !== entry.artifactPath || representedConversations.has(id)
       || !standaloneMerger(registry, id)) continue;
     const exit = readHostExit(process);
+    const boundary = cutBoundary && Number.isFinite(Date.parse(cutBoundary)) ? Date.parse(cutBoundary) : Date.parse(snapshot.observedAt);
     if ((conversation.engine !== "claude" && conversation.engine !== "codex")
-      || !exit?.stop || exit.stop.path !== "deploy-cut" || Date.parse(exit.stop.at) < Date.parse(snapshot.observedAt)
+      || !exit?.stop || exit.stop.path !== "deploy-cut" || Date.parse(exit.stop.at) < boundary
+      || Date.parse(exit.stop.at) > Date.parse(snapshot.observedAt)
       || exit.unavailable) continue;
     const writer = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
     if (entry.claimOwner && !writer) continue;
@@ -318,8 +322,10 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
       } : null, merger, evidenceSource: row.evidenceSource };
     }), ...retiredMergers],
     selection: { ...snapshot.selection, selected: snapshot.selection.selected + retiredMergers.length,
-      matched: Math.max(snapshot.selection.matched, snapshot.selection.selected + retiredMergers.length) },
-    unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
+      matched: Math.max(snapshot.selection.matched, snapshot.selection.selected + retiredMergers.length)
+        + (retiredCandidates.overflow ? 1 : 0),
+      ...(retiredCandidates.overflow ? { unreadable: snapshot.selection.unreadable + 1 } : {}) },
+    unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected) + (retiredCandidates.overflow ? 1 : 0),
     undescribedHostCount: unrepresented.length,
     measurements: { owners: owners.length, foldedConversations: [...folded.values()].filter(pids => pids.size > 1).length },
   };
@@ -348,10 +354,11 @@ export function capturedBatch(directory: string, registry: RegistryFile, id: Che
   } finally { db.close(); }
 }
 
-export async function runCensus(targetRevision: string, remainingMs: number, options: { registryDirectory?: string } = {}) {
+export async function runCensus(targetRevision: string, remainingMs: number, options: { registryDirectory?: string; cutBoundary?: string } = {}) {
   const started = performance.now();
   if (!process.env.LLV_STATE_DIR || !path.isAbsolute(process.env.LLV_STATE_DIR) || process.env.LLV_STATE_OWNER) throw new Error("explicit state without an owner required");
   if (!/^[a-f0-9]{40}$/.test(targetRevision) || !Number.isFinite(remainingMs) || remainingMs <= 0 || remainingMs > 30000) throw new Error("capture bound unavailable");
+  if (options.cutBoundary !== undefined && !Number.isFinite(Date.parse(options.cutBoundary))) throw new Error("capture boundary unavailable");
   const directory = process.env.LLV_STATE_DIR;
   if (!fs.statSync(directory).isDirectory()) throw new Error("state directory unavailable");
   const filename = path.join(options.registryDirectory ?? directory, "agent-registry.json");
@@ -373,7 +380,7 @@ export async function runCensus(targetRevision: string, remainingMs: number, opt
       describeTranscript: censusDescriber(registry.file),
       pipelines: Object.assign(() => [], { forLiveness: async (targets: { conversationId: string | null; path: string }[]) => targets.map(target => historyPipelineRef(memory, target.conversationId, target.path)) }),
       flows: () => references!.flows as Flow[],
-    }, registry.revision, targetRevision, remainingMs, (file, id) => capturedBatch(directory, file, id));
+    }, registry.revision, targetRevision, remainingMs, (file, id) => capturedBatch(directory, file, id), options.cutBoundary);
     const io = fs.readFileSync("/proc/self/io", "utf8");
     const status = fs.readFileSync("/proc/self/status", "utf8");
     return { ...answer, measurements: { ...answer.measurements, wallMs: performance.now() - started,
@@ -384,7 +391,7 @@ export async function runCensus(targetRevision: string, remainingMs: number, opt
 
 if (import.meta.main) {
   try {
-    const answer = await runCensus(process.argv[2] ?? "", Number(process.argv[3]));
+    const answer = await runCensus(process.argv[2] ?? "", Number(process.argv[3]), { cutBoundary: process.argv[4] });
     const output = JSON.stringify(answer);
     if (Buffer.byteLength(output) > MAX_OUTPUT) throw new Error("census output oversized");
     process.stdout.write(output + "\n");

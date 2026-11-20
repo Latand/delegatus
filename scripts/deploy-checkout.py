@@ -81,13 +81,16 @@ def census_environment(state):
     return environment
 
 
-def protected_host_census(release, bun, state, target, timeout):
+def protected_host_census(release, bun, state, target, timeout, cut_boundary=None):
     """One owned child, bounded by the capture's remaining wall-clock allowance."""
     if not 0 < timeout <= 30:
         raise RuntimeError("census deadline")
     deadline = time.monotonic() + timeout
-    child = subprocess.Popen([bun, "--no-env-file", str(release / "scripts/protected-host-census.ts"), target,
-                              str(max(0, int(timeout * 1000)))], cwd=release,
+    command = [bun, "--no-env-file", str(release / "scripts/protected-host-census.ts"), target,
+               str(max(0, int(timeout * 1000)))]
+    if cut_boundary is not None:
+        command.append(cut_boundary)
+    child = subprocess.Popen(command, cwd=release,
                              env=census_environment(state), stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
     data = bytearray()
@@ -975,8 +978,9 @@ class Checkout:
     def close(self):
         self.mcp.close()
 
-    def census(self, timeout=30):
-        return self.census_adapter(self.release, self.plan["bun"], self.state, self.target, timeout)
+    def census(self, timeout=30, cut_boundary=None):
+        arguments = (self.release, self.plan["bun"], self.state, self.target, timeout)
+        return self.census_adapter(*arguments) if cut_boundary is None else self.census_adapter(*arguments, cut_boundary)
 
     def process(self, entry):
         return read_process(entry, self.process_read)
@@ -1066,29 +1070,17 @@ class Checkout:
         destination = self.state / CHECKOUT_MERGER_CAPTURE
         captured_at = getattr(self, "merger_observed_at", utc())
         cutoff = parse_time(captured_at) - datetime.timedelta(seconds=CHECKOUT_MERGER_WINDOW_SECONDS)
-        captures = {}
+        previous_rows = []
         try:
             with destination.open() as stream:
                 previous = json.loads(stream.read(512 * 1024 + 1))
             if not isinstance(previous, list) or len(previous) > CHECKOUT_MERGER_LIMIT:
                 raise RuntimeError("standalone merger inventory is malformed")
-            captures = {row["conversationId"]: row for row in previous if parse_time(row["capturedAt"]) >= cutoff}
+            previous_rows = previous
         except FileNotFoundError:
             pass
         boundary = getattr(self, "merger_boundary", None) or "checkout-merger:" + uuid.uuid4().hex
         self.merger_boundary = boundary
-        for host in hosts:
-            captures[host["conversationId"]] = {**host["merger"], "capturedAt": captured_at, "boundary": boundary,
-                                                 "admissionProof": "fresh-cut-v1"}
-        if len(captures) > CHECKOUT_MERGER_LIMIT:
-            raise RuntimeError("standalone merger inventory exceeds its bound")
-        inventory = list(captures.values())
-        serialized = json.dumps(inventory, indent=2) + "\n"
-        if len(serialized.encode("utf-8")) > CHECKOUT_MERGER_MAX_BYTES:
-            raise RuntimeError("standalone merger inventory exceeds reader byte limit")
-        # Validate the complete successor schema against the exact bytes before
-        # any stop is submitted.
-        decoded = json.loads(serialized)
         def valid_identity(identity):
             return (isinstance(identity, dict) and type(identity.get("pid")) is int and identity["pid"] > 0
                     and isinstance(identity.get("startIdentity"), str) and bool(identity["startIdentity"])
@@ -1109,13 +1101,24 @@ class Checkout:
                     and (batch is None or isinstance(batch, dict) and isinstance(batch.get("directory"), str)
                          and os.path.isabs(batch["directory"]) and isinstance(batch.get("identity"), str)
                          and isinstance(batch.get("branch"), str)))
+        if not all(valid_row(row) for row in previous_rows):
+            raise RuntimeError("standalone merger inventory failed successor validation")
+        captures = {row["conversationId"]: row for row in previous_rows
+                    if parse_time(row["capturedAt"]) >= cutoff}
+        for host in hosts:
+            captures[host["conversationId"]] = {**host["merger"], "capturedAt": captured_at, "boundary": boundary,
+                                                 "admissionProof": "fresh-cut-v1"}
+        if len(captures) > CHECKOUT_MERGER_LIMIT:
+            raise RuntimeError("standalone merger inventory exceeds its bound")
+        inventory = list(captures.values())
+        serialized = json.dumps(inventory, indent=2) + "\n"
+        if len(serialized.encode("utf-8")) > CHECKOUT_MERGER_MAX_BYTES:
+            raise RuntimeError("standalone merger inventory exceeds reader byte limit")
+        decoded = json.loads(serialized)
         if not isinstance(decoded, list) or len(decoded) != len(captures) or not all(valid_row(row) for row in decoded):
             raise RuntimeError("standalone merger inventory failed successor validation")
-        # Even an empty census must prove that the retained successor inventory
-        # is readable before the stop boundary. Keep the existing file intact
-        # when there is no new custody to add.
-        if not hosts:
-            return
+        # Publish the validated bytes even for an empty census so the successor
+        # never inherits malformed or expired inventory.
         write_json(destination, inventory)
 
     def placement(self):
@@ -1843,7 +1846,8 @@ class Checkout:
             # This conservative boundary precedes census observation. A matching
             # stop admitted while the census/inventory is being written stays visible.
             self.merger_observed_at = utc()
-            self.custody_rows = complete_activity(self.census())
+            self.merger_cut_boundary = self.merger_observed_at
+            self.custody_rows = complete_activity(self.census(cut_boundary=self.merger_cut_boundary))
             try:
                 captured = self.generation(group, self.custody_rows)
             except Exception as error:
@@ -1861,9 +1865,14 @@ class Checkout:
             # registry once more while the named stop is pending; keep the
             # same boundary so already recorded owners retain their key.
             try:
-                late_rows = complete_activity(self.census())
+                late_rows = complete_activity(self.census(cut_boundary=self.merger_cut_boundary))
                 known = {row.get("conversationId"): row for row in self.custody_rows}
-                known.update({row.get("conversationId"): row for row in late_rows})
+                for row in late_rows:
+                    conversation = row.get("conversationId")
+                    previous = known.get(conversation)
+                    if previous and previous.get("merger") and not row.get("merger"):
+                        continue
+                    known[conversation] = row
                 self.custody_rows = list(known.values())
                 self.arm_merger_recovery()
             except Exception as error:

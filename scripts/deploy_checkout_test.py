@@ -892,7 +892,7 @@ class CheckoutIntegration(unittest.TestCase):
             "evidenceSource": "transcript", "pipeline": None} for n in range(150)]
         rows[0]["merger"]["conversationId"] = rows[0]["conversationId"] = "conversation_fixture"
         self.adapter.merger_observed_at = deploy.utc()
-        self.adapter.census = lambda *args: {"conversations": rows, "unselectedCount": 0,
+        self.adapter.census = lambda *args, **kwargs: {"conversations": rows, "unselectedCount": 0,
             "selection": {"matched": len(rows), "selected": len(rows), "recoveryPending": 0,
                 "recoveryTruncated": False, "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}
         self.adapter.placement = lambda: {"actual": self.service_group, "expected": self.service_group}
@@ -979,7 +979,7 @@ class CheckoutIntegration(unittest.TestCase):
 
     def test_empty_census_still_validates_retained_successor_inventory_before_stop(self):
         destination = self.state / deploy.CHECKOUT_MERGER_CAPTURE
-        destination.write_text('[{"conversationId":"conversation_bad"}]')
+        destination.write_text(json.dumps([{"conversationId": "conversation_bad", "engine": "codex", "sessionId": "old", "path": str(self.root / "old.jsonl"), "claimEpoch": 2, "process": {"pid": 104, "startIdentity": "104:104", "bootEpoch": "fixture-boot"}, "writer": {"pid": "bad", "startIdentity": "invalid"}, "batch": None, "capturedAt": (deploy.parse_time(deploy.utc()) - deploy.datetime.timedelta(minutes=16)).isoformat(), "boundary": "checkout-merger:" + "a" * 32}]))
         self.inventory_overrides = {"conversations": []}
         self.adapter.placement = lambda: {"actual": self.service_group, "expected": self.service_group}
         self.adapter.generation = lambda group, rows=None: {}
@@ -987,6 +987,20 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertFalse(result["relocation"]["stopSubmitted"])
         self.assertEqual(self.service_commands(), [])
         self.assertEqual(result["verdict"], "fail")
+
+    def test_empty_census_atomically_expires_a_valid_legacy_inventory(self):
+        legacy = {"conversationId": "conversation_legacy", "engine": "codex", "sessionId": "old",
+                  "path": str(self.root / "old.jsonl"), "claimEpoch": 2,
+                  "process": {"pid": 104, "startIdentity": "104:104", "bootEpoch": "fixture-boot"},
+                  "writer": None, "batch": None,
+                  "capturedAt": (deploy.parse_time(deploy.utc()) - deploy.datetime.timedelta(minutes=16)).isoformat(),
+                  "boundary": "checkout-merger:" + "a" * 32}
+        destination = self.state / deploy.CHECKOUT_MERGER_CAPTURE
+        destination.write_text(json.dumps([legacy]))
+        self.adapter.custody_rows = []
+        self.adapter.merger_observed_at = deploy.utc()
+        self.adapter.arm_merger_recovery()
+        self.assertEqual(json.loads(destination.read_text()), [])
 
     def test_future_previous_merger_cut_refuses_stop_before_successor_inventory_write(self):
         conversation = "conversation_clock_step"
@@ -1002,7 +1016,7 @@ class CheckoutIntegration(unittest.TestCase):
         current = {**previous, "conversationId": conversation, "capturedAt": "2026-11-20T00:00:00Z",
                    "boundary": "checkout-merger:" + "b" * 32}
         self.adapter.custody_rows = [{"conversationId": conversation, "merger": current}]
-        self.adapter.census = lambda *args: {"conversations": [{"conversationId": conversation,
+        self.adapter.census = lambda *args, **kwargs: {"conversations": [{"conversationId": conversation,
             "host": {"kind": "structured", "state": "alive", "pid": 104, "process": process},
             "turnState": "busy", "pipeline": None, "evidenceSource": "transcript", "merger": current}],
             "unselectedCount": 0, "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
@@ -1025,14 +1039,59 @@ class CheckoutIntegration(unittest.TestCase):
         self.inventory_overrides = lambda n: {"conversations": [row] if n >= 3 else [],
             "selection": {"matched": 1 if n >= 3 else 0, "selected": 1 if n >= 3 else 0,
                 "recoveryPending": 0, "recoveryTruncated": False}}
+        observed_boundaries = []
+        census = self.adapter.census
+        def bounded_census(timeout=30, cut_boundary=None):
+            observed_boundaries.append(cut_boundary)
+            return census(timeout, cut_boundary)
+        self.adapter.census = bounded_census
         self.recovery_overrides = {"conversations": [{"conversationId": conversation, "turnState": "busy",
             "pipeline": None, "evidenceSource": "transcript", "host": {"kind": "structured", "state": "dead", "pid": 104}}]}
         result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=1, timeout=2)
         cuts = json.loads((self.state / deploy.CHECKOUT_MERGER_CAPTURE).read_text())
         self.assertEqual([cut["conversationId"] for cut in cuts], [conversation])
         self.assertEqual(cuts[0]["admissionProof"], "fresh-cut-v1")
+        self.assertTrue(any(boundary is not None for boundary in observed_boundaries))
         self.assertEqual(result["protected"][0]["outcome"], "unknown")
         self.assertEqual(result["verdict"], "needs_decision")
+
+    def test_weaker_post_stop_observation_keeps_durable_merger_custody(self):
+        conversation = "conversation_weaker_observation"
+        process = {"pid": 104, "startIdentity": "104:104", "bootEpoch": self.adapter.boot_epoch}
+        merger = {"conversationId": conversation, "engine": "codex", "sessionId": "fixture-merger",
+                  "path": str(self.root / "merger.jsonl"), "claimEpoch": 2, "process": process,
+                  "writer": None, "batch": None, "turnState": "busy"}
+        durable = {"conversationId": conversation, "host": {"kind": "structured", "state": "gone",
+                   "pid": 104, "process": process}, "turnState": "busy", "evidenceSource": "transcript",
+                   "pipeline": None, "merger": merger}
+        weak = {"conversationId": conversation, "host": {"kind": "structured", "state": "unknown",
+                "pid": None, "process": None}, "turnState": "unknown", "evidenceSource": "transcript",
+                "pipeline": None, "merger": None}
+        answers = iter([{"conversations": [durable], "unselectedCount": 0,
+                         "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                                       "recoveryTruncated": False, "cacheStatus": "fresh", "projected": 0, "unreadable": 0}},
+                        {"conversations": [weak], "unselectedCount": 0,
+                         "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                                       "recoveryTruncated": False, "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}])
+        self.adapter.census = lambda *args, **kwargs: next(answers)
+        self.adapter.custody_rows = [durable]
+        self.adapter.merger_observed_at = deploy.utc()
+        self.adapter.placement = lambda: {"actual": self.service_group, "expected": self.service_group}
+        self.adapter.generation = lambda group, rows=None: {}
+        self.adapter.await_release = lambda group, timeout: True
+        self.adapter.command = lambda command, cwd=None: ""
+        self.adapter.jobs = lambda: []
+        self.adapter.active_state = lambda: "inactive"
+        self.adapter.start = lambda relocation: relocation.update({"started": True, "startAttempts": 1})
+        self.adapter.emit = lambda event: None
+        result = self.adapter.relocate()
+        protected, = self.adapter.merger_hosts(self.adapter.custody_rows)
+        self.assertEqual(protected["conversationId"], conversation)
+        self.adapter.mcp.call = lambda tool, args: {"conversations": [weak], "unselectedCount": 0,
+            "selection": {"matched": 1, "selected": 1, "recoveryPending": 0, "recoveryTruncated": False,
+                          "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}
+        self.assertEqual(self.adapter.stage(protected)["outcome"], "unknown")
+        self.assertEqual(result["outcome"], "released")
 
     def test_final_census_failure_leaves_the_original_service_running(self):
         self.inventory_overrides = lambda n: {"undescribedHostCount": 1} if n > 1 else {}
