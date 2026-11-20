@@ -194,6 +194,16 @@ test("the control sits on its own row in the Full autonomy section, above the wa
   expect(order).toEqual(["autonomy", "wakes"]);
 });
 
+test("the duration and the wakes hint sit under the autonomy toggle, above Turbo's row", async () => {
+  const root = await mountOpen();
+  click(q("[data-seat-tick-autonomy-enabled]"));
+  await settle(root);
+  const section = q("[data-seat-tick-autonomy-section]")!;
+  const order = [...section.querySelectorAll("[data-seat-tick-autonomy-enabled], [data-seat-tick-autonomy-about], [data-seat-tick-autonomy-duration], [data-seat-tick-autonomy-wakes], [data-turbo-row]")]
+    .map(node => ["data-seat-tick-autonomy-enabled", "data-seat-tick-autonomy-about", "data-seat-tick-autonomy-duration", "data-seat-tick-autonomy-wakes", "data-turbo-row"].find(name => node.hasAttribute(name)));
+  expect(order).toEqual(["data-seat-tick-autonomy-enabled", "data-seat-tick-autonomy-about", "data-seat-tick-autonomy-duration", "data-turbo-row"]);
+});
+
 test("turning on opens the confirmation: what changes, accounts, the separate unticked credit box, Claude, duration 2 h", async () => {
   const root = await mountOpen();
   click(control());
