@@ -14,7 +14,7 @@ const lanes = Array.from({ length: 35 }, (_, index) => ({ id: `outage-lane-${Str
 function recoveryRig(over: Parameters<typeof harness>[0] = {}) {
   const rig = harness({ pipelines: lanes, state: { ...OVERDUE, unreachableSince: FROM,
     reportsOwed: [{ key: "lane:earlier:completed", label: "earlier outcome", receivedAt: FROM }] }, ...over });
-  rig.deps.sources!.reports = { log: () => [], enabled: () => true, operatorLocale: () => "uk" };
+  rig.deps.sources!.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "uk" };
   return rig;
 }
 
@@ -187,7 +187,7 @@ test("a landed catch-up stays acknowledged after a real process restart", async 
     const { harness, runSeatTickCheck, PROJECT, NOW } = await import(${JSON.stringify(path.join(import.meta.dir, "seatTickController.fixture.ts"))});
     test("restart", async () => {
       const rig = harness({ stateFile: ${JSON.stringify(stateFile)}, pipelines: ${JSON.stringify(lanes)}, now: NOW });
-      rig.deps.sources.reports = { log: () => [], enabled: () => true, operatorLocale: () => "uk" };
+      rig.deps.sources.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "uk" };
       const before = rig.deps.readState(PROJECT);
       await runSeatTickCheck(PROJECT, rig.deps);
       await Bun.write(${JSON.stringify(resultFile)}, JSON.stringify({ sent: rig.sent.length, before, state: rig.deps.readState(PROJECT) }));
@@ -503,7 +503,7 @@ test("oversized catch-up pages resume their durable cursor and owe a report only
       const { harness, runSeatTickCheck, PROJECT } = await import(${JSON.stringify(path.join(import.meta.dir, "seatTickController.fixture.ts"))});
       test("resume page", async () => {
         const rig = harness({ stateFile: ${JSON.stringify(file)}, pipelines: ${JSON.stringify(many)}, now: ${NOW + page * 61 * MINUTE} });
-        rig.deps.sources.reports = { log: () => [], enabled: () => true, operatorLocale: () => "uk" };
+        rig.deps.sources.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "uk" };
         await runSeatTickCheck(PROJECT, rig.deps);
         await Bun.write(${JSON.stringify(resultFile)}, JSON.stringify({ sent: rig.sent, row: rig.deps.readState(PROJECT) }));
       });`);

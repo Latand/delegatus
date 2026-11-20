@@ -1130,6 +1130,10 @@ export interface SeatTickReportOwed {
   receivedAt: string;
 }
 
+/** Outcome keys discharged from a delivered wake, retained so later agenda
+    changes cannot turn the same parked outcome back into new report debt. */
+export type SeatTickReportAcknowledged = SeatTickReportOwed;
+
 /** Owed outcomes one project's row keeps; past it the oldest are dropped and
     counted (§5.1). */
 export const SEAT_TICK_REPORTS_OWED_LIMIT = 64;
@@ -1150,6 +1154,10 @@ export interface SeatTickReportsInput {
   /** Project-scoped ids of the project's manager reports and of every key
       they name in `covers`. */
   reportedIds: readonly string[];
+  /** Report ids retained after their full rows were retired. */
+  reservedIds?: readonly string[];
+  /** Outcome keys settled by an earlier check and retained in project state. */
+  acknowledgedOutcomeKeys?: readonly string[];
   /** The ids a report filed under `key` may carry: scoped by the project, and
       by every older key of the project a manager report was filed under. */
   reportIdsFor: (key: string) => readonly string[];
@@ -1341,6 +1349,9 @@ export interface SeatTickProjectState {
   /** Settled outcomes a landed wake announced that the report log has not
       received yet (§5.1). The project's, so a successor inherits them. */
   reportsOwed?: SeatTickReportOwed[];
+  /** Bounded keys already discharged, preventing the same parked outcome
+      from returning when its agenda presentation changes. */
+  reportsAcknowledged?: string[];
   /** Owed outcomes dropped past the bound, which the wake states. */
   reportsOwedDropped?: number;
   /** The newest manager report this tick has observed, and the material

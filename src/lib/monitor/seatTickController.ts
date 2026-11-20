@@ -1760,7 +1760,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     ...(turboShown ? { turboShown } : {}),
     ...(verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-ended") ? { autonomySummaryFor: pendingAutonomyReports(input.settings, input.now)[0]?.startedAt } : {}),
     bridgeReports: input.reports?.bridgeReports === true,
-    reportCoverage: input.reports,
+    reportCoverage: input.reports ? { ...input.reports, acknowledgedOutcomeKeys: input.state.reportsAcknowledged } : undefined,
     frozenText: text,
   });
   return { text, commit: commit!, renderedVerdict };
@@ -2630,7 +2630,7 @@ async function check(
     });
     state = { ...state, wakeDecidedSince: state.wakeDecidedSince ?? state.outstandingWake?.preparedAt ?? at };
     const payloadVerdict = verdict;
-    const { text, commit, renderedVerdict } = withViewerOperation("seat-tick.payload", () => alarmPayload(input, payloadVerdict, proposalIssues, new Date(gathered.now).toISOString()));
+    const { text, commit, renderedVerdict } = withViewerOperation("seat-tick.payload", () => alarmPayload({ ...input, state }, payloadVerdict, proposalIssues, new Date(gathered.now).toISOString()));
     verdict = renderedVerdict;
 
     /* The prompt above came off the settings row this check read, not out of

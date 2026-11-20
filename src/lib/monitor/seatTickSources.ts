@@ -61,7 +61,7 @@ import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 import { scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
-import type { SeatTickReportRow } from "./seatTickReports";
+import type { SeatTickReportLog } from "./seatTickReports";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
@@ -627,7 +627,7 @@ export interface SeatTickSources {
       language (§5.1). Absent: the check keeps no report ledger, as with bridge
       reports off. */
   reports?: {
-    log: (project: string) => readonly SeatTickReportRow[] | Promise<readonly SeatTickReportRow[]>;
+    log: (project: string) => SeatTickReportLog | Promise<SeatTickReportLog>;
     enabled: (project: string) => boolean;
     operatorLocale: () => "en" | "uk" | null;
   };
@@ -895,7 +895,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     reports: {
       log: (project) => withViewerOperation("seat-tick.reports", () => performanceSpans.wait("seat-tick.reports", async () => {
         const { runSeatSourceInWorker } = await import("@/lib/scanner/filesResponseWorker");
-        return JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project })).body) as SeatTickReportRow[];
+        return JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project })).body) as SeatTickReportLog;
       })),
       enabled: (project) => bridgeReportsEnabled(project),
       operatorLocale: () => operatorLocale(),
@@ -954,7 +954,8 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
     /* A row is the project's when its key folds to the project: a seat recorded
        before its folder changed key filed under the old one, and those rows
        still discharge what they covered. */
-    const manager = (await port.log(project)).filter((report) => !!report.project && report.origin?.kind === "manager"
+    const log = await port.log(project);
+    const manager = log.reports.filter((report) => !!report.project && report.origin?.kind === "manager"
       && (report.project === project || canonicalOrchestratorProject(report.project) === project));
     const filedUnder = [...new Set([project, ...manager.map((report) => report.project!)])];
     const reportedIds = new Set<string>();
@@ -971,6 +972,7 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
       operatorLocale: port.operatorLocale(),
       lastReportAt,
       reportedIds: [...reportedIds],
+      reservedIds: log.reservedIds,
       reportIdsFor: (key) => filedUnder.map((filed) => scopedReportId(filed, key)),
       latestCoversOwedAt,
     };

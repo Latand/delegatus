@@ -161,7 +161,7 @@ test("a wake with a deploy and a lane owes one report naming both, in the operat
   ]);
 });
 
-test("a report under the deploy's key clears the deploy only; the next wake still asks for the lane, and a covers entry clears it", () => {
+test("a report under the first key clears every outcome delivered in that wake", () => {
   const first = landed(input({ settledDeploys: [deployed(SHA_A)], ownLanes: [laneSettled("pipeline_l1")] })).state;
   const later = T0 + 70 * MINUTE;
   const next = seatTickDecision(input({
@@ -170,8 +170,7 @@ test("a report under the deploy's key clears the deploy only; the next wake stil
     pipelines: [{ id: "pipeline_open", title: "open lane", state: "active" as const, updatedAt: iso(later), stageActivity: null, stageId: "build" }],
     reports: reports({ lastReportAt: iso(T0 + MINUTE), reportedIds: [idFor("deploy:aaaaaaaa:succeeded")] }),
   }));
-  expect(next.state.reportsOwed!.map((entry) => entry.key)).toEqual(["lane:pipeline_l1:completed"]);
-  expect(wakeOf(next).reportLines![0]).toBe("Report owed, in Ukrainian, before this turn ends: lane pipeline completed. File one report with key lane:pipeline_l1:completed and coversOwed: true.");
+  expect(next.state.reportsOwed).toEqual([]);
 
   const covered = seatTickDecision(input({
     now: later,
@@ -240,6 +239,36 @@ test("a wake credited late: a coversOwed report filed after it reached the seat 
   expect(still.state.reportsOwed).toHaveLength(2);
   /* With no instant on the record, the commit's own instant stands. */
   expect(seatTickWakeCommit(decision.state, plan, T0 + 5 * MINUTE, null).reportsOwed![0]!.receivedAt).toBe(iso(T0 + 5 * MINUTE));
+});
+
+test("a report under one requested wake key settles the complete delivered set without coversOwed", () => {
+  const first = landed(input({ settledDeploys: [deployed(SHA_A)], ownLanes: [laneSettled("pipeline_l1")] })).state;
+  const firstKey = "deploy:aaaaaaaa:succeeded";
+  const secondKey = "lane:pipeline_l1:completed";
+  const settled = seatTickDecision(input({ now: T0 + MINUTE, state: first,
+    reports: reports({ reportedIds: [idFor(firstKey)] }),
+  }));
+  expect(settled.state.reportsOwed).toEqual([]);
+  expect(settled.state.reportsAcknowledged).toEqual([firstKey, secondKey]);
+});
+
+test("coversOwed acknowledgment survives changed agenda presentation and retired key reservations", () => {
+  const firstKey = "lane:pipeline_l1:completed";
+  const secondKey = "lane:pipeline_l2:completed";
+  const initial = landed(input({ ownLanes: [laneSettled("pipeline_l1"), laneSettled("pipeline_l2")] })).state;
+  const coveredAt = iso(T0 + MINUTE);
+  const covered = seatTickDecision(input({ now: T0 + 2 * MINUTE, state: initial,
+    reports: reports({ reportedIds: [idFor(firstKey)], latestCoversOwedAt: coveredAt }),
+  }));
+  expect(covered.state.reportsOwed).toEqual([]);
+  expect(covered.state.reportsAcknowledged).toEqual([firstKey, secondKey]);
+
+  const later = seatTickDecision(input({ now: T0 + 3 * MINUTE, state: covered.state,
+    ownLanes: [laneSettled("pipeline_l1", "completed", T0 + 2 * MINUTE), laneSettled("pipeline_l2", "completed", T0 + 2 * MINUTE), laneSettled("pipeline_l3", "completed", T0 + 2 * MINUTE)],
+    reports: reports({ reservedIds: [idFor(firstKey)], acknowledgedOutcomeKeys: covered.state.reportsAcknowledged }),
+  }));
+  expect(later.state.reportsOwed?.map(entry => entry.key)).not.toContain(firstKey);
+  expect(later.state.reportsAcknowledged).toContain(secondKey);
 });
 
 test("the owed list is bounded: past 64 the oldest go and the wake says how many", () => {

@@ -1728,12 +1728,13 @@ function instant(value: string | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
-type ReportCoverage = Pick<SeatTickReportsInput, "reportedIds" | "reportIdsFor">;
+type ReportCoverage = Pick<SeatTickReportsInput, "reportedIds" | "reportIdsFor"> & { reservedIds?: readonly string[]; acknowledgedOutcomeKeys?: readonly string[] };
 
 function outcomeReported(reports: ReportCoverage | undefined): (key: string) => boolean {
   if (!reports) return () => false;
-  const ids = new Set(reports.reportedIds);
-  return (key) => reports.reportIdsFor(key).some((id) => ids.has(id));
+  const ids = new Set([...reports.reportedIds, ...(reports.reservedIds ?? [])]);
+  const acknowledged = new Set(reports.acknowledgedOutcomeKeys ?? []);
+  return (key) => acknowledged.has(key) || reports.reportIdsFor(key).some((id) => ids.has(id));
 }
 
 /**
@@ -1752,8 +1753,13 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   if (!reports) return state;
   const reported = outcomeReported(reports);
   const coveredThrough = instant(reports.latestCoversOwedAt);
-  const owed = (state.reportsOwed ?? []).filter((entry) => !reported(entry.key)
-    && !(Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));
+  const prior = state.reportsOwed ?? [];
+  const acknowledgedTimes = new Set(prior.filter(entry => reported(entry.key)).map(entry => entry.receivedAt));
+  const cleared = prior.filter(entry => reported(entry.key)
+    || acknowledgedTimes.has(entry.receivedAt)
+    || (Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));
+  const acknowledged = [...new Set([...(state.reportsAcknowledged ?? []), ...cleared.map(entry => entry.key)])].slice(-64);
+  const owed = prior.filter(entry => !cleared.includes(entry));
 
   let reportSeenAt = state.reportSeenAt ?? null;
   // Without a prior board observation, establish a baseline. Signal-only
@@ -1788,6 +1794,7 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   return {
     ...state,
     reportsOwed: owed,
+    reportsAcknowledged: acknowledged,
     reportSeenAt,
     reportFingerprint,
     checkFingerprint: current,
@@ -1859,7 +1866,7 @@ export function seatTickReportLines(
   const language = reports.operatorLocale ? `, in ${LANGUAGE_NAME[reports.operatorLocale]}` : "";
   const lines: string[] = [];
   const owed: { key: string; label: string }[] = [...(state.reportsOwed ?? [])];
-  const reported = outcomeReported(reports);
+  const reported = outcomeReported({ ...reports, acknowledgedOutcomeKeys: state.reportsAcknowledged });
   for (const outcome of seatTickOwedOutcomes(items)) {
     if (!reported(outcome.key) && !owed.some((entry) => entry.key === outcome.key)) owed.push(outcome);
   }

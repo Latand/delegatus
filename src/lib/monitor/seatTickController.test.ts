@@ -1035,11 +1035,11 @@ test("a recorded wake report settles its delivered set and its key is skipped on
         return { ok: true, messageIds: [70 + sends.length] };
       },
     }), receipts, { permit: () => ({ allowed: true }) });
-    const fileReport = async (key: string, clientRequestId: string, now: number) => {
+    const fileReport = async (key: string, clientRequestId: string, now: number, coversOwed = true) => {
       setSystemTime(new Date(now));
       try {
         return await service().callTool("bridge_report", {
-          key, clientRequestId, class: "status", summary: "Reviewed the delivered lane outcomes.", coversOwed: true,
+          key, clientRequestId, class: "status", summary: "Reviewed the delivered lane outcomes.", coversOwed,
         });
       } finally {
         setSystemTime();
@@ -1065,7 +1065,7 @@ test("a recorded wake report settles its delivered set and its key is skipped on
     expect(state().reportsOwed?.map(entry => entry.key)).toEqual([firstKey, secondKey]);
     expect(state().announcedLanes).toEqual(["park-first:needs_decision", "park-second:needs_decision"]);
 
-    const filed = await fileReport(firstKey, "first-wake-report", NOW + MINUTE);
+    const filed = await fileReport(firstKey, "first-wake-report", NOW + MINUTE, false);
     expect(filed).toMatchObject({ recorded: true, replayed: false, seq: 1,
       destinations: { telegram: { state: "sent", messageIds: [71] } } });
     expect(readBridgeReportLog().reports[0]).toMatchObject({
