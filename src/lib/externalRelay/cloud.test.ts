@@ -840,14 +840,13 @@ for (const state of ["matching", "foreign", "deleted", "reassigned", "missing-cw
     const dispatch = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, deps) => {
       admitted++;
       request.admissionGuard?.();
-      expect(await deps?.idleContinuationAllowed?.()).toBe(true);
+      expect(deps?.idleContinuationAllowed).toBeUndefined();
       // This seam represents queued admission followed by the transport callback.
       await Promise.resolve();
       if (state === "dispatch-reassigned") replaceRepository();
       if (state === "dispatch-generation") record.generations.push({ ...record.generations[0]!, id: "generation_peer" });
       if (state.startsWith("dispatch-")) {
         expect(() => deps?.authorizeDispatch?.()).toThrow(OwnerContinuationRefused);
-        expect(await deps?.idleContinuationAllowed?.()).toBe(false);
         expect(() => request.recoveryAuthorityGuard?.()).toThrow(OwnerContinuationRefused);
         return { ok: false, structured: true, outcome: "failed", status: 409, admission: "refused", error: "automatic continuation unavailable" };
       }

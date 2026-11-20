@@ -461,6 +461,7 @@ export const en = {
   "externalRelay.answers.took": "Took",
   "externalRelay.answers.seconds": "{seconds} s",
   "externalRelay.answers.answeredWith": "Answered with",
+  "externalRelay.answers.diagnostic": "Diagnostic",
   "externalRelay.answers.outcome": "Outcome",
   "externalRelay.answers.delivery": "Service",
   "externalRelay.answers.delivery.accepted": "Received the result",
