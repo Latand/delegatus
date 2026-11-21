@@ -27,7 +27,6 @@ CPU_SLICE = "delegatus.slice"
 CPU_WEIGHT = "1000"
 SAMPLE_TIMEOUT = 180
 PROTECTED_READERS = 4
-SAMPLE_RETRY_INTERVAL = 10
 
 
 def census_identity(value):
@@ -410,37 +409,28 @@ class EvidenceSample:
 
 
 def evidence_frames(adapter, kind, inputs, deadline):
-    """Read-only work in one lane. Each host gets a first read before retries."""
+    """Read each captured host once. An inconclusive result remains visible until a fresh sample."""
     clock = adapter.clock
     if clock.now() >= deadline:
         return
     if kind == "protected":
-        pending = inputs
-        while pending and clock.now() < deadline:
-            remaining = []
-            for index, host in pending:
-                if clock.now() >= deadline:
-                    return
-                yield "reading", index
-                if clock.now() >= deadline:
-                    return
-                try:
-                    if host.get("startIdentity") and process_or_gone(adapter, host) is not None:
-                        outcome = {"outcome": "preserved", "attempt": host["attempt"]}
-                    else:
-                        outcome = adapter.stage(host)
-                except Exception as error:
-                    outcome = {"outcome": "unknown", "reason": "protected-read:" + type(error).__name__}
-                if clock.now() >= deadline:
-                    return
-                yield "protected", [index, outcome]
-                if outcome["outcome"] == "unknown":
-                    remaining.append((index, host))
-            pending = remaining
-            if pending and clock.now() + SAMPLE_RETRY_INTERVAL < deadline:
-                clock.sleep(SAMPLE_RETRY_INTERVAL)
-            else:
+        stage = adapter.protected_stage_reader() if hasattr(adapter, "protected_stage_reader") else adapter.stage
+        for index, host in inputs:
+            if clock.now() >= deadline:
                 return
+            yield "reading", index
+            if clock.now() >= deadline:
+                return
+            try:
+                if host.get("startIdentity") and process_or_gone(adapter, host) is not None:
+                    outcome = {"outcome": "preserved", "attempt": host["attempt"]}
+                else:
+                    outcome = stage(host)
+            except Exception as error:
+                outcome = {"outcome": "unknown", "reason": "protected-read:" + type(error).__name__}
+            if clock.now() >= deadline:
+                return
+            yield "protected", [index, outcome]
     elif kind == "interrupted":
         try:
             answer = adapter.interrupted(*inputs)
@@ -672,8 +662,14 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
         numbered = list(enumerate(hosts))
         offset = index % len(numbered)
         numbered = numbered[offset:] + numbered[:offset]
-        lanes.extend(("protected", numbered[i::PROTECTED_READERS], protected_cutoff)
-                     for i in range(min(len(hosts), PROTECTED_READERS)))
+        # Keep a pipeline on one reader so all its stages use the same observed runs.
+        by_pipeline = {}
+        for row in numbered:
+            by_pipeline.setdefault(row[1].get("pipelineId") or ("unbound", row[0]), []).append(row)
+        groups = [[] for _ in range(min(len(by_pipeline), PROTECTED_READERS))]
+        for group, rows in enumerate(by_pipeline.values()):
+            groups[group % len(groups)].extend(rows)
+        lanes.extend(("protected", group, protected_cutoff) for group in groups)
     # Serving and protected evidence share the sample cutoff. Running them in
     # one bounded batch prevents slow stage reads from starving serving proof.
     serving_inputs = [old, target] if wait_for_target else [old, target, False]
@@ -1521,7 +1517,7 @@ class Checkout:
     def census(self, timeout=30):
         return self.census_adapter(self.release, self.plan["bun"], self.state, self.target, timeout)
 
-    def read_host_census(self, _conversation_id):
+    def read_host_census(self):
         return self.census()
 
     def process(self, entry):
@@ -2828,11 +2824,49 @@ class Checkout:
             raise RuntimeError("named service start refused")
         return relocation
 
+    def protected_stage_reader(self):
+        """One worker/sample owns these observations. Process identity is checked again for each captured host."""
+        pipelines = {}
+        census = None
+
+        def runs(pipeline_id):
+            if pipeline_id not in pipelines:
+                try:
+                    answer = self.mcp.call("get_pipeline", {"pipelineId": pipeline_id, "full": True})
+                    pipelines[pipeline_id] = (answer["pipeline"]["runs"], None)
+                except Exception as error:
+                    pipelines[pipeline_id] = (None, "pipeline-unavailable:" + type(error).__name__)
+            return pipelines[pipeline_id]
+
+        def hosts():
+            nonlocal census
+            if census is None:
+                try:
+                    result = self.read_host_census()
+                except Exception as error:
+                    census = (None, "census-unavailable:" + type(error).__name__)
+                else:
+                    try:
+                        by_conversation = {}
+                        for row in complete_census(result):
+                            by_conversation.setdefault(row.get("conversationId"), []).append(row)
+                        census = (by_conversation, None)
+                    except Exception:
+                        census = (None, "census-incomplete")
+            return census
+
+        return lambda host: self.observed_stage(host, runs, hosts)
+
     def stage(self, host):
+        return self.protected_stage_reader()(host)
+
+    def observed_stage(self, host, read_runs, read_hosts):
         outcome = {"outcome": "unknown"}
+        runs, reason = read_runs(host["pipelineId"])
+        if reason:
+            return {**outcome, "reason": reason}
         try:
-            answer = self.mcp.call("get_pipeline", {"pipelineId": host["pipelineId"], "full": True})
-            run = next((r for r in answer["pipeline"]["runs"] if r["stageId"] == host["stageId"]), None)
+            run = next((r for r in runs if r["stageId"] == host["stageId"]), None)
             attempts = run["attempts"] if run else []
             current = max((a for a in attempts if not a.get("historical")), key=lambda a: a["n"], default={})
         except Exception as error:
@@ -2849,15 +2883,10 @@ class Checkout:
             if not conversation:
                 return {**outcome, "reason": "stage-conversation-pending"}
             outcome["observedConversationId"] = conversation
-            try:
-                result = self.read_host_census(conversation)
-            except Exception as error:
-                return {**outcome, "reason": "census-unavailable:" + type(error).__name__}
-            try:
-                rows = complete_census(result)
-            except Exception:
-                return {**outcome, "reason": "census-incomplete"}
-            matches = [row for row in rows if row.get("conversationId") == conversation]
+            rows, reason = read_hosts()
+            if reason:
+                return {**outcome, "reason": reason}
+            matches = rows.get(conversation, [])
             if len(matches) != 1:
                 return {**outcome, "reason": "census-unmatched"}
             activity = matches[0]
