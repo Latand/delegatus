@@ -134,6 +134,15 @@ function semantic(row: AgentProjection): string {
   return JSON.stringify([row.subject, row.entryKey, row.conversationId, facts, row.verdict.state, row.verdict.reason,
     row.verdict.stuck, row.verdict.missing, row.divergence, row.divergenceKey, row.rssBytes, row.publishable]);
 }
+/** Inputs exposed by the board that can change even while the session stays idle. */
+function boardFacts(row: AgentProjection): string {
+  const { transcript, obligations, attention } = row.facts;
+  return JSON.stringify([row.conversationId, row.entryKey,
+    transcript.determined ? transcript.value.artifact : null,
+    obligations.determined ? obligations.value : null, attention.determined ? attention.value : null,
+    row.verdict.state, row.verdict.quality, row.verdict.reason, row.verdict.stuck]);
+}
+
 /** The repair, conversation axis, journal and totals have one commit boundary. */
 export function commitAgentObservation(registry: AgentRegistry, observation: StateObservation, guard: () => boolean): AgentProjection | null {
   return registry.agentStateWrite(file => {
@@ -174,6 +183,8 @@ export function commitAgentObservation(registry: AgentRegistry, observation: Sta
     next.revision = metrics.revision;
     next.verdict.projectionRevision = next.revision;
     next.pendingPublication = next.conversationId !== null && next.publishable !== false;
+    next.pendingFilesRevision = !old || old.publishable === false || (old.pendingPublication && old.pendingFilesRevision !== false)
+      || boardFacts(old) !== boardFacts(next);
     const journal: AgentStateJournal = { ...observation.journal, from: old?.verdict.state ?? null, to: next.verdict.state,
       conversationId: next.conversationId, entryKey: next.entryKey,
       effectiveAt: next.facts.turn.determined ? next.facts.turn.value.at : null,
@@ -212,11 +223,22 @@ export function readAgentStatePage(registry: AgentRegistry, collection: "agentSt
     return { rows: keys.map(key => copyAgentStateRow(file[collection][key])), nextCursor: keys.length === limit ? keys.at(-1) : null };
   });
 }
+/** A status transition noticed at the runtime owner must survive a failed files publication. */
+export function requireAgentFilesRevision(registry: AgentRegistry, subject: string, revision: number): boolean {
+  return registry.agentStateWrite(file => {
+    const row = file.agentStates[subject];
+    if (!row || row.revision !== revision || !row.pendingPublication) return false;
+    row.pendingFilesRevision = true;
+    return true;
+  });
+}
+
 export function acknowledgeAgentProjection(registry: AgentRegistry, subject: string, revision: number, at = Date.now()): boolean {
   return registry.agentStateWrite(file => {
     const row = file.agentStates[subject];
     if (!row || row.revision !== revision || !row.pendingPublication) return false;
     row.pendingPublication = false;
+    row.pendingFilesRevision = false;
     const metrics = file.agentStateMetrics.current;
     if (metrics) { metrics.pendingProjectionPublications = Math.max(0, metrics.pendingProjectionPublications - 1); metrics.revision++; metrics.at = at; }
     return true;
