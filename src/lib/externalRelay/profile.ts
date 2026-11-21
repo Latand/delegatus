@@ -26,7 +26,7 @@ export function effectiveRequester(request: ExternalRelayRequest): ExternalRelay
     can_delete_messages: false, is_owner: false, is_anonymous_admin: false });
   if (!trigger || trigger.author.self) return member(requester.key);
   if (requester.key !== trigger.author.key) return member(trigger.author.key);
-  if (requester.is_owner && !requesterIsVerifiedOwner(request)) return { ...requester, is_owner: false };
+  if (requester.is_owner && !requesterIsVerifiedOwner(request)) return member(trigger.author.key);
   return requester;
 }
 /** Only the triggering message authored by the service-identified owner grants host access. */

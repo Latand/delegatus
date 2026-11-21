@@ -68,9 +68,12 @@ test("owner requester projection requires an authored, non-anonymous trigger", (
       ? { ...message, author: { ...message.author, self: true } } : message) } },
     { input: { ...valid.input, requester: { ...valid.input.requester!, is_anonymous_admin: true } } },
   ]) {
-    const hostile = { ...valid, ...change } as ExternalRelayRequest;
+    const hostile = { ...valid, ...change, input: { ...valid.input, ...change.input,
+      requester: { ...valid.input.requester!, is_admin: true, can_restrict_members: true, can_delete_messages: true, is_owner: true,
+        ...change.input?.requester } } } as ExternalRelayRequest;
     expect(ownerTierFor({ ownerTier: true }, hostile)).toBeNull();
-    expect(effectiveRequester(hostile)?.is_owner).toBe(false);
+    expect(effectiveRequester(hostile)).toMatchObject({ is_owner: false, is_admin: false,
+      can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false });
   }
 });
 

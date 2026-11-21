@@ -142,20 +142,25 @@ test("conflicting owner metadata cannot select an owner chain, while the verifie
   expect(prompt).toContain('"is_owner":false');
 });
 
-test("async downgraded photo reservation pins the verified member for the next reply", async () => {
+for (const asyncReservation of [false, true]) test(`${asyncReservation ? "async" : "sync"} downgraded photo reservation pins the verified member for the next reply`, async () => {
   const photo = request("photo", "root");
   photo.input.conversation.unshift({ ...request().input.conversation[0]!, id: "root", reply_to: null });
   photo.input.conversation[1]!.author.key = "member-key";
   photo.input.requester = { ...photo.input.requester!, is_owner: true, is_admin: true };
-  const first = await reserveChainConversationAsync(relay, target, photo, "member", Date.now() + 5000);
+  const first = asyncReservation
+    ? await reserveChainConversationAsync(relay, target, photo, "member", Date.now() + 5000)
+    : reserveChainConversation(relay, target, photo, "member");
   expect(first?.requesterKey).toBe("member-key");
-  await releaseConversationAsync(first!.id, {}, Date.now() + 5000, "photo");
+  if (asyncReservation) await releaseConversationAsync(first!.id, {}, Date.now() + 5000, "photo");
+  else releaseConversation(first!.id);
 
   const reply = request("reply", "photo");
   reply.input.conversation.unshift(...photo.input.conversation);
   reply.input.conversation.at(-1)!.author.key = "member-key";
   reply.input.requester = { ...photo.input.requester!, key: "member-key", is_owner: false, is_admin: false };
-  const next = await reserveChainConversationAsync(relay, target, reply, "member", Date.now() + 5000);
+  const next = asyncReservation
+    ? await reserveChainConversationAsync(relay, target, reply, "member", Date.now() + 5000)
+    : reserveChainConversation(relay, target, reply, "member");
   expect(next?.id).toBe(first?.id);
   expect(next?.requesterKey).toBe("member-key");
 });

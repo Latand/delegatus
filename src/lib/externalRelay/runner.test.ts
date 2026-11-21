@@ -1582,11 +1582,11 @@ test("the member limit declines a member past it, per chat, and never counts the
   const script = stub(
     `const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`,
   );
-  const ask = (n: number, requester: Record<string, unknown> | null, chat = "chat_key_aaaaaaaaaaaa", target?: Partial<PairedRelay["targets"][number]>) => {
+  const ask = (n: number, requester: Record<string, unknown> | null, chat = "chat_key_aaaaaaaaaaaa", target?: Partial<PairedRelay["targets"][number]>, triggerAuthorKey?: string) => {
     const paired = relay(`${server.origin}/v1`);
     paired.targets[0] = { ...paired.targets[0]!, id: "target_limit", memberLimitPerHour: 2, ...target };
     const conversation = sampleRequest.input.conversation.map(message => requester
-      ? { ...message, author: { ...message.author, key: requester.key as string } } : message);
+      ? { ...message, author: { ...message.author, key: triggerAuthorKey ?? requester.key as string } } : message);
     return runClaimedRequest(paired, {
       ...sampleRequest, request_id: `rq_limit_${n}`, target_id: paired.targets[0]!.id, chat: { key: chat },
       input: { ...sampleRequest.input, conversation, requester },
@@ -1609,6 +1609,9 @@ test("the member limit declines a member past it, per chat, and never counts the
     expect(await ask(4, member, "chat_key_bbbbbbbbbbbb")).toMatchObject({ outcome: "answered" });
     expect(await ask(5, { ...member, is_admin: true })).toMatchObject({ outcome: "answered" });
     expect(await ask(6, { ...member, is_owner: true })).toMatchObject({ outcome: "answered" });
+    const spoofedOwner = { ...member, key: "claimed-owner", is_admin: true, is_owner: true };
+    expect(await ask(15, member, "chat_key_cccccccccccc", { memberLimitPerHour: 1 })).toMatchObject({ outcome: "answered" });
+    expect(await ask(16, spoofedOwner, "chat_key_cccccccccccc", { memberLimitPerHour: 1 }, member.key)).toMatchObject({ outcome: "declined", reason: "member_limit" });
     // Another member is not affected; 0 and null are no limit; no requester block is never counted.
     expect(await ask(7, { ...member, key: "u_other" })).toMatchObject({ outcome: "answered" });
     expect(await ask(8, member, undefined, { memberLimitPerHour: 0 })).toMatchObject({ outcome: "answered" });
@@ -1620,7 +1623,7 @@ test("the member limit declines a member past it, per chat, and never counts the
     expect(await ask(12, { ...member, is_owner: true }, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "answered" });
     expect(await ask(13, member, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "answered" });
     expect(await ask(14, member, roleChangeChat, { memberLimitPerHour: 1 })).toMatchObject({ outcome: "declined", reason: "member_limit" });
-    expect(completions.filter((body) => body.reason === "member_limit")).toHaveLength(2);
+    expect(completions.filter((body) => body.reason === "member_limit")).toHaveLength(3);
   } finally {
     await server.close();
   }
