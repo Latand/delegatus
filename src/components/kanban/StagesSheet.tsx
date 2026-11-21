@@ -268,7 +268,7 @@ export function StagesSheet(props: {
       {model.rules.some((rule) => !rule.carried) ? (
         <ul className="gs-rules" aria-label={t("kanban.stages.rules")}>
           {model.rules.filter((rule) => !rule.carried).map((rule) => (
-            <li key={rule.id} className="gs-rule" data-rule={rule.id} data-rule-shape={rule.shape} data-arc-state={arcs.get(rule.id)?.state ?? "rest"}>
+            <li key={rule.id} className="gs-rule" data-rule={rule.id} data-rule-shape={rule.shape} data-rule-back={rule.back ? "1" : undefined} data-arc-state={arcs.get(rule.id)?.state ?? "rest"}>
               <span aria-hidden="true">↺ </span>{ruleText(t, rule, arcs.get(rule.id), names)}
             </li>
           ))}
@@ -387,7 +387,8 @@ function ruleText(t: ReturnType<typeof useLocale>["t"], rule: StageRule, arc: Lo
   const from = names.get(rule.from) ?? rule.from;
   const to = names.get(rule.to) ?? rule.to;
   if (arc && arc.state !== "rest") return arcTitle(t, arc, from, to);
-  return t(rule.shape === "self" ? "kanban.stages.ruleRetry" : "kanban.stages.ruleRest", { from, to, fired: rule.fired, max: rule.max });
+  const key = rule.shape === "self" ? "kanban.stages.ruleRetry" : rule.back ? "kanban.stages.ruleRest" : "kanban.stages.ruleOn";
+  return t(key, { from, to, fired: rule.fired, max: rule.max });
 }
 
 /** One tab: a step, or the stage that only runs when another fails, as a subordinate tab in its source's cell. */

@@ -7974,7 +7974,7 @@ describe("redesign S2 the Stages window as tabs", () => {
    *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "redesign S2"
    *
    * Every shape is opened at 1440 and 1100 px (the strip's row layout) and at
-   * 1099 and 820 px (its grid) in English and Ukrainian, light and dark; the
+   * 1099, 820, 760 and 700 px (its grid, narrowest before the phone rules) in English and Ukrainian, light and dark; the
    * popover, the graph, a conditional tab and a detached tab are framed on the
    * lanes that have them. Gated, from text ranges: every tab name whole and
    * never ellipsized; no scroller in the strip; the waits-on line whole on the
@@ -8028,7 +8028,7 @@ describe("redesign S2 the Stages window as tabs", () => {
       stripScrolls: strip ? strip.scrollWidth > strip.clientWidth + 1 : false,
       waits: waits ? { text: waits.textContent ?? "", cut: cut(waits, box), height: Math.round(waits.getBoundingClientRect().height) } : null,
       pop: pop ? { text: pop.textContent ?? "", inHead: Boolean(header && pop.getBoundingClientRect().top >= header.getBoundingClientRect().top - 1 && pop.getBoundingClientRect().bottom <= (waits?.getBoundingClientRect().bottom ?? 0) + pop.getBoundingClientRect().height + 8), cut: cut(pop, box) } : null,
-      rules: [...sheet.querySelectorAll<HTMLElement>(".gs-rule")].map((rule) => ({ text: rule.textContent ?? "", cut: cut(rule, box) || rule.scrollWidth > rule.clientWidth + 1 })),
+      rules: [...sheet.querySelectorAll<HTMLElement>(".gs-rule")].map((rule) => ({ text: rule.textContent ?? "", cut: cut(rule, box) || rule.scrollWidth > rule.clientWidth + 1, arc: rule.dataset.arcState ?? "rest", back: rule.dataset.ruleBack === "1", shape: rule.dataset.ruleShape ?? "" })),
       panels: sheet.querySelectorAll('[role="tabpanel"]').length,
       panes: sheet.querySelectorAll(".pane").length,
       readers: sheet.querySelectorAll("[data-kanban-reader]").length,
@@ -8056,6 +8056,11 @@ describe("redesign S2 the Stages window as tabs", () => {
     if (read.readers > 1) failures.push(`${frame}: ${read.readers} readers mounted`);
     if (Math.abs(read.paneWidth - read.lane) > 26) failures.push(`${frame}: the pane spans ${read.paneWidth} of ${read.lane}`);
     if (read.titleCut) failures.push(`${frame}: the title is cut`);
+    /* A rule at rest says «back to» only for a target that reads earlier; a conditional or detached stage after its source is forward. */
+    for (const rule of read.rules) {
+      if (rule.arc === "rest" && !rule.back && rule.shape !== "self" && /back to|назад до/.test(rule.text)) failures.push(`${frame}: a forward rule reads «back»: ${rule.text}`);
+      if (rule.arc === "rest" && rule.back && rule.shape !== "self" && !/back to|назад до/.test(rule.text)) failures.push(`${frame}: a rule back to an earlier step does not say so: ${rule.text}`);
+    }
   };
 
   const SHAPES = [
@@ -8065,9 +8070,10 @@ describe("redesign S2 the Stages window as tabs", () => {
     { slug: "eight", strip: true }, { slug: "chain", strip: true },
   ] as const;
 
-  const WIDTHS = [1440, 1100, 1099, 820] as const;
+  /* 700 and 760 sit between the phone rules (699) and 820: the 4-column grid is narrowest there. */
+  const WIDTHS = [1440, 1100, 1099, 820, 760, 700] as const;
 
-  browserTest("every graph shape opens as tabs over one pane, whole, at 1440, 1100, 1099 and 820 px, in both languages and themes", async () => {
+  browserTest("every graph shape opens as tabs over one pane, whole, at 1440, 1100, 1099, 820, 760 and 700 px, in both languages and themes", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
     const browser: Browser = await chromium.launch(LAUNCH);
@@ -8078,7 +8084,7 @@ describe("redesign S2 the Stages window as tabs", () => {
       for (const lang of ["en", "uk"] as const) {
         for (const scheme of ["light", "dark"] as const) {
           for (const width of WIDTHS) {
-            const dense = lang === "en" && scheme === "light" || width === 1440 || width === 820;
+            const dense = lang === "en" && scheme === "light" || width === 1440 || width <= 820;
             if (!dense) continue;
             const opened = await openFixture(browser, `${server.base}?scenario=stageshapes&lang=${lang}`, { width, height: width >= 1100 ? 900 : 1000 }, scheme, lang);
             try {
@@ -8099,6 +8105,28 @@ describe("redesign S2 the Stages window as tabs", () => {
                 await opened.page.screenshot({ path: path.join(OUT, file) });
                 frames.push({ file, lane: shape.slug, width, lang, scheme, state: "sheet", failures: local });
                 failures.push(...local);
+                if (shape.slug === "recheck") {
+                  /* Review ran twice and its second attempt is the re-check a spent budget handed back: its attempts row says so. */
+                  const initial = read.tabs.find((tab) => tab.selected)?.stage;
+                  await opened.page.click('[data-stages-sheet] [role="tab"][data-tab-stage="review"]');
+                  await opened.page.waitForTimeout(250);
+                  const picked = await readSheet(opened.page);
+                  const pickFailures: string[] = [];
+                  const rows = await opened.page.locator("[data-stages-sheet] .pane .attempts [data-attempt]").allInnerTexts();
+                  const word = lang === "en" ? "re-check" : "повторна перевірка";
+                  if (!picked || picked.tabs.find((tab) => tab.selected)?.stage !== "review") pickFailures.push(`${label}: the Review tab did not select`);
+                  else check(`${label}-review`, picked, shape.strip, pickFailures);
+                  if (rows.length < 2 || !rows.some((row) => row.includes(word))) pickFailures.push(`${label}: Review's attempts row has no «${word}» attempt: ${rows.join(" | ")}`);
+                  if (rows.length && rows[0]!.includes(word)) pickFailures.push(`${label}: the first attempt reads as a re-check`);
+                  const pickFile = `${label}-review-recheck.png`;
+                  await opened.page.screenshot({ path: path.join(OUT, pickFile) });
+                  frames.push({ file: pickFile, lane: shape.slug, width, lang, scheme, state: "review-recheck", failures: pickFailures });
+                  failures.push(...pickFailures);
+                  if (initial) {
+                    await opened.page.click(`[data-stages-sheet] [role="tab"][data-tab-stage="${initial}"]`);
+                    await opened.page.waitForTimeout(150);
+                  }
+                }
                 if (width === 1440 && lang === "en" && scheme === "light") {
                   /* The popover, in the head and over no text. */
                   await opened.page.click("[data-stages-sheet] .gs-waits");

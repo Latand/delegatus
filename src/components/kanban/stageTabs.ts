@@ -37,6 +37,8 @@ export interface StageRule {
   mode: PipelineFailEdgeExhaustion;
   /** The target's own tab carries this edge as round dots, so no rule line is drawn for it. */
   carried: boolean;
+  /** The target is a step that reads earlier than the stage whose failure reaches it: the lane goes back. A conditional or detached target is forward. */
+  back: boolean;
 }
 
 export interface StageTab {
@@ -97,6 +99,10 @@ export function stageTabs(summary: KanbanPipeline): StageTabModel {
 
   const sourcesOf = (id: string) => pipeline.stages.filter((stage) => stage.onFail?.to === id).map((stage) => stage.id);
 
+  /* A stage reads where its step does: a conditional stage after the step it hangs under, with the step's own order. */
+  const stepOrder = new Map(steps.map((step, index) => [step.id, index] as const));
+  const order = (id: string): number => stepOrder.get(id) ?? stepOrder.get(anchorOf.get(id) ?? "") ?? steps.length;
+
   /* 5. The rules: one per fail edge. */
   const rules: StageRule[] = pipeline.stages.flatMap((stage) => {
     const to = stage.onFail?.to;
@@ -112,6 +118,7 @@ export function stageTabs(summary: KanbanPipeline): StageTabModel {
       max: failEdgeMaxRounds(pipeline, stage),
       mode: failEdgeExhaustion(stage.onFail),
       carried: shape === "dock" && anchorOf.has(to) && sourcesOf(to).length === 1,
+      back: stepIds.has(to) && order(to) <= order(stage.id),
     }];
   });
   const carriedBy = new Map(rules.filter((rule) => rule.carried).map((rule) => [rule.to, rule] as const));

@@ -536,9 +536,9 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
             identityTitle(t, identity),
             rework ? t("kanban.graph.workingAgain") : "",
             rounds.length ? rounds.map((round) => t("kanban.graph.roundTitle", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) })).join(", ") : "",
-            /* In the stages view a node reaches its pane and opens what its stage has in the agent window. */
+            /* In the stages view a press only selects the stage's tab, so the label says that and nothing about a window. */
             navigate
-              ? conversation ? t("kanban.graph.openConversation") : draftable ? t("kanban.graph.openDraft") : isSelected ? t("kanban.stages.paneShown") : t("kanban.stages.showPane")
+              ? isSelected ? t("kanban.stages.paneShown") : t("kanban.stages.showPane")
               : conversation ? (isSelected ? t("kanban.graph.conversationOpen") : t("kanban.graph.openConversation"))
                 : draftable ? (isSelected ? t("kanban.graph.draftOpen") : t("kanban.graph.openDraft")) : t("kanban.graph.noConversation"),
           ].filter(Boolean).join(". ");

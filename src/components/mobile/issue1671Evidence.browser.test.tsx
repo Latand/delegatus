@@ -15001,11 +15001,16 @@ describe("redesign S2 the Stages window on the phone", () => {
    * title in the bar whole (it wraps, never ends in an ellipsis); the waits-on
    * line whole on the first screen; every rule line whole; one panel; the
    * selected pane's composer, when it has a conversation, whole above the
-   * screen's bottom edge; the ⋯ sheet's rows whole with its background inert.
+   * screen's bottom edge; the graph's nodes naming what a press does; the
+   * pane's ⋯ stage sheet, the ⋯ sheet and its linked-tasks face whole, each
+   * modal: Tab never leaves it and a tap on the screen behind it changes
+   * nothing there. Every state in both languages and both schemes.
    * Frames and the manifest go to $LLV_EVIDENCE_DIR/redesign-s2-phone.
    */
   const S2_OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "redesign-s2-phone");
   const SLUGS = ["fix-skipped", "fix-taken", "return-loop", "visual-gate", "shared-fix", "returning-fix", "prototype", "recheck", "skipped", "parked-publication", "parked-question", "single", "eight", "chain"] as const;
+  /** A comma list of lanes narrows a local run while the driver is worked on; the evidence run leaves it unset. */
+  const ONLY = process.env.LLV_S2_PHONE_SLUGS ? process.env.LLV_S2_PHONE_SLUGS.split(",") : null;
   const readScreen = (page: Page) => page.evaluate(() => {
     const screen = document.querySelector<HTMLElement>('[data-mobile2-screen="pipeline"]');
     if (!screen) return null;
@@ -15061,7 +15066,7 @@ describe("redesign S2 the Stages window on the phone", () => {
           const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
           await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
           try {
-            for (const slug of SLUGS) {
+            for (const slug of SLUGS.filter((entry) => !ONLY || ONLY.includes(entry))) {
               const key = `${slug}-${lang}-${scheme}`;
               const fail = (message: string) => failures.push(`${key}: ${message}`);
               const page = await context.newPage();
@@ -15087,33 +15092,165 @@ describe("redesign S2 the Stages window on the phone", () => {
                 const sheetFile = `${key}-screen.png`;
                 await page.screenshot({ path: path.join(S2_OUT, sheetFile) });
                 frames.push({ file: sheetFile, lane: slug, lang, scheme, state: "screen" });
-                if (lang === "en" && scheme === "light") {
+                {
+                  const shot = async (state: string) => {
+                    const file = `${key}-${state}.png`;
+                    await page.screenshot({ path: path.join(S2_OUT, file) });
+                    frames.push({ file, lane: slug, lang, scheme, state });
+                  };
+                  /* A sheet is modal: Tab stays inside it, and a tap on the screen behind it reaches nothing there. */
+                  const behindState = () => page.evaluate(() => {
+                    const body = document.querySelector('[data-mobile2-pipeline-body]');
+                    return JSON.stringify({
+                      selected: body?.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute("data-tab-stage") ?? null,
+                      waits: body?.querySelector(".gs-waits")?.getAttribute("aria-expanded") ?? null,
+                      graph: body?.querySelector("[data-sheet-graph]")?.getAttribute("aria-pressed") ?? null,
+                    });
+                  });
+                  const gateModal = async (sheetName: string, rowCount: number) => {
+                    for (let index = 0; index < rowCount + 3; index += 1) {
+                      await page.keyboard.press("Tab");
+                      const inside = await page.evaluate(() => Boolean(document.querySelector("[data-mobile2-sheet]")?.contains(document.activeElement)));
+                      if (!inside) { fail(`${sheetName}: Tab ${index + 1} left the sheet for the screen behind it`); break; }
+                    }
+                    const behind = await page.evaluate(() => {
+                      const body = document.querySelector('[data-mobile2-pipeline-body]');
+                      const sheet = document.querySelector("[data-mobile2-sheet]");
+                      const candidates = [...(body?.querySelectorAll<HTMLElement>('[role="tab"][aria-selected="false"], .gs-waits') ?? [])];
+                      for (const element of candidates) {
+                        const box = element.getBoundingClientRect();
+                        const x = box.left + box.width / 2;
+                        const y = box.top + box.height / 2;
+                        if (box.width === 0 || y < 0 || y > window.innerHeight) continue;
+                        const hit = document.elementFromPoint(x, y);
+                        return { x, y, reached: Boolean(hit && body?.contains(hit) && !sheet?.contains(hit)), target: element.getAttribute("data-tab-stage") ?? "waits" };
+                      }
+                      return null;
+                    });
+                    if (!behind) return;
+                    if (behind.reached) fail(`${sheetName}: the ${behind.target} control behind the sheet is reachable at ${Math.round(behind.x)},${Math.round(behind.y)}`);
+                    const before = await behindState();
+                    await page.touchscreen.tap(behind.x, behind.y);
+                    await pause(page, 250);
+                    const after = await behindState();
+                    if (before !== after) fail(`${sheetName}: a tap behind the sheet changed the screen: ${before} -> ${after}`);
+                    /* The tap on the scrim closes the sheet; reopen is the caller's. */
+                  };
+                  const openMenu = async () => {
+                    await page.tap('[data-mobile2-open="menu"]');
+                    await page.waitForSelector("[data-mobile2-pipeline-menu]");
+                    await pause(page, 300);
+                  };
+                  const closeSheet = async () => {
+                    if (await page.locator("[data-mobile2-sheet]").count()) {
+                      await page.tap("[data-mobile2-close]");
+                      await page.waitForSelector("[data-mobile2-sheet]", { state: "detached", timeout: 5_000 });
+                    }
+                  };
+
                   await page.tap(".gs-waits");
                   await page.waitForSelector(".gs-waits-pop");
-                  const popFile = `${key}-popover.png`;
-                  await page.screenshot({ path: path.join(S2_OUT, popFile) });
-                  frames.push({ file: popFile, lane: slug, lang, scheme, state: "popover" });
+                  await shot("popover");
                   await page.tap(".gs-waits");
-                  /* The ⋯ sheet, the background inert, then its faces. */
-                  await page.tap('[data-mobile2-open="menu"]');
-                  await page.waitForSelector("[data-mobile2-pipeline-menu]");
+
+                  /* The graph: every node says it shows its pane, never that it opens a conversation. */
+                  await page.tap("[data-sheet-graph]");
+                  await page.waitForSelector(".gs-graph .pnode", { timeout: 10_000 });
                   await pause(page, 300);
+                  const graph = await page.evaluate(() => ({
+                    nodes: [...document.querySelectorAll<HTMLElement>(".gs-graph .pnode")].map((node) => node.getAttribute("aria-label") ?? ""),
+                    stages: document.querySelectorAll('[role="tab"]').length,
+                    selectedNodes: document.querySelectorAll(".gs-graph .pnode.selected").length,
+                    selectedTab: document.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute("data-tab-stage") ?? null,
+                    selectedKind: document.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute("data-tab-kind") ?? null,
+                    nodeStages: [...document.querySelectorAll<HTMLElement>(".gs-graph .pnode")].map((node) => `${node.dataset.stage}${node.classList.contains("selected") ? "*" : ""}`),
+                    overflowX: Math.round(Math.max(0, document.documentElement.scrollWidth - window.innerWidth)),
+                  }));
+                  if (!graph.nodes.length) fail("the graph drew no node");
+                  if (graph.nodes.some((label) => /Open its|Відкрити його/.test(label))) fail(`a graph node names an action a press does not take: ${graph.nodes.find((label) => /Open its|Відкрити його/.test(label))}`);
+                  /* A conditional fix on a fail edge is drawn as a strip on its source node, which has no node of its own to select. */
+                  if (graph.selectedKind === "conditional" ? graph.selectedNodes > 1 : graph.selectedNodes !== 1) fail(`${graph.selectedNodes} graph nodes are selected (tab ${graph.selectedTab}; nodes ${graph.nodeStages.join(" ")})`);
+                  if (graph.overflowX > 0) fail(`the graph scrolls the page sideways by ${graph.overflowX}px`);
+                  await shot("graph");
+                  await page.tap("[data-sheet-graph]");
+                  await pause(page, 200);
+
+                  /* The stage sheet: the pane's ⋯. */
+                  await page.tap("[data-pane-menu]");
+                  await page.waitForSelector("[data-mobile2-stage-config], [data-mobile2-stage-acts]");
+                  await pause(page, 300);
+                  const stageSheet = await page.evaluate(() => {
+                    const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="stage"]');
+                    if (!sheet) return null;
+                    const box = sheet.getBoundingClientRect();
+                    const walker = document.createTreeWalker(sheet, NodeFilter.SHOW_TEXT);
+                    let cut = false;
+                    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                      if (!node.textContent?.trim()) continue;
+                      const range = document.createRange();
+                      range.selectNodeContents(node);
+                      for (const rect of range.getClientRects()) if (rect.width > 0 && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5)) cut = true;
+                    }
+                    return { title: sheet.querySelector("[data-mobile2-sheet-header]")?.textContent ?? "", cut, rows: sheet.querySelectorAll("[data-mobile2-stage-act], button").length };
+                  });
+                  if (!stageSheet) fail("the pane's ⋯ opened no stage sheet");
+                  else {
+                    if (stageSheet.cut) fail("the stage sheet's text is cut at the sheet's edge");
+                    if (!stageSheet.title.trim()) fail("the stage sheet has no title");
+                  }
+                  await shot("stage-sheet");
+                  await gateModal("the stage sheet", stageSheet?.rows ?? 4);
+                  await closeSheet();
+
+                  /* The ⋯ sheet: its rows, its caption, its background inert, then its faces. */
+                  await openMenu();
                   const menu = await page.evaluate(() => ({
                     rows: [...document.querySelectorAll<HTMLElement>("[data-mobile2-pipeline-menu] [data-mobile2-menu-row], [data-mobile2-pipeline-menu] [data-mobile2-pipeline-action], [data-mobile2-pipeline-menu] [data-phone-lane-answer]")].map((row) => row.dataset.mobile2MenuRow ?? row.dataset.mobile2PipelineAction ?? row.dataset.phoneLaneAnswer ?? ""),
                     caption: document.querySelector("[data-mobile2-stage-caption]")?.textContent ?? "",
-                    inert: Boolean(document.querySelector('[data-mobile2-screen="pipeline"]')?.closest("[inert]") || document.querySelector('[data-mobile2-pipeline-body][inert], [data-mobile2-screen="pipeline"] [inert]')),
                   }));
-                  for (const required of ["changes", "checks", "board", "links"]) if (!menu.rows.includes(required)) fail(`the ⋯ sheet lacks the ${required} row: ${JSON.stringify(menu.rows)}`);
+                  for (const required of ["changes", "checks", "board", "links", "tasks"]) if (!menu.rows.includes(required)) fail(`the ⋯ sheet lacks the ${required} row: ${JSON.stringify(menu.rows)}`);
                   if (!menu.caption) fail("the ⋯ sheet has no stage-settings caption");
-                  const menuFile = `${key}-menu.png`;
-                  await page.screenshot({ path: path.join(S2_OUT, menuFile) });
-                  frames.push({ file: menuFile, lane: slug, lang, scheme, state: "menu" });
+                  await shot("menu");
+                  await gateModal("the ⋯ sheet", menu.rows.length);
+                  if (!(await page.locator("[data-mobile2-sheet]").count())) await openMenu();
+
+                  /* The linked-tasks face: one row per task, its status beside it, whole. */
+                  if (menu.rows.includes("tasks")) {
+                    await page.tap('[data-mobile2-menu-row="tasks"]');
+                    await page.waitForSelector("[data-mobile2-pipeline-tasks]");
+                    await pause(page, 300);
+                    const tasks = await page.evaluate(() => {
+                      const face = document.querySelector<HTMLElement>("[data-mobile2-pipeline-tasks]")!;
+                      const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="menu"]')!;
+                      const box = sheet.getBoundingClientRect();
+                      const rows = [...face.querySelectorAll<HTMLElement>("[data-mobile2-linked-task]")];
+                      const cut = rows.some((row) => {
+                        const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+                        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                          if (!node.textContent?.trim()) continue;
+                          const range = document.createRange();
+                          range.selectNodeContents(node);
+                          for (const rect of range.getClientRects()) if (rect.width > 0 && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5)) return true;
+                        }
+                        return false;
+                      });
+                      return { rows: rows.map((row) => row.textContent ?? ""), cut, back: Boolean(face.querySelector('[data-mobile2-menu-row="back"]')) };
+                    });
+                    if (!tasks.rows.length) fail("the linked-tasks face lists no task");
+                    if (tasks.cut) fail("a linked task's row is cut at the sheet's edge");
+                    if (!tasks.back) fail("the linked-tasks face has no way back");
+                    await shot("tasks");
+                    await gateModal("the linked-tasks face", tasks.rows.length + 1);
+                    if (!(await page.locator("[data-mobile2-sheet]").count())) await openMenu();
+                    if (await page.locator("[data-mobile2-pipeline-tasks]").count()) {
+                      await page.tap('[data-mobile2-pipeline-tasks] [data-mobile2-menu-row="back"]');
+                      await page.waitForSelector("[data-mobile2-pipeline-menu]");
+                    }
+                  }
                   if (menu.rows.includes("past")) {
                     await page.tap('[data-mobile2-menu-row="past"]');
                     await page.waitForSelector("[data-mobile2-past]");
-                    const pastFile = `${key}-past.png`;
-                    await page.screenshot({ path: path.join(S2_OUT, pastFile) });
-                    frames.push({ file: pastFile, lane: slug, lang, scheme, state: "past" });
+                    await shot("past");
                   }
                 }
                 if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);

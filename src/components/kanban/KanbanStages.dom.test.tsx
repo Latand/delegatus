@@ -1454,14 +1454,18 @@ test("«Graph» opens the stages view with its graph; a node selects its stage i
   expect(sheet(host)?.querySelector("[data-sheet-graph]")?.getAttribute("aria-pressed")).toBe("true");
   expect(card(host).querySelector(".pnode, .pgraph")).toBeNull();
   const node = (stageId: string) => sheet(host)!.querySelector<HTMLElement>(`.gs-graph .pnode[data-stage="${stageId}"]`)!;
-  /* Each node names what it opens. */
-  expect(node("implement").getAttribute("aria-label")).toContain("Open its conversation");
-  expect(node("merge").getAttribute("aria-label")).toContain("Open its first message");
+  /* A press selects the stage's tab and opens no window, so each node says that, never that it opens a conversation or a message. */
+  expect(node("implement").getAttribute("aria-label")).toContain("Show its pane");
+  expect(node("merge").getAttribute("aria-label")).toContain("Show its pane");
+  for (const id of ["implement", "merge"]) {
+    expect(node(id).getAttribute("aria-label")).not.toContain("Open its");
+  }
   press(node("implement"));
   await tick();
   expect(host.querySelector("[data-agent-window]")).toBeNull();
   expect(sheet(host)).toBeTruthy();
   expect(node("implement").classList.contains("selected")).toBe(true);
+  expect(node("implement").getAttribute("aria-label")).toContain("Its pane is in focus");
   expect(selectedTab(host)).toBe("implement");
   expect(readerIn(pane(host, "implement"))).toBe(idOf(implement2));
 
@@ -1637,6 +1641,35 @@ test("a fix two reviewers share comes after the first of them in tab order, not 
   expect(tabsOf(host)).toEqual(["step:brief", "step:build", "step:review", "conditional:fix", "step:visual"]);
   expect(tabOf(host, "fix")!.getAttribute("aria-label")).toContain("only if Review or Visual fails");
   expect([...sheet(host)!.querySelectorAll(".gs-rule")].map((rule) => rule.getAttribute("data-rule"))).toEqual(["review:fail:fix", "visual:fail:fix"]);
+  /* Fix is a conditional stage after both sources, so the rules read forward, never «back to». */
+  const words = [...sheet(host)!.querySelectorAll(".gs-rule")].map((rule) => rule.textContent ?? "");
+  expect(words).toEqual([
+    `↺ ${translate("en", "kanban.stages.ruleOn", { from: "Review", to: "Fix", fired: 0, max: 2 })}`,
+    `↺ ${translate("en", "kanban.stages.ruleOn", { from: "Visual", to: "Fix", fired: 0, max: 1 })}`,
+  ]);
+  for (const line of words) expect(line).not.toContain("back to");
+});
+
+test("a stage whose spent budget handed it back for one more look labels that attempt «re-check» in its attempts row", async () => {
+  const record = reviewFix("completed", {
+    build: [attempt(1, "passed", implement1, 5000)],
+    review: [
+      attempt(1, "failed", review1, 3000),
+      attempt(2, "passed", review1, 600, { activatedBy: { stageId: "fix", attempt: 1, edge: "pass", budgetRecheck: true } }),
+    ],
+    fix: [attempt(1, "passed", implement2, 1800, { activatedBy: { stageId: "review", attempt: 1, edge: "fail", budgetSpent: true } })],
+  }, null);
+  const { host } = mount(record, { files: [implement1, implement2, review1] });
+  await tick();
+  click(card(host).querySelector("[data-open-stages]"));
+  await tick();
+  const rows = [...pick(host, "review").querySelectorAll<HTMLElement>(".attempts [data-attempt]")].map((button) => button.textContent);
+  expect(rows).toEqual([
+    `${translate("en", "kanban.attemptWord", { n: 1 })} · failed`,
+    `${translate("en", "kanban.attemptWord", { n: 2 })} · ${translate("en", "kanban.stages.recheck")} · passed`,
+  ]);
+  /* The returning fix's own attempt carries no re-check word. */
+  expect(pick(host, "fix").textContent).not.toContain(translate("en", "kanban.stages.recheck"));
 });
 
 test("a skipped stage carries a mark of its own that a waiting one does not, and a detached stage reads «off the chain»", async () => {

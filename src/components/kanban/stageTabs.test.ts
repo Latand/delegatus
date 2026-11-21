@@ -156,6 +156,26 @@ test("a first stage that is a fail target stays step one and the rule names it",
   expect(model.rules[0]).toMatchObject({ from: "review", to: "fix", carried: false });
 });
 
+test("a rule goes back only to a step that reads earlier; a conditional or detached target is forward", () => {
+  const first = tabsOf(lane([stage("fix", "builder", "review"), stage("review", "reviewer", null, failTo("fix"))]));
+  expect(first.rules[0]).toMatchObject({ from: "review", to: "fix", back: true });
+  const returning = tabsOf(lane([stage("build", "builder", "review"), stage("review", "reviewer", "deliver", failTo("build")), stage("deliver", "cleaner", null)]));
+  expect(returning.rules[0]).toMatchObject({ from: "review", to: "build", back: true });
+  const conditional = tabsOf(lane([stage("build", "builder", "review"), stage("review", "reviewer", null, failTo("fix")), stage("fix", "builder", "review")]));
+  expect(conditional.rules[0]).toMatchObject({ from: "review", to: "fix", back: false });
+  const shared = tabsOf(lane([
+    stage("build", "builder", "review"),
+    stage("review", "reviewer", "visual", failTo("fix")),
+    stage("visual", "visual-critic", null, failTo("fix", 1)),
+    stage("fix", "builder", "review"),
+  ]));
+  expect(shared.rules.map((rule) => [rule.from, rule.to, rule.back])).toEqual([["review", "fix", false], ["visual", "fix", false]]);
+  const detached = tabsOf(lane([stage("build", "builder", "review"), stage("review", "reviewer", null, failTo("opus-fix")), stage("opus-fix", "builder", null)]));
+  expect(detached.rules[0]).toMatchObject({ back: false });
+  const self = tabsOf(lane([stage("upgrade", "builder", null, failTo("upgrade"))]));
+  expect(self.rules[0]).toMatchObject({ shape: "self", back: true });
+});
+
 test("stages the first stage does not reach are detached tabs after the steps, even one that passes into the chain", () => {
   const record = lane([
     stage("build", "builder", "review"),
