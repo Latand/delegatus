@@ -250,7 +250,7 @@ test("a scheduled row retry cannot supply the result of full Viewer startup", as
     const entry = registry.readOnlySnapshot().entries[key]!;
     const options: NonNullable<Parameters<typeof adoptStructuredHostsAtStartup>[0]> = {
       registry, orchestratorSeats: () => [],
-      client: { ...emptyJournalClient(journal), startupGeneration: async () => {
+      client: { ...emptyJournalClient(journal), append: async event => journal.append(event), startupGeneration: async () => {
         if (holdRow) { rowEntered.resolve(); await finishRow.promise; }
         return "fixture-runtime";
       } },
@@ -267,9 +267,12 @@ test("a scheduled row retry cannot supply the result of full Viewer startup", as
         return {};
       },
     };
-    const run = () => runStructuredHostStartup(() => adoptStructuredHostsAtStartup(options), () => {}, { schedule: () => ({}) });
+    const failures: unknown[] = [];
+    const run = () => runStructuredHostStartup(() => adoptStructuredHostsAtStartup(options),
+      (_message, diagnostic) => { failures.push(diagnostic); }, { schedule: () => ({}) });
     await run();
     expect(structuredStartupStatus()?.state).toBe("failed");
+    expect(failures[0]).toMatchObject({ category: "timeout" });
     expect(scheduled).toHaveLength(1);
     setSystemTime(NOW + 60_000);
     holdRow = true;

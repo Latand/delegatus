@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -9,6 +9,7 @@ import { NextRequest } from "next/server";
 import { resetRuntimeHostRequestHealthForTests } from "@/lib/runtime/client";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { markStructuredHostStartupFailed, markStructuredHostStartupProgress, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
+import { selfUpdateService } from "@/lib/selfUpdate/instance";
 
 import { GET as GET_DEPLOYMENT } from "./[deploymentId]/route";
 import { GET } from "./route";
@@ -77,18 +78,20 @@ async function serveRuntime(
 
 test("GET /api/runtime/deployments returns an empty live ledger with runtime-host latency health", async () => {
   const methods = await serveRuntime({ deployments: [], nextCursor: null, hasMore: false });
+  const mode = spyOn(selfUpdateService(), "decide").mockResolvedValue({ mode: "managed", record: null, reason: null });
 
-  const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
-
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({
-    count: 0,
-    deployments: [],
-    nextCursor: null,
-    hasMore: false,
-    runtimeHostRequests: runtimeHostRequestHealth(),
-  });
-  expect(methods).toEqual(["viewer-deployment-list"]);
+  try {
+    const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      count: 0,
+      deployments: [],
+      nextCursor: null,
+      hasMore: false,
+      runtimeHostRequests: runtimeHostRequestHealth(),
+    });
+    expect(methods).toEqual(["viewer-deployment-list"]);
+  } finally { mode.mockRestore(); }
 });
 
 /* #1845 defect C: the snapshot orders deployments by id, a random UUID, so the
@@ -271,6 +274,7 @@ test("runtime read routes keep a configured but unreachable plane distinct from 
 
 test("deployment list sends the Viewer's current adoption progress beside the runtime-host page", async () => {
   const methods = await serveRuntime({ deployments: [], nextCursor: null, hasMore: false });
+  const mode = spyOn(selfUpdateService(), "decide").mockResolvedValue({ mode: "managed", record: null, reason: null });
   markStructuredHostStartupProgress({ phase: "refreshing transcripts", completedHosts: 16, totalHosts: 33 });
   markStructuredHostStartupFailed("timeout", {
     deadline: "structured startup read deadline exceeded",
@@ -286,5 +290,5 @@ test("deployment list sends the Viewer's current adoption progress beside the ru
       nextRetryAt: "2026-10-16T00:00:05.000Z",
     } });
     expect(methods).toEqual(["viewer-deployment-list"]);
-  } finally { markStructuredHostStartupReady(); }
+  } finally { mode.mockRestore(); markStructuredHostStartupReady(); }
 });
