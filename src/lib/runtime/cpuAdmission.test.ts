@@ -75,6 +75,23 @@ test.skipIf(process.platform !== "linux")("legacy retirements survive reopen and
   expect(later.retirements.has(owner.startIdentity!)).toBe(true);
 });
 
+test("legacy observation preserves the admission boundary used to classify pre-cutover hooks", () => {
+  const f = fixture(), owner = cpuOwnerIdentity(process.pid), q = f.open();
+  f.at(100);
+  expect(q.check("command:prior", true, owner, true, undefined, true)).toBeNull();
+  const prior = q.lastAdmission();
+  expect(prior).toBe(100);
+  const old = new Database(f.file);
+  old.exec("DROP TRIGGER legacy_gate_retired; DROP TABLE legacy_gate_cutover; DROP TABLE legacy_gate_retirements");
+  old.close();
+  f.at(200);
+  const opened = f.open(), history = opened.legacyGateHistory(owner.bootEpoch!);
+  expect(history.cutover.admission).toBe(prior);
+  f.at(prior! + CPU_QUEUE_SPACING_MS);
+  expect(opened.check("command:later", true, owner, true, undefined, true)).toBeNull();
+  expect(opened.legacyGateHistory(owner.bootEpoch!).cutover.admission).toBe(prior);
+});
+
 test("a slot observation made before another admission cannot consume a ready gate", () => {
   const f = fixture(), owner = captureProcessIdentity(process.pid), gate = f.open(), peer = f.open();
   const key = "command:bounded:probe";

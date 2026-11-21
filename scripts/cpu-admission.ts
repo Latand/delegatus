@@ -252,8 +252,9 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     [...childrenOf(parent)].some(pid => hookHasQueuedGate(path.join(proc, pid), parent, membership));
   const serviceClients = new Map<string, { unit: string; runner: string }>();
   const bornAfterPriorGrant = (base: string) => {
-    const last = queue.lastAdmission();
-    if (last === null || !Number.isFinite(last) || last <= 0) return false;
+    const recordedLast = (history ??= queue.legacyGateHistory(epoch!)).cutover.admission;
+    const last = typeof recordedLast === "number" ? recordedLast : Number(recordedLast);
+    if (recordedLast === null || !Number.isFinite(last) || last <= 0) return false;
     const bootTime = /^btime (\d+)$/m.exec(fs.readFileSync(path.join(proc, "stat"), "utf8"))?.[1];
     const uptime = Number(fs.readFileSync(path.join(proc, "uptime"), "utf8").split(" ")[0]);
     if (!bootTime || !Number.isFinite(uptime)) return false;
@@ -314,12 +315,12 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
           // This runner was spawned directly by the ordinary hook above.
           // Its waiter in the same service proves that the legacy-looking
           // service is the hook's nested cleanup admission.
-          // A live waiter in the service only identifies this as an ordinary
-          // cleanup supervisor when the outer hook predates observation and
-          // has no recorded retirement. A retired ticket is positive evidence
-          // that this process already consumed legacy admission and must keep
-          // draining until it exits.
-          return skippedAdmission(base) || unobservedUnretired(base) && bornAfterPriorGrant(base) && waitingGateInService(unit);
+          // The direct parent is the live ordinary hook, and this runner's
+          // unique service contains its queued nested gate. Check that live
+          // relationship before treating an unrecorded pre-cutover ticket as
+          // a cleanup child. The cutover grant distinguishes a hook already
+          // holding admission from one launched afterwards.
+          return waitingGateInService(unit) && (skippedAdmission(base) || unobservedUnretired(base) && bornAfterPriorGrant(base));
         }
       }
       if (args[1] === path.join(path.dirname(runner), "test-child-guardian.ts")) {

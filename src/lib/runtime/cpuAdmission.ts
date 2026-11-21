@@ -180,8 +180,9 @@ export class CpuAdmissionQueue {
       const schemaReady = () => {
         const triggers = new Map(this.db.query<{ name: string; sql: string }, []>("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'").all().map(row => [row.name, row.sql]));
         const columns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().map(row => row.name));
+        const cutoverColumns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(legacy_gate_cutover)").all().map(row => row.name));
         return triggers.has("legacy_gate_retired") && triggers.get("tickets_fifo") === TICKETS_FIFO && triggers.get("tickets_poll") === TICKETS_POLL
-          && ["priority", "source", "low_pressure", "aging", "fifo_seq"].every(name => columns.has(name));
+          && ["priority", "source", "low_pressure", "aging", "fifo_seq"].every(name => columns.has(name)) && cutoverColumns.has("admission");
       };
       if (!schemaReady()) {
         const opened = this.now();
@@ -236,14 +237,18 @@ export class CpuAdmissionQueue {
             // Historical shells delete their own command ticket when claiming.
             // A cancellation is also a possible claim until that identity exits.
             this.db.exec(`CREATE TABLE legacy_gate_retirements (seq INTEGER PRIMARY KEY, owner TEXT);
-              CREATE TABLE legacy_gate_cutover (id INTEGER PRIMARY KEY, boot TEXT, clock TEXT, uptime REAL, overflow INTEGER NOT NULL);
-              INSERT INTO legacy_gate_cutover VALUES (1, NULL, NULL, NULL, 0);
+              CREATE TABLE legacy_gate_cutover (id INTEGER PRIMARY KEY, boot TEXT, clock TEXT, uptime REAL, admission INTEGER, overflow INTEGER NOT NULL);
+              INSERT INTO legacy_gate_cutover VALUES (1, NULL, NULL, NULL, NULL, 0);
               CREATE TRIGGER legacy_gate_retired AFTER DELETE ON tickets WHEN OLD.key GLOB 'command:[0-9]*' BEGIN
                 INSERT INTO legacy_gate_retirements (owner) VALUES (OLD.owner);
                 UPDATE legacy_gate_cutover SET overflow = 1 WHERE overflow = 0 AND last_insert_rowid() > 128;
                 DELETE FROM legacy_gate_retirements WHERE seq <= last_insert_rowid() - 128;
               END`);
             if (this.lastAdmission() !== null) this.restartLegacyObservation();
+          }
+          if (!this.db.query<{ name: string }, []>("PRAGMA table_info(legacy_gate_cutover)").all().some(column => column.name === "admission")) {
+            this.db.exec("ALTER TABLE legacy_gate_cutover ADD COLUMN admission INTEGER");
+            this.restartLegacyObservation();
           }
           this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
           // The poll trigger above stamped only ownerless tickets at first.
@@ -322,14 +327,14 @@ export class CpuAdmissionQueue {
       }
       catch { /* An unavailable clock keeps the pre-existing grant uncertain. */ }
     }
-    this.db.query("UPDATE legacy_gate_cutover SET boot = ?, clock = ?, uptime = ?, overflow = 0").run(
-      context?.hostEpoch ?? (process.platform === "linux" ? systemBootEpoch() : null) ?? "unknown", clock, uptime);
+    this.db.query("UPDATE legacy_gate_cutover SET boot = ?, clock = ?, uptime = ?, admission = ?, overflow = 0").run(
+      context?.hostEpoch ?? (process.platform === "linux" ? systemBootEpoch() : null) ?? "unknown", clock, uptime, this.lastAdmission());
     this.db.exec("DELETE FROM legacy_gate_retirements");
   }
   legacyGateHistory(epoch: string) {
     const snapshot = () => this.db.transaction(() => ({
-      cutover: this.db.query<{ boot: string | null; clock: string | null; uptime: number | null; overflow: number }, []>(
-        "SELECT boot, clock, uptime, overflow FROM legacy_gate_cutover WHERE id = 1").get()!,
+      cutover: this.db.query<{ boot: string | null; clock: string | null; uptime: number | null; admission: number | null; overflow: number }, []>(
+        "SELECT boot, clock, uptime, admission, overflow FROM legacy_gate_cutover WHERE id = 1").get()!,
       rows: this.db.query<{ owner: string | null }, []>("SELECT owner FROM legacy_gate_retirements").all(),
     }))();
     const read = () => {
