@@ -51,7 +51,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { resolveSendReceipt, SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
 import { FENCED_MESSAGE_RETRY_DELAYS_MS, fencedFirstMessageRetrySafe } from "./fencedFirstMessage";
 import { stageRepairDelivery } from "./repairDelivery";
-import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
+import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WAIT_REASON, PUBLICATION_RETRY_DELAYS_MS, publicationDependencyValidationDeadline, publicationInterrupted, publicationRemoteRefusal, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
 import type { PipelineAccountHold, PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
@@ -5293,8 +5293,10 @@ function publicationNotLanded(published: RefusedPublication): boolean {
   return publicationInterrupted(published);
 }
 
-function publicationDeadlineCause(failure: import("./types").PipelinePublicationFailure): string {
-  return failure.admissionDeadline ? "the pre-push hook's CPU admission lock-wait budget expired before checks started"
+function publicationDeadlineCause(published: RefusedPublication): string | null {
+  if (publicationDependencyValidationDeadline(published)) return "validation of the existing dependency installation reached its deadline";
+  if (!published.failure?.retryableDeadline) return null;
+  return published.failure.admissionDeadline ? "the pre-push hook's CPU admission lock-wait budget expired before checks started"
     : "a check reached its execution deadline without a verdict";
 }
 
@@ -5306,8 +5308,9 @@ function passedPublicationParkDetail(attempt: PipelineStageAttempt, published: R
   if (published.remote === "unreachable") {
     return `publishing the passed stage: checking the remote pipeline branch failed${retried}. Check remote access and connectivity, then use publish to try again.\n${published.error}`;
   }
-  if (failure?.retryableDeadline && attempt.publicationRetry?.exhausted) {
-    return `publishing the passed stage: ${publicationDeadlineCause(failure)} after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
+  const deadlineCause = publicationDeadlineCause(published);
+  if (deadlineCause && attempt.publicationRetry?.exhausted) {
+    return `publishing the passed stage: ${deadlineCause} after ${PUBLICATION_RETRY_DELAYS_MS.length} automatic retries. This is a capacity failure; once capacity is available, use publish to try again.\n${published.error}`;
   }
   if (publicationNotLanded(published)) {
     return `publishing the passed stage: ${publicationInterruptionCause(failure)}${retried}. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.\n${published.error}`;
@@ -5352,14 +5355,14 @@ async function retryRefusedPublication(
   const operation = pipeline.delivery?.operation;
   const failure = published.failure;
   const notLanded = publicationNotLanded(published);
-  const deadlineOnly = failure?.retryableDeadline === true;
+  const deadlineCause = publicationDeadlineCause(published);
   const app403 = failure?.retryableApp403 === true;
   if (!operation || operation.state !== "settled") return false;
   const recoverable = published.remote === "unreachable" || recoverablePublication(published);
   const history = recordPublicationFailure(pipeline, attempt, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
-    cause: app403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
-    detail: (app403 ? APP_PUSH_WAIT_REASON : deadlineOnly ? publicationDeadlineCause(failure!)
-      : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : published.error).slice(0, 400),
+    cause: app403 ? "app-git-403" : deadlineCause ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
+    detail: (app403 ? APP_PUSH_WAIT_REASON : deadlineCause
+      ?? (notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : published.error)).slice(0, 400),
     recoverable }, notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
   if (!recoverable) return false;
   const recovery = pipeline.publicationRecovery![operation.sha]!;
@@ -5381,9 +5384,9 @@ async function retryRefusedPublication(
     ports.scheduleTick?.(0);
     return true;
   }
-  const schedule = app403 ? `${unixMs(record.retryAt) === appDeadline ? "automatic retry window ends" : "next automatic retry"} at ${record.retryAt}` : deadlineOnly ? `automatic capacity retry ${record!.failures} at ${record!.retryAt}`
+  const schedule = app403 ? `${unixMs(record.retryAt) === appDeadline ? "automatic retry window ends" : "next automatic retry"} at ${record.retryAt}` : deadlineCause ? `automatic capacity retry ${record!.failures} at ${record!.retryAt}`
     : `automatic retry ${record!.failures} of ${PUBLICATION_RETRY_DELAYS_MS.length} at ${record!.retryAt}`;
-  await keepPassedStageUnpublished(pipeline, attempt, app403 ? `${APP_PUSH_WAIT_REASON}; ${schedule}` : deadlineOnly ? `${publicationDeadlineCause(failure!)}; ${schedule}`
+  await keepPassedStageUnpublished(pipeline, attempt, app403 ? `${APP_PUSH_WAIT_REASON}; ${schedule}` : deadlineCause ? `${deadlineCause}; ${schedule}`
     : notLanded ? `${publicationInterruptionCause(failure)}; ${schedule}`
     : published.remote === "unreachable" ? `${published.error}; ${schedule}`
     : `${publicationFailureCause(failure!)}. The stage changed no files; ${schedule}`);
@@ -5399,11 +5402,11 @@ function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineSt
   if (!operation || !result) return;
   const failure = result.failure;
   const notLanded = publicationNotLanded(result);
-  const deadlineOnly = failure?.retryableDeadline === true;
+  const deadlineCause = publicationDeadlineCause(result);
   recordPublicationFailure(pipeline, attempt ?? undefined, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
-    cause: failure?.retryableApp403 ? "app-git-403" : deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
-    detail: (deadlineOnly ? publicationDeadlineCause(failure!)
-      : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error).slice(0, 400),
+    cause: failure?.retryableApp403 ? "app-git-403" : deadlineCause ? "infrastructure-deadline" : notLanded ? "interrupted" : publicationRemoteRefusal(failure) ? "remote-refusal" : "check-failure",
+    detail: (deadlineCause
+      ?? (notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error)).slice(0, 400),
     recoverable: result.remote === "unreachable" || recoverablePublication(result) },
     notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
 }

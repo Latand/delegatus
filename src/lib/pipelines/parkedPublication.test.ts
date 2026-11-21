@@ -1572,13 +1572,21 @@ async function legacyPublication(h: ReturnType<typeof fixture>) {
   savePipelines([h.lane]);
 }
 
-async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false, crashLog?: string) {
+async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false, crashLog?: string, timedOutLink?: string) {
   const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
     const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
     const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
     registerPipelineTick(async () => {});
     const fs = await import("node:fs");
     const crashLog = ${JSON.stringify(crashLog ?? null)};
+    const timedOutLink = ${JSON.stringify(timedOutLink ?? null)};
+    if (timedOutLink) {
+      const realpath = fs.promises.realpath;
+      fs.promises.realpath = async (filename, ...options) => {
+        if (filename === timedOutLink) throw new Error("dependency preparation deadline exceeded");
+        return realpath(filename, ...options);
+      };
+    }
     const fixtureExec = ${publicationFixtureExec.toString()};
     const ports = { ...defaultPipelinePorts(), exec: async (...args) => {
       if (crashLog && args[0] === "git" && args[1][0] === "push") {
@@ -1598,6 +1606,59 @@ async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z"
   const result = await realExec(process.execPath, ["-e", script], process.cwd(), process.env, { timeoutMs: 30_000 });
   expect(result.code, result.stderr).toBe(0);
 }
+
+test.each(["recovers", "exhausts"] as const)("existing dependency validation timeout %s across controller restarts", async outcome => {
+  const h = fixture();
+  try {
+    const head = trailingLane(h, 2, {
+      ".gitignore": "/node_modules\n",
+      "package.json": JSON.stringify({ name: "delegatus-cli" }),
+      "bun.lock": JSON.stringify({ lockfileVersion: 1, workspaces: { "": { name: "delegatus-cli" } }, packages: {} }),
+    });
+    const { prepareLockedDependencies } = await import("./lockedDependencies");
+    expect(await prepareLockedDependencies(h.repo)).toBe(true);
+    const link = path.join(h.repo, "node_modules");
+    const installed = fs.readlinkSync(link);
+    const marker = path.join(h.root, "hook-runs");
+    fs.writeFileSync(h.hook, `#!/bin/sh\nset -eu\ntest -d node_modules\nprintf ran >> '${marker}'\n`, { mode: 0o700 });
+    let clock = Date.parse("2026-10-19T10:00:00.000Z");
+    const now = () => new Date(clock).toISOString();
+    const ports = { ...h.ports, now, scheduleTick: () => {} };
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, ports)).error).toBeUndefined();
+    const restart = (timeout: boolean) => restartedPublicationController(now(), false, undefined, timeout ? link : undefined);
+    for (const [index, wait] of [60_000, 300_000, 900_000].entries()) {
+      await restart(true);
+      expect(h.current()).toMatchObject({ state: "running", lastPassedCommit: head, publishedCommit: null,
+        delivery: { operation: { result: { ok: false, error: expect.stringContaining("[validation: existing link and seal,") } } } });
+      expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ sha: head, failures: index + 1 });
+      expect(h.current().publicationRecovery![head]!.history.at(-1)).toMatchObject({ cause: "environment",
+        detail: expect.stringContaining("dependency preparation deadline exceeded"), retryAt: new Date(clock + wait).toISOString() });
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(h.git("ls-remote", "--heads", "origin", `refs/heads/${h.lane.branch}`)).toBe("");
+      clock += wait - 1;
+      await restart(false);
+      expect(h.current().publicationRecovery![head]!.totalAttempts).toBe(index + 1);
+      expect(fs.existsSync(marker)).toBe(false);
+      clock++;
+      if (outcome === "recovers") break;
+    }
+    await restart(outcome === "exhausts");
+    if (outcome === "exhausts") {
+      expect(h.current().state).toBe("needs_decision");
+      expect(h.current().stateDetail!.split("\n")[0]).toContain("validation of the existing dependency installation reached its deadline after 3 automatic retries");
+      expect(h.current().publicationRecovery![head]).toMatchObject({ totalAttempts: 4 });
+      clock += 60 * 60_000;
+      await restart(false);
+      expect(h.current()).toMatchObject({ state: "needs_decision", publishedCommit: null });
+      expect(fs.existsSync(marker)).toBe(false);
+    } else {
+      expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: head, publishedCommit: head });
+      expect(fs.readFileSync(marker, "utf8")).toBe("ran");
+    }
+    expect(h.current().runs[0]!.attempts).toMatchObject([{ state: "passed", verdict: { status: "pass" } }]);
+    expect(fs.readlinkSync(link)).toBe(installed);
+  } finally { h.cleanup(); }
+}, 90_000);
 
 async function leaveDeadPublication(h: ReturnType<typeof fixture>) {
   h.git("reset", "--hard", h.passed);
