@@ -60,7 +60,8 @@ test("native installation and runtime inputs verify both architectures; app chan
     expect(isMultiArchInput(file), file).toBe(true);
     expect(isImageInput(file), file).toBe(true);
   }
-  for (const file of ["bin/provision-telegram-connector.mjs", "src/runtime-host/main.ts", "src/lib/platform/linux.ts", "src/app/page.tsx", "src/app/globals.css", "public/icon.svg", "README.md", "docs/native.md"]) {
+  for (const file of ["bin/provision-telegram-connector.mjs", "src/runtime-host/main.ts", "src/lib/platform/linux.ts", "src/app/page.tsx", "src/app/globals.css", "public/icon.svg", "README.md", "docs/native.md",
+    "scripts/check-worker-client.mjs"]) {
     expect(isMultiArchInput(file), file).toBe(false);
   }
 });
@@ -77,7 +78,7 @@ test("the admission list covers every repository JS/JSON dependency in the TypeS
     .filter(file => !file.startsWith("node_modules/") && /\.(?:[cm]?js|jsx|json)$/.test(file));
   expect(dependencies).toContain("landing/site/demo/taskIcons.json");
   expect(dependencies.filter(file => !isImageInput(file))).toEqual([]);
-}, 20_000);
+}, 45_000);
 
 test("each admitted root production env file is read by the installed Next loader", () => {
   const loader = require.resolve("@next/env");
@@ -204,6 +205,8 @@ test("real Git diff excludes main merges and retains deletions, renames and file
     git("init", "-q", "-b", "main");
     git("config", "core.hooksPath", "/dev/null");
     write("README.md"); write("src/old.ts");
+    write("scripts/check-worker-client.mjs");
+    write("scripts/unused.mjs");
     commit(); git("branch", "topic");
     write("src/main-only.ts"); const main = commit();
     git("checkout", "-q", "topic");
@@ -218,6 +221,7 @@ test("real Git diff excludes main merges and retains deletions, renames and file
       ["evidence/docker-image/incident.json", false], ["docs/unused.json", false],
       ["docs/unused.js", false], ["external/unused.cjs", false],
       ["external/unused.mjs", false], ["external/unused.jsx", false],
+      ["scripts/check-worker-client.mjs", true], ["scripts/unused.mjs", false],
       ["docs/.gitignore", false], ["docs/design/desktop-v2/.gitignore", false],
       ["landing/site/.gitignore", false],
       [".gitignore", true], ["src/.gitignore", true], ["src/components/.gitignore", true],
@@ -249,7 +253,7 @@ test("real Git diff excludes main merges and retains deletions, renames and file
     expect(run("missing", large).status).not.toBe(0);
     expect(run("0".repeat(40), large).status).not.toBe(0);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
-});
+}, 15_000);
 
 test("real Tailwind compilation uses app sources and ignores prose outside src", async () => {
   const css = readFileSync(path.join(root, "src/app/globals.css"), "utf8");

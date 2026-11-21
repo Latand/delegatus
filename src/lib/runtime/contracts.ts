@@ -292,6 +292,8 @@ export interface RuntimeOperationReceipt {
   /** A send may already have reached the engine. Retained across requeues;
       the current reason only describes the latest wait or transition. */
   deliveryUnverified?: boolean;
+  /** Pending sends captured by the first kill admission, retained on replay. */
+  pendingSendIds?: string[];
   imageCount?: number;
   /** The per-turn runtime settings snapshot a send/steer was admitted with
       (issue #499): the durable audit record that the selected model/effort/fast
@@ -493,6 +495,8 @@ export function runtimeIdleKillMatches(
 
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
+  /** Viewer-derived cohort; the first admission owns it across retries. */
+  pendingSendIds?: string[];
   /** Authenticated control authorship; an automatic recovery is system custody. */
   origin?: MessageOrigin;
   onlyIfIdle?: RuntimeIdleKillFence;

@@ -87,11 +87,3 @@ export function entryModelsResult(entry: FileEntry): EntryModelsResult {
 export function entryModels(entry: FileEntry): EntryModels {
   return entryModelsResult(entry).value;
 }
-
-export function entryModel(entry: FileEntry): string | null {
-  return entryModels(entry).display;
-}
-
-export function entryLaunchModel(entry: FileEntry): string | null {
-  return entryModels(entry).launch;
-}

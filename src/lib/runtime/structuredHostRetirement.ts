@@ -4,7 +4,6 @@ import { AGENT_STATE_POLICY } from "@/lib/agentState/model";
 import { entryRevision, subjectId } from "@/lib/agentState/store";
 import { fileSignature, NATIVE_SIZE_REFUSALS } from "@/lib/agentState/transcript";
 import { servingAgentStateService } from "@/lib/agentState/service";
-import { structuredClaimIdentity } from "@/lib/agent/registry";
 import { agentScopeCommand, differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
@@ -15,7 +14,7 @@ import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { agentRegistry, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
+import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity, type AgentHostStatus, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { registryConversationsForEntryKey, registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
@@ -47,6 +46,8 @@ import { realtimeBoundConversationIds } from "./voiceViewBinding";
 import { runtimeHostClient } from "./client";
 import { reconcileUnregisteredAgentProcesses, type UnregisteredAgentOutcome } from "./unregisteredAgentProcesses";
 import { OPEN_RETIREMENT_DELIVERIES, OPEN_SPAWN_RECEIPTS, TERMINAL_SPAWN_RECEIPTS } from "./retirementOperation";
+import { pipelineRetirementReader, type PipelineRetirementStanding, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
+import type { PipelineRetirementReason } from "@/lib/pipelines/hostRetirement";
 
 /**
  * Automatic retirement of finished and idle structured hosts (#747).
@@ -78,9 +79,9 @@ import { OPEN_RETIREMENT_DELIVERIES, OPEN_SPAWN_RECEIPTS, TERMINAL_SPAWN_RECEIPT
  *   determined. Three review rounds each found a different clause that had
  *   invented its own fallback and happened to resolve unknown in favour of
  *   killing; a fallback is now a thing a clause cannot express.
- * - **Staleness is transcript modification time, never process age.** A
- *   long-lived host still being written to is alive; a young host that has
- *   produced nothing since its last turn is not.
+ * - **Ordinary staleness uses transcript modification time.** Finished stage
+ *   attempts and terminal lanes waive the quiet interval once engine custody
+ *   ends. All turn, delivery, attention and identity checks still apply.
  * - **The tree is terminated, never the process group alone.** Most MCP
  *   children put themselves in their own process group, so a group-only sweep
  *   would strand them and turn a host leak into an orphan leak. The termination
@@ -422,6 +423,7 @@ export type StructuredHostSeatStanding = "none" | "live" | "revoked";
  * established absence, which is the distinction an overloaded `| null` lost.
  */
 export interface StructuredHostRetirementSubject {
+  pipelineStanding?: Determinable<PipelineRetirementStanding>;
   key: SessionKey;
   keyId: string;
   conversationId: string | null;
@@ -545,6 +547,12 @@ function unflushedEvents(subject: StructuredHostRetirementSubject): StructuredHo
   };
 }
 
+type RetirementVerdictOptions = { now: number; idleMs: number; preservePipelineWaiver?: boolean };
+
+function qualifiesForPipelineWaiver(standing: StructuredHostRetirementSubject["pipelineStanding"]): boolean {
+  return standing?.determined === true && standing.value !== null && standing.value !== "held";
+}
+
 /**
  * The clauses, each a function of the subject alone. Order comes from
  * {@link STRUCTURED_HOST_RETIREMENT_CLAUSES}, so the list and the checks cannot
@@ -574,7 +582,7 @@ function unflushedEvents(subject: StructuredHostRetirementSubject): StructuredHo
  */
 const CLAUSE_CHECKS: Record<
   StructuredHostRetirementClause,
-  (subject: StructuredHostRetirementSubject, options: { now: number; idleMs: number }) => ClauseAnswer
+  (subject: StructuredHostRetirementSubject, options: RetirementVerdictOptions) => ClauseAnswer
 > = {
   "seat-free": (subject) => mapDeterminable(subject.seat,
     (standing) => (standing === "live" ? "the host holds a live orchestrator seat" : null)),
@@ -650,24 +658,30 @@ const CLAUSE_CHECKS: Record<
       (stat) => (stat === null ? "the transcript is not present on disk" : null));
   },
 
-  "transcript-idle": (subject, options) => mapDeterminable(subject.transcriptFile, (stat) => {
-    /* Order puts `resumable` first, so an absent transcript has already
-       refused; saying it again here keeps the clause true on its own terms
-       rather than relying on the clause before it. */
-    if (stat === null) return "the transcript is not present on disk";
-    /* The revoked-seat waiver (#1245). Recency is evidence that a host is
-       doing something, and this is the one host whose doing something is the
-       problem: rotation ends its authority and nothing else, so it kept
-       ticking, kept writing, and kept clearing this threshold's floor by the
-       activity that disqualified it. The waiver is narrow on purpose — it is
-       read off a determined revocation and nothing weaker, and every clause
-       that protects work in flight still had to pass to get here. */
-    if (seatWasRevoked(subject)) return null;
-    const idleMs = options.now - stat.mtimeMs;
-    return idleMs < options.idleMs
-      ? `the transcript was written ${Math.max(0, Math.round(idleMs / 1_000))}s ago`
-      : null;
-  }),
+  "transcript-idle": (subject, options) => {
+    const pipeline = subject.pipelineStanding;
+    return mapDeterminable(subject.transcriptFile, (stat) => {
+      /* Order puts `resumable` first, so an absent transcript has already
+         refused; saying it again here keeps the clause true on its own terms
+         rather than relying on the clause before it. */
+      if (stat === null) return "the transcript is not present on disk";
+      if (pipeline?.determined && pipeline.value === "held") return "the pipeline still owns work on this host";
+      if (qualifiesForPipelineWaiver(pipeline)) return null;
+      if (options.preservePipelineWaiver) return "the pipeline no longer releases this host for prompt retirement";
+      /* The revoked-seat waiver (#1245). Recency is evidence that a host is
+         doing something, and this is the one host whose doing something is the
+         problem: rotation ends its authority and nothing else, so it kept
+         ticking, kept writing, and kept clearing this threshold's floor by the
+         activity that disqualified it. The waiver is narrow on purpose — it is
+         read off a determined revocation and nothing weaker, and every clause
+         that protects work in flight still had to pass to get here. */
+      if (seatWasRevoked(subject)) return null;
+      const idleMs = options.now - stat.mtimeMs;
+      return idleMs < options.idleMs
+        ? `the transcript was written ${Math.max(0, Math.round(idleMs / 1_000))}s ago`
+        : null;
+    });
+  },
 
   "process-identity": (subject) => {
     const recordedStart = recordedStartIdentity(subject);
@@ -703,7 +717,7 @@ const CLAUSE_CHECKS: Record<
  */
 export function structuredHostRetirementVerdict(
   subject: StructuredHostRetirementSubject,
-  options: { now: number; idleMs: number },
+  options: RetirementVerdictOptions,
 ): StructuredHostRetirementVerdict {
   const passed: StructuredHostRetirementClause[] = [];
   for (const clause of STRUCTURED_HOST_RETIREMENT_CLAUSES) {
@@ -739,7 +753,7 @@ export interface StructuredHostUnflushedEvents {
 }
 
 export interface StructuredHostRetirementRecord {
-  reason?: "abandoned turn";
+  reason?: "abandoned turn" | PipelineRetirementReason;
   /** Set when the host retired with events its dead owner never flushed. */
   unflushedEvents?: StructuredHostUnflushedEvents;
   key: string;
@@ -1161,6 +1175,12 @@ function undeliveredHandoffIndex(
      source that failed. */
   return mapDeterminable(rows, (readable) => {
     const index = new RetirementWorkIndex();
+    const addConversations = (origin: Parameters<typeof resolveConversationAlias>[1], runtime?: typeof origin) => {
+      const canonicalOrigin = retirementConversation(file, origin);
+      const canonicalRuntime = runtime && retirementConversation(file, runtime);
+      index.addConversation(canonicalOrigin);
+      if (canonicalRuntime && canonicalRuntime !== canonicalOrigin) index.addConversation(canonicalRuntime);
+    };
     for (const row of readable) {
       const replayed = new Set(row.replayedDeliveryIds ?? []);
       if (!(row.pendingDeliveries ?? []).some((delivery) => !replayed.has(delivery.deliveryId))) continue;
@@ -1168,10 +1188,17 @@ function undeliveredHandoffIndex(
       else index.addConversation(row.conversationId);
     }
     for (const delivery of registryRowsMatching(file, "heldDeliveries", "state", OPEN_RETIREMENT_DELIVERIES)) {
-      if (OPEN_RETIREMENT_DELIVERIES.includes(delivery.state)) index.addConversation(delivery.conversationId);
+      addConversations(delivery.conversationId, delivery.runtimeConversationId);
+    }
+    for (const owner of registryRowsMatching(file, "deliveryOperationOwners", "custodyState", "pending")) {
+      if (!owner.terminalState) addConversations(owner.conversationId, owner.runtimeConversationId);
     }
     return index;
   });
+}
+
+function retirementConversation(file: RegistryFile, id: RegistryFile["conversations"][string]["id"]) {
+  return file.conversationAliases ? resolveConversationAlias(file, id) : id;
 }
 
 /** Spawn receipts that named a key or its conversation and have not settled.
@@ -1244,6 +1271,7 @@ function retirementInputs(sources: RetirementSources, nowMs: number, keys: reado
     durable store. Every one is re-read on the re-check, because every one of
     them can change under it. */
 interface RetirementReaders {
+  pipelineStanding: (target: RetirementTarget) => Determinable<PipelineRetirementStanding>;
   durableEventTail: (sessionId: string) => Determinable<number>;
   realtimeBound: (conversationId: string) => Determinable<boolean>;
   transcriptStat: (pathname: string) => Determinable<{ mtimeMs: number } | null>;
@@ -1398,10 +1426,17 @@ function retirementSubject(
   const generation = conversation?.generations.find((candidate) => candidate.id === key.sessionId) ?? null;
   const launchId = entry.structuredHostOperationId ?? null;
   const launchReceipt = launchId === null ? null : inputs.file.receipts[launchId] ?? null;
+  const canonicalId = conversationId && retirementConversation(inputs.file, conversationId);
+  let pipelineStanding = readers.pipelineStanding({
+    conversations: canonicalId ? conversationIdsResolvingTo(inputs.file, canonicalId) : [],
+    engine: key.engine, sessionId: key.sessionId, agentPath: entry.artifactPath, launchId,
+  });
+  const finishedStage = qualifiesForPipelineWaiver(pipelineStanding);
 
   const central = cachedAgentObservation(subjectId(entry)) ?? inputs.file.agentStates?.[subjectId(entry)];
   let centralSettled: boolean | null = null;
   let abandonedTurn = false;
+  let openNativeTurnId: string | null = null;
   let currentAttention: readonly string[] | null = null;
   let centralWhy = central ? "central registry revision changed" : "central projection unavailable";
   const retainedProof = proof && central?.facts.revision === entryRevision(proof)
@@ -1421,6 +1456,7 @@ function retirementSubject(
         if (ownerValid && fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) === facts.transcript.value.signature) {
           const memory = conversationId ? structuredDeliveryHostForConversation(conversationId)?.agentStateMemory?.() : null;
           const turnOpen = facts.turn.determined ? facts.turn.value.state === "open" : null;
+          if (facts.turn.determined && facts.turn.value.state === "open") openNativeTurnId = facts.turn.value.nativeId;
           centralSettled = turnOpen === false
             && !facts.obligations.value.some(obligation => obligation.startsWith("background:"))
             && (!memory || memory.activeTurnRef === null);
@@ -1433,6 +1469,9 @@ function retirementSubject(
             abandonedTurn = true;
             centralSettled = true;
           }
+          if (finishedStage && (abandonedTurn || facts.turn.determined && facts.turn.value.state === "absent")) {
+            pipelineStanding = determined(null);
+          }
           // Otherwise a turn unknown by size stays unknown, never busy.
           if (!memory && !abandonedTurn && !facts.turn.determined) { centralSettled = null; centralWhy = facts.turn.why; }
         } else centralWhy = "central owner or transcript evidence changed";
@@ -1441,6 +1480,7 @@ function retirementSubject(
   }
 
   return {
+    pipelineStanding,
     key,
     keyId,
     conversationId,
@@ -1453,7 +1493,7 @@ function retirementSubject(
     scope: recordedAgentScope(columns),
     observedProcessDead: !procBackend.pidAlive(hostProcess.pid),
     status: centralSettled === true ? "idle" : entry.status,
-    activeTurnRef: centralSettled === true ? null : columns.activeTurnRef,
+    activeTurnRef: centralSettled === true ? null : openNativeTurnId ?? columns.activeTurnRef,
     turnBusy: !central && inputs.requireAgentState ? undetermined("central agent state is unavailable") : central ? centralSettled === null ? undetermined(centralWhy) : determined(!centralSettled) : conversation === null
       ? undetermined("no conversation record establishes this host's turn state")
       : conversation.turn.state === "unknown"
@@ -1471,7 +1511,7 @@ function retirementSubject(
     structuredHostOperationReceiptAbandoned: launchReceipt !== null
       && receiptAbandoned(launchReceipt.createdAt, inputs.nowMs),
     undeliveredHandoffEntries: mapDeterminable(inputs.undelivered,
-      (index) => index.count(keyId, conversationId)),
+      (index) => index.count(keyId, canonicalId)),
     openOperations: inputs.openOperations.count(keyId, conversationId),
     eventCursor: columns.eventCursor,
     durableEventTail: readers.durableEventTail(key.sessionId),
@@ -1507,6 +1547,12 @@ function killRefFact<T>(input: Determinable<T>): T | null {
     is a type narrowing rather than a decision. */
 function qualifiedTranscriptMtimeMs(subject: StructuredHostRetirementSubject): number | null {
   return subject.transcriptFile.determined ? subject.transcriptFile.value?.mtimeMs ?? null : null;
+}
+
+function needsPipelineWaiver(subject: StructuredHostRetirementSubject, at: number, idleMs: number): boolean {
+  const mtime = qualifiedTranscriptMtimeMs(subject);
+  return mtime !== null && at - mtime < idleMs && !seatWasRevoked(subject)
+    && qualifiesForPipelineWaiver(subject.pipelineStanding);
 }
 
 /**
@@ -1589,7 +1635,20 @@ export async function runStructuredHostRetirementSweep(
     revokedConversations: dependencies.revokedSeatConversations ?? defaultRevokedSeatConversations,
   };
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
+  let pipelineReader: Awaited<ReturnType<typeof pipelineRetirementReader>> | null = null;
+  // Refresh after waits. The synchronous authorizers still validate the current
+  // projection when they read the target and check process and registry custody.
+  const refreshPipelineEvidence = async () => {
+    try { pipelineReader = await pipelineRetirementReader({ now: now(), idleMs }); }
+    catch { pipelineReader = null; }
+  };
   const readers: RetirementReaders = {
+    pipelineStanding: target => {
+      try {
+        if (!pipelineReader) return undetermined("pipeline retirement evidence is unavailable");
+        return determined(pipelineReader.sweepStanding(target));
+      } catch (error) { return undetermined(safeReason(error)); }
+    },
     ownerProcess: dependencies.ownerProcess ?? observeAgentProcess,
     ownedHere: owned,
     durableEventTail: dependencies.durableEventTail ?? ((sessionId: string) => durableRuntimeEventTailSeq(sessionId)),
@@ -1611,8 +1670,13 @@ export async function runStructuredHostRetirementSweep(
   const client = dependencies.snapshot ? null : runtimeHostClient();
   // Keep the original capture even if a concurrent release clears its durable
   // copy. Empty termination diagnostics alone do not prove a tree has exited.
-  const captures = new Map<string, { identities: readonly ProcessIdentity[]; authorizeGone: () => { error: string } | null }>();
-  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs, transcriptSignature: string | null) => {
+  const captures = new Map<string, {
+    identities: readonly ProcessIdentity[];
+    authorizeGone: () => { error: string } | null;
+    preservePipelineWaiver: boolean;
+  }>();
+  const terminate = dependencies.terminate ?? ((ref: StructuredHostKillRef, originalInputs: RetirementInputs,
+    transcriptSignature: string | null, originalSubject: StructuredHostRetirementSubject, preservePipelineWaiver: boolean) => {
     // Retain the evidence that first qualified this target. Reading a
     // new snapshot here could adopt a reopened turn as the original target.
     const observed = originalInputs.file.entries[`${ref.engine}:${ref.sessionId}`];
@@ -1620,7 +1684,6 @@ export async function runStructuredHostRetirementSweep(
     const originalTurn = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)?.turn;
     const originalGenerationPath = originalInputs.conversationsBySession.get(`${ref.engine}:${ref.sessionId}`)
       ?.generations.find(generation => generation.id === ref.sessionId)?.path;
-    const originalSubject = retirementSubject(observed, originalInputs, readers, observed);
     const authorize = (gone = false) => {
       const denied = (condition: string) => ({ status: 409 as const, error: `scope retirement target changed: ${condition}` });
       if (publicationState() !== "ready") return denied("publication");
@@ -1679,39 +1742,44 @@ export async function runStructuredHostRetirementSweep(
         subject.nativeTurnSettled = originalSubject.nativeTurnSettled;
         for (const clause of STRUCTURED_HOST_RETIREMENT_CLAUSES) {
           if (clause === "process-identity" || clause === "turn-settled" || clause === "host-idle-or-dead") continue;
-          const answer = CLAUSE_CHECKS[clause](subject, { now: now(), idleMs });
+          const answer = CLAUSE_CHECKS[clause](subject, { now: now(), idleMs, preservePipelineWaiver });
           if (!answer.determined || answer.value !== null) return denied(`verdict ${clause}: ${answer.determined ? answer.value : answer.why}`);
         }
         return null;
       }
       const verdict = structuredHostRetirementVerdict(retirementSubject(entry, inputs, readers,
-        observed), { now: now(), idleMs });
+        observed), { now: now(), idleMs, preservePipelineWaiver });
       if (!verdict.retire) return denied(`verdict ${verdict.clause}: ${verdict.reason}`);
       return null;
     };
     // A failed capture must keep the cause observed inside writer admission,
     // even if that condition changes again while its promise settles.
     let captureRefusal: ReturnType<typeof authorize> = null;
+    const persistCapturedTree = (identities: readonly ProcessIdentity[]) => {
+      captures.set(`${ref.engine}:${ref.sessionId}`, {
+        identities: identities.map(identity => ({ ...identity })), authorizeGone: () => authorize(true), preservePipelineWaiver,
+      });
+      return ref.sessionId !== null && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
+        captureRefusal = authorize();
+        if (captureRefusal) return false;
+        return agentRegistry().recordStructuredTerminationSurvivors(
+          { engine: ref.engine, sessionId: ref.sessionId! },
+          { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
+          identities,
+        );
+      });
+    };
     return terminateStructuredHostTree(ref, {
       authorize: () => captureRefusal ?? authorize(),
+      ...(preservePipelineWaiver ? { authorizeAsync: async () => { await refreshPipelineEvidence(); return null; } } : {}),
       stopOrigin: { path: "idle-retirement-sweep", operationId: `${startedAtMs}:${ref.sessionId}` },
       orphanAlarmRegistry: agentRegistry(),
       graceMs,
       deadlineMs: graceMs + TERMINATION_DEADLINE_MARGIN_MS,
-      persistCapturedTree: identities => {
-        captures.set(`${ref.engine}:${ref.sessionId}`, {
-          identities: identities.map(identity => ({ ...identity })), authorizeGone: () => authorize(true),
-        });
-        return ref.sessionId !== null && agentRegistry().deliveryWriteOrBusy({ label: "registry.idle-stop-capture" }, () => {
-          captureRefusal = authorize();
-          if (captureRefusal) return false;
-          return agentRegistry().recordStructuredTerminationSurvivors(
-            { engine: ref.engine, sessionId: ref.sessionId! },
-            { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
-            identities,
-          );
-        });
-      },
+      persistCapturedTree: preservePipelineWaiver ? async identities => {
+        await refreshPipelineEvidence();
+        return persistCapturedTree(identities);
+      } : persistCapturedTree,
     });
   });
   const record = dependencies.record ?? recordRetirementReport;
@@ -1768,6 +1836,7 @@ export async function runStructuredHostRetirementSweep(
         return { status: "failed", reason: "agent scope is still loaded or its boot identity differs" };
       }
     }
+    if (capture?.preservePipelineWaiver) await refreshPipelineEvidence();
     // Admission waits asynchronously under the registry's deadline, with an origin.
     return registry.deliveryWriteOrBusy({ label: "registry.idle-reconcile-gone" }, (): GoneHostReconciliation => {
       if (publicationState() !== "ready") return { status: "failed", reason: "retirement publication is no longer ready" };
@@ -1830,6 +1899,7 @@ export async function runStructuredHostRetirementSweep(
     gone: [],
   };
 
+  await refreshPipelineEvidence();
   const publication = publicationState();
   if (publication !== "ready") {
     /* Not an error and not "nothing to do": this process cannot speak for the
@@ -1946,6 +2016,7 @@ export async function runStructuredHostRetirementSweep(
     const tree = descendantPids(planning.process.pid, parents);
     const measured = memoryOf(tree);
     const pss = await withViewerOperation("hosts.retirement", () => measurePss(tree));
+    await refreshPipelineEvidence();
     const afterMeasurement = publicationState();
     if (afterMeasurement !== "ready") { report.standDown = afterMeasurement; break; }
     /* The re-check. Everything durable is re-read, and so is every fact that
@@ -1984,7 +2055,10 @@ export async function runStructuredHostRetirementSweep(
       refuse(report, subject, { retire: false, clause: "turn-settled", reason: "conversation turn changed" }, true);
       continue;
     }
-    const verdict = structuredHostRetirementVerdict(subject, { now: now(), idleMs });
+    const checkedAt = now();
+    const plannedWithWaiver = needsPipelineWaiver(planning, startedAtMs, idleMs);
+    const verdict = structuredHostRetirementVerdict(subject, { now: checkedAt, idleMs,
+      preservePipelineWaiver: plannedWithWaiver });
     if (!verdict.retire) {
       refuse(report, subject, verdict, true, processStatus(subject.process) === "alive");
       continue;
@@ -2019,7 +2093,8 @@ export async function runStructuredHostRetirementSweep(
 
     let outcome: StructuredHostTerminationOutcome;
     try {
-      outcome = await terminate(ref, planned, transcriptSignature);
+      outcome = await terminate(ref, planned, transcriptSignature, subject,
+        plannedWithWaiver || needsPipelineWaiver(subject, checkedAt, idleMs));
     } catch (error) {
       const reason = safeReason(error);
       report.failed.push({ key: subject.keyId, conversationId: subject.conversationId,
@@ -2027,6 +2102,8 @@ export async function runStructuredHostRetirementSweep(
       continue;
     }
     if (!outcome.ok) {
+      const capture = captures.get(subject.keyId);
+      if (capture?.preservePipelineWaiver) await refreshPipelineEvidence();
       // The host can finish while termination awaits its runtime or writer.
       // Reconcile only a tree with no unresolved members; the gone path must
       // still prove scope collection and current registry custody itself.
@@ -2042,11 +2119,9 @@ export async function runStructuredHostRetirementSweep(
           "scope retirement target changed: process identity",
           "scope retirement target changed: claimOwner",
           "scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted"].includes(outcome.error);
-      const missingIdentityRefusal = outcome.status === 409 && captures.has(subject.keyId)
+      const missingIdentityRefusal = outcome.status === 409 && capture
         && /^scope retirement target changed: verdict process-identity: no kernel identity can be observed for pid \d+$/.test(outcome.error);
-      const concurrentCloseRefusal = missingIdentityRefusal
-        && captures.has(subject.keyId) && !captures.get(subject.keyId)!.authorizeGone();
-      const capture = captures.get(subject.keyId);
+      const concurrentCloseRefusal = missingIdentityRefusal && !capture.authorizeGone();
       const currentBoot = readers.bootEpoch();
       const expectedRoot: ProcessIdentity = { pid: subject.process.pid,
         startIdentity: subject.process.startIdentity, bootEpoch: subject.process.bootEpoch ?? null };
@@ -2073,8 +2148,10 @@ export async function runStructuredHostRetirementSweep(
       continue;
     }
     const unflushed = unflushedEvents(subject);
+    const standing = subject.pipelineStanding?.determined ? subject.pipelineStanding.value : null;
+    const reason = subject.abandonedTurn ? "abandoned turn" : standing === "held" ? null : standing;
     report.retired.push({
-      ...(subject.abandonedTurn ? { reason: "abandoned turn" as const } : {}),
+      ...(reason ? { reason } : {}),
       ...(unflushed ? { unflushedEvents: unflushed } : {}),
       key: subject.keyId,
       engine: subject.key.engine,

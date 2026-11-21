@@ -141,6 +141,12 @@ type FilesFetcher = (input: string, init?: RequestInit) => Promise<Response>;
 /** The server's own representation, exactly as certified by its ETag — what a
     delta applies to. Rows are shared with the published snapshot. */
 type RawFilesResponse = Record<string, unknown>;
+/** A full global response already contains the exact JSON needed by IndexedDB.
+    Delta results have their own identity and must encode the reconstructed body. */
+const fullCatalogText = new WeakMap<RawFilesResponse, string>();
+function catalogText(raw: RawFilesResponse): string {
+  return fullCatalogText.get(raw) ?? JSON.stringify(raw);
+}
 type Representation = {
   data: FilesData;
   etag?: string;
@@ -867,7 +873,7 @@ export function createFilesClientCache(
           creationWrites = creationWrites.then(async () => {
             if (!ownsCreation(generation) || !store?.updateCreations) return;
             await store.updateCreations(authority!.owner, [], materialized, () => ownsCreation(generation),
-              { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: JSON.stringify(global.raw) }, authority!.signature);
+              { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: catalogText(global.raw) }, authority!.signature);
             if (!ownsCreation(generation)) return;
             for (const id of materialized) creations.delete(id);
             publishCreations();
@@ -1138,6 +1144,9 @@ export function createFilesClientCache(
     shownBuilt = built;
     const raw = Array.isArray(parsed) ? undefined
       : scopedIncoming === incoming ? rawSharingRows(parsed as unknown as RawFilesResponse, snapshot) : parsed as unknown as RawFilesResponse;
+    if (url === filesApiUrl() && etag && raw && deltaBase === null && text.length <= FILES_SNAPSHOT_MAX_BYTES) {
+      fullCatalogText.set(raw, text);
+    }
     rememberRepresentation(url, snapshot, etag ?? undefined, etag ? raw : undefined, built);
     settleServerPipelines(logicalGeneration ?? generation, !generationIncomplete);
     publish(url);
@@ -1365,7 +1374,9 @@ export function createFilesClientCache(
     snapshot = data;
     serverPipelines = data.pipelines;
     serverTasks = data.tasks;
-    rememberRepresentation(url, data, record.etag, rawSharingRows(parsed as RawFilesResponse, data));
+    const raw = rawSharingRows(parsed as RawFilesResponse, data);
+    fullCatalogText.set(raw, record.text);
+    rememberRepresentation(url, data, record.etag, raw);
     publish(undefined, "urgent");
     return true;
   };
@@ -1550,7 +1561,7 @@ function persistFilesSnapshot(): void {
   if (!store || !current || current.etag === persistedEtag) return;
   let text: string;
   try {
-    text = JSON.stringify(current.raw);
+    text = catalogText(current.raw);
   } catch {
     return;
   }

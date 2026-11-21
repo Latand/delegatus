@@ -265,6 +265,10 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
   }
 
   if (kind === "kill") {
+    if (body.pendingSendIds !== undefined && (!Array.isArray(body.pendingSendIds)
+      || body.pendingSendIds.some(id => typeof id !== "string" || !id || id.length > 200))) {
+      throw new Error("pending send cohort is invalid");
+    }
     if (body.providerRecovery !== undefined && body.onlyIfIdle === undefined) {
       throw new Error("provider recovery requires an idle-only kill");
     }
@@ -275,6 +279,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
       idempotencyKey,
       sessionKey: runtimeSessionKey(body.sessionKey),
       ...(parseMessageOrigin(body.origin) ? { origin: parseMessageOrigin(body.origin)! } : {}),
+      ...(body.pendingSendIds !== undefined ? { pendingSendIds: [...new Set(body.pendingSendIds as string[])] } : {}),
       ...(body.onlyIfIdle !== undefined ? { onlyIfIdle: parseRuntimeIdleKillFence(body.onlyIfIdle) } : {}),
       ...(body.providerRecovery !== undefined ? { providerRecovery: parseRuntimeProviderRecoveryRef(body.providerRecovery) } : {}),
     };

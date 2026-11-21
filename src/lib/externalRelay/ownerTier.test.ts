@@ -801,7 +801,7 @@ test("owner continuation requires its original account and a current transcript 
     return pick === "exhausted" ? { kind: "exhausted", resetsAt: null } : { kind: "available", account: { accountId: pick === "own" ? own.id : peer.id } as never };
   });
   const dispatch = spyOn(delivery, "enqueueStructuredMessage").mockImplementation(async (request, deps) => {
-    expect(request.clientMessageId).toBe("relay-owner-fixture"); expect(await deps?.idleContinuationAllowed?.()).toBe(true);
+    expect(request.clientMessageId).toBe("relay-owner-fixture"); expect(deps?.idleContinuationAllowed).toBeUndefined(); expect(request.policy).toBe("queue");
     return { ok: true, structured: true, target: record.id, outcome: "held", operationId: "own-operation" };
   });
   const turn = { clientAttemptId: "relay-owner-fixture", conversationId: record.id, claimedAt: "2026-10-17T12:00:00Z", continuation: { operationId: "own-operation" } };

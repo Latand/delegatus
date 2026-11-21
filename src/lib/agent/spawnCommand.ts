@@ -28,6 +28,7 @@ import { NoCopilotAccountError, UnknownCopilotAccountError } from "@/lib/account
 import { agentRegistry, prepareAgentRegistry, identityMaterializationFence, SpawnChildLimitError, type SpawnLauncher, type SpawnRequest } from "@/lib/agent/registry";
 import { reasoningFromBody } from "@/lib/agent/efforts";
 import { guardedDiskCleanerProfile } from "./cleanerLaunchPolicy";
+import { scheduledCleanerRunProvenance } from "@/lib/cleaner/store";
 import { grantedMcpServers, mcpServersForSession, normalizeSpawnMcpServers, SCHEDULED_REPORT_SESSION_CLASS, type McpSessionClass } from "@/lib/agent/mcpAllowlist";
 import { normalizeSpawnPlugins, pluginAllowlistForSession, SCHEDULED_REPORT_PLUGINS, sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexModelSupportsImages, defaultModelFor, modelFromBody, validateLaunchModel } from "@/lib/agent/models";
@@ -102,6 +103,8 @@ const PIN_FALLBACK_TITLE_UK_MESSAGE = uk["spawnCard.pinUnavailableFallback"];
 const PIN_FALLBACK_TITLE_UK = typeof PIN_FALLBACK_TITLE_UK_MESSAGE === "string"
   ? PIN_FALLBACK_TITLE_UK_MESSAGE
   : PIN_FALLBACK_TITLE_EN;
+
+class CleanerDrainHold extends Error {}
 
 /** Viewer-authored task titles follow the operator's interface language
     (docs/design/orchestrator-reports.md §3.5, §4.2). The request's
@@ -900,6 +903,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       launcher: launcher.value,
       launchProfile,
       clientAttemptId,
+      scheduledCleanerRunId: scheduledCleanerRunProvenance(clientAttemptId, body),
       requestDigest,
       ...(taskIds?.length ? { taskIds } : {}),
       /* Durable launch DISPLAY payload (issue #614/#615): the RAW operator
@@ -1333,8 +1337,21 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             && Boolean(receipt.admissionOwner && current.admissionOwner
               && sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)),
         });
+        const releaseCleanerAdmission = async () => {
+          if (!diskCleaner || !dependencies.autonomousAdmissionHeld?.()) return false;
+          while (true) {
+            const current = registry.spawnReceipt(receipt.launchId);
+            if (current?.state !== "starting" || !current.admissionOwner || !receipt.admissionOwner
+              || !sameRecordedProcessIdentity(receipt.admissionOwner, current.admissionOwner)) return true;
+            const released = await registry.deliveryWrite({ label: "spawn.cleaner-drain-hold" }, () =>
+              registry.releaseSpawnActuation(receipt.launchId, receipt.admissionOwner!));
+            if (released.acquired) return true;
+            await new Promise(resolve => setTimeout(resolve, 25));
+          }
+        };
         try { authorizeLaunch(receipt); }
         catch {
+          if (await releaseCleanerAdmission()) return;
           await failOwnedAdmission("autonomous launch authorization revoked");
           return;
         }
@@ -1359,6 +1376,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
             }
             try { authorizeLaunch(receipt); }
             catch {
+              if (await releaseCleanerAdmission()) throw new CleanerDrainHold("cleaner launch held by update drain");
               await failOwnedAdmission("autonomous launch authorization revoked");
               throw new Error("autonomous launch authorization revoked");
             }
@@ -1372,7 +1390,15 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
                 imageRefs,
                 registry,
                 client: runtimeClient,
-                authorize: () => authorizeLaunch(receipt),
+                authorize: () => {
+                  try { authorizeLaunch(receipt); }
+                  catch (error) {
+                    if (diskCleaner && dependencies.autonomousAdmissionHeld?.()) {
+                      throw new CleanerDrainHold("cleaner launch held by update drain", { cause: error });
+                    }
+                    throw error;
+                  }
+                },
               });
             } catch (error) {
               // The launcher may already have settled its own failure. That
@@ -1386,6 +1412,10 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
           }, dependencies.runtimeAdmissionRetry);
           await recordActualSpawnAccountOffLoop(registry, receipt, launchAccount.accountId, response.path);
         } catch (error) {
+          if (error instanceof CleanerDrainHold) {
+            await releaseCleanerAdmission();
+            return;
+          }
           spawnDiagnosticError("[spawn] structured launch failed", {
             launchId: receipt.launchId,
             conversationId: receipt.conversationId,

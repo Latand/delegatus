@@ -93,7 +93,7 @@ export function openCurrentDatabase<T extends BunDatabase>(
     throw new DatabaseReplacedError(`${filename} kept changing while it was opened`);
   };
   let current = connect();
-  let handle: T;
+  let bound = new Map<PropertyKey, { fn: unknown; wrapped: unknown }>();
   const isCurrent = () => !databaseSwapInProgress(filename) && databaseFileIdentity(filename) === current.identity;
   const ensureCurrent = (carriesCommit: boolean) => {
     const db = current.db;
@@ -105,6 +105,7 @@ export function openCurrentDatabase<T extends BunDatabase>(
     if (isCurrent()) return;
     const next = connect();
     current = next;
+    bound = new Map<PropertyKey, { fn: unknown; wrapped: unknown }>();
     try {
       // Give readers a last chance to materialize values from the old inode
       // before closing it. Most connections have no such held lazy values.
@@ -113,13 +114,21 @@ export function openCurrentDatabase<T extends BunDatabase>(
       try { db.close(); } catch { /* closing a moved file only drops its descriptors */ }
     }
   };
-  handle = new Proxy(current.db, {
+  const handle: T = new Proxy(current.db, {
     get(_target, property) {
       if (GUARDED.has(property)) ensureCurrent(property === "exec");
       const value = Reflect.get(current.db, property, current.db) as unknown;
-      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(current.db) : value;
+      if (typeof value === "function") {
+        const cached = bound.get(property);
+        if (cached && cached.fn === value) return cached.wrapped;
+        const wrapped = (value as (...args: unknown[]) => unknown).bind(current.db);
+        bound.set(property, { fn: value, wrapped });
+        return wrapped;
+      }
+      return value;
     },
     set(_target, property, value) {
+      bound.delete(property);
       return Reflect.set(current.db, property, value, current.db);
     },
   });
