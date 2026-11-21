@@ -27,7 +27,7 @@ import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIden
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { spawnNoticeFinalMessage, transcriptErrorFromRecords } from "@/lib/spawnNotice/production";
 import { scrubOwnerOutput } from "./ownerOutput";
-import { changeRun, changeRunAsync, ownerRelayStoreDeadline, readRunLedger, type OwnerStopRelease, type RunRecord } from "./store";
+import { changeRun, changeRunAsync, ownerRelayStoreDeadline, readRunLedger, runHoldsConversation, type OwnerStopRelease, type RunRecord } from "./store";
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { noteRelayOutcome } from "./activity";
 import { offersHandoff, type ExternalRelayRequest, type ExternalRelayDecision, type ExternalRelayAnswer } from "./protocol";
@@ -504,16 +504,19 @@ const productionPorts: OwnerRunPorts = {
     const { applyConversationAction } = await import("@/lib/conversation/actions");
     const { agentRegistry } = await import("@/lib/agent/registry");
     const registry = agentRegistry();
-    const currentRun = () => readRunLedger().runs.find(r => r.conversationId === conversationId && r.ownerTurn?.clientAttemptId === clientAttemptId);
+    const currentRun = () => readRunLedger().runs.find(r => r.ownerTurn?.clientAttemptId === clientAttemptId
+      && (!r.conversationId || r.conversationId === conversationId));
     const before = currentRun();
-    const continued = before?.ownerTurn?.continuation;
+    if (!before?.ownerTurn) throw new Error("owner cancellation custody changed");
+    if (!runHoldsConversation(before)) return;
+    const continued = before.ownerTurn.continuation;
     if (continued) {
       const hadDelivery = await settleOwnerContinuation(continued.operationId, conversationId, registry);
       const run = currentRun();
-      if (!run?.ownerTurn || run.leaseId !== before?.leaseId || run.ownerTurn.continuation?.operationId !== continued.operationId)
+      if (!run?.ownerTurn || run.leaseId !== before.leaseId || run.ownerTurn.continuation?.operationId !== continued.operationId)
         throw new Error("owner cancellation custody changed");
-      if (ownerStopHasNoExecutionCustody(run, registry)) return;
-      if (!hadDelivery && !run?.ownerTurn?.admissionComplete) return;
+      if (!runHoldsConversation(run) || ownerStopHasNoExecutionCustody(run, registry)) return;
+      if (!hadDelivery && !run.ownerTurn.admissionComplete) return;
       const result = await applyConversationAction({ conversationId, transcriptPath: "", action: "interrupt", operationId: `relay_owner_interrupt_${continued.operationId}` });
       if (result.status !== 200) throw new Error("owner relay conversation control refused");
       return;
@@ -522,6 +525,8 @@ const productionPorts: OwnerRunPorts = {
     try { prompt = await settleOwnerFirstPrompt(clientAttemptId!, conversationId, registry); }
     catch { /* Still stop the host; custody keeps the owed prompt cleanup. */ }
     const run = currentRun();
+    if (!run || run.leaseId !== before.leaseId || run.ownerTurn?.continuation) throw new Error("owner cancellation custody changed");
+    if (!runHoldsConversation(run)) return;
     const receipt = registry.spawnReceiptForClientAttempt(clientAttemptId!);
     if (prompt.confirmed && ownerStopHasNoExecutionCustody(run, registry)) return;
     // A retired queue with no actuation owner or host binding never started work.
@@ -1015,15 +1020,24 @@ export async function revokeOwnerRuns(relayId?: string): Promise<void> {
     if (target && (relayId === undefined || target.relayId === relayId)
       && !ownerRelayAuthorized(target.relayId, target.targetId, requestId)) cancel();
   }
+  const until = ownerRelayStoreDeadline();
   for (const run of readRunLedger().runs) {
-    if ((relayId !== undefined && run.relayId !== relayId) || !run.ownerTurn || ownerRelayAuthorized(run.relayId, run.targetId, run.requestId)) continue;
+    if ((relayId !== undefined && run.relayId !== relayId) || !run.ownerTurn || !runHoldsConversation(run)) continue;
     const cancel = cancels.get(run.requestId);
-    if (cancel) continue;
-    const cutoff: RunRecord = { ...run, ownerTurn: { ...run.ownerTurn, cancelledAt: run.ownerTurn.cancelledAt ?? new Date().toISOString(),
-      cancel: run.ownerTurn.continuation ? "interrupt" : run.ownerTurn.cancel ?? (run.ownerTurn.admissionComplete ? "interrupt" : "kill") } };
-    try { changeRun(run.requestId, () => cutoff); }
-    catch { /* The known host still receives control independently of persistence. */ }
-    pending.push(confirmOwnerStop(cutoff));
+    if (cancel || ownerRelayAuthorized(run.relayId, run.targetId, run.requestId)) continue;
+    let cutoff: RunRecord | undefined;
+    try {
+      await changeRunAsync(run.requestId, current => {
+        const turn = current.ownerTurn;
+        if (!turn || !runHoldsConversation(current) || current.leaseId !== run.leaseId
+          || turn.clientAttemptId !== run.ownerTurn?.clientAttemptId
+          || ownerRelayAuthorized(current.relayId, current.targetId, current.requestId)) return current;
+        cutoff = { ...current, ownerTurn: { ...turn, cancelledAt: turn.cancelledAt ?? new Date().toISOString(),
+          cancel: turn.continuation ? "interrupt" : turn.cancel ?? (turn.admissionComplete ? "interrupt" : "kill") } };
+        return cutoff;
+      }, until);
+    } catch { /* If the writer reached the guarded cutoff, still attempt host control. */ }
+    if (cutoff) pending.push(confirmOwnerStop(cutoff));
   }
   await Promise.all(pending);
 }

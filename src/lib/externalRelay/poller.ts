@@ -4,7 +4,7 @@ import { ownerRunRoot } from "./runDirectory";
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { deliverOwnerLateAnswer, expireOwnerLateAnswer, ownerLateAnswerTerminal, ownerLateAnswerUndeliverable, ownerRecoveryRequest } from "./ownerLateDelivery";
 import { ownerFailureAnswer, confirmOwnerStop, revokeOwnerRuns, type OwnerRunPorts } from "./ownerRun";
-import { effectiveOwnerRunTier, ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
+import { effectiveOwnerRunTier, ownerRelayFailureReplyAuthorized, ownerRunIsRequester } from "./ownerAuthority";
 import { changeRun, changeRunAsync, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
 import { sweepConversationsAsync } from "./conversations";
 import { readRelaySwitches } from "./switches";
@@ -148,13 +148,13 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         // no such limit, however long the install was off.
         if (ownerLateAnswerUndeliverable(run)) { await expireOwnerLateAnswer(run.requestId); continue; }
         const store = readRelayStore();
-        if (run.ownerTurn.entry?.tier === "requester" || effectiveOwnerRunTier(run, store) === "requester") {
+        if (ownerRunIsRequester(run, store)) {
           await changeRunAsync(run.requestId, row => {
             const lateAnswer = row.ownerTurn?.lateAnswer;
             if (!lateAnswer || ownerLateAnswerTerminal(lateAnswer) || row.completionAccepted
               || ownerStopPending(row) || relayRequestInFlight(row.requestId)) return row;
             const latest = readRelayStore();
-            if (row.ownerTurn?.entry?.tier !== "requester" && effectiveOwnerRunTier(row, latest) !== "requester") return row;
+            if (!ownerRunIsRequester(row, latest)) return row;
             const attempted = lateAnswer.firstAttemptAt !== undefined || lateAnswer.parts?.some(part => part.firstAttemptAt !== undefined || part.receipt);
             return { ...row, capacityReleased: true, ownerTurn: { ...row.ownerTurn!,
               lateAnswer: { ...lateAnswer, status: attempted ? "uncertain" : "refused" } } };

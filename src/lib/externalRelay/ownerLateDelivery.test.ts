@@ -4,7 +4,8 @@ import { startTestRelay } from "./testRelay";
 import { clonePairing, cloneReceipt } from "./clone.fixture";
 import { deliverOwnerLateAnswer, ownerRecoveryRequest } from "./ownerLateDelivery";
 import { changeRun, dropRun, readRunLedger, reserveRun, updateRelayStore } from "./store";
-import { liveOwnerRelayRequest } from "./ownerAuthority";
+import { liveOwnerRelayRequest, ownerRelayAuthorized, ownerRelayHandoff } from "./ownerAuthority";
+import { completeRelayRequest } from "./relayCompletion";
 import { sweepExternalRelayOrphans } from "./poller";
 import { procBackend } from "@/lib/proc";
 import { requestSchema } from "./protocol";
@@ -50,21 +51,40 @@ async function fixture(id: string, delivery: unknown = context, owner = true,
     } };
 }
 
-test.each(["owner", "requester"] as const)("legacy handoff and orphan delivery agree on %s tier", async tier => {
+test.each(["owner", "unverifiable", "expired", "valid"] as const)("legacy handoff and delivery with %s authority", async lease => {
   const requestId = "retained_legacy_reply";
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-24T15:00:00Z"));
+  const completions: unknown[] = [];
   let sends = 0;
-  const f = await fixture(requestId, context, true, () => { sends++; return { body: cloneReceipt() }; });
+  const f = await fixture(requestId, context, true, (req, payload) => {
+    if (req.url?.endsWith("/complete")) {
+      completions.push(payload);
+      return { body: { status: "ok" } };
+    }
+    sends++;
+    return { body: cloneReceipt() };
+  });
   const second = { ...f.relay, id: "different_pairing", owner: { ...f.relay.owner, id: "202" }, targets: [] };
-  if (tier === "requester") updateRelayStore(store => ({ ...store, relays: [...store.relays, second] }));
+  if (lease !== "owner") updateRelayStore(store => ({ ...store, relays: [...store.relays, second] }));
+  const conversation = "conversation_retained_reply";
   changeRun(requestId, row => ({
-    ...row, ownerIdentity: procBackend.processIdentity(process.pid), conversationId: "conversation_retained_reply",
-    ownerTurn: { ...row.ownerTurn!, lateAnswer: { body, files: [] } },
+    ...row, ownerIdentity: procBackend.processIdentity(process.pid), conversationId: conversation,
+    ownerTurn: { ...row.ownerTurn!, request: { text: "Do the work", requestText: null }, lateAnswer: { body, files: [] },
+      ...(lease === "expired" || lease === "valid" ? { leaseDeadlineAt: Date.now() + (lease === "expired" ? 0 : 20_000) } : {}) },
   }));
   try {
-    expect(liveOwnerRelayRequest("conversation_retained_reply")?.tier).toBe(tier);
-    if (tier === "requester") expect(await f.send()).toMatchObject({ delivery: "refused" });
+    const authorized = lease === "owner" || lease === "valid";
+    expect(liveOwnerRelayRequest(conversation)?.tier).toBe(lease === "owner" ? "owner" : authorized ? "requester" : undefined);
+    const handoff = ownerRelayHandoff("Work context", conversation);
+    expect(handoff.requester).toBe(lease !== "owner");
+    expect(!!handoff.payload).toBe(authorized);
+    const authorize = () => ownerRelayAuthorized(f.relay.id, "fixture-clone", requestId);
+    expect(await completeRelayRequest(f.relay, requestId, body, () => Date.now() + 5000, authorize))
+      .toMatchObject({ delivery: "accepted" });
+    expect(completions).toEqual([authorized ? body : { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null }]);
+    if (lease !== "owner") expect(await f.send()).toMatchObject({ delivery: "refused" });
     await sweepExternalRelayOrphans();
-    if (tier === "owner") {
+    if (lease === "owner") {
       expect(sends).toBe(1);
       expect(f.pending()).toBeUndefined();
     } else {
@@ -73,6 +93,7 @@ test.each(["owner", "requester"] as const)("legacy handoff and orphan delivery a
       expect(readRunLedger().runs.find(row => row.requestId === requestId)?.capacityReleased).toBe(true);
     }
   } finally {
+    clock.mockRestore();
     updateRelayStore(store => ({ ...store, relays: store.relays.filter(item => item.id !== second.id) }));
     await f.close();
   }

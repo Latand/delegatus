@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
     relays: store.relays.map(publicRelay),
     reviewDestination: destination.reason ? { reason: destination.reason } : {
       targetName: destination.relay.targets.find(target => target.id === destination.targetId)!.name,
+      installationOwner: destination.installationOwner,
     },
     pending: store.pending.map(publicPending),
     status: externalRelayRows(),

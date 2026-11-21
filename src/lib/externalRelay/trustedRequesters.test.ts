@@ -1,8 +1,9 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { NextRequest } from "next/server";
 import { accountManager } from "@/lib/accounts/manager";
+import * as actions from "@/lib/conversation/actions";
 import * as ephemeral from "@/lib/agent/ephemeral";
 import { agentRegistry } from "@/lib/agent/registry";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
@@ -24,6 +25,7 @@ import { partById } from "@/lib/transfer/sections";
 import { SourceSnapshot } from "@/lib/transfer/stores";
 import * as client from "./client";
 import * as cloud from "./cloud";
+import * as ownerRun from "./ownerRun";
 import { relayAnswerOp } from "./ownerAnswer";
 import { readAnswerRecord } from "./answers";
 import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayHandoff, ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized, ownerRelayTargetMatches } from "./ownerAuthority";
@@ -32,10 +34,12 @@ import { refreshRelayTargets } from "./poller";
 import { selectOwnerDestination } from "./ownerDestination";
 import { conversationAuthority, releaseConversation, reserveChainConversation } from "./conversations";
 import { requestSchema } from "./protocol";
+import { elevatedRequesterFor } from "./profile";
 import { contextRequest } from "./request.fixture";
 import { richRequest } from "./rich.fixture";
 import { runClaimedRequest } from "./runner";
 import { setRelaySwitch } from "./switches";
+import * as relayStore from "./store";
 import { addPairedOwnerRequester, addTrustedRequester, removeTrustedRequester, trustedRequesterAuditFile } from "./trustedRequesterStore";
 import { changeRun, dropRun, externalRelayFile, readRunLedger, readRelayStore, reserveRun, updateRelayStore, updateRelayStoreAsync, type PairedRelay, type RelayTargetSettings } from "./store";
 import { startTestRelay } from "./testRelay";
@@ -207,31 +211,53 @@ test("fresh authority rejects a suspended or removed entry at every durable boun
   } finally { dropRun(id); }
 });
 
-test("a carried requester grant refuses Cloud before remote execution when the provider offers no lease deadline", async () => {
-  const a = paired([target]);
-  const b = paired([{ ...target, ownerTier: true, engine: "codex-cloud", cloudEnvironmentId: "configured", model: cloud.CLOUD_MODEL }], "relay_b", "202");
+test.each(["configured", "no environment", "oversized context", "owner"] as const)("Cloud admission before either execution path (%s)", async scenario => {
+  const cloudTarget = { ...target, ownerTier: true, engine: "codex-cloud" as const, cloudEnvironmentId: "configured", model: cloud.CLOUD_MODEL };
+  const a = paired([cloudTarget]);
+  const b = paired([cloudTarget], "relay_b", "202");
+  const relay = scenario === "owner" ? a : b;
   setRelays(a, b);
   ownerMember();
-  const deadlineAt = Date.now() + 20_000;
-  const raw = { ...ownerRequest(), deadline_at: new Date(deadlineAt).toISOString(),
-    owner_delivery: { chat_id: 202, reply_to_message_id: 1, message_thread_id: null } };
+  const raw = { ...ownerRequest(), request_id: `cloud_${scenario.replaceAll(" ", "_")}`,
+    owner_delivery: { chat_id: Number(relay.owner.id), reply_to_message_id: 1, message_thread_id: null } };
+  if (scenario === "oversized context") {
+    raw.input.instructions = "🧪".repeat(10_000);
+    const elevation = elevatedRequesterFor(relay, cloudTarget, raw, [a, b])!;
+    expect(ownerRun.prepareOwnerPrompt(raw, elevation.instruction, 1).context).toContain(raw.input.instructions);
+  }
   const posts: string[] = [];
   const wire = spyOn(client, "relayCall").mockImplementation(async (_base, route) => {
     posts.push(route);
     return { status: 200, body: { status: "ok" } } as never;
   });
-  const provider = cloudProviderWithoutTerminalReply();
-  const launch = spyOn(cloud, "runCloudRelay");
-  const localLaunch = async () => { throw new Error("A configured Cloud grant cannot silently become a local run"); };
+  const environment = spyOn(cloud, "cloudEnvironment").mockReturnValue(scenario === "no environment" ? null : "configured");
+  const directory = spyOn(ownerRun, "cloudOwnerDirectory").mockReturnValue(process.env.TMPDIR!);
+  const account = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" } } });
+  const cloudRun = spyOn(cloud, "runCloudRelay");
+  const transport = mock(async (_input: cloud.CloudRequest) => "Cloud answer");
+  const localLaunch = mock(async () => ({ status: 202, body: { conversationId: "conversation_cloud_fallback", initialMessage: "delivered" } }));
   try {
-    expect(await runClaimedRequest(b, raw, undefined, {
-      leaseWorker: false, cloudTransport: provider.transport, ownerPorts: { launch: localLaunch, observe: async () => ({ state: "failed" }), stop: async () => {} },
-    })).toMatchObject({ outcome: "failed", reason: "configuration_error" });
-    expect(launch.mock.calls[0]?.[0]).toMatchObject({ fullAccess: true, environmentId: "configured", leaseDeadlineAt: deadlineAt });
-    expect(provider.methods).toEqual([]);
+    const result = await runClaimedRequest(relay, raw, undefined, {
+      leaseWorker: false, cloudTransport: transport, ownerPorts: { launch: localLaunch, observe: async () => ({ state: "ended", finalText: "Native answer" }), stop: async () => {} },
+    });
+    if (scenario === "owner") {
+      expect(result).toMatchObject({ outcome: "answered", answer: { text: "Cloud answer" } });
+      expect(cloudRun).toHaveBeenCalledTimes(1);
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(transport.mock.calls[0]?.[0]).toMatchObject({ fullAccess: true, environmentId: "configured" });
+    } else {
+      expect(result).toMatchObject({ outcome: "failed", reason: "configuration_error" });
+      expect(cloudRun).not.toHaveBeenCalled();
+      expect(transport).not.toHaveBeenCalled();
+      expect(environment).not.toHaveBeenCalled();
+      expect(directory).not.toHaveBeenCalled();
+    }
+    expect(localLaunch).not.toHaveBeenCalled();
+    expect(account).not.toHaveBeenCalled();
     expect(posts.some(route => route.endsWith("/send"))).toBe(false);
     expect(readRunLedger().runs.find(run => run.requestId === raw.request_id)).toBeUndefined();
-  } finally { launch.mockRestore(); wire.mockRestore(); provider.close(); }
+  } finally { cloudRun.mockRestore(); environment.mockRestore(); directory.mockRestore(); account.mockRestore(); wire.mockRestore(); }
 });
 
 function cloudProviderWithoutTerminalReply() {
@@ -303,6 +329,48 @@ test("poller refresh persists entries only on retained targets", async () => {
     expect(refreshed[0]).toMatchObject({ name: "Refreshed", requesters: granted.requesters });
     expect(refreshed[1]).not.toHaveProperty("requesters");
   } finally { await service.close(); }
+});
+
+test.each(["settled", "settles during cutoff"] as const)("target refresh leaves reply custody and a reused conversation alone (%s)", async state => {
+  const remainingTarget = { ...granted, id: "remaining_target" };
+  const fetch = spyOn(client, "fetchRelayTargets").mockResolvedValue([
+    { target_id: remainingTarget.id, name: remainingTarget.name, answered_by: "install", fallback: "none" },
+  ]);
+  const stop = spyOn(actions, "applyConversationAction").mockResolvedValue({ status: 200, body: { error: "fixture" } });
+  const relay = paired([granted, remainingTarget], "retained_reply_relay");
+  setRelays(relay);
+  const conversationId = "conversation_reused";
+  const oldRun = { requestId: "settled_reply", leaseId: "old_lease", relayId: relay.id, targetId: target.id,
+    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
+    startedAt: addedAt, runDir: process.env.TMPDIR!, conversationId, capacityReleased: true as const,
+    ownerTurn: { clientAttemptId: "relay-owner-settled_reply", admissionComplete: true, entry: snapshot,
+      completionAttempt: { body: { lease_id: "old_lease", outcome: "answered" as const, duration_ms: 1,
+        answer: { action: "reply" as const, text: "Older answer", reply_to: "m1" } }, files: [] } } };
+  const newRun = { ...oldRun, requestId: "later_turn", leaseId: "new_lease", targetId: remainingTarget.id,
+    capacityReleased: undefined, ownerTurn: { clientAttemptId: "relay-owner-later_turn", entry: snapshot, leaseDeadlineAt: Date.now() + 60_000 } };
+  const write = relayStore.changeRunAsync;
+  const cutoff = spyOn(relayStore, "changeRunAsync").mockImplementation(async (id, update, until) => {
+    if (id === oldRun.requestId && state === "settles during cutoff") {
+      changeRun(id, () => oldRun);
+      reserveRun(newRun);
+    }
+    return write(id, update, until);
+  });
+  if (state === "settled") {
+    reserveRun(oldRun);
+    reserveRun(newRun);
+  } else {
+    reserveRun({ ...oldRun, capacityReleased: undefined });
+  }
+  try {
+    expect(await refreshRelayTargets(relay.id, 0)).toBe("changed");
+    expect(cutoff).toHaveBeenCalledTimes(state === "settled" ? 0 : 1);
+    expect(stop).not.toHaveBeenCalled();
+    expect(readRunLedger().runs.find(row => row.requestId === oldRun.requestId)).toEqual(oldRun);
+    expect(ownerRelayAuthorized(relay.id, remainingTarget.id, newRun.requestId)).toBe(true);
+  } finally {
+    dropRun(oldRun.requestId); dropRun(newRun.requestId); cutoff.mockRestore(); fetch.mockRestore(); stop.mockRestore();
+  }
 });
 
 test("a target refresh waits for an in-progress entry write without blocking the Viewer", async () => {
@@ -382,7 +450,6 @@ test("an async MCP call rechecks its grant after awaiting acknowledgement", asyn
 });
 
 test("separate pairing owners and an unreadable team store cannot use the install-owner tier", async () => {
-  const { elevatedRequesterFor } = await import("./profile");
   const a = paired([{ ...target, ownerTier: true }]);
   const b = paired([{ ...target, ownerTier: true }], "relay_b", "202");
   setRelays(b, a);

@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -86,6 +86,44 @@ test("status refreshes the targets and omits credential and poll secret", async 
     expect(text).not.toContain("secret_poll");
   } finally {
     await service.close();
+  }
+});
+
+test("status distinguishes the installation owner's review chat from the fallback pairing", async () => {
+  const { readRelayStore, updateRelayStore } = await import("@/lib/externalRelay/store");
+  const { destinationRelay, destinationTarget } = await import("@/lib/externalRelay/ownerDestination.fixture");
+  const { MEMBER_COOKIE, mintSession } = await import("@/lib/team/sessions");
+  const teams = await import("@/lib/team/store");
+  const client = await import("@/lib/externalRelay/client");
+  const discover = spyOn(client, "discoverRelay").mockRejectedValue(new Error("offline fixture"));
+  const targets = spyOn(client, "fetchRelayTargets").mockRejectedValue(new Error("offline fixture"));
+  const owner = { ...destinationRelay([destinationTarget("Installation bot")]), id: "installation_review" };
+  const other = { ...destinationRelay([destinationTarget("Pairing bot")]), id: "pairing_review",
+    owner: { ...owner.owner, id: "42" } };
+  const original = readRelayStore();
+  const team = teams.teamStore();
+  team.insertMember({ id: "review-owner", name: "Owner", role: "owner", status: "active", color: "coral",
+    telegram: { userId: owner.owner.id, username: null, firstName: null, linkedAt: owner.pairedAt },
+    createdAt: owner.pairedAt, createdBy: "fixture", revokedAt: null });
+  const session = mintSession(team, "review-owner", "telegram", { surface: "desktop", browser: "chrome" });
+  const destination = async () => {
+    const response = await GET(new NextRequest(`${origin}/api/external-relay`, {
+      headers: { ...operator(), cookie: `${MEMBER_COOKIE}=${session.value}` },
+    }));
+    expect(response.status).toBe(200);
+    return (await response.json()).reviewDestination;
+  };
+  try {
+    updateRelayStore(store => ({ ...store, relays: [other, owner] }));
+    expect(await destination()).toEqual({ targetName: "Installation bot", installationOwner: true });
+    updateRelayStore(store => ({ ...store, relays: [other, { ...owner, paused: true }] }));
+    expect(await destination()).toEqual({ targetName: "Pairing bot", installationOwner: false });
+  } finally {
+    discover.mockRestore(); targets.mockRestore();
+    updateRelayStore(() => original);
+    teams.resetTeamStoreForTests();
+    const file = teams.teamStoreFile();
+    for (const suffix of ["", "-wal", "-shm"]) fs.rmSync(file + suffix, { force: true });
   }
 });
 test("mutation guards cross origin and staging", async () => {

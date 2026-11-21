@@ -14,10 +14,6 @@ function currentRunEntry(run: RunRecord, relay: PairedRelay, relays: readonly Pa
   const target = relay.targets.find(item => item.id === run.targetId);
   if (!run.ownerTurn || relay.paused !== false || target?.enabled !== true) return null;
   const saved = run.ownerTurn.entry;
-  if (saved?.tier === "requester") {
-    const deadline = run.ownerTurn.leaseDeadlineAt;
-    if (deadline === undefined || !Number.isFinite(deadline) || Date.now() >= deadline) return null;
-  }
   const entry = requesterEntries(relay, target).find(entry => entry.id === (saved?.id ?? legacyRequesterId(target.id)));
   if (!entry || canonicalRelayProject(entry.project) !== canonicalRelayProject(target.project)) return null;
   if (!saved && (entry.kind !== "paired-owner" || entry.source !== "earlier-switch")) return null;
@@ -25,6 +21,12 @@ function currentRunEntry(run: RunRecord, relay: PairedRelay, relays: readonly Pa
   if (saved && (current.kind !== saved.kind || current.tier !== saved.tier
     || canonicalRelayProject(current.project) !== canonicalRelayProject(saved.project))) return null;
   return saved ?? current;
+}
+
+function requesterLeaseAllows(run: RunRecord, tier: "owner" | "requester"): boolean {
+  if (tier === "owner") return true;
+  const deadline = run.ownerTurn?.leaseDeadlineAt;
+  return typeof deadline === "number" && Number.isFinite(deadline) && Date.now() < deadline;
 }
 
 export function ownerRunSettingsAllow(run: RunRecord, store: Pick<RelayStore, "relays">): boolean {
@@ -35,7 +37,15 @@ export function ownerRunSettingsAllow(run: RunRecord, store: Pick<RelayStore, "r
 
 export function effectiveOwnerRunTier(run: RunRecord, store: Pick<RelayStore, "relays">) {
   const relay = store.relays.find(item => item.id === run.relayId);
-  return (relay && currentRunEntry(run, relay, store.relays)?.tier) ?? null;
+  const tier = relay && currentRunEntry(run, relay, store.relays)?.tier;
+  return tier && requesterLeaseAllows(run, tier) ? tier : null;
+}
+
+/** Classify delivery custody even after the execution lease has expired. */
+export function ownerRunIsRequester(run: RunRecord, store: Pick<RelayStore, "relays">): boolean {
+  if (run.ownerTurn?.entry) return run.ownerTurn.entry.tier === "requester";
+  const relay = store.relays.find(item => item.id === run.relayId);
+  return !!relay && currentRunEntry(run, relay, store.relays)?.tier === "requester";
 }
 
 /** The final /send boundary must require owner tier, even for pre-upgrade rows. */
@@ -85,7 +95,7 @@ function conversationRelayAuthority(conversationId: string): { run: RunRecord | 
       const tier = entry?.tier ?? run.ownerTurn.entry?.tier ?? (relay ? pairedOwnerTier(relay, relays) : "requester");
       const requesterRun = tier === "requester";
       requester ||= requesterRun;
-      if (!entry || run.ownerTurn.cancel || run.ownerTurn.quarantinedAt || !run.ownerIdentity
+      if (!entry || !requesterLeaseAllows(run, entry.tier) || run.ownerTurn.cancel || run.ownerTurn.quarantinedAt || !run.ownerIdentity
         || procBackend.processIdentity(run.ownerPid) !== run.ownerIdentity) continue;
       // The preceding turn can still call MCP while the reply waits in the queue.
       // Only delivery of this request grants its conversation the owner's tools.

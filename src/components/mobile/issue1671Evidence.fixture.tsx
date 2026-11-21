@@ -1527,7 +1527,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         relays: [
           relayRow({ targets: [
             target({ engine: "claude", model: "opus", effort: "low", concurrency: 2, answered_by: "install", grantStatus: "active" }),
-            target({ id: "bot-2", name: "Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays", engine: "codex", model: "gpt-6-astra", effort: "high", memberLimitPerHour: null }),
+            target({ id: "bot-2", name: "Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays", engine: "codex", model: "gpt-6-astra", effort: "high", memberLimitPerHour: null, grantStatus: "suspended" }),
             target({ id: "bot-3", name: "New bot" }),
             target({ id: "bot-4", name: "Пошук по базі знань для нових учасників чату магазину", engine: "claude", model: "sonnet", concurrency: 3, memberLimitPerHour: 25, answered_by: "install" }),
             target({ id: "bot-5", name: "Moderation helper for the returns and warranty chat", engine: "claude", model: "opus", effort: "high", concurrency: 4, answered_by: "install" }),
@@ -1536,6 +1536,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           relayRow({ id: "relay-2", origin: "https://second-relay.example", name: "Second relay", description: "", paused: true, targets: [target({ engine: "claude", model: "sonnet" })] }),
         ],
         pending: [],
+        reviewDestination: { targetName: "Support bot", installationOwner: true },
         status: [
           { id: "relay-1", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: iso(240), lastProgress: { targetId: "bot-1", label: "Reading the last messages in the thread", at: iso(300) } }, running: { "bot-1": 1, "bot-2": 0, "bot-3": 0, "bot-4": 2, "bot-5": 4, "bot-6": 0 } },
           { id: "relay-2", state: { state: "paused", lastOutcome: "declined:no_capacity", lastOutcomeAt: iso(7_200), lastProgress: null }, running: { "bot-1": 0 } },
@@ -1547,6 +1548,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           relayRow({ id: "relay-2", origin: "https://second-relay.example", name: "Second relay", description: "", targets: [target({ engine: "claude", model: "sonnet", answered_by: "install" })] }),
         ],
         pending: [],
+        reviewDestination: { targetName: "Support bot", installationOwner: false },
         status: [
           { id: "relay-1", state: { state: "credential_rejected", lastOutcome: "failed:agent_error", lastOutcomeAt: iso(3_600), lastProgress: null }, running: { "bot-1": 0 } },
           { id: "relay-2", state: { state: "unreachable", lastOutcome: "answered", lastOutcomeAt: iso(1_800), lastProgress: null }, running: { "bot-1": 0 } },

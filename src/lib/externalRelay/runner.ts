@@ -765,6 +765,9 @@ export async function runClaimedRequest(
       return await finish(failed(leaseId, "cancelled"));
     }
     if (elevation && elevation.source !== "earlier-switch") cloud = false;
+    // The provider cannot guarantee termination by the requester's lease deadline.
+    // Refuse before Cloud configuration or context size can select a native fallback.
+    if (cloud && requesterTier) return await finish(failed(leaseId, "configuration_error"));
     if (owner || request.delivery === "guest") delete profile.pageRead;
     boundedOwnerTurn = !!owner && !prototype;
     ownerExecution = boundedOwnerTurn && !requesterTier;

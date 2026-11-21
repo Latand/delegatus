@@ -704,10 +704,11 @@ test("the settings render server-derived grant status and review destination wit
     target({ grantStatus: "active" }),
     target({ id: "bot-2", name: "Other bot", grantStatus: "suspended" }),
     target({ id: "bot-3", grantStatus: "none" }),
-  ] })], pending: [], status: [], reviewDestination: { targetName: "Other bot" } };
+  ] })], pending: [], status: [], reviewDestination: { targetName: "Other bot", installationOwner: false } };
   route();
   const host = await mount(<ExternalRelaySection />);
-  expect(host.querySelector("[data-external-relay-review-destination]")?.textContent).toContain("Other bot");
+  expect(host.querySelector("[data-external-relay-review-destination]")?.textContent)
+    .toBe("Prototype reviews go to the pairing owner’s private chat with Other bot.");
   const rows = Array.from(host.querySelectorAll("[data-external-relay-target]"));
   const statuses = async () => {
     const rendered = [];
@@ -722,10 +723,24 @@ test("the settings render server-derived grant status and review destination wit
   expect(host.querySelectorAll('[role="switch"]')).toHaveLength(rows.length);
   try {
     await act(async () => setLocale("uk"));
+    expect(host.querySelector("[data-external-relay-review-destination]")?.textContent)
+      .toBe("Рев’ю прототипів надходять у приватний чат власника підключення з Other bot.");
     expect(await statuses()).toEqual(["Дозволи діють", "Дозволи призупинено", "Дозволів немає"]);
   } finally { await act(async () => setLocale("en")); }
 });
 
+test("the selected installation owner's review destination is described in both languages", async () => {
+  answers.relay = { relays: [relay()], pending: [], status: [],
+    reviewDestination: { targetName: "Installation bot", installationOwner: true } };
+  route();
+  const host = await mount(<ExternalRelaySection />);
+  const notice = host.querySelector("[data-external-relay-review-destination]")!;
+  expect(notice.textContent).toBe("Prototype reviews go to the installation owner’s private chat with Installation bot.");
+  try {
+    await act(async () => setLocale("uk"));
+    expect(notice.textContent).toBe("Рев’ю прототипів надходять у приватний чат власника інсталяції з Installation bot.");
+  } finally { await act(async () => setLocale("en")); }
+});
 
 for (const locale of ["en", "uk"] as const) test(`an unresolved owner stop stays visible in relay settings (${locale})`, async () => {
   accounts({ claude: [signedIn("main")] });

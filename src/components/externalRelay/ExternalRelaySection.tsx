@@ -89,7 +89,7 @@ export type RelayState = {
   relays: RelayView[];
   pending: PendingView[];
   status: StatusRow[];
-  reviewDestination?: { reason: OwnerDestinationReason } | { targetName: string };
+  reviewDestination?: { reason: OwnerDestinationReason } | { targetName: string; installationOwner: boolean };
 };
 type PairingStatus = { status: "pending" | "awaiting_install" | "completed" | "expired" | "denied" | "cancelled"; owner?: Owner; reason?: string };
 
@@ -471,6 +471,7 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
   const configured = target.engine !== null && target.model !== null;
   const load = [t("externalRelay.target.running", { count: running, max: target.concurrency }), limit ? t("externalRelay.target.perHour", { count: limit }) : null].filter(Boolean).join(" · ");
   const here = target.answered_by === "install";
+  const answerSource = t(here ? "externalRelay.target.answeredHere" : target.answered_elsewhere ? "externalRelay.target.answeredElsewhere" : "externalRelay.target.answeredService");
   const moveRefused = actions.refused === target.id && target.answered_elsewhere === true && !here;
   const name = (key: Parameters<TFunction>[0]) => `${t(key)} · ${target.name}`;
   return (
@@ -494,11 +495,13 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
                 </>
               ) : <span className="min-w-0 truncate">{t("externalRelay.target.needsEngine")}</span>}
             </span>
-            <span data-external-relay-answer-source="" className="text-caption leading-4 text-muted">{t(here ? "externalRelay.target.answeredHere" : target.answered_elsewhere ? "externalRelay.target.answeredElsewhere" : "externalRelay.target.answeredService")}</span>
+            <span className="flex min-w-0 items-baseline gap-1.5 text-caption leading-4 text-muted">
+              <span data-external-relay-answer-source="" className="min-w-0 truncate" title={answerSource}>{answerSource}</span>
+              {!open && target.grantStatus && target.grantStatus !== "none" ? (
+                <span data-external-relay-grant-caption="" className="shrink-0">{t(`externalRelay.target.grant.${target.grantStatus}`)}</span>
+              ) : null}
+            </span>
             {target.answered_elsewhere && canAnswer && !moveRefused ? <span data-external-relay-release-elsewhere="" className="text-caption leading-4 text-muted">{t("externalRelay.target.releaseElsewhere")}</span> : null}
-            {!open && target.grantStatus && target.grantStatus !== "none" ? (
-              <span data-external-relay-grant-caption="" className="text-caption leading-4 text-muted">{t(`externalRelay.target.grant.${target.grantStatus}`)}</span>
-            ) : null}
           </span>
           {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}
         </button>
@@ -767,7 +770,8 @@ export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, 
         const selected = state.reviewDestination;
         const notice = selected ? (
           <p key="review-destination" data-external-relay-review-destination={"reason" in selected ? selected.reason : "ready"} className="text-caption leading-4 text-muted">
-            {"reason" in selected ? t(`externalRelay.review.${selected.reason}`) : t("externalRelay.review.ready", { target: selected.targetName })}
+            {"reason" in selected ? t(`externalRelay.review.${selected.reason}`)
+              : t(selected.installationOwner ? "externalRelay.review.ready" : "externalRelay.review.pairingOwner", { target: selected.targetName })}
           </p>
         ) : null;
         const connected = state.relays.map((relay) => relay.origin);

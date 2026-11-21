@@ -1,4 +1,4 @@
-import { captureAppConnectForms, withAppConnectBrowserTemp, captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
+import { captureAppConnectForms, ownedBrowserSocketEnvironment, withAppConnectBrowserTemp, captureTaskDueFrames, captureTaskSummaryFrames, taskSummaryResponses } from "@/components/kanban/issue1695BrowserHarness";
 import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -1088,12 +1088,16 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
   const { base, stop } = await serveFixture();
   const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "external-relay");
   fs.mkdirSync(out, { recursive: true });
-  const launched = await chromium.launchServer({ headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+  const sockets = ownedBrowserSocketEnvironment();
+  const launched = await chromium.launchServer({ env: sockets.env, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) }).catch(error => {
+    sockets.close(); stop(); throw error;
+  });
   const browserPid = launched.process().pid ?? null;
-  const browser = await chromium.connect(launched.wsEndpoint());
   const readings: Record<string, unknown>[] = [];
   const failures: string[] = [];
   try {
+    const browser = await chromium.connect(launched.wsEndpoint());
     for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) for (const scheme of SCHEMES) {
       const phone = width === 390;
       const open = async (scene: string) => {
@@ -1163,7 +1167,9 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
               })),
               pairedAs: Array.from(element.querySelectorAll("[data-external-relay-paired-at]")).map((node) => node.textContent),
               /* A line the row cuts short: who it is paired as, a target's model and load, or what it still needs. */
-              cut: Array.from(element.querySelectorAll("[data-external-relay-paired-at], [data-external-relay-running] .truncate")).filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => node.textContent),
+              cut: Array.from(element.querySelectorAll("[data-external-relay-paired-at], [data-external-relay-running] .truncate, [data-external-relay-grant-caption]"))
+                .filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => node.textContent),
+              reviewDestination: element.querySelector("[data-external-relay-review-destination]")?.textContent ?? null,
               pairing: element.querySelector("[data-external-relay-pairing]")?.getAttribute("data-external-relay-pairing") ?? null,
               pairingText: (element.querySelector("[data-external-relay-pairing]") as HTMLElement | null)?.innerText ?? null,
               lastOutcome: element.querySelector("[data-external-relay-last-outcome]")?.textContent ?? null,
@@ -1232,6 +1238,8 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
             if (reading.targets.length !== 7) failures.push(`${label}: ${reading.targets.length} target rows`);
             if (reading.targets.some((target) => target.open || target.settings.length)) failures.push(`${label}: a target opened unasked`);
             const [first, second, third] = reading.targets;
+            expect(second?.grantCaption).toBe(translate(locale, "externalRelay.target.grant.suspended"));
+            expect(reading.reviewDestination).toBe(translate(locale, "externalRelay.review.ready", { target: "Support bot" }));
             if (first?.answeredHere !== true || !first.summary?.includes(locale === "uk" ? "1 з 2" : "1 of 2")) failures.push(`${label}: the first target reads ${JSON.stringify(first)}`);
             if (!second?.warned || !second.switchDisabled) failures.push(`${label}: a Codex target without a Codex account can be switched on`);
             if (!third?.switchDisabled) failures.push(`${label}: a target with no engine can be switched on`);
@@ -1250,6 +1258,7 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
             if (locale === "en" && !reading.lastOutcome?.startsWith("Answered")) failures.push(`${label}: last outcome reads ${JSON.stringify(reading.lastOutcome)}`);
           }
           if (scene === "troubled") {
+            expect(reading.reviewDestination).toBe(translate(locale, "externalRelay.review.pairingOwner", { target: "Support bot" }));
             const tones = reading.stateLines.map((line) => `${line.state}:${line.tone}`);
             if (JSON.stringify(tones) !== JSON.stringify(["credential_rejected:danger", "unreachable:warning"])) failures.push(`${label}: poller lines ${JSON.stringify(tones)}`);
             const [refused, unreachable] = reading.stateLines;
@@ -1308,12 +1317,15 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
         failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
       } finally { await context.close(); }
     }
+    await browser.close();
   } finally {
-    await browser.close(); await launched.close(); stop();
-    if (launched.process().exitCode === null && launched.process().signalCode === null) {
-      failures.push(`the browser ${browserPid} outlived its close`);
-      await stopFixtureProcess(launched.process());
-    }
+    try {
+      await launched.close();
+      if (launched.process().exitCode === null && launched.process().signalCode === null) {
+        failures.push(`the browser ${browserPid} outlived its close`);
+        await stopFixtureProcess(launched.process());
+      }
+    } finally { sockets.close(); stop(); }
   }
   fs.mkdirSync("evidence/external-relay", { recursive: true });
   fs.writeFileSync("evidence/external-relay/card.json", `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", browser: { pid: browserPid, closed: true }, readings, failures }, null, 2)}\n`);
