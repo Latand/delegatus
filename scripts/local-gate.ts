@@ -6,7 +6,8 @@ import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { procBackend } from "../src/lib/proc";
+import { captureProcessIdentity, processIdentityMayOwn, processIdentityMayRun, type ProcessIdentity } from "../src/lib/processIdentity";
 import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -420,12 +421,9 @@ function cgroupOf(pid: number | "self"): string | null {
   try { return readFileSync(`/proc/${pid}/cgroup`, "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3) ?? null; }
   catch { return null; }
 }
-/** Only ESRCH proves a process gone. /proc, where there is one, also tells a
-    zombie (exited, waiting to be reaped) from a running process; unreadable
-    metadata proves nothing, so the process counts as running. */
 function live(pid: number): boolean {
   try { process.kill(pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
-  try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
+  return process.platform !== "linux" || !procBackend.processExited(pid);
 }
 function procEntries(): number[] | null {
   try { return readdirSync("/proc").filter(name => /^\d+$/.test(name)).map(Number); } catch { return null; }
@@ -519,6 +517,9 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
   const remember = (member: number) => {
     if (!signalled.has(member)) signalled.set(member, captureProcessIdentity(member));
   };
+  // Linux can prove that every thread has exited even before the parent reaps
+  // the PID. Keep the identity check elsewhere to avoid a per-PID ps probe.
+  const stillRunning = process.platform === "linux" ? processIdentityMayRun : processIdentityMayOwn;
   remember(pid);
   const cleanup: Cleanup = { ends: Date.now() + CLEANUP_MS, late: false };
   let blind = false;
@@ -545,7 +546,7 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
     const inherited = holders(token, cleanup);
     if (!inherited) blind = true;
     for (const member of [...inherited ?? [], ...[...scopes].flatMap(scopeMembers)]) remember(member);
-    return [...signalled.values()].filter(identity => processIdentityStatus(identity) !== "dead").map(identity => identity.pid);
+    return [...signalled.values()].filter(identity => stillRunning(identity)).map(identity => identity.pid);
   };
   let survivors = left();
   for (let attempt = 1; survivors.length && Date.now() < cleanup.ends; attempt++) {
