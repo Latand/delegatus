@@ -3431,8 +3431,11 @@ using the pairing credential in `Authorization: Bearer …`,
 `Delegatus-Relay-Version: 1` and JSON content type. It never discovers or guesses
 the trigger id from an opaque message reference or the destination from an
 owner identity. Absent or malformed context keeps the late answer durable with
-status `pending-delivery-context`, logs that status and sends nothing. A member
-claim carrying these fields still has no owner execution or delivery authority.
+status `pending-delivery-context`, logs that status and sends nothing. A claim
+whose requester is not the owner and carries these fields is declined
+`invalid_request` before any tool list or session exists, and so is a positive
+(private) `chat_id` that differs from the paired Telegram owner's user id
+(amended 2026-11-21; earlier, such a member claim ran without owner authority).
 
 The exact `SendMessage` payload and a valid 8–64-character `client_key` are
 persisted before dispatch and reused on every retry, including after restart.
