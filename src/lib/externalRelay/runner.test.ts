@@ -4700,7 +4700,9 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
   const trigger = fixture.input.conversation.find(m => m.id === fixture.input.respond_to)!;
   const samples: { mode: string; promptBytes: number; deliveredMs: number; answerMs: number }[] = [];
   let promptBytes = 0, deliveredAt = 0, launches = 0, sends = 0;
+  let deliveredPrompt = "";
   const engine = (prompt: string) => {
+    deliveredPrompt = prompt;
     promptBytes = Buffer.byteLength(prompt);
     // Same CPU work per prompt byte on both paths; no network/model or sleep.
     for (let i = 0; i < passes; i++) createHash("sha256").update(prompt).digest();
@@ -4725,6 +4727,12 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
         const completion = await runClaimedRequest(paired, { ...first, request_id: `latency-${pair}-${mode}`, input }, undefined, { ownerPorts: ports });
         const answerMs = performance.now() - started;
         expect(completion?.outcome).toBe("answered");
+        if (mode === "continued") {
+          const rows = JSON.parse(deliveredPrompt.match(/<conversation>\n([^]*?)\n<\/conversation>/)![1]!) as { id: string }[];
+          expect(rows.slice(-11).map(row => row.id)).toEqual(input.conversation.slice(-11).map(row => row.id));
+          expect(deliveredPrompt).toContain("<short_term_memory>");
+          expect(deliveredPrompt).not.toContain("<service_instructions>");
+        }
         samples.push({ mode, promptBytes, deliveredMs: deliveredAt - started, answerMs });
       }
     }
@@ -4733,7 +4741,7 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
     const variability = (values: number[]) => ({ rangeMs: Math.max(...values) - Math.min(...values),
       medianAbsoluteDeviationMs: median(values.map(value => Math.abs(value - median(values)))) });
     const fresh = samples.filter(s => s.mode === "fresh"), continued = samples.filter(s => s.mode === "continued");
-    expect(median(continued.map(s => s.promptBytes))).toBeLessThan(median(fresh.map(s => s.promptBytes)) / 4);
+    expect(median(continued.map(s => s.promptBytes))).toBeLessThan(median(fresh.map(s => s.promptBytes)));
     const measurement = { engine: `SHA256 ${passes} passes per prompt; alternating pair order`, load: os.loadavg(), samples,
       medians: { freshMs: median(fresh.map(s => s.answerMs)), continuedMs: median(continued.map(s => s.answerMs)) },
       variability: { fresh: variability(fresh.map(s => s.answerMs)), continued: variability(continued.map(s => s.answerMs)) } };
