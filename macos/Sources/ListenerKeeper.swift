@@ -72,7 +72,8 @@ enum ListenerKeeper {
         guard getpeereid(fd, &uid, &gid) == 0, uid == getuid(),
               getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &size) == 0,
               size == MemoryLayout.size(ofValue: pid),
-              Server.executablePath(Int(pid)) == executable else { return [] }
+              Server.executablePath(Int(pid)).map({ Installations.realPath(URL(fileURLWithPath: $0)) })
+                == Installations.realPath(URL(fileURLWithPath: executable)) else { return [] }
         var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)
         while data.count <= 32768 {
             let count = Darwin.read(fd, &buffer, buffer.count)
