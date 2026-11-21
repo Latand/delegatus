@@ -47,7 +47,8 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-startup-timeout-"));
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 1_000 });
   const adapter = new FakeDeploymentAdapter();
-  adapter.verifyHostFailure = new Error("runtime-host handoff evidence is unavailable");
+  const healthy = adapter.promotedHealth;
+  adapter.promotedHealth = { ...healthy, ok: false, detail: "Viewer writer and live-host proof is incomplete" };
   const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 27, startIdentity: "27:1" });
   const incumbent = adapter.current;
   const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
@@ -71,6 +72,7 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
   const previous = process.env.LLV_VIEWER_CONTROL_URL;
   process.env.LLV_VIEWER_CONTROL_URL = server.url.origin;
   const args = { revision: SHA, clientRequestId: "admission-during-adoption-timeout", full: true };
+  const handoffArgs = { ...args, clientRequestId: "handoff-during-adoption-timeout" };
   let designated = true;
   const caller = { ...domain, authorizedSeats: () => designated ? domain.authorizedSeats() : [] } as never;
   const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), caller), store);
@@ -91,7 +93,7 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
     await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", server.url), {
       requestInit: { headers: { "x-llv-spawn-capability": "a".repeat(43) } },
     }));
-    const call = async () => (await client.callTool({ name: "deploy_exact_sha", arguments: args })).structuredContent;
+    const call = async (request = args) => (await client.callTool({ name: "deploy_exact_sha", arguments: request })).structuredContent;
     markStructuredHostStartupFailed("timeout");
     expect(await call()).toMatchObject({ ok: true, state: "accepted" });
     const admitted = journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)!;
@@ -99,10 +101,18 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
     await coordinator.waitForDeployment(admitted.deploymentId);
     expect(adapter.current).toEqual(incumbent);
     expect(journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)).toMatchObject({
-      phase: "failed", terminal: true, error: expect.stringContaining("runtime-host handoff evidence is unavailable"),
+      phase: "rolled-back", terminal: true, error: "Viewer writer and live-host proof is incomplete",
     });
     markStructuredHostStartupFailed("timeout");
     expect(await call()).toMatchObject({ ok: true, deploymentId: admitted.deploymentId, replayed: true });
+    adapter.promotedHealth = healthy;
+    adapter.verifyHostFailure = new Error("runtime-host handoff evidence is unavailable");
+    expect(await call(handoffArgs)).toMatchObject({ ok: true, state: "accepted" });
+    const handoff = journal.viewerDeploymentByIdempotencyKey(handoffArgs.clientRequestId)!;
+    await coordinator.waitForDeployment(handoff.deploymentId);
+    expect(journal.viewerDeploymentByIdempotencyKey(handoffArgs.clientRequestId)).toMatchObject({
+      phase: "failed", terminal: true, error: "runtime-host handoff evidence is unavailable",
+    });
     await stdioClient.connect(stdio);
     for (const reader of [client, stdioClient]) {
       for (const [name, args] of [["get_orchestrator", { project: PROJECT }], ["deployment_status", {}]] as const) {
@@ -112,15 +122,17 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
     }
     designated = false;
     expect(await call()).toMatchObject({ ok: false, code: "deploy_caller_not_designated" });
-    expect(posts).toBe(1);
+    expect(posts).toBe(2);
   } finally {
     await stdioClient.close(); await stdio.close();
     await client.close();
     setMcpHttpDependenciesForTests(null);
     setDeploymentRuntimeForTests(null);
     setSelfUpdateServiceForTests(null);
-    const admitted = journal.viewerDeploymentByIdempotencyKey(args.clientRequestId);
-    if (admitted) await coordinator.waitForDeployment(admitted.deploymentId);
+    for (const request of [args, handoffArgs]) {
+      const admitted = journal.viewerDeploymentByIdempotencyKey(request.clientRequestId);
+      if (admitted) await coordinator.waitForDeployment(admitted.deploymentId);
+    }
     markStructuredHostStartupReady();
     store.close(); server.stop(true); journal.close();
     if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previous;
