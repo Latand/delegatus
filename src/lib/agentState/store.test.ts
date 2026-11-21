@@ -6,6 +6,9 @@ import path from "node:path";
 import { AgentRegistry, normalizeRegistry } from "@/lib/agent/registry";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { AgentStateService } from "./service";
+import { publishAgentProjection } from "./publication";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
+import type { RuntimeEventInput } from "@/lib/runtime/contracts";
 import { readAgentProjection, readAgentStateMetrics, readAgentStatePage, subjectId } from "./store";
 import { cachedAgentObservation } from "./projectionCache";
 import { FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, fixtureRegistry, fixtureRecords } from "./testFixture";
@@ -74,6 +77,57 @@ for (const mode of ["off", "sqlite"] as const) {
     expect(cachedAgentObservation(subject)?.facts.obligations).toEqual(settled.facts.obligations);
   });
 }
+test("revision-only status publishes without invalidating files and a failed real invalidation survives retry", async () => {
+  const f = fixture("sqlite"), registry = f.open();
+  const key = { engine: "codex" as const, sessionId: FIXTURE_SESSION };
+  const entry = registry.hostEntry(key)!;
+  const subject = subjectId(entry);
+  let statusEvents = 0, fileEvents = 0, failRefresh = false;
+  let session: Record<string, unknown> = { sessionKey: key, revision: 10, host: "unhosted", turn: "idle",
+    activeTurnId: null, writerClaim: null };
+  const client = {
+    readSession: async () => session,
+    filesRevision: async () => fileEvents,
+    append: async (event: RuntimeEventInput) => {
+      if (event.kind === "files.revision") {
+        if (failRefresh) throw new Error("fixture refresh interruption");
+        fileEvents++;
+      } else {
+        expect(event.expectedSessionRevision).toBe(session.revision as number);
+        statusEvents++;
+        session = { ...session, ...event.payload, revision: Number(session.revision) + 1 };
+      }
+    },
+  } as unknown as RuntimeHostClient;
+  const service = new AgentStateService({ registry, now: () => FIXTURE_NOW + 2000,
+    owns: () => true, process: processIdentityStatus, memory: () => null, release: "fixture",
+    publish: (row, current) => publishAgentProjection(registry, client, row, current) });
+  const observe = () => service.reconcile(registry.hostEntry(key)!);
+  try {
+    await observe();
+    expect([statusEvents, fileEvents]).toEqual([1, 1]);
+    service.observeResourceSample([{ agentState: { subject }, rssBytes: 100 }], FIXTURE_NOW + 2000);
+    await observe();
+    expect([statusEvents, fileEvents]).toEqual([2, 1]);
+
+    // The runtime owner moved independently. Keep the correction owed if only
+    // the status commits, then retry with the status already matching.
+    session.turn = "running";
+    service.observeResourceSample([{ agentState: { subject }, rssBytes: 200 }], FIXTURE_NOW + 2000);
+    failRefresh = true;
+    await expect(observe()).rejects.toThrow("fixture refresh interruption");
+    expect(readAgentProjection(registry, subject)?.pendingFilesRevision).toBe(true);
+    failRefresh = false;
+    await observe();
+    expect(fileEvents).toBe(2);
+    expect(readAgentProjection(registry, subject)?.pendingPublication).toBe(false);
+
+    registry.holdDelivery(FIXTURE_CONVERSATION, "fixture", "delivery-fact");
+    await observe();
+    expect(fileEvents).toBe(3);
+  } finally { service.stop(); }
+});
+
 test("a refused journal insert rolls back the cache, conversation and counters; retry commits once", async () => {
   const f = fixture("sqlite"), registry = f.open();
   registry.readOnlySnapshot();
