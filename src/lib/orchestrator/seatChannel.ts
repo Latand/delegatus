@@ -7,7 +7,6 @@ import { initializeStateCollectionsAsync, SqliteStateCollection, stateCollection
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { canonicalOrchestratorProject, orchestratorRevocations, type OrchestratorRevocation } from "./seats";
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { deliveryMayHaveArrived, type AgentRegistry } from "@/lib/agent/registry";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -179,20 +178,14 @@ export async function reconcileSeatChannel(revocation: OrchestratorRevocation, p
   return withViewerOperation("orchestrator.seat-channel", async () => {
     if (!ports.ownsTraffic()) return false;
     const { registry, client } = ports;
-    const snapshot = registry.readOnlySnapshot();
-    const { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } = await import("@/lib/agent/registry");
-    const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
-    const canonical = lookup.canonicalConversationId(revocation.conversationId as ViewerConversationId);
-    const ids = conversationIdsResolvingTo(snapshot, canonical);
-    const owners = registryRowsMatching(snapshot, "deliveryOperationOwners", "conversationId", ids);
-    const held = registryRowsMatching(snapshot, "heldDeliveries", "conversationId", ids);
+    const { owners, held, byId } = registry.revokedSeatDeliveries(revocation.conversationId as ViewerConversationId);
     const records = await store();
     const candidates = new Map<string, SeatChannelRecord>();
     for (const owner of owners) {
       const previous = records.get(owner.command.operationId);
       if (previous && !active(previous)) continue;
       if (owner.terminalState && owner.terminalReason !== SEND_SEAT_REVOKED_REASON) continue;
-      const delivery = snapshot.heldDeliveries[owner.deliveryId];
+      const delivery = byId.get(owner.deliveryId);
       candidates.set(owner.command.operationId, previous ?? {
         fromOperationId: owner.command.operationId, fromConversationId: owner.conversationId,
         project: revocation.project, revokedSeatEpoch: revocation.seatEpoch,
@@ -214,9 +207,11 @@ export async function reconcileSeatChannel(revocation: OrchestratorRevocation, p
         payload: { text: delivery.text, imageRefs: delivery.runtimeImages, origin: delivery.command.origin },
       });
     }
+    const retained = new Map<string, SeatChannelRecord>();
     for (const row of records.snapshotForController()) {
-      if (canonicalOrchestratorProject(row.project) === canonicalOrchestratorProject(revocation.project)
-        && row.fromConversationId === revocation.conversationId) candidates.set(row.fromOperationId, row);
+      if (row.fromConversationId !== revocation.conversationId || canonicalOrchestratorProject(row.project) !== canonicalOrchestratorProject(revocation.project)) continue;
+      retained.set(row.fromOperationId, row);
+      candidates.set(row.fromOperationId, row);
     }
     const activeSeat = currentSeat(revocation.project);
     if (activeSeat?.conversationId === revocation.conversationId && activeSeat.seatEpoch > revocation.seatEpoch) {
@@ -249,14 +244,26 @@ export async function reconcileSeatChannel(revocation: OrchestratorRevocation, p
       } else if (!row.payload && sourceOwner?.evidenceText && !sourceOwner.evidenceImageCount) {
         row = { ...row, payload: { text: sourceOwner.evidenceText, origin: sourceOwner.command.origin } };
       }
-      row = await save(row, registry); // Capture
+      const deliveryId = sourceOwner?.deliveryId ?? held.find(item => item.command.operationId === row.fromOperationId)?.id;
+      const readDelivery = () => deliveryId === undefined ? undefined : registry.heldDeliveryById(deliveryId);
+      const native = sourceOwner?.directAdmission === "native-queue-add" || Boolean(nativeEntry);
+      // An unchanged, already captured row with no withdrawal evidence stays
+      // pending. Publishing the same payload again only advances its revision.
+      // An actionable or changed row still crosses the normal capture fence.
+      if (!native && row.outcome === "unknown" && retained.get(row.fromOperationId) === row
+        && !await client.operationStatus(row.fromOperationId)) {
+        const evidence = readDelivery();
+        const current = records.get(row.fromOperationId);
+        if (current && evidence?.state !== "held" && !(evidence?.state === "failed" && evidence.error === SEND_SEAT_REVOKED_REASON)
+          && current.revision === row.revision) {
+          complete = false;
+          continue;
+        }
+      }
+      row = await save(row, registry); // Capture the complete payload before withdrawal can scrub it.
       if (!active(row)) continue; // Another serving generation already settled this source.
-      // the complete payload before withdrawal can scrub it.
       const original = await client.operationStatus(row.fromOperationId);
-      const delivery = registry.readOnlySnapshot().heldDeliveries[owners.find(owner => owner.command.operationId === row.fromOperationId)?.deliveryId
-        ?? held.find(item => item.command.operationId === row.fromOperationId)?.id ?? ""];
-      const native = owners.find(owner => owner.command.operationId === row.fromOperationId)?.directAdmission === "native-queue-add"
-        || Boolean(nativeEntry);
+      const delivery = readDelivery();
       let withdrawal: SeatWithdrawal;
       if (native && !await ports.withdrawNative?.(row.fromConversationId, row.fromOperationId)) { complete = false; continue; }
       if (row.outcome === "awaiting-seat") withdrawal = "withdrawn";
@@ -289,7 +296,7 @@ export async function reconcileSeatChannel(revocation: OrchestratorRevocation, p
             complete = false;
             continue;
           }
-          if (settled.state === "delivered" || deliveryMayHaveArrived(registry.readOnlySnapshot(), settled)) {
+          if (settled.state === "delivered" || deliveryMayHaveArrived(registry.deliverySnapshotForOperation(settled.command.operationId), settled)) {
             row = await save({ ...row, outcome: "dropped", payload: undefined }, registry);
             continue;
           }
@@ -304,7 +311,7 @@ export async function reconcileSeatChannel(revocation: OrchestratorRevocation, p
           continue;
         }
       }
-      const operationOwner = registry.readOnlySnapshot().deliveryOperationOwners[row.fromOperationId];
+      const operationOwner = registry.deliverySnapshotForOperation(row.fromOperationId).deliveryOperationOwners[row.fromOperationId];
       if (operationOwner?.directAdmission || operationOwner?.retryOfOperationId) {
         const settled = await registry.deliveryWrite({ label: "delivery.seat-channel", operationId: row.fromOperationId },
           () => registry.settleDirectAdmission(row.fromOperationId, "failed", SEND_SEAT_REVOKED_REASON, "lost"));

@@ -115,6 +115,7 @@ let deferredAdoptionLogged = false;
 type RecipientStartupAuthority = Required<Pick<import("./structuredRecovery").StructuredRecoveryRequest,
   "admissionGuard" | "authorityGuard" | "acceptSuccessorClaim">>;
 type StartupPassState = {
+  restartCutObservations?: Map<string, { owner: string; at: number; transcript: string; workAt: number | null }>;
   recipients?: Map<string, Promise<RecipientStartupAuthority>>;
   recipientDependencies?: StructuredStartupDependencies;
   /** The host rows this process has found cut. The set silences the generic
@@ -649,6 +650,7 @@ interface RestartCutRecognition {
       compared wherever this pass would replace the predecessor's ownership of
       the row. */
   stamps: Map<string, RestartCutStamp>;
+  continuing: Set<string>;
   /** Proposals the evidence no longer supports: restart records of a row no
       successor has taken, which this pass decided "no cut" from durable
       evidence that the turn ended. */
@@ -681,6 +683,12 @@ function transcriptIdentity(transcriptPath: string): string {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
   }
+}
+
+function transcriptGrewSince(before: string, after: string): boolean {
+  const [beforeDevice, beforeInode, beforeSize] = before.split(":");
+  const [device, inode, size] = after.split(":");
+  return device === beforeDevice && inode === beforeInode && Number(size) > Number(beforeSize);
 }
 
 function fileModifiedAt(filename: string): number | "absent" | "unknown" {
@@ -798,6 +806,10 @@ async function restartCutTargets(
   if (checkpoint?.size) await forEachStartupBatch(checkpoint.keys(), async key => {
     if (!snapshot.entries[key]?.structuredHost) checkpoint.delete(key);
   }, assertStartupReadActive);
+  const observations = startupPassState(registry).restartCutObservations ??= new Map();
+  if (!scope && observations.size) await forEachStartupBatch(observations.keys(), async key => {
+    if (!snapshot.entries[key]?.structuredHost) observations.delete(key);
+  }, assertStartupReadActive);
   const seated = new Set(seats.flatMap((seat) => seat.conversationId?.startsWith("conversation_")
     ? [registry.canonicalConversationId(seat.conversationId as ViewerConversationId)]
     : []));
@@ -812,7 +824,7 @@ async function restartCutTargets(
     const id = registry.canonicalConversationId(obligation.conversationId);
     recorded.set(id, [...recorded.get(id) ?? [], obligation]);
   }
-  const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), settled: new Set(), stamps: new Map(), disproved: [] };
+  const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), settled: new Set(), stamps: new Map(), continuing: new Set(), disproved: [] };
   const self = captureProcessIdentity(process.pid);
   let inSlice = 0;
   for await (const conversation of startupHostedConversationRows(snapshot)) {
@@ -877,6 +889,29 @@ async function restartCutTargets(
       }
     }
     const at = evidence?.lastWork?.at ?? null;
+    // Keep the first observation of this owner across full retries and
+    // deferred re-probes. A cached read still has to prove later work.
+    const owner = JSON.stringify([generation.path, entry.claimEpoch, entry.claimOwner,
+      entry.structuredHost.endpoint, entry.structuredHost.process]);
+    const observation = observations.get(hostKey);
+    const engine = entry.structuredHost.process;
+    if (!observation || observation.owner !== owner) {
+      observations.set(hostKey, { owner, at: now, transcript, workAt: at });
+    } else if (live && engine && at !== null && at > observation.at && at > (observation.workAt ?? -Infinity)
+      && transcriptGrewSince(observation.transcript, transcript) && transcriptIdentity(generation.path) === transcript) {
+      const latest = startupHostSnapshot(registry, entry.key).entries[hostKey];
+      if (latest?.claimEpoch === entry.claimEpoch && latest.claimOwner === entry.claimOwner
+        && latest.updatedAt === entry.updatedAt && latest.artifactPath === generation.path
+        && latest.structuredHost?.endpoint === entry.structuredHost.endpoint
+        && latest.structuredHost?.process && sameRecordedProcessIdentity(engine, latest.structuredHost.process)
+        && processIdentityStatus(engine) === "alive") {
+        recognition.settled.add(hostKey);
+        recognition.continuing.add(hostKey);
+        recognition.disproved.push(...proposals);
+        onProgress?.(recognition.stamps.size + recognition.continuing.size);
+        continue;
+      }
+    }
     const stamp: RestartCutStamp = {
       sessionId: generation.id,
       path: generation.path,
@@ -899,7 +934,7 @@ async function restartCutTargets(
       const activity = Math.max(...[ledgerWrite, transcriptWork].map((date) => date === "absent" ? -Infinity : date));
       if (now - (Number.isFinite(activity) ? activity : Date.parse(entry.updatedAt)) > startupTurnMaxAgeMs()) {
         recognition.stamps.set(hostKey, stamp);
-        onProgress?.(recognition.stamps.size);
+        onProgress?.(recognition.stamps.size + recognition.continuing.size);
         continue;
       }
     }
@@ -921,7 +956,7 @@ async function restartCutTargets(
     /* Every row decided here is stamped, a cut one included: what is written
        for it is a proposal until the row is taken. */
     recognition.stamps.set(hostKey, stamp);
-    onProgress?.(recognition.stamps.size);
+    onProgress?.(recognition.stamps.size + recognition.continuing.size);
     /* An undecided row is held whatever stands for it. A proposal read from
        evidence that was whole is kept, and its continuation waits with the
        row: the evidence that cannot be read now may show the turn ended. */
@@ -2679,6 +2714,7 @@ function startStructuredHostPass(
     const generation = await client?.startupGeneration?.() ?? null;
     assertStartupBudget(budget, "structured startup pass deadline exceeded");
     const replaced = Boolean(current.ready && generation && current.generation && generation !== current.generation);
+    if (replaced || (current.checkpoint && current.checkpoint.generation !== generation)) current.restartCutObservations?.clear();
     if (current.ready && !resumeDeferred && !replaced) return current.ready;
     const isolatedRowRetry = rowRetry && !replaced;
     const checkpoint = resumeDeferred || isolatedRowRetry ? undefined
@@ -2898,7 +2934,7 @@ async function adoptStructuredHostsPass(
      disproved proposal is still on file: left exactly as they were, and asked
      again by the deferral re-probe. */
   const heldHostKeys = new Set([...recognition.undecided, ...unwithdrawn]);
-  for (const key of [...recognition.stamps.keys(), ...recognition.cuts.map((cut) => cut.hostKey)]) {
+  for (const key of [...recognition.stamps.keys(), ...recognition.continuing, ...recognition.cuts.map((cut) => cut.hostKey)]) {
     if (!heldHostKeys.has(key)) releaseRestartCutRow(key);
   }
   /* A queued message's on-demand recovery waits for these rows as well, until
@@ -3060,6 +3096,7 @@ async function adoptStructuredHostsPass(
     await reconcileDeadStructuredRegistryHostsOffLoop(registry, (entry) => hasStructuredDeliveryHost(entry.key)
       || orchestratorHostKeys.has(sessionKeyId(entry.key))
       || interruptionHostKeys.has(sessionKeyId(entry.key))
+      || recognition.continuing.has(sessionKeyId(entry.key))
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key))
       || delayedRows.has(sessionKeyId(entry.key))
@@ -3108,6 +3145,7 @@ async function adoptStructuredHostsPass(
       try { assertActive(); } catch { return false; }
       return (!resumeDeferred || resumeDeferred.has(sessionKeyId(entry.key)))
         && !hasStructuredDeliveryHost(entry.key)
+        && !recognition.continuing.has(sessionKeyId(entry.key))
         && !delayedRows.has(sessionKeyId(entry.key))
         && !retainedHostKeys.has(sessionKeyId(entry.key))
         && !skippedHostKeys.has(sessionKeyId(entry.key))
@@ -3422,6 +3460,7 @@ async function adoptStructuredHostsPass(
     const shouldRetainCandidateOrAdopt: StructuredHostAdoptionFilter = (entry) =>
       hasStructuredDeliveryHost(entry.key) || candidateHostKeys.has(sessionKeyId(entry.key))
       || codexBootAdoptionRetired(entry)
+      || recognition.continuing.has(sessionKeyId(entry.key))
       /* A row this boot could not read a transcript for is left exactly as it
          was. The demotion below retires a skipped row — it releases the endpoint,
          clears the active turn and can signal an unclaimable Claude orphan — and

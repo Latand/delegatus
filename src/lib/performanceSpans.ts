@@ -54,7 +54,10 @@ export function createPerformanceSpans(now = monotonicNow) {
   let observeSite: ((site: number) => void) | undefined;
   const requests = new Map<string, { id: string; method: "snapshot" | "append" | "wait" | "files" | "health" | "other";
     start: number; deadline: number | null; events: Array<{ site: number; at: number; bytes: number; failed: boolean }> }>();
-  let requestsDropped = 0;
+  let droppedExpired = 0, droppedOverflow = 0;
+  const clearSpanRecords = () => {
+    records.length = 0; longest.length = 0; cursor = 0; dropped = 0; droppedMs = 0;
+  };
   const add = (record: Slice) => {
     const previous = records.length === capacity ? records[(cursor + capacity - 1) % capacity] : records.at(-1);
     // Aggregate only adjacent tiny slices. Preserve their occupied duration
@@ -104,7 +107,7 @@ export function createPerformanceSpans(now = monotonicNow) {
     observeSite(observer?: (site: number) => void) { observeSite = observer; },
     request(id: string, method: string, timeoutMs?: number) {
       if (!enabled || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return;
-      if (requests.size >= requestCapacity) { requests.delete(requests.keys().next().value!); requestsDropped++; }
+      if (requests.size >= requestCapacity) { requests.delete(requests.keys().next().value!); droppedOverflow++; }
       requests.set(id, { id, method: method === "snapshot" || method === "append" || method === "wait" || method === "files" || method === "health" ? method : "other",
         start: now(), deadline: timeoutMs === undefined ? null : now() + timeoutMs, events: [] });
     },
@@ -124,7 +127,7 @@ export function createPerformanceSpans(now = monotonicNow) {
       record.failed = failed; finish(record);
       const request = correlation ? requests.get(correlation) : undefined;
       if (request) {
-        if (request.events.length === 16) { request.events.shift(); requestsDropped++; }
+        if (request.events.length === 16) { request.events.shift(); droppedOverflow++; }
         request.events.push({ site: record.site, at: record.end, bytes, failed });
       }
     },
@@ -136,11 +139,19 @@ export function createPerformanceSpans(now = monotonicNow) {
     },
     requests() {
       const cutoff = now() - 60_000;
-      for (const [id, request] of requests) if (request.start < cutoff) { requests.delete(id); requestsDropped++; }
+      for (const [id, request] of requests) if (request.start < cutoff) { requests.delete(id); droppedExpired++; }
       const rows = [...requests.values()];
-      return { dropped: requestsDropped, omitted: Math.max(0, rows.length - 16), records: rows.slice(-16) };
+      // Overflow includes evictions from both the request map and the per-request event buffer.
+      return { dropped: droppedExpired + droppedOverflow, droppedExpired, droppedOverflow,
+        omitted: Math.max(0, rows.length - 16), records: rows.slice(-16) };
     },
-    clear() { records.length = 0; longest.length = 0; cursor = 0; dropped = 0; droppedMs = 0; },
+    clearSpans() {
+      clearSpanRecords();
+    },
+    clear() {
+      clearSpanRecords();
+      droppedExpired = 0; droppedOverflow = 0;
+    },
   };
   return recorder;
 }
