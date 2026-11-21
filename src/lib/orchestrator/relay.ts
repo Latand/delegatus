@@ -109,11 +109,13 @@ export function admitOrchestratorRelay(
   if (!conversationId && request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
     return relayRefused("caller_unidentified", "the relay caller's conversation could not be identified");
   }
-  const seat = conversationId
+  const relayPayload = conversationId ? ownerRelayPayload(text, conversationId) : null;
+  const requester = relayPayload?.requesterRequestId !== undefined;
+  const seat = conversationId && !requester
     ? authorizedManagerSeats(productionManagerAuthoritySources()).find((candidate) => candidate.conversationId === conversationId)
     : null;
-  const gateway = conversationId && !seat ? deputyAskerOf(request) : null;
-  const owner = conversationId && !seat && !gateway?.ok ? ownerRelayPayload(text, conversationId) : null;
+  const gateway = conversationId && !seat && !requester ? deputyAskerOf(request) : null;
+  const owner = !seat && !gateway?.ok ? relayPayload : null;
   const operator = !conversationId && (inProcessPerson || operatorBrowserRequest(request));
   if ((!seat && !gateway?.ok && !owner && !operator) || (seat && !seat.project)) {
     return relayRefused(seat ? "sender_seat_without_project" : "sender_not_authorized",
@@ -277,6 +279,7 @@ export function resolveOrchestratorRelay(
 /** Remote senders must be a designated seat of this shared project. */
 export function linkedRelayCaller(request: Pick<NextRequest, "headers">, project: string): AuthorizedManagerSeat | null {
   const conversationId = callerConversationId(request);
+  if (conversationId && liveOwnerRelayRequest(conversationId)?.tier === "requester") return null;
   return conversationId ? authorizedManagerSeats(productionManagerAuthoritySources())
     .find(seat => seat.conversationId === conversationId && !!seat.project && canonicalOrchestratorProject(seat.project) === canonicalOrchestratorProject(project)) ?? null : null;
 }

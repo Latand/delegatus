@@ -42,7 +42,7 @@ export function liveOwnerRelayConversation(conversationId: string): boolean {
 
 export function liveOwnerRelayRequest(conversationId: string) {
   const run = liveOwnerRelayRun(conversationId);
-  return run ? { requestId: run.requestId, relayId: run.relayId, targetId: run.targetId } : null;
+  return run ? { requestId: run.requestId, relayId: run.relayId, targetId: run.targetId, tier: run.ownerTurn?.entry?.tier } : null;
 }
 
 function liveOwnerRelayRun(conversationId: string): RunRecord | null {

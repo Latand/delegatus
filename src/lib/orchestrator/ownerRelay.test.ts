@@ -229,6 +229,13 @@ test("trusted requester handoffs are delivered to the granted project on the MCP
   expect(accepted.status).toBe(200);
   expect(delivered).toHaveLength(2);
   for (const delivery of delivered) expect(delivery.text).toContain("Trusted person");
+  designate("project-a", sender.id);
+  expect(await tools.service.callTool("send_message_to_orchestrator", { ...relayArgs("seat-cross-project"), project: "project-a" }))
+    .toMatchObject({ ok: false, code: "trusted_requester_project_refused" });
+  expect((await orchestratorPOST(request(sender.capability, {
+    ...relayArgs(), project: "project-a", clientMessageId: "seat-cross-project-http",
+  }))).status).toBe(403);
+  expect(delivered).toHaveLength(2);
 });
 
 test("an owner report reply carries verbatim approval and stored report only to its source seat", async () => {
