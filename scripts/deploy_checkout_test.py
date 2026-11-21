@@ -314,7 +314,7 @@ class LoggedFailures(unittest.TestCase):
         self.assertEqual(result["verdict"], "pass")
         self.assertEqual(len(switch.samples), 4)
         self.assertEqual(result["protected"][0]["outcome"], "recovered")
-        self.assertGreaterEqual(switch.clock.now(), deploy.SAMPLE_RETRY_INTERVAL)
+        self.assertEqual(switch.clock.now(), 4)  # Only the two inter-sample waits.
 
     def test_restart_submission_error_after_publish_still_runs_every_sample(self):
         switch = Switch()
@@ -1041,13 +1041,13 @@ class CheckoutIntegration(unittest.TestCase):
                 answer = {"ok": True, "conversations": [row], "unselectedCount": 0,
                           "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
                                         "recoveryTruncated": False, "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}
-                if args.get("limit") == 200 and not args.get("conversation_id"):
+                if args.get("limit") == 200 and not args.get("protected_census") and not args.get("conversation_id"):
                     fixture.inventory_reads += 1
                     overrides = fixture.inventory_overrides
                     if callable(overrides):
                         overrides = overrides(fixture.inventory_reads)
                     answer.update(overrides)
-                elif args.get("conversation_id"):
+                elif args.get("protected_census") or args.get("conversation_id"):
                     answer.update(fixture.recovery_overrides)
                 return answer
         env = patch.dict(os.environ, {"LLV_STATE_DIR": str(self.state)})
@@ -1059,8 +1059,7 @@ class CheckoutIntegration(unittest.TestCase):
                                        signal_process=self.signal,
                                        epoch=lambda: "fixture-boot",
                                        census=lambda *args: Transport().call("census", {"limit": 200}))
-        self.adapter.read_host_census = lambda conversation_id: Transport().call(
-            "census", {"limit": 200, "conversation_id": conversation_id})
+        self.adapter.read_host_census = lambda: Transport().call("census", {"limit": 200, "protected_census": True})
         self.adapter.sample = functools.partial(deploy.collect_sample, self.adapter, collect=inline_evidence)
         self.addCleanup(self.adapter.close)
         clock = self.adapter.clock
@@ -1862,7 +1861,10 @@ class CheckoutIntegration(unittest.TestCase):
                   if line.startswith("{")]
         samples = [event for event in events if "sample" in event]
         self.assertEqual([event["sample"] for event in samples], [1, 2, 3])
-        self.assertTrue(all(event["protected"] == result["protected"] for event in samples))
+        first = samples[0]["protected"][0]
+        self.assertEqual(first["captured"], row["captured"])
+        self.assertEqual((first["outcome"], first["reason"]), ("unknown", "pipeline-unavailable:RuntimeError"))
+        self.assertTrue(all(event["protected"] == result["protected"] for event in samples[1:]))
         self.assertEqual(json.loads((self.adapter.run_dir / "verdict.json").read_text())["protected"], result["protected"])
         self.assertTrue(all(result["serving"][role]["sha"] == TARGET and result["serving"][role]["since"]
                             for role in ["launcher", "viewer", "runtimeHost"]))
@@ -2987,6 +2989,33 @@ except BlockingIOError:
             {"n": 2, "state": "running", "conversationId": "synthetic-replacement"}],
             "pass", "fresh attempt started", 2)
 
+    def test_shared_successor_is_read_once_per_sample_and_rechecked_after_exit(self):
+        self.old_gone = True
+        self.attempts = [{"n": 2, "state": "running", "conversationId": "synthetic-stage"}]
+        host = {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1}
+        inputs = list(enumerate([host] * 12))
+        calls = {"pipeline": 0, "census": 0, "process": 0}
+        original_call, original_census = self.adapter.mcp.call, self.adapter.read_host_census
+        alive = True
+        def call(tool, args):
+            calls["pipeline"] += 1
+            return original_call(tool, args)
+        def census():
+            calls["census"] += 1
+            return original_census()
+        def process(entry):
+            calls["process"] += 1
+            return entry if alive else None
+        self.adapter.mcp.call, self.adapter.read_host_census, self.adapter.process = call, census, process
+        def sample():
+            return [row[1]["outcome"] for kind, row in deploy.evidence_frames(self.adapter, "protected", inputs, self.adapter.clock.now()+30)
+                    if kind == "protected"]
+        self.assertEqual(sample(), ["fresh attempt started"] * 12)
+        self.assertEqual(calls, {"pipeline": 1, "census": 1, "process": 12})
+        alive = False
+        self.assertEqual(sample(), ["unknown"] * 12)
+        self.assertEqual(calls, {"pipeline": 2, "census": 2, "process": 24})
+
     def test_pipeline_runs_reconcile_completed_attempt(self):
         self.assert_stage_verdict([{"n": 1, "state": "passed", "conversationId": "synthetic-stage"}],
                                   "pass", "completed", 1)
@@ -3299,10 +3328,11 @@ for line in sys.stdin:
 fixture = runpy.run_path({str(pathlib.Path(__file__).resolve())!r})
 deploy = fixture["deploy"]
 class Checkout(deploy.Checkout):
-    def read_host_census(self, conversation_id):
-        return {{"ok": True, "conversations": [{{"conversationId": conversation_id,
-            "evidenceSource": "transcript", "turnState": "unknown", "lifecycle": "gone", "host": {{"state": "gone"}}}}],
-            "unselectedCount": 0, "selection": {{"matched": 1, "selected": 1, "recoveryPending": 0,
+    def read_host_census(self):
+        rows = [{{"conversationId": key, "evidenceSource":"transcript", "turnState":"unknown",
+                  "lifecycle":"gone", "host":{{"state":"gone"}}}} for key in ("dead-1","dead-3")]
+        return {{"ok": True, "conversations": rows, "unselectedCount": 0,
+            "selection": {{"matched": len(rows), "selected": len(rows), "recoveryPending": 0,
             "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}}}
     def serving(self):
         self.mcp.probe()
