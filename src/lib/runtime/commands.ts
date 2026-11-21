@@ -61,10 +61,13 @@ function optionalNullableId(value: unknown, name: string): string | null | undef
 export function parseRuntimeIdleKillFence(value: unknown): import("./contracts").RuntimeIdleKillFence {
   const fence = object(value);
   if (!Number.isSafeInteger(fence.revision) || (fence.revision as number) < 1
-    || typeof fence.writerClaim !== "string" || !fence.writerClaim.trim()) {
+    || typeof fence.writerClaim !== "string" || !fence.writerClaim.trim()
+    || fence.releasedSession !== undefined && fence.releasedSession !== true
+    || fence.releasedSession === true && fence.writerClaim !== "released-session") {
     throw new Error("idle kill fence is invalid");
   }
-  return { revision: fence.revision as number, writerClaim: fence.writerClaim };
+  return { revision: fence.revision as number, writerClaim: fence.writerClaim,
+    ...(fence.releasedSession === true ? { releasedSession: true as const } : {}) };
 }
 
 export function parseRuntimeProviderRecoveryRef(value: unknown): import("./contracts").RuntimeProviderRecoveryRef {
