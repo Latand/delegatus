@@ -966,8 +966,9 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
     rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
     await runSeatTickCheck(PROJECT, rig.deps);
     expect(rig.sent.at(-1)!.text.length).toBeLessThanOrEqual(wakeLimit);
-    expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed);
-    expect(rig.sent.at(-1)!.text).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
+    const requestKey = rig.written.at(-1)!.reportsOwed![0]!.requestedBy![0]!;
+    expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed.map(entry => ({ ...entry, requestedBy: [requestKey] })));
+    expect(rig.sent.at(-1)!.text).toContain(`key ${requestKey} and coversOwed: true`);
   }
   const bullet = `- [maintenance] ${run.taskId} — ${maintenanceItemLabel(run)}`;
   expect(bullet.length).toBeGreaterThan(1_200);
@@ -1001,6 +1002,117 @@ test("the controller keeps unpaid report reminders after the delivered agenda dr
   expect((await runSeatTickCheck(PROJECT, rig.deps))!.reasons).toEqual(["interval"]);
   expect(rig.sent.at(-1)!.text).not.toContain(`key ${key}`);
   expect(rig.written.at(-1)!.reportsOwed).toEqual([]);
+});
+
+test("a recorded wake report settles its delivered set and its key is skipped on later wakes", async () => {
+  const { setSystemTime } = await import("bun:test");
+  const { readBridgeReportLog, scopedReportId } = await import("@/lib/bridge/store");
+  const { createMcpToolService, SqliteMcpReceiptStore } = await import("@/lib/mcp/server");
+  const { productionDomainDependencies, viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
+  const { setReportTelegram } = await import("@/lib/projects/settings");
+  const { seatTickReportRows } = await import("./seatTickReports");
+  const previousState = process.env.LLV_STATE_DIR;
+  const directory = fs.mkdtempSync(path.join(SANDBOX, "wake-report-"));
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const stateFile = path.join(directory, "seat-tick.json");
+  const receipts = new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite"));
+  try {
+    setReportTelegram(PROJECT, { chat: "report-room", name: "Project" }, "operator");
+    const sends: string[] = [];
+    const service = () => createMcpToolService(viewerMcpBindings(undefined, {
+      get: async () => { throw new Error("unexpected control read"); },
+      post: async () => { throw new Error("unexpected control write"); },
+    }, {
+      ...productionDomainDependencies,
+      callerProject: () => PROJECT,
+      callerAttribution: () => ({ kind: "manager", conversationId: CONVERSATION, role: "orchestrator" }),
+      authorizedSeats: () => [{ conversationId: CONVERSATION, path: null, project: PROJECT }],
+      operatorLocale: () => "en",
+      operatorTimeZone: () => "UTC",
+      publicDenyList: () => ({ accounts: [], people: [], local: [], projects: [] }),
+      sendReportTelegram: async ({ clientRequestId }) => {
+        sends.push(clientRequestId);
+        return { ok: true, messageIds: [70 + sends.length] };
+      },
+    }), receipts, { permit: () => ({ allowed: true }) });
+    const fileReport = async (key: string, clientRequestId: string, now: number, coversOwed = true) => {
+      setSystemTime(new Date(now));
+      try {
+        return await service().callTool("bridge_report", {
+          key, clientRequestId, class: "status", summary: "Reviewed the delivered lane outcomes.", coversOwed,
+        });
+      } finally {
+        setSystemTime();
+      }
+    };
+    const at = (now: number) => new Date(now).toISOString();
+    const parked = { ...settledLane, id: "park-first", state: "needs_decision" };
+    const second = { ...settledLane, id: "park-second", state: "needs_decision", movedAt: at(NOW - 4 * MINUTE) };
+    const firstKey = "lane:park-first:parked";
+    const secondKey = "lane:park-second:parked";
+    const laterKey = "lane:park-later:parked";
+    const state = () => readSeatTickState(PROJECT, stateFile);
+    const tick = async (now: number, pipelines: Parameters<typeof harness>[0]["pipelines"]) => {
+      const rig = harness({ pipelines, now, stateFile });
+      rig.deps.sources!.reports = { ...reportPort(() => []), log: seatTickReportRows };
+      const record = await runSeatTickCheck(PROJECT, rig.deps);
+      return { record, sent: rig.sent };
+    };
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: at(NOW - 70 * MINUTE), lastProposalAt: at(NOW) }, stateFile);
+    const first = await tick(NOW, [parked, second]);
+    expect(first.record?.delivery).toMatchObject({ outcome: "delivered", clientMessageId: first.sent[0]!.clientMessageId });
+    const firstRequestKey = first.sent[0]!.text.match(/File one report with key ([^ ]+) and coversOwed: true/)?.[1] ?? "";
+    expect(firstRequestKey).not.toBe("");
+    expect(firstRequestKey).not.toBe(firstKey);
+    expect(first.sent[0]!.text).toContain(`lane park-fir parked, lane park-sec parked. File one report with key ${firstRequestKey}`);
+    expect(state().reportsOwed?.map(entry => entry.key)).toEqual([firstKey, secondKey]);
+    expect(state().announcedLanes).toEqual(["park-first:needs_decision", "park-second:needs_decision"]);
+
+    const filed = await fileReport(firstRequestKey, "first-wake-report", NOW + MINUTE, false);
+    expect(filed).toMatchObject({ recorded: true, replayed: false, seq: 1,
+      destinations: { telegram: { state: "sent", messageIds: [71] } } });
+    expect(readBridgeReportLog().reports[0]).toMatchObject({
+      id: scopedReportId(PROJECT, firstRequestKey), at: at(NOW + MINUTE),
+    });
+    expect(readBridgeReportLog().reports[0]).not.toHaveProperty("coversOwedAt");
+    const unchanged = await tick(NOW + 2 * MINUTE, [parked, second]);
+    expect(unchanged.sent).toEqual([]);
+    expect(state().reportsOwed).toEqual([]);
+
+    const later = await tick(NOW + 71 * MINUTE, [
+      { ...parked, state: "needs_review", movedAt: at(NOW + 70 * MINUTE) },
+      { ...second, id: "park-later", movedAt: at(NOW + 69 * MINUTE) },
+    ]);
+    expect(later.record?.delivery).toMatchObject({ outcome: "delivered", clientMessageId: later.sent[0]!.clientMessageId });
+    expect(later.sent[0]!.clientMessageId).not.toBe(first.sent[0]!.clientMessageId);
+    expect(later.sent[0]!.text).toContain(`File one report with key ${laterKey}`);
+    expect(state().reportsOwed?.map(entry => entry.key)).toEqual([laterKey]);
+    expect(state().announcedLanes).toContain("park-first:needs_review");
+
+    expect(await fileReport(firstRequestKey, "first-wake-report", NOW + 72 * MINUTE, false)).toEqual({ ...filed, replayed: true });
+    expect(await fileReport(firstRequestKey, "duplicate-wake-report", NOW + 72 * MINUTE)).toMatchObject({
+      recorded: false, alreadyRecorded: true, seq: 1, reportId: filed.ok ? filed.reportId : undefined,
+    });
+    const stillOwed = await tick(NOW + 73 * MINUTE, []);
+    expect(stillOwed.sent).toEqual([]);
+    expect(state().reportsOwed?.map(entry => entry.key)).toEqual([laterKey]);
+    expect(sends).toHaveLength(1);
+    expect(readBridgeReportLog().reports.map(row => row.coversOwedAt)).toEqual([undefined]);
+
+    expect(await fileReport(laterKey, "later-wake-report", NOW + 74 * MINUTE)).toMatchObject({ recorded: true, seq: 2,
+      destinations: { telegram: { state: "sent", messageIds: [72] } } });
+    const settled = await tick(NOW + 145 * MINUTE, []);
+    expect(settled.sent).toEqual([]);
+    expect(state().reportsOwed).toEqual([]);
+    expect(readBridgeReportLog().reports.map(row => row.seq)).toEqual([1, 2]);
+    expect(sends).toHaveLength(2);
+  } finally {
+    receipts.close();
+    await shutdownTaskPageWorker();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
 });
 
 test("deploy snapshots are taken in the pass before the decision and the send, whether or not a wake goes out", async () => {
