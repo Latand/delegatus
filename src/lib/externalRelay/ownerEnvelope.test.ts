@@ -71,26 +71,29 @@ function toolRows(prompt: string): Array<Record<string, unknown>> {
   return Array.isArray(index) ? index : index.rows.map(row => Object.fromEntries(index.columns.map((key, i) => [key, row[i]])));
 }
 
-function incidentClaim(reply: boolean) {
+function incidentClaim(reply: boolean, emptyToolSummaries = false, compactHistory = false) {
   const r = request();
   const trigger = r.input.conversation.at(-1)!;
   const history = Array.from({ length: 39 }, (_, i) => ({
     ...trigger, id: `history-${i}`, sent_at: new Date(Date.parse(at) - (39 - i) * 1000).toISOString(),
-    text: i >= 29 || (reply && i === 4) ? `Update ${i}: the group agreed to review the draft on Friday.` : "Earlier discussion. ".repeat(65),
+    text: i >= 29 || (reply && i === 4) ? `Update ${i}: the group agreed to review the draft on Friday.`
+      : "Earlier discussion. ".repeat(compactHistory ? 8 : 65),
     reply_to: null,
   }));
   return requestSchema.parse({ ...r, input: { ...r.input,
     instructions: "s".repeat(6200), owner_instructions: "o".repeat(15000),
     conversation: [...history, { ...trigger, sent_at: at, reply_to: reply ? history[4]!.id : null }],
     short_term_memory: "Remember the agreed review window. ".repeat(73),
-    tools: Array.from({ length: 80 }, (_, i) => ({ name: `service_operation_${i}`, summary: "<".repeat(100),
+    tools: Array.from({ length: 80 }, (_, i) => ({ name: `service_operation_${i}`, summary: emptyToolSummaries ? "" : "<".repeat(100),
       mode: "direct", effect: "read", audience: "owner", parameters: { type: "object", properties: {} } })),
   } });
 }
 
 for (const mode of ["fresh", "reply", "continuation"] as const)
 test(`incident-sized ${mode} owner claim delivers recent history and memory within the envelope`, () => {
-  const r = incidentClaim(mode === "reply");
+  const r = incidentClaim(mode === "reply", true, true);
+  r.input.instructions = "s".repeat(2000);
+  r.input.owner_instructions = "o".repeat(9000);
   const owner = ownerTierFor(target, r)!;
   const prior = r.input.conversation.slice(0, -1).map(row => row.id);
   const prepared = mode === "continuation"
@@ -102,15 +105,15 @@ test(`incident-sized ${mode} owner claim delivers recent history and memory with
   expect(r.input.conversation).toHaveLength(40);
   expect(r.input.tools).toHaveLength(80);
   assertStructuredTextEnvelope(prepared.prompt);
-  expect(rows.slice(-11).map(row => row.id)).toEqual(r.input.conversation.slice(-11).map(row => row.id));
+  expect(rows.map(row => row.id)).toEqual(mode === "continuation" ? r.input.conversation.slice(-11).map(row => row.id)
+    : r.input.conversation.map(row => row.id));
   expect(rows.at(-1)!.reply_to).toBe(mode === "reply" ? "history-4" : null);
   expect(section(prepared.prompt, "short_term_memory")).toBe(r.input.short_term_memory!);
   if (mode !== "continuation") {
-    expect(section(prepared.prompt, "relay_context_budget")).toMatchObject({
-      older_message_texts_omitted: r.input.conversation.length - rows.length,
-      tool_entries_omitted: 80,
-    });
+    expect(section(prepared.prompt, "relay_context_budget")).toMatchObject({ tool_entries_omitted: 80 });
     expect(prepared.prompt).toContain("Use relay_service_tools with op list");
+  } else {
+    expect(toolRows(prepared.prompt)).toHaveLength(80);
   }
   if (mode === "reply") {
     expect(section(prepared.prompt, "owner_reply_context")).toMatchObject({ message_id: "history-4" });

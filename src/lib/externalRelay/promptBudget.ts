@@ -76,6 +76,14 @@ export function boundedRelayPrompt<T extends Rendered>(request: ExternalRelayReq
     || !document.message_id && !document.media_ref && protectedRows.some(message =>
       message.text.includes(`[Document attached; filename=${document.title};`)));
 
+  if (mayOmitToolTable && tools.length) {
+    // The tool table is discoverable through the relay service. Omit its
+    // display projection before sacrificing any conversation history.
+    const toolCuts = { tool_entries_omitted: tools.length };
+    const withAllHistory = render(request, toolCuts);
+    if (fits(withAllHistory)) return withAllHistory;
+  }
+
   // Local recovery can append older rows. Select by timestamp, then retain
   // the order of the rows in the claim when rendering them.
   const optional = input.conversation.map((message, index) => ({ message, index }))
