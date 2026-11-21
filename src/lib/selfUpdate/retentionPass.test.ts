@@ -63,7 +63,7 @@ test.each(["empty", "releases", "journal", "releases and journal"])("Darwin rete
     }
     if (quarantined) {
       expect(report.kept).toContainEqual({ dir: quarantined.directory, reason, bytes: 0 });
-      expect(fs.readFileSync(journal, "utf8")).toBe(originalJournal);
+      expect<typeof originalJournal>(fs.readFileSync(journal, "utf8")).toBe(originalJournal);
       expect(fs.statSync(quarantined.gate).mode & 0o777).toBe(0);
     }
   } finally {
