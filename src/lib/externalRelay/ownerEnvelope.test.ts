@@ -536,7 +536,9 @@ test(`${mode} context fallback budgets the actual escaped run-directory path`, a
   expect(done.status).toBe("done");
   expect(dispatchedPrompt).toContain("Read the context file for the full framing");
   expect(section(dispatchedPrompt, "owner_request")).toMatchObject({ text: owner.text });
-  expect(fs.readFileSync(deliveredFile, "utf8")).toBe(prepared.context);
+  const preparedContext = prepared.context;
+  if (typeof preparedContext !== "string") throw new Error("context fallback did not prepare its full file contents");
+  expect(fs.readFileSync(deliveredFile, "utf8")).toBe(preparedContext);
 });
 
 for (const mode of ["fresh", "resumed"] as const)
