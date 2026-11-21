@@ -747,7 +747,8 @@ export async function runClaimedRequest(
     // request-local: the handoff sees the triggering owner message and its
     // media, never the guest's surrounding history or retained memory.
     if (owner && request.delivery === "guest") {
-      const trigger = request.input.conversation.find(message => message.id === owner.messageId);
+      const ownerMessageId = owner.messageId;
+      const trigger = request.input.conversation.find(message => message.id === ownerMessageId);
       request.input.conversation = trigger ? [trigger] : [];
       request.input.short_term_memory = null;
       request.input.documents = [];
