@@ -121,7 +121,7 @@ import { restartCutEvidenceUnresolved } from "@/lib/runtime/restartCutHold";
 import { conversationTurnLiveness, outstandingDeliverySince, readHostProcessEvidence, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
 import { tierCutState as tierCutStateSync } from "@/lib/runtime/tierSwitch";
-import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
+import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR, isIdleRetirementDeferral } from "@/lib/runtime/structuredDeliveryQueue";
 import { enqueueStructuredMessage, idleContinuationDeliveryRetryable } from "@/lib/runtime/structuredMessageDelivery";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { interruptionObligationDirectory, interruptionObligationStore, submittedContinuationOutcome, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
@@ -1429,7 +1429,7 @@ async function confirmStageStop(probe: StageHostProbe, operationId: string | nul
         if (status && binding) observedStatus = status;
         if (status && KILL_DELIVERED_STATES.has(status) && !resident()) return { outcome: "stopped" };
         if (status && KILL_REFUSED_STATES.has(status)) {
-          if (binding && durable?.receipt.reason !== "idle-retirement-deferred") return {
+          if (binding && !isIdleRetirementDeferral(durable?.receipt.reason)) return {
             outcome: "unconfirmed", operationId, detail: durable?.receipt.reason ?? `kill ${status} without termination proof`,
           };
           if (probes.onlyIfIdle || binding) return { outcome: "deferred" };
@@ -1506,7 +1506,7 @@ export async function stopPipelineStageAgent(
         });
         assertCurrent();
         if (now() >= receiptDeadline || !receipt || !idleStopReceiptMatches(receipt, previous) || !KILL_REFUSED_STATES.has(receipt.receipt.status)
-          || receipt.receipt.reason !== "idle-retirement-deferred") return {
+          || !isIdleRetirementDeferral(receipt.receipt.reason)) return {
           outcome: "unconfirmed", operationId: previous.operationId, detail: "the earlier stage stop has no no-effect receipt",
         };
       }

@@ -1800,6 +1800,10 @@ test("a stage that keeps working after its turn ended keeps its host through the
   try {
     const stop = await f.bind(30_000);
     const bound = structuredClone(f.row());
+    const initialJournal = f.journal();
+    expect(initialJournal).toEqual([expect.objectContaining({
+      event: "host-checkpoint", outcome: "persisted", targetCursor: 172, persistedCursor: 172,
+    })]);
     // The turn ended: the host is idle and names no turn. The CLI then continues
     // by itself on a background-command notification: the transcript opens a
     // turn and grows, and the host reports cursor-only steps with no turn id.
@@ -1834,11 +1838,16 @@ test("a stage that keeps working after its turn ended keeps its host through the
     });
     expect(f.row().structuredTerminationSurvivors ?? []).toEqual([]);
     expect(f.row()).toEqual(bound);
-    expect(f.journal()).toEqual([]);
+    expect(f.journal()).toEqual(initialJournal);
     expect(f.signals).toEqual([]);
 
     // Thirty seconds after the first cursor-only step the deferred write fires.
     deferred[0]!.run();
+    const checkpointDeadline = performance.now() + 5_000;
+    while (f.journal().length === initialJournal.length && performance.now() < checkpointDeadline) await Bun.sleep(5);
+    expect(f.journal().slice(initialJournal.length)).toEqual([expect.objectContaining({
+      event: "host-checkpoint", outcome: "persisted", targetCursor: 174, persistedCursor: 174,
+    })]);
     expect(f.host.releaseCalls).toBe(0);
     expect(f.row()).toMatchObject({ status: "idle", claimOwner: f.claimOwner, structuredHost: { eventCursor: 174 } });
     const after = loadPipelines()[0]!;
@@ -1854,7 +1863,7 @@ test("a stage that keeps working after its turn ended keeps its host through the
     await tickPipelines([finished], h.ports);
     expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ verdict: { status: "pass" } });
-    stop();
+    await stop();
   } finally {
     globalThis.setTimeout = realSetTimeout;
     await f.end();

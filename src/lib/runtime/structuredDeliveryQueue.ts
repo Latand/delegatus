@@ -867,6 +867,15 @@ export type StructuredTerminationRefusalCode = typeof STRUCTURED_TERMINATION_REF
 /** `true` confirms termination; other outcomes preserve an unresolved host. */
 export type StructuredTerminationOutcome = boolean | { readonly refused: StructuredTerminationRefusalCode };
 
+const IDLE_RETIREMENT_DEFERRED = "idle-retirement-deferred";
+
+/** An owned stop can be retried after an explicit refusal before actuation. */
+export function isIdleRetirementDeferral(reason: string | null | undefined): boolean {
+  if (reason === IDLE_RETIREMENT_DEFERRED) return true;
+  return STRUCTURED_TERMINATION_REFUSALS.some(code =>
+    code !== "termination-incomplete" && reason === `${IDLE_RETIREMENT_DEFERRED}: ${code}`);
+}
+
 /** An idle-only refusal keeps its old reason as a prefix and appends an
     allowlisted cause; operator kills, plain `false` and unknown values keep
     the old reason exactly. */
@@ -3821,7 +3830,7 @@ export class StructuredDeliveryQueue {
         const state = await this.readHealth(host);
         if (!state.readable || state.value.status !== "idle" || state.value.activeTurnRef !== null
           || state.value.pendingAttention.length > 0 || blockingHostActivityFlags(state.value.activeFlags).length > 0) {
-          await transition("failed", { reason: "idle-retirement-deferred" });
+          await transition("failed", { reason: IDLE_RETIREMENT_DEFERRED });
           return { blocked: false, terminated: false };
         }
       }
@@ -3834,7 +3843,7 @@ export class StructuredDeliveryQueue {
           const outcome = await withHostStopOrigin({ path: effect.onlyIfIdle ? "idle-delivery-retirement" : "kill-action", operationId: effect.operationId }, () => this.terminateHost(effect.conversationId, effect.sessionKey!, effect.onlyIfIdle, authority, effect.providerRecovery));
           if (outcome !== true) {
             if (effect.onlyIfIdle) {
-              await transition("failed", { reason: terminationRefusalReason("idle-retirement-deferred", outcome, true) });
+              await transition("failed", { reason: terminationRefusalReason(IDLE_RETIREMENT_DEFERRED, outcome, true) });
               return { blocked: false, terminated: false };
             }
             return { blocked: true, terminated: false };
