@@ -1,6 +1,7 @@
 """Synthetic switch regressions; no installation, service or live state is used."""
 import importlib.util
 import contextlib
+import functools
 import pathlib
 import json
 import shutil
@@ -10,6 +11,7 @@ import sys
 import subprocess
 import io
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -30,6 +32,25 @@ USER_MANAGER = 7000
 CENSUS_BUN = os.environ.get("CENSUS_TEST_BUN") or shutil.which("bun")
 
 
+def inline_evidence(adapter, lanes, sample, cutoff, owner_check=None):
+    # Stateful relocation fixtures use a fake clock in one process. The
+    # worker tests below exercise the actual subprocess supervisor and pipes.
+    start = finish = adapter.clock.now()
+    for lane in lanes:
+        kind, inputs = lane[:2]
+        lane_cutoff = min(cutoff, lane[2]) if len(lane) > 2 else cutoff
+        if owner_check:
+            owner_check()
+        adapter.clock.value = start
+        for frame in deploy.evidence_frames(adapter, kind, inputs, lane_cutoff):
+            if adapter.clock.now() < lane_cutoff:
+                sample.accept(frame)
+            if owner_check:
+                owner_check()
+        finish = max(finish, adapter.clock.now())
+    adapter.clock.value = finish
+
+
 class FakeClock:
     def __init__(self):
         self.value = 0
@@ -45,6 +66,8 @@ class FakeClock:
 
 
 class Switch:
+    sample = functools.partialmethod(deploy.collect_sample, collect=inline_evidence)
+
     def __init__(self):
         self.clock = FakeClock()
         self.published = False
@@ -80,8 +103,9 @@ class Switch:
 
     def serving(self):
         self.samples.append(self.clock.now())
-        return {role: {"sha": TARGET, "since": "2026-01-01T00:00:00Z", "healthy": True}
-                for role in ["launcher", "viewer", "runtimeHost"]}
+        return {**{role: {"sha": TARGET, "since": "2026-01-01T00:00:00Z", "healthy": True}
+                   for role in ["launcher", "viewer", "runtimeHost"]},
+                "checks": dict.fromkeys(["http", "runtimeSocket", "mcp", "service", "placement"], True)}
 
     def stage(self, host):
         if self.mcp_errors:
@@ -99,29 +123,204 @@ class Switch:
 
 
 class LoggedFailures(unittest.TestCase):
+    def test_deployment_read_budget_does_not_scale_with_pending_hosts(self):
+        for count in [0, 1, 7, 40]:
+            with self.subTest(pending=count):
+                switch = Switch()
+                switch.hosts = [{"pipelineId": "synthetic", "stageId": "build-" + str(i),
+                                 "conversationId": "capture-" + str(i), "attempt": 1} for i in range(count + 1)]
+                calls = []
+                def stage(host):
+                    calls.append((switch.clock.now(), host["stageId"]))
+                    if host == switch.hosts[-1]:
+                        return {"outcome": "completed", "attempt": 1}
+                    return {"outcome": "unknown", "reason": "stage-conversation-pending",
+                            "attempt": 2, "stageState": "running"}
+                switch.stage = stage
+                result = deploy.run_switch(switch, TARGET)
+                self.assertEqual(len(switch.samples), 22)
+                self.assertLessEqual(switch.clock.now(), 21 * deploy.SAMPLE_TIMEOUT + 20 * 15)
+                self.assertLessEqual(len(calls), 21 * (12 * count + 1))
+                self.assertEqual(result["verdict"], "needs_decision" if count else "pass")
+                self.assertEqual([row["captured"] for row in result["protected"]], switch.hosts)
+                self.assertEqual(result["protected"][-1]["outcome"], "completed")
+                self.assertTrue(all(row["outcome"] == "unknown" and row["reason"] == "stage-conversation-pending"
+                                    and row["attempt"] == 2 for row in result["protected"][:-1]))
+
+    def test_stage_reply_after_its_cutoff_cannot_pass_with_healthy_serving(self):
+        switch = Switch()
+        def overdue(host):
+            switch.clock.sleep(4)
+            return {"outcome": "completed", "attempt": 1}
+        switch.stage = overdue
+        result = deploy.run_switch(switch, TARGET, samples=1, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertEqual(result["protected"][0]["outcome"], "unknown")
+        self.assertTrue(deploy.ready(result["serving"], TARGET))
+        self.assertTrue(switch.published)
+
+    def test_unconfirmed_owner_recovery_cannot_pass_on_a_healthy_sample(self):
+        switch = Switch()
+        switch.relocation.update({"released": True, "placement": "placed", "started": True,
+                                  "stopSubmitted": True})
+        switch.unit = "synthetic-viewer.service"
+        def unconfirmed(command_deadline=None, **_kwargs):
+            if command_deadline is not None:
+                raise TimeoutError("owner deadline")
+        switch.recover_start = unconfirmed
+        result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertTrue(deploy.ready(result["serving"], TARGET))
+        self.assertIn("sample-recovery:TimeoutError", result["diagnostics"])
+
+    def test_attempt_transition_drops_prior_attempt_evidence_and_keeps_unknown_reason(self):
+        sample = deploy.EvidenceSample([{"pipelineId": "lane", "stageId": "build", "attempt": 1,
+                                        "conversationId": "captured", "startIdentity": "101:old"}])
+        row = sample.protected[0]
+        row.update(stageState="running", observedConversationId="old-conversation", hostState="alive",
+                   turnState="busy", lifecycle="running")
+        sample.accept(("protected", (0, {"outcome": "unknown", "pipelineId": "lane", "stageId": "build",
+                                         "attempt": 2, "stageState": "running", "reason": "replacement-pipeline-mismatch"})))
+        self.assertEqual(row["captured"], {"pipelineId": "lane", "stageId": "build", "attempt": 1,
+                                          "conversationId": "captured", "startIdentity": "101:old"})
+        self.assertEqual(row["reason"], "replacement-pipeline-mismatch")
+        self.assertEqual(row["attempt"], 2)
+        for field in ["observedConversationId", "hostState", "turnState", "lifecycle"]:
+            self.assertNotIn(field, row)
+
+    def test_delayed_start_settlement_invalidates_a_pre_settlement_serving_witness(self):
+        switch = Switch()
+        switch.relocation = {"released": True, "placement": "placed", "started": False,
+                             "stopSubmitted": True, "startAttempts": 1, "diagnostics": []}
+        switch.unit = "synthetic-viewer.service"
+        seen_serving = False
+        recovery_owners = []
+
+        def serving():
+            nonlocal seen_serving
+            switch.samples.append(switch.clock.now())
+            if switch.relocation["started"]:
+                return {"launcher": {"sha": OLD}, "viewer": {"sha": OLD}, "runtimeHost": {"sha": OLD},
+                        "checks": dict.fromkeys(["http", "runtimeSocket", "mcp", "service", "placement"], True)}
+            seen_serving = True
+            return {**{role: {"sha": TARGET, "since": "2026-01-01T00:00:00Z", "healthy": True}
+                       for role in ["launcher", "viewer", "runtimeHost"]},
+                    "checks": dict.fromkeys(["http", "runtimeSocket", "mcp", "service", "placement"], True)}
+
+        def recover_start(**_kwargs):
+            recovery_owners.append(os.getpid())
+            if seen_serving:
+                # A submitted no-block start settles without another submission.
+                switch.relocation["started"] = True
+
+        switch.serving = serving
+        switch.recover_start = recover_start
+        result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=5)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertTrue(recovery_owners)
+        self.assertEqual(set(recovery_owners), {os.getpid()})
+        self.assertEqual(switch.relocation["startAttempts"], 1)
+        self.assertEqual(result.get("recovery", {}).get("state"), "complete")
+        self.assertEqual(result["serving"]["viewer"]["sha"], OLD)
+
+    def test_inventory_is_reread_after_recovery_during_its_read(self):
+        switch = Switch()
+        events = []
+        recovery_done = False
+        cut = [{"conversationId": "cut-after-recovery", "stage": {"pipelineId": "synthetic", "stageId": "build", "attempt": 1}}]
+
+        def owner_check(_cutoff=None):
+            nonlocal recovery_done
+            if "interrupted:first" in events and not recovery_done:
+                recovery_done = True
+                switch.cut = cut
+                events.append("owner-recovery")
+                return True
+            return False
+
+        def collect(_adapter, lanes, result, _cutoff, owner_check=None):
+            for kind, _inputs, *_rest in lanes:
+                events.append(kind + (":final" if recovery_done else ":first"))
+                if kind == "serving":
+                    result.accept(("serving", switch.serving()))
+                elif kind == "interrupted":
+                    result.accept(("interrupted", (list(switch.cut), [])))
+                    if not recovery_done:
+                        owner_check(_cutoff)
+
+        sample = deploy.collect_sample(switch, [], [], TARGET, "cut-boundary", 0, 8,
+                                       collect=collect, owner_check=owner_check)
+        recovery_at = events.index("owner-recovery")
+        self.assertEqual(events[recovery_at + 1:], ["serving:final", "interrupted:final"])
+        self.assertEqual(sample.interrupted, cut)
+        self.assertEqual(sample.unreadable, [])
+        self.assertFalse(sample.incomplete)
+
+    def test_degrading_post_protected_serving_witness_never_passes(self):
+        switch = Switch()
+        observations = []
+        def serving():
+            observations.append(len(observations))
+            result = {**{role: {"sha": TARGET, "since": "2026-01-01T00:00:00Z", "healthy": True}
+                         for role in ["launcher", "viewer", "runtimeHost"]},
+                      "checks": dict.fromkeys(["http", "runtimeSocket", "mcp", "service", "placement"], True)}
+            if len(observations) > 1:
+                result["checks"]["http"] = False
+            return result
+        def collect(_adapter, lanes, sample, _cutoff, owner_check=None):
+            for lane in lanes:
+                kind, inputs = lane[:2]
+                if kind == "serving":
+                    sample.accept(("serving", serving()))
+                elif kind == "protected":
+                    for index, _host in inputs:
+                        sample.accept(("protected", (index, {"outcome": "completed", "attempt": 1})))
+                elif kind == "interrupted":
+                    sample.accept(("interrupted", ([], [])))
+        switch.hosts = [{"pipelineId": "synthetic", "stageId": "build", "attempt": 1}]
+        switch.sample = functools.partial(deploy.collect_sample, switch, collect=collect)
+        switch.serving = serving
+        result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=5)
+        self.assertGreaterEqual(len(observations), 2)
+        self.assertFalse(result["serving"]["checks"]["http"])
+        self.assertEqual(result["verdict"], "fail")
+
+    def test_cut_inventory_that_overruns_the_sample_deadline_keeps_its_reason(self):
+        switch = Switch()
+        def overdue_inventory(_since, _hosts):
+            switch.clock.sleep(6)
+            return [], []
+        switch.interrupted = overdue_inventory
+        result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertIsNone(result["interrupted"])
+        self.assertEqual(result["interruptedUnreadable"], ["interrupted:sample-deadline"])
+        self.assertTrue(deploy.ready(result["serving"], TARGET))
+
     def test_exited_old_process_after_pointer_publication_still_samples_and_passes(self):
         switch = Switch()
         switch.process_error = FileNotFoundError("old process exited during restart")
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(len(switch.samples), 3)
+        self.assertEqual(len(switch.samples), 4)
         self.assertEqual(result["serving"]["viewer"]["sha"], TARGET)
 
     def test_vanished_protected_host_and_mcp_restart_error_are_reconciled(self):
         switch = Switch()
         switch.mcp_errors = 1
-        result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
+        result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=18)
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(len(switch.samples), 3)
+        self.assertEqual(len(switch.samples), 4)
         self.assertEqual(result["protected"][0]["outcome"], "recovered")
-        self.assertGreaterEqual(switch.clock.now(), 1)
+        self.assertGreaterEqual(switch.clock.now(), deploy.SAMPLE_RETRY_INTERVAL)
 
     def test_restart_submission_error_after_publish_still_runs_every_sample(self):
         switch = Switch()
         switch.restart_error = TimeoutError("submission timed out while restart continued")
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(len(switch.samples), 3)
+        self.assertEqual(len(switch.samples), 4)
         self.assertEqual(result["serving"]["launcher"]["since"], "2026-01-01T00:00:00Z")
 
     def test_only_lost_work_fails_a_healthy_switch(self):
@@ -131,7 +330,7 @@ class LoggedFailures(unittest.TestCase):
                 switch.outcome = outcome
                 result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
                 self.assertEqual(result["verdict"], expected)
-                self.assertEqual(len(switch.samples), 3)
+                self.assertEqual(len(switch.samples), 4)
 
     def test_verdict_lists_the_conversations_the_restart_cut(self):
         switch = Switch()
@@ -184,7 +383,7 @@ class LoggedFailures(unittest.TestCase):
         switch.serving = restarting
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(len(switch.samples), 3)
+        self.assertEqual(len(switch.samples), 4)
         self.assertGreaterEqual(switch.clock.now(), 6)
 
     def test_persistent_transport_failure_records_unknown_and_keeps_sampling(self):
@@ -208,7 +407,7 @@ class LoggedFailures(unittest.TestCase):
         switch.emit = emit
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(len(switch.samples), 3)
+        self.assertEqual(len(switch.samples), 4)
 
 
 class AdapterContracts(unittest.TestCase):
@@ -248,6 +447,23 @@ class AdapterContracts(unittest.TestCase):
             with self.assertRaises(ChildProcessError):
                 os.waitpid(pid, os.WNOHANG)
 
+    def test_timed_out_census_child_is_stopped_inside_its_sample_boundary(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
+        with tempfile.TemporaryDirectory(prefix="census-cutoff-") as root:
+            directory = pathlib.Path(root)
+            (directory / "scripts").mkdir()
+            pidfile = directory / "pid"
+            (directory / "scripts/protected-host-census.ts").write_text(
+                "import fs from 'node:fs'; fs.writeFileSync('pid', String(process.pid)); "
+                "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);")
+            started = time.monotonic()
+            with self.assertRaises(RuntimeError):
+                deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 0.5)
+            self.assertLess(time.monotonic() - started, 0.8)
+            pid = int(pidfile.read_text())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+
     def test_census_adapter_rejects_malformed_oversized_and_failed_output_beside_a_positive_child(self):
         self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
         with tempfile.TemporaryDirectory(prefix="census-child-") as root:
@@ -264,13 +480,34 @@ class AdapterContracts(unittest.TestCase):
                     deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3)
             (directory / ".env").write_text("DELEGATUS_TOKEN=fixture\nLLV_TOKEN=fixture\nLLV_SPAWN_CAPABILITY=fixture\nFAL_KEY=fixture\n")
             answer["conversations"] = [{"conversationId": "conversation_census", "host": {"state": "alive", "kind": "structured", "pid": 104},
-                                         "turnState": "busy", "evidenceSource": "transcript", "pipeline": None}]
+                                         "turnState": "busy", "lifecycle": "running", "evidenceSource": "transcript", "pipeline": None}]
             answer["selection"].update({"matched": 1, "selected": 1})
             script.write_text("if (['DELEGATUS_TOKEN','LLV_TOKEN','LLV_SPAWN_CAPABILITY','FAL_KEY'].some(key => process.env[key] !== undefined)) process.exit(1); "
                               "console.log(" + json.dumps(json.dumps(answer)) + ");")
-            rows = deploy.complete_activity(deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3))
+            rows = deploy.complete_census(deploy.protected_host_census(directory, CENSUS_BUN, directory, TARGET, 3))
             self.assertEqual(len(rows), 1)
             self.assertIsNone(rows[0]["pipeline"])
+
+    def test_legacy_target_census_without_lifecycle_remains_usable_for_preflight(self):
+        self.assertIsNotNone(CENSUS_BUN, "census child tests require Bun")
+        with tempfile.TemporaryDirectory(prefix="census-legacy-lifecycle-") as root:
+            release = pathlib.Path(root)
+            (release / "scripts").mkdir()
+            # Shape emitted by the pre-lifecycle target producer: a complete,
+            # nonempty transcript-backed busy row with no lifecycle property.
+            answer = {"targetRevision": TARGET, "registryRevision": 3, "observedAt": "2026-01-01T00:00:00Z",
+                      "conversations": [{"conversationId": "conversation_legacy", "host": {"state": "alive", "kind": "structured", "pid": 104},
+                                         "turnState": "busy", "evidenceSource": "transcript", "pipeline": None}],
+                      "unselectedCount": 0, "undescribedHostCount": 0,
+                      "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                                    "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}
+            (release / "scripts/protected-host-census.ts").write_text(
+                "console.log(" + json.dumps(json.dumps(answer)) + ");")
+            captured = deploy.protected_host_census(release, CENSUS_BUN, release, TARGET, 3)
+            rows = deploy.complete_census(captured)
+            self.assertEqual(rows, answer["conversations"])
+            host = {"stageId": "build", "attempt": 1}
+            self.assertEqual(deploy.stage_outcome(host, [{"n": 1, "state": "running"}], rows[0])["outcome"], "unknown")
 
     def test_census_custody_fields_validate_real_child_output_and_allow_older_releases(self):
         with tempfile.TemporaryDirectory(prefix="census-custody-") as root:
@@ -280,7 +517,7 @@ class AdapterContracts(unittest.TestCase):
             identity = {"pid": 104, "startIdentity": "104:42", "bootEpoch": "fixture-boot"}
             writer = {"process": {**identity, "pid": 105}, "exitFile": str(directory / "host-exits/fixture.exit.json")}
             host = {"state": "alive", "kind": "structured", "pid": 104, "process": identity, "exitWriter": writer}
-            row = {"conversationId": "conversation_custody", "host": host, "turnState": "idle", "evidenceSource": "transcript", "pipeline": None}
+            row = {"conversationId": "conversation_custody", "host": host, "turnState": "idle", "lifecycle": "waiting", "evidenceSource": "transcript", "pipeline": None}
             answer = {"targetRevision": TARGET, "registryRevision": 1, "observedAt": "2026-01-01T00:00:00Z",
                       "conversations": [row], "unselectedCount": 0, "undescribedHostCount": 0,
                       "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
@@ -348,6 +585,11 @@ class AdapterContracts(unittest.TestCase):
         self.assertEqual(deploy.stage_outcome(host, [original], alive)["outcome"], "recovered")
         fresh = {"n": 2, "state": "running", "conversationId": "synthetic-replacement"}
         self.assertEqual(deploy.stage_outcome(host, [original, fresh], alive)["outcome"], "fresh attempt started")
+        waiting = {"host": {"state": "alive"}, "turnState": "idle", "lifecycle": "waiting"}
+        self.assertEqual(deploy.stage_outcome(host, [original], waiting)["outcome"], "recovered")
+        stalled = {"host": {"state": "alive"}, "turnState": "busy", "lifecycle": "stalled"}
+        self.assertEqual(deploy.stage_outcome(host, [original], stalled)["outcome"], "unknown")
+        self.assertEqual(deploy.stage_outcome(host, [original], {**alive, "lifecycle": "running"})["outcome"], "recovered")
         self.assertEqual(deploy.stage_outcome(host, [original, {**fresh, "state": "spawning"}], {})["outcome"], "unknown")
         failed = {**original, "state": "failed", "error": "stage host was lost while its turn was open"}
         self.assertEqual(deploy.stage_outcome(host, [failed], {})["outcome"], "lost")
@@ -713,6 +955,7 @@ class CheckoutIntegration(unittest.TestCase):
         self.inventory_overrides = {}
         self.inventory_reads = 0
         self.recovery_overrides = {}
+        self.replacement_overrides = {}
         # The service's kernel cgroup, under the slice its unit configures.
         self.cgroup = self.root / "cgroup"
         self.slice = "delegatus.slice"
@@ -751,6 +994,11 @@ class CheckoutIntegration(unittest.TestCase):
                 pass
             def close(self):
                 pass
+            def probe(self):
+                if fixture.mcp_failures:
+                    fixture.mcp_failures -= 1
+                    raise RuntimeError("MCP tool returned error")
+                return True
             def call(self, tool, args):
                 if fixture.mcp_failures:
                     fixture.mcp_failures -= 1
@@ -763,19 +1011,33 @@ class CheckoutIntegration(unittest.TestCase):
                 current = fixture.attempts[-1] if fixture.old_gone else {"n": 1, "conversationId": "synthetic-stage"}
                 row = {"conversationId": "synthetic-stage", "turnState": "busy", "lifecycle": "running",
                        "evidenceSource": "transcript",
-                       "host": {"state": "alive", "pid": 204 if fixture.old_gone else 104},
+                       "host": {"state": "alive", "pid": 204 if fixture.old_gone else 104,
+                                "process": {"pid": 204 if fixture.old_gone else 104,
+                                            "startIdentity": str(204 if fixture.old_gone else 104) + ":" + str(204 if fixture.old_gone else 104),
+                                            "bootEpoch": "fixture-boot"}},
                        "pipeline": {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": current["n"]}}
                 row["conversationId"] = current.get("conversationId", "synthetic-stage")
+                for key, value in fixture.replacement_overrides.items():
+                    if key == "host":
+                        for host_key, host_value in value.items():
+                            if host_key == "process" and isinstance(host_value, dict):
+                                row["host"].setdefault("process", {}).update(host_value)
+                            else:
+                                row["host"][host_key] = host_value
+                    elif key == "pipeline":
+                        row["pipeline"].update(value)
+                    else:
+                        row[key] = value
                 answer = {"ok": True, "conversations": [row], "unselectedCount": 0,
                           "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
                                         "recoveryTruncated": False, "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}
-                if args.get("limit") == 200:
+                if args.get("limit") == 200 and not args.get("conversation_id"):
                     fixture.inventory_reads += 1
                     overrides = fixture.inventory_overrides
                     if callable(overrides):
                         overrides = overrides(fixture.inventory_reads)
                     answer.update(overrides)
-                elif args.get("conversationId"):
+                elif args.get("conversation_id"):
                     answer.update(fixture.recovery_overrides)
                 return answer
         env = patch.dict(os.environ, {"LLV_STATE_DIR": str(self.state)})
@@ -786,7 +1048,10 @@ class CheckoutIntegration(unittest.TestCase):
                                        execute=self.execute, mcp_factory=Transport, cgroup_root=self.cgroup,
                                        signal_process=self.signal,
                                        epoch=lambda: "fixture-boot",
-                                       census=lambda *args: Transport().call("agent_activity", {"limit": 200}))
+                                       census=lambda *args: Transport().call("census", {"limit": 200}))
+        self.adapter.read_host_census = lambda conversation_id: Transport().call(
+            "census", {"limit": 200, "conversation_id": conversation_id})
+        self.adapter.sample = functools.partial(deploy.collect_sample, self.adapter, collect=inline_evidence)
         self.addCleanup(self.adapter.close)
         clock = self.adapter.clock
         def sleep(seconds, advance=clock.sleep):
@@ -860,7 +1125,7 @@ class CheckoutIntegration(unittest.TestCase):
             answer = {"targetRevision": TARGET, "registryRevision": 1, "observedAt": "2026-01-01T00:00:00Z",
                       "conversations": [{"conversationId": "conversation_protected",
                                          "host": {"state": "alive", "kind": "structured", "pid": 104},
-                                         "turnState": "busy", "evidenceSource": "transcript"}],
+                                         "turnState": "busy", "lifecycle": "running", "evidenceSource": "transcript"}],
                       "unselectedCount": 0, "undescribedHostCount": 0,
                       "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
                                     "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}
@@ -1072,6 +1337,128 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertEqual(self.service_commands(), ["stop", "start"])
         self.assertEqual(self.signals, [])
 
+    def test_missing_launcher_record_recovers_unit_before_fresh_sample(self):
+        self.relocating()
+        self.adapter.preflight = lambda: ([], [])
+        start = self.adapter.start
+        starts = []
+        def lose_record_after_initial_start(relocation, attempts=deploy.START_ATTEMPTS,
+                                            settle_timeout=deploy.STOP_SETTLE):
+            start(relocation, attempts, settle_timeout)
+            starts.append(self.adapter.clock.now())
+            if len(starts) == 1:
+                self.record_file.unlink()
+                self.active = False
+        self.adapter.start = lose_record_after_initial_start
+        owner_recoveries = []
+        recover = self.adapter.recover_start
+        def record_owner_recovery(*args, **kwargs):
+            owner_recoveries.append((os.getpid(), self.adapter.clock.now()))
+            return recover(*args, **kwargs)
+        self.adapter.recover_start = record_owner_recovery
+        served_after_starts = []
+        serving = self.adapter.serving
+        def observe_serving():
+            served_after_starts.append(len(starts))
+            return serving()
+        self.adapter.serving = observe_serving
+        result = deploy.run_switch(self.adapter, TARGET, samples=2, interval=1, timeout=5)
+        self.assertEqual(len(starts), 2)
+        self.assertGreaterEqual(len(owner_recoveries), 1)
+        self.assertEqual(owner_recoveries[0][0], os.getpid())
+        self.assertLessEqual(owner_recoveries[0][1], 1)
+        self.assertGreaterEqual(served_after_starts[0], 2)
+        self.assertTrue(deploy.ready(result["serving"], TARGET))
+        self.assertEqual(self.service_commands(), ["stop", "start", "start"])
+
+    def test_unit_loss_during_serving_read_recovers_owner_promptly_and_rechecks_serving(self):
+        switch = Switch()
+        switch.relocation.update({"stopSubmitted": True, "started": True})
+        switch.active = True
+        switch.unit = "synthetic-viewer.service"
+        recoveries, fresh_witnesses = [], []
+        def recover_start(attempts=deploy.START_ATTEMPTS, settle_timeout=deploy.STOP_SETTLE, command_deadline=None):
+            if not switch.active:
+                switch.relocation["startAttempts"] += 1
+                switch.active = True
+                recoveries.append(switch.clock.now())
+            switch.relocation["started"] = switch.active
+        switch.recover_start = recover_start
+        serving = switch.serving
+        calls = 0
+        def lose_during_first_read():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                switch.active = False
+                raise FileNotFoundError("launcher record disappeared during serving read")
+            if not switch.active:
+                raise FileNotFoundError("unit stopped")
+            fresh_witnesses.append(switch.clock.now())
+            return serving()
+        switch.serving = lose_during_first_read
+        result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=5)
+        self.assertEqual(recoveries, [0])
+        self.assertTrue(fresh_witnesses)
+        self.assertGreaterEqual(fresh_witnesses[0], recoveries[0])
+        self.assertEqual(result["verdict"], "pass", result)
+
+    def test_owner_recovery_bounds_all_systemctl_calls_to_its_deadline(self):
+        binary = self.root / "slow-systemctl"
+        binary.mkdir()
+        systemctl = binary / "systemctl"
+        systemctl.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(2)\n")
+        systemctl.chmod(0o700)
+        self.adapter.command = deploy.command
+        self.adapter.relocation = {"stopSubmitted": True, "started": True, "startAttempts": 0,
+                                   "outcome": "previously-confirmed", "diagnostics": []}
+        started = time.monotonic()
+        with patch.dict(os.environ, {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}):
+            self.adapter.recover_start(settle_timeout=0.25, command_deadline=started + 0.15)
+        self.assertLess(time.monotonic() - started, 0.25)
+        self.assertTrue(self.adapter.relocation["started"])
+        self.assertEqual(self.adapter.relocation["outcome"], "previously-confirmed")
+        self.assertEqual(self.adapter.relocation["startAttempts"], 0)
+        self.assertIn("recovery:command-deadline", self.adapter.relocation["diagnostics"])
+
+    def test_expired_recovery_does_not_launch_or_mutate_confirmed_state(self):
+        marker = self.root / "systemctl-launched"
+        binary = self.root / "expired-systemctl"
+        binary.mkdir()
+        systemctl = binary / "systemctl"
+        systemctl.write_text("#!/usr/bin/env python3\nimport pathlib,sys\npathlib.Path(" + repr(str(marker)) + ").write_text('launched')\n")
+        systemctl.chmod(0o700)
+        self.adapter.command = deploy.command
+        self.adapter.relocation = {"stopSubmitted": True, "started": True, "startAttempts": 4,
+                                   "outcome": "confirmed", "diagnostics": []}
+        with patch.dict(os.environ, {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}):
+            self.adapter.recover_start(command_deadline=time.monotonic() - 1)
+        self.assertFalse(marker.exists())
+        self.assertEqual((self.adapter.relocation["started"], self.adapter.relocation["startAttempts"],
+                          self.adapter.relocation["outcome"]), (True, 4, "confirmed"))
+
+    def test_timed_out_start_keeps_confirmed_state_and_marks_launch_unknown(self):
+        binary = self.root / "slow-start-systemctl"
+        binary.mkdir()
+        systemctl = binary / "systemctl"
+        systemctl.write_text("#!/usr/bin/env python3\nimport sys,time\n"
+                             "if 'start' in sys.argv: time.sleep(2)\n"
+                             "elif 'show' in sys.argv: print('ActiveState=inactive')\n")
+        systemctl.chmod(0o700)
+        self.adapter.command = deploy.command
+        self.adapter.relocation = {"stopSubmitted": True, "started": True, "startAttempts": 0,
+                                   "outcome": "previously-confirmed", "stopOutcome": "released",
+                                   "diagnostics": []}
+        started = time.monotonic()
+        with patch.dict(os.environ, {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}):
+            self.adapter.recover_start(settle_timeout=0.25, command_deadline=started + 0.15)
+        self.assertLess(time.monotonic() - started, 0.25)
+        self.assertEqual((self.adapter.relocation["started"], self.adapter.relocation["startAttempts"],
+                          self.adapter.relocation["outcome"]), (True, 1, "previously-confirmed"))
+        self.assertEqual((self.adapter.relocation["launchEvidence"],
+                          self.adapter.relocation["settlementEvidence"]), ("unknown", "unknown"))
+        self.assertIn("recovery:start-unconfirmed", self.adapter.relocation["diagnostics"])
+
     def test_an_incomplete_interruption_record_keeps_a_healthy_switch_from_passing(self):
         directory = self.state / "interruption-obligations"
         directory.mkdir()
@@ -1086,10 +1473,16 @@ class CheckoutIntegration(unittest.TestCase):
         self.attempts = attempts
         self.adapter.run_dir = self.state / "deploy-verdicts/synthetic-stage-run"
         self.adapter.run_dir.mkdir(parents=True, mode=0o700)
-        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=18)
         self.assertEqual(result["verdict"], verdict)
-        self.assertEqual(result["protected"], [{"pipelineId": "synthetic-lane", "stageId": "build",
-                                              "attempt": attempt, "outcome": outcome}])
+        self.assertEqual(len(result["protected"]), 1)
+        row = result["protected"][0]
+        self.assertEqual((row["pipelineId"], row["stageId"], row["attempt"], row["outcome"]),
+                         ("synthetic-lane", "build", attempt, outcome))
+        self.assertEqual(row["captured"]["attempt"], 1)
+        self.assertEqual(row["captured"]["conversationId"], "synthetic-stage")
+        if outcome == "unknown":
+            self.assertIn("reason", row)
         events = [json.loads(line) for line in (self.adapter.run_dir / "switch.log").read_text().splitlines()
                   if line.startswith("{")]
         samples = [event for event in events if "sample" in event]
@@ -1168,6 +1561,7 @@ class CheckoutIntegration(unittest.TestCase):
                                   "ActiveState": "active", "ControlGroup": control}
             identity = lambda pid: {"pid": pid, "startIdentity": str(pid) + ":" + str(pid), "bootEpoch": "fixture-boot"}
             rows.append({"conversationId": "synthetic-host-" + str(index), "turnState": "busy" if index < 2 else "idle",
+                         "lifecycle": "running" if index < 2 else "waiting",
                          "pipeline": None, "evidenceSource": "transcript", "host": {"state": "alive", "kind": "structured",
                          "pid": host, "process": identity(host), "exitWriter": {"process": identity(waiter), "exitFile": str(exit_file)}}})
             groups.append({"pids": pids, "waiter": waiter, "host": host, "leader": leader, "directory": directory, "row": rows[-1], "scope": self.scopes[scope]})
@@ -1831,7 +2225,7 @@ class CheckoutIntegration(unittest.TestCase):
         self.assert_back_in_service(result)
         self.assertEqual(relocation["startAttempts"], 1001)
         self.assertEqual(relocation["outcome"], "released")
-        self.assertIn("RuntimeError", result["diagnostics"])
+        self.assertIn("serving:not-ready", result["diagnostics"])
         self.assertEqual(result["verdict"], "fail")
         self.assertFalse(result["serving"]["checks"]["service"])
 
@@ -1886,6 +2280,66 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertIn("finishedAt", latest)
         self.assertEqual(latest["recovery"]["state"], "complete")
 
+    def test_real_install_lock_refuses_a_contender_until_the_recovery_owner_finishes(self):
+        self.relocating()
+        self.start_refusals = 1000
+        self.adapter.run_dir = self.state / "deploy-verdicts/owner"
+        self.adapter.run_dir.mkdir(parents=True)
+        contender = self.adapter.run_dir.with_name("contender")
+        contender.mkdir()
+        latest = contender.parent / ("latest-" + self.adapter.install + ".json")
+        next_worker = """import functools, pathlib, runpy, sys
+fx = runpy.run_path(sys.argv[1])
+deploy = fx["deploy"]
+class Candidate(fx["Switch"]):
+    target = fx["TARGET"]
+    install = "c" * 16
+    run_dir = pathlib.Path(sys.argv[2])
+    emit = deploy.Checkout.emit
+    def publish(self):
+        (self.run_dir / "published").touch()
+    def close(self):
+        pass
+deploy.run_switch = functools.partial(deploy.run_switch, samples=1, interval=0, timeout=1)
+try:
+    sys.exit(deploy.run_worker(Candidate()))
+except BlockingIOError:
+    sys.exit(17)
+"""
+        def enter():
+            return subprocess.run([sys.executable, "-c", next_worker, __file__, str(contender)],
+                                  capture_output=True, text=True, timeout=5)
+        emit = self.adapter.emit
+        refused = []
+        def observe(event):
+            emit(event)
+            if event.get("recovery", {}).get("state") != "pending":
+                return
+            self.start_refusals = 0
+            original = latest.read_bytes()
+            child = enter()
+            refused.append((json.loads(original), child.returncode, child.stderr,
+                            latest.read_bytes() == original, sorted(p.name for p in contender.iterdir()),
+                            json.loads((contender / "status.json").read_text())))
+        self.adapter.emit = observe
+        short_switch = functools.partial(deploy.run_switch, samples=1, interval=0, timeout=0)
+        with patch.object(deploy, "run_switch", short_switch):
+            self.assertEqual(deploy.run_worker(self.adapter), 1)
+        self.assertEqual(len(refused), 1)
+        rejected, code, stderr, kept_latest, writes, status = refused[0]
+        self.assertEqual(code, 17, stderr)
+        self.assertTrue(kept_latest)
+        self.assertEqual(writes, ["status.json"])
+        self.assertEqual((status["phase"], status["reason"]), ("finished", "install-lock-held"))
+        self.assertEqual(rejected["recovery"]["ownerPid"], os.getpid())
+        self.assertEqual(self.service_commands().count("stop"), 1)
+        self.assertEqual(json.loads(latest.read_text())["recovery"]["state"], "complete")
+        self.assertEqual(json.loads(self.pointer.read_text())["sha"], TARGET)
+        child = enter()
+        self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertTrue((contender / "published").exists())
+        self.assertEqual(json.loads(latest.read_text())["run"], contender.name)
+
     def test_activating_without_a_job_keeps_recovery_owned_until_active(self):
         self.relocating()
         active_state = self.adapter.active_state
@@ -1933,6 +2387,13 @@ class CheckoutIntegration(unittest.TestCase):
 
     def test_unit_failure_after_last_health_sample_cannot_keep_a_pass(self):
         self.relocating()
+        serving_samples = []
+        serving = self.adapter.serving
+        def record_serving():
+            result = serving()
+            serving_samples.append(result)
+            return result
+        self.adapter.serving = record_serving
         interrupted = self.adapter.interrupted
         def failed(since, hosts):
             answer = interrupted(since, hosts)
@@ -1941,7 +2402,10 @@ class CheckoutIntegration(unittest.TestCase):
             return answer
         self.adapter.interrupted = failed
         result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=2, timeout=5)
-        self.assertTrue(result["serving"]["checks"]["service"])
+        self.assertTrue(any(sample["checks"]["service"] for sample in serving_samples))
+        self.assertFalse(result["serving"]["checks"]["service"])
+        self.assertTrue(self.active, {"remainingStartRefusals": self.start_refusals,
+                                      "relocation": result["relocation"]})
         self.assert_back_in_service(result)
         self.assertEqual(result["relocation"]["outcome"], "released")
         self.assertEqual(result["verdict"], "fail")
@@ -2220,7 +2684,8 @@ class CheckoutIntegration(unittest.TestCase):
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
         self.assertEqual(result["protected"][0]["outcome"], "recovered")
-        self.assertEqual(self.inventory_reads, 4)  # Three preflight reads, then retirement refresh.
+        self.assertGreaterEqual(self.inventory_reads, 4)  # Preflight retries plus retirement and sample reads.
+        self.assertLessEqual(self.inventory_reads, 7)
         self.assertEqual(self.service_commands(), ["stop", "start"])
 
     def test_preflight_failure_never_publishes_or_restarts(self):
@@ -2343,9 +2808,348 @@ class CheckoutIntegration(unittest.TestCase):
     def test_stale_activity_alive_row_cannot_prove_recovery(self):
         original = self.adapter.process
         self.adapter.process = lambda entry: None
-        with self.assertRaises(RuntimeError):
-            self.adapter.stage({"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1})
+        outcome = self.adapter.stage({"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1})
+        self.assertEqual((outcome["outcome"], outcome["reason"]), ("unknown", "replacement-process-gone"))
         self.adapter.process = original
+
+    def test_replacement_evidence_must_bind_pipeline_attempt_boot_and_process_identity(self):
+        cases = [
+            ({"pipeline": {"pipelineId": "other-lane"}}, "replacement-pipeline-mismatch"),
+            ({"pipeline": {"stageId": "other-stage"}}, "replacement-pipeline-mismatch"),
+            ({"pipeline": {"attempt": 1}}, "replacement-pipeline-mismatch"),
+            ({"host": {"process": {"bootEpoch": "other-boot"}}}, "replacement-process-identity-unverified"),
+            ({"host": {"process": {"startIdentity": "204:stale"}}}, "replacement-process-identity-unverified"),
+            ({"host": {"process": None}}, "replacement-process-identity-unverified"),
+        ]
+        self.old_gone = True
+        self.attempts = [{"n": 1, "state": "failed", "conversationId": "synthetic-stage",
+                          "error": "stage host was lost while its turn was open"},
+                         {"n": 2, "state": "running", "conversationId": "synthetic-replacement"}]
+        for overrides, reason in cases:
+            with self.subTest(reason=reason, overrides=overrides):
+                self.replacement_overrides = overrides
+                outcome = self.adapter.stage({"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1})
+                self.assertEqual((outcome["outcome"], outcome.get("reason")), ("unknown", reason))
+
+    def test_replacement_census_cannot_reuse_the_captured_process_identity(self):
+        self.old_gone = True
+        self.attempts = [{"n": 1, "state": "failed", "conversationId": "synthetic-stage",
+                          "error": "stage host was lost while its turn was open"},
+                         {"n": 2, "state": "running", "conversationId": "synthetic-replacement"}]
+        captured = {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1,
+                    "startIdentity": "42"}
+        self.replacement_overrides = {"host": {"process": {"startIdentity": "204:42"}}}
+        outcome = self.adapter.stage(captured)
+        self.assertEqual((outcome["outcome"], outcome.get("reason")),
+                         ("unknown", "replacement-process-identity-not-fresh"))
+
+    def test_legacy_capture_without_boot_epoch_still_accepts_verified_replacement(self):
+        self.old_gone = True
+        self.attempts = [{"n": 1, "state": "failed", "conversationId": "synthetic-stage",
+                          "error": "stage host was lost while its turn was open"},
+                         {"n": 2, "state": "running", "conversationId": "synthetic-replacement"}]
+        captured = {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1}
+        outcome = self.adapter.stage(captured)
+        self.assertEqual((outcome["outcome"], outcome["attempt"]), ("fresh attempt started", 2))
+
+
+class SampleSupervision(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix="checkout-sample-")
+        self.addCleanup(temp.cleanup)
+        self.root = pathlib.Path(temp.name)
+        self.state = self.root / "state"
+        self.state.mkdir()
+        (self.root / "bin").mkdir()
+        token = self.root / "service.env"
+        token.write_text("LLV_TOKEN=synthetic\n")
+        self.plan = self.root / "plan.json"
+        deploy.write_json(self.plan, {"stateDir": str(self.state), "installId": "c" * 16, "target": TARGET,
+                                     "checkout": str(self.root), "releaseDir": str(self.root),
+                                     "tokenFile": str(token), "verificationFile": str(self.root / "verification"),
+                                     "unit": "synthetic-viewer.service", "baselinePointer": {}, "bun": sys.executable})
+        env = patch.dict(os.environ, {"LLV_STATE_DIR": str(self.state), "PYTHONDONTWRITEBYTECODE": "1"})
+        env.start()
+        self.addCleanup(env.stop)
+        self.calls = self.root / "calls.jsonl"
+        (self.root / "bin/mcp-server.mjs").write_text("""import json, os, pathlib, subprocess, sys, time
+def record(*data):
+    with open("calls.jsonl", "a") as stream:
+        stream.write(json.dumps(data) + "\\n")
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    result = {}
+    if request["method"] == "tools/list":
+        result = {"tools": [{"name": "get_pipeline"}]}
+    elif request["method"] == "tools/call":
+        tool, args = request["params"]["name"], request["params"]["arguments"]
+        name = args.get("pipelineId", args.get("conversationId", "serving"))
+        record(tool, name, os.getpid())
+        if tool in ["get_pipeline", "list_pipelines"] and "clientRequestId" in args:
+            raise AssertionError("read request would write a receipt")
+        if name.startswith("late-") or name.startswith("stalled-"):
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+            record("descendant", name, child.pid)
+            time.sleep(6 if name.startswith("late-") else 60)
+            record("late-reply", name, os.getpid())
+        if tool == "get_pipeline":
+            state = "running" if name.startswith(("dead-", "pending-")) else "passed"
+            attempt = {"n": 1, "state": state}
+            if name.startswith("dead-"):
+                attempt["conversationId"] = name
+            result = {"ok": True, "pipeline": {"runs": [{"stageId": "build", "attempts": [attempt]}]}}
+        elif tool == "list_pipelines":
+            result = {"ok": True, "pipelines": []}
+        else:
+            raise AssertionError(tool)
+        if name.startswith("unavailable-"):
+            result = {"ok": False}
+    wire = result if request["method"] == "tools/list" else {"structuredContent": result}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": wire}), flush=True)
+""")
+        self.driver = self.root / "evidence-worker.py"
+        self.driver.write_text(f"""import runpy, pathlib, sys, time
+fixture = runpy.run_path({str(pathlib.Path(__file__).resolve())!r})
+deploy = fixture["deploy"]
+class Checkout(deploy.Checkout):
+    def read_host_census(self, conversation_id):
+        return {{"ok": True, "conversations": [{{"conversationId": conversation_id,
+            "evidenceSource": "transcript", "turnState": "unknown", "lifecycle": "gone", "host": {{"state": "gone"}}}}],
+            "unselectedCount": 0, "selection": {{"matched": 1, "selected": 1, "recoveryPending": 0,
+            "recoveryTruncated": False, "cacheStatus": "hit", "projected": 0, "unreadable": 0}}}}
+    def serving(self):
+        self.mcp.probe()
+        if (self.checkout / "late-serving").exists():
+            time.sleep(1.8)
+        return fixture["Switch"]().serving()
+deploy.Checkout = Checkout
+sys.exit(deploy.evidence_worker(sys.argv[2]))
+""")
+
+    def run_sample(self, names, *, driver=True, timeout=1.5):
+        switch = Switch()
+        switch.clock, switch.config_file, switch.old = deploy.Clock(), self.plan, []
+        switch.plan = json.loads(self.plan.read_text())
+        switch.sample = functools.partial(deploy.collect_sample, switch)
+        switch.hosts = [{"pipelineId": name, "stageId": "build", "attempt": 1, "pid": 100 + index,
+                         "conversationId": "original-" + name} for index, name in enumerate(names)]
+        started = time.monotonic()
+        with patch.object(deploy, "__file__", str(self.driver) if driver else deploy.__file__):
+            result = deploy.run_switch(switch, TARGET, samples=1, interval=0, timeout=timeout)
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, timeout + 0.15)
+        self.assertEqual([row["captured"] for row in result["protected"]], switch.hosts)
+        self.assertTrue(switch.published)
+        return result
+
+    def recorded(self):
+        return [json.loads(line) for line in self.calls.read_text().splitlines()]
+
+    def assert_workers_stopped(self, calls):
+        pids = {pid for _, _, pid in calls}
+        def stopped(pid):
+            try:
+                return deploy.proc_field(pid, "stat").split(") ")[-1].split()[0] in ["Z", "X"]
+            except FileNotFoundError:
+                return True
+        self.assertTrue(all(stopped(pid) for pid in pids))
+
+    def test_healthy_keeps_terminal_rows_and_real_cut_inventory(self):
+        result = self.run_sample(["complete-" + str(i) for i in range(8)], timeout=5)
+        self.assertEqual(result["verdict"], "pass", result)
+        self.assertEqual(result["interrupted"], [])
+        self.assertTrue(all(row["outcome"] == "completed" for row in result["protected"]))
+        calls = self.recorded()
+        self.assertTrue(all(tool in ["get_pipeline", "list_pipelines", "descendant"] for tool, _, _ in calls))
+        self.assertEqual(len({pid for tool, _, pid in calls if tool == "get_pipeline"}), deploy.PROTECTED_READERS)
+        self.assert_workers_stopped(calls)
+
+    def test_post_frame_nonzero_exit_without_worker_done_never_passes_any_lane(self):
+        host = {"pipelineId": "synthetic", "stageId": "build", "attempt": 1}
+        serving = {**{role: {"sha": TARGET, "healthy": True} for role in ["launcher", "viewer", "runtimeHost"]},
+                   "checks": dict.fromkeys(["http", "runtimeSocket", "mcp", "service", "placement"], True)}
+        with tempfile.TemporaryDirectory(prefix="checkout-incomplete-worker-") as directory:
+            driver = pathlib.Path(directory) / "worker.py"
+            driver.write_text(
+                "import json,sys\nkind,inputs,deadline,plan=json.load(sys.stdin)\n"
+                "frame=(['protected',[inputs[0][0],{'outcome':'completed','attempt':1}]] if kind=='protected' else "
+                "['interrupted',[[],[]]] if kind=='interrupted' else ['serving'," + repr(serving) + "])\n"
+                "print(json.dumps(frame),flush=True)\nsys.exit(23)\n")
+            adapter = type("Adapter", (), {"plan": {}, "config_file": self.plan})()
+            lanes = [
+                ("protected", [(0, host)]),
+                ("serving", [[], TARGET]),
+                ("interrupted", ["2026-01-01T00:00:00Z", [host]]),
+            ]
+            for lane in lanes:
+                sample = deploy.EvidenceSample([host])
+                with patch.object(deploy, "__file__", str(driver)):
+                    deploy.run_evidence_workers(adapter, [lane], sample, time.monotonic() + 1)
+                self.assertTrue(sample.incomplete, lane[0])
+                self.assertTrue(any(lane[0] + ":worker-exit:23" in item for item in sample.diagnostics), sample.diagnostics)
+                if lane[0] == "protected":
+                    self.assertEqual(sample.protected[0]["outcome"], "completed")
+
+    def test_premature_eof_keeps_peer_result_and_cleanup_reserve(self):
+        host = {"pipelineId": "synthetic", "stageId": "build", "attempt": 1}
+        with tempfile.TemporaryDirectory(prefix="checkout-peer-eof-") as directory:
+            driver = pathlib.Path(directory) / "worker.py"
+            driver.write_text(
+                "import json,os,sys,time\nkind,inputs,deadline,plan=json.load(sys.stdin)\n"
+                "if kind=='protected':\n print(json.dumps(['reading',0]),flush=True); os.close(1); time.sleep(60)\n"
+                "else:\n print(json.dumps(['interrupted',[[],[]]]),flush=True); time.sleep(.25); print(json.dumps(['worker-done']),flush=True)\n")
+            adapter = type("Adapter", (), {"plan": {}, "config_file": self.plan})()
+            sample = deploy.EvidenceSample([host])
+            started = time.monotonic()
+            with patch.object(deploy, "__file__", str(driver)):
+                deploy.run_evidence_workers(adapter, [
+                    ("protected", [(0, host)]), ("interrupted", ["2026-01-01T00:00:00Z", [host]])
+                ], sample, started + 1.5)
+            self.assertLess(time.monotonic() - started, 1.5)
+            self.assertEqual(sample.interrupted, [])
+            self.assertEqual(sample.protected[0]["reason"], "worker-exit-unconfirmed", sample.diagnostics)
+            self.assertFalse(any("worker-cleanup-pending" in item for item in sample.diagnostics))
+
+    def test_mixed_finishes_while_late_transport_and_descendant_are_stopped(self):
+        names = ["pending-0", "dead-1", "unavailable-2", "dead-3",
+                 "unavailable-4", "late-5", "stalled-6", "complete-7"]
+        result = self.run_sample(names, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision", result)
+        self.assertTrue(deploy.ready(result["serving"], TARGET))
+        self.assertEqual([row.get("reason") for row in result["protected"]], [
+            "stage-conversation-pending", "replacement-pipeline-mismatch", "pipeline-unavailable:RuntimeError",
+            "replacement-pipeline-mismatch", "pipeline-unavailable:RuntimeError", "sample-deadline",
+            "sample-deadline", None])
+        self.assertEqual(result["protected"][-1]["outcome"], "completed")
+        calls = self.recorded()
+        self.assertTrue(all(tool in ["get_pipeline", "list_pipelines", "descendant"] for tool, _, _ in calls))
+        self.assertFalse(any(tool == "late-reply" for tool, _, _ in calls))
+        self.assertEqual(sum(tool == "descendant" for tool, _, _ in calls), 2)
+        self.assert_workers_stopped(calls)
+
+    def test_stalled_and_queued_hosts_keep_all_identities(self):
+        result = self.run_sample(["stalled-" + str(i) for i in range(8)])
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertTrue(all(row["reason"] == "sample-deadline" for row in result["protected"]))
+        calls = self.recorded()
+        self.assertTrue(all(tool in ["get_pipeline", "list_pipelines", "descendant"] for tool, _, _ in calls))
+        self.assertEqual(sum(tool == "get_pipeline" for tool, _, _ in calls), deploy.PROTECTED_READERS)
+        self.assert_workers_stopped(calls)
+
+    def test_late_serving_cannot_turn_complete_work_into_a_pass(self):
+        (self.root / "late-serving").touch()
+        result = self.run_sample(["complete-0"])
+        self.assertEqual(result["verdict"], "fail")
+        self.assertEqual(result["protected"][0]["outcome"], "completed")
+        self.assertIn("serving:sample-deadline", result["diagnostics"])
+        self.assert_workers_stopped(self.recorded())
+
+    def test_worker_launch_stall_is_supervised_from_before_exec(self):
+        host = {"pipelineId": "synthetic", "stageId": "build", "attempt": 1}
+        adapter = type("Adapter", (), {"plan": {}, "config_file": self.plan})()
+        sample = deploy.EvidenceSample([host])
+        started = time.monotonic()
+        with patch.object(deploy.os, "execve", side_effect=lambda *args: time.sleep(60)):
+            deploy.run_evidence_workers(adapter, [("protected", [(0, host)])], sample, started + 0.4)
+        self.assertLess(time.monotonic() - started, 0.55)
+        self.assertEqual(sample.protected[0]["reason"], "sample-deadline")
+
+    def test_unexpected_worker_exits_keep_their_cause_and_prior_frames(self):
+        host = {"pipelineId": "synthetic", "stageId": "build", "attempt": 1}
+        adapter = type("Adapter", (), {"plan": {}, "config_file": self.plan})()
+        with tempfile.TemporaryDirectory(prefix="checkout-worker-exit-") as directory:
+            driver = pathlib.Path(directory) / "worker.py"
+            for body, expected in [
+                    ("import sys; sys.exit(23)\n", "worker-exit:23"),
+                    ("import json,os,signal; print(json.dumps(['reading',0]),flush=True); os.kill(os.getpid(),signal.SIGKILL)\n",
+                     "worker-signal:SIGKILL")]:
+                driver.write_text(body)
+                sample = deploy.EvidenceSample([host])
+                with patch.object(deploy, "__file__", str(driver)):
+                    deploy.run_evidence_workers(adapter, [("protected", [(0, host)])], sample,
+                                                time.monotonic() + 1)
+                self.assertEqual(sample.protected[0]["reason"], expected)
+                if expected == "worker-signal:SIGKILL":
+                    self.assertEqual(sample.protected[0]["outcome"], "unknown")
+
+    def test_reap_timeout_is_reported_without_waiting_past_sample_cutoff(self):
+        host = {"pipelineId": "synthetic", "stageId": "build", "attempt": 1}
+        adapter = type("Adapter", (), {"plan": {}, "config_file": self.plan})()
+        with tempfile.TemporaryDirectory(prefix="checkout-worker-reap-") as directory:
+            driver = pathlib.Path(directory) / "worker.py"
+            driver.write_text("import json; print(json.dumps(['protected',[0,{'outcome':'completed','attempt':1}]]),flush=True); print(json.dumps(['worker-done']),flush=True)\n")
+            sample = deploy.EvidenceSample([host])
+            started = time.monotonic()
+            reaped = []
+            waitpid = os.waitpid
+            def hold_receipt(pid, options):
+                reaped.append(pid)
+                return 0, 0
+            with patch.object(deploy, "__file__", str(driver)), patch.object(deploy.os, "waitpid", side_effect=hold_receipt):
+                deploy.run_evidence_workers(adapter, [("protected", [(0, host)])], sample, started + 0.35)
+            self.assertLess(time.monotonic() - started, 0.5)
+            self.assertEqual(sample.protected[0]["outcome"], "completed")
+            self.assertNotIn("reason", sample.protected[0])
+            self.assertTrue(any("worker-cleanup-pending" in item for item in sample.diagnostics))
+            for pid in set(reaped):
+                with contextlib.suppress(ChildProcessError):
+                    waitpid(pid, 0)
+
+    def test_unreaped_workers_keep_their_owned_slots_until_a_later_sample_reaps_them(self):
+        deploy.reap_worker_custody()
+        host = {"pipelineId": "synthetic", "stageId": "build", "attempt": 1}
+        adapter = type("Adapter", (), {"plan": {}, "config_file": self.plan})()
+        with tempfile.TemporaryDirectory(prefix="checkout-worker-custody-") as directory:
+            driver = pathlib.Path(directory) / "worker.py"
+            driver.write_text("import json,sys\nkind,inputs,deadline,plan=json.load(sys.stdin)\n"
+                              "print(json.dumps(['protected',[inputs[0][0],{'outcome':'completed','attempt':1}]]),flush=True)\n"
+                              "print(json.dumps(['worker-done']),flush=True)\n")
+            sample = deploy.EvidenceSample([host] * (deploy.PROTECTED_READERS + 1))
+            real_waitpid = os.waitpid
+            def defer_reap(_pid, _options):
+                return 0, 0
+            with patch.object(deploy, "__file__", str(driver)), patch.object(deploy.os, "waitpid", side_effect=defer_reap):
+                lanes = [("protected", [(index, host)]) for index in range(deploy.PROTECTED_READERS + 1)]
+                deploy.run_evidence_workers(adapter, lanes, sample, time.monotonic() + 0.3)
+                owned = dict(deploy.WORKER_CUSTODY)
+                self.assertEqual(len(owned), deploy.PROTECTED_READERS + 1)
+                self.assertTrue(all(custody["startIdentity"] for custody in owned.values()))
+                second = deploy.EvidenceSample([host])
+                deploy.run_evidence_workers(adapter, [("protected", [(0, host)])], second,
+                                            time.monotonic() + 0.1)
+                self.assertEqual(set(deploy.WORKER_CUSTODY), set(owned))
+                self.assertEqual(second.protected[0]["reason"], "worker-cleanup-pending")
+            for pid in owned:
+                with contextlib.suppress(ChildProcessError):
+                    real_waitpid(pid, 0)
+            deploy.reap_worker_custody()
+            self.assertFalse(set(owned) & set(deploy.WORKER_CUSTODY))
+
+    def test_production_worker_entry_reads_only_its_assigned_evidence(self):
+        host = {"pipelineId": "complete-0", "stageId": "build", "attempt": 1}
+        sample = deploy.EvidenceSample([host])
+        adapter = deploy.Checkout(self.plan)
+        try:
+            deploy.run_evidence_workers(adapter, [("protected", [(0, host)])], sample, time.monotonic() + 1.5)
+        finally:
+            adapter.close()
+        self.assertEqual(sample.protected[0]["outcome"], "completed")
+        self.assertEqual([tool for tool, _, _ in self.recorded()], ["get_pipeline"])
+
+    def test_plan_replacement_cannot_redirect_a_protected_read(self):
+        host = {"pipelineId": "complete-0", "stageId": "build", "attempt": 1}
+        sample = deploy.EvidenceSample([host])
+        adapter = deploy.Checkout(self.plan)
+        try:
+            deploy.write_json(self.plan, {**adapter.plan, "target": OLD})
+            deploy.run_evidence_workers(adapter, [("protected", [(0, host)])], sample, time.monotonic() + 1.5)
+        finally:
+            adapter.close()
+        self.assertEqual(sample.protected[0]["outcome"], "unknown")
+        self.assertEqual(sample.protected[0]["reason"], "worker:RuntimeError")
+        self.assertFalse(self.calls.exists())
 
 
 class TransportContracts(unittest.TestCase):
@@ -2463,6 +3267,35 @@ class TransportContracts(unittest.TestCase):
                     probe.close()
             self.assertEqual(len(children), 2)
             self.assertTrue(all(child.poll() is not None for child in children))
+
+    def test_mcp_health_probe_requires_a_fresh_round_trip_beyond_cached_tools_list(self):
+        with tempfile.TemporaryDirectory(prefix="delegatus-mcp-probe-") as root:
+            checkout = pathlib.Path(root)
+            (checkout / "bin").mkdir()
+            trace = checkout / "requests.jsonl"
+            (checkout / "bin/mcp-server.mjs").write_text(
+                "import json,sys,pathlib\n"
+                "for line in sys.stdin:\n"
+                " r=json.loads(line)\n"
+                " if 'id' not in r: continue\n"
+                " with open('requests.jsonl','a') as f: f.write(json.dumps(r['method'])+'\\n')\n"
+                " if r['method']=='tools/list': result={'tools':[{'name':'get_pipeline'}]}\n"
+                " elif pathlib.Path('offline').exists(): result={'isError':True,'content':[{'type':'text','text':'offline'}]}\n"
+                " else: result={'structuredContent':{'ok':True,'pipelines':[]}}\n"
+                " print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)\n")
+            probe = deploy.Mcp(checkout, checkout, "synthetic", sys.executable)
+            try:
+                self.assertTrue(probe.probe())
+                (checkout / "offline").touch()
+                with self.assertRaises(RuntimeError):
+                    probe.probe()
+                (checkout / "offline").unlink()
+                self.assertTrue(probe.probe())
+            finally:
+                probe.close()
+            methods = [json.loads(line) for line in trace.read_text().splitlines()]
+            self.assertEqual(methods.count("tools/list"), 3)
+            self.assertEqual(methods.count("tools/call"), 3)
 
 
 if __name__ == "__main__":
