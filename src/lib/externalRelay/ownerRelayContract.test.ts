@@ -17,23 +17,20 @@ test(`owner chat replies preserve negotiated Markdown without selecting answer p
       stop: async () => { throw new Error("a settled reply needs no cancellation"); }, pollMs: 1,
     },
   }).done;
-  const opening = text.split(/\r?\n/u).map(line => line.trim()).find(Boolean) ?? "";
-  const points = Array.from(opening);
-  const concise = points.length > 240 ? points.slice(0, 239).join("") + "…" : opening;
-  expect(result).toMatchObject({ status: "done", answer: { action: "reply", text: concise, format: "rich_markdown", reply_to: owner.messageId } });
+  expect(result).toMatchObject({ status: "done", answer: { action: "reply", text, format: "rich_markdown", reply_to: owner.messageId } });
 });
 
 test("the default rich reply retains the existing bounded fallback for unsupported content", () => {
   const request = richRequest();
   const owner = { messageId: request.input.respond_to!, text: "Привіт", requestText: null };
   const text = "<b>unsupported</b>" + "x".repeat(4000);
-  expect(ownerAnswer(text, request, owner)).toMatchObject({ format: "plain", text: text.slice(0, 239) + "…" });
+  expect(ownerAnswer(text, request, owner)).toMatchObject({ format: "plain", text: text.slice(0, 3999) + "…" });
 });
 
-test("a verbose rich reply keeps only the short handoff outcome", () => {
+test("a verbose rich reply after a project handoff keeps only its short outcome", () => {
   const request = richRequest();
   const owner = { messageId: request.input.respond_to!, text: "Please forward this.", requestText: null };
-  const answer = ownerAnswer("Queued for the Celestia orchestrator.\n\nHere is a long analysis.\nAnother paragraph.", request, owner);
+  const answer = ownerAnswer("Queued for the Celestia orchestrator.\n\nHere is a long analysis.\nAnother paragraph.", request, owner, [], true);
   expect(answer).toMatchObject({ action: "reply", format: "rich_markdown", text: "Queued for the Celestia orchestrator.", reply_to: owner.messageId });
 });
 

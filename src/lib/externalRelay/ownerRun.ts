@@ -302,27 +302,28 @@ export function ownerInitialCursor(request: ExternalRelayRequest, owner: OwnerIn
   return { seen, digest };
 }
 
-export function ownerAnswer(text: string | null, request: ExternalRelayRequest, owner: OwnerInstruction, credentials: readonly string[] = []): ExternalRelayDecision | null {
+export function ownerAnswer(text: string | null, request: ExternalRelayRequest, owner: OwnerInstruction, credentials: readonly string[] = [], conciseAfterHandoff = false): ExternalRelayDecision | null {
   const parts = sealOwnerAnswer(request.request_id);
   const original = parts?.mentions?.length ? text ?? "" : text?.trim() ?? "";
   const scrubbed = scrubOwnerOutput(original, credentials);
   const caps = answerCapabilities(request, "");
-  // Keep ordinary rich answers intact; their text can carry the report itself.
-  // Plain chat replies use the opening line as the outcome summary so a model
-  // that appends analysis cannot turn a handoff confirmation into a long post.
+  // Preserve normal rich answers. After a project handoff attempt, publish only
+  // the opening line so appended analysis cannot turn its outcome into a long post.
   const lines = scrubbed.split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
   const opening = lines[0] ?? "";
   const openingPoints = Array.from(opening);
   const structured = /(?:^|\n)\s*(?:```(?:json)?\s*)?\{/iu.test(scrubbed);
-  const answer = caps.rich || structured ? scrubbed : openingPoints.length > 240 ? openingPoints.slice(0, 239).join("") + "…" : opening;
-  if (parts?.mentions?.length && answer !== original) throw new ExternalRelayError("malformed", 400);
+  const answer = !conciseAfterHandoff && (caps.rich || structured)
+    ? scrubbed
+    : openingPoints.length > 240 ? openingPoints.slice(0, 239).join("") + "…" : opening;
+  if (parts?.mentions?.length && answer !== original && !conciseAfterHandoff) throw new ExternalRelayError("malformed", 400);
   if (parts?.mentions?.length && ["[ignore]", "[handoff]"].includes(answer)) throw new ExternalRelayError("malformed", 400);
   if (!answer && !parts?.attachments.length) return null;
   if (answer === "[ignore]" && request.delivery === "guest") return null;
   if (answer === "[ignore]") return { action: "ignore", text: "", reply_to: null };
   if (answer === "[handoff]") return offersHandoff(request) ? { action: "handoff", text: "", reply_to: null } : null;
   if (caps.rich) {
-    const raw = { action: "reply", text: answer, reply_to: owner.messageId, format: parts?.format ?? "rich_markdown", ...(parts?.mentions ? { mentions: parts.mentions } : {}), buttons: parts?.buttons ?? [], attachments: parts?.attachments.map(f => ({attachment_id:f.id})) ?? [] };
+    const raw = { action: "reply", text: answer, reply_to: owner.messageId, format: parts?.format ?? "rich_markdown", ...(!conciseAfterHandoff && parts?.mentions ? { mentions: parts.mentions } : {}), buttons: parts?.buttons ?? [], attachments: parts?.attachments.map(f => ({attachment_id:f.id})) ?? [] };
     const rich = raw.format === "rich_markdown" ? checkedAnswerV2(raw, request, caps, {handoff:true,ignore:true,stagedAttachments:parts?.attachments.length ?? 0}, ownerAnswerDrops(request.request_id)) : null;
     if (rich) return rich;
     raw.format = "plain";
@@ -1029,6 +1030,7 @@ type OwnerRunInput = {
   request: ExternalRelayRequest; owner: OwnerInstruction; target: RelayTargetSettings;
   accountId: string | null; hardCapMs: number; ports?: OwnerRunPorts; deadline?: RelayRequestDeadline;
   authorize?: () => void; credentials?: readonly string[];
+  conciseAfterHandoff?: () => boolean;
   inboundContext?: string;
   preparedPrompt?: PreparedOwnerPrompt;
   contextDirectory?: string;
@@ -1395,7 +1397,8 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
           // relay_answer; its last message is the chat reply only without one.
           const parts = sealOwnerAnswer(input.request.request_id);
           if (parts?.text === undefined && observed.finalTextChanged && parts?.mentions?.length) throw new ExternalRelayError("malformed", 400);
-          const answer = ownerAnswer(parts?.text ?? observed.finalText ?? null, input.request, input.owner, input.credentials);
+          const answer = ownerAnswer(parts?.text ?? observed.finalText ?? null, input.request, input.owner, input.credentials,
+            input.conciseAfterHandoff?.() ?? false);
           // A silent final message cannot discharge the owner's request. A
           // service handoff continues it through the service's own assistant.
           finish("done", !answer || answer.action === "ignore" ? ownerMissingOutcomeAnswer(input.request, input.owner) : answer);

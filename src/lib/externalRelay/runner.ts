@@ -1059,6 +1059,7 @@ export async function runClaimedRequest(
             ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: preparedOwner!.prompt } } : {}),
             authorize: () => { if (cloud && Date.now() >= executionDeadline || leaseUnavailable && !ownerExecution || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked or execution deadline expired"); },
             credentials: ownerCredentials,
+            conciseAfterHandoff: () => ownerTools?.records.some(record => record.tool === "send_message_to_orchestrator") ?? false,
             onDiagnostic: recordDiagnostic,
             rawDeadlineAt: rawRequest.deadline_at,
             preparedPrompt: preparedOwner!,
