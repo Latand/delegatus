@@ -990,7 +990,7 @@ export interface ViewerMcpDomainDependencies {
   registrySnapshot(): RegistrySnapshot;
   /** Fresh seat and delivered-wake admission for curator reads and writes. */
   curatorSnapshot?(conversationId: string): RegistrySnapshot;
-  curatorAdmission?(conversationId: string | null): Promise<void | (() => void)>;
+  curatorAdmission?(conversationId: string | null): Promise<void | (() => void | ReturnType<typeof curatorCallerOf>)>;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
@@ -2029,7 +2029,11 @@ async function sendMessage(
        over the operation id is where the end of the story lives. */
     settled: settledOutcome === "delivered",
     deliveryConfirmed: settledOutcome === "delivered",
-    ...(settledOutcome !== "delivered" ? { notice: "Accepted for delivery; arrival is unconfirmed." } : {}),
+    ...(settledOutcome !== "delivered" ? {
+      notice: typeof outcome.detail === "string" ? outcome.detail : "Accepted for delivery; arrival is unconfirmed.",
+      ...(typeof outcome.waitReason === "string" ? { waitReason: outcome.waitReason } : {}),
+      ...(typeof outcome.deadlineAt === "string" ? { deadlineAt: outcome.deadlineAt } : {}),
+    } : {}),
   };
 }
 
@@ -9119,13 +9123,13 @@ async function curatorApplyAuthority(args: McpToolArgs, dependencies: ViewerMcpD
     const admission = await dependencies.curatorAdmission?.(conversationId);
     const assertCurrent = AsyncResource.bind(() => {
       try {
-        if (typeof admission === "function") admission();
         const current = dependencies.attentionAuthority();
+        const admittedPass = typeof admission === "function" ? admission() : undefined;
         if (!conversationId || current.kind === "unidentified" || current.conversationId !== initial.conversationId
           || current.conversationId !== conversationId || current.nativeProof !== initial.nativeProof) {
           throw new RoleMemoryRefusal("CURATE_CALLER", "curator caller changed during this operation");
         }
-        const owner = curatorCallerOf(conversationId, snapshot());
+        const owner = admittedPass ?? curatorCallerOf(conversationId, snapshot());
         if (owner.id !== pass.id || owner.conversationId !== conversationId || canonicalProject(owner.project) !== project) {
           throw new RoleMemoryRefusal("CURATE_CALLER", "the original curator pass no longer authorizes this operation");
         }
@@ -9277,7 +9281,7 @@ export function viewerMcpBindings(
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
         const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
-        if (typeof assertAdmission === "function") assertAdmission();
+        if (typeof assertAdmission === "function" && assertAdmission()) return;
         curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
