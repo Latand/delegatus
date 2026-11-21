@@ -31,6 +31,9 @@ function compareReleaseVersions(a: string, b: string): number {
 /** Fetch before selecting: version order is independent of tagger clocks and backfills. */
 export async function latestReleaseTag(repoDir: string, run: typeof command = command) {
   await run("git", ["fetch", "origin", "main", "--tags"], repoDir);
+  return readLatestReleaseTag(repoDir, run);
+}
+async function readLatestReleaseTag(repoDir: string, run: typeof command) {
   const refs = (await run("git", ["ls-remote", "--tags", "--refs", "origin"], repoDir)).split("\n")
     .map(line => line.trim().split(/\s+/)).filter(parts => parts.length === 2 && /^refs\/tags\/v\d+\.\d+\.\d+$/.test(parts[1]!));
   refs.sort((a, b) => compareReleaseVersions(a[1]!.slice("refs/tags/".length), b[1]!.slice("refs/tags/".length)));
@@ -48,6 +51,14 @@ export async function latestReleaseTag(repoDir: string, run: typeof command = co
   const timestamp = await run("git", ["for-each-ref", "--format=%(creatordate:unix)", ref], repoDir);
   if (!/^\d+$/.test(timestamp)) throw new Error("latest remote release tag date is unreadable");
   return { name, version: name.slice(1), at: Number(timestamp) * 1000, boundary };
+}
+async function releasePackage(revision: string, git: (...args: string[]) => Promise<string>): Promise<{ name: string; version: string } | null> {
+  if (!await git("ls-tree", "--name-only", revision, "--", "package.json")) return null;
+  const metadata = JSON.parse(await git("show", `${revision}:package.json`));
+  if (typeof metadata?.name !== "string" || !metadata.name || typeof metadata?.version !== "string" || !metadata.version) {
+    throw new Error("root package.json has no release name or version");
+  }
+  return { name: metadata.name, version: metadata.version };
 }
 async function registryHasRelease(packageName: string, version: string): Promise<boolean> {
   const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/${version}`, { signal: AbortSignal.timeout(15_000) });
@@ -71,7 +82,8 @@ export async function supersedingReleaseTag(repoDir: string, saved: { cut: strin
     return false;
   });
   if (candidates.length === 0) return null;
-  const pkg = JSON.parse(await run("git", ["show", "origin/main:package.json"], repoDir));
+  const pkg = await releasePackage("origin/main", (...args) => run("git", args, repoDir));
+  if (!pkg) return null;
   for (const { name, object } of candidates) {
     const version = name.slice(1);
     if (await run("git", ["rev-parse", `refs/tags/${name}`], repoDir) !== object) continue;
@@ -208,8 +220,11 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const src = seat ? sources.registry().conversation(seat.conversationId as never)?.generations.at(-1)?.path : null;
       if (!src) throw new Error("release waits for an active seat transcript");
       const git = (...args: string[]) => command("git", args, repoDir);
-      const tag = await latestReleaseTag(repoDir);
+      await git("fetch", "origin", "main", "--tags");
       const main = await git("rev-parse", "origin/main");
+      const pkg = await releasePackage(main, git);
+      if (!pkg) return null;
+      const tag = await readLatestReleaseTag(repoDir, command);
       const { name, version, at } = tag;
       const setting = { ...RELEASE_DEFAULTS, ...sources.settings(project).release };
       const isAncestor = async (a: string, b: string) => {
@@ -223,7 +238,6 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       }
       const cut = frozenCut ? { revision: frozenCut } : await releaseCut(deployments, isAncestor, sources.now());
       const changes = cut ? await changesSinceRelease(repoDir, name, cut.revision, command, tag.boundary) : [];
-      const pkg = JSON.parse(await git("show", "origin/main:package.json"));
       const registryHasTag = await registryHasRelease(pkg.name, version);
       const repo = await command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], repoDir);
       const snapshot = lanes();

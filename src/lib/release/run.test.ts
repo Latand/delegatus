@@ -54,6 +54,25 @@ test("recovery holds a frozen cut that a later rollback removed from the six-hou
   expect(readReleaseProject(project).live?.pipelineId).toBeNull();
 });
 
+test("an inapplicable observation retires its stale blocker and preserves the queued request", async () => {
+  const project = "inapplicable-release";
+  const actor = { kind: "gateway" as const, project, conversationId: null, seatEpoch: null };
+  const request = { at: "2026-10-12T00:00:00Z", by: actor, why: "queued" };
+  mutateReleaseProject(project, row => ({ ...row, request, blocked: { kind: 4, since: 1, episode: "stale-blocker" } }));
+  let observations = 0;
+  const ports: ReleasePorts = {
+    now: () => 2, settings: () => ({ enabled: true, askBeforePublish: true, minChanges: 30, minGapHours: 12,
+      updatedAt: "2026-10-12T00:00:00Z", setBy: actor, why: null }),
+    observe: async () => { observations++; return null; }, taskDone: () => false, supersedingTag: async () => null,
+    task: () => "unused", create: async () => "unused", pipeline: () => null,
+  };
+  const input = { project, seat: { conversationId: "seat", seatEpoch: 1 },
+    settings: effectiveSeatTickSettings(defaultSeatTickSettings(project), 0, 60_000) } as SeatTickCheckInput;
+  expect(await productionReleaseController(ports).launchIfDue(input)).toContain("not applicable");
+  expect(observations).toBe(1);
+  expect(readReleaseProject(project)).toMatchObject({ request, blocked: null });
+});
+
 test("publish settlement occurs once, retaining parked lanes until publication completes", async () => {
   const project = "settled-release";
   mutateReleaseProject(project, row => ({ ...row, live: { key: "release-key", phase: "publish", releasePipelineId: "preparation", cut: "one", lastTag: "v1.0.0", trigger: "amount", startedAt: 0, taskId: "task", pipelineId: "lane", request: {} as never } }));
@@ -65,6 +84,20 @@ test("publish settlement occurs once, retaining parked lanes until publication c
   await c.reconcile(project); await c.reconcile(project);
   expect(readReleaseProject(project).history.length).toBe(1);
   expect(readReleaseProject(project).history[0].outcome).toBe("published");
+});
+
+test("recovery of a requested release pauses repository checks while releases are off", async () => {
+  const h = publishFixture();
+  h.setting.enabled = false;
+  mutateReleaseProject(h.project, row => ({ ...row, live: { ...row.live!, trigger: "requested", taskId: null } }));
+  h.ports.observe = async () => { throw new Error("release observation ran while disabled"); };
+  h.ports.supersedingTag = async () => { throw new Error("tag check ran while disabled"); };
+  const controller = productionReleaseController(h.ports);
+  expect(await controller.reconcile(h.project)).toBeNull();
+  expect(readReleaseProject(h.project).live?.pipelineId).toBe("release");
+  mutateReleaseProject(h.project, row => ({ ...row, live: { ...row.live!, pipelineId: null } }));
+  expect(await controller.reconcile(h.project)).toBeNull();
+  expect(h.requests).toEqual([]);
 });
 
 test("a hold set while admission observes safety prevents task and pipeline creation", async () => {

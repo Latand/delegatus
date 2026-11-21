@@ -10,7 +10,7 @@ import type { ReleaseSetting } from "./settings";
 export interface ReleasePorts {
   now: () => number;
   settings: (project: string) => ReleaseSetting | null | undefined;
-  observe: (project: string, frozenCut?: string) => Promise<{ policy: ReleaseInput; repoDir: string; src: string }>;
+  observe: (project: string, frozenCut?: string) => Promise<{ policy: ReleaseInput; repoDir: string; src: string } | null>;
   taskDone: (project: string, taskId: string) => boolean;
   supersedingTag: (project: string, run: ReleaseRun) => Promise<string | null>;
   task: (project: string, run: ReleaseRun, adopted?: string) => string;
@@ -25,6 +25,10 @@ export interface ReleaseController {
 /** Proof from the create adapter that this exact payload failed before admission. */
 export class ReleaseValidationRefusal extends Error {
   constructor(readonly digest: string, reason: string) { super(reason); }
+}
+const NOT_APPLICABLE = "release: not applicable (origin/main has no root package.json)";
+function retireInapplicableBlocker(project: string) {
+  mutateReleaseProject(project, current => current.blocked ? { ...current, blocked: null } : current);
 }
 const lockKey = Symbol.for("delegatus.release.controller");
 const globalLocks = globalThis as typeof globalThis & { [lockKey]?: Map<string, Promise<string | null>> };
@@ -44,10 +48,12 @@ async function admit(project: string, ports: ReleasePorts): Promise<string | nul
       request: current.request?.at === run!.requestedAt ? null : current.request } : current);
     return "release: recovered";
   }
-  if (!ports.settings(project)?.enabled && run.trigger !== "requested") return "release: releases-off";
+  if (!ports.settings(project)?.enabled) return null;
   // Recheck current safety evidence even when recovering a lost create receipt.
   const claim = run;
   const observed = await ports.observe(project, run.cut);
+  if (!ports.settings(project)?.enabled) return null;
+  if (!observed) { retireInapplicableBlocker(project); return NOT_APPLICABLE; }
   row = readReleaseProject(project);
   run = row.live;
   if (!run || run.key !== claim.key || run.cut !== claim.cut || run.pipelineId || !run.request) return null;
@@ -61,7 +67,7 @@ async function admit(project: string, ports: ReleasePorts): Promise<string | nul
     return settle(project, ports, run, "completed", "task-done") ? "release: completed" : null;
   }
   if (row.hold) return "release: hold";
-  if (!ports.settings(project)?.enabled && run.trigger !== "requested") return "release: releases-off";
+  if (!ports.settings(project)?.enabled) return null;
   if (!run.taskId) {
     const prior = row.history.at(-1);
     const refusedTask = prior?.outcome === "refused" && (prior.requestedAt ?? null) === (run.requestedAt ?? null) ? prior.taskId ?? undefined : undefined;
@@ -142,10 +148,11 @@ async function reconcileRun(project: string, ports: ReleasePorts): Promise<strin
   if (lane?.state === "completed" && lane.merged && run.phase !== "publish") {
     if (!lane.mergeCommit || !/^[a-f0-9]{40}$/.test(lane.mergeCommit) || !lane.pr || !run.request) return "release: merge receipt incomplete";
     const setting = ports.settings(project);
+    if (!setting?.enabled) return null;
     const request: CreatePipelineRequest = { ...run.request, task: `${run.request.task}: публікація`, baseRef: lane.mergeCommit, finishesTask: true,
       stages: releasePublishStages({ cut: run.cut, lastTag: run.lastTag, changes: [], commit: lane.mergeCommit, pr: lane.pr,
-        askBeforePublish: setting?.askBeforePublish ?? true,
-        approval: setting && !setting.askBeforePublish ? JSON.stringify(setting.publishApproval ?? { at: setting.updatedAt, by: setting.setBy, why: setting.why }) : undefined }) };
+        askBeforePublish: setting.askBeforePublish,
+        approval: !setting.askBeforePublish ? JSON.stringify(setting.publishApproval ?? { at: setting.updatedAt, by: setting.setBy, why: setting.why }) : undefined }) };
     const claim = run;
     mutateReleaseProject(project, current => current.live?.key === claim.key && current.live.pipelineId === claim.pipelineId && current.live.phase !== "publish"
       ? { ...current, live: { ...current.live, key: `${claim.key}:publish`, phase: "publish", releasePipelineId: claim.pipelineId!, pipelineId: null, request } } : current);
@@ -160,6 +167,7 @@ async function reconcileRun(project: string, ports: ReleasePorts): Promise<strin
   if (run.phase !== "publish" && run.taskId && ports.taskDone(project, run.taskId)) {
     return settle(project, ports, run, "completed", "task-done") ? "release: completed" : null;
   }
+  if (!ports.settings(project)?.enabled) return null;
   const tag = await ports.supersedingTag(project, run);
   // Another process may bind or replace the run while the repository is read.
   const current = readReleaseProject(project).live;
@@ -181,10 +189,13 @@ export function productionReleaseController(ports: ReleasePorts): ReleaseControl
         if (readReleaseProject(project).live) return detail;
       }
       const row = readReleaseProject(project); const setting = ports.settings(project);
-      if ((!setting?.enabled && !row.request) || !input.settings.enabled || !input.seat) return null;
+      if (!setting?.enabled || !input.settings.enabled || !input.seat) return null;
       const observed = await ports.observe(project);
+      if (!ports.settings(project)?.enabled) return null;
+      if (!observed) { retireInapplicableBlocker(project); return NOT_APPLICABLE; }
       const decision = await releaseState({ ...observed.policy, hold: row.hold?.reason ?? null, requested: !!row.request,
         settled: row.history.at(-1) ?? null });
+      if (!ports.settings(project)?.enabled) return null;
       const now = ports.now();
       // A version mismatch needs seat attention even below the next release's amount/gap thresholds.
       const trackBlocker = decision.reason === "release-version-mismatch" || !!row.request
@@ -200,8 +211,8 @@ export function productionReleaseController(ports: ReleasePorts): ReleaseControl
       const request: CreatePipelineRequest = { task: `Реліз Delegatus (після ${observed.policy.lastTag.version})`, repoDir: observed.repoDir,
         src: observed.src, baseBranch: "main", baseRef: cut, autoStart: true, publication: "remote-branch",
         spec: `Production cut ${cut}, served since ${new Date(decision.cut.at).toISOString()}. Trigger: ${decision.reason}; ${decision.count} visible candidates.`,
-        stages: releaseStages({ cut, lastTag: observed.policy.lastTag.name, lastTagBoundary: observed.policy.lastTag.boundary, changes: observed.policy.changes, askBeforePublish: setting?.askBeforePublish ?? true,
-          approval: setting && !setting.askBeforePublish ? JSON.stringify(setting.publishApproval ?? { at: setting.updatedAt, by: setting.setBy, why: setting.why }) : undefined }) };
+        stages: releaseStages({ cut, lastTag: observed.policy.lastTag.name, lastTagBoundary: observed.policy.lastTag.boundary, changes: observed.policy.changes, askBeforePublish: setting.askBeforePublish,
+          approval: !setting.askBeforePublish ? JSON.stringify(setting.publishApproval ?? { at: setting.updatedAt, by: setting.setBy, why: setting.why }) : undefined }) };
       // Claim before the task write; a second process adopts the same frozen request.
       mutateReleaseProject(project, current => current.live ? current : { ...current,
         live: { key, cut, lastTag: observed.policy.lastTag.name, trigger: decision.reason, startedAt: now, requestedAt: row.request?.at ?? null, taskId: null, pipelineId: null, request } });

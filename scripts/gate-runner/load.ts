@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
-import { CPU_QUEUE_SPACING_MS, cpuAdmissionFile } from "../../src/lib/runtime/cpuAdmission";
+import { ACTIVE_GATE_PREFIX, CPU_QUEUE_SPACING_MS, cpuAdmissionFile } from "../../src/lib/runtime/cpuAdmission";
 import { cpuPressurePolicy, parseCpuPressure } from "../../src/lib/runtime/cpuPressure";
 import type { Env } from "./client";
 
@@ -39,7 +39,8 @@ export function queueReady(file: string, now: number): boolean {
   }
   const db = new Database(file, { readonly: true });
   try {
-    const waiting = db.query<{ count: number }, []>("SELECT count(*) AS count FROM tickets WHERE key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)").get();
+    const waiting = db.query<{ count: number }, [string]>(`SELECT count(*) AS count FROM tickets WHERE key NOT GLOB ?
+      AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)`).get(`${ACTIVE_GATE_PREFIX}*`);
     const last = db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get();
     return waiting?.count === 0 && !!last && (last.last === null || now - last.last >= CPU_QUEUE_SPACING_MS);
   } finally { db.close(); }

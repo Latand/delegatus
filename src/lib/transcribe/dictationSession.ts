@@ -1,4 +1,4 @@
-import { float32ToPcm16 } from "@/lib/audio";
+import { DictationInput } from "./dictationInput";
 import { applySonioxFrame, sonioxLiveInitialState, sonioxStartRequest, SONIOX_LIVE_WS_URL } from "./sonioxLive";
 import { publishDictationTrace, type DictationTrace } from "./dictationTrace";
 import type { TranscriptionLanguage } from "./languages";
@@ -23,8 +23,8 @@ export interface DictationSessionCallbacks {
 /** One owner from microphone grant through live drain or one batch recovery. */
 export class DictationSession {
   readonly ctx: AudioContext;
-  private processor: ScriptProcessorNode;
-  private source: MediaStreamAudioSourceNode;
+  private input: DictationInput;
+  private stopRequested = false;
   private chunks: Int16Array[] = [];
   private baseSample = 0;
   private sentSample = 0;
@@ -43,34 +43,31 @@ export class DictationSession {
   private mode: "pending" | "live" | "batch" = "pending";
   private stopPromise: Promise<void> | null = null;
 
-  constructor(private stream: MediaStream, private trace: DictationTrace, private callbacks: DictationSessionCallbacks) {
-    try { this.ctx = new AudioContext({ sampleRate: 16_000 }); }
-    catch { this.ctx = new AudioContext(); }
-    this.trace.sampleRate = this.ctx.sampleRate;
-    this.processor = this.ctx.createScriptProcessor(4096, 1, 1);
-    this.source = this.ctx.createMediaStreamSource(stream);
-    this.processor.onaudioprocess = event => {
+  constructor(private stream: MediaStream, private trace: DictationTrace, private callbacks: DictationSessionCallbacks,
+    ctx: AudioContext, worklet: AudioWorkletNode | null) {
+    this.ctx = ctx;
+    this.trace.sampleRate = ctx.sampleRate;
+    this.input = new DictationInput(ctx, stream, worklet, chunk => {
       if (this.inputStopped || this.ended) return;
-      const input = event.inputBuffer.getChannelData(0);
-      const count = Math.min(input.length, DICTATION_BUFFER_SAMPLES - this.trace.bufferedSamples);
+      const count = Math.min(chunk.length, DICTATION_BUFFER_SAMPLES - this.trace.bufferedSamples);
       if (count) {
-        this.chunks.push(float32ToPcm16(input.subarray(0, count)));
+        this.chunks.push(count === chunk.length ? chunk : chunk.slice(0, count));
         this.trace.capturedSamples += count;
         this.trace.bufferedSamples += count;
         this.trace.peakBufferedSamples = Math.max(this.trace.peakBufferedSamples, this.trace.bufferedSamples);
       }
       this.flush();
-      if (this.trace.bufferedSamples >= DICTATION_BUFFER_SAMPLES) {
-        this.limit = true;
-        void this.recover();
-      }
-    };
-    this.source.connect(this.processor);
-    this.processor.connect(this.ctx.destination);
+      if (this.trace.bufferedSamples >= DICTATION_BUFFER_SAMPLES) this.bufferFull();
+    }, () => this.bufferFull(), () => this.finish(null, "tail"));
     publishDictationTrace(this.trace);
   }
 
-  get active(): boolean { return !this.ending && !this.ended; }
+  private bufferFull() {
+    this.limit = true;
+    void this.recover();
+  }
+
+  get active(): boolean { return !this.stopRequested && !this.ending && !this.ended; }
   useBatch(): void { if (this.active) { this.mode = "batch"; this.trace.path = "batch"; this.trace.provider = "batch"; publishDictationTrace(this.trace); } }
   connect(token: string): void {
     if (!this.active) return;
@@ -165,14 +162,18 @@ export class DictationSession {
     if (this.inputStopped) return;
     this.inputStopped = true;
     this.trace.stoppedAt ??= Date.now();
-    this.processor.onaudioprocess = null;
-    this.processor.disconnect(); this.source.disconnect();
+    this.input.close();
     this.stream.getTracks().forEach(track => track.stop());
-    void this.ctx.close().catch(() => undefined);
   }
   stop(): void {
-    if (this.ending || this.ended || this.drainTimer !== null) return;
-    this.stopInput(); this.callbacks.busy();
+    if (!this.active) return;
+    this.stopRequested = true;
+    this.callbacks.busy();
+    this.input.drain(() => this.finishInput());
+  }
+  private finishInput(): void {
+    if (this.inputStopped || this.ended) return;
+    this.stopInput();
     if (this.mode !== "live" || this.ws?.readyState !== WebSocket.OPEN) { void this.recover(); return; }
     this.trace.drainOutcome = "pending";
     this.drainDeadlineAt = Date.now() + DICTATION_DRAIN_MS;
@@ -264,7 +265,7 @@ export class DictationSession {
   release(observe?: (samples: number) => void): boolean {
     if (!this.active || this.trace.capturedSamples) return false;
     this.ended = true; this.chunks = [];
-    if (observe) this.processor.onaudioprocess = event => observe(event.inputBuffer.getChannelData(0).length);
+    if (observe) this.input.observe(observe);
     else this.stopObservation();
     return true;
   }
@@ -272,8 +273,7 @@ export class DictationSession {
   stopObservation(): void {
     // A refused handoff leaves the same processor recording the batch clip.
     if (!this.ended) return;
-    this.processor.onaudioprocess = null; this.processor.disconnect(); this.source.disconnect();
-    void this.ctx.close().catch(() => undefined);
+    this.input.close();
   }
   discard(): void {
     if (this.ended) return;

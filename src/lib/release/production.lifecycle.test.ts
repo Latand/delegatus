@@ -113,8 +113,8 @@ async function observe(rows: Pipeline[], archived: Pipeline[] = [], versionAhead
   const bin = path.join(directory, "bin"); fs.mkdirSync(bin, { recursive: true });
   const priorPath = process.env.PATH, priorFetch = globalThis.fetch;
   let archiveReads = 0;
-const script = `#!${process.execPath}\nconst tool=process.argv[1].split('/').at(-1),a=process.argv.slice(2);let out='';
-if(tool==='git'){if(a[0]==='ls-remote')out='${"a".repeat(40)}\\trefs/tags/v1.0.0';else if(a[0]==='for-each-ref'&&a.includes('refs/tags/v*'))out='${versionAhead ? "v1.1.0 1793404800\\nv1.0.0 1793318400" : "v1.0.0 1793318400"}';else if(a[0]==='for-each-ref')out='1793318400';else if(a[0]==='rev-parse'&&a[1]==='refs/tags/v1.0.0')out='${"a".repeat(40)}';else if(a[0]==='rev-parse')out='${head}';else if(a[0]==='show')out=JSON.stringify({name:'package-example',version:'${versionAhead ? "1.1.0" : "1.0.0"}'});}
+  const script = `#!${process.execPath}\nconst tool=process.argv[1].split('/').at(-1),a=process.argv.slice(2);let out='';
+if(tool==='git'){if(a[0]==='ls-remote')out='${"a".repeat(40)}\\trefs/tags/v1.0.0';else if(a[0]==='for-each-ref')out='1793318400';else if(a[0]==='rev-parse'&&a[1]==='refs/tags/v1.0.0')out='${"a".repeat(40)}';else if(a[0]==='rev-parse')out='${head}';else if(a[0]==='cat-file')out='object ${head}\\ntype commit\\ntag v1.0.0\\n\\nDelegatus 1.0.0';else if(a[0]==='ls-tree')out='package.json';else if(a[0]==='show')out=JSON.stringify({name:'package-example',version:'${versionAhead ? "1.1.0" : "1.0.0"}'});}
 if(tool==='gh'){if(a[0]==='repo')out='example/release';else if(a[1]?.includes('/branches/'))out=JSON.stringify({protection:{required_status_checks:{contexts:[]}}});else if(a[1]?.includes('/check-runs'))out=JSON.stringify({check_runs:[]});else out=JSON.stringify({statuses:[]});}
 if(tool==='bun')out=JSON.stringify({missing:[],chrome:'/fixture/chrome'});console.log(out);`;
   try {
@@ -125,7 +125,9 @@ if(tool==='bun')out=JSON.stringify({missing:[],chrome:'/fixture/chrome'});consol
       settings: () => defaultSeatTickSettings(project), seatFor: () => ({ active: { conversationId: "seat" } }),
       registry: () => ({ conversation: () => ({ generations: [{ path: "fixture-seat" }] }) }),
     } as unknown as Partial<SeatTickSources>);
-    return { ...await ports.observe(project), archiveReads };
+    const observed = await ports.observe(project);
+    if (!observed) throw new Error("fixture release is inapplicable");
+    return { ...observed, archiveReads };
   } finally { process.env.PATH = priorPath; globalThis.fetch = priorFetch; }
 }
 test("a successful publish lane ceases to block future releases", async () => {

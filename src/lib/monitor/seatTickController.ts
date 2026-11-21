@@ -64,7 +64,7 @@ import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
 import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakePayload } from "./report";
-import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickCatchUpItemCursor, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan, seatTurnProgressing } from "./seatTick";
+import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickCatchUpItemCursor, seatTickDecision, seatTickPolicy, seatTickReportRequest, seatTickWakeCommit, seatTickWakeCommitPlan, seatTurnProgressing } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
 import { effectiveSeatTickSettings, readSeatTickSettingsFile, readTurboSettings, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
 import { readSeatTickState, readSeatTickStateFile, seatTickStateForEpoch, writeSeatTickState } from "./seatTickState";
@@ -1760,6 +1760,10 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     ...(turboShown ? { turboShown } : {}),
     ...(verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-ended") ? { autonomySummaryFor: pendingAutonomyReports(input.settings, input.now)[0]?.startedAt } : {}),
     bridgeReports: input.reports?.bridgeReports === true,
+    reportCoverage: input.reports ? { ...input.reports, acknowledgedOutcomeKeys: input.state.reportsAcknowledged } : undefined,
+    reportRequest: renderedVerdict.kind === "wake" && !renderedVerdict.catchUp
+      ? seatTickReportRequest(input, input.state, renderedVerdict.items) : undefined,
+    priorReportKeys: input.state.reportsOwed?.map(entry => entry.key),
     frozenText: text,
   });
   return { text, commit: commit!, renderedVerdict };
@@ -2629,7 +2633,7 @@ async function check(
     });
     state = { ...state, wakeDecidedSince: state.wakeDecidedSince ?? state.outstandingWake?.preparedAt ?? at };
     const payloadVerdict = verdict;
-    const { text, commit, renderedVerdict } = withViewerOperation("seat-tick.payload", () => alarmPayload(input, payloadVerdict, proposalIssues, new Date(gathered.now).toISOString()));
+    const { text, commit, renderedVerdict } = withViewerOperation("seat-tick.payload", () => alarmPayload({ ...input, state }, payloadVerdict, proposalIssues, new Date(gathered.now).toISOString()));
     verdict = renderedVerdict;
 
     /* The prompt above came off the settings row this check read, not out of

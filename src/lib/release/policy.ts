@@ -42,10 +42,10 @@ export function releaseGapStart(lastTagAt: number, settled?: ReleaseInput["settl
   return Math.max(lastTagAt, settled && (settled.outcome === "failed" || settled.outcome === "declined") ? settled.at : 0);
 }
 export async function releaseState(input: ReleaseInput): Promise<ReleaseDecision> {
+  if (!input.enabled) return { state: "blocked", blocker: 1, reason: "releases-off", cut: null, count: 0 };
   const count = input.changes.filter(c => classifyPaths(c.files, c.subject) === "visible").length;
   const cut = await releaseCut(input.deployments, input.isAncestor, input.now, input.frozenCut);
   const answer = (state: ReleaseDecision["state"], blocker: number | null, reason: string): ReleaseDecision => ({ state, blocker, reason, cut, count });
-  if (!input.enabled && !input.requested) return answer("blocked", 1, "releases-off");
   if (!input.tickEnabled) return answer("blocked", 2, "tick-off");
   if (!input.mergeEnabled) return answer("blocked", 3, "merge-off");
   if (input.live) return answer("in-flight", 4, "release-in-flight");

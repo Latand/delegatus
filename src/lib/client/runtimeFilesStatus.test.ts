@@ -333,3 +333,23 @@ test("idle settlement preserves an account quota warning independent of the turn
     expect(createRuntimeFilesStatusProjection()(cache.read(), runtime()).files[0]?.rateLimit).toEqual(rateLimit);
   } finally { cache.dispose(); }
 });
+
+test("a lifecycle change outside the catalog preserves idle row, array and snapshot identity", async () => {
+  const cache = await catalog();
+  try {
+    const raw = cache.readScope();
+    const project = createRuntimeFilesStatusProjection();
+    const initial = runtime({ settledTurnId: null, activeTurnId: null });
+    const settled = project(raw, initial);
+    expect(settled.files[0]).not.toBe(raw.files[0]);
+    const unrelated: RuntimeSession = { ...session, conversationId: "other", artifactPath: "/other", turn: "running", activeTurnId: "other-turn" };
+    const changed = { ...initial, store: { ...initial.store, sessions: { ...initial.store.sessions, other: unrelated } } };
+    const projected = project(raw, changed);
+    expect(projected.files[0]).toBe(settled.files[0]);
+    expect(projected.files).toBe(settled.files);
+    expect(projected).toBe(settled);
+    const nowRunning = { ...session, turn: "running" as const, activeTurnId: "new-turn" };
+    const next = { ...changed, store: { ...changed.store, sessions: { ...changed.store.sessions, [session.conversationId]: nowRunning } } };
+    expect(project(raw, next).files[0]).toBe(raw.files[0]);
+  } finally { cache.dispose(); }
+});

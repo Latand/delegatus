@@ -88,6 +88,20 @@ test("self-update sends one wait or off signal from its durable state", () => {
   expect(selfUpdateSignals({ ...quiet, off: { at: "2026-01-02", target: "a".repeat(40), stage: "build", reason: "build failed" }, noticeAt: null, waitingSince: null })).toMatchObject([{ id: "self-update-off" }]);
 });
 
+test("a paused automatic release leaves its queued request unannounced", async () => {
+  const { mutateReleaseProject, readReleaseProject } = await import("@/lib/release/store");
+  mutateReleaseProject(PROJECT, row => ({ ...row,
+    request: { at: "2026-08-27T00:00:00Z", by: { kind: "gateway", project: PROJECT, conversationId: null, seatEpoch: null }, why: "queued" },
+    blocked: { kind: 1, since: NOW - 25 * 60 * 60_000, episode: "old-blocker" },
+  }));
+  const input = await gather({ settings: { ...defaultSeatTickSettings(PROJECT), release: {
+    enabled: false, askBeforePublish: true, minChanges: 30, minGapHours: 12,
+    updatedAt: new Date(NOW).toISOString(), setBy: { kind: "gateway", project: PROJECT, conversationId: null, seatEpoch: null }, why: null,
+  } } });
+  expect(input.releaseAlerts).toEqual([]);
+  expect(readReleaseProject(PROJECT).request).toMatchObject({ why: "queued" });
+});
+
 test("drain notice names unfinished work and the operator choices", () => {
   const drain = { id: "drain", target: { sha: "a".repeat(40), short: "aaaaaaa", version: "1", date: "" }, since: "2026-01-01T04:00:00Z", overranAt: "2026-01-01T06:00:00Z",
     blockers: { turns: 1, stages: 1, busy: false, memoryMb: null, unreadable: null, operatorActiveAt: null,
@@ -2421,8 +2435,8 @@ function childRegistry(name: string): ChildRegistry {
   };
 }
 
-function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typeof sources>[0] = {}, state: SeatTickProjectState = emptySeatTickState()) {
-  return gatherSeatTickInput(fixture.project, state, DEFAULT_SEAT_TICK_POLICY, sources({
+function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typeof sources>[0] = {}, state: SeatTickProjectState = emptySeatTickState(), project = fixture.project) {
+  return gatherSeatTickInput(project, state, DEFAULT_SEAT_TICK_POLICY, sources({
     registry: fixture.registry,
     seatConversationId: fixture.seatId,
     pipelines: [],
@@ -2433,7 +2447,7 @@ function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typ
 
 /** A production SQLite layout with fixed identities and clocks for recovery
  * regressions. The JSON seed is normalized by the production reader. */
-function replayChildren(name: string, cases: { title: string; unobserved?: boolean; host?: "dead" | "live"; ledger?: boolean | "partial"; generations?: number; admissionOwned?: boolean }[]) {
+function replayChildren(name: string, cases: { title: string; unobserved?: boolean; host?: "dead" | "live"; ledger?: boolean | "partial"; generations?: number; admissionOwned?: boolean; turn?: "busy" | "idle" | "terminal" | "unknown" }[]) {
   const dir = fs.mkdtempSync(path.join(SANDBOX, `${name}-`));
   const cwd = path.join(dir, "repo");
   fs.mkdirSync(cwd);
@@ -2441,8 +2455,9 @@ function replayChildren(name: string, cases: { title: string; unobserved?: boole
   const seatId = `conversation_${name}_seat`;
   const successorId = `conversation_${name}_successor`;
   const createdAt = new Date(NOW - 10 * MINUTE_MS).toISOString();
-  const conversation = (id: string, generations: unknown[] = []) => ({ id, engine: "claude", generations,
-    turn: { state: "unknown", source: "empty", terminalAt: null, observedAt: null }, createdAt, updatedAt: createdAt });
+  const conversation = (id: string, generations: unknown[] = [], turn: { state: string; source: string; terminalAt: string | null; observedAt: string | null } = {
+    state: "unknown", source: "empty", terminalAt: null, observedAt: null,
+  }) => ({ id, engine: "claude", generations, turn, createdAt, updatedAt: createdAt });
   const file = normalizeRegistry({ version: 2, entries: {}, receipts: {}, conversations: {
     [seatId]: conversation(seatId), [successorId]: conversation(successorId),
   } });
@@ -2465,7 +2480,8 @@ function replayChildren(name: string, cases: { title: string; unobserved?: boole
         state: options.unobserved ? "starting" : "completed", transport: "structured", launchProfile: profile,
         admissionOwner: options.admissionOwned ? { pid: 42, startIdentity: null } : null,
         artifactPath: options.unobserved ? null : childPath, key: options.unobserved ? null : key },
-    }, conversations: options.unobserved ? {} : { [id]: conversation(id, generations.map((item) => ({ id: item.id, path: item.path, accountId: null, launchProfile: profile, host: null, createdAt }))) } });
+    }, conversations: options.unobserved ? {} : { [id]: conversation(id, generations.map((item) => ({ id: item.id, path: item.path, accountId: null, launchProfile: profile, host: null, createdAt })),
+      { state: options.turn ?? "unknown", source: "assistant", terminalAt: options.turn === "terminal" ? createdAt : null, observedAt: createdAt }) } });
     Object.assign(file.receipts, seed.receipts);
     Object.assign(file.conversations, seed.conversations);
     if (options.host) file.entries[`claude:${generation}`] = { key, artifactPath: childPath, cwd, accountId: null,
@@ -2551,6 +2567,258 @@ test("a settled child with an unknown registry turn clears the gap and stays ack
   expect(new SeatTickAccounting(first.state.accounting!.filename, fixture.project).ready(10)).toEqual([]);
 });
 
+test("one unreadable child ledger is named once and healthy workers stay in the wake", async () => {
+  const f = replayChildren("damaged-ledger", [
+    { title: "worker with an unreadable ledger", host: "dead" },
+    { title: "worker with a finished turn", host: "dead", ledger: true },
+  ]);
+  const [damaged, healthy] = f.workers;
+  const ledgerDir = statePath("structured-host-events");
+  const damagedPath = path.join(ledgerDir, `${damaged.generation}.jsonl`);
+  fs.mkdirSync(damagedPath);
+  const first = await childGather(f);
+  expect(first.childrenUnavailable).toBeNull();
+  expect(first.state.childrenGap).toBeNull();
+  expect(first.children).toEqual(expect.arrayContaining([
+    expect.objectContaining({ conversationId: damaged.id, status: "unknown" }),
+    expect.objectContaining({ conversationId: healthy.id, status: "terminal", outcome: "finished" }),
+  ]));
+  const decision = seatTickDecision(first);
+  if (decision.verdict.kind !== "wake") throw new Error("expected a wake carrying the healthy worker and ledger warning");
+  expect(decision.verdict.gaps).toEqual([]);
+  expect(decision.verdict.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "signal", id: `child-ledger:${damaged.id}:${damaged.generation}`, label: expect.stringContaining("ledger-unreadable") }),
+    expect.objectContaining({ kind: "child", label: expect.stringContaining("worker with a finished turn") }),
+  ]));
+  const commit = seatTickWakeCommitPlan(decision.verdict, {
+    fingerprint: first.changeFingerprint, eventsThrough: 0, terminalChildren: first.children.flatMap(child => child.outcomeId ? [child.outcomeId] : []),
+  })!;
+  const accounting = new SeatTickAccounting(first.state.accounting!.filename, f.project);
+  const wake = { clientMessageId: "ledger-warning-wake", conversationId: f.seatId, seatEpoch: 7, operationId: null, commit };
+  expect(accounting.prepare(accounting.readState(), wake)).toBe(true);
+  expect(accounting.settle(wake.clientMessageId, seatTickWakeCommit(decision.state, commit, f.now), "landed")).toBe(true);
+  const now = f.now + 65 * MINUTE_MS;
+  const sameDamage = await childGather(f, { now }, accounting.readState());
+  expect(sameDamage.childrenUnavailable).toBeNull();
+  expect(seatTickDecision(sameDamage).verdict.kind).toBe("quiet");
+
+  fs.rmdirSync(damagedPath);
+  const ledger = new FileRuntimeEventStore(ledgerDir);
+  ledger.append(damaged.generation, { kind: "turn-started", turnId: "recovered-turn", seq: 1 });
+  ledger.append(damaged.generation, { kind: "turn-ended", turnId: "recovered-turn", status: "completed", seq: 2 });
+  const repaired = await childGather(f, { now }, sameDamage.state);
+  expect(repaired.signals.some(signal => signal.id.startsWith("child-ledger:"))).toBe(false);
+  expect(repaired.children).toMatchObject([{ conversationId: damaged.id, status: "terminal", outcome: "finished" }]);
+});
+
+test("a missing curator account reaches the seat once across retries and is reported again after recovery", async () => {
+  const f = replayChildren("curator-account", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass } = await import("@/lib/memory/curation/store");
+  const { CURATION_INTERVAL_MS } = await import("@/lib/memory/roleTypes");
+  const source = { origin: "operator" as const, project: f.project, roleId: null, fixRound: false as const, conversationId: f.seatId };
+  leaveOperatorLessons({ source, lessons: [{ scope: "project", rule: "Read the account settings before inspecting a launch refusal.", why: "Keep account selection traceable." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (now: number, failure: string | null) => {
+    const pass = claimPass({ project: f.project, repoDir: f.cwd, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: failure ? "failed" : "succeeded", endedAt: new Date(now).toISOString(), failure });
+    return pass;
+  };
+  const first = finish(f.now, "no-account");
+  const gathered = await childGather(f);
+  const decision = seatTickDecision(gathered);
+  if (decision.verdict.kind !== "wake") throw new Error("expected an account warning in the seat wake");
+  expect(decision.verdict.items).toEqual([expect.objectContaining({ id: "curator-no-account", label: expect.stringContaining("no account was available") })]);
+  const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: gathered.changeFingerprint, eventsThrough: 0 })!;
+  const landed = seatTickWakeCommit(decision.state, commit, f.now);
+  const next = f.now + CURATION_INTERVAL_MS;
+  expect(finish(next, "no-account").noAccountEpisode).toBe(first.id);
+  expect((await childGather(f, { now: next }, landed)).signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+
+  finish(next + CURATION_INTERVAL_MS, null);
+  expect((await childGather(f, { now: next + CURATION_INTERVAL_MS }, landed)).signals).toEqual([]);
+  const recurrence = next + 2 * CURATION_INTERVAL_MS;
+  finish(recurrence, "no-account");
+  expect(seatTickDecision(await childGather(f, { now: recurrence }, landed)).verdict).toMatchObject({
+    kind: "wake", items: [expect.objectContaining({ id: "curator-no-account" })],
+  });
+});
+
+test("a readable page limit keeps catch-up debt when another child ledger has a gap", async () => {
+  const f = replayChildren("catchup-readable-gap", [
+    { title: "damaged worker with readable outcomes", turn: "terminal" },
+    { title: "healthy finished worker", turn: "terminal", ledger: true },
+  ]);
+  const damaged = f.workers[0]!;
+  const ledgerDir = statePath("structured-host-events");
+  fs.mkdirSync(ledgerDir, { recursive: true });
+  const ledgerFile = path.join(ledgerDir, `${damaged.generation}.jsonl`);
+  fs.rmSync(ledgerFile, { force: true });
+  const rows: Record<string, unknown>[] = [];
+  let seq = 1;
+  for (let index = 0; index < 257; index++) {
+    if (index === 1) seq++;
+    rows.push({ kind: "turn-started", turnId: `readable-${index}`, seq: seq++ });
+    rows.push({ kind: "turn-ended", turnId: `readable-${index}`, status: "completed", seq: seq++ });
+  }
+  fs.writeFileSync(ledgerFile, `${rows.map(row => JSON.stringify(row)).join("\n")}\n`);
+  const backlog = new Date(f.now - 2 * 60 * MINUTE_MS).toISOString();
+  let gathered = await childGather(f, {}, { ...emptySeatTickState(), unreachableSince: backlog, unreachableBacklogSince: backlog });
+  expect(gathered.childrenCatchUpPending).toBe(true);
+  expect(gathered.children).toEqual(expect.arrayContaining([expect.objectContaining({ conversationId: f.workers[1]!.id })]));
+  const outcomesByWorker = new Map(f.workers.map(worker => [worker.id, new Set<string>()]));
+  const record = (children: typeof gathered.children) => {
+    for (const child of children) if (child.outcomeId) outcomesByWorker.get(child.conversationId)?.add(child.outcomeId);
+  };
+  record(gathered.children);
+  for (let pass = 0; gathered.childrenCatchUpPending && pass < 20; pass++) {
+    gathered = await childGather(f, {}, gathered.state);
+    record(gathered.children);
+  }
+  expect(gathered.childrenCatchUpPending).toBe(false);
+  expect(outcomesByWorker.get(f.workers[0]!.id)?.size).toBe(257);
+  expect(outcomesByWorker.get(f.workers[1]!.id)?.size).toBe(1);
+});
+
+test("a deferred no-account warning survives another failure and is acknowledged after delivery", async () => {
+  const f = replayChildren("curator-deferred", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning } = await import("@/lib/memory/curation/store");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Preserve the undelivered account warning.", why: "The seat must receive the cause." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (now: number, failure: string) => {
+    const pass = claimPass({ project: f.project, repoDir: f.cwd, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: "failed", endedAt: new Date(now).toISOString(), failure });
+    return pass;
+  };
+  const first = finish(f.now, "no-account");
+  const warning = curationNoAccountWarning(f.project)!;
+  const { CURATION_INTERVAL_MS } = await import("@/lib/memory/roleTypes");
+  finish(f.now + CURATION_INTERVAL_MS, "launch-refused");
+  expect(curationNoAccountWarning(f.project)).toEqual(warning);
+  const pending = await childGather(f);
+  expect(pending.signals).toEqual(expect.arrayContaining([expect.objectContaining({ id: "curator-no-account", episode: warning.episode })]));
+  const { seatTickSignalVersion } = await import("./seatTick");
+  const version = seatTickSignalVersion(pending.signals.find(signal => signal.id === "curator-no-account")!, pending.seat);
+  const deliveredState = { ...pending.state, itemsShown: [...(pending.state.itemsShown ?? []), version] };
+  const afterDelivery = await childGather(f, {}, deliveredState);
+  expect(afterDelivery.signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+  expect(curationNoAccountWarning(f.project)).toBeNull();
+  finish(f.now + 2 * CURATION_INTERVAL_MS, "no-account");
+  expect(curationNoAccountWarning(f.project)?.episode).not.toBe(first.id);
+});
+
+test("the tick reads a fixed-size curator warning record as pass history grows", async () => {
+  const f = replayChildren("curator-warning-size", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning, curationCollection } = await import("@/lib/memory/curation/store");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Keep the warning lookup bounded.", why: "Tick reads must remain predictable." }],
+    now: new Date(f.now).toISOString() });
+  const pass = claimPass({ project: f.project, repoDir: f.cwd, now: f.now })!;
+  patchPass(pass.id, { state: "failed", endedAt: new Date(f.now).toISOString(), failure: "no-account" });
+  const collection = curationCollection()!;
+  collection.boundedPatch(4, tx => {
+    const row = tx.get(`p:${f.project}`);
+    if (row?.kind === "project") tx.put({ ...row, passes: [...row.passes, ...Array.from({ length: 5000 }, (_, index) => `retained-${index}`)] });
+  });
+  const reads: { key: string; bytes: number }[] = [];
+  const original = collection.get.bind(collection);
+  const observed = spyOn(collection, "get").mockImplementation((key: string) => {
+    const row = original(key);
+    reads.push({ key, bytes: row ? Buffer.byteLength(JSON.stringify(row)) : 0 });
+    return row;
+  });
+  try {
+    expect(curationNoAccountWarning(f.project)).toMatchObject({ episode: pass.id });
+    expect(reads).toEqual([{ key: `w:${f.project}`, bytes: expect.any(Number) }]);
+    expect(reads[0]!.bytes).toBeLessThan(200);
+  } finally { observed.mockRestore(); }
+});
+
+test("curator warnings survive project succession before and after settlement", async () => {
+  const f = replayChildren("curator-warning-succession", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning } = await import("@/lib/memory/curation/store");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { seatTickSignalVersion } = await import("./seatTick");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Keep the account warning through project succession.", why: "The successor seat must acknowledge it." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (project: string, repoDir: string, now: number) => {
+    const pass = claimPass({ project, repoDir, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: "failed", endedAt: new Date(now).toISOString(), failure: "no-account" });
+    return pass;
+  };
+
+  const firstPass = finish(f.project, f.cwd, f.now);
+  expect(persistProjectAliases([{ source: f.project, target: "repo-curator-successor", displayName: "successor" }])).toBe(true);
+  const successorGather = await childGather(f, {}, emptySeatTickState(), "repo-curator-successor");
+  const successorSignal = successorGather.signals.find(signal => signal.id === "curator-no-account");
+  expect(successorSignal).toMatchObject({ episode: firstPass.id });
+  const successorVersion = seatTickSignalVersion(successorSignal!, successorGather.seat);
+  const successorSettled = await childGather(f, {}, {
+    ...successorGather.state, itemsShown: [...(successorGather.state.itemsShown ?? []), successorVersion],
+  }, "repo-curator-successor");
+  expect(successorSettled.signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+  expect(curationNoAccountWarning(f.project)).toBeNull();
+
+  // A warning settled under its predecessor key stays cleared when its alias is added later.
+  const g = replayChildren("curator-warning-succession-after-settlement", []);
+  leaveOperatorLessons({ source: { origin: "operator", project: g.project, roleId: null, fixRound: false, conversationId: g.seatId },
+    lessons: [{ scope: "project", rule: "Keep a settled warning cleared across later succession.", why: "A successor must not resurrect it." }],
+    now: new Date(g.now).toISOString() });
+  const settledPass = finish(g.project, g.cwd, g.now);
+  const predecessorGather = await childGather(g);
+  const predecessorSignal = predecessorGather.signals.find(signal => signal.id === "curator-no-account");
+  expect(predecessorSignal).toMatchObject({ episode: settledPass.id });
+  const predecessorVersion = seatTickSignalVersion(predecessorSignal!, predecessorGather.seat);
+  const predecessorSettled = await childGather(g, {}, {
+    ...predecessorGather.state, itemsShown: [...(predecessorGather.state.itemsShown ?? []), predecessorVersion],
+  });
+  expect(predecessorSettled.signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+  expect(curationNoAccountWarning(g.project)).toBeNull();
+  expect(persistProjectAliases([{ source: g.project, target: "repo-curator-successor-after-settlement", displayName: "successor" }])).toBe(true);
+  expect((await childGather(g, {}, emptySeatTickState(), "repo-curator-successor-after-settlement")).signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+});
+
+test("a delayed acknowledgement cannot erase a newer no-account episode", async () => {
+  const f = replayChildren("curator-warning-delayed-ack", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning, acknowledgeCurationNoAccountWarning } = await import("@/lib/memory/curation/store");
+  const { CURATION_INTERVAL_MS } = await import("@/lib/memory/roleTypes");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Retain the latest account warning episode.", why: "A late delivery must not clear it." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (now: number, failure: string) => {
+    const pass = claimPass({ project: f.project, repoDir: f.cwd, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: failure === "succeeded" ? "succeeded" : "failed", endedAt: new Date(now).toISOString(), failure });
+    return pass;
+  };
+  const oldPass = finish(f.now, "no-account");
+  const gatheredOld = await childGather(f);
+  const oldWarningSignal = gatheredOld.signals.find(signal => signal.id === "curator-no-account")!;
+  const { seatTickSignalVersion } = await import("./seatTick");
+  const oldVersion = seatTickSignalVersion(oldWarningSignal, gatheredOld.seat);
+  finish(f.now + CURATION_INTERVAL_MS, "succeeded");
+  const newPass = finish(f.now + 2 * CURATION_INTERVAL_MS, "no-account");
+  const newWarning = curationNoAccountWarning(f.project)!;
+  expect(newPass.id).not.toBe(oldPass.id);
+  expect(newWarning.episode).not.toBe(oldWarningSignal.episode);
+  const delayed = await childGather(f, {}, { ...gatheredOld.state, itemsShown: [...(gatheredOld.state.itemsShown ?? []), oldVersion] });
+  expect(delayed.signals).toEqual(expect.arrayContaining([expect.objectContaining({ id: "curator-no-account", episode: newWarning.episode })]));
+  expect(acknowledgeCurationNoAccountWarning(f.project, oldWarningSignal.episode!)).toBe(false);
+  expect(curationNoAccountWarning(f.project)).toEqual(newWarning);
+  const repeat = finish(f.now + 3 * CURATION_INTERVAL_MS, "no-account");
+  expect(repeat.noAccountEpisode).toBe(newWarning.episode);
+  expect(curationNoAccountWarning(f.project)?.episode).toBe(newWarning.episode);
+});
+
 test("an expired launch without a conversation is a named failure owed until its wake lands", async () => {
   const fixture = replayChildren("abandoned-launch", [{ title: "launch never materialized", unobserved: true }]);
   const worker = fixture.workers[0]!;
@@ -2585,7 +2853,8 @@ test("a gap in a completed ledger preserves the unplaced child and its owed resu
   const worker = fixture.workers[0]!;
   fs.appendFileSync(statePath("structured-host-events", `${worker.generation}.jsonl`), JSON.stringify({ kind: "unhosted", seq: 4 }) + "\n");
   const input = await childGather(fixture);
-  expect(input.childrenUnavailable).not.toBeNull();
+  expect(input.childrenUnavailable).toBeNull();
+  expect(input.signals).toContainEqual(expect.objectContaining({ id: `child-ledger:${worker.id}:${worker.generation}`, label: expect.stringContaining("sequence-gap") }));
   expect(input.children.some(child => child.conversationId === worker.id && child.status === "unknown")).toBe(true);
   const accounting = new SeatTickAccounting(input.state.accounting!.filename, fixture.project);
   expect(accounting.ready(10)).toHaveLength(1);
@@ -3191,7 +3460,7 @@ test("foreign flipping retirement reports never wake an idle project or make its
     conversation: () => foreign,
     readOnlySnapshot: () => ({ ...registry.readOnlySnapshot(), conversations: { fixtureForeign: foreign } }),
   }) as never;
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
   const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
   state = { ...state, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
@@ -3212,7 +3481,7 @@ test("foreign flipping retirement reports never wake an idle project or make its
 test("non-actionable signal churn and machine-wide retirement stalls leave idle checks quiet", async () => {
   for (const status of [null, "inbox", "blocked"]) {
     const ports = sources({ pipelines: [], tasks: status ? [boardCard({ status })] : [] });
-    ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+    ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
     let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString(), lastProposalAt: new Date(NOW).toISOString() };
     const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
     if (status === "blocked") {
@@ -3239,7 +3508,7 @@ test("an own-project lane change wakes and makes a digest due while signal churn
   let pipelines: Record<string, unknown>[] = [];
   const ports = sources({ pipelines: [], tasks: [boardCard({ status: "inbox" })] });
   ports.pipelines = () => pipelines as never;
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const initial = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
   const baseline = await gatherSeatTickInput(PROJECT, initial, DEFAULT_SEAT_TICK_POLICY, ports);
   let state: SeatTickProjectState = { ...initial, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
@@ -3273,7 +3542,7 @@ test.each(["task note edits", "maintenance timestamps", "details appends", "repo
   const ports = sources({ laneRows: [livenessRow({ lifecycle: "running" })] });
   ports.tasks = () => [task] as never;
   let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
-  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: reports as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
   let state = baseline.state;
@@ -3310,7 +3579,7 @@ test.each(["task status", "stage transition", "stage state", "attempt state", "m
     revision: "c".repeat(40), requestedAt: new Date(NOW).toISOString() }] : [];
   ports.deployment = () => ({ state: "ok", value: { deploymentId: "deploy-material", phase: "succeeded", terminal: true,
     revision: "c".repeat(40), error: null, updatedAt: new Date(NOW).toISOString() } }) as never;
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
   ports.now = () => NOW + 2 * 60 * 60_000;
@@ -3332,7 +3601,7 @@ test.each(["task status", "stage transition", "stage state", "attempt state", "m
 
 test("a legacy digest baseline upgrades without owing a digest for task timestamps", async () => {
   const ports = sources({ tasks: [boardCard({ status: "inbox", updatedAt: new Date(NOW).toISOString() })] });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const state = { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE,
     reportFingerprint: "legacy-board", checkFingerprint: "legacy-board" };
   const decision = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
@@ -3350,7 +3619,7 @@ test("a legacy digest baseline upgrades without owing a digest for task timestam
 test("a flapping pull-request source owes no digest, but a verified merge does", async () => {
   const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()],
     laneRows: [livenessRow({ lifecycle: "running" })] });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   for (let check = 1; check <= 4; check++) {
@@ -3376,7 +3645,7 @@ test("gated PR reads and report writes cannot invent digest movement", async () 
   const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()], pullRequestCalls,
     laneRows: [livenessRow({ lifecycle: "running" })] });
   let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
-  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: reports as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
@@ -3403,7 +3672,7 @@ test("gated PR reads and report writes cannot invent digest movement", async () 
 test("recovered PR evidence establishes a baseline before a later verified merge", async () => {
   const ports = sources({ pipelines: [lane(), finishedLane()], laneRows: [livenessRow({ lifecycle: "running" })] });
   ports.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
@@ -3428,7 +3697,7 @@ test("first recovered PR evidence preserves unreported board movement", async ()
   let task = boardCard({ status: "inbox" });
   const ports = sources({ pipelines: [lane(), finishedLane()], tasks: [task], laneRows: [livenessRow({ lifecycle: "running" })] });
   ports.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
@@ -3446,7 +3715,7 @@ test("first recovered PR evidence preserves unreported board movement", async ()
 test("observing an old report without a board baseline cannot invent digest movement", async () => {
   const ports = sources({});
   const reportedAt = new Date(NOW - 2 * 60 * 60_000).toISOString();
-  ports.reports = { log: () => [{ id: "fixture-report", project: PROJECT, at: reportedAt, origin: { kind: "manager" } }] as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [{ id: "fixture-report", project: PROJECT, at: reportedAt, origin: { kind: "manager" } }] as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const first = seatTickDecision(await gatherSeatTickInput(PROJECT, { ...emptySeatTickState(), seatEpoch: 7 }, DEFAULT_SEAT_TICK_POLICY, ports));
   expect(first.verdict.kind).toBe("wake");
   if (first.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");

@@ -304,7 +304,7 @@ The release policy returns the first applicable blocker in table order.
 
 | # | Blocker | How it is detected | October 2026 example |
 | --- | --- | --- | --- |
-| 1 | Releases are off | the project's `release.enabled` is false and no request is pending (§7) | off: nothing is configured |
+| 1 | Releases are off | the project's `release.enabled` is false (§7) | off: release checks are paused |
 | 2 | The seat tick is off for the project | `effectiveSeatTickSettings(...).enabled` false, as board maintenance checks (`src/lib/boardMaintenance/run.ts:216`) | on |
 | 3 | The merge setting is off | `mergeOnReviewEnabled(project)` false (`src/lib/projects/settings.ts:173`): a release PR could not land | on |
 | 4 | A release is in flight | a live release run or PR still owns the release | clear |
@@ -688,7 +688,8 @@ level (the seat header).
 
 **Turning it off:** the panel switch, telling the seat (one tool call), or
 turning the project's tick off, which pauses releases with everything else the
-tick runs.
+tick runs. Turning releases off pauses repository checks and leaves pending
+requests queued until releases are enabled again.
 
 **Mandate.** Line 463 of `src/lib/orchestrator/prompt.ts` («The project's own
 release step runs only when the operator has turned releases on for this
