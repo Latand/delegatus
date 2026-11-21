@@ -952,6 +952,82 @@ for (const locale of ["en", "uk"] as const) {
   });
 }
 
+for (const locale of ["en", "uk"] as const) {
+  test(`${locale} a confirmed move the relay refuses says to release the clone on the other install first, then a plain switch-on moves it`, async () => {
+    setLocale(locale);
+    accounts({});
+    const clones = [target({ id: "elsewhere", name: "Shared clone", engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: true }), target({ id: "service" })];
+    answers.relay = { relays: [relay({ targets: clones })], pending: [], status: [] };
+    route((url, init) => init?.method === "PATCH" && url.endsWith("/targets/elsewhere") ? jsonResponse({ error: "answered_elsewhere" }, 409) : undefined);
+    // The section re-reads the relay list on an interval. Hold every interval the section starts and fire them by hand,
+    // so the refresh that sees the release happens at a chosen step, whatever the period is.
+    const realSetInterval = window.setInterval.bind(window);
+    const originalSetInterval = window.setInterval;
+    const intervals: Array<() => void> = [];
+    window.setInterval = ((handler: () => void) => {
+      intervals.push(handler);
+      return realSetInterval(() => {}, 2 ** 31 - 1);
+    }) as unknown as typeof window.setInterval;
+    try {
+      const host = await mount(<ExternalRelaySection />);
+      const row = () => host.querySelector<HTMLElement>('[data-external-relay-target="elsewhere"]')!;
+      const notice = () => row().querySelector<HTMLElement>("[data-external-relay-move-refused]");
+      const relayReads = () => harness.calls.filter(c => c.url === "/api/external-relay" && c.method === "GET").length;
+      const dialog = () => row().querySelector<HTMLElement>("[data-external-relay-move-confirm]");
+      const control = switchOf(row());
+      await click(control);
+      expect(dialog()).not.toBeNull();
+      await click(dialog()!.querySelector<HTMLElement>("[data-external-relay-move-go]")!);
+      expect(harness.calls.filter(c => c.method === "PATCH").map(c => c.body)).toEqual([{ answered_by: "install", confirmTakeover: true }]);
+      expect(dialog()).toBeNull();
+      expect(control.getAttribute("aria-checked")).toBe("false");
+      expect(notice()?.getAttribute("role")).toBe("alert");
+      expect(notice()?.textContent).toBe(locale === "en"
+        ? "Not moved. Switch off “Answered by this install” on the other install first, then switch it on here."
+        : "Не перенесено. Спочатку вимкніть «Відповідає ця інсталяція» на іншій інсталяції, потім увімкніть тут.");
+      // The notice sits beside the clone it concerns; the card shows no second alert and the row drops its promise to move.
+      expect(host.querySelectorAll("[role=alert]")).toHaveLength(1);
+      expect(host.querySelector("[data-external-relay-release-elsewhere]")).toBeNull();
+      expect(notice()!.closest("[data-external-relay-target-fold]")).toBeNull();
+      if (locale === "uk") return;
+      // The other install lets go. Until the settings read that, the notice stays.
+      Object.assign(clones[0]!, { answered_elsewhere: false });
+      await act(async () => settle());
+      expect(notice()).not.toBeNull();
+      // Their next refresh reads the release: the notice goes and a plain switch-on is one unconfirmed write.
+      expect(intervals.length).toBeGreaterThan(0);
+      const readsBefore = relayReads();
+      await act(async () => { for (const fire of intervals) fire(); });
+      await act(async () => settle());
+      expect(relayReads()).toBeGreaterThan(readsBefore);
+      expect(notice()).toBeNull();
+      route((url, init) => {
+        if (init?.method !== "PATCH" || !url.endsWith("/targets/elsewhere")) return undefined;
+        Object.assign(clones[0]!, { answered_by: "install" });
+        return jsonResponse({ target: clones[0] });
+      });
+      await click(control);
+      expect(dialog()).toBeNull();
+      expect(harness.calls.filter(c => c.method === "PATCH").map(c => c.body)).toEqual([{ answered_by: "install" }]);
+    } finally { window.setInterval = originalSetInterval; setLocale("en"); }
+  });
+}
+
+for (const refusal of [{ status: 502, error: "unreachable" }, { status: 409, error: "not_ready" }] as const) {
+  test(`a confirmed move refused with ${refusal.error} keeps the card alert and no row notice`, async () => {
+    setLocale("en");
+    accounts({});
+    answers.relay = { relays: [relay({ targets: [target({ id: "elsewhere", engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: true })] })], pending: [], status: [] };
+    route((url, init) => init?.method === "PATCH" ? jsonResponse({ error: refusal.error }, refusal.status) : undefined);
+    const host = await mount(<ExternalRelaySection />);
+    await click(switchOf(host.querySelector('[data-external-relay-target="elsewhere"]')!));
+    await click(host.querySelector<HTMLElement>("[data-external-relay-move-go]")!);
+    expect(host.querySelector("[data-external-relay-move-refused]")).toBeNull();
+    expect(host.querySelectorAll("[role=alert]")).toHaveLength(1);
+    expect(harness.calls.filter(c => c.method === "PATCH")).toHaveLength(1);
+  });
+}
+
 test("pairing still adopts a service-only Cloud clone", async () => {
   accounts({});
   answers.relay = { relays: [], pending: [celestiaPending({ expires_at: "2099-01-01T00:00:00Z" })], status: [] };

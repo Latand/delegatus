@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { normalizeRegistry, type RegistryFile } from "./registry";
+import { AgentRegistry, normalizeRegistry, type RegistryFile } from "./registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
 import { registryLockHolder } from "./registryLockHolderFixture";
 import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
@@ -23,6 +23,87 @@ function directory() {
   directories.push(root);
   return root;
 }
+
+test.each([{ nulFirst: false }, { nulFirst: true }])( "spawn reservation preserves full attempt identity across reopen (NUL first: $nulFirst)", async ({ nulFirst }) => {
+  const filename = path.join(directory(), "registry.json");
+  const open = () => new AgentRegistry(filename, undefined, undefined, {
+    sqliteMode: "sqlite", now: () => Date.parse("2026-01-01T00:00:00Z"),
+  });
+  let registry = open();
+  const base = "pipeline_fixture_build_1";
+  const variant = `${base}\0suffix`;
+  const [first, second] = nulFirst ? [variant, base] : [base, variant];
+  const request = (clientAttemptId: string, requestDigest = "fixture-request") => ({
+    engine: "codex" as const, cwd: "/registry-fixture", clientAttemptId,
+    requestDigest, launchProfile: { title: "Reserve exact attempt identity" },
+  });
+  const reserve = (key: string, digest?: string) => registry.beginSpawnRequest(request(key, digest));
+  const created = (key: string) => {
+    const result = reserve(key);
+    expect(result.kind).toBe("created");
+    expect(result.receipt.clientAttemptId).toBe(key);
+    return result.receipt.launchId;
+  };
+  const reopen = () => {
+    registry.close();
+    registry = open();
+  };
+  try {
+    const schema = new Database(filename.replace(/\.json$/, ".sqlite"), { readonly: true });
+    try {
+      const sql = schema.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_lookup_clientAttemptId'").get()?.sql;
+      expect(sql).toContain("json_extract(value_json");
+      expect(sql).not.toContain("json_quote");
+      const plan = schema.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN SELECT row_key FROM registry_rows
+        WHERE collection='receipts' AND json_extract(value_json,'$.clientAttemptId')=json_extract(?, '$')`).all(JSON.stringify(base))
+        .map(row => row.detail).join(" ");
+      expect(plan).toContain("registry_lookup_clientAttemptId");
+      expect(plan).toContain("<expr>=?");
+    } finally { schema.close(); }
+    const firstLaunch = created(first);
+    reopen();
+    const secondLaunch = created(second);
+    expect(secondLaunch).not.toBe(firstLaunch);
+    const cases: Array<[string, string]> = [[first, firstLaunch], [second, secondLaunch]];
+    for (const key of [`${base}\0`, `${base}\\u0000suffix`, "\0", "foreign_ключ", "malformed_\uD800"]) {
+      cases.push([key, created(key)]);
+    }
+    expect(new Set(cases.map(([, launchId]) => launchId)).size).toBe(cases.length);
+
+    const verifyReplay = () => {
+      for (const [key, launchId] of cases) {
+        const replay = reserve(key);
+        expect(replay.kind).toBe("replay");
+        expect(replay.receipt).toMatchObject({ launchId, clientAttemptId: key });
+        const conflict = reserve(key, "different-request");
+        expect(conflict.kind).toBe("conflict");
+        expect(conflict.receipt.launchId).toBe(launchId);
+      }
+    };
+    verifyReplay();
+    for (const [, launchId] of cases) {
+      const failed = await registry.failStructuredSpawnOffLoop(launchId, "fixture stopped", { announce: false });
+      expect(failed.receipt?.state).toBe("failed");
+    }
+    registry.archiveInactiveRows(256);
+    const db = new Database(filename.replace(/\.json$/, ".sqlite"), { readonly: true });
+    try {
+      const archived = db.query<{ row_key: string }, []>("SELECT row_key FROM registry_cold WHERE collection='receipts'").all();
+      expect(new Set(archived.map(row => row.row_key))).toEqual(new Set(cases.map(([, id]) => id)));
+    } finally {
+      db.close();
+    }
+    verifyReplay();
+    const asyncReplay = await registry.beginSpawnRequestAsync(request(variant));
+    expect(asyncReplay.kind).toBe("replay");
+    expect(asyncReplay.receipt).toMatchObject({
+      clientAttemptId: variant, launchId: nulFirst ? firstLaunch : secondLaunch, state: "failed",
+    });
+    expect(Object.keys(registry.snapshot().receipts)).toHaveLength(cases.length);
+  } finally {
+    registry.close();
+  }
+});
 
 function fixture(receiptCount = 257) {
   const root = directory();

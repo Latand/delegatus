@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
 import { fsyncPath, readJsonCache } from "@/lib/state/durableJson";
 import type { listFilesWithProjectCatalog } from "@/lib/scanner";
 import { primeTranscriptTurnEvidence } from "@/lib/scanner/activity";
@@ -31,6 +32,10 @@ export function setFileScanRunnerForTests(runner: FileScanRunner | null): void {
 
 function configuredFileScanRunner(...args: Parameters<FileScanRunner>): ReturnType<FileScanRunner> {
   return (testFileScanRunner ?? runFileCatalogScan)(...args);
+}
+
+function canPersistFileScan(): boolean {
+  return process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1" && process.env[MCP_PROBE_READ_ONLY_ENV] !== "1";
 }
 
 export type FileScanSnapshot = Awaited<ReturnType<typeof listFilesWithProjectCatalog>>;
@@ -604,13 +609,13 @@ function fileScanRefreshPromise(
       },
     }, (intent, generationSignal) => {
       return configuredFileScanRunner(intent, {
-        persistIndex: process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1",
+        persistIndex: canPersistFileScan(),
         ...(onResourceSnapshot ? { onResourceSnapshot, resourceBaseline: slot.snapshot } : {}),
       }, generationSignal);
     });
     if (!snapshot.complete) throw new FileScanIncompleteError();
     const membershipAfterScan = await probeFileCatalogMembership(slot);
-    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(snapshot, { epoch: slot.epoch, generation });
+    if (canPersistFileScan()) writePersistedFileScanSnapshot(snapshot, { epoch: slot.epoch, generation });
     slot.snapshot = snapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();
@@ -690,7 +695,7 @@ function beginPinnedFileScanRefresh(
        callers (their runners cannot reproduce the pin overlay); it still holds
        the process-wide single-generation lease through the coordinator (#287). */
     const pinnedSnapshot = await coordinatedFileScan({ fresh, join: false, exclusive: true, signal: controller.signal }, (intent, signal) => configuredFileScanRunner(intent, {
-      persistIndex: process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1",
+      persistIndex: canPersistFileScan(),
       pin: pinnedPath,
     }, signal));
     if (!pinnedSnapshot.complete) throw new FileScanIncompleteError();
@@ -718,7 +723,7 @@ function beginPinnedFileScanRefresh(
       slot.pinnedSnapshots.delete(oldest);
       slot.pinnedGenerations?.delete(oldest);
     }
-    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(globalSnapshot, { epoch: slot.epoch, generation });
+    if (canPersistFileScan()) writePersistedFileScanSnapshot(globalSnapshot, { epoch: slot.epoch, generation });
     slot.snapshot = globalSnapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();
@@ -918,13 +923,6 @@ function probeFileCatalogMembership(slot: FileScanCacheSlot): Promise<string | n
   const clear = () => { if (slot.membershipProbe === probe) slot.membershipProbe = undefined; };
   void probe.then(clear, clear);
   return probe;
-}
-
-/** The catalog's membership key as the scanner roots hold it now, through the
-    same single probe the generations use; null when it cannot be read. Starts
-    no scan. */
-export function probedFileCatalogMembership(): Promise<string | null> {
-  return probeFileCatalogMembership(globalFileScanSlot());
 }
 
 async function membershipFileScanRefresh(slot: FileScanCacheSlot): Promise<FileScanRefresh | undefined> {

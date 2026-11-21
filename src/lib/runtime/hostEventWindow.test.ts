@@ -169,6 +169,106 @@ test("a host closing a stream ends it after the events emitted before the close"
   expect(host.subscribers.size).toBe(0);
 });
 
+test("a deferred refill keeps the live event payload and replays it only once", async () => {
+  const ledger = [delta(1)];
+  const window = new HostEventWindow();
+  window.restore(ledger);
+  window.release();
+  const subscribers = new Set<RuntimeEventSubscriber>();
+  let finishRefill!: () => void;
+  const refill = new Promise<void>(resolve => { finishRefill = resolve; });
+  const stream = attachRuntimeEvents(0, {
+    window: () => window.events,
+    ledger: () => ledger,
+    subscribers,
+  }, () => refill)[Symbol.asyncIterator]();
+
+  expect(subscribers.size).toBe(1);
+  const live = toolEvent(2, "x".repeat(60_000));
+  ledger.push(live);
+  window.append(live);
+  for (const subscriber of subscribers) {
+    subscriber.queue.push(live);
+    subscriber.wake?.();
+  }
+  finishRefill();
+
+  expect((await stream.next()).value).toEqual(ledger[0]);
+  expect((await stream.next()).value).toEqual(live);
+  await stream.return?.();
+  expect(subscribers.size).toBe(0);
+});
+
+test("a source closed during deferred refill stays closed after replay initializes", async () => {
+  const host = source(1);
+  releaseHostEventWindow(host.window);
+  let finishRefill!: () => void;
+  const refill = new Promise<void>(resolve => { finishRefill = resolve; });
+  const stream = attachRuntimeEvents(0, host.events, () => refill)[Symbol.asyncIterator]();
+
+  host.close();
+  finishRefill();
+
+  expect((await stream.next()).value).toEqual(host.ledger[0]);
+  expect(await stream.next()).toMatchObject({ done: true });
+  expect(host.subscribers.size).toBe(0);
+});
+
+test("cancelling a reader during refill releases its registered seat immediately", async () => {
+  const subscribers = new Set<RuntimeEventSubscriber>();
+  let finishRefill!: () => void;
+  const refill = new Promise<void>(resolve => { finishRefill = resolve; });
+  const stream = attachRuntimeEvents(0, {
+    window: () => [], ledger: () => [], subscribers,
+  }, () => refill)[Symbol.asyncIterator]();
+
+  expect(subscribers.size).toBe(1);
+  await stream.return?.();
+  expect(subscribers.size).toBe(0);
+  finishRefill();
+  await Promise.resolve();
+  expect(subscribers.size).toBe(0);
+});
+
+test("return settles a pending next without waiting for refill or initializing replay", async () => {
+  const subscribers = new Set<RuntimeEventSubscriber>();
+  let finishRefill!: () => void;
+  const refill = new Promise<void>(resolve => { finishRefill = resolve; });
+  let windowReads = 0;
+  let ledgerReads = 0;
+  const stream = attachRuntimeEvents(0, {
+    window: () => { windowReads++; return []; },
+    ledger: () => { ledgerReads++; return []; },
+    subscribers,
+  }, () => refill)[Symbol.asyncIterator]();
+
+  let nextSettled = false;
+  let returnSettled = false;
+  const next = stream.next().then(value => { nextSettled = true; return value; });
+  const returned = stream.return!().then(value => { returnSettled = true; return value; });
+  await new Promise<void>(resolve => setImmediate(resolve));
+
+  expect(nextSettled).toBe(true);
+  expect(returnSettled).toBe(true);
+  expect(await next).toEqual({ done: true, value: undefined });
+  expect(await returned).toEqual({ done: true, value: undefined });
+  expect(subscribers.size).toBe(0);
+  expect(windowReads).toBe(0);
+  expect(ledgerReads).toBe(0);
+  finishRefill();
+});
+
+test("a failed refill removes its seat and surfaces the original error to the reader", async () => {
+  const subscribers = new Set<RuntimeEventSubscriber>();
+  const stream = attachRuntimeEvents(0, {
+    window: () => [], ledger: () => [], subscribers,
+  }, () => Promise.reject(new Error("refill failed")))[Symbol.asyncIterator]();
+
+  expect(subscribers.size).toBe(1);
+  await expect(stream.next()).rejects.toThrow("refill failed");
+  expect(subscribers.size).toBe(0);
+});
+
 test("a bounded map drops its oldest settled entries and keeps open ones whatever their age", () => {
   const map = new Map<string, { open: boolean }>();
   map.set("open-oldest", { open: true });

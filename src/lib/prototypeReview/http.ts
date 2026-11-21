@@ -9,7 +9,7 @@ import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parsePrototypeInput, PrototypeError } from "./input";
 import { prototypeCriticGate, criticRefusal } from "./criticGate";
 import { findPrototypeRound, publishPrototype, withPrototypeState, resolvePrototypeReviewId } from "./store";
-import { operatorDecisionRound, operatorDecisions, readPrototypeReviews, readSeatRounds } from "./read";
+import { operatorDecisions, readPrototypeReviews, readSeatRounds } from "./read";
 import { findSeatRound, loadSeatRounds } from "./seatRounds";
 import { loadTasksForList } from "@/lib/tasks/store";
 import { decidePrototype, refreshPrototypeDelivery, prototypeDelivery, type PrototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
@@ -244,7 +244,7 @@ export async function decisionsGET(request: NextRequest,project: string,world: P
         if (task && !runsElsewhere(task)) await refreshPrototypeDelivery(task.id,review,delivery);
       }
     }
-    return NextResponse.json({ ...operatorDecisions(project), ...(review ? { round: operatorDecisionRound(project,review) } : {}) },{ headers: { "cache-control": "private, no-store" } });
+    return NextResponse.json(operatorDecisions(project, undefined, review),{ headers: { "cache-control": "private, no-store" } });
   } catch (error) { return prototypeFailure(error, "GET /api/projects/decisions"); }
 }
 /** One answer from the column: a seat's question or a task's waiting round,

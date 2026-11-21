@@ -110,6 +110,15 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
     ...(noteRevision(raw.noteShown) === undefined ? {} : { noteShown: noteRevision(raw.noteShown) }),
     /* A plan from before reported stalls records none, so no stall yields. */
     ...(conversationIds(raw.reportedStalls).length > 0 ? { reportedStalls: conversationIds(raw.reportedStalls) } : {}),
+    ...(Array.isArray(raw.reportsOwed) ? { reportsOwed: raw.reportsOwed.filter(
+      (entry): entry is { key: string; label: string } => !!entry && typeof entry === "object"
+        && typeof entry.key === "string" && typeof entry.label === "string",
+    ).slice(-64) } : {}),
+    ...(raw.reportRequest && typeof raw.reportRequest === "object"
+      && typeof (raw.reportRequest as Record<string, unknown>).key === "string"
+      && Array.isArray((raw.reportRequest as Record<string, unknown>).outcomeKeys)
+      ? { reportRequest: { key: String((raw.reportRequest as Record<string, unknown>).key).slice(0, 300),
+        outcomeKeys: conversationIds((raw.reportRequest as Record<string, unknown>).outcomeKeys).slice(-64) } } : {}),
   };
 }
 
@@ -459,6 +468,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     announcedMaintenance: row.announcedMaintenance,
     harvestedChildren: row.harvestedChildren,
     ...(row.reportsOwed ? { reportsOwed: row.reportsOwed } : {}),
+    ...(row.reportsAcknowledged ? { reportsAcknowledged: row.reportsAcknowledged } : {}),
     ...(row.reportsOwedDropped ? { reportsOwedDropped: row.reportsOwedDropped } : {}),
     ...(row.reportSeenAt !== undefined ? { reportSeenAt: row.reportSeenAt } : {}),
     ...(row.reportFingerprint !== undefined ? { reportFingerprint: row.reportFingerprint } : {}),

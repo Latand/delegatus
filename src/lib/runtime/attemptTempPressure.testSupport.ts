@@ -6,17 +6,19 @@ import { AttemptTempStore, ATTEMPT_TEMP_LOW_SPACE_BYTES } from "./attemptTempRet
 import { WorktreeSweepWorker } from "../pipelines/worktreeSweepWorker";
 import { statePath } from "../configDir";
 import { removeKeepMarkers } from "./keepMarker.testSupport";
+import { sweepMonotonicNow } from "./attemptTempDeadline";
 
 export const NOW = Date.parse("2030-01-20T00:00:00Z");
 export const roots: string[] = [];
-export async function realParentPass() {
-  const worker = new WorktreeSweepWorker({ executable: process.execPath, entry: "--preload",
+export function realParentWorker(realClock = false, timeoutMs = 60_000) {
+  return new WorktreeSweepWorker({ executable: process.execPath, entry: "--preload",
     args: [path.join(import.meta.dir, "attemptTempPressure.preload.ts"), path.join(import.meta.dir, "../worktreeSweep.worker.ts")] },
-  60_000, { now: () => 0, setTimeout, clearTimeout });
-  try { return await worker.attemptTemp() as {
-    checked: number; removed: number; removedBytes: number; deferred: number; errors: number; bytes: number; overCapBytes: number;
-    outcomes: { directory: string; reason: string }[];
-  }; } finally { await worker.close(); }
+  timeoutMs, { now: realClock ? sweepMonotonicNow : () => 0, setTimeout, clearTimeout });
+}
+export async function realParentPass(realClock = false) {
+  const worker = realParentWorker(realClock);
+  try { return await worker.attemptTemp() as NonNullable<Awaited<ReturnType<typeof import("./attemptTempProduction").runAttemptTempSweep>>>;
+  } finally { await worker.close(); }
 }
 export function restoreEnvironment(original: NodeJS.ProcessEnv) {
   for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key];
@@ -38,6 +40,12 @@ export function fixture() {
     scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true,
     availableBytes: () => ATTEMPT_TEMP_LOW_SPACE_BYTES };
   return { root, store, make, options };
+}
+
+/** Every ledger row for a root directly under `scratch`. */
+export function ledgerRoots(store: AttemptTempStore, scratch: string) {
+  return fs.readdirSync(scratch).filter(name => name.startsWith("llv-stage-")).sort()
+    .map(name => store.owner(path.join(scratch, name))).filter(owner => owner !== null);
 }
 
 export function nativeFenceDeferrals(report: { outcomes: { directory: string; reason: string }[] }, store: AttemptTempStore) {

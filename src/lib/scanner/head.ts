@@ -22,7 +22,7 @@ interface HeadReadOptions {
   lineLimit?: number;
 }
 
-const headCache = globalCache<CachedHead>("scanner-head-v1");
+const headCache = globalCache<CachedHead>("scanner-head-v1", (entry, key) => key.length * 2 + entry.bytes.byteLength, "buffer-bytes");
 const HEAD_CACHE_CAP = 2_048;
 const HEAD_CACHE_BYTE_CAP = 32 * 1024 * 1024;
 

@@ -1,0 +1,223 @@
+{
+  "fixture": {
+    "deliveries": 34623,
+    "failed": 752,
+    "tasks": 5109,
+    "files": 1299,
+    "pipelines": 257
+  },
+  "registry": {
+    "before": {
+      "medianMs": 2026.1488530000001,
+      "rows": [
+        35051,
+        35051,
+        35051,
+        35051,
+        35051
+      ],
+      "medianPeakRssMiB": 323.7734375,
+      "samples": [
+        {
+          "ms": 2026.1488530000001,
+          "preparationMs": 1263.772251,
+          "selectedRows": 34623,
+          "rows": 35051,
+          "peakRssMiB": 322.9765625,
+          "hash": "06246a8f18b50d5ca9ebd837918119ae840a59df948566007cceec9c464155a4"
+        },
+        {
+          "ms": 2052.352273,
+          "preparationMs": 1206.66649,
+          "selectedRows": 34623,
+          "rows": 35051,
+          "peakRssMiB": 323.7734375,
+          "hash": "06246a8f18b50d5ca9ebd837918119ae840a59df948566007cceec9c464155a4"
+        },
+        {
+          "ms": 1911.056069,
+          "preparationMs": 922.547875,
+          "selectedRows": 34623,
+          "rows": 35051,
+          "peakRssMiB": 327.25,
+          "hash": "06246a8f18b50d5ca9ebd837918119ae840a59df948566007cceec9c464155a4"
+        },
+        {
+          "ms": 1879.307885,
+          "preparationMs": 856.181591,
+          "selectedRows": 34623,
+          "rows": 35051,
+          "peakRssMiB": 325.01171875,
+          "hash": "06246a8f18b50d5ca9ebd837918119ae840a59df948566007cceec9c464155a4"
+        },
+        {
+          "ms": 2218.168006,
+          "preparationMs": 1271.255648,
+          "selectedRows": 34623,
+          "rows": 35051,
+          "peakRssMiB": 321.82421875,
+          "hash": "06246a8f18b50d5ca9ebd837918119ae840a59df948566007cceec9c464155a4"
+        }
+      ]
+    },
+    "after": {
+      "medianMs": 115.10530600000016,
+      "rows": [
+        752,
+        752,
+        752,
+        752,
+        752
+      ],
+      "medianPeakRssMiB": 275.68359375,
+      "samples": [
+        {
+          "ms": 150.78934000000004,
+          "preparationMs": 1192.906367,
+          "selectedRows": 752,
+          "rows": 752,
+          "peakRssMiB": 275.68359375,
+          "hash": "06246a8f18b50d5ca9ebd837918119ae840a59df948566007cceec9c464155a4"
+        },
+        {
+          "ms": 82.04154900000003,
+          "preparationMs": 1027.708617,
+          "selectedRows": 752,
+          "rows": 752,
+          "peakRssMiB": 275.68359375,
+          "hash": "06246a8f18b50d5ca9ebd837918119ae840a59df948566007cceec9c464155a4"
+        },
+        {
+          "ms": 115.10530600000016,
+          "preparationMs": 1071.599495,
+          "selectedRows": 752,
+          "rows": 752,
+          "peakRssMiB": 275.68359375,
+          "hash": "06246a8f18b50d5ca9ebd837918119ae840a59df948566007cceec9c464155a4"
+        },
+        {
+          "ms": 90.98461099999986,
+          "preparationMs": 937.947251,
+          "selectedRows": 752,
+          "rows": 752,
+          "peakRssMiB": 275.68359375,
+          "hash": "06246a8f18b50d5ca9ebd837918119ae840a59df948566007cceec9c464155a4"
+        },
+        {
+          "ms": 190.21582999999987,
+          "preparationMs": 1213.207833,
+          "selectedRows": 752,
+          "rows": 752,
+          "peakRssMiB": 275.68359375,
+          "hash": "06246a8f18b50d5ca9ebd837918119ae840a59df948566007cceec9c464155a4"
+        }
+      ]
+    }
+  },
+  "board": {
+    "before": {
+      "medianMs": 298.4767439999996,
+      "statSync": [
+        25545,
+        25545,
+        25545,
+        25545,
+        25545,
+        25545,
+        25545
+      ],
+      "hash": "61f6b90566e462155e58a57bcc803eaae1786326027eaf554bae88e4855855b8",
+      "stable": true,
+      "samplesMs": [
+        356.62318300000334,
+        340.513853000004,
+        278.032518,
+        310.7393930000035,
+        291.8255610000051,
+        298.4767439999996,
+        249.28767700000026
+      ]
+    },
+    "after": {
+      "medianMs": 0.580431000002136,
+      "statSync": [
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5
+      ],
+      "hash": "61f6b90566e462155e58a57bcc803eaae1786326027eaf554bae88e4855855b8",
+      "stable": true,
+      "samplesMs": [
+        0.7243689999959315,
+        0.580431000002136,
+        0.5735839999979362,
+        0.5464399999982561,
+        0.502453000000969,
+        0.6615319999982603,
+        0.627957000004244
+      ]
+    }
+  },
+  "agenda": {
+    "before": {
+      "medianMs": 116.06716299999971,
+      "statSync": [
+        9125,
+        9125,
+        9125,
+        9125,
+        9125,
+        9125,
+        9125
+      ],
+      "hash": "83a2802f9ea75502c7cad3c2cf8617e2e18af51fad10f966d0661feed401e468",
+      "stable": true,
+      "samplesMs": [
+        126.39862500000163,
+        140.09410899999784,
+        115.23465299999953,
+        100.50764099999651,
+        116.06716299999971,
+        161.27987399999984,
+        108.57404600000154
+      ]
+    },
+    "after": {
+      "medianMs": 11.579140000001644,
+      "statSync": [
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5
+      ],
+      "hash": "83a2802f9ea75502c7cad3c2cf8617e2e18af51fad10f966d0661feed401e468",
+      "stable": true,
+      "samplesMs": [
+        11.579140000001644,
+        10.403290000002016,
+        10.77910900000279,
+        12.296848999998474,
+        15.055796000000555,
+        12.624628999998095,
+        9.798134999997274
+      ]
+    }
+  },
+  "procedure": {
+    "command": "bash scripts/gate-slot.sh bun scripts/check-source.ts -- bun scripts/profile-seat-reads.ts",
+    "runtime": "Bun 1.4.0, Linux x64",
+    "base": "3a14fe1b2e7c1d6fe014df0cb1ac1d5a05b686a7",
+    "registrySamples": 5,
+    "boardSamples": 7,
+    "registryTiming": "Selection and ruleReports after initial snapshot preparation; preparationMs is retained separately.",
+    "memory": "Fresh reader process peak RSS includes module loading and snapshot preparation.",
+    "baseline": "Original Object.values and unscoped projection expressions against the same synthetic records."
+  }
+}

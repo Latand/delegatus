@@ -81,6 +81,15 @@ async function waitForFileCount(directory: string, prefix: string, count: number
   return fs.readdirSync(directory).filter((entry) => entry.startsWith(prefix)).length >= count;
 }
 
+/* Bun sizes its worker pool from the CPU quota of its own cgroup: one thread
+   per CPU when the service carries no quota of its own. Twenty children loading
+   modules at once then exceed the gate's task limit (768) whatever the change
+   under test, so the concurrent fixtures cap the pool and keep their task
+   count independent of the host's CPU count and quota. */
+function concurrentChildEnv(stateDir: string): Record<string, string | undefined> {
+  return { ...process.env, LLV_STATE_DIR: stateDir, UV_THREADPOOL_SIZE: "2" };
+}
+
 function recoveryArtifacts(directory: string): string[] {
   return fs.readdirSync(directory)
     .filter((entry) => entry.includes(".recovering") || entry.includes(".recovery-owner"));
@@ -201,9 +210,8 @@ describe("MCP tool service", () => {
         String(index),
       ],
       cwd: import.meta.dir,
-      // Twenty Bun runtimes must fit the gate's task limit even when the
-      // caller carries a large worker pool. Keep all twenty contenders live.
-      env: { ...process.env, UV_THREADPOOL_SIZE: "2", LLV_STATE_DIR: path.join(directory, "state", String(index)) },
+      // Keep all contenders inside the gate's task budget and isolate state.
+      env: concurrentChildEnv(path.join(directory, "state", String(index))),
       stdout: "pipe",
       stderr: "pipe",
     })));
@@ -321,7 +329,8 @@ describe("MCP tool service", () => {
           path.join(directory, `${schema.name}-result-${index}.json`), String(index), key,
         ],
         cwd: import.meta.dir,
-        env: { ...process.env, UV_THREADPOOL_SIZE: "2", LLV_STATE_DIR: path.join(directory, "state", schema.name, String(index)) },
+        // Keep all contenders inside the gate's task budget and isolate state.
+        env: concurrentChildEnv(path.join(directory, "state", schema.name, String(index))),
         stdout: "pipe",
         stderr: "pipe",
       })));

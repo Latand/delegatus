@@ -310,6 +310,51 @@ function withFoldLayout(): () => void {
   };
 }
 
+test("a board clock tick does not measure settled pills, but a wider stage still refolds the chain", () => {
+  const restore = withFoldLayout();
+  const observed = new Map<Element, () => void>();
+  const originalObserver = G.ResizeObserver;
+  G.ResizeObserver = class {
+    private targets: Element[] = [];
+    constructor(private notify: () => void) {}
+    observe(el: Element) { this.targets.push(el); observed.set(el, this.notify); }
+    disconnect() { for (const el of this.targets) observed.delete(el); }
+  };
+  let reads = 0, stepWidth = 12;
+  Object.defineProperty(dom.HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (!this.classList.contains("fold")) return 0;
+      reads++;
+      return this.children.length * stepWidth;
+    },
+  });
+  try {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    roots.push(root);
+    const render = (now: number) => flushSync(() => root.render(
+      <PipelineBlock summary={summarizePipeline(searchPipeline())} density="card" nowMs={now} />,
+    ));
+    render(NOW_MS);
+    const initial = reads;
+    expect(initial).toBeGreaterThan(0);
+    render(NOW_MS + 30_000);
+    expect(reads).toBe(initial);
+    const step = host.querySelector(".pb-pills.fold .pb-step")!;
+    expect(observed.has(step)).toBe(true);
+    stepWidth = 160;
+    flushSync(() => observed.get(step)!());
+    expect(reads).toBeGreaterThan(initial);
+    const line = host.querySelector<HTMLElement>(".pb-line")!;
+    expect(line.dataset.foldLevel !== "0" || line.dataset.alone === "1").toBe(true);
+  } finally {
+    G.ResizeObserver = originalObserver;
+    restore();
+  }
+});
+
 test("the card's chain steps down to the widest fold that fits, takes the line alone when none does, and never cuts the current stage", () => {
   const restore = withFoldLayout();
   try {

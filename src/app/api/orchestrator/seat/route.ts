@@ -5,11 +5,13 @@ import { workspaceRoute, requestWorkspaceScope } from "@/lib/team/workspaceRoute
 import { resolveSeatProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 
 import { NextRequest, NextResponse } from "next/server";
 
+import { readOrchestratorSeatStore } from "@/lib/orchestrator/seatStore";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { isCanonicalProjectId } from "@/lib/projects/identity";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
@@ -17,7 +19,7 @@ import { viewerMcpRegistered } from "@/lib/agent/spawnPolicy";
 import { executeOrchestratorSeatRequest, reconcileOrchestratorSeatLaunch } from "@/lib/orchestrator/seatCommand";
 import { deputiesForSeatIn, deputyConversationRefsIn, readDeputyFileOrNull, type OrchestratorDeputy, type RetiredDeputyRef } from "@/lib/orchestrator/deputies";
 import { seatDeputyView, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
-import { allSeatConversationsIn, orchestratorSeatIn, previousOrchestratorSeatsIn, readOrchestratorSeatFileOrNull, seatTaskLookup, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
+import { allSeatConversationsIn, orchestratorSeatIn, previousOrchestratorSeatsIn, seatTaskLookup, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
 import { currentSeatFailure, type SeatHostObservation } from "@/lib/orchestrator/seatFailure";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { loadTasksForList } from "@/lib/tasks/store";
@@ -96,13 +98,19 @@ interface SeatFailure {
   automaticReplacement?: { conversationId: string; seatEpoch: number };
 }
 
-async function workspaceGET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
+function panelSeats() {
+  // These read-only selectors use slots, revocations and history. Serializing
+  // their answer never mutates the store's shared snapshot.
+  return readOrchestratorSeatStore(["slots", "revocations", "history"]).file;
+}
+
+async function workspaceGET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError | { unchanged: true; tick?: SeatTickSettingsAnswer }>> {
   return withViewerOperation("seat.panel", async () => {
   let project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
   let displayName = project;
   const cwd = req.nextUrl.searchParams.get("cwd")?.trim() || undefined;
   if (req.nextUrl.searchParams.get("scope")?.trim() === "all") {
-    return NextResponse.json({ all: requestWorkspaceScope(req)?.owner === false ? null : withDeputyRefs(allSeatConversationsIn(readOrchestratorSeatFileOrNull()), readDeputyFileOrNull()) });
+    return NextResponse.json({ all: requestWorkspaceScope(req)?.owner === false ? null : withDeputyRefs(allSeatConversationsIn(panelSeats()), readDeputyFileOrNull()) });
   }
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
   try {
@@ -162,11 +170,11 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<SeatStatus |
     return { ...seat, title: task?.title ?? null, taskId: task?.taskId ?? null, hasNotes: task?.hasNotes ?? false };
   });
   const tick = active && requestWorkspaceScope(req)?.owner !== false ? seatTickSeed(project) : null;
-  return NextResponse.json({
+  const status: SeatStatus = {
     project, displayName,
     seat: active,
     pending,
-    lastFailure: currentSeatFailure(failure, active, hostObservation),
+    lastFailure: currentSeatFailure(failure, active, hostObservation) ? failure : null,
     settledFailureRequestId: failure?.clientRequestId ?? null,
     hostObservation,
     exists: active !== null && (active.path === null || fs.existsSync(active.path)),
@@ -177,8 +185,16 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<SeatStatus |
     /* docs/design/ghost-seat.md §5: the seat's feed draws each deputy's block
        from these, and the seat head and card point at the live one. */
     ...(seatDeputies.length ? { deputies: seatDeputies } : {}),
-    ...(tick ? { tick } : {}),
-  });
+  };
+  const freshTick = tick ? { tick } : {};
+  const base = req.headers.get("x-delegatus-seat-base");
+  if (base !== null && requestWorkspaceScope(req)?.owner !== false) {
+    const revision = createHash("sha256").update(JSON.stringify(status)).digest("hex");
+    const headers = { "x-delegatus-seat-revision": revision, "cache-control": "private, no-store", vary: "x-delegatus-seat-base" };
+    if (revision === base) return NextResponse.json({ unchanged: true as const, ...freshTick }, { headers });
+    return NextResponse.json({ ...status, ...freshTick }, { headers });
+  }
+  return NextResponse.json({ ...status, ...freshTick });
   });
 }
 
@@ -204,8 +220,8 @@ function seatTickSeed(project: string): SeatTickSettingsAnswer | null {
  * long as it was open while the task card said the launch had failed. Every
  * other read is the one parse it always was.
  */
-async function seatRecordReconciled(project: string): Promise<ReturnType<typeof readOrchestratorSeatFileOrNull>> {
-  const record = readOrchestratorSeatFileOrNull();
+async function seatRecordReconciled(project: string): Promise<ReturnType<typeof panelSeats>> {
+  const record = panelSeats();
   const { active, pending } = orchestratorSeatIn(record, project);
   const waiting = (pending?.intent.mode === "spawn" && pending.intent.error === null)
     || (active?.intent.mode === "spawn" && active.path === null && active.conversationId !== null);
@@ -218,7 +234,7 @@ async function seatRecordReconciled(project: string): Promise<ReturnType<typeof 
     console.warn("[orchestrator seat] the designation could not be reconciled", error instanceof Error ? error.name : "unknown");
     return record;
   }
-  return readOrchestratorSeatFileOrNull();
+  return panelSeats();
 }
 
 /** The seat record's conversations with every deputy's beside them (trimmed
