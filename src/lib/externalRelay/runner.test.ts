@@ -1232,7 +1232,7 @@ test("a duplicate claim leaves the held lease alone", async () => {
     await server.close();
   }
 });
-test("newly confirmed targets default to a 30 minute hard cap", async () => {
+test("newly confirmed targets default to a 30 minute hard cap and have no grants", async () => {
   const owner = {
     namespace: "test", id: "owner", display_name: "Owner", handle: null,
   };
@@ -1257,6 +1257,9 @@ test("newly confirmed targets default to a 30 minute hard cap", async () => {
     }));
     const confirmed = await confirmRelayPairing("pending_cap", owner.id);
     expect(confirmed.targets[0].hardCapMinutes).toBe(30);
+    const stored = readRelayStore().relays.find(relay => relay.id === confirmed.id)!.targets[0];
+    expect(stored).not.toHaveProperty("requesters");
+    expect(stored).not.toHaveProperty("ownerTier");
   } finally {
     await server.close();
   }
