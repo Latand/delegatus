@@ -171,6 +171,18 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
   // In the slotless protocol the shell execs the runner in place. Its
   // original ticket contains this exact kernel identity even after exec.
   let history: ReturnType<CpuAdmissionQueue["legacyGateHistory"]> | undefined;
+  const unobservedUnretired = (launcher: string) => {
+    const born = Number(readStat(launcher)[19]);
+    if (!epoch || !Number.isSafeInteger(born) || born <= 0) return false;
+    const { cutover, retirements } = history ??= queue.legacyGateHistory(epoch);
+    if (cutover.boot === null || !cutover.boot.startsWith("linux:") ||
+      cutover.boot.split(":")[1] !== epoch.split(":")[1] || !cutover.clock ||
+      cutover.clock !== fs.readlinkSync(path.join(proc, "self/ns/time")) ||
+      cutover.uptime === null || !Number.isFinite(cutover.uptime) || cutover.uptime <= 0) return false;
+    clockTicks ??= Number(spawnSync("/usr/bin/getconf", ["CLK_TCK"], { encoding: "utf8", timeout: 1000 }).stdout?.trim());
+    if (!Number.isSafeInteger(clockTicks) || clockTicks <= 0 || born > (cutover.uptime + 0.01) * clockTicks) return false;
+    return !retirements.has(`${path.basename(launcher)}:${born}`);
+  };
   const skippedAdmission = (launcher: string) => {
     const born = Number(readStat(launcher)[19]);
     if (!epoch || !Number.isSafeInteger(born) || born <= 0) return false;
@@ -302,7 +314,12 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
           // This runner was spawned directly by the ordinary hook above.
           // Its waiter in the same service proves that the legacy-looking
           // service is the hook's nested cleanup admission.
-          return skippedAdmission(base) || waitingGateInService(unit);
+          // A live waiter in the service only identifies this as an ordinary
+          // cleanup supervisor when the outer hook predates observation and
+          // has no recorded retirement. A retired ticket is positive evidence
+          // that this process already consumed legacy admission and must keep
+          // draining until it exits.
+          return skippedAdmission(base) || unobservedUnretired(base) && bornAfterPriorGrant(base) && waitingGateInService(unit);
         }
       }
       if (args[1] === path.join(path.dirname(runner), "test-child-guardian.ts")) {
