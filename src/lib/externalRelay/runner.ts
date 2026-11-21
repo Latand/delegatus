@@ -56,6 +56,7 @@ import {
   roundSchema,
   type ExternalRelayDecision,
   handoffAnswerSchema,
+  INVALID_REQUESTER_DETAIL,
   offersHandoff,
   requestSchema,
   type ExternalRelayCompletion,
@@ -72,6 +73,7 @@ import { answerRecorder, countMemberAnswers, readAnswerRecord, type RelayAnswerD
 import {
   answerProfileFor,
   ownerTierFor,
+  ownerBindingRefusal,
   exemptFromMemberLimit,
   memberLimitFor,
   RELAY_MEMBER_LIMIT_WINDOW_MS,
@@ -203,7 +205,10 @@ export async function runClaimedRequest(
     return sent.body;
   }
   const parsed = requestSchema.safeParse(raw);
-  const request = parsed.success ? parsed.data : null;
+  const refusalDetail = parsed.success
+    ? ownerBindingRefusal(relay, parsed.data)
+    : parsed.error.issues.find(issue => issue.message === INVALID_REQUESTER_DETAIL)?.message ?? null;
+  const request = parsed.success && !refusalDetail ? parsed.data : null;
   const caps = request ? answerCapabilities(request, relay.targets.find(t => t.id === request.target_id)?.engine ?? "") : null;
   const rawId =
     raw && typeof raw === "object"
@@ -256,7 +261,7 @@ export async function runClaimedRequest(
     claimedAt: rawRequest.claimed_at,
     chatKey: request?.chat?.key ?? null,
     requester: request?.input.requester ?? null,
-    input: rawRequest.input,
+    input: refusalDetail ? null : rawRequest.input,
     ...(request?.features ? { features: request.features } : {}),
   });
   inflight.add(requestId);
@@ -550,6 +555,8 @@ export async function runClaimedRequest(
           (raw as Record<string, unknown>).kind !== "answer"
           ? "unsupported_kind"
           : "invalid_request",
+        null,
+        refusalDetail,
       ),
     );
   if (deadline.fallback === "past") return finish(declined(leaseId, "busy"));
@@ -721,14 +728,14 @@ export async function runClaimedRequest(
     const profile = answerProfileFor(requester);
     // Third-party context stays in the closed, request-local answer profile.
     // Owner authority must never launch a general session for guest delivery.
-    const ownerMessage = request.delivery === "guest" ? null : ownerTierFor({ ownerTier: true }, request);
+    const ownerMessage = ownerTierFor({ ownerTier: true }, request);
     const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
     const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
       && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
     const trigger = request.input.conversation.find(message => message.id === ownerMessage?.messageId);
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
-    owner = request.delivery === "guest" ? null : prototype ? ownerMessage : ownerTierFor(target, request);
+    owner = prototype || target.ownerTier === true ? ownerMessage : null;
     if (owner || request.delivery === "guest") delete profile.pageRead;
     boundedOwnerTurn = !!owner && !prototype;
     ownerExecution = boundedOwnerTurn;

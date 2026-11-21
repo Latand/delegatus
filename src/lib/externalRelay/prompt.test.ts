@@ -329,7 +329,7 @@ test("owner continuation retains negotiated formatting beside service-tool guida
   const service = ownerRequest();
   request.features!.push("relay_tool_calls");
   request.input.tools = service.input.tools;
-  request.input.requester = service.input.requester;
+  request.input.requester = { ...service.input.requester!, key: request.input.conversation[0]!.author.key };
   const owner = { messageId: request.input.respond_to!, text: "Continue fixture", requestText: null };
   const initial = ownerRunPrompt(request, owner, 1);
   expect(initial).toContain("<format>");
