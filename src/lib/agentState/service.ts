@@ -427,24 +427,31 @@ export class AgentStateService {
       const publicationEntry = registry.hostEntry(entry.key);
       const publicationSource = publicationEntry ? registry.agentStateRead(file => snapshotFacts(file, publicationEntry)) : null;
       const publicationMemory = digest(publicationEntry ? this.ports.memory(publicationEntry, committed.conversationId) : null);
-      const stillCurrent = () => allowed() && readAgentProjection(registry, committed.subject)?.revision === committed.revision
-        && (() => {
-          const row = registry.hostEntry(entry.key);
-          if (!row || entryRevision(row) !== committed.facts.revision || this.ports.process(process) !== processStatus) return false;
-          if (claimIdentity && this.ports.process(claimIdentity) !== claimStatus) return false;
-          const currentSource = registry.agentStateRead(file => snapshotFacts(file, row));
-          if (!publicationSource || !currentSource.conversationCurrent || currentSource.conversationId !== committed.conversationId
-            || currentSource.conversationRevision !== publicationSource.conversationRevision
-            || currentSource.obligationsRevision !== publicationSource.obligationsRevision) return false;
-          if (digest(this.ports.memory(row, committed.conversationId)) !== publicationMemory) return false;
-          const held = this.ports.memory(row, committed.conversationId);
-          if (held && committed.facts.turn.determined && held.activeTurnRef !== committed.facts.turn.value.localRef) return false;
-          if (committed.facts.transcript.determined) {
-            try { return fileSignature(fs.statSync(row.artifactPath!, { bigint: true })) === committed.facts.transcript.value.signature; }
-            catch { return false; }
-          }
-          return true;
-        })();
+      const stillCurrent = () => {
+        if (!allowed() || !publicationSource) return false;
+        // Check all registry facts against a single read transaction. A second
+        // connection can write between publication checks and must be seen.
+        const row = registry.agentStateRead(file => {
+          const current = file.entries[committed.entryKey];
+          if (file.agentStates[committed.subject]?.revision !== committed.revision || !current
+            || entryRevision(current) !== committed.facts.revision || this.ports.process(process) !== processStatus) return null;
+          if (claimIdentity && this.ports.process(claimIdentity) !== claimStatus) return null;
+          const source = snapshotFacts(file, current);
+          if (!source.conversationCurrent || source.conversationId !== committed.conversationId
+            || source.conversationRevision !== publicationSource.conversationRevision
+            || source.obligationsRevision !== publicationSource.obligationsRevision) return null;
+          return copyAgentStateRow(current);
+        });
+        if (!row) return false;
+        const held = this.ports.memory(row, committed.conversationId);
+        if (digest(held) !== publicationMemory) return false;
+        if (held && committed.facts.turn.determined && held.activeTurnRef !== committed.facts.turn.value.localRef) return false;
+        if (committed.facts.transcript.determined) {
+          try { return fileSignature(fs.statSync(row.artifactPath!, { bigint: true })) === committed.facts.transcript.value.signature; }
+          catch { return false; }
+        }
+        return true;
+      };
       if (await this.ports.publish(committed, stillCurrent) && stillCurrent()) {
         await registry.deliveryWriteOrBusy({ label: "agent-state.publish-ack" }, () => {
           if (stillCurrent()) acknowledgeAgentProjection(registry, committed.subject, committed.revision, now());

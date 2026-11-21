@@ -2,13 +2,19 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 
 import { WORKSPACE_ROUTES } from "./team/workspaceRoutes";
+import type { ViewerOperation } from "./viewerLoopMonitor";
 import type { McpToolName } from "./mcp/server";
+
+export type RegistryReadSite = "registry.keyed" | "registry.snapshot";
 
 type Bucket = {
   minute: number;
   renders: Map<string, number>;
   tools: Map<string, number>;
   callers: Map<string, number>;
+  registryReads: Map<string, number>;
+  registrySamples: Map<string, number>;
+  lastRegistrySample: Partial<Record<RegistryReadSite, number>>;
   omitted: number;
 };
 
@@ -44,7 +50,7 @@ export function createRequestWorkload(uptime = process.uptime.bind(process)) {
   function bucket() {
     const minute = Math.floor(uptime() / 60);
     if (current?.minute !== minute) {
-      current = { minute, renders: new Map(), tools: new Map(), callers: new Map(), omitted: 0 };
+      current = { minute, renders: new Map(), tools: new Map(), callers: new Map(), registryReads: new Map(), registrySamples: new Map(), lastRegistrySample: {}, omitted: 0 };
       buckets.set(minute, current);
       for (const old of buckets.keys()) {
         if (old > minute - retainedMinutes) break;
@@ -83,6 +89,21 @@ export function createRequestWorkload(uptime = process.uptime.bind(process)) {
     withTool<T>(tool: McpToolName, run: () => T): T {
       return during("mcp:" + tool, run);
     },
+    registryRead(site: RegistryReadSite, operation: ViewerOperation | undefined) {
+      const held = bucket();
+      const scope = context.getStore();
+      const owner = scope?.active ? scope.name : operation ?? "unscoped";
+      const key = site + "|" + owner;
+      increment(held.registryReads, key);
+      // Only fixed bundle coordinates enter diagnostics. Keep at most one
+      // illustrative synchronous stack per site and five-second interval.
+      const slot = Math.floor(uptime() / 5);
+      if (held.lastRegistrySample[site] === slot) return;
+      held.lastRegistrySample[site] = slot;
+      const stack = new Error().stack ?? "";
+      const frames = Array.from(stack.matchAll(/[\\/]\.next[\\/]server[\\/]chunks[\\/](\d+\.js:\d+:\d+)/g), match => match[1]).slice(0, 8);
+      if (frames.length) increment(held.registrySamples, key + "|" + frames.join(","));
+    },
     completedRender(routeClass: string | undefined) {
       increment(bucket().renders, routeClass?.startsWith("http:") ? routeClass.slice(5) : "other");
     },
@@ -105,7 +126,9 @@ export function createRequestWorkload(uptime = process.uptime.bind(process)) {
       const minutes = Array.from({ length: Math.max(0, end - start + 1) }, (_, index) => {
         const minute = start + index, value = buckets.get(minute);
         return { minute, complete: minute < latest, renders: Object.fromEntries(value?.renders ?? []),
-          tools: Object.fromEntries(value?.tools ?? []), callerTargets: Object.fromEntries(value?.callers ?? []),
+          tools: Object.fromEntries(value?.tools ?? []),
+          registryReads: Object.fromEntries(value?.registryReads ?? []), registrySamples: Object.fromEntries(value?.registrySamples ?? []),
+          callerTargets: Object.fromEntries(value?.callers ?? []),
           omittedCallerTargets: value?.omitted ?? 0 };
       });
       return { version: 1, pid: process.pid, latest, minutes };
