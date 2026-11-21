@@ -1254,6 +1254,41 @@ describe("kill-target allowlist", () => {
 });
 
 describe("resource recurring reads", () => {
+  test.each([
+    { platform: "darwin", collector: "in-process", status: "complete" },
+    { platform: "win32", collector: "in-process", status: "complete" },
+    { platform: "linux", collector: "worker", status: "failed" },
+  ])("$platform defaults to the $collector resource collector", async ({ platform, collector, status }) => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const previousOverride = process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+    const payload: ResourcesPayload = { system: null, sessions: [] };
+    const diagnostic = { fresh: true, status: "complete" as const, durationMs: 0, phases: {
+      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+    } };
+    let reader: ReturnType<typeof createResourcesReader>;
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+    delete process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+    try {
+      reader = createResourcesReader(async () => payload, () => null, () => 1, () => diagnostic, {
+        readFiles: async () => { throw new Error("fixture worker file handoff"); },
+        readHostRecords: async () => [],
+      });
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+      if (previousOverride !== undefined) process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS = previousOverride;
+    }
+
+    const read = await reader.read(true);
+    expect(read.diagnostic.collectorId).toStartWith(`${collector}:`);
+    expect(read.diagnostic.status).toBe(status);
+    if (collector === "worker") {
+      expect(read.diagnostic.failure?.causes).toContain("fixture worker file handoff");
+    } else {
+      expect(read.diagnostic.failure).toBeUndefined();
+      expect(read.payload).toEqual(stamped(payload, 1, false));
+    }
+  });
+
   test("the full scaled deadline settles after maximum handoff and TERM-resistant group cleanup", async () => {
     const scale = 0.04;
     const observeTimeoutMs = 30_000 * scale;
