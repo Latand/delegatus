@@ -376,8 +376,10 @@ release holders. The pass keeps releases and generated files. It records known
 holds such as the active and rollback releases, and records
 `process-inventory-unavailable:darwin` when process evidence is missing.
 Recovery keeps journals and their quarantined trees in place, including closed
-gates. Reported reclamation is zero, so the usual disk-usage bound below applies
-only where the pass can prove a release is unused.
+gates. When the recovery budget is reached, the report records a
+`process-inventory-unavailable:darwin:recovery-backlog` hold at the release root
+with the count of unvisited journals. Reported reclamation is zero, so the usual
+disk-usage bound below applies only where the pass can prove a release is unused.
 
 **Bound.** Retained releases = protected ∪ recent ∪ newest K. With eight
 deploys a day that is about ten directories. After cache reclamation each is

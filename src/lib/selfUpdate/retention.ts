@@ -473,7 +473,14 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       ? [...recoveryFiles.filter(afterRecoveryCursor), ...recoveryFiles.filter(file => !afterRecoveryCursor(file))]
       : recoveryFiles;
     for (const file of recoveryWindow) {
-      if (recovered >= maxCandidates || now() >= deadline) break;
+      if (recovered >= maxCandidates || now() >= deadline) {
+        if (!processes) {
+          // The hold covers the rest of the window without opening its journals.
+          const pending = recoveryWindow.length - recovered;
+          report.kept.push({ dir: root, reason: `${DARWIN_PROCESS_HOLD}:recovery-backlog (${pending} unvisited journal${pending === 1 ? "" : "s"})`, bytes: 0 });
+        }
+        break;
+      }
       const journal = path.join(path.dirname(reportFile), file);
       recovered++;
       report.recoveryCursor = file;
