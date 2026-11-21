@@ -1,8 +1,8 @@
-import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
+import { hasActiveGateSandbox, recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 import { gateTaskDiagnostics } from "./gate-tasks";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
 import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
@@ -316,14 +316,15 @@ export function testNameFilter(sites: readonly TestSite[]): string[] {
 
 interface TestBudgets { fileMs: number; runMs: number }
 const DEFAULT_TEST_BUDGETS: TestBudgets = { fileMs: FILE_BUDGET_MS, runMs: RUN_BUDGET_MS };
+const fileRunnerPath = (env: NodeJS.ProcessEnv) => `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
+const sharesPortableRunner = () => process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0;
 async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; onFile?: (run: TestRun, cleanupConfirmed: boolean) => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number } = {}): Promise<TestRun> {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   const now = options.now ?? (() => performance.now());
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const results: TestRun[] = new Array(files.length);
   let next = 0;
-  const sharedPortable = process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0;
-  const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharedPortable);
+  const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharesPortableRunner());
   if (files.length) options.log?.(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
   const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
   while (next < files.length) {
@@ -345,7 +346,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     // stage tickets created inside a test belong only to that test's sandbox.
     env.LLV_GATE_LOCK_DIR = path.join(privateRoot, "cpu-gate");
     mkdirSync(env.LLV_GATE_LOCK_DIR, { recursive: true });
-    env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
+    env.PATH = fileRunnerPath(env);
     env.NO_COLOR = "1"; env.FORCE_COLOR = "0";
     const report = path.join(privateRoot, "junit.xml"), log = path.join(privateRoot, "output.log");
     const fd = openSync(log, "w");
@@ -383,8 +384,8 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       }
       // Portable cleanup is best effort and can miss detached descendants.
       // Its result remains observable but cannot certify later file reuse.
-      cleanupConfirmed = process.platform === "linux" && exitCode === 0
-        && !output.includes("portable cleanup") && !survivors;
+      cleanupConfirmed = process.platform === "linux" && exitCode === 0 && !!task.peak && !survivors
+        && !output.includes("portable cleanup") && !output.includes("no reachable systemd user manager");
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
@@ -471,23 +472,92 @@ function isGreenHeadFile(value: unknown): value is TestRun {
 /** The comparator preserves caller variables beyond the publication wrapper's
  * allowlist. Bind those values with the baseline environment identity, plus
  * identity/privacy/network values that a direct comparator call still passes. */
-function headEnvironmentKey(env: NodeJS.ProcessEnv): string {
+function headEnvironmentKey(env: NodeJS.ProcessEnv, inherited: NodeJS.ProcessEnv): string {
   const consumed = /^(?:GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)|LLV_PRIVACY_[A-Z0-9_]+|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
-  return fingerprint([environmentFingerprint(env), checkInputEnvironment(env), Object.entries(env)
+  return fingerprint([environmentFingerprint(env), checkInputEnvironment(inherited), env.XDG_RUNTIME_DIR ?? null, Object.entries(env)
     .filter(([name, value]) => value !== undefined && consumed.test(name)).sort(([a], [b]) => a.localeCompare(b))]);
 }
 
-/** Check the boundary of this invocation before reading or sealing receipts.
- * Portable work keeps its normal fresh execution, even after a service run. */
-function serviceCleanupIdentity(env: NodeJS.ProcessEnv): string | undefined {
-  if (process.platform !== "linux") return;
-  const systemctl = Bun.which("systemctl", { PATH: env.PATH ?? "" });
-  const runner = Bun.which("systemd-run", { PATH: env.PATH ?? "" });
-  if (!systemctl || !runner) return;
+/** Only the two inherited paths written by the local gate allocator can be
+ * folded. Every file replaces them with its own directories. Keep the selected
+ * temp parent and the original values of any explicitly declared inputs. */
+function headCheckpointEnvironment(root: string, sandbox: string, inherited: NodeJS.ProcessEnv) {
+  const temporary = path.dirname(sandbox);
+  const outer = path.dirname(temporary);
+  const owned = /^delegatus-local-gate-[a-zA-Z0-9]{6}$/.test(path.basename(outer))
+    && inherited.TMPDIR === temporary && temporary === path.join(outer, "tmpdir")
+    && inherited.XDG_STATE_HOME === path.join(outer, "xdg_state_home")
+    && inherited.XDG_RUNTIME_DIR === path.join(outer, "xdg_runtime_dir")
+    && hasActiveGateSandbox(outer, inherited.LLV_GATE_SANDBOX_RECORD);
+  const env = { ...inherited };
+  // The gate-slot.sh bash wrappers read BASH_ENV before launching the
+  // comparator. Its bytes stand for startup effects outside the environment,
+  // such as umask, rlimits, and cwd. Unknown or unreadable startup inputs
+  // keep reusable per-file receipts cold.
+  let bashEnv: readonly unknown[] | null = null;
+  if (inherited.BASH_ENV !== undefined) {
+    try {
+      const file = path.resolve(root, inherited.BASH_ENV);
+      const stat = statSync(file);
+      if (!stat.isFile()) return;
+      bashEnv = [inherited.BASH_ENV, realpathSync(file), stat.dev, stat.ino, fileFingerprint(file)];
+      if (bashEnv[4] === "missing") return;
+    } catch { return; }
+  }
+  // The Linux owned runner's check-worker-entry.py always issues these
+  // two identities anew before executing a file.
+  delete env.LLV_CHECK_ENTRY_PID;
+  delete env.LLV_CHECK_ENTRY_SUPERVISOR;
+  if (owned) {
+    delete env.XDG_STATE_HOME;
+    delete env.XDG_RUNTIME_DIR;
+  }
+  const parent = owned ? path.dirname(outer) : temporary;
   try {
-    if (spawnSync(systemctl, ["--user", "show-environment"], { env, stdio: "ignore", timeout: 5_000 }).status !== 0) return;
-    return fingerprint([systemctl, fileFingerprint(systemctl), runner, fileFingerprint(runner),
-      env.XDG_RUNTIME_DIR ?? null, env.DBUS_SESSION_BUS_ADDRESS ?? null]);
+    const stat = statSync(parent);
+    const physical = realpathSync(parent);
+    if (owned && (!lstatSync(temporary).isDirectory() || statSync(temporary).dev !== stat.dev
+      || realpathSync(temporary) !== path.join(physical, path.basename(outer), "tmpdir"))) return;
+    // Linked worktrees can share receipts, HEAD, branch and Git configuration.
+    // The checked-out directory is still an input to the test process.
+    const source = statSync(root);
+    const key = fingerprint([[root, realpathSync(root), source.dev, source.ino],
+      [owned, parent, physical, stat.dev, stat.ino], bashEnv, headEnvironmentKey(env, inherited)]);
+    return { env, key };
+  } catch { return undefined; }
+}
+
+/** The fresh runtime directory has no private systemd socket. Identify the
+ * actual local bus and its manager connection before using a service receipt. */
+function serviceCleanupIdentity(root: string, isolated: NodeJS.ProcessEnv): string | undefined {
+  if (process.platform !== "linux") return;
+  const PATH = fileRunnerPath(isolated);
+  const env: NodeJS.ProcessEnv = { ...isolated, PATH };
+  const search = { PATH, cwd: root };
+  const systemctl = Bun.which("systemctl", search), runner = Bun.which("systemd-run", search), busctl = Bun.which("busctl", search);
+  const python = Bun.which("python3", search) ?? "/usr/bin/python3";
+  const address = env.DBUS_SESSION_BUS_ADDRESS;
+  const socket = /^unix:path=(\/[\w./-]+)(?:,guid=[a-f0-9]{32})?$/.exec(address ?? "")?.[1];
+  if (!systemctl || !runner || !busctl || !socket) return;
+  try {
+    const runtime = env.XDG_RUNTIME_DIR!;
+    if (lstatSync(path.join(runtime, "systemd"), { throwIfNoEntry: false })) return;
+    const socketIdentity = () => {
+      const stat = statSync(socket);
+      return stat.isSocket() ? fingerprint([realpathSync(socket), stat.dev, stat.ino, stat.ctimeMs]) : undefined;
+    };
+    const endpoint = socketIdentity();
+    if (!endpoint || spawnSync(systemctl, ["--user", "show-environment"], { cwd: root, env, stdio: "ignore", timeout: 5_000 }).status !== 0) return;
+    const busCall = (...method: string[]) => {
+      const result = spawnSync(busctl, [`--address=${address}`, "--auto-start=no", "call", "org.freedesktop.DBus",
+        "/org/freedesktop/DBus", "org.freedesktop.DBus", ...method], { cwd: root, env, encoding: "utf8", timeout: 5_000 });
+      return result.status === 0 ? result.stdout.trim() : "";
+    };
+    const bus = busCall("GetId"), manager = busCall("GetNameOwner", "s", "org.freedesktop.systemd1");
+    if (!/^s "[a-f0-9]{32}"$/.test(bus) || !/^s ":\d+\.\d+"$/.test(manager) || socketIdentity() !== endpoint) return;
+    const tools = [systemctl, runner, busctl, python].map(file => [file, fileFingerprint(file)]);
+    if (tools.some(([, digest]) => digest === "missing")) return;
+    return fingerprint([address, endpoint, bus, manager, tools]);
   } catch { return; }
 }
 
@@ -517,7 +587,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   };
   const env = isolatedEnvironment(sandbox, inherited);
   const git = (...args: string[]) => command(["git", ...args], root, env);
-  let sealHeadSamples: (() => void) | undefined;
+  let sealHeadSamples: (() => (() => void) | undefined) | undefined;
   try {
     const base = git("rev-parse", "--verify", `${baseRef}^{commit}`).trim();
     const headCommit = git("rev-parse", "--verify", "HEAD^{commit}").trim();
@@ -528,13 +598,13 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
     // A single file already gets whole-step reuse after passing; partial
     // checkpoints cannot help it, so avoid another input traversal there.
-    const cleanupIdentity = files.length > 1 ? serviceCleanupIdentity(inherited) : undefined;
-    const environmentKey = headEnvironmentKey(inherited);
-    const inputs = cleanupIdentity ? gateInputSnapshot(root, base,
-      [{ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", base, ...files] }], inherited) : undefined;
+    const cleanupIdentity = files.length > 1 ? serviceCleanupIdentity(root, env) : undefined;
+    const checkpointEnvironment = cleanupIdentity ? headCheckpointEnvironment(root, sandbox, inherited) : undefined;
+    const inputs = checkpointEnvironment ? gateInputSnapshot(root, base,
+      [{ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", base, ...files] }], checkpointEnvironment.env) : undefined;
     const initial = inputs?.snapshot();
     const headCache = initial ? headFileCache(root) : undefined;
-    const headKey = (file: string) => fingerprint([3, initial?.key, environmentKey, cleanupIdentity, files, budgets, file]);
+    const headKey = (file: string) => fingerprint([4, initial?.key, checkpointEnvironment?.key, cleanupIdentity, files, budgets, file]);
     const reused: TestRun[] = [], pending: string[] = [], freshGreen: TestRun[] = [];
     for (const file of files) {
       const cached = headCache?.read(headKey(file));
@@ -548,15 +618,16 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     // that failure for a retry of exactly the same inputs. A killed supervisor
     // or failed cleanup cannot seal a checkpoint.
     sealHeadSamples = () => {
-      if (!initial || !headCache) return;
-      if (serviceCleanupIdentity(inherited) !== cleanupIdentity || headEnvironmentKey(inherited) !== environmentKey
+      if (!initial || !headCache || (!reused.length && !freshGreen.length)) return;
+      if (serviceCleanupIdentity(root, env) !== cleanupIdentity || headCheckpointEnvironment(root, sandbox, inherited)?.key !== checkpointEnvironment?.key
         || inputs?.snapshot()?.key !== initial.key) {
         if (reused.length) throw new Error("head checkpoint inputs changed during this run; fresh checks required");
         return;
       }
-      for (const run of freshGreen) headCache.write(headKey(run.completed[0]!), run);
+      return () => { for (const run of freshGreen) headCache.write(headKey(run.completed[0]!), run); };
     };
-    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers: HEAD_FILE_WORKERS,
+    const workers = comparisonFileWorkers(files, HEAD_FILE_WORKERS, sharesPortableRunner());
+    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers,
       onFile: headCache ? (run, cleanupConfirmed) => { if (cleanupConfirmed && isGreenHeadFile(run)) freshGreen.push(run); } : undefined });
     const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
       completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };
@@ -677,7 +748,12 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     logTiming();
     log(`touched-tests: ${comparison.introduced.length} new failures, ${comparison.preexisting.length} pre-existing failures, ${comparison.fixed.length} fixed, ${comparison.absent.length} removed/skipped, ${comparison.flaky.length} flaky`);
     return comparison;
-  } finally { budget.close(); releaseGateSandbox(sandbox); sealHeadSamples?.(); }
+  } finally {
+    budget.close();
+    let persist: (() => void) | undefined;
+    try { persist = sealHeadSamples?.(); } finally { releaseGateSandbox(sandbox); }
+    persist?.();
+  }
 }
 
 if (import.meta.main) {

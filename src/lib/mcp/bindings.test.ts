@@ -4886,6 +4886,35 @@ test("list_pipelines names the successor carrying an automatic refresh", async (
   expect(answer.pipelines).toMatchObject([{ id: "refresh-parent", merge: { state: "refreshing", refresh: "refresh-successor" } }]);
 });
 
+test("board reads keep main's exact-key selection only for a domain without a catalog source", async () => {
+  const tasks = [{ id: "task_unlisted", project: "unlisted-key", status: "inbox", placement: "unplaced", text: "Unlisted" }];
+  const pipelines = [{ id: "pipeline_unlisted", project: "unlisted-key", state: "running" }];
+  let rowReads = 0;
+  const bindings = (extra: Record<string, unknown> = {}) => viewerMcpBindings(undefined, undefined, {
+    listTaskRecords: () => { rowReads++; return tasks; }, loadTasks: () => tasks,
+    listPipelineRecords: () => { rowReads++; return pipelines; }, getPipelines: () => ({ pipelines }),
+    ...extra,
+  } as never);
+  const seat = { callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat" }),
+    authorizedSeats: () => [{ conversationId: "conversation_seat", project: "viewer" }] };
+  const catalog = { lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project: "viewer", smt: 1, conversations: 1 }] }) };
+
+  // No catalog source: a key the resolver cannot name reads exactly, as on main.
+  await expect(bindings().list_tasks({ project: "unlisted-key" })).resolves.toMatchObject({ count: 1, tasks: [{ id: "task_unlisted" }] });
+  await expect(bindings().list_pipelines({ project: "unlisted-key" })).resolves.toMatchObject({ count: 1, pipelines: [{ id: "pipeline_unlisted" }] });
+
+  rowReads = 0;
+  for (const tool of ["list_tasks", "list_pipelines"] as const) {
+    // The seat fence still compares that key before any row is read.
+    await expect((async () => bindings(seat)[tool]({ project: "unlisted-key" }))()).rejects.toMatchObject({ details: { code: "cross_project_refused", retryable: false } });
+    // A catalog source keeps the unknown-name refusal, also before any row is read.
+    for (const extra of [catalog, { ...catalog, ...seat }]) {
+      await expect((async () => bindings(extra)[tool]({ project: "unlisted-key" }))()).rejects.toMatchObject({ details: { code: "unknown_project", retryable: false } });
+    }
+  }
+  expect(rowReads).toBe(0);
+});
+
 for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
   test(`spawn_agent admits ${model} before control-plane dispatch`, async () => {
     const requests: Record<string, unknown>[] = [];

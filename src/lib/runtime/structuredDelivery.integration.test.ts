@@ -208,7 +208,8 @@ function runtimeJournalClient(journal: RuntimeJournal): RuntimeHostClient {
     operationStatus: async (operationId) => journal.operationResult(operationId),
     producerCursor: async (producerKind, eventKeyPrefix) => journal.producerCursor(producerKind, eventKeyPrefix),
     effectBatch: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
-    transitionOperation: async (operationId, status, details) => journal.transitionOperation(operationId, status, details),
+    transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    acknowledgeTerminalProjection: async (operationIds) => journal.acknowledgeTerminalProjection(operationIds),
   } as RuntimeHostClient;
 }
 
@@ -718,7 +719,8 @@ test("the controller republishes a live host into a restarted runtime journal", 
     operationStatus: async (operationId: string) => journal.operationResult(operationId),
     producerCursor: async (producerKind: string, eventKeyPrefix: string) => journal.producerCursor(producerKind, eventKeyPrefix),
     effectBatch: async (kinds?: readonly string[], afterEventSeq?: number) => journal.effectBatch(100, kinds, afterEventSeq),
-    transitionOperation: async (operationId: string, status: Parameters<RuntimeHostClient["transitionOperation"]>[1], details?: Parameters<RuntimeHostClient["transitionOperation"]>[2]) => journal.transitionOperation(operationId, status, details),
+    transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    acknowledgeTerminalProjection: async (operationIds: readonly string[]) => journal.acknowledgeTerminalProjection(operationIds),
   } as RuntimeHostClient;
   const host = observableFakeHost(new FakeEngineHost(createFakeDeliveryLedger()));
 
@@ -807,7 +809,8 @@ test("one host whose state cannot be read costs no other host its republish (#11
     operationStatus: async (operationId: string) => journal.operationResult(operationId),
     producerCursor: async (producerKind: string, eventKeyPrefix: string) => journal.producerCursor(producerKind, eventKeyPrefix),
     effectBatch: async (kinds?: readonly string[], afterEventSeq?: number) => journal.effectBatch(100, kinds, afterEventSeq),
-    transitionOperation: async (operationId: string, status: Parameters<RuntimeHostClient["transitionOperation"]>[1], details?: Parameters<RuntimeHostClient["transitionOperation"]>[2]) => journal.transitionOperation(operationId, status, details),
+    transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+    acknowledgeTerminalProjection: async (operationIds: readonly string[]) => journal.acknowledgeTerminalProjection(operationIds),
   } as RuntimeHostClient;
   /* Healthy while it is adopted, unreadable afterwards: the outage this covers
      opens after the host is already registered and published. */
@@ -5607,12 +5610,7 @@ async function claudeTerminalRecoveryFixture(mode: "idle" | "active" | "backgrou
   };
   registry.upsert({ ...entry, structuredHost: null });
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
-  /* The production client forwards transition options; the late echo needs
-     its `confirmedDelivery` to reach the journal, as it does in production. */
-  const client: RuntimeHostClient = mode === "late-echo"
-    ? { ...runtimeJournalClient(journal), transitionOperation: async (operationId, status, details, options) =>
-      journal.transitionOperation(operationId, status as Parameters<RuntimeJournal["transitionOperation"]>[1], details, options) }
-    : runtimeJournalClient(journal);
+  const client = runtimeJournalClient(journal);
   const events = new FileRuntimeEventStore(path.join(directory, "events"));
   /* The late echo is settled by the production evidence reader, which reads
      the default ledger; that mode keeps the pairing production has. */
@@ -5829,6 +5827,22 @@ for (const mode of ["idle", "active", "background", "lost-echo", "late-result"] 
       }
       expect(f.events.load(f.sessionId).filter(event => event.kind === "turn-ended" && event.turnId === f.oldTurn))
         .toHaveLength(mode === "idle" ? 0 : 1);
+      if (mode === "lost-echo") {
+        const { operationId } = f.request;
+        const unverified = f.journal.operationResult(operationId)?.receipt;
+        expect(unverified?.status).toBe("uncertain");
+        await expect(f.client.transitionOperation(operationId, "delivered", {}, { fromStatuses: ["uncertain"] }))
+          .rejects.toThrow("runtime operation transition is invalid");
+        await expect(f.client.transitionOperation(operationId, "delivered", {}, {
+          confirmedDelivery: true, fromStatuses: ["delivering"],
+        })).rejects.toThrow("runtime operation moved before its transition");
+        expect(f.journal.operationResult(operationId)?.receipt).toEqual(unverified);
+        await f.client.transitionOperation(operationId, "delivered", {}, {
+          confirmedDelivery: true, fromStatuses: ["uncertain"],
+        });
+        expect(f.journal.operationResult(operationId)?.receipt.status).toBe("delivered");
+        expect(accepted()).toHaveLength(1);
+      }
     } finally { try { await f.close(); } finally { setSystemTime(); } }
   }, 20_000);
 }
@@ -5850,6 +5864,7 @@ test("a Claude send absorbed mid-turn after its confirmation budget settles from
     expect(accepted()).toHaveLength(1);
     expect(await resolveSendReceipt(f.request.operationId, { registry: f.registry, client: f.client }))
       .toMatchObject({ state: "failed", resend: "verify-first", duplicateRisk: true });
+    expect(f.journal.operationResult(f.request.operationId)?.receipt.status).toBe("uncertain");
     const written = accepted()[0]!;
     /* Claude's record of an input taken mid-turn, in the shape it journals:
        the queue removal, then an attachment naming the id it echoed. */

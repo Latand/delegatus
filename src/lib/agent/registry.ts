@@ -6755,7 +6755,7 @@ export class AgentRegistry {
 
   /** A detached delivery view for one conversation, including historical aliases. */
   conversationDeliverySnapshot(target: { conversationId?: string | null; path?: string }): RegistryFile {
-    return this.scopedConversationSnapshot(target, false);
+    return this.scopedConversationSnapshot(target, "delivery");
   }
 
   /** Curator authority needs one identity and its receipts, role and project.
@@ -6778,7 +6778,7 @@ export class AgentRegistry {
   /** Activity attribution needs one conversation's custody, role and launch
       receipts. It must not hydrate unrelated retained history. */
   activityConversationSnapshot(artifactPath: string): RegistryFile {
-    return this.scopedConversationSnapshot({ path: artifactPath }, true);
+    return this.scopedConversationSnapshot({ path: artifactPath }, "attribution");
   }
 
   /** Liveness needs every generation and artifact-path owner for one
@@ -6786,7 +6786,24 @@ export class AgentRegistry {
       so a targeted poll does not hydrate unrelated host rows from retained
       registry history. */
   livenessConversationSnapshot(conversationId: string): RegistryFile {
-    return this.scopedConversationSnapshot({ conversationId }, true, true);
+    return this.scopedConversationSnapshot({ conversationId }, "custody");
+  }
+
+  /** The targeted agent activity observation reads host and receipt evidence
+      and one witness for its undelivered-message guard. Recovery callers use
+      the complete custody view above. */
+  targetedActivitySnapshot(conversationId: string): Pick<RegistryFile, "entries" | "conversations" | "conversationAliases" | "receipts" | "heldDeliveries"> {
+    return this.scopedConversationSnapshot({ conversationId }, "targeted-activity");
+  }
+
+  /** Accepted launch evidence for a target whose transcript is still unavailable. */
+  latestAcceptedSpawnReceipt(conversationId: string): SpawnReceipt | null {
+    return this.readKeyed(file => {
+      const latest = registryReceiptsForConversation(file, conversationId)
+        .filter(row => !row.rejection)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.launchId.localeCompare(a.launchId))[0];
+      return latest ? clone(latest) : null;
+    }, { skipColdKeyInitialization: true });
   }
 
   /** Read bounded termination evidence. The cursor visits retained generations,
@@ -6894,23 +6911,25 @@ export class AgentRegistry {
     } finally { fs.closeSync(descriptor); }
   }
 
-  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean, liveness = false): RegistryFile {
+  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, mode: "delivery" | "attribution" | "custody" | "targeted-activity"): RegistryFile {
+    const liveness = mode === "custody" || mode === "targeted-activity";
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
       const id = target.conversationId ? resolveConversationAlias(file, target.conversationId as ViewerConversationId)
         : target.path ? registryConversationsForPath(file, target.path)[0]?.id : undefined;
       if (!id) return result;
       const conversation = file.conversations[id];
-      for (const identity of conversationIdentities(file, id)) {
+      const identities = conversationIdentities(file, id);
+      for (const identity of identities) {
         if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
       }
       if (conversation) {
         result.conversations[id] = clone(conversation);
         result.conversationRevision[conversation.engine] = file.conversationRevision[conversation.engine];
         const generation = conversation.generations.at(-1);
-        if (generation) {
+        if (generation && !liveness) {
           const key = `${conversation.engine}:${generation.id}`;
-          if (file.entries[key]) result.entries[key] = liveness ? this.cloneLivenessEntry(file.entries[key]!) : clone(file.entries[key]!);
+          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
         }
         if (liveness) {
           const paths = new Set([
@@ -6923,28 +6942,39 @@ export class AgentRegistry {
           }
           for (const pathname of paths) {
             for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
-              result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = this.cloneLivenessEntry(entry);
+              const key = sessionKeyId(entry.key);
+              result.entries[key] ??= this.cloneLivenessEntry(entry);
             }
           }
         }
       }
-      if (activity) {
+      if (mode !== "delivery") {
         if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
         if (file.lineageEdges[id]) result.lineageEdges[id] = clone(file.lineageEdges[id]!);
-        for (const key of registryKeysMatching(file, "receipts", "conversationId", conversationIdentities(file, id))) {
+        for (const key of registryKeysMatching(file, "receipts", "conversationId", identities)) {
           const receipt = file.receipts[key]!;
           result.receipts[key] = clone(receipt);
           const parent = receipt.parentConversationId;
           if (parent && file.conversations[parent]) result.conversations[parent] = clone(file.conversations[parent]!);
         }
       }
+      if (mode === "targeted-activity") {
+        const key = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+          ? this.sqliteStore.firstUndeliveredKey(identities)
+          : Object.keys(file.heldDeliveries).find(key => {
+            const row = file.heldDeliveries[key]!;
+            return identities.includes(row.conversationId) && row.state !== "delivered";
+          });
+        if (key !== undefined) result.heldDeliveries[key] = clone(file.heldDeliveries[key]!);
+        return result;
+      }
       for (const collection of ["heldDeliveries", "deliveryOperationOwners", "deliveryEvidenceCompactions"] as const) {
-        for (const key of registryKeysMatching(file, collection, "conversationId", conversationIdentities(file, id))) {
+        for (const key of registryKeysMatching(file, collection, "conversationId", identities)) {
           (result[collection] as Record<string, unknown>)[key] = clone(file[collection][key]);
         }
       }
       return result;
-    });
+    }, { skipColdKeyInitialization: mode === "targeted-activity" });
   }
 
   deliverySnapshotForOperation(operationId: string, options: { recipientEvidence?: boolean } = {}): RegistryFile {
