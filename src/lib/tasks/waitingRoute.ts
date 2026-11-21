@@ -16,7 +16,7 @@ export type WaitingRoute =
 type WaitingTask = Pick<BoardTask, "id" | "status" | "hold" | "prototypeReview" | "prototypeReviews" | "prototypeReviewReplica" | "doneAt" | "updatedAt">;
 
 /** Index the same snapshot once for the whole project's routing pass. */
-export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status" | "assignments">[], pipelines: readonly Pipeline[]) {
+export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status" | "assignments">[], pipelines: readonly Pipeline[], liveAssignments: ReadonlySet<string> = new Set()) {
   const tasksById = new Map(tasks.map(task => [task.id, task]));
   const lanesById = new Map<string, Pipeline>();
   const lanesByTask = new Map<string, Set<Pipeline>>();
@@ -30,7 +30,7 @@ export function waitingRouteIndex(tasks: readonly Pick<BoardTask, "id" | "status
       linked.add(owner);
     }
   }
-  return { tasksById, lanesById, lanesByTask };
+  return { tasksById, lanesById, lanesByTask, liveAssignments };
 }
 
 function laneOpen(lane: Pipeline): boolean {
@@ -94,6 +94,9 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
   if (paused.some(lane => lane.pause?.resumeCondition?.kind === "date" && Date.parse(lane.pause.resumeCondition.at) > now)) {
     return { owner: "agents", rule: "dated", action: "Wait for the lane’s resume date." };
   }
+  if (lanes.length && !open.length && lanes.some(lane => lane.merge?.state === "merged")) {
+    return seat("unowned", "its lanes settled and work merged", "Check acceptance on the running build with deployment_status. Close the task or name what remains.");
+  }
   if (!open.length && lanes.some(laneWaitCleared)) {
     return seat("lane-dismissed", "its lane wait was dismissed", "Start the next step or close the task with a note.");
   }
@@ -110,7 +113,8 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
     return seat("wait-cleared", "its recorded prerequisite cleared", "Start or continue the work, then clear the hold.");
   }
   if (until > now || hold?.kind === "postponed") return { owner: "agents", rule: "dated", action: "Keep the recorded postponement or reset time." };
-  const dependencyHasOwner = !!dependency && (dependency.assignments.some(a => !!a.conversationId && ["delivered", "spawning", "handoff"].includes(a.state))
+  const dependencyHasOwner = !!dependency && (dependency.assignments.some(a => a.state === "spawning" && !a.conversationId
+    || !!a.conversationId && input.liveAssignments.has(a.conversationId))
     || dependency.status === "blocked" && [...(input.lanesByTask.get(dependency.id) ?? [])].some(laneActive))
     || !!dependencyLane && laneActive(dependencyLane);
   if (dependencyHasOwner || open.length && (hold?.kind === "pr" || hold?.kind === "issue")) {
@@ -118,9 +122,6 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
   }
   if (paused.length || routed.some(({ route }) => route?.owner === "system")) {
     return { owner: "agents", rule: "lane", action: "Keep the hold while the lane’s pause or retry is pending." };
-  }
-  if (lanes.length && !open.length && lanes.some(lane => lane.merge?.state === "merged")) {
-    return seat("unowned", "its lanes settled and work merged", "Check acceptance on the running build with deployment_status. Close the task or name what remains.");
   }
   return seat("unowned", "no live owner carries this wait",
     "Verify the wait now. Resume it or give the hold a ref or until. If only the operator can act, publish a decision form on this task and set an operator hold.");

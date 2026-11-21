@@ -162,7 +162,8 @@ function maintenanceWaiting(project: string, tasks: ReturnType<SeatTickSources["
   const waiting = summarized.filter(task => task.status === "blocked" && canonicalOrchestratorProject(task.project) === project);
   const lanes = sources.pipelines().filter(lane => canonicalOrchestratorProject(lane.project) === project).map(lane => ({ ...lane }));
   overlayAttentionRoutes([], lanes, waitingRoundIds(summarized, seatDecisionNotices(project)), now / 1000);
-  const index = waitingRouteIndex(tasks, lanes);
+  const index = waitingRouteIndex(tasks, lanes, new Set(evidence.flatMap(row => row.workers
+    .filter(worker => worker.lifecycle === "running" || worker.lifecycle === "starting").map(worker => worker.conversationId))));
   const working = new Set(evidence.filter(row => row.workers.some(worker =>
     worker.via === "assignment" && (worker.lifecycle === "running" || worker.lifecycle === "starting"))).map(row => row.taskId));
   const lines: string[] = [];

@@ -75,6 +75,7 @@ import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdent
 import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelinesForList, loadArchivedPipelinesForListAsync, loadPipelinesForList, loadPipelinesForListAsync, loadPipelinesForTask } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
+import { waitingRoute, waitingRouteIndex } from "@/lib/tasks/waitingRoute";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { canonicalRepository, lanePullRequest, pipelineWorkLinks } from "@/lib/forge/resolve";
@@ -3442,13 +3443,16 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   const deployThrough = Math.max(...settledDeploys.map(deploy => Date.parse(deploy.settledAt ?? "") || 0));
   const deployResumeTasks = new Map<string, string[]>();
   if (deployThrough > 0) {
+    const waitingTasks = projectRows(sources.tasks(), project).filter(task => task.status !== "done");
+    const waitingIndex = waitingRouteIndex(waitingTasks, paused);
     const eligible = new Set(paused.filter(lane => !pausedByOperator(lane)
       && (lane.pause?.actor?.kind !== "agent" || lane.pause.actor.conversationId === seat.conversationId)
       && Date.parse(lane.pausedAt ?? "") <= deployThrough
       && (!lane.pause.resumeCondition || pauseReminderDue(lane.pause, lane.pausedAt, now,
         pauses.get(lane.id)?.pauseConditionMet ?? false))).map(lane => lane.id));
-    for (const task of projectRows(sources.tasks(), project)) {
+    for (const task of waitingTasks) {
       if (task.status === "done" || (task.status !== "blocked" && !task.hold)) continue;
+      if (waitingRoute(task, waitingIndex, now)?.owner === "operator") continue;
       for (const lane of paused) if (eligible.has(lane.id) && lane.taskIds?.includes(task.id)) {
         const ids = deployResumeTasks.get(lane.id) ?? [];
         ids.push(task.id);

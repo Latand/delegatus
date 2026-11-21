@@ -148,7 +148,7 @@ export function seatAgendaAsks(
   const projectLanes = body.pipelines.filter(pipeline => canonicalOrchestratorProject(pipeline.project) === canonical);
   const waitingLaneTasks = new Map<string, string[]>();
   if (body.tasks?.length) {
-    const index = waitingRouteIndex(body.tasks, projectLanes);
+    const index = waitingRouteIndex(body.tasks, projectLanes, working);
     for (const task of body.tasks) {
       if (task.status === "done" || (!task.hold && task.status !== "blocked")
         || canonicalOrchestratorProject(task.project) !== canonical) continue;

@@ -37,8 +37,8 @@ const merge = (state: "blocked" | "merged" | "checking") => ({
   state, updatedAt: at(-1), reason: state === "blocked" ? "reviewed checks failed" : undefined,
 }) as Pipeline["merge"];
 
-const classify = (row: BoardTask, lanes: Pipeline[] = [], dependencies: BoardTask[] = [], live = false) =>
-  waitingRoute(row, waitingRouteIndex([row, ...dependencies], lanes), NOW, live);
+const classify = (row: BoardTask, lanes: Pipeline[] = [], dependencies: BoardTask[] = [], live = false, liveAssignments: ReadonlySet<string> = new Set()) =>
+  waitingRoute(row, waitingRouteIndex([row, ...dependencies], lanes, liveAssignments), NOW, live);
 
 test.each([...TASK_HOLD_KINDS])("routes %s across lane states", kind => {
   const row = task("waiting", kind);
@@ -84,7 +84,8 @@ test("structured dates and refs tell a cleared wait from an open prerequisite", 
   const assigned = { ...dependency, assignments: [{
     state: "delivered" as const, path: null, conversationId: "conversation_live", panePid: null, error: null, at: at(0),
   }] };
-  expect(classify(held, [], [assigned])).toMatchObject({ owner: "agents", rule: "dependency" });
+  expect(classify(held, [], [assigned])).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(classify(held, [], [assigned], false, new Set(["conversation_live"]))).toMatchObject({ owner: "agents", rule: "dependency" });
   expect(classify(held, [], [{ ...dependency, status: "inbox" }])).toMatchObject({ owner: "seat", rule: "unowned", carriedBy: "task" });
   const cycleA = task("cycle-a", "task", { ref: "cycle-b" });
   const cycleB = task("cycle-b", "task", { ref: "cycle-a" });

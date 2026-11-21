@@ -1494,7 +1494,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* ── Menus ───────────────────────────────────────────────────────────── */
   useEffect(() => {
     if (!holdEditing) return;
-    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(`[data-kanban-card="${CSS.escape(holdEditing)}"]`)?.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" }));
+    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(`[data-kanban-card="${CSS.escape(holdEditing)}"] [data-hold-editor]`)?.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" }));
   }, [holdEditing]);
   const statusItems = useCallback((card: KanbanCardModel, hints: boolean): KanbanMenuItem[] => [
     ...KANBAN_STATUSES.map((status): KanbanMenuItem => ({

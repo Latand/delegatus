@@ -526,6 +526,10 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
   onCancelHold?: () => void;
 }) {
   const { t } = useLocale();
+  const holdEditorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (holdEditing) requestAnimationFrame(() => holdEditorRef.current?.querySelector<HTMLElement>("[data-hold-editor]")?.scrollIntoView({ block: "center", behavior: "auto" }));
+  }, [holdEditing]);
   const { card } = item;
   const nowMs = now * 1000;
   const pending = item.kind === "task" && card.titlePending;
@@ -681,7 +685,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
         </div>
       ) : face}
     </Pressable>
-    {holdEditing && onSaveHold && onCancelHold ? <div className="mx-2 mb-2 rounded-xl border border-border bg-card p-3"><TaskHoldEditor hold={item.card.task?.hold} onSave={onSaveHold} onCancel={onCancelHold} /></div> : null}
+    {holdEditing && onSaveHold && onCancelHold ? <div ref={holdEditorRef} className="mx-2 mb-2 rounded-xl border border-border bg-card p-3"><TaskHoldEditor hold={item.card.task?.hold} onSave={onSaveHold} onCancel={onCancelHold} /></div> : null}
     {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1" data-phone-card-shell="" data-attention={item.reasons.length > 0 || item.waitsOnPrototype ? "needs" : undefined}><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
     </>
   );
