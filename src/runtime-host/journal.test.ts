@@ -4688,3 +4688,34 @@ test.each([false, true])("idle continuation pre-execution proof survives journal
   journal.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+
+test("a kill receipt retains its first send cohort across transitions and a process restart", () => {
+  const dir = sandbox("kill-cohort-restart");
+  const filename = path.join(dir, "events.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  try {
+    const command = { kind: "kill" as const, conversationId: "conversation_cohort", operationId: "cohort-stop", idempotencyKey: "cohort-stop",
+      sessionKey: { engine: "codex" as const, sessionId: "cohort-generation" }, pendingSendIds: ["send-before"] };
+    expect(journal.executeOperation(command).receipt.pendingSendIds).toEqual(["send-before"]);
+    journal.transitionOperation(command.operationId, "failed", { reason: "target unavailable" });
+    journal.close();
+    const child = Bun.spawnSync({ cmd: [process.execPath, "-e", `
+      import { RuntimeJournal } from "./src/runtime-host/journal.ts";
+      const journal = new RuntimeJournal(process.env.LLV_TEST_JOURNAL, { structuredHosts: true });
+      try {
+        const command = ${JSON.stringify(command)};
+        command.pendingSendIds = ["send-later"];
+        const replay = journal.executeOperation(command);
+        console.log(JSON.stringify({ replay, status: journal.operationResult(command.operationId) }));
+      } finally { journal.close(); }
+    `], cwd: process.cwd(), env: { ...process.env, LLV_TEST_JOURNAL: filename }, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    const result = JSON.parse(new TextDecoder().decode(child.stdout));
+    expect(result.replay).toMatchObject({ replayed: true, receipt: { status: "failed", pendingSendIds: ["send-before"] } });
+    expect(result.status.receipt.pendingSendIds).toEqual(["send-before"]);
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

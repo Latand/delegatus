@@ -51,6 +51,7 @@ import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accou
 import { admitAutomaticAccountTarget, placedAccountHolds } from "@/lib/accounts/projectSelection";
 import {
   emptyLaunchProfile,
+  DELIVERY_ATTEMPT_LIMIT,
   normalizeProjectOwnership,
   validExplicitProject,
   type AutoBalancePolicy,
@@ -11998,14 +11999,19 @@ export class AgentRegistry {
    */
   async stopMigrationIntent(
     id: string,
-    options: { expectedRevision?: number; reason?: string } = {},
+    options: { expectedRevision?: number; reason?: string; canStop?: (file: RegistryFile) => boolean } = {},
   ): Promise<{ acquired: true; value: MigrationIntent } | { acquired: false }> {
     const reason = options.reason ?? STOPPED_MIGRATION_DELIVERY_REASON;
     const owned = await conversationIdsWhere(Object.values((await this.migrationStopView()).conversations),
       (conversation) => conversation.migration?.intentId === id && conversation.migration.phase !== "committed");
     const stopped = await this.deliveryWrite({ label: "migration.stop" },
-      () => this.mutate((file) => stopMigrationIntentInFile(file, id, options.expectedRevision, reason, owned)));
-    if (!stopped.acquired) return stopped;
+      () => this.mutate((file) => {
+        const intent = file.migrationIntents[id];
+        if (!intent) throw new Error("migration intent is unknown");
+        if (options.canStop && !options.canStop(file)) return clone(intent);
+        return stopMigrationIntentInFile(file, id, options.expectedRevision, reason, owned);
+      }));
+    if (!stopped.acquired || stopped.value.state !== "stopped") return stopped;
     await yieldToRuntime();
     try {
       await this.continueMigrationStop(id, reason);
@@ -12635,6 +12641,10 @@ export class AgentRegistry {
       if (claimed) settleStoppedMigrationOf(file, claimed.conversationId);
       const delivery = file.heldDeliveries[id];
       if (!delivery || delivery.state !== "assigned" || delivery.generationId !== generationId) return null;
+      if (delivery.attempts >= DELIVERY_ATTEMPT_LIMIT) {
+        this.recordDeliveryOutcomeInFile(file, id, "failed", "delivery attempt limit reached; verify the recipient before retrying", "unverified");
+        return null;
+      }
       const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
       // Recovery authorizes exactly the selected candidate under the same
       // writer as its claim. A replacement admission or newly started migration
