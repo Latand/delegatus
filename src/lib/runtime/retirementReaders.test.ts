@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, setSystemTime, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +11,11 @@ import { determined } from "./determinable";
 import { handOverHostForDemotion } from "./structuredDeliveryController";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
+import * as activity from "@/lib/scanner/activity";
+import { addStructuredRestartConversation } from "./startupRecipient.fixture";
+import { structuredStartupStatus } from "./startupStatus";
+import { STRUCTURED_STARTUP_PASS_DEADLINE_MS } from "./startupWork";
+import { runStructuredHostStartup } from "@/lib/viewerInstrumentation";
 
 const NOW = Date.parse("2026-10-16T00:00:00Z");
 const CREATED = new Date(NOW).toISOString();
@@ -122,6 +127,172 @@ test("bulk membership preparation yields, validates its revision and observes ca
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("membership retries finish a census larger than one budget and discard a changed selection", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-checkpoint-"));
+  let clock = 0;
+  const time = spyOn(performance, "now").mockImplementation(() => clock);
+  try {
+    const file = seeded(root, 80);
+    const host = file.entries["codex:reader-0"]!.structuredHost!;
+    const reads = new Map<string, number>();
+    const view = (data: RegistryFile): RegistryFile => {
+      const selectingKeys = new Set<string>();
+      return {
+        ...data,
+        entries: new Proxy(data.entries, {
+          ownKeys(entries) {
+            const keys = Object.keys(entries);
+            keys.forEach(key => selectingKeys.add(key));
+            return keys;
+          },
+          get(entries, key: string) {
+            if (!selectingKeys.delete(key) && Object.hasOwn(entries, key)) {
+              clock++;
+              reads.set(key, (reads.get(key) ?? 0) + 1);
+            }
+            return Reflect.get(entries, key);
+          },
+        }),
+      };
+    };
+    for (const entry of Object.values(file.entries)) entry.structuredHost = host;
+    let current = view(file);
+    const registry = { readOnlySnapshot: () => current } as AgentRegistry;
+    const checkpoint = {};
+    let progress = { completed: 0, remaining: 0 };
+    const read = () => pipelineStartupMembershipsAsync(registry, {
+      deadline: clock + 22, checkpoint,
+      onProgress: (completed, remaining) => { progress = { completed, remaining }; },
+    });
+    await expect(read()).rejects.toThrow("startup membership deadline exceeded");
+    expect(progress.completed).toBeGreaterThan(0);
+    expect(progress.remaining).toBeGreaterThan(0);
+    expect(progress.completed + progress.remaining).toBe(82);
+    const changed = "conversation_reader_0";
+    file.memberships[changed] = [{ ...file.memberships[changed]![0]!, containerId: "replacement-lane" }];
+    current = view(file);
+    let selected: Awaited<ReturnType<typeof read>> | undefined;
+    for (let i = 0; i < 12 && !selected; i++) {
+      try { selected = await read(); }
+      catch (error) { expect(String(error)).toContain("startup membership deadline exceeded"); }
+    }
+    expect(selected?.selectedIds.size).toBe(83);
+    expect(selected?.byPipeline.get("replacement-lane")).toEqual([changed]);
+    expect(progress).toEqual({ completed: 82, remaining: 0 });
+    expect(reads.get("codex:reader-0")).toBe(2);
+    expect(reads.get("codex:reader-80")).toBe(1);
+  } finally { time.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test.each(["off", "sqlite"] as const)("Viewer startup checkpoints transcript batches and re-reads changed transcripts (%s)", async sqliteMode => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-transcript-checkpoint-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode });
+  let clock = 0;
+  const time = spyOn(performance, "now").mockImplementation(() => clock);
+  const read = activity.readStableTailRecords;
+  const visits = new Map<string, number>();
+  const tail = spyOn(activity, "readStableTailRecords").mockImplementation(async (file, ...args) => {
+    if (structuredStartupStatus()?.phase === "refreshing transcripts") {
+      clock += 12_000;
+      visits.set(file, (visits.get(file) ?? 0) + 1);
+    }
+    return read(file, ...args);
+  });
+  const terminal = { type: "event_msg", timestamp: CREATED, payload: { type: "task_complete", turn_id: "test-turn" } };
+  try {
+    const self = captureProcessIdentity(process.pid);
+    const fixtures = Array.from({ length: 33 }, (_, index) => addStructuredRestartConversation(registry, root, {
+      sessionId: retirementSession(index), status: "live", turn: "busy", transcriptRecords: [terminal],
+    }));
+    for (const entry of registry.structuredHostEntries()) {
+      registry.upsert({ ...entry, claimOwner: `structured-host:${JSON.stringify(self)}` });
+    }
+    const options = {
+      registry, client: null, orchestratorSeats: () => [],
+      pipelineEvidence: () => ({ settled: new Set<string>(), deferred: new Set<string>() }),
+      adopt: async () => [], adoptClaude: async () => [], schedule: () => ({}),
+    };
+    await expect(adoptStructuredHostsAtStartup(options)).rejects.toThrow("deadline exceeded");
+    expect(structuredStartupStatus()).toMatchObject({ phase: "refreshing transcripts", completedHosts: 16, totalHosts: 33 });
+    const changed = fixtures.find(fixture => visits.has(fixture.artifactPath))!;
+    fs.appendFileSync(changed.artifactPath, JSON.stringify({ ...terminal, timestamp: new Date(NOW + 60_000).toISOString() }) + "\n");
+    let finished = false;
+    for (let i = 0; i < 6 && !finished; i++) {
+      try { await adoptStructuredHostsAtStartup(options); finished = true; }
+      catch (error) { expect(String(error)).toContain("deadline exceeded"); }
+    }
+    expect(finished).toBe(true);
+    expect(visits.get(changed.artifactPath)).toBe(2);
+    expect([...visits.values()].filter(count => count === 1).length).toBeGreaterThanOrEqual(15);
+    expect(visits.size).toBe(33);
+  } finally {
+    tail.mockRestore(); time.mockRestore(); registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a scheduled row retry cannot supply the result of full Viewer startup", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-scoped-retry-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
+  const rowEntered = Promise.withResolvers<void>();
+  const finishRow = Promise.withResolvers<void>();
+  const scheduled: Array<() => void | Promise<void>> = [];
+  const key = `codex:${retirementSession(0)}`;
+  let clock = 0, refreshes = 0, holdRow = false;
+  const time = spyOn(performance, "now").mockImplementation(() => clock);
+  setSystemTime(NOW);
+  let retry: Promise<void> | undefined;
+  try {
+    addStructuredRestartConversation(registry, root, { sessionId: retirementSession(0), status: "idle", turn: "terminal" });
+    const entry = registry.readOnlySnapshot().entries[key]!;
+    const options: NonNullable<Parameters<typeof adoptStructuredHostsAtStartup>[0]> = {
+      registry, orchestratorSeats: () => [],
+      client: { ...emptyJournalClient(journal), startupGeneration: async () => {
+        if (holdRow) { rowEntered.resolve(); await finishRow.promise; }
+        return "fixture-runtime";
+      } },
+      pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+      refreshTranscriptState: async () => { refreshes++; },
+      adopt: async (_registry, _launch, _env, _filter, _processed, hooks) => {
+        if (scheduled.length === 0 && refreshes === 1) hooks?.onFailure?.(entry, new Error("synthetic host refusal"));
+        return [];
+      },
+      adoptClaude: async () => [],
+      schedule: callback => {
+        if (scheduled.length === 0 && refreshes === 1 && !holdRow) clock += STRUCTURED_STARTUP_PASS_DEADLINE_MS;
+        scheduled.push(callback);
+        return {};
+      },
+    };
+    const run = () => runStructuredHostStartup(() => adoptStructuredHostsAtStartup(options), () => {}, { schedule: () => ({}) });
+    await run();
+    expect(structuredStartupStatus()?.state).toBe("failed");
+    expect(scheduled).toHaveLength(1);
+    setSystemTime(NOW + 60_000);
+    holdRow = true;
+    await scheduled.shift()!();
+    await rowEntered.promise;
+    retry = run();
+    expect(structuredStartupStatus()?.state).toBe("failed");
+    holdRow = false;
+    finishRow.resolve();
+    await retry;
+    expect(refreshes).toBe(2);
+    expect(structuredStartupStatus()?.state).toBe("ready");
+  } finally {
+    finishRow.resolve();
+    await retry?.catch(() => {});
+    setSystemTime();
+    time.mockRestore();
+    await bindStructuredDeliveryQueue([]);
+    journal.close(); registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 
 test("reconciliation services the loop while selecting hosts, before any mutation", async () => {
   const row = { key: { engine: "codex", sessionId: "released" }, status: "dead", claimOwner: null,
@@ -180,7 +351,9 @@ test("selection validation covers every membership input and refuses a lost or c
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-input-revisions-"));
   const cases: Array<(file: RegistryFile) => void> = [
     file => { file.entries["codex:reader-0"]!.structuredHost = null; },
+    file => { file.entries["codex:reader-0"]!.artifactPath = "/fixture/replacement.jsonl"; },
     file => { file.conversations["conversation_reader_0"]!.generations[0]!.id = "replacement-generation"; },
+    file => { file.conversations["conversation_reader_0"]!.generations[0]!.path = "/fixture/replacement.jsonl"; },
     file => { file.memberships["conversation_reader_0"]![0]!.containerId = "replacement-owner"; },
     file => { file.conversationAliases["conversation_reader_alias"] = "conversation_reader_1"; },
     file => { file.receipts.pending!.state = "completed"; },
@@ -354,8 +527,7 @@ for (const retainedHost of [false, true]) test(`startup finalization reads selec
   let initialPreparation = true;
   const prepare = registry.prepareReadOnlySnapshot.bind(registry);
   const observed = spyOn(registry, "prepareReadOnlySnapshot").mockImplementation((...args) => {
-    // The initial read precedes this pass's first phase report. Its status
-    // still belongs to the preceding pass, including the previous test case.
+    // Bootstrap prepares the initial view before the phase-specific reads.
     if (initialPreparation) initialPreparation = false;
     else preparations.push(structuredStartupStatus({ LLV_STRUCTURED_HOSTS: "1" })?.phase ?? "initial");
     return prepare(...args);
@@ -384,7 +556,7 @@ for (const retainedHost of [false, true]) test(`startup finalization reads selec
     expect(preparations).not.toContain("adopting Claude hosts");
     // After runtime reads, adoption needs one current view. The identity-only
     // selectors before it share the validated initial selection.
-    expect(preparations.filter(phase => phase === "refreshing transcripts")).toHaveLength(1);
+    expect(preparations.filter(phase => phase === "reading runtime startup signals")).toHaveLength(1);
     expect(capturedReceipts).toBe(true);
     expect(fencedAfterCapture).toBe(true);
   } finally {

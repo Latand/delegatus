@@ -13,6 +13,7 @@ import { isCanonicalBranchRef } from "@/lib/runtime/canonicalRevision";
 import { parseViewerDeploymentListCursor, viewerDeploymentPage } from "@/lib/runtime/contracts";
 import { RuntimeHostUnavailableError, runtimeHostClient, runtimeHostRequestHealth } from "@/lib/runtime/client";
 import { DeploymentRuntimeUnavailableError, requestViewerDeployment } from "@/lib/runtime/deploymentRuntime";
+import { structuredStartupStatus } from "@/lib/runtime/startupStatus";
 import { runtimeEventsRolledBack, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { authenticatedAgentSpawnCaller } from "@/app/api/spawn/admission";
@@ -43,6 +44,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       { status: 503 },
     );
   }
+  const startup = structuredStartupStatus();
+  const startupDetails = startup && startup.phase !== "waiting for structured startup" ? { structuredHostStartup: startup } : {};
   const decision = await selfUpdateService().decide();
   if (decision.mode === "checkout" || decision.mode === "package") {
     await selfUpdateService().snapshot();
@@ -54,7 +57,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     try {
       const page = viewerDeploymentPage(checkoutDeployments(statePath("self-update")), deploymentListLimit(request), cursor,
         request.nextUrl.searchParams.get("compact") === "true");
-      return NextResponse.json({ count: page.deployments.length, ...page });
+      return NextResponse.json({ count: page.deployments.length, ...page, ...startupDetails });
     } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Deployment ledger unavailable" }, { status: 503 }); }
   }
   const client = runtimeHostClient();
@@ -74,6 +77,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       count: page.deployments.length,
       ...page,
       runtimeHostRequests: runtimeHostRequestHealth(),
+      ...startupDetails,
     });
   } catch (error) {
     return NextResponse.json(

@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 
 import { resetRuntimeHostRequestHealthForTests } from "@/lib/runtime/client";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
+import { markStructuredHostStartupFailed, markStructuredHostStartupProgress, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
 
 import { GET as GET_DEPLOYMENT } from "./[deploymentId]/route";
 import { GET } from "./route";
@@ -266,4 +267,24 @@ test("runtime read routes keep a configured but unreachable plane distinct from 
       });
     }
   }
+});
+
+test("deployment list sends the Viewer's current adoption progress beside the runtime-host page", async () => {
+  const methods = await serveRuntime({ deployments: [], nextCursor: null, hasMore: false });
+  markStructuredHostStartupProgress({ phase: "refreshing transcripts", completedHosts: 16, totalHosts: 33 });
+  markStructuredHostStartupFailed("timeout", {
+    deadline: "structured startup read deadline exceeded",
+    hostKey: "codex:startup-fixture",
+    nextRetryAt: "2026-10-16T00:00:05.000Z",
+  });
+  try {
+    const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ deployments: [], structuredHostStartup: {
+      phase: "refreshing transcripts", state: "failed", completedHosts: 16, remainingHosts: 17,
+      deadline: "structured startup read deadline exceeded", hostKey: "codex:startup-fixture",
+      nextRetryAt: "2026-10-16T00:00:05.000Z",
+    } });
+    expect(methods).toEqual(["viewer-deployment-list"]);
+  } finally { markStructuredHostStartupReady(); }
 });

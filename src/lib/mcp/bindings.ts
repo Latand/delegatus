@@ -15,6 +15,7 @@ import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { assertWorkspaceMcpCall, workspaceGuardedBindings } from "./workspaceFence";
+import { hasWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { previewAgentMemoryCap, PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import { readSelf } from "@/lib/links/self";
@@ -936,6 +937,20 @@ function readViewerControl(
 ): Promise<Record<string, unknown>> {
   if (!control.get) throw new Error("Viewer control read is unavailable");
   return control.get(pathname);
+}
+
+async function readViewerStartupStatus(control: ViewerControlDependencies, context?: McpToolCallContext) {
+  // Startup diagnostics include installation-wide host keys and require an
+  // unrestricted workspace call.
+  if (!control.get || hasWorkspaceExecution()) return null;
+  const deadlineAt = Math.min(context?.deadlineAt ?? Infinity, Date.now() + 750);
+  try {
+    const result = await viewerControlForCall(control, { ...context, deadlineAt }).get!("/api/runtime/deployments/capabilities/v1");
+    if (result.capability === "viewer-deployments" && result.version === 1 && objectRecord(result.structuredHostStartup)) {
+      return result.structuredHostStartup;
+    }
+  } catch { /* Older and unreachable Viewers still permit a seat read. */ }
+  return null;
 }
 
 function viewerControlForCall(
@@ -7157,6 +7172,7 @@ async function deploymentStatus(
   return redactPayload({
     count: deployments.length,
     deployments: args.compact === true ? deployments.map(row => isDeploymentSummary(row) ? row : compactDeployment(row)) : deployments,
+    ...(objectRecord(result.structuredHostStartup) ? { structuredHostStartup: result.structuredHostStartup } : {}),
     ...(nextCursor !== undefined ? { nextCursor, hasMore } : {}),
     ...(legacySnapshot ? { legacySnapshot } : {}),
     ...(runtimeHostRequests ? { runtimeHostRequests } : {}),
@@ -9353,7 +9369,10 @@ export function viewerMcpBindings(
     }),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: orchestratorProjectBinding(domainDependencies, (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies), true),
-    get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),
+    get_orchestrator: orchestratorProjectBinding(domainDependencies, async (args, context) => {
+      const [seat, startup] = await Promise.all([getOrchestrator(args, domainDependencies), readViewerStartupStatus(controlDependencies, context)]);
+      return startup ? { ...seat, structuredHostStartup: redactPayload(startup) } : seat;
+    }),
     seat_tick_settings: seatTickSettingsBinding(domainDependencies),
     /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),

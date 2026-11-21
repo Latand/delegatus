@@ -865,10 +865,10 @@ function startupSelectionFacts(collection: string, row: unknown): string {
     const host = value.structuredHost as { kind?: unknown } | null;
     const legacyHost = value.host as { kind?: unknown } | null;
     const key = value.key as { engine?: unknown; sessionId?: unknown } | null;
-    return JSON.stringify([host?.kind, legacyHost?.kind, key?.engine, key?.sessionId]);
+    return JSON.stringify([host?.kind, legacyHost?.kind, key?.engine, key?.sessionId, value.artifactPath]);
   }
   if (collection === "conversations") return JSON.stringify([value.id, value.engine,
-    (value.generations as Array<{ id: unknown }> | undefined)?.map(generation => generation.id)]);
+    (value.generations as Array<{ id: unknown; path: unknown }> | undefined)?.map(generation => [generation.id, generation.path])]);
   const pending = ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"].includes(String(value.state));
   return JSON.stringify(pending ? [value.conversationId] : []);
 }
