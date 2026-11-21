@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
+import { formatGuide } from "@/lib/externalRelay/rich.fixture";
 
 // Isolate before importing the route's state-resolving module graph.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-owner-seat-relay-"));
@@ -19,7 +20,7 @@ const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await im
 const { POST } = await import("@/app/api/conversation-host/route");
 const { POST: orchestratorPOST } = await import("@/app/api/orchestrator/message/route");
 const { setConversationHostDependenciesForTests } = await import("@/app/api/conversation-host/dependencies");
-const { viewerMcpBindings, viewerMcpRecoverableTools } = await import("@/lib/mcp/bindings");
+const { viewerMcpBindings, viewerMcpRecoverableTools, viewerMcpToolPolicy } = await import("@/lib/mcp/bindings");
 const { createMcpToolService, MemoryMcpReceiptStore, McpDispatchUncertainError } = await import("@/lib/mcp/server");
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { ViewerControlDependencies, ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
@@ -111,7 +112,7 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
     },
   };
   const bindings = viewerMcpBindings(undefined, transport, domain as ViewerMcpDomainDependencies);
-  return { bindings, posts, service: createMcpToolService(bindings, new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain as ViewerMcpDomainDependencies) }) };
+  return { bindings, posts, service: createMcpToolService(bindings, new MemoryMcpReceiptStore(), viewerMcpToolPolicy(domain as ViewerMcpDomainDependencies), { recovery: viewerMcpRecoverableTools(domain as ViewerMcpDomainDependencies) }) };
 }
 
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
@@ -224,8 +225,10 @@ for (const pairedProject of ["project-b", "unknown-project", null] as const) for
     const message = contextRequest.input.conversation[0]!;
     const projectKey = pairedProject ?? "unset";
     const wire = requestSchema.parse({ ...contextRequest, ...(delivery === "guest" ? { delivery: "guest" } : {}), target_id: "target", request_id: `owner-request-${delivery}-${projectKey}`,
-      chat: { key: "fixture_group_chat" }, answer: { max_chars: 1000, progress: "none" },
-      input: { ...contextRequest.input, ...(delivery === "guest" ? { tools: contextRequest.input.tools.filter(tool => tool.mode === "handoff") } : {}),
+      chat: { key: "fixture_group_chat" }, answer: { max_chars: delivery === "owner" ? 32000 : 1000, progress: "none" },
+      ...(delivery === "owner" ? { features: ["relay_rich_messages"] } : {}),
+      input: { ...contextRequest.input, ...(delivery === "owner" ? { format: formatGuide } : {}),
+        ...(delivery === "guest" ? { tools: contextRequest.input.tools.filter(tool => tool.mode === "handoff") } : {}),
         requester: { ...contextRequest.input.requester, is_owner: true },
         respond_to: "owner-message", conversation: [
           { ...message, id: "attachment-message", text: attachment },
@@ -247,6 +250,11 @@ for (const pairedProject of ["project-b", "unknown-project", null] as const) for
           return { status: 202, body: { conversationId: sender.id } };
         },
         observe: async () => {
+          if (delivery === "guest") {
+            expect(await tools.service.callTool("list_tasks", { project: "project-b" })).toMatchObject({
+              ok: false, code: "tool_not_permitted",
+            });
+          }
           const handoff = await tools.service.callTool("send_message_to_orchestrator", send);
           if (pairedProject === "project-b") {
             expect(handoff).toMatchObject({ ok: true, project: "project-b", conversationId: recipient.id, outcome: "queued" });
@@ -265,6 +273,7 @@ for (const pairedProject of ["project-b", "unknown-project", null] as const) for
       } });
       expect(result).toMatchObject({ outcome: "answered", answer: {
         action: "reply", reply_to: delivery === "guest" ? null : "owner-message", text: pairedProject === "project-b" ? accepted : question,
+        ...(delivery === "owner" ? { format: "rich_markdown" } : {}),
       } });
       if (pairedProject !== "project-b") {
         expect(delivered).toEqual([]);

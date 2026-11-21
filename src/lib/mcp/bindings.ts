@@ -45,7 +45,7 @@ import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
-import { liveOwnerRelayConversation, liveOwnerRelayProject, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { liveOwnerRelayConversation, liveOwnerRelayHandoffOnly, liveOwnerRelayProject, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
@@ -8288,6 +8288,11 @@ export function viewerMcpToolPolicy(
   );
   return {
     permit: (tool, args) => {
+      const caller = attributionOf(domainDependencies);
+      if (caller.kind === "agent" && !caller.via && caller.conversationId
+        && liveOwnerRelayHandoffOnly(caller.conversationId) && tool !== "send_message_to_orchestrator") {
+        return { allowed: false, code: "tool_not_permitted", error: "Guest-origin owner relays may use Viewer only for the verified project-seat handoff." };
+      }
       // An admitted agent's read surface is independent of role/seat identity.
       // Resolve authority only where the policy uses it. Bindings still verify
       // their own operation authority and recoverable receipts before dispatch.

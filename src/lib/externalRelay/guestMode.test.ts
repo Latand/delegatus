@@ -145,12 +145,14 @@ const a=process.argv.slice(2);await Bun.stdin.text();require('fs').writeFileSync
     } finally { await server.close(); }
   }, 30_000);
 
-test("service-verified owner on guest delivery enters owner tier with the quoted group request", async () => {
+test("service-verified owner on guest delivery gets a request-local seat handoff", async () => {
   const request = guest();
   const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
   request.input.request_text = "Please pass this issue to the project seat.";
   const quotedText = "The blacklist phrase still leaves matching messages visible.";
   request.input.conversation = [{ ...trigger, text: quotedText }];
+  request.input.conversation.unshift({ ...trigger, id: "guest_history", reply_to: null, text: "PRIVATE_GUEST_HISTORY" });
+  request.input.short_term_memory = "PRIVATE_GUEST_MEMORY";
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const relay = paired(server.origin, true);
   relay.targets[0]!.project = "project-b";
@@ -175,9 +177,48 @@ test("service-verified owner on guest delivery enters owner tier with the quoted
     expect(sentRequest.current).toEqual({ text: quotedText, requestText: request.input.request_text });
     expect(launchPrompt).toContain(quotedText);
     expect(launchPrompt).toContain(request.input.request_text!);
+    expect(launchPrompt).not.toContain("PRIVATE_GUEST_HISTORY");
+    expect(launchPrompt).not.toContain("PRIVATE_GUEST_MEMORY");
+    expect(readConversations()).toEqual([]);
     expect(result).toMatchObject({ outcome: "answered", answer: {
       action: "reply", text: "Sent to the project-b orchestrator.", reply_to: null,
     } });
+  } finally { await server.close(); }
+}, 30_000);
+
+test("guest delivery cannot enter owner tier when the triggering author mismatches the verified requester", async () => {
+  const request = guest();
+  request.input.conversation.find(message => message.id === request.input.respond_to)!.author.key = "unrelated_member";
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const relay = paired(server.origin, true);
+  updateRelayStore(state => ({ ...state, relays: [relay] }));
+  let launches = 0;
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts: {
+      launch: async () => { launches++; throw new Error("mismatched trigger must not launch owner execution"); },
+      observe: async () => ({ state: "ended", finalText: "Unexpected owner execution." }), stop: async () => {}, pollMs: 1,
+    } });
+    expect(launches).toBe(0);
+    expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner ?? false).toBe(false);
+    expect(result).not.toBeNull();
+  } finally { await server.close(); }
+}, 30_000);
+
+test("an ordinary guest requester receives no owner-tier handoff", async () => {
+  const request = guest();
+  request.input.requester!.is_owner = false;
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const relay = paired(server.origin, true);
+  updateRelayStore(state => ({ ...state, relays: [relay] }));
+  let ownerLaunches = 0;
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts: {
+      launch: async () => { ownerLaunches++; throw new Error("a guest requester cannot launch owner execution"); },
+      observe: async () => ({ state: "ended", finalText: "Unexpected owner execution." }), stop: async () => {}, pollMs: 1,
+    } });
+    expect(ownerLaunches).toBe(0);
+    expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner ?? false).toBe(false);
+    expect(result).not.toBeNull();
   } finally { await server.close(); }
 }, 30_000);
 
@@ -417,10 +458,12 @@ fs.writeFileSync(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:
   } finally { clock.mockRestore(); await server.close(); }
 }, 30_000);
 
-for (const ownerTier of [true, false]) test(`Codex Cloud hands guest history photos back to the hosted assistant with ownerTier=${ownerTier}`, async () => {
+for (const ownerTier of [true, false]) test(`Codex Cloud guest history photos ${ownerTier ? "reach the verified handoff" : "return to the hosted assistant"}`, async () => {
   const request = guest(); request.features = ["requester_context", "relay_media_in"];
+  if (ownerTier) request.input.request_text = "Please pass this photo issue to the project seat.";
   const message = request.input.conversation[0]!;
-  message.media = [{ ref: "media_00000000000000000000000000000001", kind: "photo", availability: "ready",
+  message.text = ownerTier ? "Please pass this photo to the fixture project seat; matching messages remain visible." : message.text;
+  message.media = [{ ref: "media_00000000000000000000000000000001", kind: "photo", availability: ownerTier ? "missing" : "ready",
     mime_type: "image/png", byte_size: 77, expires_at: "2099-01-01T00:00:00Z" }];
   const relay = paired("http://127.0.0.1:1", ownerTier);
   relay.targets[0] = { ...relay.targets[0]!, engine: "codex-cloud", model: "gpt-6.1-sol", project: "fixture-project", cloudEnvironmentId: "fixture-environment" };
@@ -433,15 +476,20 @@ for (const ownerTier of [true, false]) test(`Codex Cloud hands guest history pho
   });
   relay.origin = server.origin; relay.api_base = `${server.origin}/v1`;
   updateRelayStore(s => ({ ...s, relays: [relay] }));
-  let cloudCalls = 0;
+  let cloudCalls = 0, localLaunches = 0, localPrompt = "";
   try {
     const claimed = await relayCall<{ request: unknown }>(relay.api_base, "/requests/claim", "POST", relayClaimBody(relay), relay.credential);
     const result = await runClaimedRequest(relay, claimed.body!.request, undefined, { leaseWorker: false,
-      cloudTransport: async () => { cloudCalls++; return JSON.stringify({ action: "reply", text: "Done.", reply_to: null }); } });
-    expect(result).toMatchObject({ outcome: "declined", reason: "handoff",
+      cloudTransport: async () => { cloudCalls++; return JSON.stringify({ action: "reply", text: "Done.", reply_to: null }); },
+      ownerPorts: { launch: async input => { localLaunches++; localPrompt = String(input.prompt); return { status: 202, body: { conversationId: "conversation_cloud_guest_handoff" } }; },
+        observe: async () => ({ state: "ended", finalText: "Sent to the fixture project seat.\nExtra analysis." }), stop: async () => {}, pollMs: 1 } });
+    if (ownerTier) expect(result).toMatchObject({ outcome: "answered", answer: { text: "Sent to the fixture project seat." } });
+    else expect(result).toMatchObject({ outcome: "declined", reason: "handoff",
       detail: "This install cannot inspect guest history photos; the service's own assistant will answer." });
     expect(completions).toEqual([result]);
     expect(cloudCalls).toBe(0);
+    expect(localLaunches).toBe(ownerTier ? 1 : 0);
+    if (ownerTier) expect(localPrompt).toContain("media");
     expect(urls.some(url => url.includes("/media/"))).toBe(false);
   } finally { await server.close(); }
 }, 30_000);

@@ -23,6 +23,12 @@ export function liveOwnerRelayProject(conversationId: string): string | null {
   return liveOwnerRelayRun(conversationId)?.project ?? null;
 }
 
+/** Guest-origin owner turns receive only the request-bound seat handoff. */
+export function liveOwnerRelayHandoffOnly(conversationId: string): boolean {
+  const raw = liveOwnerRelayRun(conversationId)?.run.ownerTurn?.rawRequest;
+  return !!raw && typeof raw === "object" && (raw as { delivery?: unknown }).delivery === "guest";
+}
+
 function liveOwnerRelayRun(conversationId: string): { run: RunRecord; project: string | null } | null {
   try {
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
