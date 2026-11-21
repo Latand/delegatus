@@ -93,6 +93,8 @@ serviceTest("native pre-push resumes only equivalent green files across fresh pr
   const project = path.resolve(import.meta.dir, "..");
   const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-hook-")); roots.push(scratch);
   const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  // Match the production hook parent's admission classification.
+  mkdirSync(path.join(f.dir, "scripts/gate-runner"));
   const origin = path.join(scratch, "origin.git");
   f.git("clone", "--bare", "--shared", ".", origin);
   f.git("remote", "add", "origin", origin);
@@ -142,9 +144,15 @@ test("fixture contract", () => {
 `);
   f.git("config", "core.hooksPath", "/dev/null");
   f.git("add", "."); f.git("commit", "-m", "Independent checkpoint fixtures");
+  let invocation = 0;
   const run = (input = "first") => {
-    const result = spawnSync("bash", [".githooks/pre-push"], {
-      cwd: f.dir, env: { ...env, CHECKPOINT_STEP_INPUT: input }, encoding: "utf8", timeout: 30_000,
+    const pool = path.join(scratch, `admission-${++invocation}`);
+    mkdirSync(pool);
+    const admissionFile = path.join(pool, "check-admission.sqlite");
+    const result = spawnSync("bash", ["scripts/gate-slot.sh", "bash", ".githooks/pre-push"], {
+      cwd: f.dir, encoding: "utf8", timeout: 30_000,
+      env: { ...env, CHECKPOINT_STEP_INPUT: input, LLV_GATE_LOCK_DIR: pool,
+        LLV_CHECK_ADMISSION_FILE: admissionFile, LLV_GATE_CHECK_ADMISSION_FILE: admissionFile },
     });
     const output = result.stdout + result.stderr;
     expect(result.status, output).toBe(1);
@@ -354,6 +362,7 @@ serviceTest("head checkpoints invalidate installed dependency bytes and the merg
   const f = fixture();
   const dependency = path.join(f.repo, "node_modules", "fixture", "index.js");
   mkdirSync(path.dirname(dependency), { recursive: true });
+  mkdirSync(path.join(f.repo, ".git/info"), { recursive: true });
   writeFileSync(path.join(f.repo, ".git/info/exclude"), "node_modules/\n");
   writeFileSync(dependency, "export default 1;\n");
   writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b"));
