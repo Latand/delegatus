@@ -1,3 +1,6 @@
+import type { createToolResultMedia } from "./toolResultMedia";
+import type { LocalAttachment } from "./answerV2";
+import type { OwnerMediaSource } from "./attachments";
 import { relayAnswerSchema } from "./protocol";
 export { relayAnswerSchema } from "./protocol";
 import { ExternalRelayError } from "./client";
@@ -7,7 +10,7 @@ import { stageOwnerAttachments, removeStaged, type StagedAttachment } from "./at
 import type { ExternalRelayRequest, RelayUrlButton, RelayMention } from "./protocol";
 import { scrubOwnerOutput } from "./ownerOutput";
 export type OwnerAnswerParts = { text?:string; format:"plain"|"rich_markdown"; buttons:RelayUrlButton[][]; mentions?:RelayMention[]; attachments:StagedAttachment[] };
-type Entry = {relayId:string;request:ExternalRelayRequest;runDir:string;credentials:readonly string[];authorize:()=>boolean;signal?:AbortSignal;open:boolean;sequence:number;parts:OwnerAnswerParts;drops:AnswerDrop[]};
+type Entry = {relayId:string;request:ExternalRelayRequest;runDir:string;credentials:readonly string[];authorize:()=>boolean;signal?:AbortSignal;media?:ReturnType<typeof createToolResultMedia>;open:boolean;sequence:number;parts:OwnerAnswerParts;drops:AnswerDrop[]};
 const shared=globalThis as typeof globalThis & {__llvRelayOwnerAnswers?:Map<string,Entry>};
 const entries=shared.__llvRelayOwnerAnswers??=new Map<string,Entry>();
 export function ownerAnswerDrops(requestId:string) { return entries.get(requestId)?.drops ?? []; }
@@ -16,9 +19,9 @@ export function sealOwnerAnswer(requestId:string) {
   if (entry) entry.open=false;
   return entry?.parts;
 }
-export function openOwnerAnswer(relayId:string,request:ExternalRelayRequest,runDir:string,credentials:readonly string[],authorize:()=>boolean,signal?:AbortSignal) {
+export function openOwnerAnswer(relayId:string,request:ExternalRelayRequest,runDir:string,credentials:readonly string[],authorize:()=>boolean,signal?:AbortSignal,media?:ReturnType<typeof createToolResultMedia>) {
   if (!answerCapabilities(request, "").rich || entries.has(request.request_id)) throw new ExternalRelayError("relay_answer_unavailable");
-  const entry:Entry={relayId,request,runDir,credentials,authorize,...(signal?{signal}:{}),open:true,sequence:0,parts:{format:"rich_markdown",buttons:[],attachments:[]},drops:[]};
+  const entry:Entry={relayId,request,runDir,credentials,authorize,media,...(signal?{signal}:{}),open:true,sequence:0,parts:{format:"rich_markdown",buttons:[],attachments:[]},drops:[]};
   entries.set(request.request_id,entry);
   return {parts:()=>entry.parts, drops:entry.drops,
     close:()=>{entry.open=false;},
@@ -50,8 +53,23 @@ export async function relayAnswerOp(conversationId:string,args:unknown) {
     if(scrub(button.url)!==button.url || !scrub(button.text).trim()) throw new ExternalRelayError("button_invalid");
     button.text=scrub(button.text);
   }
-  const refs=(value.attachments??[]).map(ref=>({...ref,caption:scrub(ref.caption??"")}));
-  const files=await stageOwnerAttachments(refs,entry.runDir,caps,drops,undefined,undefined,entry.signal);
+  const mediaSources: OwnerMediaSource[] = [];
+  const refs: LocalAttachment[] = (value.attachments??[]).map(ref=>{
+    const caption=scrub(ref.caption??"");
+    if(ref.media_ref !== undefined) {
+      if(!caps.media) throw new ExternalRelayError("media_not_negotiated");
+      const file=entry.media?.attachment(ref.media_ref);
+      if(!file?.snapshot) throw new ExternalRelayError("media_ref_unavailable");
+      mediaSources.push({path:file.path,...file.snapshot});
+      return {...ref,path:file.path,caption};
+    }
+    return {...ref,path:ref.path!,caption};
+  });
+  const files=await stageOwnerAttachments(refs,entry.runDir,caps,drops,undefined,undefined,entry.signal,mediaSources);
+  try {
+    // Lease, expiry and ref identity are rechecked after the worker await.
+    for(const ref of value.attachments??[]) if(ref.media_ref) entry.media?.attachment(ref.media_ref);
+  } catch(error) { await removeStaged(files); throw error; }
   if(!available() || sequence!==entry.sequence) {await removeStaged(files);return null;}
   const old=entry.parts.attachments;
   entry.parts={...(value.text!==undefined ? {text:value.text} : {}),format,buttons,...(value.mentions ? {mentions:value.mentions} : {}),attachments:files}; entry.drops.push(...drops);

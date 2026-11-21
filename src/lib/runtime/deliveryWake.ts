@@ -28,3 +28,24 @@ export class DeliveryWake {
 export function cancelDeliveryWakeForKick(wake: DeliveryWake, freshAdmission: boolean, passCanStart: boolean): void {
   if (freshAdmission || passCanStart) wake.cancel();
 }
+
+/** Map iteration retains its position without copying or sorting the fleet.
+ * A controller owns one iterator; retiring that controller drops the cursor.
+ * Each call probes at most limit hosts, including skipped/cooling hosts. */
+export class DeliveryHostPage<K, V> {
+  private iterator: MapIterator<[K, V]> | null = null;
+  constructor(private readonly hosts: Map<K, V>, private readonly limit = 8) {}
+  get pending(): boolean { return this.iterator !== null; }
+  reset(): void { this.iterator = null; }
+  next(): Array<[K, V]> {
+    this.iterator ??= this.hosts.entries();
+    const page: Array<[K, V]> = [];
+    for (let count = 0; count < this.limit; count++) {
+      const item = this.iterator.next();
+      if (item.done) { this.iterator = null; break; }
+      const [key, host] = item.value;
+      if (this.hosts.get(key) === host) page.push([key, host]);
+    }
+    return page;
+  }
+}

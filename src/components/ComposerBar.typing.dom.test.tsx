@@ -200,3 +200,16 @@ test("a composer portalled into the floating window marks that window's document
   floating.focus();
   expect(marked(pipDocument)).toBe(false);
 });
+
+test("ordinary edits do not replace the textarea's default text or invalidate the surrounding seat", () => {
+  const { field } = mount("base");
+  const observer = new field.ownerDocument.defaultView!.MutationObserver(() => {});
+  observer.observe(field, { childList: true, characterData: true, subtree: true });
+  try {
+    type(field, "base one");
+    type(field, "base one two");
+    expect(field.value).toBe("base one two");
+    expect(field.defaultValue).toBe("");
+    expect(observer.takeRecords()).toHaveLength(0);
+  } finally { observer.disconnect(); }
+});

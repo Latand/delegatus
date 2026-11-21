@@ -285,3 +285,21 @@ test.each(["wrong-id", "invalid-code", "invalid-message"])("a %s JSON-RPC error 
   const service = await createProductionViewerMcpService(false, true);
   expect(await service.callTool("agent_fleet", {})).toMatchObject({ ok: false, error: expect.stringContaining("malformed response") });
 });
+
+test.each(["too-many", "oversized-image", "wrong-mime", "invalid-base64", "oversized-frame", "private-error"])("relay image forwarding refuses %s without disclosing the response", async shape => {
+  const privateRef = `media_${"d".repeat(32)}`;
+  fixture(async request => {
+    const body = await request.json() as { id: string };
+    if (shape === "private-error") return Response.json({ jsonrpc: "2.0", id: body.id, error: { code: -32603, message: privateRef } });
+    const image = { type: "image", mimeType: shape === "wrong-mime" ? "text/plain" : "image/png",
+      data: shape === "invalid-base64" ? privateRef : Buffer.alloc(shape === "oversized-image" ? 1024 * 1024 + 1 : 1).toString("base64") };
+    return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [
+      { type: "text", text: JSON.stringify({ ok: true, toolName: "relay_service_tools", privateRef,
+        ...(shape === "oversized-frame" ? { padding: "x".repeat(14 * 1024 * 1024) } : {}) }) },
+      ...Array.from({ length: shape === "too-many" ? 11 : 1 }, () => image),
+    ] } });
+  });
+  const result = await (await createProductionViewerMcpService(false, true)).callTool("relay_service_tools", { op: "list" });
+  expect(result.ok).toBe(false);
+  expect(JSON.stringify(result)).not.toContain(privateRef);
+});

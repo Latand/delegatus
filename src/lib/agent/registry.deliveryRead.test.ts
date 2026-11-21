@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, setSystemTime, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry } from "./registry";
@@ -104,6 +104,23 @@ test("admission ordering reads its conversation's aliases without loading unrela
     registry.close();
     seedRegistry.close();
   }
+});
+
+test("admission order stays monotonic after terminal reservation rows are compacted", () => {
+  const { registry: seedRegistry, conversation, delivery } = seed("admission-after-compaction");
+  const state = seedRegistry.snapshot();
+  state.conversations[conversation.id]!.incomingDeliveryHealth = {
+    failures: 1, uncertain: 0, firstFailedAt: new Date().toISOString(), lastOutcomeAt: new Date().toISOString(),
+    lastDeliveredAt: new Date().toISOString(), cause: "fixture refusal", lastOutcomeAdmissionSeq: 11,
+    lastDeliveredAdmissionSeq: 12, episodeAdmissionSeq: 11,
+  };
+  delete state.heldDeliveries[delivery.id];
+  delete state.deliveryOperationOwners[delivery.command.operationId];
+  fs.writeFileSync(seedRegistry.filename, JSON.stringify(state));
+  const registry = new AgentRegistry(seedRegistry.filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    expect(registry.holdDelivery(conversation.id, "after compaction", "after-compaction").admissionSeq).toBe(13);
+  } finally { registry.close(); seedRegistry.close(); }
 });
 
 test("conversation upserts retain overlapping generation and continuity paths", () => {
@@ -238,3 +255,194 @@ test("opening an existing termination projection upgrades connected conversation
     expect(owner()).toBeUndefined();
   } finally { writer.close(); store.close(); registry.close(); }
 });
+
+test.each(["off", "sqlite"] as const)("recipient failure health survives restart and observes terminal corrections (%s)", sqliteMode => {
+  const at = "2026-11-01T12:00:00.000Z";
+  setSystemTime(new Date(at));
+  const filename = path.join(root, `incoming-${sqliteMode}.json`);
+  let reads = 0;
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode, onSqliteRowPayloadRead: (_collection, count) => { reads += count; } });
+  try {
+    const conversation = registry.ensureConversation("claude", "/sessions/incoming.jsonl", null);
+    expect(registry.incomingDeliveryHealth(conversation.id)).toBeNull();
+    const fail = (key: string, disposition: "lost" | "unverified" = "lost") => {
+      const delivery = registry.holdDelivery(conversation.id, "fixture request", key);
+      registry.recordDeliveryOutcome(delivery.id, "failed", "claude-native-broker/admission: native-evidence-uncertain", disposition);
+      return delivery;
+    };
+    const first = fail("incoming-first");
+    registry.recordDeliveryOutcome(first.id, "failed", "same terminal replay", "lost");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({
+      failures: 1, firstFailedAt: at, penultimateFailedAt: null, lastFailedAt: at,
+    });
+    fail("incoming-second");
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode, onSqliteRowPayloadRead: (_collection, count) => { reads += count; } });
+    const summary = registry.incomingDeliveryHealth(conversation.id);
+    expect(summary).toMatchObject({
+      failures: 2, firstFailedAt: at, penultimateFailedAt: at, lastFailedAt: at, lastDeliveredAt: null,
+    });
+    expect(normalizeRegistry(registry.snapshot()).conversations[conversation.id]!.incomingDeliveryHealth).toEqual(summary!);
+    const clearsFirst = registry.holdDelivery(conversation.id, "fixture clears first episode", "incoming-clear-first");
+    registry.recordDeliveryOutcome(clearsFirst.id, "delivered", null, "delivered");
+    expect(registry.incomingDeliveryHealth(conversation.id)?.lastDeliveredEpisodeId).toBe(summary!.episodeId);
+    const uncertain = fail("incoming-unverified", "unverified");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 0, firstFailedAt: null });
+    const afterUnknown = fail("incoming-after-unknown");
+    expect(registry.incomingDeliveryHealth(conversation.id)?.failures).toBe(1);
+    registry.recordDeliveryOutcomeForOperation(conversation.id, uncertain.command.operationId, "delivered", null, "delivered");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 1, episodeId: afterUnknown.command.operationId,
+      lastDeliveredEpisodeId: summary!.episodeId });
+    const clearsCurrent = registry.holdDelivery(conversation.id, "fixture current episode delivery", "incoming-clear-current");
+    registry.recordDeliveryOutcome(clearsCurrent.id, "delivered", null, "delivered");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 0, firstFailedAt: null,
+      lastDeliveredEpisodeId: afterUnknown.command.operationId });
+    // Populate retained unrelated admissions, then measure only the hot read.
+    const other = registry.ensureConversation("claude", "/sessions/unrelated.jsonl", null);
+    for (let i = 0; i < 120; i++) {
+      const held = registry.holdDelivery(other.id, "fixture unrelated", `unrelated-${i}`);
+      registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+    }
+    reads = 0;
+    expect(registry.incomingDeliveryHealth(conversation.id)?.failures).toBe(0);
+    if (sqliteMode === "sqlite") expect(reads).toBeLessThanOrEqual(4);
+    const legacy = registry.snapshot(); delete legacy.conversations[conversation.id]!.incomingDeliveryHealth;
+    expect(normalizeRegistry(legacy).conversations[conversation.id]!.incomingDeliveryHealth).toBeUndefined();
+    const nextEpisode = fail("new-episode");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ episodeId: nextEpisode.command.operationId,
+      lastDeliveredEpisodeId: afterUnknown.command.operationId });
+    expect(registry.incomingDeliveryHealth(conversation.id)?.episodeId).not.toBe(summary!.episodeId);
+    const long = registry.holdDelivery(other.id, "fixture long identity", "incoming-long", "text", [], null,
+      { operationId: "long-operation-" + "x".repeat(500) });
+    registry.recordDeliveryOutcome(long.id, "failed", "fixture terminal refusal", "lost");
+    const bounded = registry.incomingDeliveryHealth(other.id)!;
+    expect(bounded).toMatchObject({ failures: 1, firstFailedAt: at });
+    expect(bounded.episodeId!.length).toBeLessThanOrEqual(200);
+    expect(bounded.lastOperationId).toBeUndefined();
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    expect(registry.incomingDeliveryHealth(other.id)).toEqual(bounded);
+    expect(registry.incomingDeliveryHealth(conversation.id)?.lastDeliveredEpisodeId).toBe(afterUnknown.command.operationId);
+  } finally { registry.close(); setSystemTime(); }
+}, 60_000);
+
+test("a confirmed direct admission closes its prior failure episode and sequences the next one", () => {
+  setSystemTime(new Date("2026-11-01T12:00:00.000Z"));
+  const filename = path.join(root, "incoming-direct-admission.json");
+  const registry = new AgentRegistry(filename);
+  try {
+    const conversation = registry.ensureConversation("claude", "/sessions/incoming-direct.jsonl", null);
+    const fail = (key: string) => {
+      const row = registry.holdDelivery(conversation.id, "fixture request", key);
+      registry.recordDeliveryOutcome(row.id, "failed", "fixture refusal", "lost");
+    };
+    fail("direct-episode-first"); fail("direct-episode-second");
+    const before = registry.incomingDeliveryHealth(conversation.id)!;
+    const owner = registry.recordDirectAdmission({ handOff: { conversationId: conversation.id, clientMessageId: "direct-success",
+      command: { operationId: "direct-success", kind: "send", policy: "queue" }, text: "direct success", contentDigest: null,
+      evidenceText: "direct success", evidenceImageCount: 0 } })!;
+    expect(owner.admissionSeq).toBeGreaterThan(before.lastOutcomeAdmissionSeq!);
+    registry.settleDirectAdmission(owner.command.operationId, "delivered", null, "delivered");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: 0, firstFailedAt: null,
+      lastDeliveredEpisodeId: before.episodeId, lastDeliveredAdmissionSeq: owner.admissionSeq });
+    fail("direct-episode-next-first"); fail("direct-episode-next-second");
+    const nextEpisode = registry.incomingDeliveryHealth(conversation.id)!;
+    expect(nextEpisode.episodeId).not.toBe(before.episodeId);
+    expect(nextEpisode).toMatchObject({ failures: 2, episodeAdmissionSeq: 4 });
+  } finally { registry.close(); setSystemTime(); }
+});
+
+test("review probe: direct reservations advance order before either settles", () => {
+  const registry = new AgentRegistry(path.join(root, "review-direct-order.json"));
+  try {
+    const conversation = registry.ensureConversation("claude", "/sessions/review-direct.jsonl", null);
+    const direct = (id: string) => registry.recordDirectAdmission({ handOff: {
+      conversationId: conversation.id, clientMessageId: id,
+      command: { operationId: id, kind: "send", policy: "queue" }, text: "fixture request", contentDigest: null, evidenceText: "fixture request", evidenceImageCount: 0 } })!;
+    const older = direct("review-older");
+    const newer = direct("review-newer");
+    registry.settleDirectAdmission(newer.command.operationId, "failed", "fixture refusal", "lost");
+    registry.settleDirectAdmission(older.command.operationId, "delivered", null, "delivered");
+    expect(newer.admissionSeq).toBeGreaterThan(older.admissionSeq!);
+    expect(registry.incomingDeliveryHealth(conversation.id)?.failures).toBe(1);
+  } finally { registry.close(); }
+});
+
+test.each(["off", "sqlite"] as const)("overlapping held, direct and retry admissions retain order across restart and compaction (%s)", sqliteMode => {
+  setSystemTime(new Date("2026-11-01T12:00:00.000Z"));
+  const filename = path.join(root, `overlapping-order-${sqliteMode}.json`);
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+  try {
+    const conversation = registry.ensureConversation("claude", "/sessions/overlapping.jsonl", null);
+    const direct = (id: string) => registry.recordDirectAdmission({ handOff: {
+      conversationId: conversation.id, clientMessageId: id,
+      command: { operationId: id, kind: "send", policy: "queue" }, text: "fixture request", contentDigest: null,
+      evidenceText: "fixture request", evidenceImageCount: 0 } })!;
+    const older = direct("overlapping-older");
+    const held = registry.holdDelivery(conversation.id, "held request", "overlapping-held");
+    const retry = registry.recordDirectAdmission({ operationId: "overlapping-retry", retryOf: older.command.operationId })!;
+    expect([older.admissionSeq, held.admissionSeq, retry.admissionSeq]).toEqual([1, 2, 3]);
+    const pending = direct("overlapping-pending");
+    expect(pending.admissionSeq).toBe(4);
+    registry.recordDeliveryOutcome(held.id, "failed", "fixture refusal", "lost");
+    registry.settleDirectAdmission(retry.command.operationId, "failed", "fixture refusal", "lost");
+    // The real terminal-owner retention limit is 200. Pending owners survive it.
+    for (let index = 0; index < 202; index++) {
+      setSystemTime(new Date(Date.parse("2026-11-01T12:00:00.000Z") + index + 1));
+      const row = direct(`overlapping-compact-${index}`);
+      registry.settleDirectAdmission(row.command.operationId, "failed", "fixture refusal", "lost");
+    }
+    registry.compactDeliveryReservations();
+    expect(registry.deliverySnapshotForOperation(retry.command.operationId).deliveryOperationOwners[retry.command.operationId]).toBeUndefined();
+    const newer = direct("overlapping-newer");
+    expect(newer.admissionSeq).toBe(207);
+    registry.settleDirectAdmission(newer.command.operationId, "failed", "newer refusal", "lost");
+    const before = registry.incomingDeliveryHealth(conversation.id)!;
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    registry.settleDirectAdmission(older.command.operationId, "delivered", null, "delivered");
+    registry.settleDirectAdmission(pending.command.operationId, "delivered", null, "delivered");
+    expect(registry.incomingDeliveryHealth(conversation.id)).toMatchObject({ failures: before.failures,
+      episodeId: before.episodeId, lastOutcomeAdmissionSeq: newer.admissionSeq, lastDeliveredAdmissionSeq: pending.admissionSeq });
+    const next = registry.holdDelivery(conversation.id, "next request", "overlapping-after-restart");
+    expect(next.admissionSeq).toBe(208);
+    expect(normalizeRegistry(registry.snapshot()).conversations[conversation.id]?.deliveryAdmissionSeq).toBe(208);
+    registry.close();
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+    expect(direct("overlapping-final").admissionSeq).toBe(209);
+  } finally { registry.close(); setSystemTime(); }
+}, 60_000);
+
+
+for (const sqliteMode of ["off", "sqlite"] as const) {
+  test(`targeted activity keeps undelivered evidence through aliases and skips settled command history (${sqliteMode})`, () => {
+    const { registry: legacy, conversation, delivery } = seed(`targeted-activity-${sqliteMode}`);
+    const file = legacy.snapshot();
+    const alias = "conversation_activity_before_move";
+    file.conversationAliases[alias] = conversation.id;
+    file.heldDeliveries[delivery.id]!.conversationId = alias;
+    file.heldDeliveries[delivery.id]!.state = "failed";
+    for (let i = 0; i < 32; i++) {
+      const id = `settled-history-${i}`;
+      file.heldDeliveries[id] = { ...delivery, id, command: { ...delivery.command, operationId: id },
+        conversationId: alias, state: "delivered", deliveredAt: delivery.createdAt };
+    }
+    fs.writeFileSync(legacy.filename, JSON.stringify(file));
+    const registry = new AgentRegistry(legacy.filename, undefined, undefined, { sqliteMode });
+    try {
+      if (sqliteMode === "sqlite") registry.archiveInactiveRows(256);
+      const full = registry.livenessConversationSnapshot(alias);
+      const activity = registry.targetedActivitySnapshot(alias);
+      expect(activity.conversations).toEqual(full.conversations);
+      expect(activity.entries).toEqual(full.entries);
+      expect(activity.receipts).toEqual(full.receipts);
+      expect(activity.conversationAliases).toEqual(full.conversationAliases);
+      expect(Object.keys(full.heldDeliveries)).toHaveLength(33);
+      expect(Object.keys(activity.heldDeliveries)).toEqual([delivery.id]);
+      expect(activity.heldDeliveries[delivery.id]?.state).toBe("failed");
+      registry.recordDeliveryOutcome(delivery.id, "delivered");
+      expect(Object.keys(registry.targetedActivitySnapshot(alias).heldDeliveries)).toHaveLength(0);
+      expect(Object.keys(registry.livenessConversationSnapshot(alias).heldDeliveries)).toHaveLength(33);
+    } finally { registry.close(); legacy.close(); }
+  });
+}

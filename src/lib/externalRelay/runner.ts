@@ -20,12 +20,12 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline, remainingMs } from "./deadline";
-import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
+import { ownerRelayAuthorized, liveOwnerRelayRequest, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
 import { ownerRequestTimeoutText } from "./requestTimeout";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
-import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, prepareOwnerPrompt, ownerAnswer, ownerFailureAnswer, ownerFailureCustody, type OwnerRunPorts } from "./ownerRun";
+import { runOwnerAgent, ownerContinuationPrompt, prepareOwnerPrompt, ownerAnswer, ownerFailureAnswer, ownerFailureCustody, type OwnerRunPorts } from "./ownerRun";
 import { ownerTurnDiagnostic, type OwnerTurnDiagnostic } from "./diagnostic";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
@@ -756,7 +756,7 @@ export async function runClaimedRequest(
         preResolvedConversation = await lookupChainConversationAsync(relay, target, request, authority!);
       }
     }
-    const selectAccount = () => prototype || usingCloud ? null : accountManager.resolveHeadlessSpawn(target.engine!,
+    const selectAccount = () => prototype || usingCloud || owner && (conversation ?? preResolvedConversation)?.conversationId ? null : accountManager.resolveHeadlessSpawn(target.engine!,
       conversation?.accountId ?? preResolvedConversation?.accountId ?? null,
       [], target.project, target.model);
     let selection = selectAccount();
@@ -903,38 +903,8 @@ export async function runClaimedRequest(
         return await finish(declined(leaseId, "handoff", null, "This install cannot inspect history photos; the service's own assistant will answer."));
     }
     const hydrated = recovery ? { request, guidance: [] } : await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
-    if (!owner) toolMedia = createToolResultMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
-      authorize: () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); } });
     request.input = hydrated.request.input;
     callAbort.signal.throwIfAborted();
-    if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
-      async () => {
-        const registry = cloud && localOwnerConversationId
-          ? await (await import("@/lib/agent/registry")).prepareAgentRegistry() : null;
-        if (!await ownerRelayAuthorizedAsync(relay.id, target.id, requestId)) return false;
-        if (registry && localOwnerConversationId) {
-          // Binding can precede continuation admission. A foreign conversation
-          // must not borrow this request's tools while that admission awaits.
-          const generation = registry.conversation(localOwnerConversationId as `conversation_${string}`)?.generations.at(-1);
-          if (!generation?.launchProfile?.cwd) return false;
-          try { cloudOwnerDirectory(target.project, generation.launchProfile.cwd); } catch { return false; }
-        }
-        return true;
-      });
-    if (ownerTools && usingCloud) loop = ownerTools.loop;
-    else if (!owner && request.delivery !== "guest" && (callableTools(request).length || profile.pageRead)) loop = createToolLoop(relay, request, lease, { ...runtime, pageRead: profile.pageRead, seedMediaRefs: toolMedia?.seedRefs }, (tool, done, failed) => {
-      if (!steps && request.answer.progress === "notes") {
-        newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
-          status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
-        noteRelayProgress(relay.id, target.id, newestProgress);
-        transport?.progress(newestProgress);
-      }
-    }, steps ? pending => {
-      pendingServiceTools += pending ? 1 : -1;
-      // Service tools never read the Delegatus board; their names stay local.
-      steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
-    } : undefined);
-    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, ownerCredentials, () => (!leaseUnavailable || ownerExecution) && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal);
     let result: EphemeralAgentResult | null = null;
     let completion: ExternalRelayDecision | null = null;
     const executionExpired = cloud && owner && !prototype ? new Promise<"expired">(resolve => {
@@ -947,7 +917,6 @@ export async function runClaimedRequest(
       if (executionExpired && Date.now() >= executionDeadline) return await finishOwnerTimeout(started);
       if (!ownerExecution && Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
       let providerOpened = false;
-      const final = rounds === RELAY_TOOL_ROUNDS || !!loop && loop.callsLeft() === 0;
       runFinished = false;
       let previousImages = new Set<string>();
       if (caps?.generate && conversation?.sessionId) {
@@ -960,10 +929,11 @@ export async function runClaimedRequest(
       if (rounds === 1 && hasInboundMedia(request)) {
         if (!await lease.ack()) return null;
         await inbound?.dispose();
-        inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at, skipRejected: true,
+        inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at), skipRejected: true,
           ...(conversation && request.delivery !== "guest" ? { seenMessageIds: new Set(conversation.seen) } : {}),
           authorize: () => { if (leaseUnavailable || releaseRequested || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new ExternalRelayError("lease_lost", 409); } });
         callAbort.signal.throwIfAborted();
+        if (toolMedia) toolMedia.replaceInbound(inbound);
         // Rejected originals must not remain seed candidates or contribute a
         // stale extraction to the text answer.
         const refused = new Map(inbound.skipped.map(item => [item.ref, item.reason]));
@@ -985,6 +955,39 @@ export async function runClaimedRequest(
             answer: { action: "reply", text: notice.slice(0, request.answer.max_chars), reply_to: request.input.respond_to, format: "plain" } });
         }
       }
+      if (rounds === 1 && !toolMedia) {
+        toolMedia = createToolResultMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at),
+          authorize: () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); } }, inbound ?? undefined);
+        if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
+          async () => {
+            const registry = cloud && localOwnerConversationId
+              ? await (await import("@/lib/agent/registry")).prepareAgentRegistry() : null;
+            if (!await ownerRelayAuthorizedAsync(relay.id, target.id, requestId)) return false;
+            if (registry && localOwnerConversationId) {
+              // Binding can precede continuation admission. A foreign conversation
+              // must not borrow this request's tools while that admission awaits.
+              const generation = registry.conversation(localOwnerConversationId as `conversation_${string}`)?.generations.at(-1);
+              if (!generation?.launchProfile?.cwd) return false;
+              try { cloudOwnerDirectory(target.project, generation.launchProfile.cwd); } catch { return false; }
+            }
+            return true;
+          }, toolMedia);
+        if (ownerTools && usingCloud) loop = ownerTools.loop;
+        else if (!owner && request.delivery !== "guest" && (callableTools(request).length || profile.pageRead)) loop = createToolLoop(relay, request, lease, { ...runtime, pageRead: profile.pageRead, seedMediaRefs: toolMedia?.seedRefs, seedRefusal: toolMedia?.seedRefusal }, (tool, done, failed) => {
+          if (!steps && request.answer.progress === "notes") {
+            newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
+              status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
+            noteRelayProgress(relay.id, target.id, newestProgress);
+            transport?.progress(newestProgress);
+          }
+        }, steps ? pending => {
+          pendingServiceTools += pending ? 1 : -1;
+          // Service tools never read the Delegatus board; their names stay local.
+          steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
+        } : undefined);
+        if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, ownerCredentials, () => (!leaseUnavailable || ownerExecution) && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal,toolMedia ?? undefined);
+      }
+      const final = rounds === RELAY_TOOL_ROUNDS || !!loop && loop.callsLeft() === 0;
       try {
         const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent, pageRead: !owner && profile.pageRead }, target.engine) : answerPrompt(request, target.engine);
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
@@ -1049,6 +1052,7 @@ export async function runClaimedRequest(
               : prepareOwnerPrompt(request, owner, ownerTarget.hardCapMinutes, fallbackAdditions);
             turn = preparedOwner;
           }
+          const continuing = !!conversation?.conversationId;
           return prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
             if (leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked");
           }, { telegramUserId: relay.owner.namespace === "telegram" ? relay.owner.id : undefined }) : owner ? runOwnerAgent({
@@ -1060,7 +1064,7 @@ export async function runClaimedRequest(
             preparedPrompt: preparedOwner!,
             contextDirectory: localRunDir,
             onPromptBytes: bytes => { if (chain) chain = { ...chain, promptBytes: chain.promptBytes + bytes - Buffer.byteLength(persistentPrompt) }; },
-            request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: selectedAccount().accountId,
+            request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: conversation?.conversationId ? null : selectedAccount().accountId,
             hardCapMs: Math.min(cloud ? Math.max(0, executionDeadline - Date.now()) : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
             onConversation: async (conversationId, initialPrompt) => {
               localOwnerConversationId = conversationId;
@@ -1074,7 +1078,7 @@ export async function runClaimedRequest(
                 await releaseConversationAsync(conversation.id, patch, ownerRelayStoreDeadline(), requestId);
                 if (cursor) Object.assign(conversation, patch);
               }
-              ownerTools?.bindConversation(conversationId);
+              ownerTools?.bindConversation(conversationId, continuing ? () => liveOwnerRelayRequest(conversationId)?.requestId === requestId : undefined);
               recorder?.bindConversation(conversationId);
             },
             ...(steps ? { onProgress: steps.observe } : {}),
@@ -1111,6 +1115,7 @@ export async function runClaimedRequest(
         const pendingRun = usingCloud && !cloudFailed && !prototype ? runCloudRelay({
           ["prompt"]: agentPrompt,
           environmentId: cloudEnvironment(configuredTarget!, !!owner) ?? "",
+          model: target.model,
           privateContext: request.delivery === "guest",
           schema, effort: target.effort, fullAccess: !!owner, timeoutMs: Math.min(owner ? Math.max(0, executionDeadline - Date.now()) : remainingMs(deadline), target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity),
           transport: async input => {
@@ -1180,7 +1185,7 @@ export async function runClaimedRequest(
       if (!launchedRun) throw new Error("external relay launch unavailable");
       // Record launched children and authenticated owner controls. The profile
       // identifies prototype decisions that used no agent or account capacity.
-      if ((launchedRun.pid || owner || usingCloud) && !recorder?.begun) recorder?.begin(configuredTarget!.engine!, cloud ? "gpt-6.1-sol" : target.model, owner ? { ...profile, owner: true, ...(prototype ? { prototype: prototype.round.id } : {}) } : profile);
+      if ((launchedRun.pid || owner || usingCloud) && !recorder?.begun) recorder?.begin(configuredTarget!.engine!, target.model, owner ? { ...profile, owner: true, ...(prototype ? { prototype: prototype.round.id } : {}) } : profile);
       await changeRunAsync(requestId, (current) => ({
         ...current,
         childPid: launchedRun.pid,
@@ -1211,30 +1216,6 @@ export async function runClaimedRequest(
           requestTimer.unref();
         }) : null;
       try { result = await (expired ? Promise.race([launchedRun.done, expired]) : launchedRun.done); }
-      catch (error) {
-        if (!(error instanceof OwnerContinuationRefused) || !conversation || !owner) throw error;
-        run = null;
-        if (error.reason === "unavailable") {
-          if (conversation.conversationId) ownerTools?.unbindConversation(conversation.conversationId);
-          Object.assign(conversation, { conversationId: null, seen: [], staticDigest: null });
-          await releaseConversationAsync(conversation.id, { conversationId: null, seen: [], staticDigest: null, state: "running", runningRequestId: requestId }, ownerRelayStoreDeadline(), requestId);
-          await changeRunAsync(requestId, current => ({ ...current, conversationId: undefined,
-            ownerTurn: { ...current.ownerTurn!, continuation: undefined, admissionComplete: false } }), ownerRelayStoreDeadline());
-        } else {
-          admissionHeld = true;
-          await releaseAdmission();
-          enterRelayHold({ requestId, relayId: relay.id, targetId: target.id, cause: "chat", deadline,
-            release: () => { releaseRequested = true; wakeHold?.(); return released; } });
-          await new Promise<void>(resolve => {
-            const timer = setTimeout(resolve, Math.max(0, Math.min(1000, deadline.declineAt - Date.now())));
-            wakeHold = () => { clearTimeout(timer); resolve(); };
-          });
-          wakeHold = null;
-          if (Date.now() >= deadline.declineAt) return await finish(declined(leaseId, "busy", null, "chat busy"));
-          if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
-        }
-        rounds--; continue;
-      }
       finally { if (requestTimer) clearTimeout(requestTimer); }
       if (owner && !prototype && (cloud || result.status === "timeout") && Date.now() >= executionDeadline) return await finishOwnerTimeout(started);
       if (!usingCloud || cloudFailed || result.status !== "done") ownerParts?.close();

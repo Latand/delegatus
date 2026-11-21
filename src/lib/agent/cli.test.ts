@@ -993,3 +993,17 @@ for (const engine of ["claude", "codex"] as const) test(`${engine} terminal boun
     if (previousBinary === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previousBinary;
   }
 });
+
+for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+  test(`${model} preserves all supported efforts in fresh and resumed Codex commands`, () => {
+    for (const effort of ["low", "medium", "high", "xhigh", "max", "ultra"]) {
+      const fresh = freshSpecFor("codex", SANDBOX, { model, effort });
+      expect(fresh.command).toContain(`model_reasoning_effort=${effort}`);
+      expect(fresh.launchProfile).toMatchObject({ model, effort });
+      const sessionId = ["11111111", "1111", "4111", "8111", "111111111111"].join("-");
+      const resumed = resumeSpecForSession("codex", sessionId, SANDBOX, SANDBOX, fresh.launchProfile!)!;
+      expect(resumed.command).toContain(`model_reasoning_effort=${effort}`);
+      expect(resumed.launchProfile).toMatchObject({ model, effort });
+    }
+  });
+}

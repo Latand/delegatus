@@ -26,7 +26,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "memory.curation-authority"
-  | "recorded-check.observe" | "pipelines.retirement-evidence" | "pipelines.retirement-check" | "pipelines.prior-writer-stop" | "pipelines.evidence" | "pipelines.get" | "pipelines.laneChanges" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
+  | "recorded-check.observe" | "pipelines.retirement-evidence" | "pipelines.retirement-check" | "pipelines.prior-writer-stop" | "pipelines.evidence" | "pipelines.get" | "pipelines.laneChanges" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-quota" | "controller.account-credit-guard" | "account-credit-guard.store"
   | "runtime-journal.maintenance"
   | "orchestrator.deploy-attribution" | "orchestrator.deploy-attribution.write"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
@@ -45,7 +45,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "codex.protocol-admission" | "codex.cli-update" | "mcp.page-cursors"
   | "worktrees.discovery" | "worktrees.candidate" | "worktrees.accounting"
   | "pipelines.controller-job" | "pipelines.provisioning" | "pipelines.controller-lane" | "pipelines.controller-schedule" | "pipelines.publication-recovery"
-  | "pipelines.controller-artifacts"
+  | "pipelines.controller-artifacts" | "pipelines.operator-stop-evidence"
   | "telegram.membership-check" | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
   | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention"
   | "turbo.sweep" | "turbo.sweep.read" | "turbo.sweep.apply" | "turbo.sweep.settle";

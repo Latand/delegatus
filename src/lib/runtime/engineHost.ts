@@ -110,7 +110,7 @@ export type DeliveryReceipt =
   | { outcome: "steered"; turnId: string }
   | { outcome: "turn-started"; turnId: string }
   | { outcome: "queued-next-turn"; turnId: string }
-  | { outcome: "rejected"; reason: "stale-turn" | "dead-host" };
+  | { outcome: "rejected"; reason: "stale-turn" | "dead-host"; refusal?: string };
 
 export type RuntimeEvent =
   /** One canonical realtime transcript segment, from the app-server's own

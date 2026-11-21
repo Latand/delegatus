@@ -15,7 +15,7 @@ process.env.LLV_CLAUDE_HOME = path.join(sandbox, "main");
 
 const accounts = await import("./claude");
 const { accountManager } = await import("./manager");
-const { freshSpecFor, resumeSpecForSession, resolveBinary, resolveHostBinary } = await import("@/lib/agent/cli");
+const { freshSpecFor, resumeSpecForSession, resolveBinary, resolveHostBinary, shellQuote } = await import("@/lib/agent/cli");
 const { claudeStructuredHostOptions } = await import("@/lib/runtime/structuredSpawn");
 const { applyClaudeSpawnPolicy } = await import("@/lib/agent/spawnPolicy");
 const { selectHealthyClaudeAccount } = await import("./spawnHealth");
@@ -445,6 +445,41 @@ test("direct fresh and resumed production commands reach only the selected provi
     expect(fresh.command).not.toContain(token);
     expect(resumed!.command).not.toContain(token);
   } finally { a.stop(); b.stop(); }
+});
+
+test.each(["fresh", "resumed", "reviewer"] as const)("%s provider launch excludes project dotenv from the native child (#3968)", async kind => {
+  const account = accounts.createManagedClaudeAccount("Provider fixture", { config: provider, token });
+  const project = path.join(sandbox, "dotenv-project");
+  fs.mkdirSync(project, { recursive: true });
+  const names = ["OPENAI_API_KEY", "PROJECT_SERVICE_SECRET", "PROJECT_DATABASE_PASSWORD", "COLORTERM"];
+  fs.writeFileSync(path.join(project, ".env"), names.map(name => [name, "fixture-dotenv"].join("=")).join("\n"));
+  fs.writeFileSync(path.join(project, ".env.local"), ["PROJECT_LOCAL_SECRET", "fixture-local"].join("="));
+  const selected = [...names, "PROJECT_LOCAL_SECRET"];
+  const node = Bun.which("node");
+  expect(node).not.toBeNull();
+  const script = path.join(project, "inspect.cjs");
+  fs.writeFileSync(script, `console.log(JSON.stringify({
+    present: ${JSON.stringify(selected)}.filter(name => process.env[name] !== undefined),
+    provider: Boolean(process.env.ANTHROPIC_BASE_URL && process.env.ANTHROPIC_AUTH_TOKEN),
+  }));`);
+  const fake = path.join(project, "native-cli");
+  fs.writeFileSync(fake, `#!/bin/sh\nexec ${shellQuote(node!)} ${shellQuote(script)} "$@"\n`, { mode: 0o700 });
+  const fresh = freshSpecFor("claude", project, { claudeConfigDir: account.home, model: "opus" });
+  const sessionId = path.basename(fresh.transcript!, ".jsonl");
+  const resumed = resumeSpecForSession("claude", sessionId, project, account.home, { model: "haiku" })!;
+  const reviewer = reviewerCommand({ engine: "claude", model: "haiku", effort: null }, "Fixture review",
+    path.join(project, "review.md"), project, null, { home: account.home, projectsDir: account.projectsDir, managed: true });
+  const spec = kind === "fresh" ? fresh : resumed;
+  const command = kind === "reviewer"
+    ? [reviewer.command, ...reviewer.args.map(value => value === resolveHostBinary("claude") ? fake : value)]
+    : ["sh", "-c", spec.command.replace(shellQuote(resolveBinary("claude")), shellQuote(fake))];
+  const env: NodeJS.ProcessEnv = { ...(kind === "reviewer" ? reviewer.env : process.env), NODE_ENV: "development" };
+  for (const name of selected) delete env[name];
+  const child = Bun.spawn(command, { cwd: project, env, stdout: "pipe", stderr: "pipe" });
+  const output = await new Response(child.stdout).text();
+  const errors = await new Response(child.stderr).text();
+  expect({ code: await child.exited, errors }).toEqual({ code: 0, errors: "" });
+  expect(JSON.parse(output)).toEqual({ present: [], provider: true });
 });
 
 test("headless Claude reviewer uses the selected provider through the private launcher", () => {

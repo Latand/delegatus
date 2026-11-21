@@ -1,6 +1,6 @@
 import { revokeOwnerRuns } from "@/lib/externalRelay/ownerRun";
 import { NextRequest, NextResponse } from "next/server";
-import { validateLaunchModel } from "@/lib/agent/models";
+import { CODEX_CLOUD_MODEL_IDS, validateLaunchModel } from "@/lib/agent/models";
 import { effortScale } from "@/lib/agent/efforts";
 import {
   guardRelayRoute,
@@ -75,7 +75,7 @@ export async function PATCH(req: NextRequest, context: Context) {
               (next.model !== null &&
                 (typeof next.model !== "string" ||
                   !next.engine ||
-                  (next.engine === "codex-cloud" ? next.model !== "gpt-6.1-sol" : "error" in validateLaunchModel(next.engine, next.model)))) ||
+                  (next.engine === "codex-cloud" ? !CODEX_CLOUD_MODEL_IDS.includes(next.model) : "error" in validateLaunchModel(next.engine, next.model)))) ||
               (next.effort !== null &&
                 (!next.engine ||
                   !effortScale(next.engine === "codex-cloud" ? "codex" : next.engine, next.model)?.includes(

@@ -274,6 +274,8 @@ export async function dispatchStructuredControl(
     onResumed?: (conversationId: string) => void | Promise<void>;
     hostProcessAlive?: (identity: ProcessIdentity | null) => boolean;
     preflightSource?: typeof import("@/lib/accounts/migration/provider").preflightCodexSource;
+    /** A caller with durable custody can reconcile under its own deadline. */
+    recoverTransportReceipt?: false;
   } = {},
 ): Promise<StructuredControlResult | null> {
   if (request.providerRecovery && (request.action !== "kill" || !request.onlyIfIdle)) {
@@ -623,7 +625,8 @@ export async function dispatchStructuredControl(
       const safe = sanitizeProviderError(error);
       return { status: 409, body: { error: safe.message, code: error instanceof HistorySecurityError ? error.code : "source-ancestor-missing" } };
     }
-    if ((request.action === "kill" || request.action === "reconfigure" || request.action === "compact")
+    if (dependencies.recoverTransportReceipt !== false
+      && (request.action === "kill" || request.action === "reconfigure" || request.action === "compact")
       && isRuntimeHostTransportFailure(error)) {
       /* The socket failed after the command may have reached the journal. The
          durable receipt decides whether structured control owns the response. */

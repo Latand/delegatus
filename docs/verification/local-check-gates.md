@@ -1,10 +1,9 @@
 # Local check priority and CPU admission
 
 The incident report described local check services competing with message
-delivery after the remote check host retired. This change puts CPU and I/O
-weight 10 on each local check service and prevents the ten-minute queue bound
-from overriding measured pressure for heavy checks. Stage and workflow tickets
-still start at their own bound when a check held by pressure is ahead of them.
+delivery after the remote check host retired. Local check services now use CPU
+and I/O weight 10. Heavy checks, stages and workflows each have a ten-minute
+pressure bound.
 A live owner-relay stop that cannot be confirmed now backs off to one retry a
 minute.
 
@@ -17,16 +16,17 @@ minute.
 | Direct `owned-runner.ts` invocation | The same properties apply without a slice override |
 | CPU-placement enabled | Existing aggregate work-slice weight 100 and quotas remain; the check service gets CPU/I/O weight 10 |
 | No reachable user manager | Existing bounded portable/namespace fallback; no transient unit exists |
-| `scripts/cpu-admission.ts --wait` and `--claim` | Both require a permissive sample, including after the queue bound and helper restart |
-| Stage/workflow queue callers | Ten-minute fairness bound remains; once it runs out, a stage or workflow ticket passes heavy checks still waiting for low pressure |
+| `scripts/cpu-admission.ts --wait` and `--claim` | Both require a permissive sample before the durable ten-minute bound and lift the pressure hold at the bound, including after helper restart |
+| Stage/workflow queue callers | Separate admission lane with its own ten-minute pressure bound and shared spacing |
 | `scripts/build-gate.ts` | Bundles the new imports into the shipped admission and owned-runner entries |
 
 PSI uses the existing 30% hold threshold, 20% release threshold and ten-second
 release window. Sampling yields the event loop. Missing PSI falls back to the
 one-minute load divided by online CPUs, requiring less than 0.75 per CPU.
-Unreadable metrics keep the command waiting. The existing explicit pressure-off
-setting remains available. Slot claims, queue order and admission spacing still
-apply. A stable wait reason is printed once while that reason remains current.
+Unreadable metrics keep the command waiting until its pressure bound. The
+explicit pressure-off setting remains available. Slot claims, the strictest
+active outer cap, queue order and admission spacing still apply. A stable
+wait reason is printed once while that reason remains current.
 
 ## Serving priority observation
 
@@ -46,18 +46,12 @@ The real-manager test verifies the produced transient-unit properties.
 
 ## CPU queue order under pressure
 
-A heavy check waits for a permissive sample at its readiness check and again at
-its claim, even after its own ten-minute bound. Stage and workflow tickets
-share the machine queue (`src/lib/runtime/cpuAdmissionScope.ts`), so a check
-held at the head by pressure kept every stage behind it waiting: with
-sustained pressure, a stage queued one second after a check was still second
-in line after an hour. Each check now records on its ticket that it needs low
-pressure (`low_pressure`). A ticket that does not need it, and whose own
-ten-minute bound has run out, no longer counts those tickets ahead of it
-(`CpuAdmissionQueue.check` in `src/lib/runtime/cpuAdmission.ts`). Checks keep
-FIFO among themselves and behind older stages, and spacing still separates
-every start. A helper from an older release leaves the column at 0, which is
-the earlier behaviour for its tickets.
+A heavy check waits for a permissive sample at readiness and claim until its
+durable ten-minute bound. Each check marks its ticket as `low_pressure` so a
+publication install past its own bound can pass checks waiting for a slot.
+Checks keep FIFO within their effective priority class. Stage and workflow
+tickets use a separate lane in the machine queue, and spacing still separates
+every start. A helper from an older release leaves the column at 0.
 
 ## Repeating owner-stop warning
 

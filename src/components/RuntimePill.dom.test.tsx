@@ -451,10 +451,10 @@ test("the model drill-down keeps model rows available for turn-boundary reconfig
   await click(submenu[0]!);
   // One anchored surface — the root panel is gone, the model panel is in place.
   const modelRows = [...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')];
-  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "GPT-5.6-Sol"]);
+  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6.2-Sol", "GPT-6.2-Astra", "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "GPT-5.6-Sol"]);
   // The conversation runs on the retired 5.6 Sol, so its row stays, checked,
   // after the current choices; the others stay selectable.
-  expect(modelRows[4]!.getAttribute("aria-checked")).toBe("true");
+  expect(modelRows.find(row => row.getAttribute("data-runtime-value") === "gpt-5.6-sol")!.getAttribute("aria-checked")).toBe("true");
   expect(modelRows[0]!.getAttribute("aria-checked")).toBe("false");
   expect(modelRows[0]!.hasAttribute("disabled")).toBe(false);
   // The back row returns to the root panel; its accessible name is the wired
@@ -482,7 +482,7 @@ test("a conversation on a retired model can move to Terra 6.1 and back, and a cu
   await openModels();
   // The drafted Terra is checked; the model the transcript still reports stays listed to go back to.
   expect(modelRows().map((row) => [row.textContent, row.getAttribute("aria-checked")])).toEqual([
-    ["GPT-6-Astra", "false"], ["GPT-6.1-Sol", "false"], ["GPT-6.1-Terra", "true"], ["GPT-6-Luna", "false"], ["GPT-5.6-Sol", "false"],
+    ["GPT-6.2-Sol", "false"], ["GPT-6.2-Astra", "false"], ["GPT-6-Astra", "false"], ["GPT-6.1-Sol", "false"], ["GPT-6.1-Terra", "true"], ["GPT-6-Luna", "false"], ["GPT-5.6-Sol", "false"],
   ]);
   await act(async () => root.unmount());
 
@@ -490,7 +490,7 @@ test("a conversation on a retired model can move to Terra 6.1 and back, and a cu
   await click(current.host.querySelector("[data-runtime-pill]")!);
   await click([...current.host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')].find((row) => row.getAttribute("data-runtime-value") === "model")!);
   expect([...current.host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')].map((row) => row.textContent))
-    .toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"]);
+    .toEqual(["GPT-6.2-Sol", "GPT-6.2-Astra", "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"]);
   await act(async () => current.root.unmount());
 });
 
@@ -601,7 +601,7 @@ test("a resume profile saved on a retired model stays listed and checked while t
   await click(host.querySelector("[data-runtime-pill]")!);
   await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')].find((row) => row.getAttribute("data-runtime-value") === "model")!);
   expect([...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')].map((row) => [row.textContent, row.getAttribute("aria-checked")])).toEqual([
-    ["GPT-6-Astra", "false"], ["GPT-6.1-Sol", "false"], ["GPT-6.1-Terra", "false"], ["GPT-6-Luna", "false"], ["GPT-5.6-Terra", "true"],
+    ["GPT-6.2-Sol", "false"], ["GPT-6.2-Astra", "false"], ["GPT-6-Astra", "false"], ["GPT-6.1-Sol", "false"], ["GPT-6.1-Terra", "false"], ["GPT-6-Luna", "false"], ["GPT-5.6-Terra", "true"],
   ]);
   // Opening the list rewrites nothing that was saved.
   expect(JSON.parse(localStorage.getItem(key + ":resume")!)).toEqual({ model: "gpt-5.6-terra", effort: "ultra", fast: false });

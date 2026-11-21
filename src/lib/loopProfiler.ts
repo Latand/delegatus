@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, statSync } from "node:fs";
+import { LoopProfilerFailure } from "./loopProfilerFailure";
 
 export const LOOP_PROFILE_WINDOW_MS = 5000;
 export const LOOP_PROFILE_ARM_MS = 30 * 60_000;
@@ -15,7 +16,7 @@ type Categories = ReturnType<typeof categorizeLoopProfile>;
 /** A gap of two seconds or more carries named frames and the category
  * histogram; a shorter gap carries the histogram alone. */
 export type LoopGapProfile = { status: "captured"; from: number; to: number; intervalUs: number; frames?: Summary; categories?: Categories }
-  | { status: "unavailable" | "not-armed" | "skipped"; reason: string };
+  | { status: "unavailable" | "not-armed" | "skipped"; reason: string; phase?: LoopProfilerFailure["phase"]; code?: string };
 /** Shortest gap that gets a category histogram; named frames need LOOP_PROFILE_FRAMES_GAP_MS. */
 export const LOOP_PROFILE_GAP_MS = 500;
 export const LOOP_PROFILE_FRAMES_GAP_MS = 2000;
@@ -107,12 +108,12 @@ const nativeNames = new Set([
   "encode", "decode", "write", "end", "readFileSync", "writeFileSync", "statSync", "lstatSync", "existsSync",
   "readdirSync", "openSync", "readSync", "closeSync", "renameSync", "mkdirSync", "rmSync", "realpathSync", "digest",
   "update", "createHash", "randomUUID", "randomBytes", "setTimeout", "clearTimeout", "setImmediate", "queueMicrotask",
-  "nextTick", "emit", "fetch", "json", "text", "enqueue", "close", "gc", "deepEquals", "inspect", "isDeepStrictEqual",
+  "next", "nextTick", "emit", "fetch", "json", "text", "enqueue", "close", "gc", "deepEquals", "inspect", "isDeepStrictEqual",
 ]);
 const nativeRows = 12, fileRows = 8, callerRows = 3, callerNatives = 4;
 /* One name, several built-ins: a SQLite statement, a Map, a Promise. Their
  * callers tell them apart, so these keep their callers whatever their rank. */
-const sharedNames = new Set(["all", "get", "run", "set", "has", "values", "parse", "exec"]);
+const sharedNames = new Set(["all", "get", "run", "set", "has", "values", "parse", "exec", "next"]);
 
 /** A repository-relative emitted chunk or source file, or null. Never a path outside the serving root. */
 function safeFile(sourceURL: string | undefined, root: string, known: Map<string, string | null>) {
@@ -135,6 +136,13 @@ function safeFile(sourceURL: string | undefined, root: string, known: Map<string
 }
 
 const runtimeModuleSource = /^(?:bun|node):|^builtin:\/\//;
+// Bun reports these method names at the actual call site in source and SWC output.
+// Only these functions forward work. Snapshot and bookkeeping have their own frames.
+const instrumentationSources = new Map([
+  ["delegatusPerformanceSync", "src/lib/performanceSpans.ts"],
+  ["delegatusReadAttributionForward", "src/lib/readAttribution.ts"],
+  ["delegatusSqliteInstrumentation", "src/lib/sqliteReadAttribution.ts"],
+]);
 
 /**
  * Where the sampled time went, by the leaf of each sample: a native function
@@ -163,21 +171,24 @@ export function categorizeLoopProfile(raw: LoopProfile, root: string) {
     }
     const name = typeof leaf.name === "string" && nativeNames.has(leaf.name) ? leaf.name : "other";
     native.set(name, (native.get(name) ?? 0) + 1);
-    // The nearest script frame names the caller of this native work. Bun's
-    // own modules (`bun:sqlite` wraps prepare and run) are passed over: the
-    // statement that matters is the repository frame that called into them.
-    let position: string | undefined, runtimeModule = false;
+    // Pass through runtime modules and instrumentation to the native call site.
+    let position: string | undefined, skippedCaller = false;
     for (let depth = 1; depth < Math.min(depthCap, frames.length); depth++) {
       const caller = frames[depth]!;
       if (!caller.sourceURL) continue;
-      if (runtimeModuleSource.test(caller.sourceURL)) { runtimeModule = true; continue; }
+      if (runtimeModuleSource.test(caller.sourceURL)) { skippedCaller = true; continue; }
       const file = safeFile(caller.sourceURL, root, known);
+      const instrumentationSource = instrumentationSources.get(caller.name);
+      if (instrumentationSource && (file === instrumentationSource || file?.startsWith(".next/server/"))) {
+        skippedCaller = true;
+        continue;
+      }
       position = file && Number.isSafeInteger(caller.line) && caller.line > 0 && caller.line !== 4294967295
         && Number.isSafeInteger(caller.column) && caller.column > 0 && caller.column !== 4294967295
         ? `${file}:${caller.line}:${caller.column}` : file ?? "elsewhere";
       break;
     }
-    if (position === undefined && runtimeModule) position = "elsewhere";
+    if (position === undefined && skippedCaller) position = "elsewhere";
     if (position !== undefined) {
       let held = callers.get(name);
       if (!held) callers.set(name, held = new Map());
@@ -260,6 +271,7 @@ export interface LoopProfilerPorts {
   phase<T>(phase: "collect" | "trim" | "settings", work: () => T): T;
   root: string;
   completed?(profile: LoopGapProfile): void;
+  failed?(failure: LoopProfilerFailure): void;
   beforeCollect?(): Promise<boolean>;
   /** Synchronous boundary immediately before native sampling starts. */
   captureStarted?(): void;
@@ -285,6 +297,7 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
   const capture = async () => {
     if (!await enabled()) return false;
     const current = window = { from: ports.now(), pending: [] as { emit: Emit; frames: boolean }[] };
+    let phase: "collect" | "trim" = "collect";
     try {
       if (ports.beforeCollect && !await ports.beforeCollect()) {
         inactive = { status: "not-armed", reason: "waiting-for-capture" };
@@ -304,6 +317,7 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
       if (current.pending.length || ports.completed) {
         // The histogram reads no source files. Named frames are requested
         // by long gaps or the explicitly admitted capture callback.
+        phase = "trim";
         const { categories, frames } = ports.phase("trim", () => ({
           categories: categorizeLoopProfile(raw.stackTraces as LoopProfile, ports.root),
           frames: ports.completed || current.pending.some(gap => gap.frames) ? trimLoopProfile(raw.stackTraces as LoopProfile, ports.root) : undefined,
@@ -315,9 +329,11 @@ export function createLoopProfiler(ports: LoopProfilerPorts, expires: number) {
         ports.completed?.(record(true));
         for (const gap of current.pending.splice(0)) gap.emit(record(gap.frames));
       }
-    } catch {
+    } catch (error) {
       stopped = true;
-      inactive = { status: "unavailable", reason: "capture-failed" };
+      const failure = new LoopProfilerFailure(phase, error);
+      inactive = { status: "unavailable", reason: "capture-failed", phase: failure.phase, code: failure.code };
+      ports.failed?.(failure);
     } finally {
       // Admission can refuse after correlate has accepted a deferred record.
       // Every exit finishes those records with the fixed refusal or failure.

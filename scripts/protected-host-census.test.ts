@@ -18,6 +18,7 @@ import { publishRegistryBackendIdentity } from "../src/lib/agent/registryBackend
 import { projectInfoFromCwd } from "../src/lib/scanner/describe";
 import type { AgentRegistryEntry, RegistryFile } from "../src/lib/agent/registry";
 import type { Flow } from "../src/lib/flows/types";
+import { bindHostExitWriter } from "../src/lib/runtime/hostExit";
 
 const TARGET = "a".repeat(40);
 const NOW = "2026-10-29T12:00:00.000Z";
@@ -31,8 +32,9 @@ function retainedLivenessFixture(count = 12) {
   catch (error) { fixture.close(); throw error; }
 }
 const sha = (file: string) => fs.existsSync(file) ? crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") : null;
-const fields = (rows: Awaited<ReturnType<typeof censusSnapshot>>["conversations"]) => rows.filter(row => row.host.state === "alive")
-  .map(row => [row.conversationId, row.host.state, row.host.kind, row.host.pid, row.turnState, row.pipeline && [row.pipeline.pipelineId, row.pipeline.stageId, row.pipeline.attempt]])
+const fields = (rows: readonly { conversationId: string | null; host: { state: string; kind: string; pid: number | null };
+  turnState: string; lifecycle: string; pipeline: { pipelineId: string; stageId: string; attempt: number } | null }[]) => rows.filter(row => row.host.state === "alive")
+  .map(row => [row.conversationId, row.host.state, row.host.kind, row.host.pid, row.turnState, row.lifecycle, row.pipeline && [row.pipeline.pipelineId, row.pipeline.stageId, row.pipeline.attempt]])
   .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 
 function fixture() {
@@ -89,6 +91,42 @@ test("B-1: native census equals the product over every live structured, receipt 
     expect(answer.undescribedHostCount).toBe(0);
     expect(answer.selection.projected).toBe(0);
     expect(answer.selection.unreadable).toBe(0);
+  } finally { f.close(); }
+});
+
+test("custody census carries recorded identities and bounded writer evidence without writes", async () => {
+  const f = fixture();
+  const directory = temporary();
+  try {
+    const host = f.rows[0]!.entry.structuredHost!.process!;
+    const writer = { pid: 8001, startIdentity: "8001:42", bootEpoch: "fixture-boot" };
+    bindHostExitWriter(directory, host, writer);
+    const exitFile = JSON.parse(fs.readFileSync(path.join(directory, "host-exit.json"), "utf8")).file as string;
+    const slot = exitFile.replace(/\.exit\.json$/, ".writer.json");
+    for (const input of [JSON.stringify(writer), "{", " ".repeat(4097), null]) {
+      if (input === null) fs.rmSync(slot, { force: true });
+      else fs.writeFileSync(slot, input);
+      const before = fs.readdirSync(path.dirname(slot)).sort().map(name => [name, sha(path.join(path.dirname(slot), name))]);
+      const answer = await censusSnapshot(f.sources, 1, TARGET, 30000);
+      const row = answer.conversations.find(row => row.host.pid === host.pid)!;
+      expect(row.host.process).toEqual(host);
+      expect(row.host.exitWriter).toEqual(input === JSON.stringify(writer) ? { process: writer, exitFile } : null);
+      expect(answer.undescribedHostCount).toBe(0);
+      expect(fs.readdirSync(path.dirname(slot)).sort().map(name => [name, sha(path.join(path.dirname(slot), name))])).toEqual(before);
+      expect(answer.conversations.find(row => row.host.pid === 4003)!.host.process).toMatchObject({ pid: 4003, startIdentity: "fixture-start" });
+      expect(answer.conversations.find(row => row.host.pid === 4006)!.host.process).toBeNull();
+    }
+  } finally { f.close(); }
+});
+
+test("custody census refuses ambiguous recorded identities for the same PID", async () => {
+  const f = fixture();
+  try {
+    f.rows[1]!.entry.structuredHost!.process = { pid: 4001, startIdentity: "other-start" };
+    const answer = await censusSnapshot({ ...f.sources, probe: { ...f.sources.probe, processIdentity: () => null } }, 1, TARGET, 30000);
+    const row = answer.conversations.find(row => row.host.pid === 4001)!;
+    expect(row.host.process).toBeNull();
+    expect(row.host.exitWriter).toBeNull();
   } finally { f.close(); }
 });
 
@@ -447,7 +485,7 @@ test("live census: a missing recorded transcript counts one undescribed host and
     const answer = await censusSnapshot(f.sources, 1, TARGET, 30000);
     expect(answer.undescribedHostCount).toBe(2);
     expect(answer.conversations.some(row => [4001, 4002].includes(row.host.pid ?? 0))).toBe(false);
-    const check = spawnSync("python3", ["-c", "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('deploy',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.complete_activity(json.load(sys.stdin))", path.join(ROOT, "scripts/deploy-checkout.py")],
+    const check = spawnSync("python3", ["-c", "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('deploy',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.complete_census(json.load(sys.stdin))", path.join(ROOT, "scripts/deploy-checkout.py")],
       { env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" }, input: JSON.stringify(answer), encoding: "utf8", timeout: 10000 });
     expect(check.status).not.toBe(0);
     expect(check.stderr).toContain("protected activity capture incomplete");

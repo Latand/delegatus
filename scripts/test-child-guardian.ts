@@ -6,19 +6,41 @@ import { recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCanc
 const [ledger, ownerJson] = process.argv.slice(2);
 const owner = JSON.parse(ownerJson!) as ProcessIdentity;
 const recorded = recordedSupervisorObligation();
+const input = fs.openSync(ledger!, "r");
 const owned = new Map<string, ProcessIdentity>();
 const remember = (identity: ProcessIdentity) => {
   if (identity.startIdentity && identity.bootEpoch) owned.set(JSON.stringify(identity), identity);
 };
+const children = (pid: number): number[] => {
+  const result = new Set<number>();
+  const gone = (error: unknown) => ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "");
+  try {
+    // A fork belongs to the calling thread's kernel child list. Walk every
+    // thread of this recorded parent, without opening unrelated processes.
+    for (const tid of fs.readdirSync(`/proc/${pid}/task`)) {
+      try {
+        for (const child of fs.readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim().split(/\s+/)) {
+          if (child) result.add(Number(child));
+        }
+      } catch (error) { if (!gone(error)) throw error; }
+    }
+  } catch (error) { if (!gone(error)) throw error; }
+  return [...result];
+};
 const read = () => {
-  for (const line of fs.readFileSync(ledger!, "utf8").split("\n").filter(Boolean)) remember(JSON.parse(line));
-  if (![...owned.values()].some(identity => processIdentityStatus(identity) === "alive")) return;
-  const parents = procBackend.ppidMap();
+  // The writer appends each captured identity once. Retain the file position
+  // so completed history cannot repopulate the live ownership set each tick.
+  for (const line of fs.readFileSync(input, "utf8").split("\n").filter(Boolean)) remember(JSON.parse(line));
+  if (!owned.size) return;
+  const parents = process.platform === "linux" ? null : procBackend.ppidMap();
   // Only an identity already recorded from spawn can start a tree walk.
   // Verify every edge while both processes are still present.
-  for (const identity of owned.values()) {
-    if (processIdentityStatus(identity) !== "alive") continue;
-    for (const [pid, parent] of parents) if (parent === identity.pid) {
+  for (const [key, identity] of owned) {
+    const status = processIdentityStatus(identity);
+    if (status === "dead") { owned.delete(key); continue; }
+    if (status !== "alive") continue;
+    const descendants = parents ? [...parents].filter(([, parent]) => parent === identity.pid).map(([pid]) => pid) : children(identity.pid);
+    for (const pid of descendants) {
       const child = captureProcessIdentity(pid);
       if (procBackend.readPpid(pid) === identity.pid && processIdentityStatus(identity) === "alive") remember(child);
     }
@@ -56,4 +78,4 @@ try {
     writeEnvelope(`${ledger}.cleanup.json`, { owner, complete: true, cancellation });
   }
   process.exitCode = survivors.length || expired ? 1 : 0;
-} finally { clearTimeout(bound); }
+} finally { clearTimeout(bound); fs.closeSync(input); }

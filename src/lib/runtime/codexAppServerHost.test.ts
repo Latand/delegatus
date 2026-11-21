@@ -43,7 +43,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { gateCheckTool, GATE_CHECK_ROOT_IDENTITY_ENV } from "./gateCheckTool";
-import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, recorderGateRunRoot } from "./gateCheckRecord";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, recorderGatePaths } from "./gateCheckRecord";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
@@ -313,16 +313,16 @@ test("negotiates provider and per-model capabilities independently of userAgent"
   } finally { await host.release(); }
 });
 
-test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.169.1"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
+test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0", "0.170.1"])("compatible CLI %s reaches thread/start and turn/start under its reviewed pin", async version => {
   // Exact pins load their own schema; other CLIs stand on a newer real schema above their pin.
-  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.169.1": { pin: "0.169.0", schema: "0.169.0" } };
+  const unpinned: Record<string, { pin: string; schema: string }> = { "0.162.7": { pin: "0.162.1", schema: "0.163.0" }, "0.170.1": { pin: "0.170.0", schema: "0.170.0" } };
   const pin = unpinned[version]?.pin ?? version;
   const schemaVersion = unpinned[version]?.schema ?? version;
   const server = new FakeAppServer("unpinned-cli");
-  if (version === "0.169.1") server.threadResponseExtra = { futureHint: "available" };
+  if (version === "0.170.1") server.threadResponseExtra = { futureHint: "available" };
   const schemas = (name: string) => {
     const raw = fs.readFileSync(path.join(import.meta.dir, `../accounts/protocol/${schemaVersion}`, `${name}.json`), "utf8");
-    if (version !== "0.169.1") return raw;
+    if (version !== "0.170.1") return raw;
     const bundle = JSON.parse(raw);
     bundle.definitions.v2.ThreadStartResponse.properties.futureHint = { type: ["string", "null"] };
     return JSON.stringify(bundle);
@@ -350,7 +350,7 @@ test.each(["0.162.7", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.
       expect(generated).toEqual(["codex-fixture"]);
     }
     expect(await host.send({ id: "unpinned-turn", text: "continue" })).toMatchObject({ outcome: "turn-started" });
-    if (version === "0.169.1") {
+    if (version === "0.170.1") {
       expect(writes.mock.calls.some(([chunk]) => JSON.parse(String(chunk)).result?.futureHint === "available")).toBeTrue();
     }
   } finally {
@@ -365,7 +365,7 @@ test("a self-updated CLI with a breaking schema is refused before spawning", asy
     cwd: "/repo", readProtocolVersion: () => "0.162.8", eventStore: new MemoryEventStore(),
     spawnProcess: (...args) => { spawned = true; return fakeSpawn(server)(...args); },
     generateProtocolSchemas: async () => ({ stable: '{"definitions":{}}', experimental: '{"definitions":{}}' }),
-  })).rejects.toThrow("CLI 0.162.8; Supported: 0.169.0, 0.168.0, 0.167.0; cause: not an additive extension of pin 0.162.1");
+  })).rejects.toThrow("CLI 0.162.8; Supported: 0.170.0, 0.169.0, 0.168.0; cause: not an additive extension of pin 0.162.1");
   expect(spawned).toBe(false);
 });
 
@@ -1081,6 +1081,32 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
     return server as unknown as ChildProcessWithoutNullStreams;
   };
 }
+
+test("Codex host persists a media-free copy while its live event retains the response", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-private-media-ledger-"));
+  const threadId = "thread-private-media";
+  const store = new FileRuntimeEventStore(path.join(directory, "events"));
+  const server = new FakeAppServer(threadId);
+  const host = await CodexAppServerHost.start({ cwd: directory, eventStore: store, spawnProcess: fakeSpawn(server) });
+  try {
+    const emit = (host as unknown as { emit(event: object): void }).emit.bind(host);
+    const ref = `media_${"a".repeat(32)}`;
+    const pixels = "cHJpdmF0ZS1waXhlbHM=";
+    emit({ kind: "item", turnId: "turn-private", phase: "completed", item: {
+      type: "mcpToolCall", tool: "relay_service_tools", result: { content: [{ type: "image", data: pixels }], ref },
+    }, voiceResponse: { responseId: "voice-private", text: `spoken ${ref}` } });
+    emit({ kind: "delta", turnId: "turn-private", text: `media_${"b".repeat(9)}` });
+    emit({ kind: "delta", turnId: "turn-private", text: "b".repeat(23) });
+    const stored = JSON.stringify(store.load(threadId));
+    expect(stored).not.toContain(ref);
+    expect(stored).not.toContain(pixels);
+    expect(stored).not.toContain(`media_${"b".repeat(32)}`);
+    expect(JSON.stringify((host as unknown as { events: RuntimeEvent[] }).events)).toContain(pixels);
+  } finally {
+    await host.release();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("Codex refuses fresh and adopted launches with missing or empty Viewer tools before queue recovery", async () => {
   for (const resume of [false, true]) for (const status of [[], [{ name: "viewer", tools: {} }]]) {
@@ -2314,6 +2340,10 @@ describe("CodexAppServerHost", () => {
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
     const email = ["no-reply", "build.example.invalid"].join("@");
     const prioritySource = JSON.stringify({ database: path.join(metadataState, "tasks.sqlite"), taskIds: ["stage-task"] });
+    const root = fs.mkdtempSync(path.join(metadataState, "shell-policy-"));
+    const physicalRoot = fs.realpathSync(root);
+    const { dev, ino } = fs.statSync(physicalRoot);
+    const gate = { [GATE_CHECK_LAUNCH_ROOT_ENV]: root, [GATE_CHECK_ROOT_ENV]: physicalRoot, [GATE_CHECK_ROOT_IDENTITY_ENV]: `${dev}:${ino}` };
     const server = new FakeAppServer();
     server.shellPolicy = {
       inherit: "core", set: { GIT_AUTHOR_EMAIL: "unsafe", GIT_COMMITTER_EMAIL: "unsafe", OTHER: "kept" },
@@ -2321,7 +2351,8 @@ describe("CodexAppServerHost", () => {
     };
     const host = await CodexAppServerHost.start({
       cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email,
-        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource },
+        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource, TMPDIR: root, PRIVATE_SETTING: "excluded",
+        [GATE_CHECK_LAUNCH_ROOT_ENV]: "unverified", [GATE_CHECK_ROOT_ENV]: "unverified", [GATE_CHECK_ROOT_IDENTITY_ENV]: "unverified" },
       eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured),
     });
     try {
@@ -2329,13 +2360,14 @@ describe("CodexAppServerHost", () => {
         GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
         GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
         LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
+        ...gate,
       });
       const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email });
-      expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
-        shell_environment_policy: { set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource }, ...(keyedFilters
-          ? { filters: Object.fromEntries([...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"].map((key) => [key, "include"])) }
-          : { include_only: ["PATH", "HOME", ...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"] }) },
-      } });
+      const set = { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource, TMPDIR: root, ...gate };
+      const params = server.requests.find((request) => request.method === "thread/start")?.params as { config: Record<string, unknown> };
+      expect(params.config.shell_environment_policy).toEqual({ set, ...(keyedFilters
+        ? { filters: Object.fromEntries(Object.keys(set).map((key) => [key, "include"])) }
+        : { include_only: ["PATH", "HOME", ...Object.keys(set)] }) });
     } finally { await host.release(); }
   });
 
@@ -2353,9 +2385,9 @@ describe("CodexAppServerHost", () => {
       const log = path.join(root, "check.log");
       expect(env[GATE_CHECK_LAUNCH_ROOT_ENV]).toBe(alias);
       expect(env[GATE_CHECK_ROOT_ENV]).toBe(fs.realpathSync(root));
-      expect(recorderGateRunRoot(log, root, env)).toBe(fs.realpathSync(root));
+      expect(recorderGatePaths(log, root, env).root).toBe(fs.realpathSync(root));
       fs.unlinkSync(alias); fs.symlinkSync(foreign, alias, "dir");
-      expect(() => recorderGateRunRoot(log, root, env)).toThrow("gate launch root identity changed");
+      expect(() => recorderGatePaths(log, root, env)).toThrow("gate launch root identity changed");
     } finally { await host.release(); }
   });
 
@@ -8701,9 +8733,11 @@ test("central native completion releases an unanswered old tool and admits the n
   } finally { await host.release(); }
 });
 
-test("a settled host releases idle events, replays to subscribers and refills on its next turn", async () => {
+test.each(["memory", "file"])("a settled host releases idle events, replays to subscribers and refills on its next turn (%s)", async kind => {
+  const eventStore = kind === "file"
+    ? new FileRuntimeEventStore(fs.mkdtempSync(path.join(os.tmpdir(), "host-refill-"))) : new MemoryEventStore();
   const server = new FakeAppServer("idle-window-thread");
-  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore, spawnProcess: fakeSpawn(server) });
   const idle = idleWindowFixture(host);
   try {
     const count = host.heapAttribution().events;
@@ -8713,8 +8747,8 @@ test("a settled host releases idle events, replays to subscribers and refills on
     expect(host.heapAttribution().events).toBe(0);
     const stream = host.attach(0)[Symbol.asyncIterator]();
     try {
-      expect(host.heapAttribution().events).toBeGreaterThan(0);
       for (let index = 0; index < count; index++) expect((await stream.next()).done).toBeFalse();
+      expect(host.heapAttribution().events).toBeGreaterThan(0);
     } finally { await stream.return?.(); }
     expect(await host.releaseIdleEventWindow(() => true)).toBeTrue();
     await host.send({ id: "next-idle-turn", text: "continue" });

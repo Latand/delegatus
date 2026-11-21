@@ -37,9 +37,7 @@ whole blobs. Their detector results are cached by blob id and media kind;
 provenance is checked at every path and commit. A private snapshot supplies that
 commit's manifest and generator. Snapshot checkout disables inherited global
 Git configuration and hooks. Symbolic links, unsupported data, oversize blobs,
-invalid provenance and inspection errors remain refusals. The hook may defer
-unavailable OCR tooling to the required hosted check; metadata and provenance
-still run. Direct `privacy:check` keeps missing tools decisive.
+invalid provenance and inspection errors remain refusals. The hook and hosted check inspect metadata and provenance without external media tools.
 
 Messages and merge identities retain their existing readers and detectors.
 `--paths` cannot override `--added-lines`. Explicit-path consumers, merge-batch
@@ -95,7 +93,7 @@ The expensive baseline reached the wrapper's 900-second deadline without a
 verdict. Its interrupted scan has no completed CPU/RSS measurement and is kept
 separate from completed samples. No speed ratio is inferred from that timeout.
 The target is under sixty CPU-seconds for a typical lane; entirely new large
-text or binary/media blobs still require proportional inspection and OCR.
+text or binary/media blobs still require proportional inspection.
 
 To repeat a sample, freeze the rules file and catalog, check out the named input
 head in a private clone, and run from a separate scanner export:

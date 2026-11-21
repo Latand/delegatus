@@ -846,9 +846,10 @@ export class RuntimeJournal {
       const parentReceipt = retryParent
         ? JSON.parse(retryParent.receipt_json) as RuntimeOperationReceipt
         : null;
-      const receipt = this.operationReceipt(command, operationId, retryOfOperationId, parentReceipt);
+      const retirement = command.kind === "kill" ? null : this.retirementInProgress(command.conversationId);
+      const receipt = this.operationReceipt(command, operationId, retirement, retryOfOperationId, parentReceipt);
       if (command.kind === "send" || command.kind === "steer") receipt.deliveryUnverified = false;
-      const nativeCommand = this.nativeCommandAtAdmission(command, operationId);
+      const nativeCommand = retirement ? null : this.nativeCommandAtAdmission(command, operationId);
       if (nativeCommand && receipt.status !== "rejected") {
         const entry = this.nativeQueue.admit(nativeCommand, operationId);
         if (entry) receipt.nativeQueue = nativeQueueReceipt(entry);
@@ -877,6 +878,11 @@ export class RuntimeJournal {
         payload: receipt as unknown as Record<string, unknown>,
         ...(effect ? { effect } : {}),
       }));
+      if (retirement && effect) {
+        // The kill already owns the host. Keep the reply and its key durable,
+        // but publish its effect only once the signal ladder has released it.
+        this.db.query("UPDATE outbox SET state = ? WHERE id = ?").run(`retiring:${retirement}`, effect.id);
+      }
       const committedReceipt: RuntimeOperationReceipt = { ...receipt, revision: event.revision };
       this.upsertEntity("operation", operationId, event.revision, committedReceipt, event.seq);
       // Operator intent invalidates a captured idle revision before a host
@@ -908,7 +914,7 @@ export class RuntimeJournal {
     if (command.kind === "native-queue") return { ...command, operationId };
     if (command.kind !== "send" || command.policy !== "queue" || command.onlyIfIdle) return null;
     const session = this.entity<RuntimeSession>("session", command.conversationId);
-    if (!session?.capabilities.nativeQueue || session.hostKind !== "codex-app-server") return null;
+    if (session?.host !== "hosted" || !session.capabilities.nativeQueue || session.hostKind !== "codex-app-server") return null;
     return { kind: "native-queue", action: "add", conversationId: command.conversationId, operationId,
       idempotencyKey: command.idempotencyKey, binding: { threadId: session.sessionKey.sessionId, accountId: session.accountId },
       text: command.text, images: command.images ?? [], contentDigest: command.contentDigest,
@@ -1244,7 +1250,7 @@ export class RuntimeJournal {
           details = { ...details, reason: "idle-retirement-deferred" };
         }
       }
-      if (status === "delivering" && command.kind === "send" && command.onlyIfIdle) {
+      if (status === "delivering" && command.kind === "send" && command.onlyIfIdle && command.origin?.role !== "owner-relay") {
         const session = this.entity<RuntimeSession>("session", command.conversationId);
         if (!session || !runtimeIdleKillMatches(session, session.sessionKey, command.onlyIfIdle)
           || this.retirementBlocked(command.conversationId, operationId)
@@ -1346,6 +1352,9 @@ export class RuntimeJournal {
       this.db.query("UPDATE operations SET receipt_json = ?, event_seq = ?, projection_pending = COALESCE(?, projection_pending) WHERE operation_id = ?")
         .run(stableJson(committed), event.seq, completing && (options.awaitProjection === true || discarding) ? this.now() : null, operationId);
       if (completing || nativeTransition?.phase === "acknowledged" || nativeTransition?.phase === "observed-queued" || nativeTransition?.phase === "proven") this.db.query("UPDATE outbox SET state = 'completed', payload_json = '{}' WHERE id = ?").run(`effect:${operationId}`);
+      if (automaticKill && previous.status === "delivering" && status !== "delivering") {
+        this.db.query("UPDATE outbox SET state = 'pending' WHERE state = ?").run(`retiring:${operationId}`);
+      }
       if (killBoundary) {
         this.retainStopBoundary(command, committed, killBoundary.event_seq);
       }
@@ -2468,7 +2477,7 @@ export class RuntimeJournal {
       this.db.query(
         `DELETE FROM operations
          WHERE event_seq <= ?
-           AND operation_id NOT IN (SELECT substr(id, 8) FROM outbox WHERE state = 'pending' AND id LIKE 'effect:%')
+           AND operation_id NOT IN (SELECT substr(id, 8) FROM outbox WHERE (state = 'pending' OR state GLOB 'retiring:*') AND id LIKE 'effect:%')
            AND operation_id NOT IN (SELECT operation_id FROM native_queue_operation_holds)
            AND operation_id NOT IN (
              SELECT operation_id FROM operations WHERE projection_pending IS NOT NULL ORDER BY event_seq DESC LIMIT ?
@@ -2728,6 +2737,7 @@ export class RuntimeJournal {
   private operationReceipt(
     command: RuntimeOperationCommand,
     operationId: string,
+    retirement: string | null,
     retryOfOperationId?: string,
     retryParent: RuntimeOperationReceipt | null = null,
   ): RuntimeOperationReceipt {
@@ -2736,10 +2746,15 @@ export class RuntimeJournal {
     let reason: string | null = null;
     let turnId = "turnId" in command && typeof command.turnId === "string" ? command.turnId : session?.activeTurnId ?? null;
     let queuePosition: number | null = null;
-    if (command.kind !== "kill" && this.retirementInProgress(command.conversationId)) {
+    const relayReply = command.kind === "send" && command.policy === "queue" && command.origin?.role === "owner-relay";
+    if (relayReply && (retirement || session?.host === "dead" || session?.host === "unhosted")) {
+      status = "queued";
+      queuePosition = this.queuedSendCount(command.conversationId) + 1;
+      turnId = null;
+    } else if (retirement) {
       status = "rejected";
       reason = "idle-retirement-in-progress";
-    } else if (command.kind === "send" && command.onlyIfIdle
+    } else if (command.kind === "send" && command.onlyIfIdle && !relayReply
       && (!session || !runtimeIdleKillMatches(session, session.sessionKey, command.onlyIfIdle)
         || this.retirementBlocked(command.conversationId)
         || this.idleContinuationStopped(command.conversationId, command.onlyIfIdle.revision, operationId))) {
@@ -2958,13 +2973,13 @@ export class RuntimeJournal {
     return { threadId: session.sessionKey.sessionId, accountId: session.accountId, writerClaim: session.writerClaim };
   }
 
-  private retirementInProgress(conversationId: string): boolean {
-    return !!this.db.query<{ present: number }, [string]>(`
-      SELECT 1 AS present FROM operations WHERE conversation_id = ?
+  private retirementInProgress(conversationId: string): string | null {
+    return this.db.query<{ operation_id: string }, [string]>(`
+      SELECT operation_id FROM operations WHERE conversation_id = ?
         AND json_extract(request_json, '$.kind') = 'kill'
         AND json_type(request_json, '$.onlyIfIdle') = 'object'
         AND json_extract(receipt_json, '$.status') = 'delivering' LIMIT 1
-    `).get(conversationId);
+    `).get(conversationId)?.operation_id ?? null;
   }
 
   /** A stop admitted after the observed idle session fences automatic work

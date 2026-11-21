@@ -1,10 +1,16 @@
+import { RuntimeJournal } from "@/runtime-host/journal";
 import { HostEventWindow, runtimeEventsAfter } from "./hostEventWindow";
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { assertRuntimeEvent } from "./contracts";
 import { streamingVoiceDelivery } from "./voiceDelivery";
 import type { RuntimeEvent } from "./engineHost";
-import { coalesceReadyEngineDeltas, projectEngineHostEvent, type CoalescedEngineEvent } from "./engineHostEvents";
+import { coalesceReadyEngineDeltas, createEngineHostLedgerProjection, projectEngineHostEvent, type CoalescedEngineEvent } from "./engineHostEvents";
+import { FileRuntimeEventStore } from "./eventStore";
+import { redactMediaProjection } from "@/lib/externalRelay/mediaPrivacy";
 import { normalizeRuntimeLiveTurn, projectRuntimeLiveTurnItem, runtimeLiveTurnItems } from "./liveTurn";
 
 describe("projectEngineHostEvent", () => {
@@ -735,4 +741,197 @@ test("retained previews cross journal projection and conversation live-turn read
     live = projectRuntimeLiveTurnItem(live, "turn", projected.payload.item, "completed", "2026-11-12T00:00:00.000Z");
   }
   expect(runtimeLiveTurnItems(live).find(row => row.tool)).toMatchObject({ itemId: "write", tool: { status: "err" } });
+});
+
+
+test("private relay media never enters small journal items for either engine", () => {
+  const ref = `media_${"a".repeat(32)}`, pixels = "aW1hZ2U=";
+  const items = [
+    { type: "mcpToolCall", id: "media-call", tool: "relay_service_tools", arguments: { seed_media_refs: [ref] },
+      result: { content: [{ type: "image", mimeType: "image/png", data: pixels }], output: ref }, status: "completed" },
+    { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "media-call", content: [
+      { type: "text", text: JSON.stringify({ media: [{ ref }] }) }, { type: "image", source: { type: "base64", data: pixels, media_type: "image/png" } },
+    ] }] } },
+  ];
+  for (const engine of ["codex", "claude"] as const) for (const item of items) {
+    const projected = projectEngineHostEvent("conversation_media", `${engine}:media`, { kind: "item", phase: "completed", turnId: "turn-media", seq: 1, item });
+    expect(JSON.stringify(projected)).not.toContain(ref); expect(JSON.stringify(projected)).not.toContain(pixels);
+    expect(JSON.stringify(item)).toContain(pixels);
+  }
+});
+
+test("private relay media is removed before Claude and Codex events reach the file ledger", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "relay-media-ledger-"));
+  try {
+    const store = new FileRuntimeEventStore(directory);
+    const ref = `media_${"b".repeat(32)}`;
+    const pixels = "cHJpdmF0ZS1waXhlbHM=";
+    for (const engine of ["claude", "codex"] as const) {
+      const project = createEngineHostLedgerProjection();
+      const host = `${engine}:private-media`;
+      const events: RuntimeEvent[] = [
+        { kind: "item", turnId: "turn", phase: "completed", seq: 1,
+          item: { type: "mcpToolCall", tool: "relay_service_tools", result: { content: [{ type: "image", mimeType: "image/png", data: pixels }], ref } },
+          voiceResponse: { responseId: "voice", text: `${JSON.stringify({ type: "image", mimeType: "image/png", data: pixels })} caption ${ref}` } },
+      { kind: "voice-chunk", turnId: "turn", seq: 2, delivery: streamingVoiceDelivery({ sourceTurnId: "turn", chunkIndex: 0, startOffset: 0, endOffset: ref.length,
+        text: `${JSON.stringify({ type: "image", mimeType: "image/png", data: pixels })} ${ref}` }) },
+        { kind: "delta", turnId: "turn", seq: 3, text: `split ${ref.slice(0, 6)}` },
+        { kind: "delta", turnId: "turn", seq: 4, text: ref.slice(6) },
+      { kind: "delta", turnId: "turn", seq: 5, text: `image ${JSON.stringify({ type: "image", mimeType: "image/png", data: pixels })}` },
+      ];
+      for (const event of events) store.append(host, project(event));
+      const stored = JSON.stringify(store.load(host));
+      expect(stored).not.toContain(ref);
+      expect(stored).not.toContain(pixels);
+      expect(stored).not.toContain("\"data\":");
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("formatted and nested JSON text wrappers do not retain image bytes or media refs", () => {
+  const ref = `media_${"d".repeat(32)}`;
+  const pixels = "cHJpdmF0ZS1waXhlbHM=";
+  const inner = JSON.stringify({ image: { mimeType: "image/png", data: pixels, ref } });
+  const wrapped = `\n\u001b[1mResult:\u001b[0m\n\`\`\`json\n${JSON.stringify({ content: inner, tool: "relay_service_tools" })}\n\`\`\``;
+  const projected = redactMediaProjection(wrapped);
+  expect(projected).not.toContain(ref);
+  expect(projected).not.toContain(pixels);
+});
+
+test("JSON wrapper prefixes and suffixes redact media refs while preserving ordinary text", () => {
+  const ref = `media_${"1".repeat(32)}`;
+  const wrapped = `before ${ref} relay_service_tools ${JSON.stringify({ ok: true })} after ${ref}`;
+  const safe = redactMediaProjection(wrapped);
+  expect(safe).not.toContain(ref);
+  expect(safe).toContain("before [private media]");
+  expect(safe).toContain("after [private media]");
+  expect(safe).toContain('"ok":true');
+});
+
+test("relay MCP failures remain failed after private error data is removed", () => {
+  const ref = `media_${"2".repeat(32)}`;
+  const projected = projectEngineHostEvent("conversation_private", "codex:thread-private", {
+    kind: "item", turnId: "turn-private", seq: 1, phase: "completed",
+    item: { type: "mcpToolCall", id: "call-private", server: "viewer", tool: "relay_service_tools",
+      status: "completed", error: { message: `request failed ${ref}` } },
+  });
+  const item = projected!.payload.item as Record<string, unknown>;
+  expect(item).toMatchObject({ type: "mcpToolCall", id: "call-private", status: "failed" });
+  expect(item).not.toHaveProperty("error");
+  expect(JSON.stringify(item)).not.toContain(ref);
+  expect(runtimeLiveTurnItems(projectRuntimeLiveTurnItem(null, "turn-private", item, "completed", "2026-11-15T00:00:00.000Z"))[0]?.tool)
+    .toMatchObject({ status: "err" });
+});
+
+test("code-mode image wrappers with multiple JSON values are discarded", () => {
+  const pixels = "cHJpdmF0ZS1waXhlbHM=";
+  const wrapped = `Result: ${JSON.stringify({ content: [{ type: "image", data: pixels }] })}\n${JSON.stringify({ text: "next block" })}`;
+  expect(redactMediaProjection(wrapped)).not.toContain(pixels);
+});
+
+test("live journal projection redacts voice fields and refs split across arrivals", () => {
+  const ref = `media_${"e".repeat(32)}`;
+  const directJournalVoice = projectEngineHostEvent("conversation_private", "claude:thread", {
+    kind: "item", turnId: "turn", seq: 5, phase: "completed", item: { type: "assistant", text: "safe" },
+    voiceResponse: { responseId: "voice", text: `spoken ${ref}` },
+  });
+  expect(JSON.stringify(directJournalVoice)).not.toContain(ref);
+  const project = createEngineHostLedgerProjection();
+  const first = project({ kind: "delta", turnId: "turn", seq: 1, text: `caption ${ref.slice(0, 19)}` });
+  const second = project({ kind: "delta", turnId: "turn", seq: 2, text: ref.slice(19) });
+  const voice = project({ kind: "item", turnId: "turn", seq: 3, phase: "completed",
+    item: { type: "agentMessage", text: "safe" }, voiceResponse: { responseId: "voice", text: `spoken ${ref}` } });
+  const chunk = project({ kind: "voice-chunk", turnId: "turn", seq: 4,
+    delivery: streamingVoiceDelivery({ sourceTurnId: "turn", chunkIndex: 0, startOffset: 0, endOffset: ref.length, text: ref }) });
+  expect(JSON.stringify([first, second, voice, chunk])).not.toContain(ref);
+  expect((voice as Extract<RuntimeEvent, { kind: "item" }>).voiceResponse?.text).toContain("[private media]");
+  expect((chunk as Extract<RuntimeEvent, { kind: "voice-chunk" }>).delivery.responses[0]?.text).toContain("[private media]");
+});
+
+test("durable stream projections keep every split of a media ref private", () => {
+  const ref = `media_${"f".repeat(32)}`;
+  for (let split = 1; split < ref.length; split++) {
+    for (const engine of ["claude", "codex"] as const) {
+      const project = createEngineHostLedgerProjection();
+      const first = project({ kind: "delta", turnId: "turn", seq: 1, text: `before ${ref.slice(0, split)}` });
+      const second = project({ kind: "delta", turnId: "turn", seq: 2, text: ref.slice(split) });
+      const journal = [first, second].map(event => projectEngineHostEvent("conversation_private", `${engine}:thread`, event as CoalescedEngineEvent));
+      expect(journal.map(event => event?.payload.text ?? "").join("")).not.toContain(ref);
+    }
+  }
+});
+
+test("ordinary text suffixes survive mismatch and turn end", () => {
+  const project = createEngineHostLedgerProjection();
+  const pieces = [
+    (project({ kind: "delta", turnId: "turn", seq: 1, text: "I am" }) as Extract<RuntimeEvent, { kind: "delta" }>).text,
+    (project({ kind: "delta", turnId: "turn", seq: 2, text: " working." }) as Extract<RuntimeEvent, { kind: "delta" }>).text,
+    (project({ kind: "delta", turnId: "turn", seq: 3, text: " Done." }) as Extract<RuntimeEvent, { kind: "delta" }>).text,
+  ];
+  const end = project({ kind: "turn-ended", turnId: "turn", seq: 4, status: "completed" });
+  const tail = project.flushPendingText();
+  expect(pieces.join("") + tail).toBe("I am working. Done.");
+  expect(end.kind).toBe("turn-ended");
+});
+
+test("independent delta and voice streams keep exact text across consecutive turns", () => {
+  const project = createEngineHostLedgerProjection();
+  const delta = project({ kind: "delta", turnId: "first", seq: 1, text: "I am" }) as Extract<RuntimeEvent, { kind: "delta" }>;
+  const voice = project({ kind: "item", turnId: "first", seq: 2, phase: "completed",
+    item: { type: "agentMessage", text: "safe" }, voiceResponse: { responseId: "voice-one", text: "spoken text" } }) as Extract<RuntimeEvent, { kind: "item" }>;
+  const end = project({ kind: "turn-ended", turnId: "first", seq: 3, status: "completed" });
+  const second = project({ kind: "delta", turnId: "second", seq: 4, text: "Hello." }) as Extract<RuntimeEvent, { kind: "delta" }>;
+  expect(delta.text + project.flushPendingText("first", "delta")).toBe("I am");
+  expect(voice.voiceResponse?.text).toBe("spoken text");
+  expect(second.text).toBe("Hello.");
+  expect(end.kind).toBe("turn-ended");
+  expect(project.flushPendingText("first")).toBe("");
+});
+
+test("held ref prefixes are isolated by stream and replaced on mismatch or turn end", () => {
+  const project = createEngineHostLedgerProjection();
+  const ref = `media_${"3".repeat(32)}`;
+  const partial = project({ kind: "delta", turnId: "turn-one", seq: 1, text: `caption ${ref.slice(0, 12)}` }) as Extract<RuntimeEvent, { kind: "delta" }>;
+  const voice = project({ kind: "item", turnId: "turn-one", seq: 2, phase: "completed",
+    item: { type: "agentMessage", text: "safe" }, voiceResponse: { responseId: "voice-two", text: "voice stays exact" } }) as Extract<RuntimeEvent, { kind: "item" }>;
+  expect(partial.text).toBe("caption ");
+  expect(voice.voiceResponse?.text).toBe("voice stays exact");
+  expect(project.flushPendingText("turn-one", "delta")).toBe("[private media]");
+  const held = project({ kind: "delta", turnId: "turn-two", seq: 3, text: `again ${ref.slice(0, 12)}` }) as Extract<RuntimeEvent, { kind: "delta" }>;
+  const mismatch = project({ kind: "delta", turnId: "turn-two", seq: 4, text: " ordinary" }) as Extract<RuntimeEvent, { kind: "delta" }>;
+  expect(held.text).toBe("again ");
+  expect(mismatch.text).toBe("[private media] ordinary");
+  expect(project.flushPendingText("turn-two")).toBe("");
+});
+
+
+test.each([false, true])("coalesced privacy projections retain valid lengths and exact journal delivery credit (media: %s)", async media => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "privacy-fold-credit-"));
+  const filename = path.join(root, "journal.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const ref = `media_${"a".repeat(32)}`;
+  const text = media ? ["caption m", ref.slice(1), " end."] : ["caption d", "ata", " flow."];
+  const events: RuntimeEvent[] = text.map((text, index) => ({ kind: "delta", turnId: "turn-fold", seq: index + 1, text }));
+  const key = "claude:fold-credit";
+  try {
+    // A predecessor has already recorded the first part. Its held namespace
+    // prefix belongs to the later part when the replacement projects the fold.
+    journal.append(projectEngineHostEvent("conversation_fold", key, createEngineHostLedgerProjection()(events[0]))!);
+    const iterator = coalesceReadyEngineDeltas((async function* () { yield* events; })()[Symbol.asyncIterator]());
+    const folded = (await iterator.next()).value!;
+    expect("foldedTextLengths" in folded).toBe(true);
+    const project = createEngineHostLedgerProjection();
+    const safe = project(folded) as CoalescedEngineEvent;
+    const row = projectEngineHostEvent("conversation_fold", key, safe)!;
+    expect(() => assertRuntimeEvent(row)).not.toThrow();
+    journal.append(row);
+    journal.append(projectEngineHostEvent("conversation_fold", key, { kind: "turn-ended", turnId: "turn-fold", status: "completed", seq: 4 })!);
+    journal.close(); journal = new RuntimeJournal(filename, { structuredHosts: true });
+    const stored = journal.replay(0).events;
+    expect(stored.filter(row => row.kind === "delta").map(row => row.payload.text).join("")).toBe(media ? "caption [private media] end." : "caption data flow.");
+    expect(stored.at(-1)).toMatchObject({ kind: "turn-ended", payload: { outcome: "completed" } });
+    await iterator.return?.();
+  } finally { journal.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

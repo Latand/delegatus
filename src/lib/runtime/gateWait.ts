@@ -57,7 +57,9 @@ export async function waitForGate(log: string, timeoutMs = MAX_WAIT_MS): Promise
 
 async function observeGate(log: string, timeoutMs: number, signal?: AbortSignal): Promise<ReturnType<typeof gateSnapshot>> {
   const dir = directory(log);
-  if (!fs.existsSync(path.join(dir, "owner.json"))) throw new Error("unknown gate log (no recording ticket)");
+  const ownerFile = path.join(dir, "owner.json");
+  const exitFile = path.join(dir, "exit");
+  if (!fs.existsSync(ownerFile)) throw new Error("unknown gate log (no recording ticket)");
   return await new Promise((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let watcher: fs.FSWatcher | undefined;
@@ -75,20 +77,24 @@ async function observeGate(log: string, timeoutMs: number, signal?: AbortSignal)
     const abort = () => fail(new Error("gate completion wait cancelled; command result unknown"));
     try {
       if (signal?.aborted) { abort(); return; }
+      const owner = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
       signal?.addEventListener("abort", abort, { once: true });
-      watcher = fs.watch(dir, (_event, name) => { if ((!name || name.toString() === "exit") && fs.existsSync(path.join(dir, "exit"))) finish(); });
+      watcher = fs.watch(dir, (_event, name) => { if ((!name || name.toString() === "exit") && fs.existsSync(exitFile)) finish(); });
       watcher.on("error", fail);
       const deadline = performance.now() + timeoutMs;
-      const arm = () => {
+      const arm = (initial = false) => {
         if (settled) return;
-        const remaining = Math.max(0, deadline - performance.now());
-        if (remaining === 0 || fs.existsSync(path.join(dir, "exit"))) { finish(); return; }
-        timer = setTimeout(arm, Math.min(remaining, COMPLETION_RECHECK_MS));
+        try {
+          const remaining = Math.max(0, deadline - performance.now());
+          if (remaining === 0 || fs.existsSync(exitFile)) { finish(); return; }
+          const status = cpuOwnerStatus(owner);
+          // A recorder can die without changing any file. Use the same
+          // fallback tick to detect loss of its original identity.
+          if (status === "dead" || (initial && status !== "alive") || cpuOwnerExited(owner)) { finish(); return; }
+          timer = setTimeout(arm, Math.min(remaining, COMPLETION_RECHECK_MS));
+        } catch (error) { fail(error); }
       };
-      arm();
-      // An already finished run returns immediately, including after restart.
-      if (fs.existsSync(path.join(dir, "exit"))) finish();
-      else if (cpuOwnerStatus(JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8"))) !== "alive") finish();
+      arm(true);
     } catch (error) { fail(error); }
   });
 }
