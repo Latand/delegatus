@@ -21,7 +21,7 @@ import { isolatedEnvironment } from "./local-gate";
 import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
 import * as merger from "./merge-batch";
 import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
-import { resolveGateRun } from "../src/lib/runtime/gateCheckRecord";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, resolveGateRun } from "../src/lib/runtime/gateCheckRecord";
 import { ownFixtureTree, stopFixtureTree } from "../src/lib/testing/fixtureProcess";
 import { bindMergerContract } from "../src/lib/pipelines/mergerContract.fixture";
 
@@ -1084,11 +1084,20 @@ async function landWithSandboxedMerger(f: ReturnType<typeof landingFixture>, kin
       { ...process.env, TMPDIR: f.root }, join(f.root, "agent"));
     expect(env.LLV_STATE_DIR).not.toBe(process.env.LLV_STATE_DIR);
     const allow = ["PATH", "HOME", "LLV_STATE_DIR", "NODE_ENV"];
+    const gateRoot = bindGateCheckRoot(f.root)!;
     const shell = agentCodexPublicationPolicy(kind === "numbered" ? { include_only: allow }
-      : { filters: Object.fromEntries(allow.map(key => [key, "include"])) }, env);
+      : { filters: Object.fromEntries(allow.map(key => [key, "include"])) }, env, gateRoot);
     const included = new Set<string>(kind === "numbered" ? shell.include_only as string[]
       : [...allow, ...Object.keys(shell.filters as Record<string, string>)]);
     expect(shell.set).not.toHaveProperty("LLV_SPAWN_CAPABILITY");
+    expect(shell.set).toMatchObject({
+      [GATE_CHECK_LAUNCH_ROOT_ENV]: gateRoot.root,
+      [GATE_CHECK_ROOT_ENV]: gateRoot.physicalRoot,
+      [GATE_CHECK_ROOT_IDENTITY_ENV]: gateRoot.rootDirectoryIdentity,
+    });
+    expect([...included]).toEqual(expect.arrayContaining([
+      GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV,
+    ]));
     const childEnv = Object.fromEntries(Object.entries(env).filter(([key]) => included.has(key)));
     const admission = merger.viewerLandingAdmission(childEnv);
     const head = f.addPr(12, "held.txt", "member patch");

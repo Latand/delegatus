@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { stateLockProcessKind } from "@/lib/state/lockWait";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -100,6 +101,18 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
   }
 }
 
+async function readStoreChild(child: Bun.ReadableSubprocess) {
+  const reads = [child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()] as const;
+  try {
+    const [exit, stdout, stderr] = await Promise.all(reads);
+    return { exit, stdout, stderr };
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await Promise.allSettled(reads);
+    throw error;
+  }
+}
+
 test.each([false, true])("a closed stageless draft round-trips and archives (pinned base: %s)", async (pinned) => isolatedDelivery(async () => {
   const pipeline = buildPipeline({ id: "empty-closed", task: "Discard empty draft", project: "fixture", repoDir: "/repo",
     stages: [], srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft" });
@@ -159,8 +172,9 @@ test("promoted Viewer loads historical severity-only verdicts before hot-state a
   const child = Bun.spawn([process.execPath, "-e", script], {
     env: { ...process.env, LLV_STATE_DIR: root, LLV_STATE_OWNER: "viewer" }, stdout: "pipe", stderr: "pipe",
   });
-  const stderr = await new Response(child.stderr).text();
-  expect({ exit: await child.exited, stderr }).toEqual({ exit: 0, stderr: "" });
+  const { exit, stdout, stderr } = await readStoreChild(child);
+  assertStateChildSuccess(exit, stderr);
+  expect(stdout).toBe("");
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.findings).toEqual(["P1", "P2"]);
 }));
 
@@ -170,14 +184,17 @@ test.each([
 ])("$name", async ({ contendedRelease }) => isolatedDelivery(async (root) => {
   savePipelines([]);
   const modulePath = path.join(import.meta.dir, "store.ts");
+  const operationId = "pipeline-store-delivery";
   const script = `import { createPipelineWithDelivery } from ${JSON.stringify(modulePath)};
+    import { withWaitCorrelation } from ${JSON.stringify(path.join(import.meta.dir, "../blockingWaits.ts"))};
     import { injectStateWriteFaultForTests, stateLeaseHoldsInFlight } from ${JSON.stringify(path.join(import.meta.dir, "../state/sqliteStateStore.ts"))};
     if (process.env.CONTENDED_RELEASE === "1") injectStateWriteFaultForTests({
       site: "release", collection: "pipelines", times: 1,
       error: Object.assign(new Error("database is locked"), { name: "SQLiteError", code: "SQLITE_BUSY" }),
     });
     const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
-    console.log(JSON.stringify(await createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET))));
+    console.log(JSON.stringify(await withWaitCorrelation({ operationId: ${JSON.stringify(operationId)} }, () =>
+      createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET)))));
     if (process.env.CONTENDED_RELEASE === "1") {
       const deadline = Date.now() + 10000;
       while (stateLeaseHoldsInFlight().some(hold => hold.collection === "pipelines")) {
@@ -185,43 +202,44 @@ test.each([
         await Bun.sleep(5);
       }
     }`;
-  const run = (record: Pipeline, contend = false) => Bun.spawn([process.execPath, "-e", script], {
+  const run = async (record: Pipeline, contend = false) => readStoreChild(Bun.spawn([process.execPath, "-e", script], {
     env: { ...process.env, LLV_STATE_DIR: root, CONTENDED_RELEASE: contend ? "1" : "0",
       DELIVERY_FIXTURE: JSON.stringify(record), DELIVERY_TARGET: JSON.stringify(deliveryTarget) },
     stdout: "pipe", stderr: "pipe",
-  });
+  }));
   // A committed write can defer lease cleanup when a competing process holds
-  // SQLite's writer lock. Each emitted diagnostic must match the exact allowlist;
-  // the exit, durable ownership and restart replay still have to prove success.
-  const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked\n";
-  const admissionWarning = "[state lease] abandoned pipelines: StateLockDeferredError: state admission is busy at state.lease.release\n";
+  // SQLite's writer lock. Keep those exact lease lines separate from the
+  // shared state timing diagnostics, and retain the cleanup proof.
+  const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked";
+  const admissionWarning = "[state lease] abandoned pipelines: StateLockDeferredError: state admission is busy at state.lease.release";
   const clearedLease = /^\[state lease\] cleared abandoned pipelines after \d+ ms$/;
-  const collect = async (child: ReturnType<typeof run>) => {
-    const [output, errors, exit] = await Promise.all([
-      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
-    ]);
-    expect(exit).toBe(0);
-    const waits = errors.split("\n").filter(line => line.startsWith("[blocking-wait] "));
-    for (const line of waits) expect(JSON.parse(line.slice("[blocking-wait] ".length)).site).toBe("state-write-lock");
-    const warnings = errors.split("\n").filter(line => line && !line.startsWith("[blocking-wait] "));
-    // A real contender can report admission release and the injected release
-    // fault separately. Deferred cleanup runs before the child exits; unknown
-    // stderr remains a failure, including beside an allowlisted diagnostic.
-    for (const warning of warnings) {
-      expect([releaseWarning.trim(), admissionWarning.trim()].includes(warning) || clearedLease.test(warning)).toBe(true);
-    }
-    return { record: JSON.parse(output) as Pipeline, errors: warnings };
+  // Bun prints the lease-hold timing object as a multiline console warning.
+  const leaseHold = /^\[state lease-hold\] \{\r?\n  collection: "pipelines",\r?\n  operation: "pipelines\.mutation",\r?\n  heldMs: [1-9]\d{3,},\r?\n(?:  inFlight: true,\r?\n)?\}(?:\r?\n|$)/gm;
+  const parseResult = ({ exit, stdout, stderr }: Awaited<ReturnType<typeof run>>) => {
+    const leaseWarnings: string[] = [];
+    const diagnostics = stderr.replace(leaseHold, "").split(/(?<=\n)/).filter(line => {
+      const warning = line.replace(/\r?\n$/, "");
+      if (warning !== releaseWarning && warning !== admissionWarning && !clearedLease.test(warning)) return true;
+      leaseWarnings.push(warning);
+      return false;
+    }).join("");
+    assertStateChildSuccess(exit, diagnostics, { correlatedOperationId: operationId });
+    return { record: JSON.parse(stdout) as Pipeline, leaseWarnings };
   };
-  const children = [run(deliveryFixture("owner-a"), contendedRelease), run(deliveryFixture("owner-b"))];
-  const completed = await Promise.all(children.map(collect));
-  if (contendedRelease) expect(completed[0]!.errors.some(line => clearedLease.test(line))).toBe(true);
+  // Join both contenders before parsing either result or removing the fixture state.
+  const children = await Promise.allSettled([run(deliveryFixture("owner-a"), contendedRelease), run(deliveryFixture("owner-b"))]);
+  const completed = children.map(result => {
+    if (result.status === "rejected") throw result.reason;
+    return parseResult(result.value);
+  });
+  if (contendedRelease) expect(completed[0]!.leaseWarnings.some(line => clearedLease.test(line))).toBe(true);
   const results = completed.map(({ record }) => record);
   const owner = results.find((record) => record.delivery?.active)!;
   const comparison = results.find((record) => record.delivery?.disposition === "comparison")!;
   expect(results.filter((record) => record.delivery?.active)).toHaveLength(1);
   expect(comparison).toMatchObject({ publication: "internal", delivery: { publish: "disabled", ownerId: owner.id, epoch: 1 } });
-  const replay = run(deliveryFixture(owner.id));
-  expect((await collect(replay)).record).toEqual(owner);
+  const replay = parseResult(await run(deliveryFixture(owner.id)));
+  expect(replay.record).toEqual(owner);
   expect(loadPipelines().sort((a, b) => a.id.localeCompare(b.id))).toEqual(results.sort((a, b) => a.id.localeCompare(b.id)));
   const database = new Database(path.join(root, "state.sqlite"));
   try {

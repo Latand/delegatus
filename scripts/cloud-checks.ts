@@ -98,12 +98,18 @@ const cloudClock: CloudClock = { now: () => Date.now(), sleep: ms => new Promise
  * with stage execution. Publication owns only transfer and verdict policy. */
 export async function connectCloud(config: CloudConfig, signal = new AbortController().signal, timeoutMs = 30_000,
   dependencies?: HostedCloudDependencies): Promise<CloudRpc> {
-  const { openHostedCloudSession, resolveHostedCloudEnvironment } = await import("../src/lib/pipelines/cloudHostedClient");
+  const { CloudEnvironmentMissingError, openHostedCloudSession, resolveHostedCloudEnvironment } = await import("../src/lib/pipelines/cloudHostedClient");
   const session = await openHostedCloudSession({ account: config.account, signal, assertCurrent: config.assertCurrent ?? (() => {}) }, timeoutMs, dependencies);
   try {
     const cwd = await resolveHostedCloudEnvironment(config.environmentId, session.auth, session.scope, dependencies);
     return { cwd, call: (method, params, onDispatch) => session.client.rpc(method, params, false, onDispatch), close: session.close };
-  } catch (error) { session.close(); throw error; }
+  } catch (error) {
+    session.close();
+    // Stages can replace a missing environment. For publication a catalogue
+    // 404 is a configuration refusal and supplies no evidence of a Cloud limit.
+    if (error instanceof CloudEnvironmentMissingError) throw new CloudRpcError(error.message, "invalid", error.diagnostic);
+    throw error;
+  }
 }
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;

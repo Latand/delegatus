@@ -613,7 +613,7 @@ must keep true.
 | File | Change |
 |---|---|
 | `src/lib/externalRelay/ownerServiceTools.ts` (new) | Registry on `globalThis`, `openOwnerServiceTools`, the adapter (§4, §5), `relayServiceToolsOp(conversationId, args, waitMs)` |
-| `src/lib/externalRelay/toolIndex.ts` (new) | Compact index, list matching, describe with blocks, `isOnDemandClaim`, `hydrateToolIndex` (§6) |
+| `src/lib/externalRelay/toolIndex.ts` (new) | Compact index, list matching, describe with blocks, `isOnDemandClaim` (folded into `hydrateToolIndex` over audience-visible tools on 2026-11-21), `hydrateToolIndex` (§6) |
 | `src/lib/externalRelay/toolLoop.ts` | Export `RELAY_TOOL_ROUNDS = 8` |
 | `src/lib/externalRelay/protocol.ts` | `spec` on `toolSchema`; `RELAY_TOOLS_ON_DEMAND`; `lookupResultSchema` |
 | `src/lib/externalRelay/runner.ts` | Fill before `:613`; shared lease; owner adapter; `RELAY_TOOL_ROUNDS` at `:638`, `:640`; `close` after `:719`; `loopRecord`; `finally` cleanup |

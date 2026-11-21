@@ -33,15 +33,17 @@ import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptP
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { buildReleaseTagPolicy } from "./releaseTagPolicy";
 import { controllerClosedHosts, controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
+import { withProvisioningTurn } from "./provisioningTurn";
 import { startPipelineControllerJob, pipelineControllerJobLanes, reportProvisioningPhase, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leasedOperationPorts, OperationLeaseExpiredError, operationPortIdentity, withoutOperationLease } from "@/lib/operationLease";
+import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leasedOperationPorts, OperationLease, OperationLeaseExpiredError, operationPortIdentity, withoutOperationLease } from "@/lib/operationLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipelineRuntimeReads } from "./runtimeReads";
 import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
 import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts } from "./controllerSnapshot";
+import { claimIdleStop, claimWithdrawal, consumeWithdrawalRefusal, hasWithdrawalRefusal, idleStopReceiptMatches, readIdleStop, readWithdrawal, recordWithdrawalRefusal, settleDeadWithdrawal, terminalIdleStopKey, terminalIdleStopOwner, withdrawalSettledDead, type IdleStopBinding, type WithdrawalBinding } from "./stageControlCustody";
 import { pipelineStageHostTerminationSourceCurrent, probePipelineStageHostTermination, type HostTerminationInput, type HostTerminationProbe } from "./hostTermination";
 import { guardHostTerminationCheckpoint, hostTerminationKey } from "./hostTerminationProof";
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, recoverableRuntimeSwitch, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
@@ -63,6 +65,8 @@ import { agentMemoryScopes, PIPELINE_MEMORY_DEFAULT_ROLE, type AgentMemoryScopeI
 import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
 import { cpuPriorityEnv, type CpuPrioritySource } from "@/lib/runtime/cpuPriority";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
+import { CPU_STAGE_POLL_MS } from "@/lib/runtime/cpuAdmission";
+import type { UrgentStagePoll } from "@/lib/runtime/urgentStageCapacity";
 import { instanceCpuPrioritySource, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import crypto from "node:crypto";
@@ -70,7 +74,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
-import { withConversationActuation } from "@/lib/deliveryActuation";
+import { tryConversationActuation, withConversationActuation } from "@/lib/deliveryActuation";
 import { codexServiceTierRefusal, hiddenAccountsTierRefusal, tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { codexSessionRoots, listCodexAccounts } from "@/lib/accounts/codex";
 import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
@@ -107,7 +111,7 @@ import type { Flow, FlowEngine } from "@/lib/flows/types";
 import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isVisualCriticStage, visualCriticSkipRefusal } from "@/lib/prototypeReview/criticGate";
-import { isRuntimeHostTransportFailure, runtimeHostClient, withRuntimeRecoveryReads, type RuntimeHostClient } from "@/lib/runtime/client";
+import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, withRuntimeRecoveryReads, type RuntimeHostClient } from "@/lib/runtime/client";
 import { runtimeHostSocket, structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
 import { readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { restartCutEvidenceUnresolved } from "@/lib/runtime/restartCutHold";
@@ -195,7 +199,7 @@ import { pipelineAttemptMayBeWorking, pipelineAttemptReleased, pipelineHostHasLi
 import { recordedAttemptReceipts, recordedHostHeld } from "@/lib/recordedChecks/store";
 import { recordedReportReceipts } from "@/lib/recordedChecks/reportGate";
 import { pipelineRecordRevalidator } from "./revalidation";
-import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, completedComparisonPass, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
+import { findControllerPipeline, controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, completedComparisonPass, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, controllerUnclaimedPublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesForList, loadPipelinesAsync, selectControllerPipelines as selectAllControllerPipelines, controllerPipelineRowOrder, controllerPipelineVersion, controllerPipelineVersionNow, pendingCpuStageRevision, wakePipelineCpuStage, pipelineRecordReader, cloneControllerPipeline, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation as withAllPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -402,7 +406,7 @@ export interface PipelinePorts {
   fencedFirstMessageRetrySafe?(launchId: string, conversationId: string, eligible: () => boolean): Promise<boolean>;
   drainHold?(): DrainLease | null;
   /** A held stage start waits in the shared bounded CPU queue; null admits. */
-  cpuPressureHold?(key?: string, priority?: CpuPrioritySource): CpuPressureHold | null;
+  cpuPressureHold?(key?: string, priority?: CpuPrioritySource, urgentStage?: UrgentStagePoll): CpuPressureHold | null;
   cpuAdmissionReconcile?(admission?: Pick<PipelinePorts, "drainHold" | "structuredDeliveryPublication" | "now">): void | Promise<void>;
   cpuAdmissionSuspend?(key: string): void;
   observeControllerLeaseHold?(heldMs: number): void;
@@ -564,7 +568,7 @@ export interface PipelinePorts {
   /** Journal proof that the accepted continuation was refused before execution. */
   conversationDeliveryRetryable?(conversationId: string, clientMessageId: string): Promise<boolean>;
   /** Withdraw queued automatic continuations before acknowledging operator control. */
-  invalidateProviderContinuation?(conversationId: string): Promise<void>;
+  invalidateProviderContinuation?(conversationId: string, owner?: ContinuationWithdrawalOwner): Promise<void>;
   /** A fresh live quota reading after the limit proves the source recovered. */
   claudeAccountRecovered?(accountId: string, limitedAt: number, model: string | null): boolean;
   /** Fresh provider proof after a cut, including a successful sign-in. */
@@ -1178,6 +1182,7 @@ export type StageStopProbes = {
   now?: () => number;
   budgetMs?: number;
   intervalMs?: number;
+  signal?: AbortSignal;
 };
 
 /**
@@ -1359,14 +1364,131 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
   };
 }
 
+function stageStopSignal(probes: StageStopProbes): AbortSignal | undefined {
+  const lane = currentOperationLease()?.abort.signal;
+  return probes.signal && lane ? AbortSignal.any([probes.signal, lane]) : probes.signal ?? lane;
+}
+
+async function confirmStageStop(probe: StageHostProbe, operationId: string | null, receiptStatus: string | null,
+  probes: StageStopProbes, binding?: IdleStopBinding, receiptDeadline?: number): Promise<PipelineStageStopResult> {
+  const { resident } = probe;
+  const client = probes.client === undefined ? runtimeHostClient() : probes.client;
+  const now = probes.now ?? (() => performance.now());
+  const sleep = probes.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const deadline = receiptDeadline ?? now() + (probes.budgetMs ?? KILL_CONFIRMATION_BUDGET_MS);
+  const interval = probes.intervalMs ?? KILL_CONFIRMATION_INTERVAL_MS;
+  const confirmation = new OperationLease();
+  const caller = stageStopSignal(probes);
+  const cancel = () => confirmation.abort.abort(caller?.reason);
+  if (caller?.aborted) cancel();
+  else caller?.addEventListener("abort", cancel, { once: true });
+  const timer = setTimeout(() => confirmation.expire(), Math.max(0, deadline - now()));
+  let observedStatus = receiptStatus;
+  try {
+    for (let poll = 0; poll < KILL_CONFIRMATION_MAX_POLLS; poll += 1) {
+      if (!resident()) return { outcome: "stopped" };
+      const remaining = Math.ceil(deadline - now());
+      if (remaining <= 0 || confirmation.abort.signal.aborted) break;
+      if (operationId && client) {
+        const durable = await confirmation.run(() => awaitLeasedOperation("pipelines.stop-confirmation", () =>
+          client.operationStatus(operationId, { timeoutMs: remaining, signal: confirmation.abort.signal }))).catch(() => null);
+        if (confirmation.abort.signal.aborted || now() >= deadline) break;
+        const status = durable && (!binding || idleStopReceiptMatches(durable, binding)) ? durable.receipt.status : null;
+        if (status && binding) observedStatus = status;
+        if (status && KILL_DELIVERED_STATES.has(status) && !resident()) return { outcome: "stopped" };
+        if (status && KILL_REFUSED_STATES.has(status)) {
+          if (binding && durable?.receipt.reason !== "idle-retirement-deferred") return {
+            outcome: "unconfirmed", operationId, detail: durable?.receipt.reason ?? `kill ${status} without termination proof`,
+          };
+          if (probes.onlyIfIdle || binding) return { outcome: "deferred" };
+          return {
+            outcome: "failed",
+            error: durable?.receipt.reason ?? `stage host kill ${status} (operation ${operationId})`,
+          };
+        }
+      }
+      const wait = Math.min(interval, deadline - now());
+      if (wait <= 0) break;
+      await confirmation.run(() => awaitLeasedOperation("pipelines.stop-confirmation-poll", () => sleep(wait))).catch(() => {});
+    }
+  } finally {
+    clearTimeout(timer);
+    caller?.removeEventListener("abort", cancel);
+  }
+  if (!resident()) return { outcome: "stopped" };
+  return {
+    outcome: "unconfirmed",
+    operationId,
+    detail: observedStatus === null && binding ? "the owned stage stop awaits a confirmed receipt" :
+      `kill accepted as ${observedStatus} but termination was not confirmed`,
+  };
+}
+
+function idleStopTargetMatches(probe: StageHostProbe, binding: IdleStopBinding): boolean {
+  return probe.conversationId === binding.conversationId && probe.transcriptPath === binding.transcriptPath
+    && probe.key.engine === binding.sessionKey.engine && probe.key.sessionId === binding.sessionKey.sessionId;
+}
+
 export async function stopPipelineStageAgent(
   target: PipelineStageHostRef,
   probes: StageStopProbes = {},
 ): Promise<PipelineStageStopResult> {
   if (probes.providerRecovery && !probes.onlyIfIdle) return { outcome: "deferred" };
+  let binding: IdleStopBinding | undefined;
+  let receiptDeadline: number | undefined;
+  const signal = stageStopSignal(probes);
+  const assertCurrent = () => signal?.throwIfAborted();
   try {
+    assertCurrent();
     const probe = await stageHostProbe(target);
+    assertCurrent();
     if (!probe || !probe.resident()) return { outcome: "not-running" };
+    const ownerKey = terminalIdleStopOwner(probes.operationId) ? probes.operationId : null;
+    if (ownerKey) {
+      if (ownerKey !== terminalIdleStopKey(target) || target.agentPath && target.agentPath !== probe.transcriptPath)
+        return { outcome: "deferred" };
+      const previous = await readIdleStop(ownerKey);
+      if (previous && !idleStopTargetMatches(probe, previous)) return { outcome: "deferred" };
+      binding = previous ?? undefined;
+      assertCurrent();
+      if (previous) {
+        if (!probes.onlyIfIdle || probes.onlyIfIdle.revision <= previous.revision) {
+          return await confirmStageStop(probe, previous.operationId, null, probes, previous);
+        }
+        const client = probes.client === undefined ? runtimeHostClient() : probes.client;
+        const now = probes.now ?? (() => performance.now());
+        const budget = probes.budgetMs ?? KILL_CONFIRMATION_BUDGET_MS;
+        receiptDeadline = now() + budget;
+        const proof = new OperationLease();
+        const stopObserving = currentOperationLease()?.observe(proof);
+        const cancelProof = () => proof.abort.abort(signal?.reason);
+        signal?.addEventListener("abort", cancelProof, { once: true });
+        const timer = setTimeout(() => proof.expire(), budget);
+        const receipt = await proof.run(() => awaitLeasedOperation("pipelines.stop-replacement-proof", () =>
+          client?.operationStatus(previous.operationId, { timeoutMs: budget, signal: proof.abort.signal }))).finally(() => {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", cancelProof);
+          stopObserving?.();
+        });
+        assertCurrent();
+        if (now() >= receiptDeadline || !receipt || !idleStopReceiptMatches(receipt, previous) || !KILL_REFUSED_STATES.has(receipt.receipt.status)
+          || receipt.receipt.reason !== "idle-retirement-deferred") return {
+          outcome: "unconfirmed", operationId: previous.operationId, detail: "the earlier stage stop has no no-effect receipt",
+        };
+      }
+      if (!probes.onlyIfIdle) return { outcome: "deferred" };
+      const owned = await claimIdleStop(ownerKey, {
+        conversationId: probe.conversationId, sessionKey: probe.key, transcriptPath: probe.transcriptPath,
+        revision: probes.onlyIfIdle.revision, writerClaim: probes.onlyIfIdle.writerClaim,
+      }, previous ?? undefined);
+      binding = owned.binding;
+      assertCurrent();
+      if (!idleStopTargetMatches(probe, binding)) return { outcome: "deferred" };
+      if (!owned.acquired) return await confirmStageStop(probe, binding.operationId, null, probes, binding, receiptDeadline);
+      const current = await stageHostProbe(target);
+      assertCurrent();
+      if (!current || !idleStopTargetMatches(current, binding) || probes.observationGuard?.()) return { outcome: "deferred" };
+    }
     /* What the attempt already holds as unresolved is its caller's to report;
        nothing else of this host runs to stop. */
     if (probes.recordedSurvivors?.length && probe.onlyRecordedSurvivorsRun(probes.recordedSurvivors)) {
@@ -1380,15 +1502,24 @@ export async function stopPipelineStageAgent(
     const { conversationId, transcriptPath, resident } = probe;
 
     const applyAction = probes.action ?? (async (request) => {
-      const { applyConversationAction } = await import("@/lib/conversation/actions");
-      return applyConversationAction(request);
+      const { applyConversationAction, applyOwnedStageStop } = await import("@/lib/conversation/actions");
+      assertCurrent();
+      return binding ? applyOwnedStageStop(request) : applyConversationAction(request);
     });
-    const result = await applyAction({ conversationId, transcriptPath, action: "kill", ...(probes.operationId ? { operationId: probes.operationId } : {}),
-      ...(probes.automatic ? { actor: { kind: "agent" as const, conversationId } } : {}),
-      ...(probes.onlyIfIdle ? { onlyIfIdle: probes.onlyIfIdle } : {}),
-      ...(probes.providerRecovery ? { providerRecovery: probes.providerRecovery } : {}),
-    });
+    const operationId = binding?.operationId ?? probes.operationId;
+    assertCurrent();
+    const result = await awaitLeasedOperation("pipelines.stage-stop-dispatch", () =>
+      applyAction({ conversationId, transcriptPath, action: "kill", ...(operationId ? { operationId } : {}),
+        ...(probes.automatic ? { actor: { kind: "agent" as const, conversationId } } : {}),
+        ...(probes.onlyIfIdle ? { onlyIfIdle: probes.onlyIfIdle } : {}),
+        ...(probes.providerRecovery ? { providerRecovery: probes.providerRecovery } : {}),
+      }));
     const body = result.body as { ok?: boolean; error?: string; code?: string; operationId?: string; receipt?: { status?: string } };
+    // An admitted owner keeps the operation even if the send acknowledgement
+    // failed. The journal and the original host identity decide settlement.
+    if (binding && (result.status >= 400 || body.ok !== true)) {
+      return await confirmStageStop(probe, binding.operationId, null, probes, binding, receiptDeadline);
+    }
     if (result.status === 503 && body.code === RUNTIME_HOST_UNAVAILABLE_CODE) {
       if (probes.onlyIfIdle && !probes.observationGuard) return { outcome: "deferred" };
       return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {}, probes.observationGuard);
@@ -1399,40 +1530,19 @@ export async function stopPipelineStageAgent(
     }
     /* No receipt means the control settled synchronously — the legacy pane
        ladder, or a replayed terminal kill on an already-dead host. */
+    if (binding && body.operationId && body.operationId !== binding.operationId) {
+      return await confirmStageStop(probe, binding.operationId, null, probes, binding, receiptDeadline);
+    }
     const receiptStatus = body.receipt?.status ?? null;
-    if (probes.onlyIfIdle && receiptStatus && KILL_REFUSED_STATES.has(receiptStatus)) return { outcome: "deferred" };
+    if (!binding && probes.onlyIfIdle && receiptStatus && KILL_REFUSED_STATES.has(receiptStatus)) return { outcome: "deferred" };
     if ((!receiptStatus || KILL_DELIVERED_STATES.has(receiptStatus)) && !resident()) return { outcome: "stopped" };
 
-    const operationId = body.operationId ?? null;
-    const client = probes.client === undefined ? runtimeHostClient() : probes.client;
-    const now = probes.now ?? Date.now;
-    const sleep = probes.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-    const deadline = now() + (probes.budgetMs ?? KILL_CONFIRMATION_BUDGET_MS);
-    const interval = probes.intervalMs ?? KILL_CONFIRMATION_INTERVAL_MS;
-    for (let poll = 0; poll < KILL_CONFIRMATION_MAX_POLLS; poll += 1) {
-      if (!resident()) return { outcome: "stopped" };
-      if (operationId && client) {
-        const durable = await client.operationStatus(operationId).catch(() => null);
-        const status = durable?.receipt.status ?? null;
-        if (status && KILL_DELIVERED_STATES.has(status) && !resident()) return { outcome: "stopped" };
-        if (status && KILL_REFUSED_STATES.has(status)) {
-          if (probes.onlyIfIdle) return { outcome: "deferred" };
-          return {
-            outcome: "failed",
-            error: durable?.receipt.reason ?? `stage host kill ${status} (operation ${operationId})`,
-          };
-        }
-      }
-      if (now() >= deadline) break;
-      await sleep(interval);
-    }
-    if (!resident()) return { outcome: "stopped" };
-    return {
-      outcome: "unconfirmed",
-      operationId,
-      detail: `kill accepted as ${receiptStatus} but termination was not confirmed`,
-    };
+    return await confirmStageStop(probe, body.operationId ?? binding?.operationId ?? null, receiptStatus, probes, binding, receiptDeadline);
   } catch (error) {
+    if (binding) {
+      return { outcome: "unconfirmed", operationId: binding.operationId,
+        detail: `the owned stage stop acknowledgement is unknown: ${redactBounded(String(error), 300)}` };
+    }
     if (probes.onlyIfIdle) return { outcome: "deferred" };
     return { outcome: "failed", error: error instanceof Error ? error.message : String(error) };
   }
@@ -1447,19 +1557,35 @@ export async function retirePipelineStageAgent(
   try {
     const probe = await stageHostProbe(target);
     if (!probe || !probe.resident()) return { outcome: "not-running" };
+    const ownerKey = terminalIdleStopOwner(probes.operationId) ? probes.operationId : null;
+    const previous = ownerKey && await readIdleStop(ownerKey);
+    const signal = stageStopSignal(probes);
+    signal?.throwIfAborted();
+    if (ownerKey && (ownerKey !== terminalIdleStopKey(target) || target.agentPath && target.agentPath !== probe.transcriptPath)) {
+      return { outcome: "deferred" };
+    }
+    const reconcile = () => previous ? stopPipelineStageAgent(target, probes) : { outcome: "deferred" as const };
     /* A missing stream cannot prove the host is idle. Automatic retirement
        leaves it retryable; callers without this fence may use its recorded identity. */
     if (probe.orphaned()) {
-      if (probes.requireIdleEvidence) return { outcome: "deferred" };
-      return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
+      if (previous || probes.requireIdleEvidence) return await reconcile();
+      return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {}, () => {
+        if (signal?.aborted || !probe.orphaned()) return { status: 409, error: "recorded orphan authority changed" };
+        return probes.observationGuard?.() ?? null;
+      });
     }
     const client = probes.client === undefined ? runtimeHostClient() : probes.client;
-    if (!client) return { outcome: "deferred" };
-    const session = await client.readSession?.({ conversationId: probe.conversationId });
+    if (!client) return await reconcile();
+    const session = await client.readSession?.({ conversationId: probe.conversationId }, { signal });
+    signal?.throwIfAborted();
     // Older runtime generations cannot prove the conditional-kill protocol.
     if (!session || session.retirementBlocked !== false || session.host !== "hosted" || session.turn !== "idle"
       || session.activeTurnId !== null || session.attentionIds.length > 0 || !session.writerClaim
-      || session.artifactPath !== probe.transcriptPath) return { outcome: "deferred" };
+      || session.artifactPath !== probe.transcriptPath) return await reconcile();
+    if (ownerKey && (session.conversationId !== probe.conversationId
+      || session.sessionKey.engine !== probe.key.engine || session.sessionKey.sessionId !== probe.key.sessionId)) {
+      return { outcome: "deferred" };
+    }
     return await stopPipelineStageAgent(target, { ...probes, client,
       onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim },
     });
@@ -1976,10 +2102,10 @@ export function defaultPipelinePorts(
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
     drainHold: () => activeDrain(),
-    cpuPressureHold: (key, priority) => {
+    cpuPressureHold: (key, priority, urgentStage) => {
       const gate = machineCpuPressureGate();
       if (!gate) return null;
-      return gate.check(key, priority);
+      return gate.check(key, priority, urgentStage);
     },
     cpuAdmissionReconcile: async (admission) => {
       let waiting: Pipeline[];
@@ -2360,7 +2486,7 @@ export function defaultPipelinePorts(
           : { outcome: "failed", error: "stage launch wrote native turn evidence while its host stopped" };
       })
       : options?.onlyIfIdle
-      ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery, requireIdleEvidence: options.requireIdleEvidence })
+      ? retirePipelineStageAgent(target, { operationId: options.operationId, providerRecovery: options.providerRecovery, requireIdleEvidence: options.requireIdleEvidence })
       : stopPipelineStageAgent(target, { operationId: options?.operationId, automatic: options?.automatic,
         ...(options?.recordedSurvivors ? { recordedSurvivors: options.recordedSurvivors } : {}) }),
     stopInterruptedStageAgent: async (target, options) => {
@@ -2661,7 +2787,7 @@ export function defaultPipelinePorts(
       }
       return result?.ok === true;
     },
-    invalidateProviderContinuation,
+    invalidateProviderContinuation: (id, key) => invalidateProviderContinuation(id, runtimeHostClient(), key),
     runtimeSwitchControl: async (conversationId, path, action, operationId, target) => {
       const conversation = registry.conversation(conversationId as ViewerConversationId);
       if (conversation?.reconfigure?.operationId === operationId) return;
@@ -4040,14 +4166,103 @@ async function stopStageForRecovery(target: PipelineStageHostRef, ports: Pipelin
   return pane.outcome === "unknown" ? { outcome: "failed", error: pane.detail } : pane;
 }
 
+type ContinuationWithdrawalOwner = { key: string; artifactPath: string | null };
+
+// Older runtime handlers return this exact refusal before opening the journal.
+const LEGACY_WITHDRAWAL_REFUSAL = "a fenced session append requires a session-status event and its observed revision";
+
+function closeWithdrawalOwner(pipelineId: string, target: PipelineStageHostRef): ContinuationWithdrawalOwner {
+  return { key: `stage-close-withdrawal:${pipelineId}:${target.conversationId}`, artifactPath: target.agentPath };
+}
+
 /** Withdraw the idle revision a queued provider continuation was admitted against. */
-export async function invalidateProviderContinuation(conversationId: string, client = runtimeHostClient()): Promise<void> {
+export async function invalidateProviderContinuation(conversationId: string, client = runtimeHostClient(),
+  owner?: ContinuationWithdrawalOwner): Promise<void> {
   if (!client) throw new Error("runtime host is unavailable");
+  const producerKind = "viewer-command";
   // Informational session events consume a revision. Held deliveries retain
   // their old fence and are refused when they subsequently reach the journal.
-  await withConversationActuation(conversationId, () => client.append({ scope: { type: "session", id: conversationId },
+  const event = (eventKey: string) => ({
+    scope: { type: "session" as const, id: conversationId },
     kind: "pipeline.provider-continuation-cancelled", payload: { conversationId },
-    producer: { kind: "viewer-command", eventKey: `provider-cancel:${crypto.randomUUID()}` } }));
+    producer: { kind: producerKind, eventKey },
+  });
+  if (!owner) {
+    await withConversationActuation(conversationId, () => awaitLeasedOperation("pipelines.provider-continuation-withdrawal", () =>
+      client.append(event(`provider-cancel:${crypto.randomUUID()}`))));
+    return;
+  }
+  const appendFenced = client.appendSessionFenced;
+  if (!appendFenced) throw new Error("runtime host cannot fence provider withdrawal");
+  const signal = currentOperationLease()?.abort.signal;
+  const cursorFor = (record: WithdrawalBinding) => awaitLeasedOperation("pipelines.provider-withdrawal-receipt", () =>
+    client.producerCursor(producerKind, record.producerPrefix, { signal }));
+  const settled = async (record: WithdrawalBinding) => {
+    if (record.conversationId !== conversationId || record.artifactPath !== owner.artifactPath) {
+      throw new Error("provider withdrawal custody changed");
+    }
+    return await withdrawalSettledDead(record) || await cursorFor(record) === 1;
+  };
+  const pending = () => new Error("provider withdrawal awaits a confirmed receipt");
+  const previous = await readWithdrawal(owner.key);
+  if (previous && await settled(previous)) return;
+  const session = await awaitLeasedOperation("pipelines.provider-withdrawal-fence", () =>
+    client.readSession?.({ conversationId }, { signal }) ?? null);
+  const { artifactPath } = owner;
+  if (!session || session.conversationId !== conversationId || !artifactPath || session.artifactPath !== artifactPath) {
+    throw previous ? pending() : new Error("provider withdrawal cannot prove session authority");
+  }
+  let retry: WithdrawalBinding | undefined;
+  let dead: WithdrawalBinding | undefined;
+  if (previous) {
+    if (session.revision < previous.revision || session.sessionKey.engine !== previous.sessionKey.engine
+      || session.sessionKey.sessionId !== previous.sessionKey.sessionId || session.activeTurnId !== null
+      || session.attentionIds.length !== 0) throw pending();
+    // Runtime admission reports both released host states as dead-host.
+    const deadSession = (session.host === "dead" || session.host === "unhosted") && !session.writerClaim;
+    if (session.revision > previous.revision && deadSession) dead = previous;
+    if (!deadSession && (session.host !== "hosted" || session.turn !== "idle" || !session.writerClaim)) throw pending();
+    if (session.revision === previous.revision) {
+      if ((session.writerClaim ?? null) !== previous.writerClaim || !await hasWithdrawalRefusal(previous, LEGACY_WITHDRAWAL_REFUSAL)) throw pending();
+      retry = previous;
+    }
+    // Once the row has advanced, the journal cannot admit the old revision.
+    // Read its producer receipt again to account for an append that won just
+    // before the revision changed or a resumed operation that already settled.
+    const cursor = await cursorFor(previous);
+    if (cursor === 1) return;
+    if (cursor !== 0) throw pending();
+  }
+  const issued = await tryConversationActuation(conversationId, async lease => {
+    assertOperationLease();
+    if (previous && await withdrawalSettledDead(previous)) return null;
+    if (dead) {
+      // The old revision cannot arrive after this proof. Retain the
+      // settlement so later readers never rebase it onto a new writer.
+      if (!await settleDeadWithdrawal(owner.key, dead)) throw pending();
+      return null;
+    }
+    const claim = retry
+      ? { acquired: await consumeWithdrawalRefusal(retry, LEGACY_WITHDRAWAL_REFUSAL), binding: retry }
+      : await claimWithdrawal(owner.key, { conversationId, sessionKey: session.sessionKey,
+        artifactPath, revision: session.revision, writerClaim: session.writerClaim ?? null }, previous ?? undefined);
+    if (!claim.acquired) return claim.binding;
+    assertOperationLease();
+    const eventKey = claim.binding.producerPrefix + "1";
+    lease.act(eventKey);
+    try {
+      await awaitLeasedOperation("pipelines.provider-continuation-withdrawal", () =>
+        appendFenced.call(client, { ...event(eventKey), expectedSessionRevision: claim.binding.revision }, { signal }));
+    } catch (error) {
+      if (error instanceof RuntimeHostUnavailableError && error.code === undefined && error.message === LEGACY_WITHDRAWAL_REFUSAL) {
+        await recordWithdrawalRefusal(claim.binding, error.message);
+      }
+      throw error;
+    }
+    return null;
+  });
+  if (!issued.acquired) throw new Error("provider withdrawal is waiting for its conversation owner");
+  if (issued.value && !await settled(issued.value)) throw pending();
 }
 
 async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, condition: ProviderCondition, ports: PipelinePorts, persist: () => void | Promise<void>, target: string | null): Promise<boolean> {
@@ -8392,15 +8607,16 @@ async function spawnCorrelatedRunStage(
     const assertSetupCurrent = () => {
       const current = findPipelineRecord(pipeline.id);
       if (attempt.activation) {
-        const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
+        const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.at(-1);
         if (!current || activationFence(current) !== attempt.activation.fence
           || current.repoDir !== pipeline.repoDir || current.worktreeDir !== pipeline.worktreeDir || current.branch !== pipeline.branch
-          || currentAttempt?.activation?.id !== attempt.activation.id) throw new ActivationSuperseded();
+          || currentAttempt?.n !== attempt.n || currentAttempt.activation?.id !== attempt.activation.id
+          || currentAttempt.activation.cancelRequested) throw new ActivationSuperseded();
       }
       assertProactivePipelineExecution(current ?? pipeline);
     };
     const setupWatch = attempt.activation ? setInterval(() => {
-      try { assertSetupCurrent(); } catch { setupAbort.abort(); }
+      try { assertSetupCurrent(); } catch (error) { setupAbort.abort(error); }
     }, 100) : null;
     try {
       if (!ports.worktreePresent(pipeline.worktreeDir)) {
@@ -8410,9 +8626,16 @@ async function spawnCorrelatedRunStage(
       // Validate Delegatus's shared graph even on a resumed stage. Other
       // repositories release old source links before package code can run.
       lockedDependencies = await performanceSpans.wait("pipeline.shared",
-        () => prepareLockedDependencies(pipeline.worktreeDir, { exec: ports.exec }));
+        () => prepareLockedDependencies(pipeline.worktreeDir, {
+          exec: ports.exec, signal: setupAbort.signal, assertCurrent: assertSetupCurrent, repository: pipeline.repoDir,
+        }));
+      assertSetupCurrent();
       if (!lockedDependencies) isolateWorktreeDependencies(pipeline);
       await preparePipelineSetup(pipeline, stage, attempt, ports.now, persist, ports.executeProjectSetup, setupAbort.signal, assertSetupCurrent);
+    } catch (error) {
+      setupAbort.signal.throwIfAborted();
+      assertSetupCurrent();
+      throw error;
     } finally { if (setupWatch) clearInterval(setupWatch); }
     if (!lockedDependencies && fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {
       const ignored = await ports.exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
@@ -8951,12 +9174,22 @@ async function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist
   }
   // Heavy work yields to production under CPU pressure. Only a fresh stage
   // start asks; recovery and reconciliation of launched work never do.
-  const pressure = ports.cpuPressureHold?.(cpuStageKey(pipeline), instanceCpuPrioritySource(pipeline.taskIds));
+  const { id, cursor } = pipeline;
+  const stage = cursor?.state === "pending" ? cursor.stageId : undefined;
+  const attempt = stage ? currentAttempt(pipeline, stage) : null;
+  const n = attempt?.state === "pending" ? attempt.n : undefined;
+  const urgentStage: UrgentStagePoll | undefined = stage !== undefined && n !== undefined ? {
+    currentRevision: () => pendingCpuStageRevision(id, stage, n),
+    makeDue: (revision, expiresAt) => wakePipelineCpuStage(id, stage, n, revision, expiresAt),
+    wake: requestPipelineTick,
+  } : undefined;
+  const pressure = ports.cpuPressureHold?.(cpuStageKey(pipeline), instanceCpuPrioritySource(pipeline.taskIds), urgentStage);
   if (pressure) {
     await pauseAdmission();
     const detail = cpuPressureHoldDetail(pressure);
     if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
-    ports.scheduleTick?.(5_000);
+    pressure.observeUrgentCapacity?.();
+    ports.scheduleTick?.(CPU_STAGE_POLL_MS);
     return true;
   }
   if (heldForCpuPressure(pipeline)) { pipeline.stateDetail = null; await persist(); }
@@ -9363,28 +9596,32 @@ function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: Pi
 /** Persist the stop before contacting the runtime. Replays use the same key and
  * retain custody until termination and pending delivery settlement are proven. */
 async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
-  ports: PipelinePorts, persist: () => void | Promise<void>): Promise<boolean> {
+  ports: PipelinePorts, persist: () => void | Promise<void>, accountBlocked = false): Promise<boolean> {
   const suspension = attempt.suspension!;
   await persist();
-  let continuationError: unknown;
-  try {
-    const alreadyWithdrawn = attempt.providerWait?.retryCancelled && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE;
-    if (attempt.conversationId && !alreadyWithdrawn) await ports.invalidateProviderContinuation?.(attempt.conversationId);
-  }
-  catch (error) { continuationError = error; }
+  const withdraw = async (): Promise<string | undefined> => {
+    try {
+      const alreadyWithdrawn = attempt.providerWait?.retryCancelled && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE;
+      if (attempt.conversationId && !alreadyWithdrawn) {
+        const withdrawalKey = `stage-continuation-withdrawal:${pipeline.id}:${stage.id}:${attempt.n}:${suspension.requestedAt}`;
+        await ports.invalidateProviderContinuation?.(attempt.conversationId, { key: withdrawalKey, artifactPath: attempt.agentPath });
+      }
+    } catch (error) {
+      return redactBounded(String(error), 300);
+    }
+  };
   const target = { stageId: stage.id, attempt: attempt.n, launchId: attempt.launchId,
     conversationId: attempt.conversationId, agentPath: attempt.agentPath, paneId: attempt.paneId };
-  // A paused lane keeps its receipt while its host and pane remain absent.
-  // Running recovery still needs a fresh stop before replacement admission.
-  // Check after withdrawal: a host may have resumed during that await.
-  // Unreadable host probes report resident and still require a fresh stop.
-  if (suspension.stoppedAt && (pipeline.state !== "paused" || await ports.stageHostResident(target)
-    || target.paneId && await ports.paneAgentAlive(target.paneId))) {
-    suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
-    delete suspension.stoppedAt;
-    await persist();
-  }
-  if (!suspension.stoppedAt) {
+  const stop = async (): Promise<boolean> => {
+    // A host can resume while awaiting a receipt. An unreadable probe
+    // reports resident and still requires a fresh stop.
+    if (suspension.stoppedAt && (await ports.stageHostResident(target)
+      || target.paneId && await ports.paneAgentAlive(target.paneId))) {
+      suspension.stopRevision = (suspension.stopRevision ?? 0) + 1;
+      delete suspension.stoppedAt;
+      await persist();
+    }
+    if (suspension.stoppedAt) return true;
     try {
       let stopped = await ports.stopStageAgent(target,
       { automatic: true, operationId: suspensionStopKey(pipeline, stage, attempt),
@@ -9404,11 +9641,19 @@ async function stopSuspendedStage(pipeline: Pipeline, stage: PipelineStage, atte
       pipeline.stateDetail = `${suspension.detail}; stop pending: ${redactBounded(String(error), 300)}`;
       await persist(); ports.scheduleTick?.(1_000); return false;
     }
-  }
-  if (continuationError) {
-    pipeline.stateDetail = `${suspension.detail}; host stopped, waiting to withdraw queued continuation: ${redactBounded(String(continuationError), 300)}`;
+    return true;
+  };
+  const stopFirst = accountBlocked || suspension.reason === "account";
+  // Termination of an ineligible host gets its own bounded port before a
+  // multi-read withdrawal can use the rest of the detached lane's budget.
+  if (stopFirst && !await stop()) return false;
+  const withdrawalFailure = await withdraw();
+  if (!stopFirst && !await stop()) return false;
+  if (withdrawalFailure !== undefined) {
+    pipeline.stateDetail = `${suspension.detail}; host stopped, waiting to withdraw queued continuation: ${withdrawalFailure}`;
     await persist(); ports.scheduleTick?.(1_000); return false;
   }
+  if (stopFirst && !await stop()) return false;
   if (pipelineSurvivorRefusal(pipeline) || attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
     pipeline.stateDetail = `${suspension.detail}; host stopped, waiting for pending delivery settlement`;
     await persist(); ports.scheduleTick?.(1_000); return false;
@@ -9468,7 +9713,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   }
   attempt.suspension ??= { reason: "account", detail: blocked!, requestedAt: ports.now() };
   recordAccountHold(attempt, blocked, ports);
-  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
+  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist, blocked !== null)) return true;
   if (pipeline.state === "paused" || attempt.report) return true;
   const retryCancelledByPause = attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE || attempt.error === SUSPENDED_RETRY_CANCELLED_BY_PAUSE;
   if (attempt.suspension.retryRequestedAt && retryCancelledByPause) attempt.error = null;
@@ -9546,7 +9791,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   }
   // Transcript and operator-evidence reads above yielded custody. Reconfirm
   // the current host immediately before allocating a replacement.
-  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
+  if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist, blocked !== null)) return true;
   if (configuredRetry && await settleStoppedReport()) return true;
   let finalBlock: string | null;
   try { finalBlock = stageAccountBlocked(pipeline, targetAttempt(target), ports); }
@@ -11194,7 +11439,7 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
   };
 }
 
-async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal): Promise<PipelineProvisionOutcome> {
+async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal, checkoutReady: () => void): Promise<PipelineProvisionOutcome> {
   const fence = provisionFence(pipeline);
   // Legacy non-draft records did not retain caller pin provenance. Preserve
   // their published-head default; new records carry the explicit marker.
@@ -11208,12 +11453,10 @@ async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: Provision
     if (!resolved.ok) return { id: pipeline.id, fence, base: null, head: null, error: resolved.error };
     base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef, baseRefPinned };
   }
-  const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal);
+  const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal, checkoutReady);
   return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error,
     ...(provisioned.preservedLocalRef ? { preservedLocalRef: provisioned.preservedLocalRef } : {}) };
 }
-
-const provisioningHost = globalThis as typeof globalThis & { __llvProvisioningRepositories?: Map<string, Promise<void>> };
 
 /**
  * Fetch and provision outside the lease (#1799). Scoped controller passes
@@ -11265,7 +11508,6 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   // Close/delete may originate in another process. Indexed row revisions
   // invalidate only changed jobs; polling needs no lease or close-path hook.
   const watch = setInterval(revalidate, 50);
-  const repositoryTails = provisioningHost.__llvProvisioningRepositories ??= new Map<string, Promise<void>>();
   const diskAdmission = ports.worktreeDiskWait ?? ((repoDir: string, worktreeDir: string, usesClaude: boolean) =>
     worktreeDiskWait(repoDir, worktreeDir, undefined, undefined, undefined, usesClaude));
   try {
@@ -11303,8 +11545,6 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           });
         }
       };
-      let releaseRepository: (() => void) | undefined;
-      let repository: string | undefined, tail: Promise<void> | undefined;
       try {
         // Linked worktrees share refs and Git locks even when repoDir differs.
         // Resolve through Git asynchronously, then serialize each common dir.
@@ -11316,23 +11556,18 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           });
           return;
         }
-        repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
-        const previous = repositoryTails.get(repository);
-        tail = new Promise<void>((resolve) => { releaseRepository = resolve; });
-        repositoryTails.set(repository, tail);
-        if (previous) await waitForRepository(previous);
-        const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal);
-        revalidate();
-        if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
+        const repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
+        await withProvisioningTurn(repository, job.pipeline.worktreeDir, waitForRepository, async checkoutReady => {
+          const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal, checkoutReady);
+          revalidate();
+          if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
+        });
       } catch (error) {
         revalidate();
         if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, {
           id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null,
           error: `pipeline provisioning failed: ${String(error)}`,
         });
-      } finally {
-        releaseRepository?.();
-        if (repository && repositoryTails.get(repository) === tail) repositoryTails.delete(repository);
       }
     }));
   } finally { clearInterval(watch); }
@@ -13307,7 +13542,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
     /* Release ends ownership, never a possibly open turn: a stamp can survive
        a resume, so the working state alone also demands positive idle proof.
        The candidate stands for every round that shares its host. */
-    const result = await ports.stopStageAgent(target, { onlyIfIdle: true,
+    const result = await ports.stopStageAgent(target, { onlyIfIdle: true, operationId: terminalIdleStopKey(target),
       ...(sharedHostMayBeWorking(pipeline, target) ? { requireIdleEvidence: true as const } : {}) });
     if (result.outcome === "deferred") {
       liveWork = true;
@@ -16165,10 +16400,10 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
         if (processed++ > 0 && ports.monotonicNow() >= deadline - (controllerPipelineKeys() ? CLOSE_TEARDOWN_BUDGET_MS / 2 : 0)) break;
         if (budget) { budget.cancellations++; budget.used++; }
         try {
-          await ports.invalidateProviderContinuation?.(target.conversationId);
+          await ports.invalidateProviderContinuation?.(target.conversationId, closeWithdrawalOwner(claimed.id, target));
           report.pendingContinuations = report.pendingContinuations!.filter((item) => item !== target);
         } catch (error) {
-          target.detail = `runtime-host automatic continuation cancellation failed: ${String(error)}`;
+          target.detail = `runtime-host automatic continuation cancellation failed: ${redactBounded(String(error), 300)}`;
           report.pendingContinuations = [...report.pendingContinuations!.filter(item => item !== target), target];
         }
         await checkpoint();
@@ -17264,6 +17499,7 @@ async function applyPipelinePatch(
     if (!creator.lineage) return { error: creator.error, status: creator.status };
   }
   let linkRepositories: string[] = [];
+  const acceptedClose: { withdrawal?: { planId: string; target: NonNullable<PipelineCloseReport["pendingContinuations"]>[number] } } = {};
   const patched = req.action === "set-src" ? await withDeliveryMutationAsync<PipelinePatchResult>((tx) => {
       assertAuthority?.();
       const pipeline = tx.get(id);
@@ -18683,14 +18919,8 @@ async function applyPipelinePatch(
       }
       const pendingContinuations: NonNullable<PipelineCloseReport["pendingContinuations"]> = [];
       if (attempt?.conversationId && stage && needsProviderContinuationCancellation(attempt)) {
-        // Withdraw an admitted continuation before close returns. A host outage
-        // leaves a durable cancellation obligation without refusing the close.
-        try { await ports.invalidateProviderContinuation?.(attempt.conversationId); }
-        catch (error) {
-          pendingContinuations.push({ stageId: stage.id, attempt: attempt.n, conversationId: attempt.conversationId,
-            agentPath: attempt.agentPath, paneId: attempt.paneId, launchId: attempt.launchId,
-            detail: `runtime-host automatic continuation cancellation failed: ${String(error)}` });
-        }
+        pendingContinuations.push({ stageId: stage.id, attempt: attempt.n, conversationId: attempt.conversationId,
+          agentPath: attempt.agentPath, paneId: attempt.paneId, launchId: attempt.launchId });
       }
       for (const run of pipeline.runs) for (const item of run.attempts) {
         const pendingSwitch = openRuntimeSwitch(item);
@@ -18721,6 +18951,8 @@ async function applyPipelinePatch(
       pipeline.hiddenAt = null;
       pipeline.stateDetail = "closed; teardown pending";
       await persist();
+      const withdrawal = pendingContinuations[0];
+      if (withdrawal) acceptedClose.withdrawal = { planId: pipeline.closeTeardown.id, target: withdrawal };
       return { pipeline, close: pipeline.closeReport };
     } else {
       return { error: "unknown pipeline action", status: 400 };
@@ -18732,8 +18964,33 @@ async function applyPipelinePatch(
     && patched.pipeline?.delivery?.operation?.state === "pending") {
     requestPipelineTick();
   }
+  if (acceptedClose.withdrawal) {
+    const { planId, target } = acceptedClose.withdrawal;
+    let detail: string | undefined;
+    try { await ports.invalidateProviderContinuation?.(target.conversationId, closeWithdrawalOwner(id, target)); }
+    catch (error) { detail = `runtime-host automatic continuation cancellation failed: ${redactBounded(String(error), 300)}`; }
+    // The request and the background drain share the frozen intent. A drain
+    // already holding the close owns its checkpoint.
+    const updated = await withPipelineMutation(async (pipelines, persist) => {
+      const pipeline = pipelines.find(item => item.id === id);
+      const report = pipeline?.closeReport;
+      const continuations = report?.pendingContinuations;
+      if (pipeline?.closeTeardown?.id !== planId || pipeline.closeTeardown.phase !== "pending" || !report || !continuations) return;
+      const same = continuations.find(item => item.stageId === target.stageId && item.attempt === target.attempt
+        && closeHostIdentity(item) === closeHostIdentity(target) && item.agentPath === target.agentPath);
+      if (!same) return;
+      if (detail !== undefined) same.detail = detail;
+      else {
+        report.pendingContinuations = continuations.filter(item => item !== same);
+        if (!report.pendingContinuations.length) delete report.pendingContinuations;
+      }
+      await persist([pipeline]);
+      return pipeline;
+    });
+    if (updated) { patched.pipeline = updated; patched.close = updated.closeReport; }
+  }
   if (req.action === "close" && patched.close?.status === "pending") ports.scheduleTick?.(0);
-  /* The lock is gone: ask the sweep to read what the new links name. */
+  /* Ask the sweep to read what the new links name. */
   for (const repository of linkRepositories) nudgeForgeSweep(repository);
   return patched;
 }

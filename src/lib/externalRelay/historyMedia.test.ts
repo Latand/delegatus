@@ -62,7 +62,7 @@ for (const role of ["owner", "group", "guest"] as const) {
     expect(validateMediaInput(parsed).map(media => media.ref)).toEqual(["photo_3", "photo_0", "photo_2", "photo_1"]);
     expect(requestSchema.parse(parsed)).toEqual(parsed);
     expect(admittedSeedMedia(parsed, { seed_media_refs: ["photo_1"] })).toBe(true);
-    expect(ownerTierFor({ ownerTier: true }, parsed) !== null).toBe(role !== "group");
+    expect(ownerTierFor({ ownerTier: true }, parsed) !== null).toBe(role === "owner");
     expect(callableTools(parsed)).toEqual([]);
     const hostile = structuredClone(parsed); hostile.input.conversation[3]!.author.key = "other";
     expect(ownerTierFor({ ownerTier: true }, hostile)).toBeNull();

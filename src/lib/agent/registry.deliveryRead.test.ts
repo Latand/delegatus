@@ -412,3 +412,37 @@ test.each(["off", "sqlite"] as const)("overlapping held, direct and retry admiss
     expect(direct("overlapping-final").admissionSeq).toBe(209);
   } finally { registry.close(); setSystemTime(); }
 }, 60_000);
+
+
+for (const sqliteMode of ["off", "sqlite"] as const) {
+  test(`targeted activity keeps undelivered evidence through aliases and skips settled command history (${sqliteMode})`, () => {
+    const { registry: legacy, conversation, delivery } = seed(`targeted-activity-${sqliteMode}`);
+    const file = legacy.snapshot();
+    const alias = "conversation_activity_before_move";
+    file.conversationAliases[alias] = conversation.id;
+    file.heldDeliveries[delivery.id]!.conversationId = alias;
+    file.heldDeliveries[delivery.id]!.state = "failed";
+    for (let i = 0; i < 32; i++) {
+      const id = `settled-history-${i}`;
+      file.heldDeliveries[id] = { ...delivery, id, command: { ...delivery.command, operationId: id },
+        conversationId: alias, state: "delivered", deliveredAt: delivery.createdAt };
+    }
+    fs.writeFileSync(legacy.filename, JSON.stringify(file));
+    const registry = new AgentRegistry(legacy.filename, undefined, undefined, { sqliteMode });
+    try {
+      if (sqliteMode === "sqlite") registry.archiveInactiveRows(256);
+      const full = registry.livenessConversationSnapshot(alias);
+      const activity = registry.targetedActivitySnapshot(alias);
+      expect(activity.conversations).toEqual(full.conversations);
+      expect(activity.entries).toEqual(full.entries);
+      expect(activity.receipts).toEqual(full.receipts);
+      expect(activity.conversationAliases).toEqual(full.conversationAliases);
+      expect(Object.keys(full.heldDeliveries)).toHaveLength(33);
+      expect(Object.keys(activity.heldDeliveries)).toEqual([delivery.id]);
+      expect(activity.heldDeliveries[delivery.id]?.state).toBe("failed");
+      registry.recordDeliveryOutcome(delivery.id, "delivered");
+      expect(Object.keys(registry.targetedActivitySnapshot(alias).heldDeliveries)).toHaveLength(0);
+      expect(Object.keys(registry.livenessConversationSnapshot(alias).heldDeliveries)).toHaveLength(33);
+    } finally { registry.close(); legacy.close(); }
+  });
+}

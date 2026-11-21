@@ -102,7 +102,10 @@ export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcp
     async seatReply(project, message, redact) { return readSeat(project, (source, filename) => newestSeatReply(source, filename, message, redact)); },
     call: (name, args, redactText = defaultRedactor) => {
       const reads = readsFor(redactText);
-      const context = { redactText };
+      const context = { redactText,
+        ...((name === "list_tasks" || name === "list_pipelines") && typeof args.project === "string"
+          ? { operatorBoardProject: args.project } : {}),
+      };
       const target = name === "conversation_messages" || name === "agent_activity" ? searchHandles.get(String(args.conversationId)) : null;
       const selected = target ? {...args,conversationId:undefined,transcriptPath:target.path} : args;
       if (name === "agent_activity") {
