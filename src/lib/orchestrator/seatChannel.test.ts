@@ -334,7 +334,7 @@ test("a retained unknown observes peer settlement during the journal read and re
         if (!missing) return { operationId, receipt: { status: "failed", reason: "cancelled" } };
         peer.recordDeliveryOutcome(held.id, "delivered");
         return null;
-      } } as RuntimeHostClient };
+      } } as unknown as RuntimeHostClient };
     expect(await reconcileSeatChannel(revocation, ports)).toBe(false);
     expect(seatChannelRecord(operationId)).toMatchObject({ revision: 4, outcome: "unknown" });
     missing = false;
