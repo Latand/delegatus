@@ -95,6 +95,14 @@ test("an unpinned base without origin resolves local main without fetching", asy
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+function publicationChildReachedCloseBarrier(markerExists: boolean, commandFinished: boolean): boolean {
+  return markerExists && !commandFinished;
+}
+
+test("lane-close barrier rejects a publication marker from an expired probe", () => {
+  expect(publicationChildReachedCloseBarrier(true, true)).toBe(false);
+});
+
 test.each(["probe", "push-reply"] as const)("closing a lane during a real publication %s fences its outcome", async (phase) => {
   const box = await publishSandbox();
   const { patchPipeline, defaultPipelinePorts } = await import("./engine");
@@ -110,6 +118,7 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
     ? '#!/bin/sh\nif [ "$1" = "ls-remote" ]; then touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; fi\nexec "$PUBLISH_GIT" "$@"\n'
     : '#!/bin/sh\nif [ "$1" = "push" ]; then "$PUBLISH_GIT" "$@" || exit $?; touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; exit 0; fi\nexec "$PUBLISH_GIT" "$@"\n', { mode: 0o700 });
   const restoreTick = registerPipelineTick(async () => {});
+  let publicationCommandFinished = false;
   const exec: ExecPort = async (command, args, cwd, env, options) => {
     const resultPromise = realExec(command, args, cwd, command === "git" ? {
       ...env,
@@ -119,9 +128,8 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
       PUBLISH_GIT: gitBinary,
     } : env, options);
     if (command === "git" && args[0] === (phase === "probe" ? "ls-remote" : "push")) {
-      let finished = false;
-      void Promise.resolve(resultPromise).then(() => { finished = true; }, () => { finished = true; });
-      while (!fs.existsSync(enteredPath) && !finished) await Bun.sleep(5);
+      void Promise.resolve(resultPromise).then(() => { publicationCommandFinished = true; }, () => { publicationCommandFinished = true; });
+      while (!fs.existsSync(enteredPath) && !publicationCommandFinished) await Bun.sleep(5);
       if (fs.existsSync(enteredPath)) entered.resolve();
     }
     return resultPromise;
@@ -131,7 +139,9 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
     const head = await box.commit("accepted.txt", "accepted\n");
     pending = publishPipelineBranch(box.subject, exec, { acceptedSha: head });
     expect(await Promise.race([entered.promise.then(() => true), pending.then(() => false)])).toBe(true);
-    expect(fs.existsSync(enteredPath)).toBe(true);
+    // The marker alone is insufficient: an expired probe may create it as it
+    // exits. The child must still be live when the lane-close barrier begins.
+    expect(publicationChildReachedCloseBarrier(fs.existsSync(enteredPath), publicationCommandFinished)).toBe(true);
     const ports = { ...defaultPipelinePorts(), stopStageAgent: async () => ({ outcome: "not-running" as const }), paneAgentAlive: async () => false, stageHostResident: async () => false };
     expect((await patchPipeline(box.subject.id, { action: "close" }, ports)).error).toBeUndefined();
     fs.writeFileSync(releasedPath, "");
