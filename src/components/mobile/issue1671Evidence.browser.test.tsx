@@ -14986,3 +14986,146 @@ describe("account row on the phone", () => {
     } finally { await browser.close(); server.stop(); }
   }, 7_200_000);
 });
+
+describe("redesign S2 the Stages window on the phone", () => {
+  /*
+   * The phone pipeline screen draws the board's Stages window (`StagesSheet` at
+   * `presentation="screen"`): the same lanes of every graph shape as the
+   * desktop driver (`stageShapes.fixture.ts`), at 390 × 844, in both languages
+   * and schemes:
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "redesign S2"
+   *
+   * Gated, from text ranges: every tab name whole in the four-column grid; the
+   * title in the bar whole (it wraps, never ends in an ellipsis); the waits-on
+   * line whole on the first screen; every rule line whole; one panel; the
+   * selected pane's composer, when it has a conversation, whole above the
+   * screen's bottom edge; the ⋯ sheet's rows whole with its background inert.
+   * Frames and the manifest go to $LLV_EVIDENCE_DIR/redesign-s2-phone.
+   */
+  const S2_OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "redesign-s2-phone");
+  const SLUGS = ["fix-skipped", "fix-taken", "return-loop", "visual-gate", "shared-fix", "returning-fix", "prototype", "recheck", "skipped", "parked-publication", "parked-question", "single", "eight", "chain"] as const;
+  const readScreen = (page: Page) => page.evaluate(() => {
+    const screen = document.querySelector<HTMLElement>('[data-mobile2-screen="pipeline"]');
+    if (!screen) return null;
+    const box = screen.getBoundingClientRect();
+    const ranges = (root: Element) => {
+      const found: DOMRect[] = [];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent?.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) found.push(rect);
+      }
+      return found;
+    };
+    const outside = (element: Element | null, within: DOMRect) => !element || ranges(element).some((rect) => rect.left < within.left - 0.5 || rect.right > within.right + 0.5);
+    const strip = screen.querySelector<HTMLElement>('[role="tablist"]');
+    const tabs = [...screen.querySelectorAll<HTMLElement>('[role="tab"]')];
+    const title = screen.querySelector<HTMLElement>("[data-mobile2-title-text]");
+    const waits = screen.querySelector<HTMLElement>(".gs-waits");
+    const composer = screen.querySelector<HTMLElement>("[data-kanban-reader] textarea, [data-kanban-reader] [contenteditable='true']");
+    const composerBox = composer?.getBoundingClientRect();
+    return {
+      tabs: tabs.map((tab) => {
+        const name = tab.querySelector<HTMLElement>(".slbl")!;
+        const stripBox = strip?.getBoundingClientRect();
+        return {
+          stage: tab.dataset.tabStage ?? "", kind: tab.dataset.tabKind ?? "", word: tab.dataset.tabWord ?? null, selected: tab.getAttribute("aria-selected") === "true",
+          cut: name.scrollWidth > name.clientWidth + 1 || ranges(name).some((rect) => stripBox ? rect.right > stripBox.right + 0.5 || rect.left < stripBox.left - 0.5 : false),
+          height: Math.round(tab.getBoundingClientRect().height),
+        };
+      }),
+      columns: strip ? getComputedStyle(strip).gridTemplateColumns.split(" ").length : 0,
+      title: { text: title?.textContent ?? "", cut: !title || title.scrollWidth > title.clientWidth + 1 || outside(title, box) || getComputedStyle(title).textOverflow === "ellipsis" && title.scrollWidth > title.clientWidth },
+      waits: waits ? { text: waits.textContent ?? "", cut: outside(waits, box) } : null,
+      rules: [...screen.querySelectorAll<HTMLElement>(".gs-rule")].map((rule) => ({ text: rule.textContent ?? "", cut: outside(rule, box) })),
+      panels: screen.querySelectorAll('[role="tabpanel"]').length,
+      readers: screen.querySelectorAll("[data-kanban-reader]").length,
+      composer: composerBox ? { bottom: Math.round(composerBox.bottom), top: Math.round(composerBox.top), screenBottom: Math.round(box.bottom), whole: composerBox.bottom <= box.bottom + 0.5 && composerBox.top >= box.top } : null,
+      overflowX: Math.round(Math.max(0, document.documentElement.scrollWidth - window.innerWidth)),
+    };
+  });
+
+  browserTest("390 px: every graph shape's pipeline screen, its popover, the ⋯ sheet and its faces, in both languages and schemes", async () => {
+    fs.mkdirSync(S2_OUT, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const frames: Array<{ file: string; lane: string; lang: string; scheme: string; state: string }> = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of SCHEMES) {
+          const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+          await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+          try {
+            for (const slug of SLUGS) {
+              const key = `${slug}-${lang}-${scheme}`;
+              const fail = (message: string) => failures.push(`${key}: ${message}`);
+              const page = await context.newPage();
+              const pageErrors: string[] = [];
+              page.on("pageerror", (error) => pageErrors.push(error.message));
+              try {
+                await page.goto(`${base}/?kanban=1&stageshapes=1#pipeline=lane-shape-${slug}`);
+                await page.waitForSelector('[data-mobile2-screen="pipeline"] .gsheet.screen', { timeout: 20_000 });
+                await pause(page, 700);
+                const read = await readScreen(page);
+                if (!read) { fail("the pipeline screen did not open"); continue; }
+                const strip = slug === "parked-publication" || slug === "single" ? false : true;
+                if (strip && read.columns !== 4) fail(`the tab grid has ${read.columns} columns`);
+                if (!strip && read.tabs.length) fail(`a single stage drew ${read.tabs.length} tab(s)`);
+                for (const tab of read.tabs) if (tab.cut) fail(`tab ${tab.stage} is cut`);
+                if (read.title.cut) fail(`the bar's title is cut: ${JSON.stringify(read.title)}`);
+                if (!read.waits || read.waits.cut) fail(`the waits-on line is cut or missing: ${JSON.stringify(read.waits)}`);
+                if (read.rules.some((rule) => rule.cut)) fail("a rule line is cut");
+                if (read.panels !== (strip ? 1 : 0)) fail(`${read.panels} tab panels`);
+                if (read.readers > 1) fail(`${read.readers} readers mounted`);
+                if (read.composer && !read.composer.whole) fail(`the composer is cut: ${JSON.stringify(read.composer)}`);
+                if (read.overflowX > 0) fail(`the page scrolls sideways by ${read.overflowX}px`);
+                const sheetFile = `${key}-screen.png`;
+                await page.screenshot({ path: path.join(S2_OUT, sheetFile) });
+                frames.push({ file: sheetFile, lane: slug, lang, scheme, state: "screen" });
+                if (lang === "en" && scheme === "light") {
+                  await page.tap(".gs-waits");
+                  await page.waitForSelector(".gs-waits-pop");
+                  const popFile = `${key}-popover.png`;
+                  await page.screenshot({ path: path.join(S2_OUT, popFile) });
+                  frames.push({ file: popFile, lane: slug, lang, scheme, state: "popover" });
+                  await page.tap(".gs-waits");
+                  /* The ⋯ sheet, the background inert, then its faces. */
+                  await page.tap('[data-mobile2-open="menu"]');
+                  await page.waitForSelector("[data-mobile2-pipeline-menu]");
+                  await pause(page, 300);
+                  const menu = await page.evaluate(() => ({
+                    rows: [...document.querySelectorAll<HTMLElement>("[data-mobile2-pipeline-menu] [data-mobile2-menu-row], [data-mobile2-pipeline-menu] [data-mobile2-pipeline-action], [data-mobile2-pipeline-menu] [data-phone-lane-answer]")].map((row) => row.dataset.mobile2MenuRow ?? row.dataset.mobile2PipelineAction ?? row.dataset.phoneLaneAnswer ?? ""),
+                    caption: document.querySelector("[data-mobile2-stage-caption]")?.textContent ?? "",
+                    inert: Boolean(document.querySelector('[data-mobile2-screen="pipeline"]')?.closest("[inert]") || document.querySelector('[data-mobile2-pipeline-body][inert], [data-mobile2-screen="pipeline"] [inert]')),
+                  }));
+                  for (const required of ["changes", "checks", "board", "links"]) if (!menu.rows.includes(required)) fail(`the ⋯ sheet lacks the ${required} row: ${JSON.stringify(menu.rows)}`);
+                  if (!menu.caption) fail("the ⋯ sheet has no stage-settings caption");
+                  const menuFile = `${key}-menu.png`;
+                  await page.screenshot({ path: path.join(S2_OUT, menuFile) });
+                  frames.push({ file: menuFile, lane: slug, lang, scheme, state: "menu" });
+                  if (menu.rows.includes("past")) {
+                    await page.tap('[data-mobile2-menu-row="past"]');
+                    await page.waitForSelector("[data-mobile2-past]");
+                    const pastFile = `${key}-past.png`;
+                    await page.screenshot({ path: path.join(S2_OUT, pastFile) });
+                    frames.push({ file: pastFile, lane: slug, lang, scheme, state: "past" });
+                  }
+                }
+                if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+              } catch (error) {
+                fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+              } finally { await page.close(); }
+            }
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(S2_OUT, "manifest.json"), `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", describe: "redesign S2 the Stages window on the phone", scenario: "kanban=1&stageshapes=1", viewport: "390x844", frames, failures }, null, 2)}\n`);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); stop(); }
+  }, 3_600_000);
+});

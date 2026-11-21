@@ -7432,13 +7432,12 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
    * production frames, and compared.
    *
    * Gated here:
-   *   - the eight-stage sheet: header, graph direction, one pane per stage at
-   *     the prototype's pane width, four waiting stages each with an unsent
-   *     first message and no composer, the live stage focused. Each stage is
-   *     drawn once (#2148): while the graph is shown it is the navigation, so
-   *     the chip strip is drawn only with the graph hidden;
-   *   - the retry sheet: attempt tabs on Implement and Verify, the loop on the
-   *     graph's fail edge;
+   *   - the eight-stage sheet (redesign S2: stages as tabs): the waits-on line,
+   *     eight tabs over one pane, four waiting stages each with an unsent first
+   *     message and no composer once selected, the live stage selected and
+   *     focused; the graph is off until asked for;
+   *   - the retry sheet: attempt tabs on Implement and Verify, the loop as one
+   *     rule line, and on the graph's fail edge once the graph is shown;
    *   - a waiting node on a card opens its first message; Save sends the
    *     stage's wiring token with the words and the digest the read returned; a
    *     stage another client saves between that read and the write is refused by
@@ -7466,9 +7465,11 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
   interface SheetMeasure {
     title: string;
-    progress: string;
-    navChips: number;
+    /** The head's waits-on line. */
+    waits: string;
+    tabs: number;
     loops: string[];
+    rules: string[];
     graphDir: string | null;
     graphNodes: number;
     /** The lane's controls in the sheet's head (#2148), and nothing else of them. */
@@ -7484,11 +7485,12 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
     const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, " ").trim() ?? "";
     return {
       title: text(sheet.querySelector("header h2")),
-      progress: text(sheet.querySelector("header .progress")),
-      navChips: sheet.querySelectorAll(".navchip").length,
+      waits: text(sheet.querySelector("header .gs-waits")),
+      tabs: sheet.querySelectorAll('[role="tab"]').length,
       /* The loop is the chip strip's loop chip, or the graph's fail edge: a
          strip under the failing stage since #2277, an edge label in the prototype. */
-      loops: [...sheet.querySelectorAll(".gs-nav .ploop, .gs-graph .pelabel.fail, .gs-graph .pstrip")].map(text),
+      loops: [...sheet.querySelectorAll(".gs-rule, .gs-graph .pelabel.fail, .gs-graph .pstrip")].map(text),
+      rules: [...sheet.querySelectorAll(".gs-rule")].map(text),
       graphDir: sheet.querySelector<HTMLElement>(".gs-graph .pgraph")?.dataset.dir ?? null,
       graphNodes: sheet.querySelectorAll(".gs-graph .pnode").length,
       headControls: [...sheet.querySelectorAll<HTMLElement>(".lane-bar button")].map((button) => (button.closest("header") ? "" : "outside:") + (button.getAttribute("aria-label") ?? text(button))),
@@ -7496,7 +7498,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       panes: [...sheet.querySelectorAll<HTMLElement>(".pane[data-stage]")].map((pane) => ({
         stage: pane.dataset.stage ?? "",
         width: Math.round(pane.getBoundingClientRect().width),
-        folded: pane.classList.contains("folded"),
+        folded: false,
         attempts: [...pane.querySelectorAll(".attempts button")].map(text),
         draft: Boolean(pane.querySelector(".msg.user.draft")),
         status: pane.querySelector(".bstatus") ? text(pane.querySelector(".bstatus")) : null,
@@ -7605,57 +7607,49 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
             failures.push(`stages ${scheme}: the sheet did not open`);
             return;
           }
-          /* The graph is shown and is the navigation: no chip strip beside it. */
-          if (sheet.panes.length !== 8 || sheet.navChips !== 0) failures.push(`stages ${scheme}: ${sheet.panes.length} panes, ${sheet.navChips} chips`);
-          if (sheet.graphDir !== "LR" || sheet.graphNodes !== 8) failures.push(`stages ${scheme}: graph ${sheet.graphDir} ${sheet.graphNodes}`);
-          if (JSON.stringify(sheet.headControls) !== JSON.stringify(["Collapse finished", "Expand all", "Previous stage", "Next stage"])) failures.push(`stages ${scheme}: head controls ${JSON.stringify(sheet.headControls)}`);
-          const waiting = sheet.panes.filter((pane) => pane.draft);
-          if (waiting.map((pane) => pane.stage).join() !== "review-ui,verify,docs,merge") failures.push(`stages ${scheme}: waiting panes ${JSON.stringify(waiting)}`);
-          if (waiting.some((pane) => pane.status !== "First message · not sent yet" || pane.composerDisabled !== null)) failures.push(`stages ${scheme}: waiting panes ${JSON.stringify(waiting)}`);
-          if (waiting.some((pane) => !pane.added?.startsWith("Added when it starts: previous stage output · pinned task · spec · "))) failures.push(`stages ${scheme}: added-at-start lines ${JSON.stringify(waiting.map((pane) => pane.added))}`);
-          if (sheet.panes.filter((pane) => !pane.draft).some((pane) => !pane.reader)) failures.push(`stages ${scheme}: a started pane holds no conversation ${JSON.stringify(sheet.panes)}`);
+          /* The stages are tabs over one pane, the graph is off, and the head says whom the lane waits on. */
+          if (sheet.panes.length !== 1 || sheet.tabs !== 8) failures.push(`stages ${scheme}: ${sheet.panes.length} panes, ${sheet.tabs} tabs`);
+          if (sheet.graphNodes !== 0) failures.push(`stages ${scheme}: the graph is drawn at open (${sheet.graphNodes} nodes)`);
+          if (JSON.stringify(sheet.headControls) !== JSON.stringify(["Previous stage", "Next stage"])) failures.push(`stages ${scheme}: head controls ${JSON.stringify(sheet.headControls)}`);
           if (sheet.focusedPane !== "build-ui") failures.push(`stages ${scheme}: focus on ${sheet.focusedPane}`);
-          if (!sheet.progress.startsWith("8 stages · ")) failures.push(`stages ${scheme}: progress ${sheet.progress}`);
-        });
-        await prototype("sheet=t-upload", scheme, `prototype stages ${scheme}`, async (page) => {
-          await page.waitForSelector(".gsheet .pane[data-stage]", { timeout: 10_000 });
-          await page.waitForTimeout(500);
-          frames[`stages-${scheme}`] = { ...frames[`stages-${scheme}`], prototype: await measureSheet(page) };
-          await shot(page, "prototype", "stages", scheme);
+          if (sheet.waits !== "Stage 4 of 8 · waiting on the Builder (Build ui)") failures.push(`stages ${scheme}: waits-on ${sheet.waits}`);
+          if (!sheet.panes[0]?.reader) failures.push(`stages ${scheme}: the live pane holds no conversation ${JSON.stringify(sheet.panes)}`);
+          /* Each waiting stage, selected, holds its unsent first message and no composer. */
+          for (const waitingStage of ["review-ui", "verify", "docs", "merge"]) {
+            await page.click(`.gsheet [role="tab"][data-tab-stage="${waitingStage}"]`);
+            await page.waitForTimeout(250);
+            const pane = (await measureSheet(page))?.panes[0];
+            if (!pane || pane.stage !== waitingStage || !pane.draft || pane.status !== "First message · not sent yet" || pane.composerDisabled !== null) failures.push(`stages ${scheme}: waiting pane ${waitingStage} ${JSON.stringify(pane)}`);
+            else if (!pane.added?.startsWith("Added when it starts: previous stage output · pinned task · spec · ")) failures.push(`stages ${scheme}: added-at-start line ${JSON.stringify(pane.added)}`);
+          }
         });
       }
 
       await production("light", "stages retry", async (page) => {
         await openStages(page, "t-search");
-        /* The graph's node reaches its pane and opens its conversation in the
-           agent window over the sheet (docs/design/task-card-no-inline-conversations.md §4);
-           closing the window comes back to the sheet on that pane. */
+        /* The graph, shown, is a second way to select a stage: its node selects the tab and opens no window. */
+        await page.click(".gsheet [data-sheet-graph]");
+        await page.waitForSelector(".gsheet .gs-graph .pnode", { timeout: 10_000 });
         await page.click('.gsheet .gs-graph .pnode[data-stage="implement"]');
-        await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
-        await page.keyboard.press("Escape");
-        await page.waitForSelector("[data-agent-window]", { state: "detached" });
-        await page.waitForTimeout(700);
+        await page.waitForTimeout(500);
+        if (await page.locator("[data-agent-window]").count()) failures.push("stages retry: a graph node opened the agent window");
         const sheet = await measureSheet(page);
         await shot(page, "production", "stages-retry", "light");
         frames["stages-retry"] = { production: sheet };
-        const byStage = new Map(sheet?.panes.map((pane) => [pane.stage, pane] as const));
         /* One attempt caption everywhere since #2277. */
-        if (JSON.stringify(byStage.get("implement")?.attempts) !== JSON.stringify(["attempt 1 · passed", "attempt 2 · passed"])) failures.push(`stages retry: implement tabs ${JSON.stringify(byStage.get("implement")?.attempts)}`);
-        if (JSON.stringify(byStage.get("verify")?.attempts) !== JSON.stringify(["attempt 1 · failed", "attempt 2 · running"])) failures.push(`stages retry: verify tabs ${JSON.stringify(byStage.get("verify")?.attempts)}`);
-        if (sheet?.loops.length !== 1) failures.push(`stages retry: loops ${JSON.stringify(sheet?.loops)}`);
-        /* Hidden, the graph gives way to the chips, whose loop chip says the rounds. */
+        if (JSON.stringify(sheet?.panes[0]?.attempts) !== JSON.stringify(["attempt 1 · passed", "attempt 2 · passed"])) failures.push(`stages retry: implement tabs ${JSON.stringify(sheet?.panes[0]?.attempts)}`);
+        await page.click('.gsheet [role="tab"][data-tab-stage="verify"]');
+        await page.waitForTimeout(300);
+        const verify = await measureSheet(page);
+        if (JSON.stringify(verify?.panes[0]?.attempts) !== JSON.stringify(["attempt 1 · failed", "attempt 2 · running"])) failures.push(`stages retry: verify tabs ${JSON.stringify(verify?.panes[0]?.attempts)}`);
+        /* The rule line under the tabs and the graph's own fail-edge label each say the loop once. */
+        if (verify?.rules.length !== 1 || verify.loops.length !== 2) failures.push(`stages retry: loops ${JSON.stringify(verify?.loops)}`);
+        /* Hidden, the graph gives way to the tabs alone, and the rule line says the rounds. */
         await page.click(".gsheet [data-sheet-graph]");
         await page.waitForTimeout(300);
-        const chips = await measureSheet(page);
-        if (chips?.navChips !== 4 || chips.graphNodes !== 0 || chips.loops.length !== 1) failures.push(`stages retry, graph hidden: ${JSON.stringify({ navChips: chips?.navChips, graphNodes: chips?.graphNodes, loops: chips?.loops })}`);
+        const tabs = await measureSheet(page);
+        if (tabs?.tabs !== 4 || tabs.graphNodes !== 0 || tabs.loops.length !== 1) failures.push(`stages retry, graph hidden: ${JSON.stringify({ tabs: tabs?.tabs, graphNodes: tabs?.graphNodes, loops: tabs?.loops })}`);
       });
-      await prototype("sheet=t-search:implement", "light", "prototype stages retry", async (page) => {
-        await page.waitForSelector(".gsheet .pane[data-stage]", { timeout: 10_000 });
-        await page.waitForTimeout(500);
-        frames["stages-retry"] = { ...frames["stages-retry"], prototype: await measureSheet(page) };
-        await shot(page, "prototype", "stages-retry", "light");
-      });
-
       await production("light", "stage details and save", async (page) => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
@@ -7779,10 +7773,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
       await production("light", "changed elsewhere", async (page) => {
         await openStages(page, "t-upload");
-        /* The node opens the first message in the agent window; closed, the pane edits it. */
-        await page.click('.gsheet .gs-graph .pnode[data-stage="docs"]');
-        await page.locator("[data-agent-window] [data-stage-detail]").press("Escape");
-        await page.waitForSelector("[data-agent-window]", { state: "detached" });
+        /* The tab selects the waiting stage, and its pane edits the first message. */
+        await page.click('.gsheet [role="tab"][data-tab-stage="docs"]');
         await page.waitForTimeout(600);
         const pane = '.gsheet .pane[data-stage="docs"]';
         await page.click(`${pane} [data-draft-edit]`);
@@ -7915,13 +7907,13 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
           };
         }, reader);
         await shot(page, "production", "stages-reader", "light");
-        await page.focus('.gsheet .pane[data-stage="build-ui"]');
+        await page.focus('.gsheet [role="tab"][data-tab-stage="build-ui"]');
         await page.keyboard.press("ArrowRight");
         await page.waitForTimeout(700);
         const stepped = await page.evaluate(() => ({
-          focused: (document.activeElement as HTMLElement | null)?.dataset.stage ?? null,
-          /* The graph marks the stage in focus while it is the navigation. */
-          current: document.querySelector<HTMLElement>(".gsheet .gs-graph .pnode.selected")?.dataset.stage ?? null,
+          focused: (document.activeElement as HTMLElement | null)?.dataset.tabStage ?? null,
+          /* The tab list walks the lane: the next tab is selected. */
+          current: document.querySelector<HTMLElement>('.gsheet [role="tab"][aria-selected="true"]')?.dataset.tabStage ?? null,
         }));
         await page.keyboard.press("/");
         await page.waitForTimeout(200);
@@ -7955,27 +7947,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
     const stages = (key: string) => frames[key] as { production?: SheetMeasure | null; prototype?: SheetMeasure | null } | undefined;
     const comparison: Record<string, unknown> = {};
     if (PROTOTYPE) {
-      for (const key of ["stages-light", "stages-dark", "stages-retry"]) {
-        const frame = stages(key);
-        if (!frame?.production || !frame.prototype) {
-          failures.push(`${key}: the prototype frame was not measured`);
-          continue;
-        }
-        const { production: ours, prototype: theirs } = frame;
-        const widths = { production: ours.panes.map((pane) => pane.width), prototype: theirs.panes.map((pane) => pane.width) };
-        const drafts = { production: ours.panes.filter((pane) => pane.draft).map((pane) => pane.stage), prototype: theirs.panes.filter((pane) => pane.draft).map((pane) => pane.stage) };
-        const attempts = { production: ours.panes.map((pane) => pane.attempts), prototype: theirs.panes.map((pane) => pane.attempts) };
-        /* #2148 draws each stage once: with the graph shown the prototype's chip
-           strip and its "Stage k of n" bar are gone, so the chip count and the
-           loop's place are recorded here and not compared. */
-        comparison[key] = { panes: [ours.panes.length, theirs.panes.length], navChips: [ours.navChips, theirs.navChips], loops: [ours.loops.length, theirs.loops.length], graphDir: [ours.graphDir, theirs.graphDir], graphNodes: [ours.graphNodes, theirs.graphNodes], widths, drafts, attempts };
-        if (ours.panes.length !== theirs.panes.length) failures.push(`${key}: structure ${JSON.stringify(comparison[key])}`);
-        if (ours.graphDir !== theirs.graphDir || ours.graphNodes !== theirs.graphNodes) failures.push(`${key}: graph ${ours.graphDir}/${ours.graphNodes}, prototype ${theirs.graphDir}/${theirs.graphNodes}`);
-        const widthDelta = Math.max(0, ...widths.production.map((width, index) => Math.abs(width - (widths.prototype[index] ?? width))));
-        if (widthDelta > 2) failures.push(`${key}: pane widths ${widths.production}, prototype ${widths.prototype}`);
-        if (JSON.stringify(drafts.production) !== JSON.stringify(drafts.prototype)) failures.push(`${key}: waiting panes ${JSON.stringify(drafts)}`);
-        if (JSON.stringify(attempts.production) !== JSON.stringify(attempts.prototype)) failures.push(`${key}: attempt tabs ${JSON.stringify(attempts)}`);
-      }
+      /* The sheet's frames are no longer compared with the prototype of the side-by-side lane: redesign S2 drew them as tabs. */
       const detail = frames["stage-details"] as { production?: { status: string; edit: boolean; composerDisabled: boolean } | null; prototype?: { status: string; edit: boolean; composerDisabled: boolean } | null } | undefined;
       if (!detail?.production || !detail.prototype) failures.push("stage-details: the prototype frame was not measured");
       else {
@@ -7990,6 +7962,197 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
     fs.writeFileSync(path.join(EVIDENCE, "k5b.json"), `${JSON.stringify({ prototypeCompared: Boolean(PROTOTYPE), boardWidth, frames, comparison, flows, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
+});
+
+describe("redesign S2 the Stages window as tabs", () => {
+  /*
+   * Rendered evidence for the Stages window drawn as tabs over one stage
+   * (docs/design/redesign-2026-11/s2-build-brief.md): the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=stageshapes`, one lane per graph
+   * shape, with the production stylesheet, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "redesign S2"
+   *
+   * Every shape is opened at 1440 and 1100 px (the strip's row layout) and at
+   * 1099 and 820 px (its grid) in English and Ukrainian, light and dark; the
+   * popover, the graph, a conditional tab and a detached tab are framed on the
+   * lanes that have them. Gated, from text ranges: every tab name whole and
+   * never ellipsized; no scroller in the strip; the waits-on line whole on the
+   * first screen; the popover inside the head and over no text; every rule line
+   * whole; one tab panel, one pane and at most one reader; a conditional tab's
+   * word that differs from the waiting word; a skipped tab's mark that differs
+   * from a waiting tab's. Frames and the manifest go to $LLV_EVIDENCE_DIR.
+   */
+  const OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "redesign-s2-stages");
+  type Frame = { file: string; lane: string; width: number; lang: string; scheme: string; state: string; failures: string[] };
+
+  /** The sheet read from text ranges, so a fractional cut shows. */
+  const readSheet = (page: Page) => page.evaluate(() => {
+    const sheet = document.querySelector<HTMLElement>("[data-stages-sheet]");
+    if (!sheet) return null;
+    const box = sheet.getBoundingClientRect();
+    const ranges = (root: Element) => {
+      const found: DOMRect[] = [];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent?.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) found.push(rect);
+      }
+      return found;
+    };
+    const cut = (element: Element, within: DOMRect) => ranges(element).some((rect) => rect.left < within.left - 0.5 || rect.right > within.right + 0.5);
+    const tabs = [...sheet.querySelectorAll<HTMLElement>('[role="tab"]')];
+    const strip = sheet.querySelector<HTMLElement>('[role="tablist"]');
+    const waits = sheet.querySelector<HTMLElement>(".gs-waits");
+    const pop = sheet.querySelector<HTMLElement>(".gs-waits-pop");
+    const header = sheet.querySelector<HTMLElement>("header, .gs-tools");
+    return {
+      width: Math.round(box.width),
+      tabs: tabs.map((tab) => {
+        const name = tab.querySelector<HTMLElement>(".slbl")!;
+        const rects = ranges(name);
+        return {
+          stage: tab.dataset.tabStage ?? "",
+          kind: tab.dataset.tabKind ?? "",
+          word: tab.dataset.tabWord ?? null,
+          selected: tab.getAttribute("aria-selected") === "true",
+          name: name.textContent ?? "",
+          clipped: name.scrollWidth > name.clientWidth + 1 || getComputedStyle(name).textOverflow === "ellipsis" && name.scrollWidth > name.clientWidth,
+          outside: rects.some((rect) => rect.right > (strip?.getBoundingClientRect().right ?? 1e9) + 0.5 || rect.left < (strip?.getBoundingClientRect().left ?? -1e9) - 0.5),
+          skipMark: Boolean(tab.querySelector(".stab-skip")),
+          ariaLabel: tab.getAttribute("aria-label") ?? "",
+        };
+      }),
+      stripScrolls: strip ? strip.scrollWidth > strip.clientWidth + 1 : false,
+      waits: waits ? { text: waits.textContent ?? "", cut: cut(waits, box), height: Math.round(waits.getBoundingClientRect().height) } : null,
+      pop: pop ? { text: pop.textContent ?? "", inHead: Boolean(header && pop.getBoundingClientRect().top >= header.getBoundingClientRect().top - 1 && pop.getBoundingClientRect().bottom <= (waits?.getBoundingClientRect().bottom ?? 0) + pop.getBoundingClientRect().height + 8), cut: cut(pop, box) } : null,
+      rules: [...sheet.querySelectorAll<HTMLElement>(".gs-rule")].map((rule) => ({ text: rule.textContent ?? "", cut: cut(rule, box) || rule.scrollWidth > rule.clientWidth + 1 })),
+      panels: sheet.querySelectorAll('[role="tabpanel"]').length,
+      panes: sheet.querySelectorAll(".pane").length,
+      readers: sheet.querySelectorAll("[data-kanban-reader]").length,
+      paneWidth: Math.round(sheet.querySelector<HTMLElement>(".pane")?.getBoundingClientRect().width ?? 0),
+      lane: Math.round(sheet.querySelector<HTMLElement>(".lane")?.getBoundingClientRect().width ?? 0),
+      title: sheet.querySelector("header h2")?.textContent ?? "",
+      titleCut: (() => { const h2 = sheet.querySelector<HTMLElement>("header h2"); return h2 ? h2.scrollWidth > h2.clientWidth + 1 : false; })(),
+    };
+  });
+
+  const boardReady = (page: Page) => page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+
+  const check = (frame: string, read: NonNullable<Awaited<ReturnType<typeof readSheet>>>, expectStrip: boolean, failures: string[]) => {
+    if (expectStrip && !read.tabs.length) failures.push(`${frame}: no tabs`);
+    if (!expectStrip && read.tabs.length) failures.push(`${frame}: a single stage drew ${read.tabs.length} tab(s)`);
+    for (const tab of read.tabs) {
+      if (tab.clipped || tab.outside) failures.push(`${frame}: tab ${tab.stage} "${tab.name}" is cut`);
+      if (tab.word && !tab.ariaLabel) failures.push(`${frame}: tab ${tab.stage} has no label`);
+    }
+    if (read.stripScrolls) failures.push(`${frame}: the tab strip scrolls`);
+    if (!read.waits || read.waits.cut) failures.push(`${frame}: the waits-on line is cut or missing`);
+    if (read.rules.some((rule) => rule.cut)) failures.push(`${frame}: a rule line is cut`);
+    /* The tabs have one panel; a lane of one stage has no tabs and holds its pane in a plain region. */
+    if (read.panels !== (expectStrip ? 1 : 0) || read.panes !== 1) failures.push(`${frame}: ${read.panels} panels and ${read.panes} panes`);
+    if (read.readers > 1) failures.push(`${frame}: ${read.readers} readers mounted`);
+    if (Math.abs(read.paneWidth - read.lane) > 26) failures.push(`${frame}: the pane spans ${read.paneWidth} of ${read.lane}`);
+    if (read.titleCut) failures.push(`${frame}: the title is cut`);
+  };
+
+  const SHAPES = [
+    { slug: "fix-skipped", strip: true }, { slug: "fix-taken", strip: true }, { slug: "return-loop", strip: true }, { slug: "visual-gate", strip: true },
+    { slug: "shared-fix", strip: true }, { slug: "returning-fix", strip: true }, { slug: "prototype", strip: true }, { slug: "recheck", strip: true },
+    { slug: "skipped", strip: true }, { slug: "parked-publication", strip: false }, { slug: "parked-question", strip: true }, { slug: "single", strip: false },
+    { slug: "eight", strip: true }, { slug: "chain", strip: true },
+  ] as const;
+
+  const WIDTHS = [1440, 1100, 1099, 820] as const;
+
+  browserTest("every graph shape opens as tabs over one pane, whole, at 1440, 1100, 1099 and 820 px, in both languages and themes", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const frames: Frame[] = [];
+    const failures: string[] = [];
+    const wordsSeen = new Map<string, Set<string>>();
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          for (const width of WIDTHS) {
+            const dense = lang === "en" && scheme === "light" || width === 1440 || width === 820;
+            if (!dense) continue;
+            const opened = await openFixture(browser, `${server.base}?scenario=stageshapes&lang=${lang}`, { width, height: width >= 1100 ? 900 : 1000 }, scheme, lang);
+            try {
+              await boardReady(opened.page);
+              for (const shape of SHAPES) {
+                const label = `${shape.slug}-${width}-${lang}-${scheme}`;
+                const task = card(`t-shape-${shape.slug}`);
+                await opened.page.waitForSelector(`${task} [data-open-stages]`, { state: "attached", timeout: 10_000 });
+                await opened.page.locator(`${task} [data-open-stages]`).first().evaluate((element) => (element as HTMLElement).click());
+                await opened.page.waitForSelector("[data-stages-sheet] .pane[data-stage]", { timeout: 10_000 });
+                await opened.page.waitForTimeout(350);
+                const read = await readSheet(opened.page);
+                const local: string[] = [];
+                if (!read) { local.push(`${label}: the sheet did not open`); failures.push(...local); continue; }
+                check(label, read, shape.strip, local);
+                for (const tab of read.tabs) if (tab.word) wordsSeen.set(tab.word, new Set([...(wordsSeen.get(tab.word) ?? []), tab.stage]));
+                const file = `${label}-sheet.png`;
+                await opened.page.screenshot({ path: path.join(OUT, file) });
+                frames.push({ file, lane: shape.slug, width, lang, scheme, state: "sheet", failures: local });
+                failures.push(...local);
+                if (width === 1440 && lang === "en" && scheme === "light") {
+                  /* The popover, in the head and over no text. */
+                  await opened.page.click("[data-stages-sheet] .gs-waits");
+                  await opened.page.waitForSelector("[data-stages-sheet] .gs-waits-pop");
+                  const popRead = await readSheet(opened.page);
+                  const popFailures: string[] = [];
+                  if (!popRead?.pop || popRead.pop.cut || !popRead.pop.text) popFailures.push(`${label}: the popover is cut or empty`);
+                  const popFile = `${label}-popover.png`;
+                  await opened.page.screenshot({ path: path.join(OUT, popFile) });
+                  frames.push({ file: popFile, lane: shape.slug, width, lang, scheme, state: "popover", failures: popFailures });
+                  failures.push(...popFailures);
+                  await opened.page.keyboard.press("Escape");
+                  await opened.page.waitForSelector("[data-stages-sheet] .gs-waits-pop", { state: "detached" });
+                  if (!(await opened.page.evaluate(() => document.querySelector("[data-stages-sheet]") !== null))) failures.push(`${label}: Escape closed the whole sheet while the popover was open`);
+                  /* A conditional or detached tab, selected. */
+                  const other = read.tabs.find((tab) => tab.kind !== "step");
+                  if (other) {
+                    await opened.page.click(`[data-stages-sheet] [role="tab"][data-tab-stage="${other.stage}"]`);
+                    await opened.page.waitForTimeout(250);
+                    const picked = await readSheet(opened.page);
+                    const pickFailures: string[] = [];
+                    if (!picked || picked.tabs.find((tab) => tab.selected)?.stage !== other.stage) pickFailures.push(`${label}: the ${other.kind} tab did not select`);
+                    else check(`${label}-${other.kind}`, picked, shape.strip, pickFailures);
+                    const pickFile = `${label}-${other.kind}-tab.png`;
+                    await opened.page.screenshot({ path: path.join(OUT, pickFile) });
+                    frames.push({ file: pickFile, lane: shape.slug, width, lang, scheme, state: `${other.kind}-tab`, failures: pickFailures });
+                    failures.push(...pickFailures);
+                  }
+                  /* The graph, beside the tabs. */
+                  await opened.page.click("[data-stages-sheet] [data-sheet-graph]");
+                  await opened.page.waitForSelector("[data-stages-sheet] .gs-graph .pnode", { timeout: 10_000 });
+                  await opened.page.waitForTimeout(250);
+                  const graphFile = `${label}-graph.png`;
+                  await opened.page.screenshot({ path: path.join(OUT, graphFile) });
+                  frames.push({ file: graphFile, lane: shape.slug, width, lang, scheme, state: "graph", failures: [] });
+                }
+                await opened.page.keyboard.press("Escape");
+                await opened.page.waitForSelector("[data-stages-sheet]", { state: "detached" });
+              }
+            } finally { await opened.context.close(); }
+            if (opened.pageErrors.length) failures.push(`${lang}-${scheme}-${width}: page errors ${opened.pageErrors.join(" | ")}`);
+          }
+        }
+      }
+      /* A conditional stage that never ran reads «if needed» while the lane is open and «not needed» once it ended. */
+      const seen = (word: string) => [...(wordsSeen.get(word) ?? [])];
+      if (!seen("ifNeeded").length) failures.push("no lane drew an «if needed» tab");
+      if (!seen("notNeeded").length) failures.push("no lane drew a «not needed» tab");
+      if (!seen("offChain").length && !seen("notRun").length) failures.push("no lane drew a detached tab");
+      const manifest = { driver: "src/components/kanban/kanbanBoard.browser.test.tsx", describe: "redesign S2 the Stages window as tabs", scenario: "stageshapes", widths: WIDTHS, frames, failures };
+      fs.writeFileSync(path.join(OUT, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 3_600_000);
 });
 
 describe("#1695 K6a account chips and pickers", () => {

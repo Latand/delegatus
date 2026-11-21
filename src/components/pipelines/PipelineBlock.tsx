@@ -403,7 +403,7 @@ function ReviewStopReport({ pipeline, stop, nameOf }: {
 
 /** What the lane stopped on: why it stopped on a review, the review heads of
     a spent review budget, or the parked stage's report. */
-function AnswerReport({ pipeline, answers, names, nameOf }: {
+export function AnswerReport({ pipeline, answers, names, nameOf }: {
   pipeline: Pipeline;
   answers: PipelineAnswers;
   names: ReadonlyMap<string, string>;
