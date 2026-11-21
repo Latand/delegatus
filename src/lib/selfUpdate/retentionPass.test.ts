@@ -48,7 +48,8 @@ test.each(["empty", "releases", "journal", "releases and journal"])("Darwin rete
     const report = await runRetentionPass(h.record, h.inputs, { ...h.options, launch, fence });
     h.ended();
     expect(report.errors).toEqual([]);
-    expect(fs.existsSync(path.join(h.root, "proc-reads"))).toBeFalse();
+    const procReads = path.join(h.root, "proc-reads");
+    expect(fs.existsSync(procReads) ? fs.readFileSync(procReads, "utf8").trim().split("\n") : []).toEqual([]);
     expect(claims).toEqual([]);
     expect(report.removed).toEqual([]);
     expect(report.reclaimedCacheBytes).toBe(0);

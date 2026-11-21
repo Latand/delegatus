@@ -173,6 +173,7 @@ async function acquireLocalAsync(deadline: number, holder: string): Promise<() =
    pid liveness is trusted only within the same namespace, and everything
    else falls back to heartbeat freshness. */
 function selfPidNamespace(): string | null {
+  if (process.platform !== "linux") return null;
   try {
     return fs.readlinkSync("/proc/self/ns/pid");
   } catch {
