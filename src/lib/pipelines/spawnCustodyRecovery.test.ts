@@ -5,13 +5,17 @@ import { NextRequest } from "next/server";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { registryLockHolder, sqliteRegistryFixture } from "@/lib/agent/registryLockHolderFixture";
 import { REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
-import { expect, test, spyOn, crypto, path, harness, create, frozenWallClock, REMOTE_BRANCH,
+import { expect, test, spyOn, crypto, fs, path, harness, create, frozenWallClock, REMOTE_BRANCH,
   engineModule, patchPipeline, tickPipelines, loadPipelines, savePipelines,
-  setAgentRegistryForTests, defaultPipelinePorts } from "./engine.fixture";
+  setAgentRegistryForTests, defaultPipelinePorts, durableStageTurnEvidence } from "./engine.fixture";
 
 const FAILURE = `${REGISTRY_WRITER_BUSY} (spawn.setup-custody)`;
+const KILLED_AT = "2026-11-21T09:08:13.818Z";
+const KILLED_SETUP = `${FAILURE}; exit: signal SIGKILL; no Delegatus stop recorded at ${KILLED_AT}; ` +
+  "stderr: bwrap: setting up uid map: Permission denied";
 const NOW = "2026-11-12T12:00:00.000Z";
 beforeEach(() => setSystemTime(new Date(NOW)));
 afterEach(() => setSystemTime());
@@ -39,6 +43,7 @@ async function fixture(trigger: "resume" | "takeover" = "resume") {
   h.ports.stopStageAgent = production.stopStageAgent;
   h.ports.failStoppedStageLaunch = production.failStoppedStageLaunch;
   h.ports.unpublishedLaunchRetrySafe = production.unpublishedLaunchRetrySafe;
+  h.ports.retireInterruptedStageSetup = production.retireInterruptedStageSetup;
   const close = async () => {
     await holder.close(); journal.close(); registry.close(); setAgentRegistryForTests(null);
     storage.cleanup(); ids.mockRestore();
@@ -87,7 +92,7 @@ async function fixture(trigger: "resume" | "takeover" = "resume") {
       expect(loadPipelines()[0]!.delivery!.epoch).toBe(target.epoch + 1);
     }
     const row = () => loadPipelines()[0]!;
-    return { h, registry, journal, client, production, advance, row, tries: () => tries,
+    return { h, registry, journal, client, production, holder, root: storage.root, advance, row, tries: () => tries,
       launch: () => failedLaunch,
       async launchOnce() {
         await tickPipelines([], h.ports);
@@ -160,6 +165,112 @@ async function connect(f: Awaited<ReturnType<typeof fixture>>) {
     close,
   };
 }
+
+// The incident was a sixth attempt that already carried restart context.
+// Reconstruct the saved pipeline and its original receipt using fixture IDs.
+async function killedSetup(f: Awaited<ReturnType<typeof fixture>>, state: "starting" | "failed" | "answered") {
+  // Keep this receipt in the historical park instead of scheduling a retry.
+  f.h.ports.unpublishedLaunchRetrySafe = async () => false;
+  await f.launchOnce();
+  f.h.ports.unpublishedLaunchRetrySafe = f.production.unpublishedLaunchRetrySafe;
+  f.advance(Date.parse(KILLED_AT) - Date.parse(NOW));
+  const lane = f.row();
+  const run = lane.runs[0]!;
+  const first = run.attempts[0]!;
+  const attempt = { ...structuredClone(first), n: 6, state: "spawning" as const, spawnCalls: 1,
+    startedAt: "2026-11-21T09:08:05.907Z", completedAt: null, error: KILLED_SETUP,
+    restartContext: { previousAttempt: 5, transcriptPath: null } };
+  const { receipt } = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: lane.worktreeDir!,
+    transport: "structured", clientAttemptId: `pipeline_${lane.id}_plan_6`,
+    memberships: [{ kind: "pipeline", containerId: lane.id, stageId: "plan", slot: "plan:6",
+      round: 6, role: "architect", stageOrder: 0, parentConversationId: null }] });
+  const { launchId, conversationId, admissionOwner } = receipt;
+  const spawnOperation = { kind: "spawn" as const, operationId: launchId, idempotencyKey: launchId,
+    conversationId, engine: "codex" as const, cwd: lane.worktreeDir!, prompt: "Review" };
+  f.journal.executeOperation(spawnOperation);
+  f.registry.beginStructuredHostSetup(launchId, admissionOwner!, Date.parse(attempt.startedAt));
+  const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
+  try {
+    f.registry.recordStructuredHostSetup(launchId, admissionOwner!, captureProcessIdentity(child.pid));
+    await f.holder.hold();
+    try {
+      expect(() => f.registry.recordStructuredHostSetup(launchId, admissionOwner!)).toThrow(FAILURE);
+      child.kill("SIGKILL");
+      await child.exited;
+      expect(child.signalCode).toBe("SIGKILL");
+    } finally { await f.holder.release(); }
+  } finally {
+    if (child.signalCode === null && child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+  }
+  f.registry.confirmStructuredHostSetupCleanup(launchId, admissionOwner!);
+  if (state === "answered") {
+    const pathname = path.join(f.root, "answered.jsonl");
+    fs.writeFileSync(pathname, [
+      { timestamp: attempt.startedAt, type: "event_msg", payload: { type: "task_started" } },
+      { timestamp: KILLED_AT, type: "response_item", payload: { type: "message", role: "assistant",
+        content: [{ type: "output_text", text: "Review complete" }] } },
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    const staged = f.registry.stageStructuredSpawn(launchId, {
+      key: { engine: "codex", sessionId: "answered-stage" }, artifactPath: pathname, cwd: lane.worktreeDir!,
+      accountId: null, status: "unhosted", host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn",
+    });
+    expect(staged.kind).toBe("settled");
+    expect(await durableStageTurnEvidence("codex", pathname)).toMatchObject({
+      message: { text: "Review complete" },
+    });
+    f.h.ports.durableTurnEvidence = durableStageTurnEvidence;
+    f.h.ports.sourcePathAllowed = value => value === pathname;
+  }
+  f.journal.transitionOperation(launchId, "failed", { reason: KILLED_SETUP });
+  if (state !== "starting") expect((await f.registry.failStructuredSpawnOffLoop(launchId, KILLED_SETUP)).claimed).toBe(true);
+  f.registry.releaseStructuredSpawnAdmissionOwner(launchId, admissionOwner!);
+  run.attempts = Array.from({ length: 5 }, (_, index) => ({
+    ...structuredClone(first), n: index + 1, state: "failed", completedAt: attempt.startedAt,
+  }));
+  Object.assign(attempt, { launchId, conversationId });
+  run.attempts.push(attempt);
+  lane.state = "needs_decision"; lane.stateDetail = KILLED_SETUP; lane.cursor!.state = "spawning";
+  savePipelines([lane]);
+  return { lane, launchId, conversationId };
+}
+
+test.each(["failed", "starting", "compacted"] as const)("retry-stage abandons the killed setup with a %s record", async state => {
+  const f = await fixture();
+  try {
+    const { lane, launchId } = await killedSetup(f, state === "starting" ? state : "failed");
+    if (state === "compacted") {
+      f.journal.append({ scope: { type: "operation", id: "compaction-fixture" }, kind: "fixture-marker", payload: {} });
+      f.journal.compact(1);
+      expect(f.journal.snapshot().retentionFloorSeq).toBeGreaterThan(0);
+    }
+    const req = { action: "retry-stage", stageId: "plan", launchId } as const;
+    const retry = await patchPipeline(lane.id, req, f.h.ports);
+    expect(retry.error).toBeUndefined();
+    expect(f.row().runs[0]!.attempts[5]).toMatchObject({ n: 6, launchId, state: "failed",
+      error: expect.stringContaining("abandoned") });
+    expect(f.registry.spawnReceipt(launchId)?.state).toBe("failed");
+    expect(f.journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
+    expect((await patchPipeline(lane.id, req, f.h.ports)).status).toBe(409);
+    await tickPipelines([], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(f.row().runs[0]!.attempts.at(-1)).toMatchObject({ n: 7, state: "running" });
+    expect(f.tries()).toBe(2);
+  } finally { await f.close(); }
+});
+
+test("retry-stage refuses an interrupted launch with a native answer", async () => {
+  const f = await fixture();
+  try {
+    const { lane, launchId } = await killedSetup(f, "answered");
+    const result = await patchPipeline(lane.id, { action: "retry-stage", stageId: "plan", launchId }, f.h.ports);
+    expect(result.status).toBe(409);
+    expect(f.row().runs[0]!.attempts).toHaveLength(6);
+    expect(f.registry.spawnReceipt(launchId)?.retryClaim).toBeUndefined();
+    await tickPipelines([], f.h.ports);
+    expect(f.tries()).toBe(1);
+  } finally { await f.close(); }
+});
 
 test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-down", "owner-change"].map(delivery => ({ explicit, delivery }))))
 ("MCP retry-stage reconciles a stuck replacement: %j", async ({ explicit, delivery }) => {

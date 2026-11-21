@@ -96,8 +96,8 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, resolveConversationAlias, RegistryWriterBusyError, REGISTRY_WRITER_BUSY, type AgentRegistryEntry, type DurableMembershipInput, type RegistryFile, type StructuredTerminationCapture } from "@/lib/agent/registry";
-import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
+import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, resolveConversationAlias, RegistryWriterBusyError, REGISTRY_WRITER_BUSY, type AgentRegistryEntry, type DurableMembershipInput, type RegistryFile, type SpawnReceipt, type StructuredTerminationCapture } from "@/lib/agent/registry";
+import { registryKeysMatching, registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -403,6 +403,8 @@ export interface PipelinePorts {
   /** Original launch/message journal evidence, freshly fenced by the failed
       receipt. An unavailable read never proves that a prompt was absent. */
   unpublishedLaunchRetrySafe?(launchId: string, signal?: AbortSignal): Promise<boolean>;
+  retireInterruptedStageSetup?(launchId: string, conversationId: string, failure: string,
+    eligible: () => boolean, signal: AbortSignal): Promise<string | null>;
   fencedFirstMessageRetrySafe?(launchId: string, conversationId: string, eligible: () => boolean): Promise<boolean>;
   drainHold?(): DrainLease | null;
   /** A held stage start waits in the shared bounded CPU queue; null admits. */
@@ -2341,6 +2343,35 @@ export function defaultPipelinePorts(
     }),
     releaseFailedStageLaunchContinuation: (launchId, conversationId) =>
       releaseFailedStagedLaunchContinuation(launchId, conversationId, registry),
+    retireInterruptedStageSetup: (launchId, conversationId, failure, eligible, signal) => withViewerOperation("pipelines.evidence", async () => {
+      const initial = registry.readOnlySnapshot();
+      const before = initial.receipts[launchId];
+      if (!before || before.conversationId !== conversationId) return "the original reservation is unavailable or conflicts";
+      const refusal = interruptedStageSetupRefusal(initial, before);
+      if (refusal) return refusal;
+      const source = dependencies.spawnRecoveryClient ? dependencies.spawnRecoveryClient() : runtimeHostClient();
+      if (!source) return "the runtime journal is unavailable";
+      const client = withRuntimeRecoveryReads(source, signal);
+      const firstMessageId = `spawn_message_${launchId}`;
+      const [launch, message] = await Promise.all([client.operationStatus(launchId), client.operationStatus(firstMessageId)]);
+      if (message) return "the runtime journal retains a first-message operation";
+      if (launch && (launch.operationId !== launchId || launch.receipt.operationId !== launchId
+        || launch.receipt.kind !== "spawn" || launch.receipt.conversationId !== conversationId
+        || !["failed", "rejected"].includes(launch.receipt.status))) return "the runtime launch has not confirmed failure";
+      // A compacted journal may have lost the spawn receipt. The registry
+      // still has the prepublication reservation, and a send would require
+      // staging its native identity first. Keep that proof at the write fence.
+      const safe = (file: RegistryFile, receipt: SpawnReceipt) => !signal.aborted && eligible()
+        && JSON.stringify(receipt) === JSON.stringify(before) && !interruptedStageSetupRefusal(file, receipt);
+      if (before.state === "failed") {
+        const current = registry.readOnlySnapshot();
+        const receipt = current.receipts[launchId];
+        return receipt && safe(current, receipt) ? null : "the original launch evidence changed during recovery";
+      }
+      const failed = await registry.failStructuredSpawnOffLoop(launchId, failure, { announce: false, recoveryFence: safe });
+      invalidateRegistryProjection();
+      return failed.claimed ? null : "the original reservation could not be retired within the recovery window";
+    }),
     unpublishedLaunchRetrySafe: async (launchId, inheritedSignal) => {
       const signal = AbortSignal.any([AbortSignal.timeout(10_000), ...(inheritedSignal ? [inheritedSignal] : [])]);
       if (signal.aborted) return false;
@@ -3081,7 +3112,9 @@ function isVerifiedNoHostStageReceipt(pipeline: Pipeline, stageId: string, attem
 }
 
 async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
-  ports: PipelinePorts, bound = false, stopHosts = false): Promise<string | null> {
+  ports: PipelinePorts, bound = false, stopHosts = false,
+  interruptedSetup?: { failure: string; eligible: () => boolean; deadline: AbortSignal },
+): Promise<string | null> {
   if (!bound && (attempt.launchId || attempt.conversationId || attempt.sessionId || attempt.agentPath || attempt.paneId
     || attempt.report || attempt.verdict || attempt.activation)) {
     return "stage launch recovery cannot prove no dispatch began: the attempt retains conversation or turn evidence";
@@ -3128,6 +3161,7 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
   const expected = JSON.stringify(attempt);
   const control = activationFence(pipeline);
   const currentAttemptMatches = () => {
+    if (interruptedSetup && !interruptedSetup.eligible()) return false;
     const live = findPipelineRecord(pipeline.id), current = live && currentAttempt(live, stage.id);
     const sameCounter = current?.spawnCalls === attempt.spawnCalls;
     // A refused retry persists its reason. Keep a peer's larger inventory
@@ -3142,7 +3176,15 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
       && sameCounter
       && !current.report && !current.verdict && current.completedAt === attempt.completedAt;
   };
-  const deadline = AbortSignal.timeout(10_000);
+  const deadline = interruptedSetup?.deadline ?? AbortSignal.timeout(10_000);
+  const checkInterruptedSetup = async (receipt: SpawnReceipt) => {
+    if (!ports.retireInterruptedStageSetup || !interruptedSetup || deadline.aborted || !currentAttemptMatches()) {
+      return "the interrupted launch evidence could not be checked within the recovery window";
+    }
+    const claimId = `${pipeline.id}:${stage.id}:${receipt.launchId}`;
+    if (receipt.retryClaim && receipt.retryClaim.claimId !== claimId) return "the original launch is already claimed by another retry";
+    return ports.retireInterruptedStageSetup(receipt.launchId, receipt.conversationId, interruptedSetup.failure, currentAttemptMatches, deadline);
+  };
   try {
     const registry = agentRegistry();
     const receipts = new Map<string, NonNullable<ReturnType<typeof stageReservationReceipt>>>();
@@ -3158,10 +3200,16 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
       if (receipt) receipts.set(receipt.launchId, receipt);
     }
     if (bound && attempt.launchId) {
-      const active = registry.spawnReceipt(attempt.launchId);
+      let active = registry.spawnReceipt(attempt.launchId);
       if (!active?.clientAttemptId || active.conversationId !== attempt.conversationId
         || stageReservationReceipt(pipeline, stage.id, attempt, active.clientAttemptId)?.launchId !== active.launchId) {
         return "stage launch recovery cannot prove no dispatch began: the original reserved receipt is unavailable or conflicts";
+      }
+      if (interruptedSetup && active.state === "starting") {
+        const refusal = await checkInterruptedSetup(active);
+        if (refusal) return `stage launch recovery cannot retire interrupted setup: ${refusal}`;
+        active = registry.spawnReceipt(attempt.launchId);
+        if (!active || active.state !== "failed") return "the original launch changed while retiring its interrupted setup";
       }
       receipts.set(active.launchId, active);
     }
@@ -3181,6 +3229,14 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
       const claimId = `${pipeline.id}:${stage.id}:${receipt.launchId}`;
       const before = JSON.stringify(registry.spawnReceipt(receipt.launchId));
       if (before !== JSON.stringify(receipt)) return "stage launch recovery cannot prove no dispatch began: evidence changed during reconciliation; original operations retained";
+      if (interruptedSetup && receipt.launchId === attempt.launchId) {
+        const refusal = await checkInterruptedSetup(receipt);
+        if (refusal) return `stage launch recovery cannot retire interrupted setup: ${refusal}`;
+        if (deadline.aborted || !currentAttemptMatches() || JSON.stringify(registry.spawnReceipt(receipt.launchId)) !== before) {
+          return "the original launch changed during interrupted setup recovery";
+        }
+        continue;
+      }
       const claimed = receipt.retryClaim?.claimId === claimId && projected?.retryClaimId === claimId;
       const retained = attempt.retiredLaunches?.some(row => row.launchId === receipt.launchId
         && row.conversationId === receipt.conversationId) === true;
@@ -3224,7 +3280,7 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
         return "stage launch recovery cannot prove no dispatch began: evidence changed during reconciliation; original operations retained";
       }
     }
-    if (stopHosts) {
+    if (stopHosts && (!interruptedSetup || receipts.size > 1)) {
       // A retry claim leaves its admitted host in this attempt's custody.
       // Stop every original receipt, including those outside the active fields.
       const hostStamp = (launchId: string) => {
@@ -3249,6 +3305,9 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
             : JSON.stringify(after) === JSON.stringify(before);
         });
       for (const receipt of receipts.values()) {
+        // The interrupted setup proof already established that this launch
+        // never bound a host and that its setup processes have exited.
+        if (interruptedSetup && receipt.launchId === attempt.launchId) continue;
         if (!eligible()) return "stage launch recovery cannot prove no dispatch began: host ownership changed during reconciliation; original operations retained";
         const before = hosts.get(receipt.launchId)!;
         const stopped = await ports.stopStageAgent({ stageId: stage.id, attempt: attempt.n,
@@ -3275,7 +3334,7 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
       }
       // Termination yielded. Re-read all original delivery proofs and keep
       // earlier hosts fenced while later hosts and their journals are read.
-      const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, bound);
+      const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, bound, false, interruptedSetup);
       if (refusal) return refusal;
       if (!eligible()) return "stage launch recovery cannot prove no dispatch began: host ownership changed after termination; original operations retained";
     }
@@ -13108,6 +13167,40 @@ function controllerFailureReason(failure: string): string {
 
 const PREPUBLICATION_RETRY_REFUSAL_SUFFIX = "; original launch and first-message journal evidence do not prove a safe replacement";
 
+function interruptedStageSetupFailure(failure: string | null | undefined): failure is string {
+  return failure?.startsWith(`${REGISTRY_WRITER_BUSY} (spawn.setup-custody); exit: signal SIGKILL;`) === true;
+}
+
+function interruptedStageSetupRefusal(file: RegistryFile, receipt: SpawnReceipt): string | null {
+  if (receipt.transport !== "structured" || receipt.purpose !== "launch" || receipt.rejection
+    || receipt.queuedPinnedSpawn || !["starting", "failed"].includes(receipt.state)) {
+    return "the original receipt is no longer an interrupted structured launch";
+  }
+  if (receipt.key || receipt.artifactPath || receipt.artifactLifecycle === "materialized" || receipt.pane || receipt.verifiedHost
+    || resolveConversationAlias(file, receipt.conversationId) !== receipt.conversationId
+    || registryKeysMatching(file, "conversationAliases", "alias", receipt.conversationId).length
+    || file.conversations[receipt.conversationId]) {
+    return "the original launch has session, transcript or host evidence";
+  }
+  const operationId = `spawn_message_${receipt.launchId}`;
+  if (file.deliveryOperationOwners[operationId] || file.deliveryEvidenceCompactions[receipt.conversationId]
+    || registryKeysMatching(file, "heldDeliveries", "command.operationId", operationId).length
+    || registryKeysMatching(file, "heldDeliveries", "conversationId", receipt.conversationId).length
+    || registryKeysMatching(file, "deliveryOperationOwners", "conversationId", receipt.conversationId).length) {
+    return "the original launch has durable delivery evidence";
+  }
+  if (receipt.admissionOwner && processIdentityStatus(receipt.admissionOwner) !== "dead") {
+    return "the original launch still has an admission owner";
+  }
+  const setup = receipt.hostSetup;
+  if (!receipt.hostSetupStartedAt || !setup || setup.adoptionClaimEpoch !== undefined) return "native setup custody is unavailable";
+  if (setup.processes.some(process => processIdentityStatus(process) !== "dead")
+    || setup.phase === "executing" && (!setup.cleanupConfirmed || !setup.processes.length)) {
+    return "native setup process cleanup is unconfirmed";
+  }
+  return null;
+}
+
 function unverifiedLaunchRetryRefusal(failure: string, launchId?: string | null): string {
   if (failure === SEND_LOST_REASON) return `${failure}; original first-message journal fence could not be verified; original launch retained`;
   if (isPrepublicationSpawnFailure(failure)) {
@@ -18054,6 +18147,52 @@ async function applyPipelinePatch(
           pipeline.state = "running";
           pipeline.stateDetail = pendingLaunchDetail(attempt, ports, pipelineHasActivation(pipeline));
         }
+        await persist(); requestPipelineTick();
+        return { pipeline };
+      }
+      const interruptedReceipt = pipeline.cursor?.state === "spawning" && attempt?.launchId
+        ? ports.spawnReceipt(attempt.launchId) : null;
+      const interruptedFailure = [interruptedReceipt?.error, attempt?.error ?? pipeline.stateDetail].find(interruptedStageSetupFailure);
+      if (stage?.kind === "run" && attempt?.launchId && attempt.conversationId && interruptedFailure
+        && pipeline.cursor?.state === "spawning" && ["running", "paused", "needs_decision"].includes(pipeline.state)) {
+        if (attempt.report || attempt.verdict || attempt.completedAt || attempt.sessionId || attempt.agentPath || attempt.paneId
+          || attempt.activation || attempt.historical || attempt.cloud || attempt.flowId || openRuntimeSwitch(attempt)
+          || !["spawning", "needs_decision"].includes(attempt.state)) {
+          return { error: "the interrupted launch retains stage execution evidence", status: 409 };
+        }
+        const launchId = attempt.launchId;
+        const before = JSON.stringify(attempt);
+        const control = remoteActionFence(pipeline);
+        const recovery = {
+          failure: interruptedFailure,
+          deadline: AbortSignal.timeout(10_000),
+          eligible: () => {
+            assertAuthority?.();
+            const live = findPipelineRecord(pipeline.id);
+            return !!live && remoteActionFence(live) === control && live.cursor?.state === "spawning"
+              && JSON.stringify(currentAttempt(live, stage.id)) === before && !pipelineSurvivorRefusal(live);
+          },
+        };
+        const refusal = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, true, true, recovery);
+        if (refusal) {
+          // Legacy rows sometimes lack the request count. Persist its
+          // reconciled value while keeping the original interruption reason.
+          if (JSON.stringify(attempt) !== before && recovery.eligible()) await persist();
+          return { error: refusal, status: 409 };
+        }
+        if (recovery.deadline.aborted || !recovery.eligible()) return { error: "the interrupted stage changed during recovery", status: 409 };
+        const claim = await ports.claimSpawnRetry(launchId, `${pipeline.id}:${stage.id}:${launchId}`);
+        if (claim !== "claimed") return { error: "the interrupted launch changed before its retry could be claimed", status: 409 };
+        const changed = await unreservedStageRetryRefusal(pipeline, stage, attempt, ports, true, false, recovery);
+        if (changed) return { error: changed, status: 409 };
+        attempt.state = "failed";
+        attempt.completedAt = ports.now();
+        attempt.error = `stage launch abandoned after interrupted setup; ${interruptedFailure}`;
+        delete attempt.controllerWait;
+        resetStageForRetry(pipeline, stage);
+        if (pipeline.cursor) pipeline.cursor.admittedAt = ports.now();
+        recordHandLaunch(pipeline, actor, ports.now());
+        await newAttempt(pipeline, stage, ports.now(), req.repeatReason ?? "unknown");
         await persist(); requestPipelineTick();
         return { pipeline };
       }
