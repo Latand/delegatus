@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterAll, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-linked-seat-tools-"));
 const previous = { ...process.env };
@@ -93,35 +94,57 @@ test("remote orchestrator recovery reads the queued outbound row after a lost re
   expect((await create().callTool("send_message_to_orchestrator", { ...args, text: "Different words" })).code).toBe("idempotency_conflict");
 });
 
-test("remote relay binds and dispatches withheld lesson text; local binding stays verbatim", async () => {
-  expect(resolveSeatMessageMachine("Other", project.project)).toMatchObject({ install });
-  const { leaveLessons, recordLessonRequest, roleMemoryCollection } = await import("@/lib/memory/roleStore");
+test("a linked-seat relay queues stored rules verbatim and replays the same operation", async () => {
+  const { splitRelayMessageText } = await import("@/lib/orchestrator/relayText");
+  const { leaveLessons, lessonPublicationEnv, recordLessonRequest, storedLessonTexts } = await import("@/lib/memory/roleStore");
+  const { withoutStoredLessonsAsync } = await import("@/lib/memory/privacy");
   const rule = "Inspect the current durable owner before replaying a saved acknowledgement.";
+  const why = "A saved acknowledgement had changed owners.";
   const source = { project: project.project, pipelineId: "relay-fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: caller };
-  recordLessonRequest({ ...source, at: new Date().toISOString() });
-  leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: "A saved acknowledgement had changed owners." }], none: null });
+  recordLessonRequest({ ...source, at: "2026-11-19T00:00:00.000Z" });
+  leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why }], none: null });
+  const knownValues = fs.readFileSync(lessonPublicationEnv().LLV_PRIVACY_KNOWN_VALUES_FILE, "utf8").split("\n");
+  expect(knownValues).toEqual(expect.arrayContaining([rule, why]));
+
   const recoverable = viewerMcpRecoverableTools(domain).send_message_to_orchestrator!;
-  const args = { project: project.project, machine: "Other", text: rule, clientRequestId: "linked-private-rule" };
+  const text = `Relay this checkpoint verbatim.\n\n${rule}\n\n${why}`;
+  const args = { project: project.project, machine: "Other", text, clientRequestId: "linked-rule" };
   const bound = await recoverable.bind(args);
-  expect(bound.target.identity).toBe(`machine:${install}`);
-  expect(bound.sendPayload!.text).toContain("[learned rule]");
-  expect(bound.sendPayload!.text).not.toContain(rule);
+  expect(bound.target).toEqual({ project: project.project, identity: `machine:${install}` });
+  expect(splitRelayMessageText(bound.sendPayload!.text)?.body).toBe(text);
   for (const machine of [undefined, "Here", "this machine", selfId]) {
     const local = await recoverable.bind({ ...args, machine });
-    expect(local.sendPayload!.text).toContain(rule);
+    expect(splitRelayMessageText(local.sendPayload!.text)?.body).toBe(text);
   }
+
   const posts: Record<string, unknown>[] = [];
-  const api = createMcpToolService(viewerMcpBindings(undefined, { post: async (_path, body) => { posts.push(body); const link = resolveSeatMessageMachine(String(body.machine), String(body.project))!; return queueSeatMessage(link, String(body.project), String(body.text), caller, String(body.clientMessageId)); } }, domain), new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain) });
-  expect(await api.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true });
-  expect(posts[0]!.text).toContain("[learned rule]");
-  expect(posts[0]!.text).not.toContain(rule);
-  expect(await api.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, replayed: true });
+  const control = { post: async (_path: string, body: Record<string, unknown>) => {
+    posts.push(body);
+    const link = resolveSeatMessageMachine(String(body.machine), String(body.project))!;
+    return queueSeatMessage(link, String(body.project), String(body.text), caller, String(body.clientMessageId));
+  } };
+  const api = createMcpToolService(viewerMcpBindings(undefined, control, domain), new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain) });
+  const accepted = await api.callTool("send_message_to_orchestrator", args);
+  if (!accepted.ok) throw new Error(accepted.error);
+  expect(accepted).toMatchObject({ state: "queued", operationId: expect.any(String), replayed: false });
+  expect(posts[0]).toMatchObject({ project: project.project, machine: install, text, clientMessageId: bound.downstreamKey });
+  expect(await api.callTool("send_message_to_orchestrator", args)).toMatchObject({
+    ok: true, state: "queued", operationId: accepted.operationId, replayed: true,
+  });
   expect(posts).toHaveLength(1);
-  const read = spyOn(roleMemoryCollection()!, "snapshot").mockImplementation(() => { throw new Error("unreadable rule store"); });
+
+  const database = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
   try {
-    expect(await api.callTool("send_message_to_orchestrator", { ...args, clientRequestId: "unreadable-rule" })).toMatchObject({ ok: false, code: "LESSON_PRIVACY_UNAVAILABLE" });
-    expect(posts).toHaveLength(1);
-  } finally { read.mockRestore(); }
+    database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'")
+      .run(JSON.stringify({ kind: "rule", id: 7, rule }));
+  } finally { database.close(); }
+  expect(() => storedLessonTexts()).toThrow(expect.objectContaining({ code: "LESSON_PRIVACY_UNAVAILABLE" }));
+  await expect(withoutStoredLessonsAsync(text)).rejects.toMatchObject({ code: "LESSON_PRIVACY_UNAVAILABLE" });
+
+  expect(await api.callTool("send_message_to_orchestrator", { ...args, clientRequestId: "unreadable-rule" }))
+    .toMatchObject({ ok: true, state: "queued" });
+  expect(posts).toHaveLength(2);
+  expect(posts[1]).toMatchObject({ project: project.project, machine: install, text });
 });
 
 for (const backend of ["memory", "file", "sqlite"] as const) {

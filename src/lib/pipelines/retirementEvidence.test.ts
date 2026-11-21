@@ -15,12 +15,15 @@ afterEach(() => {
   if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+function buildFixtureLane(id: string) {
+  return buildPipeline({ id, task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
+    now: "2026-10-01T00:00:00Z", stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+}
 function setup() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-evidence-")); roots.push(root);
   process.env.LLV_STATE_DIR = root;
-  const lane = buildPipeline({ id: "owner", task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
-    now: "2026-10-01T00:00:00Z", stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
-      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+  const lane = buildFixtureLane("owner");
   lane.state = "running";
   lane.runs[0]!.attempts = [{ n: 1, state: "running", effectiveRole: lane.stages[0]!.effectiveRole,
     historical: false, launchId: "launch-owner", conversationId: "conversation_owner", sessionId: "session-owner", agentPath: "/fixture/owner.jsonl", paneId: null,
@@ -29,7 +32,9 @@ function setup() {
   savePipelines([lane]);
   return { root, lane, db: new Database(path.join(root, "state.sqlite")) };
 }
-const target = { conversations: ["conversation_owner"], sessionId: "session-owner", agentPath: "/fixture/owner.jsonl" };
+const target = { conversations: ["conversation_owner"], engine: "codex" as const, sessionId: "session-owner", agentPath: "/fixture/owner.jsonl" };
+const FIXTURE_NOW = Date.parse("2026-10-01T00:00:00Z");
+const readEvidence = (now = FIXTURE_NOW) => pipelineRetirementReader({ now });
 function decodedRows() { return performanceSpans.snapshot().records.filter(row => performanceSites[row.site] === "state.json").reduce((n, row) => n + row.rows, 0); }
 
 test("retirement target reads match the full predicate and warm decoding stays flat across tenfold history", async () => {
@@ -37,7 +42,7 @@ test("retirement target reads match the full predicate and warm decoding stays f
   try {
     for (const size of [10, 100]) {
       for (let n = 0; n < size; n++) {
-        const row = { ...buildPipeline({ ...f.lane, state: "provisioning", id: `history-${n}`, now: f.lane.createdAt }), state: "running", srcConversationId: null,
+        const row = { ...buildFixtureLane(`history-${n}`), state: "running", srcConversationId: null,
           runs: [{ stageId: "build", attempts: [{ ...f.lane.runs[0]!.attempts[0]!, conversationId: `conversation_history_${n}`, sessionId: `session-${n}`, agentPath: `/fixture/${n}.jsonl` }] }] };
         f.db.query("INSERT OR REPLACE INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,?,1,0)")
           .run(row.id, JSON.stringify(row), n);
@@ -87,11 +92,128 @@ test("a peer archive edit and deletion revoke old evidence and the next read ans
     f.db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='owner'").run(JSON.stringify({ ...f.lane, runs: [{ stageId: "build", attempts: [] }], state: "closed", cursor: null }));
     expect(() => first(target)).toThrow("changed");
     expect((await pipelineRetirementReader())(target)).toBe(false);
-    f.db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive','archived',?,1,1,0)").run(JSON.stringify({ ...buildPipeline({ ...f.lane, state: "provisioning", id: "archived", now: f.lane.createdAt }), state: "running", runs: f.lane.runs }));
+    f.db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive','archived',?,1,1,0)").run(JSON.stringify({ ...buildFixtureLane("archived"), state: "running", runs: f.lane.runs }));
     const archived = await pipelineRetirementReader(); expect(archived(target)).toBe(true);
     f.db.query("DELETE FROM state_rows WHERE collection='pipelines_archive'").run();
     expect(() => archived(target)).toThrow("changed");
     expect((await pipelineRetirementReader())(target)).toBe(false);
+  } finally { f.db.close(); }
+});
+
+test("a non-pipeline SQLite write leaves sweep standing and the compact projection current", async () => {
+  const f = setup();
+  try {
+    f.lane.state = "completed";
+    f.lane.cursor = null;
+    savePipelines([f.lane]);
+    const reader = await readEvidence();
+    expect(reader.sweepStanding(target)).toBe("terminal lane");
+    f.db.query("INSERT INTO state_collections(collection,schema_version,revision,migration_id,imported_at) VALUES(?,1,1,?,?)")
+      .run("other", "fixture", f.lane.createdAt);
+    expect(reader.sweepStanding(target)).toBe("terminal lane");
+    expect(reader.sweepStanding({ conversations: ["unrelated"] })).toBeNull();
+    performanceSpans.clear();
+    expect((await readEvidence()).sweepStanding(target)).toBe("terminal lane");
+    expect(decodedRows()).toBe(0);
+  } finally { f.db.close(); }
+});
+
+test.each(["cold", "warm"] as const)("expired terminal archive attempts yield no waiver on a %s read", async cache => {
+  const f = setup();
+  try {
+    const lane = buildFixtureLane("archived");
+    lane.state = "closed";
+    lane.cursor = null;
+    lane.closedAt = lane.createdAt;
+    const original = f.lane.runs[0]!.attempts[0]!;
+    const attempts = ["first", "second"].map((suffix, index) => ({
+      ...original, n: index + 1, state: "passed" as const, sessionId: `session-${suffix}`,
+      conversationId: `conversation_${suffix}`, agentPath: `/fixture/${suffix}.jsonl`,
+      completedAt: lane.createdAt, verdict: { status: "pass" as const, findings: [] },
+    }));
+    lane.runs[0]!.attempts = attempts;
+    f.db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,1,1,0)")
+      .run(lane.id, JSON.stringify(lane));
+    const targets = attempts.map(attempt => ({ conversations: [attempt.conversationId],
+      engine: "codex" as const, sessionId: attempt.sessionId, agentPath: attempt.agentPath }));
+    const cutoff = FIXTURE_NOW + 3_600_000;
+    if (cache === "warm") {
+      const recent = await readEvidence(cutoff - 1);
+      expect(targets.map(selected => recent.sweepStanding(selected))).toEqual(["terminal lane", "terminal lane"]);
+    }
+    performanceSpans.clear();
+    const expired = await readEvidence(cutoff);
+    expect(targets.map(selected => expired.sweepStanding(selected))).toEqual([null, null]);
+    expect(expired(target)).toBe(true);
+    if (cache === "warm") expect(decodedRows()).toBe(0);
+  } finally { f.db.close(); }
+});
+
+test("finished verdict reasons reuse compact evidence and disappear when the same attempt resumes", async () => {
+  const f = setup();
+  try {
+    const attempt = f.lane.runs[0]!.attempts[0]!;
+    attempt.state = "passed";
+    attempt.completedAt = f.lane.createdAt;
+    attempt.verdict = { status: "pass", findings: [] };
+    savePipelines([f.lane]);
+    const reader = await readEvidence();
+    expect(reader(target)).toBe(false);
+    expect(reader.sweepStanding(target)).toBe("stage verdict");
+    expect(reader.sweepStanding({ conversations: [], engine: "codex", sessionId: target.sessionId })).toBe("stage verdict");
+    expect(reader.sweepStanding({ conversations: ["unrelated"] })).toBeNull();
+    performanceSpans.clear();
+    expect((await readEvidence()).sweepStanding(target)).toBe("stage verdict");
+    expect(decodedRows()).toBe(0);
+    attempt.state = "running";
+    savePipelines([f.lane]);
+    expect(() => reader.sweepStanding(target)).toThrow("changed");
+    const resumed = await readEvidence();
+    expect(resumed(target)).toBe(true);
+    expect(resumed.sweepStanding(target)).toBeNull();
+    attempt.state = "needs_decision";
+    attempt.verdict.status = "needs_decision";
+    savePipelines([f.lane]);
+    const parked = await readEvidence();
+    expect(parked(target)).toBe(true);
+    expect(parked.sweepStanding(target)).toBeNull();
+    // resolve-decision reserves a fresh attempt; the answered attempt's
+    // original needs_decision verdict remains in history without custody.
+    f.lane.runs[0]!.attempts.push({ ...attempt, n: 2, state: "running", verdict: null, completedAt: null,
+      conversationId: "conversation_successor", sessionId: "session-successor", agentPath: "/fixture/successor.jsonl" });
+    savePipelines([f.lane]);
+    const continued = await readEvidence();
+    expect(continued(target)).toBe(false);
+    expect(continued.sweepStanding(target)).toBe("stage verdict");
+  } finally { f.db.close(); }
+});
+
+test("a repair reservation on a later stage keeps its original producer", async () => {
+  const f = setup();
+  try {
+    const producer = f.lane.runs[0]!.attempts[0]!;
+    producer.state = "passed";
+    producer.completedAt = f.lane.createdAt;
+    producer.verdict = { status: "pass", findings: [] };
+    const repair = {
+      sha: "a".repeat(40), baseSha: "b".repeat(40), operationId: "fixture-push",
+      stageId: "build", attempt: producer.n, refusedAt: f.lane.createdAt,
+      detail: "Publication refused", paths: [], messageTs: null,
+    };
+    f.lane.stages.push({ ...f.lane.stages[0]!, id: "publish" });
+    f.lane.runs.push({ stageId: "publish", attempts: [{
+      ...producer, conversationId: null, agentPath: null, sessionId: null, launchId: null, publicationRepair: repair,
+    }] });
+    savePipelines([f.lane]);
+    expect(pipelineHostHasLiveWork([f.lane], producer)).toBe(true);
+    const reader = await readEvidence();
+    expect(reader(target)).toBe(true);
+    expect(reader.sweepStanding(target)).toBe("held");
+
+    f.lane.runs[1]!.attempts[0]!.publicationRepair!.settledAt = f.lane.createdAt;
+    savePipelines([f.lane]);
+    expect(pipelineHostHasLiveWork([f.lane], producer)).toBe(false);
+    expect((await readEvidence()).sweepStanding(target)).toBe("stage verdict");
   } finally { f.db.close(); }
 });
 
@@ -154,7 +276,7 @@ test.each(["completed", "closed", "superseded"] as const)("the production projec
       if (protection === "publication") lane.publicationAdmission = { id: "publish", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
       if (protection === "activation") attempt.activation = { id: "activation", phase: "dispatching", clientAttemptId: "fixture", startedAt: lane.createdAt, fence: "fixture",
         input: { role: attempt.effectiveRole, prompt: "Build", cwd: "/fixture", project: "fixture", clientAttemptId: "fixture", title: "Fixture", runtimeProfile: {}, membership: {} } } as typeof attempt.activation;
-      const successor = { ...buildPipeline({ ...f.lane, state: "provisioning", id: "successor", now: f.lane.createdAt }), state: "paused",
+      const successor = { ...buildFixtureLane("successor"), state: "paused",
         srcConversationId: original.conversationId, srcPath: original.agentPath, runs: f.lane.runs.map(run => ({ ...run, attempts: [] })) } as Pipeline;
       if (protection === "source-publication") successor.publicationAdmission = { id: "publish", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
       const rows = [lane, successor];
@@ -180,7 +302,7 @@ test("released conversation aliases end source custody while independent paths a
   try {
     const lane = structuredClone(f.lane);
     lane.state = "completed"; lane.cursor = null;
-    const successor = { ...buildPipeline({ ...f.lane, state: "provisioning", id: "successor", now: f.lane.createdAt }), state: "paused",
+    const successor = { ...buildFixtureLane("successor"), state: "paused",
       srcConversationId: "conversation_alias", srcPath: "/fixture/independent.jsonl",
       runs: f.lane.runs.map(run => ({ ...run, attempts: [] })) } as Pipeline;
     savePipelines([lane, successor]);
