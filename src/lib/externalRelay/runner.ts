@@ -756,6 +756,8 @@ export async function runClaimedRequest(
     const elevation = !prototype && current && paired && currentTarget
       && canonicalRelayProject(currentTarget.project) === canonicalRelayProject(target.project)
       ? elevatedRequesterFor(paired, currentTarget, request, current.relays) : null;
+    if (!prototype && !elevation && current && elevatedRequesterFor(relay, target, request, current.relays))
+      return await finish(failed(leaseId, "cancelled"));
     owner = prototype ? ownerMessage : elevation?.instruction ?? null;
     const requesterTier = owner?.entry?.tier === "requester";
     if (recovery && (!owner || requesterTier || !current || !ownerRunSettingsAllow(recovery, current)

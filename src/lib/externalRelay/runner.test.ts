@@ -3305,7 +3305,7 @@ for (const phase of ["running", "pending"] as const) test(`owner cutoff through 
     const origin = "http://127.0.0.1:8899";
     const response = await PATCH(new NextRequest(`${origin}/api/external-relay/relays/${paired.id}`, {
       method: "PATCH", headers: { cookie: `llv_operator=${soloBrowserSession()}`, origin, host: "127.0.0.1:8899", "content-type": "application/json" },
-      body: JSON.stringify({ target: { id: "target_1", ownerTier: false } }),
+      body: JSON.stringify({ target: { id: "target_1", enabled: false } }),
     }), { params: Promise.resolve({ id: paired.id }) });
     expect(response.status).toBe(200);
     if (phase === "pending") expect(readRunLedger().runs[0]?.ownerTurn).toMatchObject({ cancel: "kill" });
