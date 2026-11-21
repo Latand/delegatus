@@ -1,14 +1,12 @@
 import { afterEach, expect, jest, test } from "bun:test";
 import { Window } from "happy-dom";
-import { flushSync } from "react-dom";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
-import { KanbanBoard, kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanBoardProps } from "./KanbanBoard";
+import type { KanbanBoardProps } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
-import { DWELL_MS } from "./useColumnDwell";
 import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
 import { timelineStorageKey } from "./boardTimelineStore";
 
@@ -37,6 +35,12 @@ Object.assign(globalThis, {
   requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
+
+// React detects input event support when it loads.
+const { flushSync } = await import("react-dom");
+const { createRoot } = await import("react-dom/client");
+const { KanbanBoard, kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside } = await import("./KanbanBoard");
+const { DWELL_MS } = await import("./useColumnDwell");
 
 const roots: Root[] = [];
 afterEach(() => {
