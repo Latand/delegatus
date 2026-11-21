@@ -132,7 +132,10 @@ test.each([
 ] as const)("does not recognize a private gate-shaped directory with %s", (_name, state) => {
   const fixture = activeJournalFixture();
   if (state !== "missing" && state !== "empty") {
-    fs.writeFileSync(fixture.journal, JSON.stringify({ ...fixture.row, [state]: true }) + "\n");
+    fs.writeFileSync(fixture.journal, [
+      JSON.stringify(fixture.row),
+      JSON.stringify({ ...fixture.row, [state]: true }),
+    ].join("\n") + "\n");
   }
   const journal = state === "missing" ? path.join(path.dirname(fixture.journal), "absent.ndjson") : fixture.journal;
   expect(hasActiveGateSandbox(fixture.directory, journal)).toBe(false);
