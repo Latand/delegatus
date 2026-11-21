@@ -12,6 +12,7 @@ import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext 
 
 export const CPU_QUEUE_MAX_WAIT_MS = 10 * 60_000;
 export const CPU_QUEUE_SPACING_MS = 2_000;
+export const CPU_STAGE_POLL_MS = 5_000;
 /** A waiting stage polls every five seconds. An ownerless ticket nobody has
  * polled for this long stops counting ahead of others, for every release
  * sharing the file; it keeps its row. */
@@ -25,6 +26,17 @@ const BOUNDED_GATE_PREFIX = "command:bounded:";
 export const ACTIVE_GATE_PREFIX = "command:gate-active:";
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; waitedMs: number; heldBy: "queue" | "pressure"; priority?: TaskPriority; stalledMs?: number };
+/** Recent kernel capacity evidence from before admission. Any intervening
+ * admission invalidates the observation, including on a different process. */
+export type UrgentStageCapacity = {
+  key: string; revision: string; sampledAt: number; lastBeforeProbe: number | null; hasCapacity: boolean;
+};
+type UrgentStageDecision = { evidence: UrgentStageCapacity; currentRevision(): string | null };
+
+function matchesUrgentStage(decision: UrgentStageDecision): boolean {
+  try { return decision.currentRevision() === decision.evidence.revision; }
+  catch { return false; } // A state reader with no current evidence cannot authorize an early start.
+}
 type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null; low_pressure: number };
 type GateSlot = { slot: number | null; cap: number };
 type ActiveGateSlot = GateSlot & { key: string; owner: string };
@@ -399,7 +411,7 @@ export class CpuAdmissionQueue {
     }).immediate();
   }
   check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource, requireLowPressure = false,
-    gateSlot?: GateSlot & { lastBeforeProbe: number | null }): CpuQueueWait | null {
+    gateSlot?: GateSlot & { lastBeforeProbe: number | null }, urgentStage?: UrgentStageDecision): CpuQueueWait | null {
     // Process probes and reads of the task database must not hold this
     // queue's writer. Re-read the rows under the lock and match observations
     // by their exact owner/binding and observed rank. Peers may poll or reorder
@@ -538,7 +550,14 @@ export class CpuAdmissionQueue {
       const slotObservationChanged = gateSlot !== undefined && gateSlot.lastBeforeProbe !== last;
       const portableSlots = gateSlot?.slot === null ? activeSlots.filter(gate => gate.slot === null) : [];
       const portableFull = gateSlot?.slot === null && portableSlots.length >= Math.min(gateSlot.cap, ...portableSlots.map(gate => gate.cap));
-      if (!observationChanged && !slotObservationChanged && !portableFull && position === 1 && spacing === 0 && (pressureAllows || budget === 0)) {
+      const ready = !observationChanged && !slotObservationChanged && !portableFull && position === 1 && spacing === 0;
+      const evidence = urgentStage?.evidence;
+      const canStartUrgently = ready && !pressureAllows && budget > 0 && consume && evidence?.hasCapacity === true
+        && ticket.owner === null && ticket.priority === 0 && !requireLowPressure && ticket.low_pressure === 0
+        && key.startsWith("stage:") && evidence.key === key && evidence.lastBeforeProbe === last
+        && evidence.sampledAt <= now && now - evidence.sampledAt <= CPU_STAGE_POLL_MS
+        && matchesUrgentStage(urgentStage!);
+      if (ready && (pressureAllows || budget === 0 || canStartUrgently)) {
         if (consume) {
           // Commands settle at their kernel slot claim. Stages retain a
           // recoverable admission until their own start checkpoint is read.

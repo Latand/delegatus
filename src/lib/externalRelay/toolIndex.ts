@@ -1,20 +1,20 @@
 import { createHash } from "node:crypto";
 import { ExternalRelayError, relayCall } from "./client";
-import { lookupResultSchema, type ExternalRelayRequest, type ExternalRelayTool } from "./protocol";
+import { lookupResultSchema, relayToolAudience, visibleRelayTools, type ExternalRelayRequest, type ExternalRelayTool } from "./protocol";
 import type { PairedRelay } from "./store";
-import { canonical, mayQuote, toolSleep, type ToolLoopRuntime } from "./toolLoop";
+import { canonical, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 /** Only the service's advertised, audience-visible metadata enters the owner prompt. */
 export function compactToolIndex(request: ExternalRelayRequest) {
-  return (request.input.tools ?? []).filter(tool => mayQuote(tool.audience, request.input.requester))
+  return visibleRelayTools(request)
     .map(({ name, summary, mode, effect, audience }) => ({ name, summary, mode,
       ...(effect ? { effect } : {}), ...(audience ? { audience } : {}) }));
 }
 
 export type ToolGuidance = { tools: string[]; text: string };
 export function describeToolIndex(request: ExternalRelayRequest, names: string[], blocks: ToolGuidance[] = []) {
-  const visible = (request.input.tools ?? []).filter(tool => mayQuote(tool.audience, request.input.requester));
+  const visible = visibleRelayTools(request);
   const tools = visible.filter(tool => names.includes(tool.name));
   const missing = names.filter(name => !visible.some(tool => tool.name === name));
   const reply = () => {
@@ -28,14 +28,13 @@ export function describeToolIndex(request: ExternalRelayRequest, names: string[]
   return reply();
 }
 
-export const isOnDemandClaim = (request: ExternalRelayRequest) =>
-  request.input.tools?.some(tool => tool.mode === "direct" && tool.spec && !tool.parameters) ?? false;
-
 /** Fill a request once for both agent paths. Lookup failures retain the safe handoff claim. */
 export async function hydrateToolIndex(relay: PairedRelay, request: ExternalRelayRequest,
   lease: { signal: AbortSignal; ack: () => Promise<boolean>; lose: () => void },
   runtime: ToolLoopRuntime = {}, deadlineAt = Infinity): Promise<{ request: ExternalRelayRequest; guidance: ToolGuidance[] }> {
-  if (!isOnDemandClaim(request)) return { request, guidance: [] };
+  if (request.delivery === "guest") return { request, guidance: [] };
+  const visible = visibleRelayTools(request);
+  if (!visible.some(tool => tool.mode === "direct" && tool.spec && !tool.parameters)) return { request, guidance: [] };
   return withViewerOperation("relay.tool-index", async () => {
     const now = runtime.now ?? Date.now;
     const sleep = runtime.sleep ?? toolSleep;
@@ -44,7 +43,8 @@ export async function hydrateToolIndex(relay: PairedRelay, request: ExternalRela
     const until = now() + budget;
     const tools = new Map<string, ExternalRelayTool>();
     const guidance = new Map<string, ToolGuidance>();
-    const pending = new Set((request.input.tools ?? []).filter(tool => tool.mode === "direct").map(tool => tool.name).sort());
+    const mayQuote = relayToolAudience(request);
+    const pending = new Set(visible.filter(tool => tool.mode === "direct").map(tool => tool.name).sort());
     try {
       for (let page = 0; pending.size && page < 4; page++) {
         const describe = [...pending];
@@ -65,7 +65,7 @@ export async function hydrateToolIndex(relay: PairedRelay, request: ExternalRela
           }
           if (result.status !== "ok" || !result.tools) throw new Error("lookup refused");
           let progress = 0;
-          for (const tool of result.tools) if (pending.has(tool.name)) {
+          for (const tool of result.tools) if (pending.has(tool.name) && mayQuote(tool.audience)) {
             const filled = { ...tool }; delete filled.spec;
             if (filled.mode === "handoff" || filled.parameters) { tools.set(tool.name, filled); pending.delete(tool.name); progress++; }
           }
@@ -78,9 +78,10 @@ export async function hydrateToolIndex(relay: PairedRelay, request: ExternalRela
           break;
         }
       }
+      const admittedGuidance = [...guidance.values()].filter(block => block.tools.some(name => tools.has(name)));
       return { request: { ...request, input: { ...request.input,
-        tools: request.input.tools!.flatMap(tool => tool.mode === "direct" ? tools.has(tool.name) ? [tools.get(tool.name)!] : [] : [tool]),
-        tool_guidance: [...guidance.keys()].join("\n\n") || null } }, guidance: [...guidance.values()] };
+        tools: visible.flatMap(tool => tool.mode === "direct" ? tools.has(tool.name) ? [tools.get(tool.name)!] : [] : [tool]),
+        tool_guidance: admittedGuidance.map(block => block.text).join("\n\n") || null } }, guidance: admittedGuidance };
     } catch (error) {
       if (error instanceof ExternalRelayError && (error.status === 404 || error.code === "lease_lost")) lease.lose();
       if (lease.signal.aborted) throw error;

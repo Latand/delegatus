@@ -94,3 +94,49 @@ test.each([true, false])("identity resolution keeps a moved ID and a genuinely I
   expect(result.pipelines[0]!.attempts[0]!.live).toBe(true);
   expect(result.agents).toHaveLength(0);
 });
+
+test("work end is the last evidenced work, never the lifecycle end of an open attempt", () => {
+  const project = (pipeline: Pipeline, file?: FileEntry) => projectTaskTimelines({ project: task.project, tasks: [task], pipelines: [pipeline],
+    members: file ? [{ taskId: task.id, file }] : undefined, nowMs: NOW }).tasks[0]!.pipelines[0]!.attempts[0]!;
+  // Open, no evidence: the lifecycle runs to now, the work end is unknown.
+  const none = project(lane());
+  expect(none.endAtMs).toBe(NOW);
+  expect(none.workEndAtMs).toBeNull();
+  // Open and idle with a closed turn: work ends with that turn.
+  const closed = project(lane(), member());
+  expect(closed.endAtMs).toBe(NOW);
+  expect(closed.workEndAtMs).toBe(NOW - 60_000);
+  // Live: work runs to the clock.
+  const live = project(lane(), member({ activity: "live", lastTurn: { startedAt: NOW - 120_000, endedAt: null },
+    agentActivity: { lastRecordAt: NOW - 1000, checking: false, check: null } }));
+  expect(live.workEndAtMs).toBe(NOW);
+  // The production shape: a paused lane whose cursor attempt is still spawning and has no agent.
+  const paused = lane();
+  paused.state = "paused";
+  paused.runs[0]!.attempts[0]!.state = "spawning";
+  paused.runs[0]!.attempts[0]!.conversationId = null;
+  paused.runs[0]!.attempts[0]!.agentPath = null;
+  const waiting = project(paused);
+  expect(waiting.endAtMs).toBe(NOW);
+  expect(waiting.workEndAtMs).toBeNull();
+  // Settled attempts keep their end.
+  const completed = lane();
+  completed.runs[0]!.attempts[0]!.state = "passed";
+  completed.runs[0]!.attempts[0]!.completedAt = stamp(-3_600_000);
+  expect(project(completed).workEndAtMs).toBe(NOW - 3_600_000);
+  const stopped = lane();
+  stopped.runs[0]!.attempts[0]!.suspension = { reason: "pause", detail: "stopped", requestedAt: stamp(-7_200_000), stoppedAt: stamp(-5_400_000) };
+  const stoppedAttempt = project(stopped);
+  expect(stoppedAttempt.endAtMs).toBe(NOW - 5_400_000);
+  expect(stoppedAttempt.workEndAtMs).toBe(NOW - 5_400_000);
+});
+
+test("a standalone agent without a verified start has no work end and still counts as live", () => {
+  const file = member({ activity: "live", lastTurn: null, agentActivity: { lastRecordAt: NOW - 1000, checking: false, check: null } });
+  const agent = projectTaskTimelines({ project: task.project, tasks: [task], pipelines: [], members: [{ taskId: task.id, file }], nowMs: NOW }).tasks[0]!.agents[0]!;
+  expect(agent.live).toBe(true);
+  expect(agent.startedAtMs).toBeNull();
+  expect(agent.workEndAtMs).toBeNull();
+  const known = member({ activity: "live", lastTurn: { startedAt: NOW - 120_000, endedAt: null }, agentActivity: { lastRecordAt: NOW - 1000, checking: false, check: null } });
+  expect(projectTaskTimelines({ project: task.project, tasks: [task], pipelines: [], members: [{ taskId: task.id, file: known }], nowMs: NOW }).tasks[0]!.agents[0]!.workEndAtMs).toBe(NOW);
+});

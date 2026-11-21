@@ -380,6 +380,13 @@ that loop).
 | `"owner"` | `requester?.is_owner === true` |
 | anything else | never (the schema refuses other values anyway) |
 
+Amended 2026-11-21: `mayQuote` was replaced by `relayToolAudience(request)` and
+`visibleRelayTools(request)` in `protocol.ts`. Both flags count only when the
+requester's `key` is the author of the unique non-`self` trigger named by
+`respond_to`; `owner` also needs `is_anonymous_admin: false` and an ordinary
+(non-guest) delivery. The request parser declines a conflicting requester
+`invalid_request` before any tool list is built (relay.md, `requester` row).
+
 It runs twice: on the index, to drop tools the requester could not be shown
 (§2.1, so no call is spent and no restricted data reaches this machine), and
 on every result, using the result's own `audience` (R4 carries it per result,

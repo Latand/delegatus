@@ -56,7 +56,7 @@ test("a synthetic two-megabyte changed file gets the full privacy verdict within
     fingerprints.push({ length: 10, exactOnly: true, sha256: createHash("sha256").update("z".repeat(10)).digest("hex") });
     const catalog = join(root, "catalog.json");
     writeFileSync(catalog, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1", fingerprints }));
-    Object.assign(env, { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog, LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr" });
+    Object.assign(env, { LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog });
     const run = async () => {
       const started = performance.now();
       const child = Bun.spawn({

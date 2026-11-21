@@ -1210,6 +1210,10 @@ type ManagerSpec = {
   hold?: "operator" | "pr" | "external" | "worker" | "resource" | "task" | "postponed";
   lane: "paused" | "needs_decision" | "running" | "completed" | null; final?: "failed" | "needs_decision" | "passed" | "running" | "pending";
   minutes?: number; working?: "stage" | "stage-ended" | "agent"; agent?: number; stopped?: boolean; noEnd?: boolean; neverStarted?: boolean;
+  /** Hours before the clock at which the running attempt began, instead of the table's own. */
+  lastBegin?: number;
+  /** The standalone agent works now, but its transcript tail and launch facts name no start. */
+  startUnknown?: boolean;
 };
 const MANAGER_SPECS: ManagerSpec[] = [
   { n: 1, status: "blocked", start: 340, attempts: 1, minutes: 8, lastEnd: 340, due: 4, slips: 6, hold: "pr", lane: "paused", final: "failed" },
@@ -1297,7 +1301,7 @@ async function managerRecords(lang: "en" | "uk", mutate?: (spec: ManagerSpec) =>
         const last = index === spec.attempts - 1;
         const minutes = spec.minutes ?? 5 + (index * 7) % 21;
         const running = last && spec.final === "running";
-        const lastBegin = running ? ({ 17: 0.7, 18: 0.5, 23: 0.9 } as Record<number, number>)[spec.n] ?? spec.start : (spec.lastEnd ?? 0) + minutes / 60;
+        const lastBegin = running ? spec.lastBegin ?? ({ 17: 0.7, 18: 0.5, 23: 0.9 } as Record<number, number>)[spec.n] ?? spec.start : (spec.lastEnd ?? 0) + minutes / 60;
         const fraction = spec.attempts === 1 ? 0 : index / (spec.attempts - 1);
         const begin = spec.start + fraction * (lastBegin - spec.start);
         const stageIndex = index % used, run = lane.runs[stageIndex]!;
@@ -1313,7 +1317,8 @@ async function managerRecords(lang: "en" | "uk", mutate?: (spec: ManagerSpec) =>
         if (started) {
           const end = running ? null : spec.stopped && index === 3 ? MANAGER_NOW - (begin - 0.25) * 3_600_000 : completed ? MANAGER_NOW - (begin - minutes / 60) * 3_600_000 : null;
           const startMs = MANAGER_NOW - begin * 3_600_000;
-          truth[id]!.segments.push({ startMs, endMs: running ? MANAGER_NOW : spec.stopped && index === 3 ? MANAGER_NOW - (begin - 0.25) * 3_600_000 : end });
+          // A running attempt with no working file is waiting: only its start is evidenced. One whose turn ended works up to that turn's end.
+          truth[id]!.segments.push({ startMs, endMs: running ? !spec.working ? null : spec.working === "stage-ended" ? MANAGER_NOW - 12 * 60_000 : MANAGER_NOW : spec.stopped && index === 3 ? MANAGER_NOW - (begin - 0.25) * 3_600_000 : end });
           truth[id]!.startMs = Math.min(truth[id]!.startMs ?? Infinity, startMs);
         }
         if (running && spec.working) {
@@ -1333,12 +1338,14 @@ async function managerRecords(lang: "en" | "uk", mutate?: (spec: ManagerSpec) =>
     }
     if (spec.agent !== undefined) {
       const fileId = `mgr-agent-${spec.n}`;
-      const file = workingFile(fileId, spec.agent);
+      const file = workingFile(fileId, spec.agent, spec.startUnknown ? { lastTurn: null } : {});
       files.push(file);
       task.assignments.push({ path: file.path, conversationId: fileId, panePid: null, state: "delivered", error: null, at: hours(spec.agent) });
-      const startMs = MANAGER_NOW - spec.agent * 3_600_000;
-      truth[id]!.segments.push({ startMs, endMs: MANAGER_NOW });
-      truth[id]!.startMs = Math.min(truth[id]!.startMs ?? Infinity, startMs);
+      if (!spec.startUnknown) {
+        const startMs = MANAGER_NOW - spec.agent * 3_600_000;
+        truth[id]!.segments.push({ startMs, endMs: MANAGER_NOW });
+        truth[id]!.startMs = Math.min(truth[id]!.startMs ?? Infinity, startMs);
+      }
     }
   }
   return { payload: { ...filesReadSummary([], pipelines), files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: files.length, smt: MANAGER_NOW / 1000 }], projectCwds: { atlas: "/fixture/atlas" } }, truth };
@@ -1579,6 +1586,7 @@ describe("board timeline manager view", () => {
             // 5. Paging back on purpose, and back to now.
             const viewStart = () => scroller.getAttribute("data-view-start").then(Number);
             const liveStart = await viewStart();
+            const restAxisHeight = await page.locator(".bt-axis").evaluate(axis => axis.getBoundingClientRect().height);
             await page.locator(`[data-timeline-task="${idOf(1)}"] [data-timeline-expand]`).click();
             await settleChart(page);
             const foldLine = page.locator(`[data-timeline-fold="${idOf(1)}"] [data-timeline-fold-expand]`);
@@ -1590,7 +1598,8 @@ describe("board timeline manager view", () => {
             await settleChart(page);
             check(await viewStart() < liveStart && await page.locator("[data-timeline-back]").count() === 1, `${tag}: paging did not move the window back`);
             await page.locator(`[data-timeline-task="${idOf(1)}"]`).scrollIntoViewIfNeeded();
-            // The return control has a row of its own: no time label of the axis is under it, cut by an edge or left out.
+            // The return control sits in the axis's time-label row and the axis keeps its height; no label is under it, cut by an edge or left out.
+            check(Math.abs(await page.locator(".bt-axis").evaluate(axis => axis.getBoundingClientRect().height) - restAxisHeight) <= 0.5, `${tag}: the axis changed height while paged`);
             const axisLabels = await page.evaluate(() => {
               const back = document.querySelector<HTMLElement>("[data-timeline-back]")!.getBoundingClientRect(), scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
               const edge = scroller.getBoundingClientRect().left + scroller.clientWidth, range = document.createRange();
@@ -1652,6 +1661,233 @@ describe("board timeline manager view", () => {
               check(seen.size === allRows.length, `${tag}: ${seen.size} of ${allRows.length} rows reached beside the seat panel`);
             } finally { await B.context.close(); }
           }
+        }
+      }
+    } finally {
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify({ now: MANAGER_NOW, failures, readings }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 3_000_000);
+
+  /*
+   * The seven defects the installed-version check found (docs/design/board-timeline-manager-view.md §20), each on the
+   * fixture shape that reproduces it: an open stage with no agent (task 10), a recent overdue task among those waiting
+   * for the operator (22), an agent with seconds in its elapsed time (26) and one with no known start (27), and a due
+   * date on the window's right edge (25). Frames: $LLV_EVIDENCE_DIR/board-timeline-waiting/<width>-<lang>-<theme>-<state>.png.
+   */
+  managerTest("waiting reads as the thin line, overdue notes share one ink, minute durations, a live row without a start, the return control on the axis, the right-edge flag", async () => {
+    const { timelineWindow, HOUR } = await import("@/lib/board/taskTimelineView");
+    const out = path.join(os.tmpdir(), `llv-waiting-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-timeline-waiting"); fs.mkdirSync(evidence, { recursive: true });
+    const edge = timelineWindow(MANAGER_NOW, 6, null).end;
+    const mutate = (spec: ManagerSpec): ManagerSpec => spec.n === 10 ? { ...spec, final: "running", lastBegin: 120 }
+      : spec.n === 22 ? { ...spec, due: -(24 * 60 + 46) / 3600 }
+        : spec.n === 25 ? { ...spec, due: (edge - MANAGER_NOW) / HOUR }
+          : spec.n === 26 ? { ...spec, agent: 0.5 + 39 / 3600 }
+            : spec.n === 27 ? { ...spec, startUnknown: true } : spec;
+    let current = await managerRecords("en", mutate);
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang, mutate);
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+        for (const theme of ["light", "dark"] as const) for (const { width, height } of [{ width: 390, height: 844 }, { width: 1000, height: 700 }, { width: 1200, height: 800 }, { width: 1440, height: 900 }]) {
+          const tag = `${width}-${lang}-${theme}`;
+          if (process.env.LLV_TIMELINE_ONLY && !process.env.LLV_TIMELINE_ONLY.split(",").includes(tag)) continue;
+          const phone = width === 390;
+          const A = await openManager(browser, served.base, { width, height, lang, theme, seat: false, stored: { view: "board", hours: 24, expanded: {} } });
+          try {
+            const { page, pageErrors } = A;
+            const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : "[data-board-timeline-toggle]");
+            await page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : "[data-bar=\"project\"]").first().waitFor();
+            if (await toggle.isVisible()) await toggle.click();
+            else { await page.evaluate(() => { const key = "llv:board-timeline:v1:atlas"; localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), view: "timeline" })); }); await page.reload(); }
+            const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
+            await page.locator("[data-timeline-task]").first().waitFor();
+            await settleChart(page);
+            const scroller = page.locator("[data-timeline-scroll]");
+            const scaleButton = (name: "zoomIn" | "zoomOut") => page.getByRole("button", { name: t(`timeline.${name}`), exact: true });
+            const taskRow = (n: number) => page.locator(`[data-timeline-task="${idOf(n)}"]`);
+            // Bring a row to the top of the chart, under the pinned axis, so a frame shows it whole.
+            const show = async (selector: string) => {
+              await page.evaluate(sel => {
+                const scrollBox = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, row = document.querySelector<HTMLElement>(sel);
+                if (!row) return;
+                const axis = scrollBox.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+                scrollBox.scrollTop = row.getBoundingClientRect().top - scrollBox.getBoundingClientRect().top + scrollBox.scrollTop - axis;
+              }, selector);
+              await settleChart(page);
+            };
+            const frame = async (state: string, strict = true) => {
+              await settleChart(page).catch(() => undefined);
+              const geometry = await timelineGeometry(chart);
+              await page.screenshot({ path: path.join(evidence, `${tag}-${state}.png`) });
+              readings.push({ name: `${tag}-${state}`, width, height, lang, theme, state, failures: geometry.failures, controls: geometry.controls.length });
+              check(pageErrors.length === 0, `${tag}-${state}: page errors ${pageErrors.join(" | ")}`);
+              if (strict) {
+                check(geometry.failures.length === 0, `${tag}-${state}: text cut by an edge: ${JSON.stringify(geometry.failures.slice(0, 5))}`);
+                check(geometry.controls.every(control => control.hit), `${tag}-${state}: a control is covered: ${JSON.stringify(geometry.controls.filter(control => !control.hit).map(control => control.text))}`);
+                for (const control of geometry.controls) check(control.width >= (phone ? 44 : 24) && control.height >= (phone ? 44 : 24), `${tag}-${state}: control ${control.text} is ${control.width}×${control.height}`);
+              }
+            };
+            // F1: every overdue note reads in the danger ink of an overdue due word; F3, F4: words and minutes.
+            const noteInk = async (state: string) => {
+              const ink = await page.evaluate(() => {
+                const probe = document.createElement("i"); probe.style.color = "var(--color-danger)"; document.body.append(probe);
+                const danger = getComputedStyle(probe).color; probe.remove();
+                const due = document.querySelector<HTMLElement>('[data-timeline-due="overdue"]');
+                const notes = [...document.querySelectorAll<HTMLElement>(".bt-overdue-note")].map(note => ({ text: note.textContent ?? "", color: getComputedStyle(note).color, weight: getComputedStyle(note).fontWeight }));
+                return { danger, due: due ? getComputedStyle(due).color : null, notes };
+              });
+              check(ink.notes.length >= 1, `${tag}-${state}: no overdue note on screen`);
+              for (const note of ink.notes) {
+                check(note.color === ink.danger && (ink.due === null || note.color === ink.due), `${tag}-${state}: note «${note.text}» is ${note.color}, danger ${ink.danger}, due word ${ink.due}`);
+                check(!note.text.includes(" · до "), `${tag}-${state}: ambiguous maximum in «${note.text}»`);
+                check(note.text.includes(t("timeline.group.overdue", { count: 0, duration: "" }).split("·")[1]!.trim().split(" ")[0]!), `${tag}-${state}: note «${note.text}» lacks the maximum word`);
+              }
+              return ink.notes.map(note => note.text);
+            };
+            const noSeconds = async (state: string) => {
+              const texts = await page.evaluate(() => { const root = document.querySelector<HTMLElement>("[data-board-timeline]")!;
+                return [root.innerText, ...[...root.querySelectorAll<HTMLElement>("[title]")].map(node => node.title)]; });
+              const seconds = lang === "uk" ? /\d+\s?с(?![\p{L}])/u : /\d+s\b/;
+              for (const text of texts) check(!seconds.test(text), `${tag}-${state}: seconds in «${text.slice(0, 120)}»`);
+            };
+            // F5: the live mark of task 27 stands on the now line and claims no duration.
+            const liveMarks = (state: string, count: number, scope = taskRow(27)) => scope.evaluate((row, expected) => {
+              const marks = [...row.querySelectorAll<HTMLElement>("[data-timeline-live]")];
+              const now = row.querySelector<HTMLElement>(".bt-lane .bt-now");
+              const lane = row.querySelector<HTMLElement>(".bt-lane");
+              if (!now || !lane) return `no now line (${marks.length} marks)`;
+              const nowX = now.getBoundingClientRect().left;
+              const bad = marks.filter(mark => Math.abs(mark.getBoundingClientRect().right - nowX) > 1 || mark.getBoundingClientRect().width > 10.5);
+              return marks.length === expected && !bad.length && !row.querySelector("[data-timeline-segment]") && !row.querySelector("[data-timeline-line]") ? "" : `${marks.length} marks (${expected} expected), ${bad.length} off the now line or wide, ${row.querySelectorAll("[data-timeline-segment]").length} segments`;
+            }, count).then(problem => check(problem === "", `${tag}-${state}: task 27 live mark: ${problem}`));
+            const rowsOf = (rows: ManagerRow[], n: number) => rows.find(row => row.task === idOf(n))!;
+
+            // 1. Fresh storage: collapsed, groups closed.
+            let rows = await readRows(page);
+            const notesClosed = await noteInk("default");
+            check(notesClosed.length >= 3, `${tag}-default: ${notesClosed.length} overdue notes, the header and two closed groups expected`);
+            await noSeconds("default");
+            const r27 = rowsOf(rows, 27), r26 = rowsOf(rows, 26);
+            check(r27.since === t("timeline.startUnknown") && r27.line === 0 && r27.segments === 0, `${tag}-default: task 27 reads «${r27.since}», line ${r27.line}, segments ${r27.segments}`);
+            check(!r27.label.includes(t("timeline.elapsed", { duration: "" }).trim()) && r27.label.includes(t("mobile2.kanban.agents", { count: 1 })) && r27.label.includes(t("kanban.graphState.running")), `${tag}-default: task 27 label «${r27.label}»`);
+            await liveMarks("default", 1);
+            check((r26.since ?? "").endsWith(` · ${lang === "uk" ? "30 хв" : "30m"}`), `${tag}-default: task 26 reads «${r26.since}»`);
+            check(await page.locator("[data-flag-head=\"left\"]").count() === 0, `${tag}-default: a flag inside the lane points its head left`);
+            const restAxis = await page.locator(".bt-axis").evaluate(axis => axis.getBoundingClientRect().height);
+            await show('[data-timeline-task="mgr-task-27"]');
+            await frame("default");
+
+            // 2. «Waiting for you» open: the recent overdue task, in minutes.
+            await page.locator('[data-timeline-group-row="needs-you"] button').click(); await settleChart(page);
+            rows = await readRows(page);
+            const r22 = rowsOf(rows, 22);
+            check(r22.due[0]?.tone === "overdue" && r22.due[0].words.includes(t("timeline.overdueBy", { duration: lang === "uk" ? "24 хв" : "24m" })), `${tag}-needs-open: task 22 reads «${r22.due[0]?.words}»`);
+            await noteInk("needs-open"); await noSeconds("needs-open");
+            await show('[data-timeline-task="mgr-task-22"]');
+            await frame("needs-open");
+
+            // 3. «Stopped» open, its nested line closed: the note leads the nested row's meta.
+            await page.locator('[data-timeline-group-row="still"] button').click(); await settleChart(page);
+            await noteInk("still-open"); await noSeconds("still-open");
+            const nested = await page.locator('[data-timeline-group-row="still-long"] .bt-overdue-note').count();
+            check(nested === 1, `${tag}-still-open: the nested line carries ${nested} overdue notes`);
+            await page.locator('[data-timeline-group-row="still-long"] button').click(); await settleChart(page);
+            // Task 23's work ends with its observed turn (12 min ago); the thin line goes on to the clock.
+            const ends23 = await taskRow(23).locator("[data-timeline-segment]").evaluateAll(nodes => nodes.map(node => Number((node as HTMLElement).dataset.endMs)));
+            check(ends23.length > 0 && Math.max(...ends23) === MANAGER_NOW - 12 * 60_000, `${tag}-still-open: task 23 work ends ${JSON.stringify(ends23.slice(-2))}, expected ${MANAGER_NOW - 12 * 60_000}`);
+            await show('[data-timeline-group-row="still"]');
+            await frame("still-open");
+
+            // 4. Waiting: task 10 open. No thick segment of its idle open stage reaches the clock at 1 day, 3 days or 1 week.
+            const waiting = async (state: string, hours: number, ticks: number) => {
+              const segs = await taskRow(10).locator("[data-timeline-segment]").evaluateAll(nodes => nodes.map(node => { const el = node as HTMLElement; return { tick: "timelineTick" in el.dataset, start: Number(el.dataset.startMs), end: el.dataset.endMs ? Number(el.dataset.endMs) : null }; }));
+              check(segs.every(segment => segment.tick || segment.end! < MANAGER_NOW - 100 * HOUR), `${tag}-${state}: task 10 draws work past its last turn: ${JSON.stringify(segs)}`);
+              check(segs.filter(segment => segment.tick).length === ticks, `${tag}-${state}: task 10 ticks ${segs.filter(segment => segment.tick).length}, expected ${ticks} at ${hours} h`);
+            };
+            await taskRow(10).locator("[data-timeline-expand]").click(); await settleChart(page);
+            await waiting("expanded-waiting", 24, 0);
+            const stageRows10 = await page.evaluate(id => { const out: { ticks: number; bar: boolean; live: number }[] = [];
+              for (let row = document.querySelector(`[data-timeline-task="${id}"]`)!.nextElementSibling; row && row.hasAttribute("data-timeline-attempt"); row = row.nextElementSibling) out.push({ ticks: row.querySelectorAll("[data-timeline-tick]").length, bar: !!row.querySelector("[data-timeline-bar]"), live: row.querySelectorAll("[data-timeline-live]").length });
+              return out; }, idOf(10));
+            check(stageRows10.every(row => row.ticks === 0 && row.live === 0), `${tag}-expanded-waiting: stage rows ${JSON.stringify(stageRows10)}`);
+            await show('[data-timeline-task="mgr-task-10"]');
+            await frame("expanded-waiting");
+
+            // 5. A live row without a start, opened: the agent's stage row carries the mark and the unknown elapsed word.
+            await taskRow(27).locator("[data-timeline-expand]").click(); await settleChart(page);
+            const stage27 = await page.evaluate(id => { const row = document.querySelector(`[data-timeline-task="${id}"]`)!.nextElementSibling!; return { attempt: row.hasAttribute("data-timeline-attempt"), text: row.querySelector(".bt-label")?.textContent ?? "", marks: row.querySelectorAll("[data-timeline-live]").length }; }, idOf(27));
+            check(stage27.attempt && stage27.marks === 1 && stage27.text.includes(t("timeline.elapsed", { duration: t("timeline.unknownTime") })), `${tag}-expanded-live: stage row ${JSON.stringify(stage27)}`);
+            await show('[data-timeline-task="mgr-task-27"]');
+            await frame("expanded-live");
+            await taskRow(27).locator("[data-timeline-expand]").click(); await settleChart(page);
+
+            // 6. A running stage: its segment ends on the now line.
+            await taskRow(17).locator("[data-timeline-expand]").click(); await settleChart(page);
+            const live17 = await taskRow(17).locator("[data-timeline-segment]").evaluateAll(nodes => nodes.map(node => Number((node as HTMLElement).dataset.endMs)));
+            check(live17.length > 0 && live17.at(-1) === MANAGER_NOW, `${tag}-running: task 17 last segment ends ${live17.at(-1)}, clock ${MANAGER_NOW}`);
+            await show('[data-timeline-task="mgr-task-17"]');
+            await frame("running");
+            await taskRow(17).locator("[data-timeline-expand]").click(); await settleChart(page);
+
+            // 7. Zooms: 3 days and 1 week keep the waiting line, the mark and the notes; 6 hours puts the due flag on the edge.
+            await scaleButton("zoomOut").click(); await settleChart(page);
+            await liveMarks("zoom-3d", 1); await waiting("zoom-3d", 72, 0); await noteInk("zoom-3d"); await noSeconds("zoom-3d");
+            await show('[data-timeline-task="mgr-task-10"]'); await frame("zoom-3d");
+            await scaleButton("zoomOut").click(); await settleChart(page);
+            await liveMarks("zoom-1w", 1); await waiting("zoom-1w", 168, 1); await noteInk("zoom-1w"); await noSeconds("zoom-1w");
+            await show('[data-timeline-task="mgr-task-10"]'); await frame("zoom-1w");
+            for (let step = 0; step < 4; step++) { await scaleButton("zoomIn").click(); await settleChart(page); }
+            await liveMarks("zoom-6h", 1); await noteInk("zoom-6h"); await noSeconds("zoom-6h");
+            const flag = await taskRow(25).evaluate(row => { const lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect(), pole = row.querySelector<HTMLElement>("[data-timeline-flag]")!;
+              const box = pole.getBoundingClientRect(), words = row.querySelector<HTMLElement>("[data-timeline-due]")!.getBoundingClientRect();
+              return { inside: box.left >= lane.left - 0.01 && box.right <= lane.right + 0.01, head: pole.dataset.flagHead ?? null, wordsInside: words.left >= lane.left - 1 && words.right <= lane.right + 1 }; });
+            check(flag.inside && flag.head === "left" && flag.wordsInside, `${tag}-zoom-6h: task 25 flag ${JSON.stringify(flag)}`);
+            await show('[data-timeline-task="mgr-task-25"]');
+            await frame("zoom-6h");
+            for (let step = 0; step < 2; step++) { await scaleButton("zoomOut").click(); await settleChart(page); }
+
+            // 8. Paged back: the axis keeps its height and the return control sits inside it, over no label.
+            await page.reload(); await chart.waitFor(); await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            const viewStart = () => scroller.getAttribute("data-view-start").then(Number);
+            const liveStart = await viewStart();
+            await taskRow(1).locator("[data-timeline-expand]").click(); await settleChart(page);
+            await page.locator(`[data-timeline-fold="${idOf(1)}"] [data-timeline-fold-expand]`).click(); await settleChart(page);
+            const earlier = page.locator(".bt-earlier").first();
+            await earlier.scrollIntoViewIfNeeded(); await earlier.click(); await settleChart(page);
+            check(await viewStart() < liveStart && await page.locator("[data-timeline-back]").count() === 1, `${tag}-paged: paging did not move the window back`);
+            const axisNow = () => page.evaluate(() => {
+              const axis = document.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect(), back = document.querySelector<HTMLElement>("[data-timeline-back]")?.getBoundingClientRect() ?? null;
+              const scrollBox = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, edge = scrollBox.getBoundingClientRect().left + scrollBox.clientWidth, range = document.createRange();
+              const labels = [...document.querySelectorAll<HTMLElement>(".bt-axis .bt-tick, .bt-axis .bt-day")].map(label => { range.selectNodeContents(label); const box = range.getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top, bottom: box.bottom }; });
+              return { height: axis.height, back: back && { left: back.left, right: back.right, top: back.top, bottom: back.bottom, width: back.width, height: back.height }, axis: { top: axis.top, bottom: axis.bottom, left: axis.left, right: axis.right },
+                labels: labels.length, covered: back ? labels.filter(box => box.left < back.right && box.right > back.left && box.top < back.bottom && box.bottom > back.top).length : 0, cut: labels.filter(box => box.right > edge + 0.5).length };
+            });
+            const pagedAxis = await axisNow();
+            check(Math.abs(pagedAxis.height - restAxis) <= 0.5, `${tag}-paged: the axis is ${pagedAxis.height}px paged and ${restAxis}px at rest`);
+            check(!!pagedAxis.back && pagedAxis.back.left >= pagedAxis.axis.left - 0.5 && pagedAxis.back.right <= pagedAxis.axis.right + 0.5 && pagedAxis.back.top >= pagedAxis.axis.top - 0.5 && pagedAxis.back.bottom <= pagedAxis.axis.bottom + 0.5, `${tag}-paged: the return control lies outside the axis ${JSON.stringify(pagedAxis)}`);
+            check(pagedAxis.labels >= 2 && pagedAxis.covered === 0 && pagedAxis.cut === 0, `${tag}-paged: axis has ${pagedAxis.labels} labels, ${pagedAxis.covered} under the return control, ${pagedAxis.cut} cut`);
+            check(!!pagedAxis.back && pagedAxis.back.height >= (phone ? 44 : 24) - 0.5 && pagedAxis.back.width >= (phone ? 44 : 24), `${tag}-paged: the return control is ${pagedAxis.back?.width}×${pagedAxis.back?.height}`);
+            check((await chart.locator("[data-timeline-back]").innerText()).includes(t("timeline.now")), `${tag}-paged: the return control lacks the now label`);
+            await page.locator("[data-timeline-back]").focus();
+            check(await page.evaluate(() => document.activeElement?.hasAttribute("data-timeline-back") === true), `${tag}-paged: keyboard focus does not reach the return control`);
+            await page.locator(`[data-timeline-task="${idOf(1)}"]`).scrollIntoViewIfNeeded();
+            await frame("paged");
+            await page.locator("[data-timeline-back]").click(); await settleChart(page);
+            check(await viewStart() === liveStart && await page.locator("[data-timeline-back]").count() === 0, `${tag}-back-to-now: the window did not return`);
+            const backAxis = await axisNow();
+            check(Math.abs(backAxis.height - restAxis) <= 0.5, `${tag}-back-to-now: the axis is ${backAxis.height}px, ${restAxis}px at rest`);
+            await frame("back-to-now");
+          } catch (error) { failures.push(`${tag}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally { await A.context.close(); }
         }
       }
     } finally {
@@ -46258,6 +46494,7 @@ describe("Relay targets answered by another install", () => {
             const relay = { id: "fixture-relay", origin: "https://relay.example", name: "Relay", description: "", paused: false,
               owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-11-17T12:00:00Z", targets };
             const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+            let refusals = 0;
             const writes: unknown[] = [];
             Object.assign(window, { relayOwnershipWrites: writes });
             let fetcher = window.fetch;
@@ -46269,6 +46506,8 @@ describe("Relay targets answered by another install", () => {
                 if (url.pathname.startsWith("/api/external-relay/")) {
                   if (init?.method === "PATCH" && url.pathname.endsWith("/targets/clone-0")) {
                     const patch = JSON.parse(String(init.body)); writes.push(patch);
+                    // The first confirmed move meets the relay's refusal; the clone stays with the other install.
+                    if (refusals++ === 0) return new Response(JSON.stringify({ error: "answered_elsewhere" }), { status: 409, headers: { "content-type": "application/json" } });
                     Object.assign(targets[0]!, { answered_by: "install", answered_elsewhere: false });
                     return json({ target: targets[0] });
                   }
@@ -46330,11 +46569,39 @@ describe("Relay targets answered by another install", () => {
           await (phone ? confirmation.locator("[data-external-relay-move-cancel]").tap() : confirmation.locator("[data-external-relay-move-cancel]").click());
           await confirmation.waitFor({ state: "detached" });
           expect(await writes()).toEqual([]);
+          const go = () => phone ? confirmation.locator("[data-external-relay-move-go]").tap() : confirmation.locator("[data-external-relay-move-go]").click();
+          const refusedNotice = page.locator("[data-external-relay-move-refused]");
           await press();
           await confirmation.waitFor();
-          await (phone ? confirmation.locator("[data-external-relay-move-go]").tap() : confirmation.locator("[data-external-relay-move-go]").click());
-          await page.waitForFunction(() => document.querySelector("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]")?.getAttribute("aria-checked") === "true");
+          await go();
+          await refusedNotice.waitFor();
+          await confirmation.waitFor({ state: "detached" });
           expect(await writes()).toEqual([{ answered_by: "install", confirmTakeover: true }]);
+          expect(await refusedNotice.textContent()).toBe(lang === "en"
+            ? "Not moved. Switch off “Answered by this install” on the other install first, then switch it on here."
+            : "Не перенесено. Спочатку вимкніть «Відповідає ця інсталяція» на іншій інсталяції, потім увімкніть тут.");
+          expect(await refusedNotice.getAttribute("role")).toBe("alert");
+          expect(await page.locator("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]").getAttribute("aria-checked")).toBe("false");
+          expect(await page.locator("[data-external-relay-release-elsewhere]").count()).toBe(0);
+          expect(await page.locator("[data-external-relay] [role=alert]").count()).toBe(1);
+          await refusedNotice.scrollIntoViewIfNeeded();
+          const refusedBox = await refusedNotice.evaluate(el => {
+            const range = document.createRange(); range.selectNodeContents(el.querySelector("span")!);
+            const text = range.getBoundingClientRect(); const own = el.getBoundingClientRect();
+            const row = el.closest("[data-external-relay-target]")!.getBoundingClientRect();
+            const next = el.closest("[data-external-relay-target]")!.nextElementSibling?.getBoundingClientRect() ?? null;
+            return { inside: own.left >= 0 && own.right <= innerWidth && own.top >= 0 && own.bottom <= innerHeight,
+              textWhole: text.left >= own.left && text.right <= own.right && text.top >= own.top && text.bottom <= own.bottom,
+              inRow: own.bottom <= row.bottom + 1, clearOfNext: next === null || own.bottom <= next.top + 1, scrollClipped: el.scrollWidth > el.clientWidth + 1 };
+          });
+          expect(refusedBox).toEqual({ inside: true, textWhole: true, inRow: true, clearOfNext: true, scrollClipped: false });
+          await page.screenshot({ path: path.join(out, `refused-${frame}`), fullPage: true });
+          await press();
+          await confirmation.waitFor();
+          expect(await refusedNotice.count()).toBe(0);
+          await go();
+          await page.waitForFunction(() => document.querySelector("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]")?.getAttribute("aria-checked") === "true");
+          expect(await writes()).toEqual([{ answered_by: "install", confirmTakeover: true }, { answered_by: "install", confirmTakeover: true }]);
           expect(nativeDialogs).toEqual([]);
           readings.push({ frame, width, lang, scheme, geometry });
         } finally { await context.close(); }

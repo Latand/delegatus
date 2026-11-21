@@ -20,13 +20,14 @@ test("the window is one span wide, ends past now at the hour, and pages back by 
   expect(timelineWindow(NOW, 24, pageTo(live.liveEnd, 24, NOW - HOUR)).paged).toBe(false);
 });
 
-test("segments: a start and an end run, a start alone ticks, no start draws nothing, never past the clock", () => {
-  expect(attemptSegment({ startedAtMs: NOW - 2 * HOUR, endAtMs: NOW - HOUR }, NOW)).toEqual({ kind: "span", startMs: NOW - 2 * HOUR, endMs: NOW - HOUR });
-  expect(attemptSegment({ startedAtMs: NOW - 2 * HOUR, endAtMs: NOW + HOUR }, NOW)).toEqual({ kind: "span", startMs: NOW - 2 * HOUR, endMs: NOW });
-  expect(attemptSegment({ startedAtMs: NOW - 2 * HOUR, endAtMs: null }, NOW)).toEqual({ kind: "tick", startMs: NOW - 2 * HOUR });
-  expect(attemptSegment({ startedAtMs: null, endAtMs: NOW }, NOW)).toBeNull();
-  expect(attemptSegment({ startedAtMs: NOW + 1, endAtMs: null }, NOW)).toBeNull();
-  expect(attemptSegment({ startedAtMs: NOW - HOUR, endAtMs: NOW - 2 * HOUR }, NOW)).toBeNull();
+test("segments: a start and a work end run, a start alone ticks, a live attempt without a start makes the live mark, never past the clock", () => {
+  expect(attemptSegment({ startedAtMs: NOW - 2 * HOUR, workEndAtMs: NOW - HOUR, live: false }, NOW)).toEqual({ kind: "span", startMs: NOW - 2 * HOUR, endMs: NOW - HOUR });
+  expect(attemptSegment({ startedAtMs: NOW - 2 * HOUR, workEndAtMs: NOW + HOUR, live: true }, NOW)).toEqual({ kind: "span", startMs: NOW - 2 * HOUR, endMs: NOW });
+  expect(attemptSegment({ startedAtMs: NOW - 2 * HOUR, workEndAtMs: null, live: false }, NOW)).toEqual({ kind: "tick", startMs: NOW - 2 * HOUR });
+  expect(attemptSegment({ startedAtMs: null, workEndAtMs: null, live: true }, NOW)).toEqual({ kind: "live" });
+  expect(attemptSegment({ startedAtMs: null, workEndAtMs: NOW, live: false }, NOW)).toBeNull();
+  expect(attemptSegment({ startedAtMs: NOW + 1, workEndAtMs: null, live: true }, NOW)).toBeNull();
+  expect(attemptSegment({ startedAtMs: NOW - HOUR, workEndAtMs: NOW - 2 * HOUR, live: false }, NOW)).toBeNull();
 });
 
 test("a span is clipped to the lane at both edges and keeps a visible minimum", () => {
@@ -72,6 +73,13 @@ test("durations of two days or more are written in days, in both languages", () 
   expect(timelineDuration(2 * DAY, "uk", t("uk"))).toBe("2 д");
   expect(timelineDuration(2 * DAY - 1000, "uk", t("uk"))).toBe("47 год 59 хв");
   expect(timelineDuration(66 * 60_000, "en", t("en"))).toBe("1h 6m");
+});
+
+test.each([
+  ["uk", [[59_000, "<1 хв"], [60_000, "1 хв"], [(50 * 60 + 44) * 1000, "50 хв"], [((26 * 60 + 36) * 60 + 59) * 1000, "26 год 36 хв"], [(47 * 60 + 59) * 60_000, "47 год 59 хв"], [48 * HOUR, "2 д"]]],
+  ["en", [[59_000, "<1m"], [60_000, "1m"], [(50 * 60 + 44) * 1000, "50m"], [((26 * 60 + 36) * 60 + 59) * 1000, "26h 36m"], [(47 * 60 + 59) * 60_000, "47h 59m"], [48 * HOUR, "2d"]]],
+] as const)("durations are whole minutes with no seconds and read under a minute in words (%s)", (locale, cases) => {
+  for (const [ms, words] of cases) expect(timelineDuration(ms, locale, t(locale))).toBe(words);
 });
 
 test("a task's start reads as the time today and the date otherwise, whatever the window", () => {

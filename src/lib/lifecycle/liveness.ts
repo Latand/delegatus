@@ -380,7 +380,7 @@ export function productionLivenessSources(
     describeTranscript: describeTranscriptPath,
     registrySnapshot: () => agentRegistry().readOnlySnapshot(),
     prepareRegistrySnapshot: signal => agentRegistry().prepareReadOnlySnapshot(signal),
-    registrySnapshotForConversation: conversationId => agentRegistry().livenessConversationSnapshot(conversationId),
+    registrySnapshotForConversation: conversationId => agentRegistry().targetedActivitySnapshot(conversationId),
     pipelines: Object.assign(() => loadPipelines(), { forLiveness: (targets: { conversationId: string | null; path: string }[], options: LivenessProjectionOptions = {}) =>
       readHistoryPipelineRefs(targets, options) }),
     flows: Object.assign(() => loadFlows(), {

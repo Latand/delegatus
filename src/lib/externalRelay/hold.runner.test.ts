@@ -219,7 +219,12 @@ for (const outcome of ["no_capacity", "member_limit"] as const) test(`${outcome}
     releaseDrain(drainFile(), "early-outcome"); accountManager.resolveHeadlessSpawn = previous;
     reserveRun(blocker(relay, "recheck-blocker"));
     const held = claim(`${outcome}-recheck`, 20000);
-    if (outcome === "member_limit") held.input.requester.key = "another-member";
+    if (outcome === "member_limit") {
+      // Another member's request: that member is both the requester and the trigger's author.
+      held.input.requester.key = "another-member";
+      Object.assign(held.input, { conversation: held.input.conversation.map(message => message.id === held.input.respond_to
+        ? { ...message, author: { ...message.author, key: "another-member" } } : message) });
+    }
     const pending = runClaimedRequest(relay, held, undefined, { command });
     await Bun.sleep(200);
     if (outcome === "no_capacity") accountManager.resolveHeadlessSpawn = (() => ({ kind: "unavailable" })) as typeof previous;

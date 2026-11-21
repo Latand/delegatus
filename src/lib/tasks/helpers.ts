@@ -1,3 +1,4 @@
+import { dateTimeFormatter } from "@/lib/dateTimeFormatter";
 import type { BoardTask } from "./types";
 
 export function isoNow(): string {
@@ -24,17 +25,18 @@ export function isOverdue(dueAt: string, nowMs = Date.now()): boolean {
   return Number.isFinite(t) && t < nowMs;
 }
 
+const dueDateOptions: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
+
 /** Compact chip label for a deadline, formatted in the zone it was set in
     (`dueTz`). Falls back to the viewer's zone if `dueTz` is somehow invalid.
     The clock is 24-hour in every locale, as the board's own stamps are. */
 export function formatDue(dueAt: string, dueTz: string, locale = "en"): string {
   const d = new Date(dueAt);
   if (Number.isNaN(d.getTime())) return "";
-  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
   try {
-    return new Intl.DateTimeFormat(locale, { ...opts, timeZone: dueTz }).format(d);
+    return dateTimeFormatter(locale, dueTz, dueDateOptions).format(d);
   } catch {
-    return new Intl.DateTimeFormat(locale, opts).format(d);
+    return new Intl.DateTimeFormat(locale, dueDateOptions).format(d);
   }
 }
 
