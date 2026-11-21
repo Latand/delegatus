@@ -72,8 +72,12 @@ export function requesterEntries(relay: Pick<PairedRelay, "pairedAt">, target: R
 
 export function bindRequesterEntry(relay: Pick<PairedRelay, "owner" | "name">, entry: TrustedRequesterEntry, relays: readonly RelayOwner[]): RelayRunEntry {
   const paired = entry.kind === "paired-owner";
-  const id = paired ? telegramOwner(relay) : null;
-  const tier = id && id === machineTelegramOwner(relays) ? "owner" : "requester";
+  const tier = paired ? pairedOwnerTier(relay, relays) : "requester";
   return { id: entry.id, kind: entry.kind, tier, project: entry.project,
     label: paired && tier === "requester" && entry.source === "earlier-switch" ? `Owner of pairing ${relay.name}` : entry.label };
+}
+
+export function pairedOwnerTier(relay: RelayOwner, relays: readonly RelayOwner[]): RelayRunEntry["tier"] {
+  const id = telegramOwner(relay);
+  return id !== null && id === machineTelegramOwner(relays) ? "owner" : "requester";
 }

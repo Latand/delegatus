@@ -3,7 +3,10 @@ import { expect, spyOn, test } from "bun:test";
 import { startTestRelay } from "./testRelay";
 import { clonePairing, cloneReceipt } from "./clone.fixture";
 import { deliverOwnerLateAnswer, ownerRecoveryRequest } from "./ownerLateDelivery";
-import { changeRun, dropRun, readRunLedger, reserveRun } from "./store";
+import { changeRun, dropRun, readRunLedger, reserveRun, updateRelayStore } from "./store";
+import { liveOwnerRelayRequest } from "./ownerAuthority";
+import { sweepExternalRelayOrphans } from "./poller";
+import { procBackend } from "@/lib/proc";
 import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
 
@@ -30,6 +33,8 @@ async function fixture(id: string, delivery: unknown = context, owner = true,
   handler: Parameters<typeof startTestRelay>[0] = () => ({ body: cloneReceipt() })) {
   const server = await startTestRelay(handler);
   const relay = clonePairing(server.origin);
+  relay.targets[0] = { ...relay.targets[0]!, ownerTier: true, enabled: true };
+  updateRelayStore(store => ({ ...store, relays: [...store.relays, relay] }));
   const directory = await fs.promises.mkdtemp(`${process.env.TMPDIR}/owner-late-send-`);
   reserveRun({ requestId: id, leaseId: "fixture", relayId: relay.id, targetId: "fixture-clone",
     ownerPid: process.pid, ownerIdentity: "fixture", childPid: null, childIdentity: null,
@@ -37,8 +42,41 @@ async function fixture(id: string, delivery: unknown = context, owner = true,
     ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${id}`, delivery: delivery as typeof context } } : {}) }, 1);
   return { relay, pending: () => readRunLedger().runs.find(row => row.requestId === id)?.ownerTurn?.lateAnswer,
     send: (authorize = () => true) => deliverOwnerLateAnswer(relay, id, body, [], authorize),
-    close: async () => { dropRun(id); await server.close(); await fs.promises.rm(directory, { recursive: true, force: true }); } };
+    close: async () => {
+      dropRun(id);
+      updateRelayStore(store => ({ ...store, relays: store.relays.filter(item => item.id !== relay.id) }));
+      await server.close();
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    } };
 }
+
+test.each(["owner", "requester"] as const)("legacy handoff and orphan delivery agree on %s tier", async tier => {
+  const requestId = "retained_legacy_reply";
+  let sends = 0;
+  const f = await fixture(requestId, context, true, () => { sends++; return { body: cloneReceipt() }; });
+  const second = { ...f.relay, id: "different_pairing", owner: { ...f.relay.owner, id: "202" }, targets: [] };
+  if (tier === "requester") updateRelayStore(store => ({ ...store, relays: [...store.relays, second] }));
+  changeRun(requestId, row => ({
+    ...row, ownerIdentity: procBackend.processIdentity(process.pid), conversationId: "conversation_retained_reply",
+    ownerTurn: { ...row.ownerTurn!, lateAnswer: { body, files: [] } },
+  }));
+  try {
+    expect(liveOwnerRelayRequest("conversation_retained_reply")?.tier).toBe(tier);
+    if (tier === "requester") expect(await f.send()).toMatchObject({ delivery: "refused" });
+    await sweepExternalRelayOrphans();
+    if (tier === "owner") {
+      expect(sends).toBe(1);
+      expect(f.pending()).toBeUndefined();
+    } else {
+      expect(sends).toBe(0);
+      expect(f.pending()?.status).toBe("refused");
+      expect(readRunLedger().runs.find(row => row.requestId === requestId)?.capacityReleased).toBe(true);
+    }
+  } finally {
+    updateRelayStore(store => ({ ...store, relays: store.relays.filter(item => item.id !== second.id) }));
+    await f.close();
+  }
+});
 
 test("lost send ACK and repeated delivery use the persisted key and payload", async () => {
   const payloads: unknown[] = [], messages = new Set<string>();

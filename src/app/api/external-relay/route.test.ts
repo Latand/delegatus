@@ -285,17 +285,21 @@ test("routing materialises the old grant at its original project before changing
   const { trustedRequesterAuditFile } = await import("@/lib/externalRelay/trustedRequesterStore");
   const { requestSchema } = await import("@/lib/externalRelay/protocol");
   const { contextRequest } = await import("@/lib/externalRelay/request.fixture");
+  const { startTestRelay } = await import("@/lib/externalRelay/testRelay");
+  const service = await startTestRelay(req => req.url === "/v1/targets"
+    ? { body: { targets: [{ target_id: "target_1", name: "Target", answered_by: "install", fallback: "none" }] } }
+    : { status: 404 });
   const relayId = "routing_legacy";
   const patch = (project: string) => PATCH(new NextRequest(`${origin}/api/external-relay/relays/${relayId}`, {
     method: "PATCH", headers: { ...operator(), "content-type": "application/json" },
     body: JSON.stringify({ target: { id: "target_1", project } }),
   }), { params: Promise.resolve({ id: relayId }) });
   const threshold = "2026-09-28T12:00:00Z";
-  updateRelayStore(store => ({ ...store, relays: [...store.relays, { id: relayId, origin, api_base: origin,
+  updateRelayStore(store => ({ ...store, relays: [...store.relays, { id: relayId, origin: service.origin, api_base: `${service.origin}/v1`,
     name: "Relay", description: "", credential: "fixture", paused: false, pairedAt: threshold,
     limits: { max_response_bytes: 65536, max_wait_s: 5, max_answer_chars: 20 },
     owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
-    targets: [{ id: "target_1", name: "Target", answered_by: "service", fallback: "none", enabled: true,
+    targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true,
       engine: "codex", model: "gpt-6-sol", effort: null, project: "dir-old", concurrency: 1, hardCapMinutes: 1, ownerTier: true }],
   }] }));
   try {
@@ -303,15 +307,35 @@ test("routing materialises the old grant at its original project before changing
       requester: { ...contextRequest.input.requester, is_owner: true } } });
     const current = () => readRelayStore().relays.find(relay => relay.id === relayId)!;
     const eligible = () => elevatedRequesterFor(current(), current().targets[0]!, request, [current()]);
+    const settings = async () => {
+      const response = await GET(new NextRequest(`${origin}/api/external-relay`, local()));
+      expect(response.status).toBe(200);
+      const { relays } = await response.json();
+      const target = relays.find((relay: { id: string }) => relay.id === relayId).targets[0];
+      expect(target).not.toHaveProperty("requesters");
+      expect(target).not.toHaveProperty("ownerTier");
+      return target.grantStatus;
+    };
     expect(eligible()).toBeTruthy();
-    expect((await patch("dir-new")).status).toBe(200);
+    expect(await settings()).toBe("active");
+    expect(current().targets[0]?.ownerTier).toBe(true);
+    const suspended = await patch("dir-new");
+    expect(suspended.status).toBe(200);
+    expect((await suspended.json()).relay.targets[0].grantStatus).toBe("suspended");
+    expect(await settings()).toBe("suspended");
     expect(current().targets[0]?.requesters?.entries[0]).toMatchObject({ source: "earlier-switch", project: "dir-old" });
     expect(eligible()).toBeNull();
-    expect((await patch("dir-old")).status).toBe(200);
+    const restored = await patch("dir-old");
+    expect(restored.status).toBe(200);
+    expect((await restored.json()).relay.targets[0].grantStatus).toBe("active");
+    expect(await settings()).toBe("active");
     expect(eligible()?.entry.id).toBe("earlier-switch-target_1");
     const rows = fs.readFileSync(trustedRequesterAuditFile(), "utf8").trim().split("\n").map(row => JSON.parse(row));
     expect(rows.filter(row => row.relay === relayId)).toMatchObject([{ action: "earlier-switch", project: "dir-old" }]);
-  } finally { updateRelayStore(store => ({ ...store, relays: store.relays.filter(relay => relay.id !== relayId) })); }
+  } finally {
+    updateRelayStore(store => ({ ...store, relays: store.relays.filter(relay => relay.id !== relayId) }));
+    await service.close();
+  }
 });
 
 test("recent answers and one exchange are read-only reads for the operator alone", async () => {

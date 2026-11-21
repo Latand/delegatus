@@ -772,7 +772,7 @@ export interface McpRequestBindingInput {
   downstreamKey: string;
   /** Relay admission's server-derived text and author, captured before dispatch
       so recovery verifies the actual durable payload after rotation/restart. */
-  sendPayload?: { text: string; origin: MessageOrigin };
+  sendPayload?: { text: string; origin: MessageOrigin; requesterRequestId?: string };
   /** Sender outbox CAS fence carried only by a safe same-key retry. */
   seatMessageFence?: string;
 }
@@ -1132,7 +1132,8 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   if (typeof value.clientRequestId !== "string" || (requestId !== undefined && value.clientRequestId !== requestId)) return false;
   if (typeof value.downstreamKey !== "string" || !value.downstreamKey) return false;
   if (value.sendPayload !== undefined && (!isRecord(value.sendPayload)
-    || typeof value.sendPayload.text !== "string" || !parseMessageOrigin(value.sendPayload.origin))) return false;
+    || typeof value.sendPayload.text !== "string" || !parseMessageOrigin(value.sendPayload.origin)
+    || value.sendPayload.requesterRequestId !== undefined && typeof value.sendPayload.requesterRequestId !== "string")) return false;
   if (typeof value.claimedAt !== "string") return false;
   const { caller, target, owner } = value;
   if (!isRecord(caller) || !["root", "worker", "unidentified"].includes(String(caller.kind))

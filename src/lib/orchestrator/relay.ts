@@ -11,7 +11,7 @@ import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { messageOriginProject, sameMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lookupOriginalSend, type SendReceipt } from "@/lib/runtime/sendSettlement";
 import { admittedVoiceBinding } from "@/lib/voiceCompanion/admission";
-import { liveOwnerRelayRequest, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { hasRequesterRelayCustody, ownerRelayHandoff, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 
 import { authorizedManagerSeats, type AuthorizedManagerSeat } from "./authority";
 import { deputyAskerOf } from "./deputyAsker";
@@ -64,7 +64,7 @@ function journalRelayRefusal(reason: OrchestratorRelayRefusalReason, stage: "adm
 }
 
 type RelayAdmission =
-  | { ok: true; text: string; origin: MessageOrigin; recipient: string; operationId?: string; terminalReceipt?: SendReceipt; voiceRecoveryReceipt?: SendReceipt; admissionGuard?: () => void;
+  | { ok: true; text: string; origin: MessageOrigin; recipient: string; requesterRequestId?: string; operationId?: string; terminalReceipt?: SendReceipt; voiceRecoveryReceipt?: SendReceipt; admissionGuard?: () => void;
       /** The reason the guard last refused this admission, for the response. */
       refusalReason?: () => OrchestratorRelayRefusalReason | undefined }
   | { ok: false; status: number; code: string; error: string; reason?: OrchestratorRelayRefusalReason };
@@ -97,6 +97,7 @@ export function admitOrchestratorRelay(
   clientMessageId?: string,
   voice?: { sessionId: string; proposalId: string },
   inProcessPerson = false,
+  expectedRequesterRequestId?: unknown,
 ): RelayAdmission {
   const refused = (code: string, error: string, status = 403): RelayAdmission => ({ ok: false, status, code, error });
   let conversationId: string | null = null;
@@ -109,8 +110,11 @@ export function admitOrchestratorRelay(
   if (!conversationId && request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
     return relayRefused("caller_unidentified", "the relay caller's conversation could not be identified");
   }
-  const relayPayload = conversationId ? ownerRelayPayload(text, conversationId) : null;
-  const requester = relayPayload?.requesterRequestId !== undefined;
+  const handoff = conversationId ? ownerRelayHandoff(text, conversationId) : null;
+  const relayPayload = handoff?.payload;
+  const requester = handoff?.requester === true;
+  if ((requester && !relayPayload) || (expectedRequesterRequestId !== undefined && expectedRequesterRequestId !== relayPayload?.requesterRequestId))
+    return relayRefused("sender_not_authorized", "the trusted requester relay turn is no longer authorized");
   const seat = conversationId && !requester
     ? authorizedManagerSeats(productionManagerAuthoritySources()).find((candidate) => candidate.conversationId === conversationId)
     : null;
@@ -140,15 +144,15 @@ export function admitOrchestratorRelay(
   const resolved = resolveOrchestratorRelay(project, recipient, payload, text, clientMessageId, seat ?? undefined, voiceBinding);
   // Recover the frozen recipient before comparing report custody. A retry may
   // settle the original source seat's receipt after its designation rotates.
-  if (owner && !ownerRelayTargetMatches(conversationId!, project, resolved.ok ? resolved.recipient : recipient)) {
+  if (owner && !ownerRelayTargetMatches(conversationId!, project, resolved.ok ? resolved.recipient : recipient, owner.requesterRequestId)) {
     if (owner.requesterRequestId)
       return refused("trusted_requester_project_refused", "the trusted requester's handoff must stay within its granted project", 403);
     return refused("owner_report_seat_unavailable", "the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", 409);
   }
   if (resolved.ok && owner?.requesterRequestId) {
-    return { ...resolved, admissionGuard: () => {
-      const live = liveOwnerRelayRequest(conversationId!);
-      if (live?.requestId !== owner.requesterRequestId || !ownerRelayTargetMatches(conversationId!, project, resolved.recipient))
+    const requesterRequestId = owner.requesterRequestId;
+    return { ...resolved, requesterRequestId, admissionGuard: () => {
+      if (!ownerRelayTargetMatches(conversationId!, project, resolved.recipient, requesterRequestId))
         throw new OrchestratorRelayRefusedError("sender_not_authorized");
     } };
   }
@@ -162,6 +166,7 @@ export function admitOrchestratorRelay(
     catch { return "caller_unverified"; }
     try {
       if (caller !== conversationId) return "caller_changed";
+      if (hasRequesterRelayCustody(conversationId!)) return "sender_not_authorized";
       const current = authorizedManagerSeats(productionManagerAuthoritySources()).find(candidate => candidate.conversationId === conversationId);
       if (!current) return "sender_seat_revoked";
       if (current.project !== seat.project) return "sender_project_changed";
@@ -279,7 +284,7 @@ export function resolveOrchestratorRelay(
 /** Remote senders must be a designated seat of this shared project. */
 export function linkedRelayCaller(request: Pick<NextRequest, "headers">, project: string): AuthorizedManagerSeat | null {
   const conversationId = callerConversationId(request);
-  if (conversationId && liveOwnerRelayRequest(conversationId)?.tier === "requester") return null;
+  if (conversationId && hasRequesterRelayCustody(conversationId)) return null;
   return conversationId ? authorizedManagerSeats(productionManagerAuthoritySources())
     .find(seat => seat.conversationId === conversationId && !!seat.project && canonicalOrchestratorProject(seat.project) === canonicalOrchestratorProject(project)) ?? null : null;
 }

@@ -82,7 +82,7 @@ export async function checkRelayPairing(id: string) {
 export async function confirmRelayPairing(
   id: string,
   ownerId: string,
-): Promise<Omit<PairedRelay, "credential">> {
+): Promise<ReturnType<typeof publicRelay>> {
   const pending = pendingById(id);
   if (!pending.owner || pending.owner.id !== ownerId)
     throw new ExternalRelayError("owner_changed", 409);

@@ -4,7 +4,7 @@ import { ownerRunRoot } from "./runDirectory";
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { deliverOwnerLateAnswer, expireOwnerLateAnswer, ownerLateAnswerTerminal, ownerLateAnswerUndeliverable, ownerRecoveryRequest } from "./ownerLateDelivery";
 import { ownerFailureAnswer, confirmOwnerStop, revokeOwnerRuns, type OwnerRunPorts } from "./ownerRun";
-import { ownerRelayFailureReplyAuthorized, ownerRunSettingsAllow } from "./ownerAuthority";
+import { effectiveOwnerRunTier, ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
 import { changeRun, changeRunAsync, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
 import { sweepConversationsAsync } from "./conversations";
 import { readRelaySwitches } from "./switches";
@@ -147,7 +147,21 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         // window, whatever the relay's settings say. A deliverable answer has
         // no such limit, however long the install was off.
         if (ownerLateAnswerUndeliverable(run)) { await expireOwnerLateAnswer(run.requestId); continue; }
-        const relay = readRelayStore().relays.find(item => item.id === run.relayId);
+        const store = readRelayStore();
+        if (run.ownerTurn.entry?.tier === "requester" || effectiveOwnerRunTier(run, store) === "requester") {
+          await changeRunAsync(run.requestId, row => {
+            const lateAnswer = row.ownerTurn?.lateAnswer;
+            if (!lateAnswer || ownerLateAnswerTerminal(lateAnswer) || row.completionAccepted
+              || ownerStopPending(row) || relayRequestInFlight(row.requestId)) return row;
+            const latest = readRelayStore();
+            if (row.ownerTurn?.entry?.tier !== "requester" && effectiveOwnerRunTier(row, latest) !== "requester") return row;
+            const attempted = lateAnswer.firstAttemptAt !== undefined || lateAnswer.parts?.some(part => part.firstAttemptAt !== undefined || part.receipt);
+            return { ...row, capacityReleased: true, ownerTurn: { ...row.ownerTurn!,
+              lateAnswer: { ...lateAnswer, status: attempted ? "uncertain" : "refused" } } };
+          }, Date.now() + 5000);
+          continue;
+        }
+        const relay = store.relays.find(item => item.id === run.relayId);
         if (!relay || !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) continue;
         ownerRecoveries.add(run.requestId);
         try {
@@ -222,11 +236,12 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     }
     if (held.ownerTurn?.lateAnswer) continue;
     const currentStore = readRelayStore();
+    const canRecoverAsOwner = effectiveOwnerRunTier(held, currentStore) === "owner";
     const recoveryRelay = currentStore.relays.find(item => item.id === run.relayId);
     const recoveryRequest = recoveryRelay && ownerRecoveryRequest(held, recoveryRelay);
     if (recoveryRelay && recoveryRequest && held.ownerTurn && !held.ownerTurn.restartRetries
       && interruptedOwner && !held.ownerTurn.quarantinedAt
-      && held.ownerTurn.entry?.tier !== "requester" && ownerRunSettingsAllow(held, currentStore)) {
+      && canRecoverAsOwner) {
       changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, restartRetries: 1 } }));
       ownerRecoveries.add(run.requestId);
       void runClaimedRequest(recoveryRelay, recoveryRequest, undefined, { ownerPorts, ownerRecovery: held })
@@ -234,7 +249,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         .finally(() => ownerRecoveries.delete(run.requestId));
       continue;
     }
-    if (recoveryRelay && recoveryRequest && interruptedOwner && held.ownerTurn?.restartRetries && !held.ownerTurn.quarantinedAt) {
+    if (recoveryRelay && recoveryRequest && interruptedOwner && held.ownerTurn?.restartRetries && !held.ownerTurn.quarantinedAt && canRecoverAsOwner) {
       const request = requestSchema.parse(recoveryRequest);
       const owner = held.ownerTurn.context ?? ownerTierFor({ ownerTier: true }, request);
       const diagnostic = { ...ownerTurnDiagnostic("exception", held.ownerTurn.continuation?.failureReason ?? "The owner retry was interrupted by another install restart. Resend the request.", [recoveryRelay.credential], held.ownerTurn.continuation?.primaryFailure),
@@ -261,7 +276,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     const failureAnswer = request && failureOwner && saved
       ? ownerFailureAnswer(request, failureOwner, held.ownerTurn?.diagnostic ?? ownerTurnDiagnostic("exception", "Owner request could not be completed"), [relay!.credential])
       : null;
-    if (relay && saved && failureAnswer && held.ownerTurn?.entry?.tier !== "requester" && Date.now() >= Date.parse(saved.until)
+    if (relay && saved && failureAnswer && canRecoverAsOwner && Date.now() >= Date.parse(saved.until)
       && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) {
       const body = { lease_id: run.leaseId, outcome: "answered" as const, answer: failureAnswer,
         duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) };

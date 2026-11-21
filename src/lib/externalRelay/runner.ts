@@ -2,7 +2,7 @@ import { safeRelayHttpReason } from "./httpDiagnostics";
 import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
 import { actionOutcomeAnswer } from "./actionOutcome";
-import { CloudFailure, cloudEnvironment, cloudTransport, runCloudRelay, type CloudTransport } from "./cloud";
+import { CloudFailure, CloudLeaseUnsupported, cloudEnvironment, cloudTransport, runCloudRelay, type CloudTransport } from "./cloud";
 import { scrubOwnerReply } from "./ownerOutput";
 import { cloudOwnerDirectory, CloudOwnerDirectoryError } from "./ownerRun";
 import { createOwnerRunDirectory } from "./runDirectory";
@@ -949,10 +949,10 @@ export async function runClaimedRequest(
     let result: EphemeralAgentResult | null = null;
     let completion: ExternalRelayDecision | null = null;
     const executionExpired = (cloud || requesterTier) && owner && !prototype ? new Promise<"expired">(resolve => {
-      const budget = Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity,
-        requesterTier ? remainingMs(serviceDeadline) : Infinity);
-      executionDeadline = Date.now() + budget;
-      executionTimer = setTimeout(() => { run?.cancel(); resolve("expired"); }, budget);
+      const now = Date.now();
+      executionDeadline = Math.min(now + target.hardCapMinutes * 60_000, now + (runtime?.timeoutMs ?? Infinity),
+        requesterTier ? serviceDeadline.at : Infinity);
+      executionTimer = setTimeout(() => { run?.cancel(); resolve("expired"); }, Math.max(0, executionDeadline - now));
       executionTimer.unref();
     }) : null;
     for (rounds = 1; rounds <= (loop ? RELAY_TOOL_ROUNDS : 1); rounds++) {
@@ -1162,6 +1162,7 @@ export async function runClaimedRequest(
           model: target.model,
           privateContext: request.delivery === "guest",
           schema, effort: target.effort, fullAccess: !!owner, timeoutMs: Math.min(owner ? Math.max(0, executionDeadline - Date.now()) : remainingMs(deadline), target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity),
+          ...(requesterTier ? { leaseDeadlineAt: executionDeadline } : {}),
           transport: async input => {
             // A restart after this write cannot prove the remote turn stopped.
             cloudUncertain = true;
@@ -1229,7 +1230,7 @@ export async function runClaimedRequest(
       if (!launchedRun) throw new Error("external relay launch unavailable");
       // Record launched children and authenticated owner controls. The profile
       // identifies prototype decisions that used no agent or account capacity.
-      if ((launchedRun.pid || owner || usingCloud) && !recorder?.begun) recorder?.begin(configuredTarget!.engine!, target.model, owner ? { ...profile, owner: true, ...(prototype ? { prototype: prototype.round.id } : {}) } : profile);
+      if ((launchedRun.pid || owner || usingCloud) && !recorder?.begun) recorder?.begin(usingCloud ? "codex-cloud" : target.engine, target.model, owner ? { ...profile, owner: true, ...(prototype ? { prototype: prototype.round.id } : {}) } : profile);
       await changeRunAsync(requestId, (current) => ({
         ...current,
         childPid: launchedRun.pid,
@@ -1387,6 +1388,8 @@ export async function runClaimedRequest(
       run?.cancel();
       return await finishOwnerTimeout(deadline.receivedAt);
     }
+    if (error instanceof CloudLeaseUnsupported)
+      return await finish({ lease_id: leaseId, outcome: "failed", reason: "configuration_error", detail: null });
     if (error instanceof CloudOwnerDirectoryError && (!owner || !run)) return await finish({ lease_id: leaseId, outcome: "failed", reason: "configuration_error", detail: error.message });
     if (!diagnostic) {
       // Record, journal and hand the first failure to durable owner custody

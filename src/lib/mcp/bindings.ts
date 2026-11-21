@@ -47,7 +47,7 @@ import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal, type Na
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
-import { liveOwnerRelayConversation, liveOwnerRelayRequest, ownerRelayPayload, ownerRelayProjectMatches, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { hasRequesterRelayCustody, liveOwnerRelayConversation, ownerRelayHandoff, ownerRelayProjectMatches, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
@@ -1987,6 +1987,8 @@ async function sendMessage(
          is the server's own caller attribution, so the feed can say WHO relayed. */
       origin: mcpSenderOrigin(dependencies),
       ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
+      ...(orchestratorRelayProject && context?.binding?.sendPayload?.requesterRequestId
+        ? { requesterRequestId: context.binding.sendPayload.requesterRequestId } : {}),
     };
     outcome = await withNativeRelayHandoff(body, orchestratorRelayProject ? nativeOrchestratorRelayCaller() : null,
       headers => dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/conversation-host", body,
@@ -8572,19 +8574,20 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
   const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
-  const relayPayload = attribution.conversationId && !attribution.via ? ownerRelayPayload(message, attribution.conversationId) : null;
+  const handoff = attribution.conversationId && !attribution.via ? ownerRelayHandoff(message, attribution.conversationId) : null;
+  const relayPayload = handoff?.payload;
   const owner = attribution.kind === "agent" || relayPayload?.requesterRequestId ? relayPayload : null;
   // The active requester grant scopes this turn even if the conversation has
   // an independent seat designation.
-  const seat = owner?.requesterRequestId ? null : (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+  const seat = handoff?.requester ? null : (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find((candidate) => candidate.conversationId === attribution.conversationId);
-  if (!seat && !owner && (attribution.kind !== "gateway" || !attribution.conversationId)) {
+  if (!seat && !owner && (handoff?.requester || attribution.kind !== "gateway" || !attribution.conversationId)) {
     throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation; continue the requested work with your tools, or explain the failure and the owner's next action", {
       code: "orchestrator_relay_refused", retryable: false,
     });
   }
   const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
-  if (!seat && owner && project && !ownerRelayTargetMatches(attribution.conversationId!, project, orchestratorSeatFor(project).active?.conversationId)) {
+  if (!seat && owner && project && !ownerRelayTargetMatches(attribution.conversationId!, project, orchestratorSeatFor(project).active?.conversationId, owner.requesterRequestId)) {
     if (owner.requesterRequestId) throw new McpToolRefusal("the trusted requester's handoff must stay within its granted project", { code: "trusted_requester_project_refused", retryable: false });
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }
@@ -8609,7 +8612,7 @@ function resolveRemoteSeatMachine(machine: string, project: string, dependencies
   const caller = attributionOf(dependencies);
   const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find(seat => seat.conversationId === caller.conversationId && seat.project && canonicalOrchestratorProject(seat.project) === project);
-  if (!seat || caller.via || liveOwnerRelayRequest(seat.conversationId)?.tier === "requester")
+  if (!seat || caller.via || hasRequesterRelayCustody(seat.conversationId))
     throw new McpToolRefusal("only this project's designated seat may relay over a link", { code: "orchestrator_relay_refused", retryable: false });
   try { return resolveSeatMessageMachine(machine, project); }
   catch (error) {
@@ -8630,6 +8633,8 @@ function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies, project?: s
 function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencies): void {
   nativeOrchestratorRelayCaller()?.();
   const caller = attributionOf(dependencies);
+  if (caller.conversationId && hasRequesterRelayCustody(caller.conversationId) && !ownerRelayCaller(dependencies))
+    throw new McpToolRefusal("the trusted requester relay turn is no longer authorized", { code: "orchestrator_relay_refused", retryable: false });
   if (caller.kind === "gateway" || ownerRelayCaller(dependencies)) return;
   if (caller.conversationId && !caller.via) {
     const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());

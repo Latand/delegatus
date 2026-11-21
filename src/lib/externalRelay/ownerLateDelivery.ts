@@ -11,6 +11,7 @@ import { ownerFailureAnswer } from "./ownerRun";
 import { isDeepStrictEqual } from "node:util";
 import { answerCapabilities } from "./answerV2";
 import { isOwnerRequestTimeoutReply } from "./requestTimeout";
+import { ownerLateDeliveryAllowed } from "./ownerAuthority";
 
 /** Older custody rows retained the input in the answer record. Reconstruct only
  * from that record and the already verified owner request, never from chat text. */
@@ -115,12 +116,12 @@ function payloadsFor(pending: LateAnswer, relayId: string, requestId: string,
 export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: string,
   body: ExternalRelayCompletion, files: StagedAttachment[], authorize: () => boolean,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
-  const prepared = { pending: undefined as LateAnswer | undefined };
+  const prepared = { pending: undefined as LateAnswer | undefined, run: undefined as RunRecord | undefined };
   let targetId = "";
   let missingContextAlarm = false;
   try {
     await changeRunAsync(requestId, row => {
-      if (!row.ownerTurn || row.ownerTurn.entry?.tier === "requester" || row.relayId !== relay.id || !authorize()) return row;
+      if (!row.ownerTurn || row.relayId !== relay.id || !authorize() || !ownerLateDeliveryAllowed(row)) return row;
       targetId = row.targetId;
       let pending: LateAnswer = { ...row.ownerTurn.lateAnswer, body: row.ownerTurn.lateAnswer?.body ?? body,
         files: row.ownerTurn.lateAnswer?.files ?? files };
@@ -166,11 +167,13 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
         }
       }
       prepared.pending = pending;
+      prepared.run = row;
       return { ...row, ...(!ownerStopPending(row) && !relayRequestInFlight(requestId) ? { capacityReleased: true as const } : {}),
         ownerTurn: { ...row.ownerTurn, lateAnswer: pending } };
     }, ownerRelayStoreDeadline());
     let pending = prepared.pending;
-    if (!pending || !authorize()) return { body, delivery: "refused" };
+    const run = prepared.run;
+    if (!pending || !run || !authorize() || !ownerLateDeliveryAllowed(run)) return { body, delivery: "refused" };
     body = pending.body;
     if (pending.status === "uncertain") return { body, delivery: "unconfirmed" };
     if (!pending.parts) {
@@ -200,7 +203,7 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
         return { ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: pending } };
       }, ownerRelayStoreDeadline());
       const sent = await sendAsClone(relay, targetId, part.payload, { partIndex: index, beforeSend: () => {
-        if (!authorize()) throw new Error("owner relay revoked");
+        if (!authorize() || !ownerLateDeliveryAllowed(run)) throw new Error("owner relay revoked");
       } });
       await changeRunAsync(requestId, row => {
         const saved = row.ownerTurn!.lateAnswer!;

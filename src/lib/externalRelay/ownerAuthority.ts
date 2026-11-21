@@ -5,10 +5,10 @@ import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { agentRegistry } from "@/lib/agent/registry";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
-import { externalRelayFile, type PairedRelay, type RunLedger, type RelayStore, type RunRecord } from "./store";
+import { externalRelayFile, runHoldsConversation, type PairedRelay, type RunLedger, type RelayStore, type RunRecord } from "./store";
 import type { ExternalRelayCompletion } from "./protocol";
 import { isOwnerRequestTimeoutReply } from "./requestTimeout";
-import { bindRequesterEntry, canonicalRelayProject, legacyRequesterId, requesterEntries } from "./trustedRequesters";
+import { bindRequesterEntry, canonicalRelayProject, legacyRequesterId, pairedOwnerTier, requesterEntries } from "./trustedRequesters";
 
 function currentRunEntry(run: RunRecord, relay: PairedRelay, relays: readonly PairedRelay[]) {
   const target = relay.targets.find(item => item.id === run.targetId);
@@ -28,11 +28,20 @@ function currentRunEntry(run: RunRecord, relay: PairedRelay, relays: readonly Pa
 }
 
 export function ownerRunSettingsAllow(run: RunRecord, store: Pick<RelayStore, "relays">): boolean {
+  if (run.ownerTurn?.prototype !== true) return effectiveOwnerRunTier(run, store) !== null;
+  return store.relays.some(relay => relay.id === run.relayId && relay.paused === false
+    && relay.targets.some(target => target.id === run.targetId && target.enabled === true));
+}
+
+export function effectiveOwnerRunTier(run: RunRecord, store: Pick<RelayStore, "relays">) {
   const relay = store.relays.find(item => item.id === run.relayId);
-  if (!relay || !run.ownerTurn) return false;
-  return run.ownerTurn.prototype === true
-    ? relay.paused === false && relay.targets.some(target => target.id === run.targetId && target.enabled === true)
-    : currentRunEntry(run, relay, store.relays) !== null;
+  return (relay && currentRunEntry(run, relay, store.relays)?.tier) ?? null;
+}
+
+/** The final /send boundary must require owner tier, even for pre-upgrade rows. */
+export function ownerLateDeliveryAllowed(run: RunRecord): boolean {
+  const store = readAuthorityStore();
+  return !!store && effectiveOwnerRunTier(run, store) === "owner";
 }
 
 /** MCP reads only: no store creation, pruning or mutation during admission. */
@@ -46,12 +55,38 @@ export function liveOwnerRelayRequest(conversationId: string) {
 }
 
 function liveOwnerRelayRun(conversationId: string): RunRecord | null {
+  return conversationRelayAuthority(conversationId)?.run ?? null;
+}
+
+function readAuthorityStore(): RelayStore | null {
+  try {
+    const store = JSON.parse(fs.readFileSync(externalRelayFile("relays"), "utf8")) as RelayStore;
+    return store.v === 1 && Array.isArray(store.relays) ? store : null;
+  } catch { return null; }
+}
+
+export function hasRequesterRelayCustody(conversationId: string): boolean {
+  return conversationRelayAuthority(conversationId)?.requester === true;
+}
+
+function conversationRelayAuthority(conversationId: string): { run: RunRecord | null; requester: boolean } | null {
+  let requester = false;
   try {
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
-    const store = JSON.parse(fs.readFileSync(externalRelayFile("relays"), "utf8")) as RelayStore;
-    if (ledger.v !== 1 || store.v !== 1) return null;
+    if (ledger.v !== 1) return null;
+    let relays: PairedRelay[] | undefined;
+    let owner: RunRecord | null = null;
     for (const run of ledger.runs) {
-      if (!run.ownerTurn || run.ownerTurn.cancel || run.conversationId !== conversationId || !run.ownerIdentity || procBackend.processIdentity(run.ownerPid) !== run.ownerIdentity) continue;
+      if (!run.ownerTurn || run.ownerTurn.prototype || run.conversationId !== conversationId
+        || (!runHoldsConversation(run) && !run.ownerTurn.quarantinedAt)) continue;
+      relays ??= readAuthorityStore()?.relays ?? [];
+      const relay = relays.find(r => r.id === run.relayId);
+      const entry = relay && currentRunEntry(run, relay, relays);
+      const tier = entry?.tier ?? run.ownerTurn.entry?.tier ?? (relay ? pairedOwnerTier(relay, relays) : "requester");
+      const requesterRun = tier === "requester";
+      requester ||= requesterRun;
+      if (!entry || run.ownerTurn.cancel || run.ownerTurn.quarantinedAt || !run.ownerIdentity
+        || procBackend.processIdentity(run.ownerPid) !== run.ownerIdentity) continue;
       // The preceding turn can still call MCP while the reply waits in the queue.
       // Only delivery of this request grants its conversation the owner's tools.
       const continuation = run.ownerTurn.continuation;
@@ -61,41 +96,49 @@ function liveOwnerRelayRun(conversationId: string): RunRecord | null {
         const delivery = owner && snapshot.heldDeliveries[owner.deliveryId];
         if (delivery?.conversationId !== conversationId || delivery.state !== "delivered") continue;
       }
-      const relay = store.relays.find(r => r.id === run.relayId);
-      const entry = relay && currentRunEntry(run, relay, store.relays);
-      if (entry) return { ...run, ownerTurn: { ...run.ownerTurn, entry } };
+      const authorized = { ...run, ownerTurn: { ...run.ownerTurn, entry } };
+      if (requesterRun) return { run: authorized, requester: true };
+      owner ??= authorized;
     }
-    return null;
+    // A stopped or revoked requester cannot fall through to another authority
+    // while its turn still owns the conversation.
+    return requester ? { run: null, requester } : owner && { run: owner, requester };
   } catch {
-    return null;
+    return requester ? { run: null, requester } : null;
   }
 }
 
 /** Reuse the gateway's directive body, keeping agent authorship. The quoted
  * instruction comes from the runner's verified owner turn, never MCP input. */
-export function ownerRelayPayload(text: string, conversationId: string): { text: string; origin: MessageOrigin; requesterRequestId?: string } | null {
-  const run = liveOwnerRelayRun(conversationId);
-  if (!run?.ownerTurn) return null;
+export function ownerRelayHandoff(text: string, conversationId: string): {
+  payload: { text: string; origin: MessageOrigin; requesterRequestId?: string } | null;
+  requester: boolean;
+} {
+  const authority = conversationRelayAuthority(conversationId);
+  const run = authority?.run;
+  const requester = authority?.requester === true;
+  if (!run?.ownerTurn) return { payload: null, requester };
   const turn = run.ownerTurn;
   const request = turn.request;
-  if (!request || typeof request.text !== "string" || (request.requestText !== null && typeof request.requestText !== "string")) return null;
-  const entry = turn?.entry;
-  const requester = entry?.tier === "requester";
-  const directive = requester
+  if (!request || typeof request.text !== "string" || (request.requestText !== null && typeof request.requestText !== "string")) return { payload: null, requester };
+  const entry = turn.entry;
+  const directive = entry?.tier === "requester"
     ? `${JSON.stringify(entry.label)} delegated this request as a trusted requester for project ${JSON.stringify(entry.project)}. The quoted request carries this trusted requester's authority for that project. Act within that project's scope.`
     : "The install owner delegated this request through a verified owner relay. The quoted owner request carries operator authority, as a voice gateway directive does. Act on it within this project's scope.";
-  return {
+  return { requester, payload: {
     text: bridgeDirectiveBody(`${directive}\n\n${requester ? "Trusted requester" : "Owner"} request: ${JSON.stringify(request)}${turn.bridgeReport ? `\n\nQuoted bridge report: ${JSON.stringify(turn.bridgeReport)}` : ""}\n\nRelay context:\n${text}`),
     origin: { kind: "agent", role: "owner-relay", conversationId },
     ...(requester ? { requesterRequestId: run.requestId } : {}),
-  };
+  } };
 }
 
 /** A report approval stays addressed to its source seat, including migrations
  * that rekey that same conversation. It cannot authorize a different project. */
-export function ownerRelayTargetMatches(conversationId: string, project: string, recipient: string | null | undefined): boolean {
+export function ownerRelayTargetMatches(conversationId: string, project: string, recipient: string | null | undefined,
+  requesterRequestId?: string): boolean {
   const run = liveOwnerRelayRun(conversationId);
   if (!run?.ownerTurn || !entryAllowsProject(run.ownerTurn.entry, project)) return false;
+  if (requesterRequestId !== undefined && (run.requestId !== requesterRequestId || run.ownerTurn.entry?.tier !== "requester")) return false;
   const report = run.ownerTurn?.bridgeReport;
   if (!report) return true;
   if (!recipient || canonicalOrchestratorProject(report.project) !== canonicalOrchestratorProject(project)) return false;

@@ -1343,10 +1343,18 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         const cwd = input.target.engine === "codex-cloud" ? cloudOwnerDirectory(input.target.project)
           : (input.target.project ? projectDirectoryCandidates(input.target.project, 1)[0] : null) ?? os.homedir();
         const authorizeLaunch = () => { authorize(); if (input.target.engine === "codex-cloud") cloudOwnerDirectory(input.target.project, cwd); };
+        const titlePrefix = "Relay · ";
+        let title = titlePrefix + input.target.name;
+        if (input.owner.entry?.tier === "requester") {
+          // Leave room for both names within the durable spawn title limit.
+          const label = input.owner.entry.label.slice(0, 80).trim();
+          const remaining = 120 - titlePrefix.length - " · ".length - label.length;
+          title = titlePrefix + input.target.name.slice(0, remaining).trimEnd() + " · " + label;
+        }
         launched = await ports.launch({
           engine: localTarget.engine, model: input.target.model, effort: input.target.effort,
           cwd, prompt: initialPrompt!,
-          title: `Relay · ${input.target.name}${input.owner.entry?.tier === "requester" ? ` · ${input.owner.entry.label}` : ""}`,
+          title,
           clientAttemptId: turn.clientAttemptId, accountId: input.accountId,
           mcpServers: ["viewer"], plugins: [], notifyLauncher: false,
         }, authorizeLaunch);

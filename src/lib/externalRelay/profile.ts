@@ -2,6 +2,7 @@ import { ownerRequesterTrigger, requesterTrigger, type ExternalRelayRequest, typ
 import type { PairedRelay, RelayTargetSettings } from "./store";
 import type { OwnerBridgeContext } from "./ownerBridgeContext";
 import { bindRequesterEntry, canonicalRelayProject, requesterEntries, type RelayRunEntry } from "./trustedRequesters";
+import { RELAY_MEMBER_ANSWERS_PER_HOUR } from "./settingsView";
 
 /**
  * What one relay answer may use (relay.md §B.6). Every requester gets the
@@ -51,8 +52,6 @@ export function answerProfileFor(
   return { webSearch: true, pageRead: true };
 }
 
-/** Answers per member per hour in one chat when a target has no setting of its own. */
-export const RELAY_MEMBER_ANSWERS_PER_HOUR = 10;
 export const RELAY_MEMBER_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 /** The target's limit: its own setting, else the default; null or 0 is no limit. */
 export function memberLimitFor(target: Pick<RelayTargetSettings, "memberLimitPerHour">): number | null {

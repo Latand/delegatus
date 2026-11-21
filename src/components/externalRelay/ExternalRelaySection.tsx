@@ -16,8 +16,8 @@ import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { effortScale } from "@/lib/agent/efforts";
 import { CODEX_CLOUD_MODEL_IDS, defaultModelFor, ENGINE_MODELS, listedModels } from "@/lib/agent/models";
 import { KNOWN_RELAYS, verifyUrlAllowed, type KnownRelayInfo } from "@/lib/externalRelay/knownRelays";
-import { RELAY_MEMBER_ANSWERS_PER_HOUR } from "@/lib/externalRelay/profile";
-import { selectOwnerDestination } from "@/lib/externalRelay/ownerDestination";
+import { RELAY_MEMBER_ANSWERS_PER_HOUR, type RelayGrantStatus } from "@/lib/externalRelay/settingsView";
+import type { OwnerDestinationReason } from "@/lib/externalRelay/ownerDestination";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { offersCloneCreate } from "@/lib/externalRelay/cloneNames";
@@ -53,7 +53,7 @@ type Target = {
   concurrency: number;
   hardCapMinutes: number;
   memberLimitPerHour?: number | null;
-  ownerTier?: boolean;
+  grantStatus?: RelayGrantStatus;
 };
 export type RelayView = {
   id: string;
@@ -85,7 +85,12 @@ type StatusRow = {
   state: { state: string; lastOutcome: string | null; lastOutcomeAt: string | null; alarm?: string | null; alarmAt?: string | null; lastProgress: { targetId: string; label: string; at: string } | null };
   running: Record<string, number>;
 };
-export type RelayState = { relays: RelayView[]; pending: PendingView[]; status: StatusRow[] };
+export type RelayState = {
+  relays: RelayView[];
+  pending: PendingView[];
+  status: StatusRow[];
+  reviewDestination?: { reason: OwnerDestinationReason } | { targetName: string };
+};
 type PairingStatus = { status: "pending" | "awaiting_install" | "completed" | "expired" | "denied" | "cancelled"; owner?: Owner; reason?: string };
 
 const ERROR_KEYS: Record<string, Parameters<TFunction>[0]> = {
@@ -491,7 +496,9 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
             </span>
             <span data-external-relay-answer-source="" className="text-caption leading-4 text-muted">{t(here ? "externalRelay.target.answeredHere" : target.answered_elsewhere ? "externalRelay.target.answeredElsewhere" : "externalRelay.target.answeredService")}</span>
             {target.answered_elsewhere && canAnswer && !moveRefused ? <span data-external-relay-release-elsewhere="" className="text-caption leading-4 text-muted">{t("externalRelay.target.releaseElsewhere")}</span> : null}
-            {target.ownerTier === true ? <span data-external-relay-owner-tier-caption="" className="text-caption leading-4 text-muted">{t("externalRelay.target.ownerTierOn")}</span> : null}
+            {!open && target.grantStatus && target.grantStatus !== "none" ? (
+              <span data-external-relay-grant-caption="" className="text-caption leading-4 text-muted">{t(`externalRelay.target.grant.${target.grantStatus}`)}</span>
+            ) : null}
           </span>
           {open ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />}
         </button>
@@ -548,12 +555,11 @@ function TargetRow({ relay, target, running, signedIn, actions, open, onOpen, fr
             <MemberLimitField target={target} actions={actions} />
           </SettingLine>
           <p className="text-caption leading-4 text-muted">{t("externalRelay.target.memberLimitHint")}</p>
-          <SettingLine label={t("externalRelay.target.ownerTier")}>
-            <SettingSwitch enabled={target.ownerTier === true} size="responsive" aria-label={name("externalRelay.target.ownerTier")}
-              data-external-relay-owner-tier="" disabled={actions.busy}
-              onClick={() => actions.patchTarget(target, { ownerTier: target.ownerTier !== true })} />
+          <SettingLine label={t("externalRelay.target.grant.label")}>
+            <span data-external-relay-grant-status={target.grantStatus ?? "none"} className="text-caption text-muted">
+              {t(`externalRelay.target.grant.${target.grantStatus ?? "none"}`)}
+            </span>
           </SettingLine>
-          <p data-external-relay-owner-tier-hint="" className="text-caption leading-4 text-muted">{t(target.engine === "codex-cloud" ? "externalRelay.target.ownerTierCloudHint" : "externalRelay.target.ownerTierHint")}</p>
           {noAccount ? (
             <p data-external-relay-no-account="" className="flex items-start gap-1.5 text-caption leading-4 text-warning">
               <AlertTriangle className="mt-px h-3 w-3 shrink-0" aria-hidden />
@@ -758,11 +764,12 @@ export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, 
       {error && !state ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{relayErrorText(t, error)}</p> : null}
       {!state && !error ? <p className="text-ui text-muted">{t("common.loading")}</p> : null}
       {state ? (() => {
-        const selected = selectOwnerDestination(state.relays);
-        const notice = <p key="review-destination" data-external-relay-review-destination={selected.reason ?? "ready"} className="text-caption leading-4 text-muted">
-          {selected.reason ? t(`externalRelay.review.${selected.reason}`)
-            : t("externalRelay.review.ready", { target: selected.relay.targets.find(target => target.id === selected.targetId)!.name })}
-        </p>;
+        const selected = state.reviewDestination;
+        const notice = selected ? (
+          <p key="review-destination" data-external-relay-review-destination={"reason" in selected ? selected.reason : "ready"} className="text-caption leading-4 text-muted">
+            {"reason" in selected ? t(`externalRelay.review.${selected.reason}`) : t("externalRelay.review.ready", { target: selected.targetName })}
+          </p>
+        ) : null;
         const connected = state.relays.map((relay) => relay.origin);
         const cards = state.relays.map((relay) => (
           <RelayCard key={relay.id} relay={relay} status={state.status.find((row) => row.id === relay.id) ?? null} signedIn={signedIn} onChanged={refresh} />

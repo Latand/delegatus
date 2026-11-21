@@ -1086,7 +1086,7 @@ browserTest("linked installs: a failed Settings read keeps the dialog usable", a
  */
 browserTest("external relay: settings and the setup guide's step at 390 and desktop widths in en and uk, light and dark", async () => {
   const { base, stop } = await serveFixture();
-  const out = path.resolve(".artifacts/external-relay");
+  const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "external-relay");
   fs.mkdirSync(out, { recursive: true });
   const launched = await chromium.launchServer({ headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
   const browserPid = launched.process().pid ?? null;
@@ -1180,15 +1180,8 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
                   settings: Array.from(target.querySelectorAll("select")).map((select) => (select as HTMLSelectElement).value),
                   settingsText: Array.from(target.querySelectorAll("select")).map((select) => (select as HTMLSelectElement).selectedOptions[0]?.textContent ?? null),
                   memberLimit: (target.querySelector("[data-external-relay-member-limit]") as HTMLInputElement | null)?.value ?? null,
-                  ownerTier: (() => {
-                    const control = target.querySelector<HTMLElement>("[data-external-relay-owner-tier]");
-                    const hint = target.querySelector<HTMLElement>("[data-external-relay-owner-tier-hint]");
-                    const box = control?.getBoundingClientRect();
-                    return { on: control?.getAttribute("aria-checked") === "true", label: control?.getAttribute("aria-label") ?? null,
-                      caption: target.querySelector("[data-external-relay-owner-tier-caption]")?.textContent ?? null,
-                      box: box ? { width: box.width, height: box.height } : null,
-                      hint: hint?.textContent ?? null, hintOverflow: hint ? hint.scrollWidth > hint.clientWidth : null };
-                  })(),
+                  grantStatus: target.querySelector("[data-external-relay-grant-status]")?.textContent ?? null,
+                  grantCaption: target.querySelector("[data-external-relay-grant-caption]")?.textContent ?? null,
                   answeredHere: toggle?.getAttribute("aria-checked") === "true",
                   switchDisabled: toggle?.disabled ?? null,
                   noAccount: target.querySelector("[data-external-relay-no-account]") !== null,
@@ -1207,10 +1200,8 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
             await page.locator("[data-external-relay=relay-1] [data-external-relay-target=bot-1] [data-external-relay-target-fold]").click();
             const unfolded = await read();
             extra.unfolded = unfolded.targets[0];
-            expect(unfolded.targets[0]!.ownerTier).toMatchObject({ on: true, hintOverflow: false });
-            expect(unfolded.targets[0]!.ownerTier.label).toContain(translate(locale, "externalRelay.target.ownerTier"));
-            expect(unfolded.targets[0]!.ownerTier.caption).toBe(translate(locale, "externalRelay.target.ownerTierOn"));
-            if (phone) expect(unfolded.targets[0]!.ownerTier.box!.height).toBeGreaterThanOrEqual(44);
+            expect(unfolded.targets[0]!.grantStatus).toBe(translate(locale, "externalRelay.target.grant.active"));
+            expect(reading.targets[0]!.grantCaption).toBe(translate(locale, "externalRelay.target.grant.active"));
             extra.unfoldedShortControls = unfolded.shortControls;
             extra.unfoldedOverflow = unfolded.overflow;
             await page.locator("[data-external-relay=relay-1] [data-external-relay-target=bot-1]").scrollIntoViewIfNeeded();

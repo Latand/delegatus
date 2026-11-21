@@ -8,7 +8,8 @@ import type { OwnerBridgeContext } from "./ownerBridgeContext";
 import type { OwnerTurnDiagnostic } from "./diagnostic";
 import { ACTION_VERIFICATION_READS } from "./actionOutcome";
 import { ExternalRelayError } from "./errors";
-import type { RelayRunEntry, TrustedRequesterSettings } from "./trustedRequesters";
+import { canonicalRelayProject, requesterEntries, type RelayRunEntry, type TrustedRequesterSettings } from "./trustedRequesters";
+import type { RelayGrantStatus } from "./settingsView";
 
 export type RelayTargetSettings = {
   id: string;
@@ -618,11 +619,18 @@ export function mergeRelayTargets(
       : newTargetSettings(target);
   });
 }
-export function publicRelay(
-  relay: PairedRelay,
-): Omit<PairedRelay, "credential"> {
+export function publicRelay(relay: PairedRelay) {
   const { credential: _credential, ...publicRecord } = relay;
-  return { ...publicRecord, targets: relay.targets.map(({ requesters: _requesters, ...target }) => target) };
+  const targets = relay.targets.map(target => {
+    const entries = requesterEntries(relay, target);
+    const project = canonicalRelayProject(target.project);
+    const active = relay.paused === false && target.enabled === true && target.answered_by === "install"
+      && entries.some(entry => canonicalRelayProject(entry.project) === project);
+    const grantStatus: RelayGrantStatus = active ? "active" : entries.length ? "suspended" : "none";
+    const { ownerTier: _ownerTier, requesters: _requesters, ...settings } = target;
+    return { ...settings, grantStatus };
+  });
+  return { ...publicRecord, targets };
 }
 export function publicPending(
   pending: PendingRelay,

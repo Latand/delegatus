@@ -3067,8 +3067,8 @@ test("chain switches preserve the service wire and legacy record fields", async 
     const record = { ...run.record, startedAt: "time", finishedAt: "time", durationMs: 0 };
     if (record.profile) { record.profile = { ...record.profile }; delete record.profile.pageRead; }
     const view = (await import("./store")).publicRelay({ ...run.paired, origin: "https://fixture.example", api_base: "https://fixture.example/v1", pairedAt: "time" });
-    if (ownerTier !== undefined) delete view.targets[0]!.ownerTier;
-    return { calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(view)) };
+    const legacyView = { ...view, targets: view.targets.map(({ grantStatus: _status, ...target }) => target) };
+    return { calls: run.calls.map((call) => hash(JSON.stringify(call))), record: hash(JSON.stringify(record)), view: hash(JSON.stringify(legacyView)) };
   }
   for (const role of cases) surfaces[role] = await replay(role);
   if (process.env.LLV_RELAY_CAPTURE_2B) { fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_2B, JSON.stringify({ ...snapshot, surfaces }, null, 2) + "\n"); return; }

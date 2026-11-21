@@ -1,9 +1,14 @@
-import { afterEach, expect, jest, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import { EventEmitter } from "node:events";
 import { NextRequest } from "next/server";
 import { accountManager } from "@/lib/accounts/manager";
 import * as ephemeral from "@/lib/agent/ephemeral";
 import { agentRegistry } from "@/lib/agent/registry";
+import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
+import { executeSpawnRequest, productionSpawnCommandDependencies } from "@/lib/agent/spawnCommand";
+import { reportSpawnHeaders } from "@/lib/telegram/reportSpawn";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { runAsMcpHttpCaller } from "@/lib/mcp/callerContext";
 import { McpTaskExecutor } from "@/lib/mcp/taskExecutor";
@@ -19,7 +24,8 @@ import { SourceSnapshot } from "@/lib/transfer/stores";
 import * as client from "./client";
 import * as cloud from "./cloud";
 import { relayAnswerOp } from "./ownerAnswer";
-import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayOperationAuthorized, ownerRelayPayload, ownerRelaySpawnAuthorized, ownerRelayTargetMatches } from "./ownerAuthority";
+import { readAnswerRecord } from "./answers";
+import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayHandoff, ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized, ownerRelayTargetMatches } from "./ownerAuthority";
 import { openOwnerServiceTools, relayServiceToolsOp } from "./ownerServiceTools";
 import { refreshRelayTargets } from "./poller";
 import { selectOwnerDestination } from "./ownerDestination";
@@ -73,7 +79,8 @@ afterEach(() => {
 });
 
 test("only the bound key on its target launches a local elevated run", async () => {
-  const relay = paired([{ ...granted, engine: "codex-cloud", cloudEnvironmentId: "configured" },
+  const longTargetName = "Long target name ".repeat(8).trim().slice(0, 120);
+  const relay = paired([{ ...granted, name: longTargetName, engine: "codex-cloud", cloudEnvironmentId: "configured", model: cloud.CLOUD_MODEL },
     { ...target, id: "target_2" }]);
   setRelays(relay);
   const picked = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
@@ -86,13 +93,29 @@ test("only the bound key on its target launches a local elevated run", async () 
   const launch = async (body: Record<string, unknown>) => {
     launches.push(body);
     expect(readRunLedger().runs.find(run => run.requestId === "trusted")?.ownerTurn?.entry).toEqual(snapshot);
-    return { status: 202, body: { conversationId: "conversation_trusted", initialMessage: "delivered" } };
+    const home = process.env.HOME!;
+    const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1:1/api/spawn", {
+      method: "POST", headers: reportSpawnHeaders(ensureOperatorSpawnCapability(), VIEWER_SPAWN_CAPABILITY_HEADER),
+      body: JSON.stringify(body),
+    }), { ...productionSpawnCommandDependencies, autonomousStructured: true, assertStructuredRuntime() {},
+      resolveHealthySpawnAccount: async () => ({ engine: "codex", accountId: "fixture", kind: "managed", home, transcriptRoot: home, env: {} }),
+      preflightProtocol: async () => {},
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      defer() {},
+    });
+    const result = await response.json();
+    expect(response.status, JSON.stringify(result)).toBe(202);
+    expect(agentRegistry().spawnReceiptForClientAttempt(String(body.clientAttemptId))?.launchProfile.title)
+      .toMatch(/^Relay · Long target name .+ · Trusted person$/);
+    return { status: response.status, body: { ...result, initialMessage: "delivered" } };
   };
   const launches: Record<string, unknown>[] = [];
-  const ports = { launch, observe: async () => {
-    expect(await relayAnswerOp("conversation_trusted", { text: "Done", format: "plain", reply_to: "other_message" })).not.toBeNull();
+  const ports = { launch, observe: async (turn: { conversationId?: string | null }) => {
+    expect(await relayAnswerOp(turn.conversationId!, { text: "Done", format: "plain", reply_to: "other_message" })).not.toBeNull();
     return { state: "ended" as const, finalText: "Done" };
   }, stop: async () => {} };
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = `${process.env.TMPDIR}/unused-fixture.sock`;
   try {
     const raw = request("trusted");
     const rich = richRequest();
@@ -101,7 +124,7 @@ test("only the bound key on its target launches a local elevated run", async () 
     raw.input.conversation.push({ ...raw.input.conversation[0]!, id: "other_message", author: { key: "u2", name: "Other", self: false } });
     expect(await runClaimedRequest(relay, raw, undefined, { leaseWorker: false, ownerPorts: ports }))
       .toMatchObject({ outcome: "answered", answer: { text: "Done", reply_to: "m1" } });
-    expect(launches[0]?.title).toBe("Relay · Target · Trusted person");
+    expect(readAnswerRecord(relay.id, target.id, "trusted")).toMatchObject({ engine: "codex", outcome: "answered" });
     expect(launches[0]?.prompt).toContain("Trusted person");
     expect(JSON.stringify(launches[0])).not.toContain(relay.credential);
     expect(cloudRun).not.toHaveBeenCalled();
@@ -131,7 +154,12 @@ test("only the bound key on its target launches a local elevated run", async () 
     }
     expect(launches).toHaveLength(1);
     expect(wire.mock.calls.some(([, url]) => url.endsWith("/send"))).toBe(false);
-  } finally { picked.mockRestore(); wire.mockRestore(); restricted.mockRestore(); environment.mockRestore(); cloudRun.mockRestore(); }
+  } finally {
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+    else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
+    dropRun("trusted");
+    picked.mockRestore(); wire.mockRestore(); restricted.mockRestore(); environment.mockRestore(); cloudRun.mockRestore();
+  }
 });
 
 test("fresh authority rejects a suspended or removed entry at every durable boundary", async () => {
@@ -150,7 +178,7 @@ test("fresh authority rejects a suspended or removed entry at every durable boun
     expect(conversationAuthority(request("conversation").input.requester, snapshot)).toBe("trusted:grant-one");
     expect(ownerRelayTargetMatches(conversation, project, null)).toBe(true);
     expect(ownerRelayTargetMatches(conversation, otherProject, null)).toBe(false);
-    expect(ownerRelayPayload("context", conversation)?.text).toContain("Trusted person");
+    expect(ownerRelayHandoff("context", conversation).payload?.text).toContain("Trusted person");
     const check = async (allowed: boolean) => {
       expect(ownerRelayAuthorized(relay.id, target.id, id)).toBe(allowed);
       expect(await ownerRelayAuthorizedAsync(relay.id, target.id, id)).toBe(allowed);
@@ -170,81 +198,79 @@ test("fresh authority rejects a suspended or removed entry at every durable boun
     setRelays(paired([{ ...target, requesters: { revision: 3, entries: [{ ...entry, id: "new-id" }] } }]));
     await check(false);
     expect(ownerRelayOperationAuthorized(operation, conversation)).toBe(false);
-    expect(ownerRelayPayload("context", conversation)).toBeNull();
+    expect(ownerRelayHandoff("context", conversation)).toEqual({ payload: null, requester: true });
   } finally { dropRun(id); }
 });
 
-test("a carried grant on the second pairing keeps Cloud and expires inside the lease", async () => {
+test("a carried requester grant refuses Cloud before remote execution when the provider offers no lease deadline", async () => {
   const a = paired([target]);
-  const b = paired([{ ...target, ownerTier: true, engine: "codex-cloud", cloudEnvironmentId: "configured" }], "relay_b", "202");
+  const b = paired([{ ...target, ownerTier: true, engine: "codex-cloud", cloudEnvironmentId: "configured", model: cloud.CLOUD_MODEL }], "relay_b", "202");
   setRelays(a, b);
   ownerMember();
-  const leaseEnd = Date.now() + 10_000;
-  const raw = { ...ownerRequest(), deadline_at: new Date(leaseEnd).toISOString(),
+  const deadlineAt = Date.now() + 20_000;
+  const raw = { ...ownerRequest(), deadline_at: new Date(deadlineAt).toISOString(),
     owner_delivery: { chat_id: 202, reply_to_message_id: 1, message_thread_id: null } };
-  const environment = spyOn(cloud, "cloudEnvironment").mockReturnValue("configured");
-  let dispatched = false, cancelled = false;
   const posts: string[] = [];
   const wire = spyOn(client, "relayCall").mockImplementation(async (_base, route) => {
     posts.push(route);
     return { status: 200, body: { status: "ok" } } as never;
   });
-  const launch = spyOn(cloud, "runCloudRelay").mockImplementation(input => {
-    expect(input.environmentId).toBe("configured");
-    expect(input.fullAccess).toBe(true);
-    expect(input.prompt).toContain("Owner of pairing Relay");
-    expect(input.timeoutMs).toBeLessThanOrEqual(10_000);
-    dispatched = true;
-    let settle!: (result: Awaited<ReturnType<typeof cloud.runCloudRelay>["done"]>) => void;
-    const done = new Promise<Awaited<ReturnType<typeof cloud.runCloudRelay>["done"]>>(resolve => { settle = resolve; });
-    return { pid: null, identity: null, done, cancel() {
-      cancelled = true;
-      settle({ status: "cancelled", answer: null, code: null, signal: null, durationMs: 0 });
-    } };
-  });
-  jest.useFakeTimers();
-  let now = leaseEnd - 10_000;
-  const clock = spyOn(Date, "now").mockImplementation(() => now);
-  const pending = runClaimedRequest(b, raw, undefined, { leaseWorker: false });
+  const provider = cloudProviderWithoutTerminalReply();
+  const launch = spyOn(cloud, "runCloudRelay");
+  const localLaunch = async () => { throw new Error("A configured Cloud grant cannot silently become a local run"); };
   try {
-    for (let i = 0; i < 300 && !dispatched; i++) {
-      jest.advanceTimersByTime(1);
-      await fs.promises.stat(process.cwd());
-    }
-    expect(dispatched).toBe(true);
-    now += 11_000;
-    jest.advanceTimersByTime(11_000);
-    await pending;
-    expect(cancelled).toBe(true);
+    expect(await runClaimedRequest(b, raw, undefined, {
+      leaseWorker: false, cloudTransport: provider.transport, ownerPorts: { launch: localLaunch, observe: async () => ({ state: "failed" }), stop: async () => {} },
+    })).toMatchObject({ outcome: "failed", reason: "configuration_error" });
+    expect(launch.mock.calls[0]?.[0]).toMatchObject({ fullAccess: true, environmentId: "configured", leaseDeadlineAt: deadlineAt });
+    expect(provider.methods).toEqual([]);
     expect(posts.some(route => route.endsWith("/send"))).toBe(false);
-  } finally {
-    launch.mock.results.forEach(result => { if (result.type === "return") result.value.cancel(); });
-    clock.mockRestore();
-    jest.useRealTimers();
-    try { await pending; } finally { launch.mockRestore(); environment.mockRestore(); wire.mockRestore(); }
-  }
+    expect(readRunLedger().runs.find(run => run.requestId === raw.request_id)).toBeUndefined();
+  } finally { launch.mockRestore(); wire.mockRestore(); provider.close(); }
 });
 
-test("requester-tier Cloud output cannot redirect a final reply to another author", async () => {
-  const relay = paired([{ ...target, ownerTier: true, engine: "codex-cloud", cloudEnvironmentId: "configured" }]);
-  setRelays(relay, paired([target], "relay_b", "202"));
-  const raw = request("cloud_reply");
-  raw.input.requester.is_owner = true;
-  raw.input.conversation.push({ ...raw.input.conversation[0]!, id: "other_message",
-    author: { key: "u2", name: "Other", self: false } });
-  const environment = spyOn(cloud, "cloudEnvironment").mockReturnValue("configured");
-  const wire = spyOn(client, "relayCall").mockResolvedValue({ status: 200, body: { status: "ok" } } as never);
-  const cloudRun = spyOn(cloud, "runCloudRelay").mockReturnValue({ pid: null, identity: null, cancel() {},
-    done: Promise.resolve({ status: "done", answer: { action: "reply", text: "Done", reply_to: "other_message" },
-      durationMs: 0, code: null, signal: null }),
-  });
+function cloudProviderWithoutTerminalReply() {
+  const original = process.env.LLV_CODEX_CLOUD_URL;
+  process.env.LLV_CODEX_CLOUD_URL = "wss://example.invalid/app-server";
+  const socket = new EventEmitter();
+  const turnStarted = Promise.withResolvers<void>();
+  const methods: string[] = [];
+  const transport = cloud.createCloudTransport(() => {
+    queueMicrotask(() => socket.emit("open"));
+    return { on: socket.on.bind(socket), close() {}, send(data) {
+      const { method, id } = JSON.parse(data);
+      methods.push(method);
+      if (id === undefined) return;
+      queueMicrotask(() => {
+        const result = method === "thread/start" ? { thread: { id: "thread", environments: [
+          { environmentConfigId: "configured", environmentId: "ccarenv_fixture", cwd: "/workspace/fixture" },
+        ] } } : method === "turn/start" ? { turn: { id: "turn" } } : {};
+        socket.emit("message", JSON.stringify({ id, result }));
+        if (method === "turn/start") {
+          socket.emit("message", JSON.stringify({ method: "turn/started", params: { threadId: "thread", turn: { id: "turn" } } }));
+          turnStarted.resolve();
+        }
+        // The provider acknowledges interruption but never confirms termination.
+      });
+    } };
+  }, async () => "/workspace/fixture");
+  return { transport, turnStarted: turnStarted.promise, methods, close() {
+    if (original === undefined) delete process.env.LLV_CODEX_CLOUD_URL;
+    else process.env.LLV_CODEX_CLOUD_URL = original;
+  } };
+}
+
+test("the Cloud transport keeps an acknowledged interrupt unconfirmed without a terminal reply", async () => {
+  const provider = cloudProviderWithoutTerminalReply();
+  const controller = new AbortController();
+  const pending = provider.transport({ prompt: "Fixture request", model: cloud.CLOUD_MODEL,
+    fullAccess: true, environmentId: "configured", timeoutMs: 5000, signal: controller.signal });
   try {
-    expect(await runClaimedRequest(relay, raw, undefined, { leaseWorker: false }))
-      .toMatchObject({ outcome: "answered", answer: { text: "Done", reply_to: "m1" } });
-    expect(cloudRun).toHaveBeenCalledTimes(1);
-    expect(wire.mock.calls.find(([, route]) => route.endsWith("/complete"))?.[3])
-      .toMatchObject({ answer: { reply_to: "m1" } });
-  } finally { cloudRun.mockRestore(); environment.mockRestore(); wire.mockRestore(); }
+    await provider.turnStarted;
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ confirmed: false });
+    expect(provider.methods).toEqual(["initialize", "initialized", "thread/start", "turn/start", "turn/interrupt"]);
+  } finally { controller.abort(); provider.close(); }
 });
 
 test("a legacy run retains authority across the upgrade", () => {
