@@ -94,9 +94,6 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
   if (paused.some(lane => lane.pause?.resumeCondition?.kind === "date" && Date.parse(lane.pause.resumeCondition.at) > now)) {
     return { owner: "agents", rule: "dated", action: "Wait for the lane’s resume date." };
   }
-  if (lanes.length && !open.length && lanes.some(lane => lane.merge?.state === "merged")) {
-    return seat("unowned", "its lanes settled and work merged", "Check acceptance on the running build with deployment_status. Close the task or name what remains.");
-  }
   if (!open.length && lanes.some(laneWaitCleared)) {
     return seat("lane-dismissed", "its lane wait was dismissed", "Start the next step or close the task with a note.");
   }
@@ -113,6 +110,9 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
     return seat("wait-cleared", "its recorded prerequisite cleared", "Start or continue the work, then clear the hold.");
   }
   if (until > now || hold?.kind === "postponed") return { owner: "agents", rule: "dated", action: "Keep the recorded postponement or reset time." };
+  if (lanes.length && !open.length && lanes.some(lane => lane.merge?.state === "merged")) {
+    return seat("unowned", "its lanes settled and work merged", "Check acceptance on the running build with deployment_status. Close the task or name what remains.");
+  }
   const dependencyHasOwner = !!dependency && (dependency.assignments.some(a => a.state === "spawning" && !a.conversationId
     || !!a.conversationId && input.liveAssignments.has(a.conversationId))
     || dependency.status === "blocked" && [...(input.lanesByTask.get(dependency.id) ?? [])].some(laneActive))

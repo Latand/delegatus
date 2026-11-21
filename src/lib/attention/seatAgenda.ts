@@ -180,7 +180,7 @@ export function seatAgendaAsks(
       return pages.map((page, index) => {
         const waiting = page?.length ? `After settling this lane, move Waiting task(s) ${page.join(", ")} by re-sending or clearing their holds. ` : "";
         const key = agendaKey(route) + (page ? `@waiting:${index + 1}:${waitingTaskIds!.length}:${page.join(",")}` : "");
-      return { key, id: pipeline.id, label: clip(`${laneLine(pipeline)} ${returnedNote(route)} ${waiting}`, LABEL_MAX),
+      return { key, id: pipeline.id, label: clip(`${waiting}${laneLine(pipeline)} ${returnedNote(route)}`, LABEL_MAX),
           ...(page ? { waitingTaskIds: page } : {}), sinceMs: state.sinceMs,
           seatOwnedLane: { id: pipeline.id, title: pipeline.task || pipeline.id, sinceMs: state.sinceMs,
             reason: `${kind}: ${pipeline.merge?.state === "blocked" ? clip(pipeline.merge.reason ?? "merge stopped", 120) : pipeline.stateDetail ?? state.stop?.kind ?? pipeline.state}` } };

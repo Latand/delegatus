@@ -204,6 +204,19 @@ test("a long returned-round lane wake keeps retry-stage and every task id before
   for (const id of ids) expect(ask.label).toContain(id);
 });
 
+test("a long returned merge wake retains every task id and retry action before the long reason", () => {
+  const ids = [1, 2, 3, 4].map(number => `waiting-task-fixture-with-long-id-0${number}`);
+  const tasks = ids.map(id => ({ id, project: "project-a", text: "Retry publication", status: "blocked" as const, placement: "unplaced" as const,
+    assignments: [], createdAt: at, updatedAt: at, hold: { kind: "external" as const, note: "Publication parked", since: at, by: "agent" as const } }));
+  const lane = mergeLane("returned-merge", "long merge reason ".repeat(14));
+  lane.taskIds = ids;
+  lane.attentionRoute = { ...lane.attentionRoute!, returnedFrom: "round-returned-12345678901234567890" };
+  const ask = seatAgendaAsks({ files: [], pipelines: [lane], tasks }, now, "project-a").find(item => item.id === lane.id)!;
+  expect(ask.waitingTaskIds).toEqual(ids);
+  expect(ask.label).toContain("pipeline_action retry-merge");
+  for (const id of ids) expect(ask.label).toContain(id);
+});
+
 test("the maintenance hold resend write leaves a named task action on the next seat agenda", () => {
   const task: BoardTask = { id: "moved-task", project: "project-a", text: "Resume publication", status: "blocked",
     placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,

@@ -1038,6 +1038,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const written = settles();
     const entry: HistoryEntry = { kind: "status", taskId: task.id, title: short, from, to, fromHold: controller.holdFor(task) ?? null, toHold: null, settled: written.promise };
     historyRef.current.record(entry);
+    const optimisticReceiptId = to === "blocked" ? null : show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
+    if (optimisticReceiptId) entryReceipts.current.set(entry, optimisticReceiptId);
     if (options.focus) focusMoved(card.id, to);
     void controller.move(task, to, Object.hasOwn(options, "hold") ? { hold: options.hold } : {}).then((outcome: StatusMoveOutcome) => {
       if (outcome.kind === "saved") {
@@ -1045,13 +1047,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
         entry.lineages = new Map([[task.id, outcome.lineage]]);
         entry.toHold = outcome.task.hold ?? null;
         if (to === "blocked" && holdEditing === card.id) setHoldEditing(null);
-        const receiptId = show(t("kanban.moved", { title: short, status: statusLabel(t, outcome.task.status) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
+        if (outcome.task.status !== to && optimisticReceiptId) dismiss(optimisticReceiptId);
+        const receiptId = optimisticReceiptId && outcome.task.status === to ? optimisticReceiptId
+          : show(t("kanban.moved", { title: short, status: statusLabel(t, outcome.task.status) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
         entryReceipts.current.set(entry, receiptId);
       }
       written.resolve(outcome.kind === "saved");
       /* The server already held the status: nothing of this board's is left to undo. */
       if (outcome.kind === "settled") return;
       if (outcome.kind === "failed") {
+        if (optimisticReceiptId) dismiss(optimisticReceiptId);
+        entryReceipts.current.delete(entry);
         flash(card.id);
         show(t("kanban.moveFailed", { title: short, error: outcome.error }), {
           label: t("kanban.retry"),
@@ -1061,6 +1067,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
           },
         }, { error: true });
       } else if (outcome.kind === "conflict") {
+        if (optimisticReceiptId) dismiss(optimisticReceiptId);
+        entryReceipts.current.delete(entry);
         flash(card.id);
         show(t("kanban.movedElsewhere", { title: short, status: statusLabel(t, outcome.serverStatus) }), {
           label: t("kanban.moveAnyway"),
@@ -1494,7 +1502,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* ── Menus ───────────────────────────────────────────────────────────── */
   useEffect(() => {
     if (!holdEditing) return;
-    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(`[data-kanban-card="${CSS.escape(holdEditing)}"] [data-hold-editor]`)?.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" }));
+    requestAnimationFrame(() => {
+      const card = [...(rootRef.current?.querySelectorAll<HTMLElement>("[data-kanban-card]") ?? [])]
+        .find(node => node.dataset.kanbanCard === holdEditing);
+      card?.querySelector<HTMLElement>("[data-hold-editor]")?.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
+    });
   }, [holdEditing]);
   const statusItems = useCallback((card: KanbanCardModel, hints: boolean): KanbanMenuItem[] => [
     ...KANBAN_STATUSES.map((status): KanbanMenuItem => ({

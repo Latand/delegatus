@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
+import { patchTask } from "@/lib/tasks/commands";
 import { publishPOST as gatedPublishPOST, reviewGET, reviewPOST, reviewReadPOST } from "./http";
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -78,6 +79,16 @@ test("publication copies a task's prototype before its worktree disappears", asy
   expect(body.rounds[0].variants[0].frames[0].image.available).toBe(true);
   expect(body.waitingReviewId).toBe(body.rounds[0].id);
   expect(loadTasks()[0]!.prototypeReviews).toHaveLength(1);
+});
+
+test("a hold write reads a published unanswered form from stored task history, then releases after its answer", async () => {
+  const reviewId = await publish(await fullInput("stored-form-hold"));
+  const pending = patchTask(loadTasks(), "task-prototype", { status: "blocked", hold: { kind: "operator", note: "" } }, Date.parse("2026-10-01T00:01:00Z"), { actor: "operator" });
+  expect(pending).toMatchObject({ ok: true, task: { status: "blocked", hold: { kind: "operator", note: "" } } });
+  const answered = await reviewPOST(request("/review", { reviewId, chosen: [1], comment: "Use the compact layout." }), "task-prototype");
+  expect(answered.status).toBe(200);
+  const released = patchTask(loadTasks(), "task-prototype", { status: "blocked", hold: { kind: "operator", note: "" } }, Date.parse("2026-10-01T00:02:00Z"), { actor: "operator" });
+  expect(released).toMatchObject({ ok: true, task: { status: "inbox" } });
 });
 
 test("the agent surface exposes a publishing tool and a decision read", () => {

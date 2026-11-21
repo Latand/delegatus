@@ -20,6 +20,7 @@ setKanbanCardsOpenByDefault(true);
 const dom = new Window({ url: "http://localhost/" });
 // These interaction tests commit synchronously; animation timing has its own suite.
 Object.defineProperty(dom.HTMLElement.prototype, "animate", { configurable: true, writable: true, value: undefined });
+Object.defineProperty(dom.HTMLElement.prototype, "scrollIntoView", { configurable: true, writable: true, value: () => {} });
 Object.assign(globalThis, {
   window: dom,
   document: dom.document,
@@ -316,19 +317,27 @@ test("a column names its cards' status, so a card draws no status pill; S opens 
 });
 
 test("a refused write returns the card to its column with an error receipt and Retry", async () => {
+  const patches: unknown[] = [];
   const ports: TaskMutationPorts = {
-    patch: async () => ({ ok: false, status: 500, error: "disk full" }),
+    patch: async (_id, body) => { patches.push(body); return { ok: false, status: 500, error: "disk full" }; },
     read: async () => null,
     changed: () => {},
   };
   const { host } = mount([task("a", "assigned", "Repair old links")], ports);
-  const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
-  card.focus();
-  flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
+  click(host.querySelector('.card[data-id="task:a"] [data-menu]'));
+  click([...host.querySelectorAll('.menu [role="menuitemradio"]')].find(item => item.textContent?.includes("Waiting")));
+  const form = host.querySelector<HTMLFormElement>("[data-hold-editor]")!;
+  const select = form.querySelector("select")!;
+  flushSync(() => { select.value = "operator"; select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+  const field = form.querySelector<HTMLInputElement>("input")!;
+  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+  flushSync(() => { setter.call(field, "Grant deployment access"); field.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+  flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
   expect(columnOf(host, "a")).toBe("blocked");
   await tick();
   await tick();
   expect(columnOf(host, "a")).toBe("assigned");
+  expect(patches).toEqual([{ status: "blocked", hold: { kind: "operator", note: "Grant deployment access" }, expectedProject: "fixture", expectedRevision: REV(1) }]);
   expect(receiptTexts(host)).toContain("Couldn't save the status of «Repair old links»: disk full");
   expect(receiptTexts(host)).not.toContain("Moved «Repair old links» to Waiting");
   expect([...host.querySelectorAll("[data-kanban-receipt].error .act")].map((node) => node.textContent)).toEqual(["Retry"]);

@@ -898,17 +898,19 @@ export function defaultSeatTickSources(): SeatTickSources {
         const ids = (lane.taskIds ?? []).filter(id => tasksById.has(id));
         if (ids.length) pauseWaitingTasks[lane.id] = [...new Set([...(pauseWaitingTasks[lane.id] ?? []), ...ids])].sort();
       }
-      const relevantArchived = [...new Map(tasks.filter(task => task.status !== "done")
+      const resolveProject = seatProjectResolver();
+      const linkedLanes = [...new Map(tasks
         .flatMap(task => loadPipelinesForTask(task.id))
-        .filter(lane => canonicalProject(lane.project) === project && lane.hiddenAt)
+        .filter(lane => resolveProject(lane.project) === project)
         .map(lane => [lane.id, lane] as const)).values()];
+      const relevantArchived = linkedLanes.filter(lane => lane.hiddenAt);
       let asks = [...result.asks];
       if (relevantArchived.length) {
         const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
-        const archivedAsks = seatAgendaAsks({ files: [], pipelines: relevantArchived, tasks }, now / 1000, project);
+        const archivedAsks = seatAgendaAsks({ files: [], pipelines: linkedLanes, tasks }, now / 1000, project);
         const archivedTaskIds = new Set(relevantArchived.flatMap(lane => lane.taskIds ?? []));
         asks = asks.filter(ask => !(archivedTaskIds.has(ask.id) && ask.waitingTaskIds?.includes(ask.id)));
-        asks = asks.concat(archivedAsks);
+        asks = asks.concat(archivedAsks.filter(ask => archivedTaskIds.has(ask.id) && ask.waitingTaskIds?.includes(ask.id)));
       }
       return { ...result, asks, ...(Object.keys(pauseWaitingTasks).length ? { pauseWaitingTasks } : {}) };
     })),

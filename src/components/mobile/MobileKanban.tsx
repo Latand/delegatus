@@ -685,7 +685,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
         </div>
       ) : face}
     </Pressable>
-    {holdEditing && onSaveHold && onCancelHold ? <div ref={holdEditorRef} className="mx-2 mb-2 rounded-xl border border-border bg-card p-3"><TaskHoldEditor hold={item.card.task?.hold} onSave={onSaveHold} onCancel={onCancelHold} /></div> : null}
+    {holdEditing && onSaveHold && onCancelHold ? <div ref={holdEditorRef} data-phone-hold-editor={item.card.task?.id ?? item.key} className="mx-2 mb-2 rounded-xl border border-border bg-card p-3"><TaskHoldEditor hold={item.card.task?.hold} onSave={onSaveHold} onCancel={onCancelHold} /></div> : null}
     {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1" data-phone-card-shell="" data-attention={item.reasons.length > 0 || item.waitsOnPrototype ? "needs" : undefined}><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
     </>
   );
@@ -1111,6 +1111,10 @@ export function MobileKanban(props: MobileKanbanProps) {
       else if (outcome.kind === "conflict") showReceipt(t("kanban.movedElsewhere", { title, status: t(STATUS_LABEL[outcome.serverStatus]) }), null, { error: true });
     });
   }, [controller, t]);
+  const moveToColumn = useCallback((item: PhoneCard, to: TaskStatus) => {
+    if (to === "blocked") { setHoldEditingKey(item.card.task?.id ?? item.key); return; }
+    move(item, to);
+  }, [move]);
   const hide = useCallback((item: PhoneCard) => {
     const raw = item.card.task ? tasksById.current.get(item.card.task.id) : undefined;
     if (!raw) return;
@@ -1223,7 +1227,7 @@ export function MobileKanban(props: MobileKanbanProps) {
         hint: t(`kanban.statusHint.${status}`),
         icon: <Icon className="h-4 w-4" aria-hidden />,
         tone: "accent",
-        run: () => status === "blocked" ? setHoldEditingKey(item.key) : move(item, status),
+        run: () => moveToColumn(item, status),
         cell: t(STATUS_LABEL[status]),
       };
     });
@@ -1308,11 +1312,11 @@ export function MobileKanban(props: MobileKanbanProps) {
       onOpen={open(item)}
       onOpenStage={openStage}
       onLongPress={() => openSheet(item)}
-      lift={item.kind === "task" && item.card.task ? { status: item.card.status, onDrop: (to) => move(item, to) } : null}
+      lift={item.kind === "task" && item.card.task ? { status: item.card.status, onDrop: (to) => moveToColumn(item, to) } : null}
       onDismiss={item.reasons.length ? () => sendCardDismissal(item, false) : null}
       onUndo={item.cleared ? () => sendCardDismissal(item, true) : null}
       onAnswer={item.kind === "task" ? (state) => answerCard(item, state) : null}
-      holdEditing={holdEditingKey === item.key}
+      holdEditing={holdEditingKey === (item.card.task?.id ?? item.key)}
       onSaveHold={(hold) => saveHold(item, hold)}
       onCancelHold={() => setHoldEditingKey(null)}
     />
