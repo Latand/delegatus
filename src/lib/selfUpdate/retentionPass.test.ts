@@ -1,4 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import type { NonSharedBuffer } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -36,7 +37,7 @@ test.each([
 ])("Darwin retention keeps uncertain data without procfs ($releases releases, $journals journals)", async ({ releases, journals }) => {
   const h = fixture(releases + journals);
   if (!releases && !journals) fs.rmdirSync(h.record.releasesDir);
-  const quarantines: { dir: string; gate: string; journal: string; original: Buffer; fd: number }[] = [];
+  const quarantines: { dir: string; gate: string; journal: string; original: NonSharedBuffer; fd: number }[] = [];
   const launch = { executable: process.execPath, entry: path.resolve(import.meta.dir, "../retention.worker.ts") };
   const claims: string[] = [];
   const fence = (claim: string) => { claims.push(claim); return true; };
