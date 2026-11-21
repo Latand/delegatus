@@ -185,8 +185,10 @@ publication attempt, 21 samples run with a 15 second wait between samples.
 Each sample has one 180 second monotonic budget for read-only evidence.
 It includes worker startup, queued host reads, transport, retries, and teardown.
 Up to four workers reconcile protected hosts, each with its own MCP connection.
-Each lane tries its assigned hosts before retrying unresolved reads, with 10
-seconds between retry rounds. At least the final third of the budget is
+Each sampling pass checks a captured host identity once. Stages from the same
+pipeline share its observed attempts in one lane. A lane reads the host census
+at most once, then checks each replacement PID and start identity independently.
+An unresolved read remains unknown until the next fresh sample. At least the final third of the budget is
 reserved for fresh serving evidence and, on the last sample, the cut inventory.
 Time saved by earlier stage reads is available to the serving checks. Replies
 that miss their cutoff expire and the worker's process group is stopped.
