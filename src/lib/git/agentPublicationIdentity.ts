@@ -55,6 +55,11 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
     ? {} : { LLV_GATE_CPU_PRIORITY_SOURCE: source.LLV_GATE_CPU_PRIORITY_SOURCE };
   const storage = Object.fromEntries(["TMPDIR", "LLV_EVIDENCE_DIR"].flatMap(key => source[key] === undefined ? [] : [[key, source[key]]]));
   const set = { ...identity, ...shellBindings, ...storage };
+  // The batch merger calls the Viewer from its shell. Keep the inherited
+  // capability through inclusion filters without putting its value in CLI args.
+  const inheritedViewerBindings = ["LLV_SPAWN_CAPABILITY", "LLV_VIEWER_CONTROL_URL", "LLV_VIEWER_PORT", "LLV_VIEWER_DEPLOY_TARGET"]
+    .filter(key => source[key] !== undefined);
+  const required = [...Object.keys(set), ...inheritedViewerBindings];
   const configured = policy && typeof policy === "object" && !Array.isArray(policy)
     ? policy as Record<string, unknown> : {};
   const override: Record<string, unknown> = { set };
@@ -67,13 +72,12 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
     if (typeof filters !== "object" || Array.isArray(filters)
       || Object.values(filters).some((value) => value !== "include" && value !== "exclude")
       || included != null || configured.exclude != null) throw new Error("Codex shell policy could not be read safely");
-    // Includes filter after `set`; add only the Git fields to an existing
-    // inclusion bound. Exclusions run before `set` and remain untouched.
+    // Includes filter after `set`. The existing policy still owns inheritance.
     if (Object.values(filters).includes("include")) {
-      override.filters = Object.fromEntries(Object.keys(set).map((key) => [key, "include"]));
+      override.filters = Object.fromEntries(required.map((key) => [key, "include"]));
     }
   } else if (Array.isArray(included) && included.length) {
-    override.include_only = [...new Set([...included, ...Object.keys(set)])];
+    override.include_only = [...new Set([...included, ...required])];
   }
   return override;
 }

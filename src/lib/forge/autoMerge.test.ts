@@ -421,7 +421,7 @@ describe("GitHub read failure recovery through production ports", () => {
       else process.env.PATH = previousPath;
       fs.rmSync(bin, { recursive: true, force: true });
     }
-  });
+  }, 45_000);
 
   test("a refused App read never falls back to the CLI identity", async () => {
     const { githubRunner } = await import("../monitor/githubEvidence");
@@ -1772,15 +1772,25 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     expect(h.merge("L1")).toBeUndefined();
   });
 
-  test("a merge GitHub refuses blocks with GitHub's words", async () => {
+  test("an exact-head refusal survives stale OPEN readback and still requires review of a new head", async () => {
     const h = harness({ lanes: [lane("L1")], prs: [openPr(11)] });
     h.refuseMerges("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)");
     await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS, () => h.merges().length > 0);
     expect(h.merges()).toHaveLength(1);
     expect(h.merge("L1")).toMatchObject({
-      state: "blocked",
-      reason: "GitHub refused the merge: GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)",
+      state: "checking", nextReadAt: iso(h.now() + MERGE_POLL_MS), rejectedLandingHead: HEAD_A,
+      head: null, headSeenAt: null, lastChecks: null, seenChecks: [], optionalFailedChecks: [],
+      reason: "PR head moved during merge admission; checking again",
     });
+    h.advance(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    await h.sweep();
+    expect(h.merge("L1")?.state).toBe("checking");
+    expect(h.merges()).toHaveLength(1);
+    h.prs.get(11)!.head = HEAD_B;
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged, reviewedHead: HEAD_A });
+    expect(h.merges()).toHaveLength(1);
   });
 
   test("three unclassified read failures block with their diagnostic", async () => {

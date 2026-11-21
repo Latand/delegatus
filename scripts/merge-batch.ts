@@ -13,7 +13,10 @@ import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
 import { parseReport, testNameFilter, type TestRun, type TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
 import { isDeclaredRepository } from "../bin/forge-app-token.mjs";
-import { deliveryPullRequestRepository } from "../src/lib/forge/workLinks";
+import { boundedRepository } from "../src/lib/forge/workLinks";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "../src/lib/agent/capabilityHeader";
+import { viewerControlOrigin } from "../src/lib/mcp/controlEndpoint";
+import { realExec } from "../src/lib/workflows/provision";
 
 // A between-test error, a runner disagreement and a file that produced no
 // usable report are one file-level fault: their messages vary between runs,
@@ -200,7 +203,13 @@ export async function attributeBatchTests(base: BatchTestRun, candidate: TestRun
 
 export type ReviewedPr = { number: number; reviewed: string };
 export type Candidate = { main: string; prs: { number: number; head: string }[] };
-type LandingAdmission = (repository: string, members: readonly { number: number }[], land: () => Promise<void>) => Promise<void>;
+type LandingReservation = { id: string; repository: string };
+type PendingLandingReservation = LandingReservation & { admitUntil: number };
+type LandingTarget = { number: number; headRepository: string; branch: string };
+export type LandingAdmission = {
+  reserve(reservation: PendingLandingReservation, targets: LandingTarget[]): Promise<void>;
+  release(reservation: LandingReservation): Promise<void>;
+};
 export function candidateOf(state: Pick<RunState, "base" | "rows">): Candidate {
   return { main: state.base, prs: state.rows.filter(row => row.status === "clean").map(row => ({ number: row.number, head: row.head })) };
 }
@@ -353,6 +362,8 @@ type PrView = {
   baseRefName: string; headRefOid: string; headRefName: string;
   closingIssuesReferences: { number: number }[];
   headRepository: { name: string } | null;
+  headRepositoryOwner?: { login: string } | null;
+  isCrossRepository?: boolean;
   reviewDecision?: string | null;
 };
 export type BatchRow = ReviewedPr & {
@@ -367,6 +378,7 @@ export type RunState = {
   published: string | null; refreshes: number; landed: boolean; gates: Gate[];
   resolving?: { number: number; work: string; main: string };
   mergeIntent?: string;
+  landingReservation?: PendingLandingReservation;
   /** Full browser campaigns are opt-in (`gate --browser`); review ran them per PR. */
   browser?: boolean;
   attributionLog: AttributionRecord[];
@@ -449,8 +461,17 @@ function prepareCorpusPath(cwd: string, path: string, createdDirectories: string
   return current;
 }
 
-const PR_FIELDS = "number,title,body,state,isDraft,baseRefName,headRefOid,headRefName,headRepository,reviewDecision";
+type BatchView = {
+  state: string; headRefOid: string; mergeStateStatus: string; statusCheckRollup: Check[];
+  reviewDecision?: string | null;
+  mergeCommit?: { oid: string } | null;
+};
+
+const PR_FIELDS = "number,title,body,state,isDraft,baseRefName,headRefOid,headRefName,headRepository,headRepositoryOwner,isCrossRepository,reviewDecision";
 const BATCH_FIELDS = "number,url,state,headRefOid,mergeStateStatus,statusCheckRollup,mergeCommit,reviewDecision";
+
+export class BatchMergeRefused extends Error {}
+class BatchAdmissionRefused extends Error {}
 
 /** Mirrors the engine's human-review rule without importing its state graph.
  * The paginated endpoint emits reviews in chronological order. */
@@ -477,11 +498,22 @@ export class MergeBatch {
   readonly gh: GithubRunner;
   constructor(readonly repo: string, readonly stateFile: string, readonly run: CommandRunner = commandRunner, gh?: GithubRunner,
     readonly sleep: () => Promise<void> = () => new Promise((done) => setTimeout(done, 10_000)),
-    readonly now: () => string = () => new Date().toISOString(), readonly landingAdmission?: LandingAdmission) {
+    readonly now: () => string = () => new Date().toISOString(), readonly landingAdmission: LandingAdmission = viewerLandingAdmission()) {
     this.gh = gh ?? (async (args) => {
-      const result = await this.run(repo, ["gh", ...args]);
-      if (result.code) throw new Error("GitHub command failed; no merge verdict can be established");
-      return result.output.trim();
+      if (run !== commandRunner) {
+        const result = await run(repo, ["gh", ...args]);
+        if (result.code) throw new Error("GitHub command failed; no merge verdict can be established");
+        return result.output.trim();
+      }
+      const result = await realExec("gh", args, repo, { GH_PROMPT_DISABLED: "1" }, { timeoutMs: 30_000 });
+      if (result.code === 1 && args[0] === "pr" && args[1] === "merge"
+        && /(?:head|base) branch was modified|head sha does not match|the base branch policy prohibits the merge/i.test(result.stderr)) {
+        throw new BatchMergeRefused("GitHub refused the exact batch merge");
+      }
+      if (result.code !== 0) throw new Error(result.code === null
+        ? "GitHub command interrupted; no merge verdict can be established"
+        : "GitHub command failed; no merge verdict can be established");
+      return result.stdout.trim();
     });
   }
 
@@ -598,9 +630,10 @@ export class MergeBatch {
     }
   }
 
-  private async view(number: number): Promise<PrView> {
+  private async view(number: number, includeIssues = true): Promise<PrView> {
     const view = JSON.parse(await this.gh(["pr", "view", String(number), "--json", PR_FIELDS])) as PrView;
     if (view.number !== number || !/^[a-f0-9]{40}$/.test(view.headRefOid)) throw new Error("Invalid PR response");
+    if (!includeIssues) return view;
     // gh 2.45 does not expose this field through `pr view --json`. GraphQL
     // pagination preserves all references, including members closing >100 issues.
     const references = await this.gh(["api", "graphql", "--paginate",
@@ -615,24 +648,41 @@ export class MergeBatch {
     return view;
   }
 
-  private async unchanged(row: BatchRow): Promise<boolean> {
-    const view = await this.view(row.number);
-    return view.state === "OPEN" && !view.isDraft && view.baseRefName === "main"
-      && view.headRefOid === row.head && view.headRefName === row.view.headRefName;
+  private static landingTarget(repository: string, view: PrView): LandingTarget {
+    const head = view.headRepositoryOwner?.login && view.headRepository?.name
+      ? `${view.headRepositoryOwner.login}/${view.headRepository.name}`
+      : view.isCrossRepository !== true && view.headRepository?.name?.toLowerCase() === repository.split("/")[1]?.toLowerCase()
+        ? repository : null;
+    if (!boundedRepository(head) || !view.headRefName) throw new Error("Cannot establish the original PR head repository and branch");
+    return { number: view.number, headRepository: head.toLowerCase(), branch: `refs/heads/${view.headRefName}` };
   }
 
-  private async stale(state: RunState): Promise<boolean> {
-    let changed = false;
-    for (const row of state.rows.filter(row => row.status === "clean")) {
-      if (!await this.unchanged(row)) { row.status = "head-moved"; changed = true; }
-    }
-    git(state.work, ["fetch", "origin", "main"]);
+  private async unchanged(row: BatchRow, target?: LandingTarget, repository?: string): Promise<boolean> {
+    const view = await this.view(row.number, false);
+    return view.state === "OPEN" && !view.isDraft && view.baseRefName === "main"
+      && view.headRefOid === row.head && view.headRefName === row.view.headRefName
+      && (!target || (target.branch === `refs/heads/${view.headRefName}`
+        && MergeBatch.landingTarget(repository!, view).headRepository === target.headRepository));
+  }
+
+  private async stale(state: RunState, finalAdmission?: { repository: string; targets: LandingTarget[] }): Promise<boolean> {
+    await this.fetchMain(state);
     const main = git(state.work, ["rev-parse", "origin/main"]);
-    if (main !== state.base) {
-      state.base = main; changed = true;
+    let changed = main !== state.base;
+    state.base = main;
+    const clean = state.rows.filter(row => row.status === "clean");
+    for (const [index, row] of clean.entries()) {
+      if (!await this.unchanged(row, finalAdmission?.targets[index], finalAdmission?.repository)) {
+        row.status = "head-moved"; changed = true;
+      }
     }
-    if (changed) this.save(state);
+    if (changed && !finalAdmission) this.save(state);
     return changed;
+  }
+
+  private async fetchMain(state: RunState): Promise<void> {
+    const fetched = await realExec("git", ["fetch", "origin", "main"], state.work, undefined, { timeoutMs: 30_000 });
+    if (fetched.code !== 0) throw new Error("Could not confirm the current batch base");
   }
 
   async build(input: string): Promise<RunState> {
@@ -1169,6 +1219,7 @@ export class MergeBatch {
 
   async gate(options?: { browser?: boolean }): Promise<RunState> {
     const state = this.read();
+    if (state.landingReservation && state.mergeIntent) throw new Error("Reconcile the existing batch merge with land before running new gates");
     if (state.revalidationExhausted) throw new Error("Membership revalidation required more than three times");
     this.assertTip(state);
     this.assertMembershipTip(state);
@@ -1356,12 +1407,24 @@ export class MergeBatch {
 
   async land(): Promise<RunState> {
     let state = this.read();
-    if (state.landed) { await this.closeOriginals(state); return state; }
-    this.assertValidated(state);
-    if (state.mergeIntent === state.tip && state.batch) {
-      const outcome = JSON.parse(await this.gh(["pr", "view", String(state.batch.number), "--json", BATCH_FIELDS])) as { state: string; headRefOid: string };
-      if (outcome.state === "MERGED" && outcome.headRefOid === state.tip) return this.recordLanding(state);
+    if (state.landed) { await this.closeOriginals(state); await this.releaseLanding(state); return state; }
+    if (state.landingReservation && state.mergeIntent && (state.mergeIntent !== state.tip || !state.batch)) {
+      throw new Error("The pending landing belongs to a different exact batch");
     }
+    if (state.mergeIntent === state.tip && state.batch) {
+      this.assertValidated(state);
+      const outcome = await this.batchView(state.batch.number);
+      if (outcome.state === "MERGED" && outcome.headRefOid === state.tip) return this.recordLanding(state, outcome);
+      if (state.landingReservation) {
+        if (outcome.state === "CLOSED") await this.releaseLanding(state);
+        throw new Error(`Batch merge outcome is unresolved or the batch was closed. Inspect batch PR #${state.batch.number}.`);
+      }
+    }
+    if (state.landingReservation && Date.now() < state.landingReservation.admitUntil) {
+      throw new Error("The previous Viewer admission may still be in flight. Retry land after its deadline.");
+    }
+    await this.releaseLanding(state);
+    this.assertValidated(state);
     const repository = (await this.gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])).trim();
     if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new Error("Invalid repository response");
     const protection = JSON.parse(await this.gh(["api", `repos/${repository}/branches/main/protection`])) as {
@@ -1383,11 +1446,9 @@ export class MergeBatch {
       if (state.published !== state.tip || !state.batch) {
         if (!await this.publish(state, repository)) { state = await this.refresh(state); continue; }
       }
-      const view = JSON.parse(await this.gh(["pr", "view", String(state.batch!.number), "--json", BATCH_FIELDS])) as {
-        state: string; headRefOid: string; mergeStateStatus: string; statusCheckRollup: Check[]; reviewDecision?: string | null;
-      };
+      const view = await this.batchView(state.batch!.number);
       if (view.state === "MERGED" && view.headRefOid === state.tip && state.mergeIntent === state.tip) {
-        return this.recordLanding(state);
+        return this.recordLanding(state, view);
       }
       if (view.headRefOid !== state.tip || view.state !== "OPEN") throw new Error("Batch PR changed outside this run");
       if (view.mergeStateStatus === "BEHIND") { state = await this.refresh(state); continue; }
@@ -1407,44 +1468,80 @@ export class MergeBatch {
         if (await this.reviewsBlock(repository, state.batch!.number, view.reviewDecision)) {
           throw new Error("Batch review: human change request outstanding; nothing merged");
         }
-        // Last read of originals immediately precedes the exact-head merge.
         await this.assertMachineForgePrincipal(repository);
         if (await this.stale(state)) { state = await this.refresh(state); continue; }
-        const landingAdmission = this.landingAdmission ?? await defaultLandingAdmission();
-        try {
-          await landingAdmission(repository, clean, async () => {
-            this.assertValidated(state);
-            state.mergeIntent = state.tip; this.save(state);
-            try {
-              await this.gh(["pr", "merge", String(state.batch!.number), "--repo", `https://github.com/${repository}`, "--rebase", "--match-head-commit", state.tip]);
-            } catch (error) {
-              const outcome = JSON.parse(await this.gh(["pr", "view", String(state.batch!.number), "--json", BATCH_FIELDS])) as { state: string; headRefOid: string };
-              if (outcome.state === "MERGED" && outcome.headRefOid === state.tip) return;
-              throw error;
-            }
-          });
-        } catch (error) {
-          git(state.work, ["fetch", "origin", "main"]);
-          if (git(state.work, ["rev-parse", "origin/main"]) !== state.base) { state = await this.refresh(state); continue; }
+        // Resolve head repositories from fresh views, including when resuming
+        // a batch recorded before the head repository owner was persisted.
+        const targets = await Promise.all(clean.map(async row => MergeBatch.landingTarget(repository, await this.view(row.number, false))));
+        const batchTarget = { number: state.batch!.number, headRepository: repository.toLowerCase(), branch: `refs/heads/${state.branch}` };
+        const reservation = { id: randomUUID(), repository: repository.toLowerCase(), admitUntil: Date.now() + 15_000 };
+        state.landingReservation = reservation; this.save(state);
+        try { await this.landingAdmission.reserve(reservation, [...targets, batchTarget]); }
+        catch (error) {
+          if (error instanceof BatchAdmissionRefused) { delete state.landingReservation; this.save(state); }
           throw error;
         }
-        return this.recordLanding(state);
+        let dispatched = false;
+        let reconciled = false;
+        let refusal: BatchMergeRefused | undefined;
+        let stale = false;
+        try {
+          stale = await this.stale(state, { repository, targets });
+          if (!stale) {
+            this.assertValidated(state);
+            state.mergeIntent = state.tip; this.save(state);
+            dispatched = true;
+            await this.gh(["pr", "merge", String(state.batch!.number), "--repo", `https://github.com/${repository}`,
+              "--rebase", "--match-head-commit", state.tip]).catch(error => {
+              if (error instanceof BatchMergeRefused) refusal = error;
+            });
+            const outcome = await this.batchView(state.batch!.number);
+            if (outcome.state === "MERGED" && outcome.headRefOid === state.tip) {
+              state = await this.recordLanding(state, outcome);
+              reconciled = true;
+              refusal = undefined;
+            } else if (outcome.state === "OPEN" && outcome.headRefOid === state.tip && refusal) {
+              delete state.mergeIntent;
+              this.save(state);
+              reconciled = true;
+            } else {
+              reconciled = outcome.state === "CLOSED";
+              throw new Error(`Batch merge did not settle at the intended head. Inspect batch PR #${state.batch!.number}.`);
+            }
+          }
+        } finally {
+          if (!dispatched || reconciled) await this.releaseLanding(state, !stale);
+        }
+        if (stale) { state = await this.refresh(state); continue; }
+        if (refusal) {
+          if (await this.stale(state)) { state = await this.refresh(state); continue; }
+          throw refusal;
+        }
+        return state;
       }
       await this.sleep();
     }
     throw new Error("Required checks did not settle within the polling bound");
   }
 
-  private async recordLanding(state: RunState): Promise<RunState> {
+  private async releaseLanding(state: RunState, save = true): Promise<void> {
+    if (!state.landingReservation) return;
+    await this.landingAdmission.release(state.landingReservation);
+    delete state.landingReservation;
+    if (save) this.save(state);
+  }
+
+  private async batchView(number: number): Promise<BatchView> {
+    return JSON.parse(await this.gh(["pr", "view", String(number), "--json", BATCH_FIELDS])) as BatchView;
+  }
+
+  private async recordLanding(state: RunState, merged: BatchView): Promise<RunState> {
     const clean = state.rows.filter((row) => row.status === "clean");
     // GitHub rebases identities and SHAs; map the contiguous landed chain
     // from the batch mergeCommit, verifying every original patch again.
-    const merged = JSON.parse(await this.gh(["pr", "view", String(state.batch!.number), "--json", "state,mergeCommit"])) as {
-      state: string; mergeCommit: { oid: string } | null;
-    };
-    if (merged.state !== "MERGED" || !merged.mergeCommit?.oid) throw new Error("Batch merge did not settle");
-    git(state.work, ["fetch", "origin", "main"]);
-    const tip = merged.mergeCommit.oid;
+    const tip = merged.mergeCommit?.oid ?? "";
+    if (merged.state !== "MERGED" || !/^[a-f0-9]{40}$/.test(tip)) throw new Error("Batch merge did not settle");
+    await this.fetchMain(state);
     git(state.work, ["merge-base", "--is-ancestor", tip, "origin/main"]);
     const commits = git(state.work, ["rev-list", "--first-parent", "--max-count", String(clean.length), tip]).split("\n").reverse();
     for (let index = 0; index < clean.length; index++) {
@@ -1454,6 +1551,7 @@ export class MergeBatch {
     clean.forEach((row, index) => { row.status = "merged"; row.commit = commits[index]!; });
     state.landed = true; this.save(state);
     await this.closeOriginals(state);
+    await this.releaseLanding(state);
     return state;
   }
 
@@ -1566,17 +1664,27 @@ export class MergeBatch {
   }
 }
 
-async function defaultLandingAdmission(): Promise<LandingAdmission> {
-  await import("../src/lib/state/owner/tool");
-  const { withDeliveryAdmissionFence } = await import("../src/lib/pipelines/store");
-  return (repository, members, land) => withDeliveryAdmissionFence(async mutate => {
-    for (const member of members) {
-      const owner = mutate(tx => tx.activeDeliveryOwnerForPullRequest(member.number, pipeline =>
-        deliveryPullRequestRepository(pipeline.delivery?.target) === repository.toLowerCase()));
-      if (owner) throw new Error(`Batch held: PR #${member.number} has active delivery owner lane ${owner.id}`);
+export function viewerLandingAdmission(env: Readonly<Record<string, string | undefined>> = process.env): LandingAdmission {
+  const request = async (body: LandingReservation & { action: "reserve" | "release"; admitUntil?: number; targets?: LandingTarget[] }) => {
+    const endpoint = new URL("/api/forge/batch-landing", viewerControlOrigin(env));
+    if (endpoint.protocol !== "http:" || !["127.0.0.1", "[::1]", "localhost"].includes(endpoint.hostname)) {
+      throw new Error("Batch landing requires the local Viewer control endpoint");
     }
-    await land();
-  });
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", [VIEWER_SPAWN_CAPABILITY_HEADER]: env.LLV_SPAWN_CAPABILITY ?? "" },
+      body: JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(35_000),
+    });
+    const result = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+    if (!response.ok || result?.ok !== true) {
+      const message = result?.error ?? `Viewer batch landing admission failed (HTTP ${response.status})`;
+      throw response.status === 409 ? new BatchAdmissionRefused(message) : new Error(message);
+    }
+  };
+  return {
+    reserve: (reservation, targets) => request({ ...reservation, action: "reserve", targets }),
+    release: ({ id, repository }) => request({ id, repository, action: "release" }),
+  };
 }
 
 function testDecisionReport(decisions: BatchTestDecision[], log: AttributionRecord[]): string[] {

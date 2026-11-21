@@ -10,6 +10,13 @@ Run from the repository with a dedicated `TMPDIR` for this pass. Keep that
 directory for every command; the run record is `$TMPDIR/merge-batch.json`.
 The launched agent must have the machine noreply author and committer identity
 described in [CONTRIBUTING](../CONTRIBUTING.md).
+For `land`, use a Viewer release that supports batch admission. The merger's
+launch capability authorizes the request for its repository. The Viewer
+reserves the member PR numbers and head repositories and branches in its
+registry, then the command rechecks membership before dispatch. If the exact
+batch merge has an unknown outcome, keep its run directory and rerun `land`
+to reconcile the original batch PR. The reservation stays in place until the
+command records the landing or verifies the batch was closed.
 
 ```sh
 bun install --frozen-lockfile

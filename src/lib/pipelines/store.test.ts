@@ -7,8 +7,8 @@ import path from "node:path";
 
 import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission, pipelineTaskBindingSource } from "./store";
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "./types";
-import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryAdmissionFence, withDeliveryMutation } from "./store";
-import { deliveryPullRequestRepository } from "@/lib/forge/workLinks";
+import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, releaseBatchLanding, reserveBatchLanding, withDeliveryMutation } from "./store";
+import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
@@ -99,41 +99,6 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
-
-test("a batch landing fence finds active PR owners and holds new claims until its receipt", async () => isolatedDelivery(async () => {
-  const target = { ...deliveryTarget, remote: "https://github.com/acme/widgets.git", prRepository: "acme/widgets" };
-  const owner = await createPipelineWithDelivery(deliveryFixture("batch-owner"), target);
-  const findOwner = () => withDeliveryAdmissionFence(async mutate => mutate(tx =>
-    tx.activeDeliveryOwnerForPullRequest(637, pipeline =>
-      deliveryPullRequestRepository(pipeline.delivery?.target) === "acme/widgets")));
-  expect(await findOwner()).toMatchObject({ id: owner.id, delivery: { active: true, disposition: "owner" } });
-
-  withDeliveryMutation(tx => {
-    const live = tx.get(owner.id)!;
-    live.state = "closed";
-    live.cursor = null;
-    live.closedAt = "2026-07-02T00:00:00.000Z";
-    tx.put(live);
-  });
-  expect(await findOwner()).toBeNull();
-
-  const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const landing = withDeliveryAdmissionFence(async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  await entered.promise;
-  let claimSettled = false;
-  const nextTarget = { ...target, branch: "refs/heads/next-review-target" };
-  const claim = createPipelineWithDelivery(deliveryFixture("claim-after-landing"), nextTarget, false, { requireOwner: true })
-    .finally(() => { claimSettled = true; });
-  await new Promise<void>(resolve => setTimeout(resolve, 0));
-  expect(claimSettled).toBe(false);
-  release.resolve();
-  await landing;
-  await expect(claim).resolves.toMatchObject({ id: "claim-after-landing", delivery: { active: true, disposition: "owner" } });
-}));
 
 test.each([false, true])("a closed stageless draft round-trips and archives (pinned base: %s)", async (pinned) => isolatedDelivery(async () => {
   const pipeline = buildPipeline({ id: "empty-closed", task: "Discard empty draft", project: "fixture", repoDir: "/repo",
@@ -378,6 +343,49 @@ test("takeover after restart keeps an unrecorded App refusal's original expiry",
   expect(taken.pipeline.publicationRecovery[sha]).toMatchObject({ app403Since: "2026-10-27T08:00:00.000Z",
     history: [{ cause: "app-git-403", retryAt: null }] });
   expect(findPipelineRecord(owner.id)!.publicationRecovery).toEqual(taken.pipeline.publicationRecovery);
+}));
+
+test("durable batch reservations hold only matching admissions and survive a separate writer", async () => isolatedDelivery(async root => {
+  const repository = "acme/widgets";
+  const target = { ...deliveryTarget, remote: "ssh://github.com/ACME/Widgets.git" };
+  const id = "landing-batch";
+  const identity = { prNumber: 637, prRepository: repository, headRepository: repository, branch: target.branch };
+  expect(await reserveBatchLanding(id, repository, [identity])).toBeNull();
+
+  const child = Bun.spawn([process.execPath, "-e", `
+    const {buildPipeline, createPipelineWithDelivery} = await import("./src/lib/pipelines/store.ts");
+    const target = JSON.parse(process.env.FIXTURE_DELIVERY);
+    const lane = id => buildPipeline({ id, task: id, project: "fixture", repoDir: "/repo", stages: [],
+      srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft" });
+    try { await createPipelineWithDelivery(lane("held"), {...target, pr: undefined}); process.exit(2); }
+    catch (error) { if (!error.message.includes("merge is in flight")) throw error; }
+    await createPipelineWithDelivery(lane("independent"), {...target, pr: 638, branch: "refs/heads/unrelated"});
+  `], { env: { ...process.env, LLV_STATE_DIR: root, FIXTURE_DELIVERY: JSON.stringify(target), LLV_PIPELINE_LOCK_WAIT_MS: "100" },
+    stdout: "pipe", stderr: "pipe" });
+  const [exit, errors] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  expect(exit, errors).toBe(0);
+  expect(findPipelineRecord("independent")?.delivery?.disposition).toBe("owner");
+  expect(findPipelineRecord("held")).toBeNull();
+  expect(await reserveBatchLanding("competing-batch", repository, [identity])).toContain("overlaps");
+  await releaseBatchLanding(id, repository);
+  expect((await createPipelineWithDelivery(deliveryFixture("after-landing"), target)).delivery?.disposition).toBe("owner");
+}));
+
+test("a queued delivery outlasts a landing reservation while its peer is admitted", async () => isolatedDelivery(async () => {
+  const repository = "acme/widgets";
+  const target = { ...deliveryTarget, remote: "https://github.com/acme/widgets.git" };
+  const id = "queued-delivery-batch";
+  const older = deliveryFixture("queued-reserved"), peer = deliveryFixture("queued-peer");
+  queuePipelineCreation(older, target, false, "fixture contention", "2026-07-01T00:00:00.000Z");
+  queuePipelineCreation(peer, { ...target, pr: 638, branch: "refs/heads/peer" }, false, "fixture contention", "2026-07-01T00:00:01.000Z");
+  expect(await reserveBatchLanding(id, repository, [{ headRepository: repository, branch: target.branch }])).toBeNull();
+  try {
+    expect((await admitQueuedPipelineCreations()).map(lane => lane.id)).toEqual([peer.id]);
+    expect(findPipelineRecord(older.id)).toBeNull();
+  } finally {
+    await releaseBatchLanding(id, repository);
+  }
+  expect((await admitQueuedPipelineCreations()).map(lane => lane.id)).toEqual([older.id]);
 }));
 
 test("terminal release retains receipts through archive and takeover fences epochs and in-flight writes", async () => isolatedDelivery(async () => {

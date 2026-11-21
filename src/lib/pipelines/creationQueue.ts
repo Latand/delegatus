@@ -9,7 +9,7 @@ import { OperationLeaseExpiredError } from "@/lib/operationLease";
 import { STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
 import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 
-import { createPipelineWithDelivery, findPipelineRecord } from "./store";
+import { createPipelineWithDelivery, DeliveryLandingReserved, findPipelineRecord } from "./store";
 import type { Pipeline, PipelineDeliveryTarget } from "./types";
 import { MAX_TASK_LENGTH, MAX_SPEC_LENGTH, MAX_PIPELINE_STAGES, MAX_STAGE_PROMPT_LENGTH } from "./limits";
 
@@ -187,8 +187,8 @@ export function queuedPipelineCreationMessage(pipelineId: string, status: Queued
 /**
  * Stores every queued creation the store now admits, oldest first. A create
  * the store still refuses as busy stays queued for the next pass, and so does
- * everything after it. Any other failure sets the file aside as
- * refused, with the error, so one bad record cannot hold the queue.
+ * everything after it. A landing reservation holds only the matching
+ * creation. Permanent refusals retain their reason.
  */
 export async function admitQueuedPipelineCreations(): Promise<Pipeline[]> {
   const admitted: Pipeline[] = [];
@@ -214,6 +214,7 @@ export async function admitQueuedPipelineCreations(): Promise<Pipeline[]> {
       // Cancellation revoked this pass before writer admission. Keep the
       // original file and idempotency key for the next serving pass.
       if (error instanceof FileTransactionBusyError || error instanceof OperationLeaseExpiredError) break;
+      if (error instanceof DeliveryLandingReserved) continue;
       console.error("[pipelines] queued pipeline creation was refused", { pipelineId: entry.pipeline.id, error });
       writeJsonDurably(path.join(pipelineCreationQueueDir(), `${entry.pipeline.id}${REFUSED_SUFFIX}`),
         { ...entry, refusedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) });

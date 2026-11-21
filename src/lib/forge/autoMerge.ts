@@ -1,3 +1,5 @@
+import type { StateBoundedTransaction } from "@/lib/state/sqliteStateStore";
+import { deliveryLandingIdentity, landingKeys, type LandingIdentity } from "./landingIdentity";
 import { proactiveResultReview } from "@/lib/tasks/proactiveLane";
 import { assertProactivePipelineExecution, proactivePipelineExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
@@ -17,7 +19,7 @@ import type { ExecPort } from "@/lib/workflows/provision";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { ForgeAppWriteRefused, ForgeAppTokenSource, mintForgeAppToken, forgeAppWriter, forgeWriter, type ForgeAppWriter } from "./appWrite";
 import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
-import { loadArchivedPipelinesForOwnership, loadPipelinesForList, loadPipelinesForListAsync, pipelineDeliveryLookup, withPipelineMutation } from "@/lib/pipelines/store";
+import { loadArchivedPipelinesForOwnership, loadPipelinesForList, loadPipelinesForListAsync, pipelineDeliveryLookup, withDeliveryMutationAsync } from "@/lib/pipelines/store";
 import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline, type PipelineMerge, type PipelineMergeMethod, type PipelineStage } from "@/lib/pipelines/types";
 import { mergeOnReviewSetting, type MergeOnReviewSetting } from "@/lib/projects/settings";
@@ -98,7 +100,7 @@ export interface AutoMergePorts {
   prepareRead?: () => Promise<void>;
   /** Applies `change` to the live record under the pipeline lock and persists
       it when `change` answers true. False when the record is gone or unchanged. */
-  mutate: (pipelineId: string, change: (pipeline: Pipeline) => boolean) => Promise<boolean>;
+  mutate: (pipelineId: string, change: (pipeline: Pipeline, tx?: StateBoundedTransaction<Pipeline>) => boolean) => Promise<boolean>;
   setting: (project: string) => MergeOnReviewSetting;
   /** The one pull request the lane's own records join to it, else null. */
   pullRequestOf: (pipeline: Pipeline) => { repository: string; number: number } | null;
@@ -594,17 +596,17 @@ function block(merge: PipelineMerge, reason: string, now: number): void {
 
 /** Write `change` against the record read again under the lock, only while
     it is still the merge the runner read. */
-async function commit(ports: AutoMergePorts, read: Pipeline, change: (merge: PipelineMerge, live: Pipeline) => void, reconcileOwner = false, capture?: (merge: PipelineMerge) => void): Promise<boolean> {
+async function commit(ports: AutoMergePorts, read: Pipeline, change: (merge: PipelineMerge, live: Pipeline, tx?: StateBoundedTransaction<Pipeline>) => void, reconcileOwner = false, capture?: (merge: PipelineMerge) => void): Promise<boolean> {
   const readAt = read.merge!.updatedAt;
   let status: string | undefined;
-  const changed = await ports.mutate(read.id, (live) => {
+  const changed = await ports.mutate(read.id, (live, tx) => {
     if ((live.state !== "completed" && !read.merge!.effectUncertain && !(reconcileOwner && live.state === read.state && live.merge?.state === "merging"))
       || !live.merge || live.merge.updatedAt !== readAt || live.merge.state !== read.merge!.state || live.merge.attempts !== read.merge!.attempts) return false;
     if (!live.merge.effectUncertain && live.merge.state !== "merging") {
       const refusal = mergeWithdrawalReason(live, indexMergeSuccessors(ports.loadPipelines(), true));
       if (refusal) return withdrawPipelineMerge(live, refusal, iso(ports.now()));
     }
-    change(live.merge, live);
+    change(live.merge, live, tx);
     live.merge.updatedAt = iso(Math.max(ports.now(), Date.parse(readAt) + 1));
     capture?.(live.merge);
     status = mergeStatus(live.merge, Boolean(live.hiddenAt));
@@ -638,10 +640,10 @@ async function retainRefreshReviewStop(read: Pipeline, ports: AutoMergePorts): P
 
 /** Queued work from an older release and a changed record after a forge await
     must meet the current review bar before merging. */
-async function commitReviewed(ports: AutoMergePorts, read: Pipeline, change: (merge: PipelineMerge, pipeline: Pipeline) => void): Promise<PipelineMerge | null> {
+async function commitReviewed(ports: AutoMergePorts, read: Pipeline, change: (merge: PipelineMerge, pipeline: Pipeline, tx?: StateBoundedTransaction<Pipeline>) => void): Promise<PipelineMerge | null> {
   let admitted = false;
   let reservation: PipelineMerge | null = null;
-  const changed = await commit(ports, read, (merge, live) => {
+  const changed = await commit(ports, read, (merge, live, tx) => {
     if (deliveryProof(live) !== deliveryProof(read)) {
       withdrawPipelineMerge(live, "Delivery changed before merge admission", iso(ports.now()));
       return;
@@ -654,7 +656,7 @@ async function commitReviewed(ports: AutoMergePorts, read: Pipeline, change: (me
       block(merge, "review evidence does not bind the published commit", ports.now());
       return;
     }
-    change(merge, live);
+    change(merge, live, tx);
     admitted = true;
   }, false, merge => { if (admitted) reservation = structuredClone(merge); });
   return changed && admitted ? reservation : null;
@@ -732,8 +734,8 @@ const DELIVERY_WAIT_PREFIX = "Waiting for delivery lane ";
 
 function holdsDelivery(lane: Pipeline): boolean {
   const claim = lane.delivery;
-  return lane.state !== "completed" && lane.state !== "closed" && claim?.active === true
-    && claim.disposition === "owner" && claim.ownerId === lane.id && claim.publish === "enabled";
+  return claim?.active === true && claim.disposition === "owner" && claim.ownerId === lane.id && claim.publish === "enabled"
+    && ((lane.state !== "completed" && lane.state !== "closed") || claim.operation?.state === "running");
 }
 
 function deliveryPrKey(repository: string, number: number): string {
@@ -748,19 +750,20 @@ function claimedPrKey(lane: Pipeline): string | null {
 
 const deliveryWaitReason = (ownerId: string) => `${DELIVERY_WAIT_PREFIX}${ownerId} to finish`;
 
+function prLandingIdentity(merge: PipelineMerge, view: PullRequestView): LandingIdentity {
+  return {
+    prRepository: merge.repository, prNumber: merge.prNumber,
+    headRepository: view.headRepository ?? (view.isCrossRepository === true ? null : merge.repository.toLowerCase()),
+    branch: view.headRefName ? `refs/heads/${view.headRefName}` : null,
+  };
+}
+
 /** The queue record may predate delivery claims. Match the PR itself, or the
  * forge's head repository and ref when the delivery was claimed by branch. */
 function deliveryHold(lane: Pipeline, lanes: readonly Pipeline[], view: PullRequestView): string | null {
-  const { repository, prNumber } = lane.merge!;
-  const prKey = prNumber == null ? null : deliveryPrKey(repository, prNumber);
-  const headRepository = view.headRepository ?? (view.isCrossRepository === false ? repository.toLowerCase() : null);
-  const headBranch = view.headRefName && `refs/heads/${view.headRefName}`;
-  const owner = lanes.find(other => {
-    if (other.id === lane.id || !holdsDelivery(other)) return false;
-    const claim = other.delivery!.target;
-    return (prKey && claimedPrKey(other) === prKey)
-      || (headRepository && claim.branch === headBranch && githubRepositoryOfRemote(claim.remote) === headRepository);
-  });
+  const keys = new Set(landingKeys(prLandingIdentity(lane.merge!, view)));
+  const owner = lanes.find(other => other.id !== lane.id && holdsDelivery(other)
+    && landingKeys(deliveryLandingIdentity(other.delivery!.target)).some(key => keys.has(key)));
   return owner ? deliveryWaitReason(owner.id) : null;
 }
 
@@ -1038,18 +1041,33 @@ async function stepGitOnlyLane(read: Pipeline, ports: AutoMergePorts, mayMerge: 
       await fail(MERGE_REASONS.settingOff);
       return;
     }
-    const reserved = await commitReviewed(ports, currentRead, live => {
+    const reserved = await commitReviewed(ports, currentRead, (live, current, tx) => {
       if (!live.gitOnly || (live.prNumber === null && read.delivery?.target.pr !== undefined)
         || !gitOnlyDeliveryReady(read)) {
         block(live, "Git-only landing lost its publication authority", ports.now());
         return;
       }
+      const identity = { ...deliveryLandingIdentity(delivery.target), prRepository: live.repository, prNumber: live.prNumber };
+      if (tx) {
+        const owner = tx.activeDeliveryOwnerForLanding(identity, current.id);
+        if (owner) { waitForDelivery(live, deliveryWaitReason(owner.id), ports.now()); return; }
+        if (tx.batchLandingConflict(identity) || tx.activeDirectMerge(identity)) {
+          live.state = "queued";
+          live.reason = "waiting for an in-flight PR landing";
+          live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
+          return;
+        }
+      }
       live.state = "merging";
+      if (identity.headRepository && identity.branch) {
+        live.landingRepository = identity.headRepository;
+        live.landingBranch = identity.branch;
+      }
       live.effectUncertain = true;
       live.reason = null;
       live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
     });
-    if (!reserved) return;
+    if (reserved?.state !== "merging") return;
     currentRead = ports.loadPipelines().find(lane => lane.id === read.id)!;
     if (!currentRead?.merge || currentRead.merge.updatedAt !== reserved.updatedAt) return;
     if (!authority() || !ports.setting(read.project).enabled) {
@@ -1075,7 +1093,7 @@ async function stepGitOnlyLane(read: Pipeline, ports: AutoMergePorts, mayMerge: 
 async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, capacity: () => string | null = () => null, queueReason: string | null = null): Promise<void> {
   // An accepted dispatch needs terminal landing proof. Readiness, check
   // deadlines and lane lifecycle cannot release its durable reservation.
-  if (read.merge!.state === "merging" && !read.merge!.effectUncertain && read.merge!.prNumber !== null) {
+  if (read.merge!.state === "merging" && !read.merge!.gitOnly && !read.merge!.effectUncertain && read.merge!.prNumber !== null) {
     await reconcileBatchLanding(read, { repository: read.merge!.repository, number: read.merge!.prNumber }, ports, true);
     return;
   }
@@ -1095,6 +1113,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     live.optionalFailedChecks = merge.optionalFailedChecks;
     live.readAt = iso(now);
     live.readFailures = 0;
+    if (!merge.rejectedLandingHead) delete live.rejectedLandingHead;
   };
   const setting = ports.setting(read.project);
   if (!merge.effectUncertain && merge.state !== "merging" && !mergeEligible(read)) {
@@ -1118,6 +1137,15 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   try {
     view = parsePullRequestView(await ports.run(["pr", "view", String(merge.prNumber), "--repo", merge.repository, "--json", PR_FIELDS]));
     if (!view) throw new Error("gh returned no parsable pull request");
+    if (view.state === "OPEN" && view.headRefOid === merge.rejectedLandingHead) {
+      await commit(ports, read, live => {
+        live.readAt = iso(now);
+        live.readFailures = 0;
+        live.nextReadAt = iso(now + MERGE_POLL_MS);
+      });
+      return;
+    }
+    delete merge.rejectedLandingHead;
     if (view.state === "OPEN" || view.state === "CLOSED") admitLocalOutputHead(read, merge, view.headRefOid);
     if (view.state === "CLOSED" && merge.chain.includes(view.headRefOid)) {
       const landed = await readBatchLanding(merge.repository, merge.prNumber, view.baseRefName || read.baseBranch, { head: view.headRefOid, repoDir: read.repoDir }, ports.run);
@@ -1263,7 +1291,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   } catch (error) {
     const transientRead = githubReadFailure(error).transient;
     const gitReady = gitOnlyDeliveryReady(read);
-    if (transientRead && read.delivery?.target.pr !== undefined && gitReady
+    if (transientRead && !read.merge!.rejectedLandingHead && read.delivery?.target.pr !== undefined && gitReady
       && !read.proactiveTaskIds?.length) {
       if (view) {
         if (merge.effectUncertain) {
@@ -1342,10 +1370,18 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   }
   const method = await mergeMethod(merge.repository, ports).catch(() => "squash" as const);
   let reserved = false;
-  const recorded = await commitReviewed(ports, read, (live, current) => {
+  const identity = prLandingIdentity(merge, view);
+  const recorded = await commitReviewed(ports, read, (live, current, tx) => {
     bookkeeping(live);
-    const held = deliveryHold(current, ports.loadPipelines(), view!);
+    const deliveryOwner = tx?.activeDeliveryOwnerForLanding(identity, current.id);
+    const held = deliveryOwner ? deliveryWaitReason(deliveryOwner.id) : deliveryHold(current, ports.loadPipelines(), view!);
     if (held) { waitForDelivery(live, held, now); return; }
+    if (tx?.batchLandingConflict(identity) || tx?.activeDirectMerge(identity)) {
+      live.state = "queued";
+      live.reason = "waiting for an in-flight PR landing";
+      live.nextReadAt = iso(now + MERGE_POLL_MS);
+      return;
+    }
     const owner = mergeOwner();
     if (owner) {
       live.state = "queued";
@@ -1355,6 +1391,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     }
     reserved = true;
     live.state = "merging";
+    if (identity.headRepository && identity.branch) {
+      live.landingRepository = identity.headRepository;
+      live.landingBranch = identity.branch;
+    }
     if (read.proactiveTaskIds?.length) live.effectUncertain = true;
     live.method = method;
     live.reason = null;
@@ -1367,6 +1407,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
   let dispatchHeld: string | null = null;
   let authorityRefused: string | null = null;
   let headMismatch = false;
+  let interrupted = false;
   try {
     /* `--match-head-commit`: GitHub refuses if the head moved since the read.
        The branch stays; worktree cleanup owns lane branches. */
@@ -1404,7 +1445,9 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       () => { beforeDispatch(); dispatched = true; });
   } catch (error) {
     /* No App credential: the refusal is the whole reason, in its own words. */
-    headMismatch = dispatched && /head branch was modified/i.test(githubMessage(error));
+    headMismatch = dispatched && /head branch was modified|head sha does not match/i.test(githubMessage(error));
+    const transport = error as { killed?: boolean; signal?: string } | null;
+    interrupted = Boolean(transport?.killed || transport?.signal) || githubReadFailure(error).transient;
     if (!dispatchHeld) failure = refreshReviewRefused ? MERGE_REASONS.refreshReviewRequired
       : error instanceof ForgeAppWriteRefused ? error.message : `GitHub refused the merge: ${githubMessage(error)}`;
   }
@@ -1434,8 +1477,8 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     if (after?.state === "MERGED") {
       delete live.effectUncertain;
       live.state = "merged";
-      live.by = headMismatch ? "outside" : "auto-merge";
-      if (!headMismatch) live.postMergeWatch = true;
+      live.by = headMismatch || after.headRefOid !== view!.headRefOid ? "outside" : "auto-merge";
+      if (live.by === "auto-merge") live.postMergeWatch = true;
       live.mergedHead = after?.headRefOid ?? view!.headRefOid;
       live.mergeCommit = after?.mergeCommit ?? null;
       live.mergedAt = after?.mergedAt ?? iso(ports.now());
@@ -1443,19 +1486,24 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       live.nextReadAt = null;
       return;
     }
-    if (live.effectUncertain && after?.state === "CLOSED") {
+    if (after?.state === "CLOSED") {
       delete live.effectUncertain;
       block(live, MERGE_REASONS.closed, ports.now());
       return;
     }
-    if ((headMismatch && (!after || (after.state === "OPEN" && after.headRefOid !== view!.headRefOid)))
-      || (failure !== null && after?.state === "OPEN" && after.headRefOid !== view!.headRefOid)) {
+    if (headMismatch || (failure !== null && after?.state === "OPEN" && after.headRefOid !== view!.headRefOid)) {
       delete live.effectUncertain;
+      live.rejectedLandingHead = view!.headRefOid;
       live.state = "checking";
       live.reason = "PR head moved during merge admission; checking again";
       live.head = null;
       live.headSeenAt = null;
       live.lastChecks = null;
+      live.seenChecks = [];
+      live.optionalFailedChecks = [];
+      live.blockedAt = null;
+      live.method = null;
+      live.readFailures = 0;
       live.readAt = iso(ports.now());
       live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
       return;
@@ -1464,6 +1512,11 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     if (live.effectUncertain) {
       live.state = "blocked";
       live.reason = failure ?? "The merge outcome is unconfirmed; waiting for its actual receipt";
+      live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
+      return;
+    }
+    if (dispatched && failure && (!after || interrupted)) {
+      live.reason = `The merge outcome is unconfirmed: ${failure}`;
       live.nextReadAt = iso(ports.now() + MERGE_POLL_MS);
       return;
     }
@@ -1477,7 +1530,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     } else if (failure) block(live, failure, ports.now());
     /* Otherwise the merge was accepted and the PR does not read merged yet:
        the next read in `merging` settles it. */
-  });
+  }, true);
 }
 
 /** Create without the lock, then attach the answer to this reservation only. */
@@ -2284,11 +2337,11 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
     write: forgeWriter(run, forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS)),
     prepareRead: overrides.loadPipelines === loadPipelinesForList ? async () => { await loadPipelinesForListAsync(); } : undefined,
     mutate: async (pipelineId, change) => {
-      const changed = await withControllerPipelineScope([pipelineId], () => withPipelineMutation(async (pipelines, persist) => {
-      const pipeline = pipelines.find((candidate) => candidate.id === pipelineId);
-      if (!pipeline || !performanceSpans.sync("forge.auto-merge.step", () => change(pipeline))) return false;
-      await persist();
-      return true;
+      const changed = await withControllerPipelineScope([pipelineId], () => withDeliveryMutationAsync(tx => {
+        const pipeline = tx.get(pipelineId);
+        if (!pipeline || !performanceSpans.sync("forge.auto-merge.step", () => change(pipeline, tx))) return false;
+        tx.put(pipeline);
+        return true;
       }));
       // Promise continuations can otherwise take every due lane's lease before
       // the loop gets a timer opportunity. No lease spans this yield.

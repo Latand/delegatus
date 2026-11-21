@@ -75,6 +75,11 @@ export function proxy(request: NextRequest): NextResponse {
   // These assets previously bypassed the proxy matcher. Keep them loadable
   // without credentials, after checking Host like every other route.
   if (request.nextUrl.pathname.startsWith("/_next/static/") || request.nextUrl.pathname === "/favicon.ico") return NextResponse.next();
+  // Spawned mergers authenticate to this one handler with their own launch
+  // capability and repository scope, independently of the browser key.
+  if (request.method === "POST" && request.nextUrl.pathname === "/api/forge/batch-landing") {
+    return handoffBlock(request) ?? NextResponse.next();
+  }
   const perimeter = perimeterCheck(request);
   if (perimeter.response) return perimeter.response;
   if (isPeerRoute(request.nextUrl.pathname)) return handoffBlock(request) ?? NextResponse.next();

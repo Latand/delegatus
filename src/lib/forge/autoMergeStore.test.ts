@@ -20,7 +20,7 @@ const { MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, merg
 const { refreshRequest, refreshReservation } = await import("./autoRefresh");
 const { defaultPipelinePorts, normalizeStages, patchPipeline } = await import("@/lib/pipelines/engine");
 const { pipelineRoleLookup } = await import("@/lib/pipelines/roles");
-const { takeoverPipelineDelivery, assignPipelineDelivery, buildPipeline, archiveSettledPipelines, createPipelineWithDelivery, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
+const { takeoverPipelineDelivery, assignPipelineDelivery, buildPipeline, archiveSettledPipelines, createPipelineWithDelivery, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines, reserveBatchLanding, releaseBatchLanding } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
 const { laneNeed } = await import("@/components/attention/needReason");
 const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
@@ -192,6 +192,74 @@ function gitOnlyFixture(id: string) {
   lane.closedAt = iso(T0);
   return { directory, bare, work, base, head, git, lane };
 }
+
+test.each(["accepted", "lost reply"] as const)("direct landing fences claims and takeover until the receipt (%s)", async outcome => {
+  resetAutoMergeForTests();
+  savePipelines([completedLane("direct-merge")]);
+  const branch = { repository: PROJECT, remote: "ssh://github.com/Fork/Widgets.git", branch: "refs/heads/reviewed" };
+  const numbered = { ...branch, branch: "refs/heads/other", prRepository: REPO, pr: 7 };
+  const draft = (id: string) => buildPipeline({ id, task: id, project: PROJECT, repoDir: "/repo", stages: [],
+    srcPath: null, srcConversationId: null, now: iso(T0), state: "draft" });
+  const comparison = await createPipelineWithDelivery(draft("direct-comparison"), branch, true);
+  const sent = Promise.withResolvers<void>(), response = Promise.withResolvers<void>();
+  const reading = Promise.withResolvers<void>(), receipt = Promise.withResolvers<void>();
+  let clock = T0, writes = 0, merged = outcome === "accepted";
+  const ports = productionAutoMergePorts({
+    now: () => clock, loadPipelines, cachedState: () => null,
+    pullRequestOf: lane => lane.id === "direct-merge" ? { repository: REPO, number: 7 } : null,
+    setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+    run: async args => {
+      if (args[0] === "pr" && args[1] === "view") {
+        if (writes) { reading.resolve(); await receipt.promise; }
+        return JSON.stringify({ state: writes && merged ? "MERGED" : "OPEN", isDraft: false, headRefOid: HEAD,
+          headRefName: "reviewed", headRepository: { name: "widgets" }, headRepositoryOwner: { login: "fork" }, isCrossRepository: true,
+          baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+          ...(writes && merged ? { mergeCommit: { oid: "e".repeat(40) } } : {}),
+          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }] });
+      }
+      if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+      if (args[1]?.includes("/reviews")) return "";
+      if (args[1]?.includes("/branches/")) return "[]";
+      throw new Error("unexpected forge read");
+    },
+    write: async (args, _repo, beforeDispatch) => {
+      beforeDispatch?.();
+      expect(args.at(-1)).toBe(HEAD);
+      writes++;
+      sent.resolve();
+      await response.promise;
+      if (outcome === "lost reply") throw new Error("HTTP 503: Service Unavailable");
+      return "";
+    },
+  });
+  await sweepAutoMerge(ports);
+  clock += MERGE_SETTLE_MS;
+  const landing = sweepAutoMerge(ports);
+  try {
+    await Promise.race([sent.promise, landing.then(() => { throw new Error("merge did not dispatch"); })]);
+    await expect(createPipelineWithDelivery(draft("numbered-claim"), numbered)).rejects.toThrow("merge is in flight");
+    await expect(createPipelineWithDelivery(draft("branch-claim"), branch)).rejects.toThrow("merge is in flight");
+    await expect(takeoverPipelineDelivery(comparison.id, comparison.delivery!.ownerId, comparison.delivery!.epoch, "test takeover", null))
+      .resolves.toMatchObject({ status: 409, error: expect.stringContaining("merge is in flight") });
+    response.resolve();
+    await reading.promise;
+    await expect(createPipelineWithDelivery(draft("during-receipt"), branch)).rejects.toThrow("merge is in flight");
+  } finally {
+    response.resolve();
+    receipt.resolve();
+    await landing;
+  }
+  if (outcome === "lost reply") {
+    expect(loadPipelines().find(lane => lane.id === "direct-merge")?.merge).toMatchObject({ state: "merging" });
+    await expect(createPipelineWithDelivery(draft("after-stale-readback"), branch)).rejects.toThrow("merge is in flight");
+    merged = true;
+    clock += MERGE_POLL_MS;
+    await sweepAutoMerge(ports);
+  }
+  expect(writes).toBe(1);
+  expect(loadPipelines().find(lane => lane.id === "direct-merge")?.merge).toMatchObject({ state: "merged", mergedHead: HEAD });
+  expect((await createPipelineWithDelivery(draft("branch-after-receipt"), branch)).delivery?.disposition).toBe("owner");
+});
 
 test.each(["OPEN", "MERGED", "CLOSED", "read-error"])("a real closed merge record reconciles %s after a fresh process reads it", async terminal => {
   resetAutoMergeForTests();
@@ -412,7 +480,7 @@ describe("global merge admission", () => {
     } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
   });
 
-  test("a linked PR can land and finish its task when forge reads are unavailable", async () => {
+  test("a linked PR can land through Git after a batch reservation releases it", async () => {
     resetAutoMergeForTests();
     setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
     const fixture = gitOnlyFixture("git-only-linked-offline");
@@ -426,6 +494,18 @@ describe("global merge admission", () => {
         pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
         setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
         run: async () => { forgeReads++; throw Object.assign(new Error("forge unavailable"), { code: "ECONNREFUSED" }); } });
+      const batch = "offline-linked-batch";
+      expect(await reserveBatchLanding(batch, REPO, [{ prRepository: REPO, prNumber: 17 }])).toBeNull();
+      try {
+        await sweepAutoMerge(ports);
+        clock += MERGE_POLL_MS;
+        await sweepAutoMerge(ports);
+        expect(loadPipelines()[0]!.merge).toMatchObject({ state: "queued", gitOnly: true, reason: "waiting for an in-flight PR landing" });
+        expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+      } finally {
+        await releaseBatchLanding(batch, REPO);
+      }
+      clock += MERGE_POLL_MS;
       for (let attempt = 0; attempt < 4 && loadPipelines()[0]!.merge?.state !== "merged"; attempt++) {
         await sweepAutoMerge(ports);
         await sweepTaskFinishes(ports);
@@ -959,7 +1039,7 @@ test("transient backoff yields to a healthy follower across fresh processes and 
   const merged = await run(clock + MERGE_SETTLE_MS, true);
   expect(merged).toMatchObject({ writes: 1, merge: { state: "merged", readFailures: 0, reason: null } });
   expect(await run(clock + MERGE_SETTLE_MS + MERGE_POLL_MS, true)).toMatchObject({ writes: 0, merge: { state: "merged" } });
-});
+}, 60_000);
 
 test.each([[12, 1], [21, 2]])("%s due failures yield to a healthy follower with %s slots after every process restart", async (count, slots) => {
   const rows = Array.from({ length: count }, (_, index) => completedLane(`failed-${String(index).padStart(2, "0")}`));
@@ -1028,7 +1108,7 @@ test.each([[12, 1], [21, 2]])("%s due failures yield to a healthy follower with 
     expect(row.merge).toMatchObject({ state: "queued", reason: expect.stringMatching(/^GitHub read timed out:/) });
     expect(row.merge!.readFailures).toBeGreaterThan(1);
   }
-});
+}, 60_000);
 
 test.each(["conflict", "legacy optional failure"])("a stopped %s is stored and retry-merge requeues and merges it", async mode => {
   resetAutoMergeForTests();

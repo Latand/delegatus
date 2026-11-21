@@ -24,6 +24,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pipelineHasPullRequest } from "@/lib/forge/resolve";
 import { deliveryPullRequestRepository } from "@/lib/forge/workLinks";
+import { deliveryLandingIdentity, landingKeys, type LandingIdentity } from "@/lib/forge/landingIdentity";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/lib/projects/aliases";
 import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
@@ -1125,14 +1126,44 @@ export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedT
   }, remaining()));
 }
 
-/** Holds the cross-process delivery lease while a short external landing is
- * reconciled. Each state read or write uses the already-held lease; delivery
- * claims cannot enter between the final ownership check and the receipt. */
-export async function withDeliveryAdmissionFence<R>(
-  operation: (mutate: <T>(change: (tx: StateBoundedTransaction<Pipeline>) => T, limit?: number) => T) => Promise<R>,
-): Promise<R> {
-  const store = pipelineStore();
-  return store.admitWithLease(async heldLease => operation((change, limit = 4096) => store.boundedPatch(limit, change, heldLease)), pipelineLockWaitMs());
+export class DeliveryLandingReserved extends Error {
+  constructor(laneId?: string) {
+    super(`PR merge is in flight${laneId ? ` in lane ${laneId}` : ""}; Delegatus could not claim the delivery branch`);
+  }
+}
+
+/** The legacy task-claim caller already holds the pipeline writer lease. */
+export function deliveryLandingRefusal(target: PipelineDeliveryTarget, tx?: StateBoundedTransaction<Pipeline>): DeliveryLandingReserved | null {
+  const identity = deliveryLandingIdentity(target);
+  if (!tx) return pipelineStore().deliveryLandingConflict(identity) ? new DeliveryLandingReserved() : null;
+  const direct = tx.activeDirectMerge(identity);
+  return direct || tx.batchLandingConflict(identity) ? new DeliveryLandingReserved(direct?.id) : null;
+}
+
+/** The Viewer writes these keys alongside delivery admission. The CLI keeps
+ * the reservation id and reconciles the exact batch outside the lease. */
+export function reserveBatchLanding(id: string, repository: string, members: readonly LandingIdentity[],
+  assertAuthority: () => void = () => {}, deadline = Infinity): Promise<string | null> {
+  return withDeliveryMutationAsync(tx => {
+    assertAuthority();
+    if (performance.now() >= deadline) return "Batch landing admission deadline expired";
+    for (const member of members) {
+      const owner = tx.activeDeliveryOwnerForLanding(member);
+      if (owner) return `Batch held: PR #${member.prNumber} has active delivery owner lane ${owner.id}`;
+      const merge = tx.activeDirectMerge(member);
+      if (merge) return `Batch held: PR #${member.prNumber} has a direct merge in flight in lane ${merge.id}`;
+    }
+    if (performance.now() >= deadline) return "Batch landing admission deadline expired";
+    const keys = [...new Set(members.flatMap(landingKeys))].sort();
+    return tx.reserveBatchLanding(id, repository, keys) ? null : "Batch held: a landing reservation overlaps this batch";
+  }, 4096, deadline);
+}
+
+export function releaseBatchLanding(id: string, repository: string, assertAuthority: () => void = () => {}): Promise<void> {
+  return withDeliveryMutationAsync(tx => {
+    assertAuthority();
+    tx.releaseBatchLanding(id, repository);
+  });
 }
 
 /** A short state admission publishes the durable fence. The sweep owns its
@@ -1196,17 +1227,15 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
     if (preparationFailure) throw preparationFailure.error;
     options.admit?.();
     const pullRequestRepository = target.pr ? deliveryPullRequestRepository(target) : null;
-    const mergeReservation = options.requireOwner && target.pr && pullRequestRepository
-      ? tx.activeMergeForPullRequest(pullRequestRepository, target.pr) : null;
-    if (options.requireOwner && (comparison || mergeReservation || tx.pipelineLookup({ ...target, active: true })
+    const landing = comparison ? null : deliveryLandingRefusal(target, tx);
+    if (landing) throw landing;
+    if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
       || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
         ...(target.pr && pullRequestRepository ? { pullRequestRepository, prNumber: target.pr,
           pullRequestMatches: (candidate, repository, number) => pipelineHasPullRequest(candidate as Pipeline, repository, number),
         } : {}),
       }))) {
-      throw new Error(mergeReservation
-        ? `PR merge is in flight in lane ${mergeReservation.id}; Delegatus could not claim the refresh delivery branch`
-        : "target already owned or has unfinished PR work; Delegatus could not claim the refresh delivery branch");
+      throw new Error("target already owned or has unfinished PR work; Delegatus could not claim the refresh delivery branch");
     }
     assignPipelineDelivery(pipeline, target, comparison, tx.pipelineLookup);
     tx.put(pipeline);
@@ -1247,6 +1276,8 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     if (!pipeline?.delivery) return { error: "pipeline has no delivery target", status: 409 };
     if (admitted && !admitted(pipeline)) return { error: "takeover admission superseded", status: 409 };
     const target = pipeline.delivery.target;
+    const landing = deliveryLandingRefusal(target, tx);
+    if (landing) return { error: landing.message, status: 409 };
     const owner = tx.pipelineLookup({ ...target, active: true });
     const previous = owner ?? tx.pipelineLookup(target);
     if (!previous?.delivery || previous.delivery.ownerId !== expectedOwner || previous.delivery.epoch !== expectedEpoch) {
@@ -1383,7 +1414,7 @@ function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   const taskLinks = loadTasksByIds(new Set(pipeline.taskIds)).flatMap(task => task.workLinks ?? []);
   if (issueDeliveryHoldsArchive(pipeline, nowMs, taskLinks)) return false;
   // The receipt sweep reads the hot collection, even after closure or hiding.
-  if (pipeline.merge?.effectUncertain) return false;
+  if (pipeline.merge?.effectUncertain || pipeline.merge?.state === "merging") return false;
   if (!pipelineActivitySettled(pipeline)) return false;
   if (pipeline.unconfirmedHosts?.length) return false;
   if (["completed", "closed"].includes(pipeline.state) && !pipeline.closeTeardown && !pipeline.terminalReap?.settledAt

@@ -8,7 +8,7 @@ import { existingTeamStore } from "@/lib/team/store";
 import { assertWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { reserveProactiveLane, recordProactiveScopeReview, proactiveScopeReviewEvidence } from "@/lib/tasks/proactiveLane";
 import { proactiveCandidateDecision } from "@/lib/tasks/proactive";
-import { isPipelineConversationSource } from "./store";
+import { DeliveryLandingReserved, deliveryLandingRefusal, isPipelineConversationSource } from "./store";
 import { beginSpawnAdmission, chargeSpawnWait, finishSpawnAdmission, recordSpawnFailure, remainingSpawnAdmission, spawnAdmissionFailure, switchSpawnAdmissionPhase } from "./spawnAdmissionBudget";
 import { DEPLOY_ADMISSION_BUDGET_MS } from "@/lib/runtime/admissionBudget";
 import { hostExitText, hostExitWriterPending, readHostExit } from "@/lib/runtime/hostExit";
@@ -13407,6 +13407,7 @@ async function admitExistingPipelineDelivery(pipeline: Pipeline, ports: Pipeline
     }
     if (current && !current.delivery && current.repoDir === pipeline.repoDir && current.branch === pipeline.branch
       && current.state !== "closed" && current.state !== "completed") {
+      if (deliveryLandingRefusal(target, tx)) return current;
       assignPipelineDelivery(current, target, false, tx.pipelineLookup);
       if (admission) {
         const result = queuePipelinePublication(current, ports.exec, { acceptedSha: admission.sha });
@@ -15797,7 +15798,7 @@ async function admitPipelineFromRequest(
         admit: options.admitConversationCreate, admitReplay: options.admitConversationReplay, onReplay: () => { replayed = true; },
       });
     } catch (error) {
-      if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };
+      if (error instanceof DeliveryLandingReserved || (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned"))) return { error: error.message, status: 409 };
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
       const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
       if (pipeline.state === "provisioning") reportProvisioningPhase(pipeline.id, { phase: "accepted", admission: "queued" }, entry.queuedAt);
@@ -15830,6 +15831,8 @@ async function admitPipelineFromRequest(
     if (taskLinkError) return { error: taskLinkError, status: 400 };
     const elsewhere = pipelineTasksRunElsewhere(taskIds, tasks);
     if (elsewhere) return elsewhere;
+    const landing = targetInput?.comparison ? null : deliveryLandingRefusal(target);
+    if (landing) return { error: landing.message, status: 409 };
     assignPipelineDelivery(pipeline, target, targetInput?.comparison);
     pipelines.push(pipeline);
     await persist();
@@ -17060,6 +17063,8 @@ async function applyPipelinePatch(
       const attempt = current.cursor ? currentAttempt(current, current.cursor.stageId) : null;
       if (currentStage(current)?.kind === "review-loop" && attempt?.flowId) return { error: "finish or retry the review stage first", status: 409 };
       const target = { ...delivery.target, remote: resolved.remote, repository: resolved.repository };
+      const landing = deliveryLandingRefusal(target, tx);
+      if (landing) return { error: landing.message, status: 409 };
       const owner = tx.pipelineLookup({ ...target, active: true });
       if (owner && owner.id !== id) return { error: `delivery target is owned by ${owner.id} at epoch ${owner.delivery?.epoch ?? 0}`, status: 409 };
       const history = tx.pipelineLookup(target);

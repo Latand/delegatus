@@ -10,7 +10,7 @@ process.env.LLV_STATE_DIR = remoteState;
 const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 closeAgentRegistryForTests();
 const { pipelineCorpus } = await import("./fixtures/corpus");
-const { savePipelines, findPipelineRecord, takeoverPipelineDelivery, withPipelineMutation } = await import("./store");
+const { savePipelines, findPipelineRecord, takeoverPipelineDelivery, withPipelineMutation, reserveBatchLanding, releaseBatchLanding } = await import("./store");
 const { defaultPipelinePorts, patchPipeline, settlePendingRemoteActions, settlePendingStageGit, tickPipelines } = await import("./engine");
 const { realExec } = await import("@/lib/workflows/provision");
 const { publishPipelineBranch } = await import("./git");
@@ -536,6 +536,75 @@ test("legacy publication records acceptance before observing its missing deliver
   } finally { release(); await publish; }
 });
 
+test("legacy publication leaves late assignment pending while its observed branch is reserved for landing", async () => {
+  const h = setupRetry("run");
+  delete h.lane.delivery;
+  savePipelines([h.lane]);
+  const entered = Promise.withResolvers<void>(), observed = Promise.withResolvers<void>();
+  const repository = "acme/widgets";
+  const operation = "late-assignment-batch";
+  const remote = "ssh://github.com/ACME/Widgets.git";
+  let pushes = 0;
+  const ports = { ...h.ports, exec: async (_command: string, args: string[]) => {
+    if (args[0] === "remote") {
+      entered.resolve();
+      await observed.promise;
+      return { code: 0, stdout: remote, stderr: "" };
+    }
+    if (args[0] === "push") pushes++;
+    return h.ports.exec(_command, args);
+  } };
+  expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: HEAD }, ports)).error).toBeUndefined();
+  const tick = tickPipelines([], ports);
+  try {
+    await Promise.race([entered.promise, tick.then(() => { throw new Error("late assignment did not read origin"); })]);
+    expect(await reserveBatchLanding(operation, repository, [{
+      prRepository: repository, prNumber: 12, headRepository: repository, branch: `refs/heads/${h.lane.branch}`,
+    }])).toBeNull();
+    observed.resolve();
+    await tick;
+    expect(findPipelineRecord(h.lane.id)!.publicationAdmission?.state).toBe("pending");
+    expect(findPipelineRecord(h.lane.id)!.delivery).toBeUndefined();
+    expect(pushes).toBe(0);
+  } finally {
+    observed.resolve();
+    await tick;
+    await releaseBatchLanding(operation, repository);
+  }
+  await tickPipelines([], ports);
+  expect(findPipelineRecord(h.lane.id)!.delivery?.disposition).toBe("owner");
+  expect(findPipelineRecord(h.lane.id)!.publicationAdmission?.state).toBe("settled");
+});
+
+test("remote adoption cannot claim a branch reserved for landing", async () => {
+  const h = setupRetry("run");
+  const repository = "acme/widgets";
+  const remote = "ssh://github.com/ACME/Widgets.git";
+  const branch = `refs/heads/${h.lane.branch}`;
+  h.lane.delivery = { target: { repository: "local", remote: "", branch },
+    disposition: "owner", publish: "enabled", ownerId: h.lane.id, epoch: 1, active: true, journal: [] };
+  savePipelines([h.lane]);
+  const ports = { ...h.ports, exec: async (_command: string, args: string[]) => {
+    if (args[0] === "remote") return { code: 0, stdout: args.length === 1 ? "origin" : remote, stderr: "" };
+    if (args[0] === "-c" && args.at(-1) === "-v") {
+      return { code: 0, stdout: `delegatus-literal-probe\t${remote} (fetch)\ndelegatus-literal-probe\t${remote} (push)`, stderr: "" };
+    }
+    return h.ports.exec(_command, args);
+  } };
+  const operation = "remote-adoption-batch";
+  expect(await reserveBatchLanding(operation, repository, [{ headRepository: repository, branch }])).toBeNull();
+  try {
+    expect(await patchPipeline(h.lane.id, { action: "set-delivery-remote" }, ports)).toMatchObject({
+      status: 409, error: expect.stringContaining("merge is in flight"),
+    });
+    expect(findPipelineRecord(h.lane.id)?.delivery).toMatchObject({ epoch: 1, target: { remote: "" } });
+  } finally {
+    await releaseBatchLanding(operation, repository);
+  }
+  expect((await patchPipeline(h.lane.id, { action: "set-delivery-remote" }, ports)).pipeline?.delivery)
+    .toMatchObject({ epoch: 2, target: { remote } });
+});
+
 test("a passed-stage retry acknowledges before checking its accepted local head", async () => {
   const h = setupRetry();
   h.lane.stateDetail = "publishing the passed stage: remote unavailable";
@@ -766,8 +835,9 @@ test("a remote review retry records pending work before remote Git answers", asy
   } finally { release(); await retry; }
 });
 
-function setupRetry() {
+function setupRetry(reviewKind: "review-loop" | "run" = "review-loop") {
   const lane = pipelineCorpus(2, 1)[1]!;
+  lane.stages[1]!.kind = reviewKind;
   lane.state = "needs_decision";
   lane.publication = "remote-branch";
   lane.closedAt = null;

@@ -966,6 +966,9 @@ function isPipelineMerge(value: unknown): boolean {
     && (merge.state !== "refreshing" || merge.refresh !== undefined)
     && (merge.by === null || merge.by === "auto-merge" || merge.by === "outside")
     && typeof merge.repository === "string" && merge.repository.length > 0
+    && (merge.landingRepository === undefined || typeof merge.landingRepository === "string")
+    && (merge.landingBranch === undefined || typeof merge.landingBranch === "string")
+    && (merge.rejectedLandingHead === undefined || typeof merge.rejectedLandingHead === "string")
     && ((Number.isSafeInteger(merge.prNumber) && (merge.prNumber as number) > 0)
       || (merge.prNumber === null && (merge.gitOnly === true
         ? ["queued", "blocked", "cancelled", "merging", "merged"].includes(String(merge.state))

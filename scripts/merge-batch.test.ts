@@ -4,12 +4,18 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { NextRequest } from "next/server";
+import { POST as batchLanding } from "../src/app/api/forge/batch-landing/route";
+import { proxy } from "../src/proxy";
+import { agentRegistry, closeAgentRegistryForTests } from "../src/lib/agent/registry";
+import { projectIdentityFromRemote } from "../src/lib/projects/identity";
+import { buildPipeline, createPipelineWithDelivery, withDeliveryMutation } from "../src/lib/pipelines/store";
 import { once } from "node:events";
 import { text as streamText } from "node:stream/consumers";
 import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
 import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
-import { report, attributeBatchTests, compareBatchTests, fileFault, INCOMPLETE_FILE, GATE_SLOT, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
+import { report, attributeBatchTests, compareBatchTests, fileFault, INCOMPLETE_FILE, GATE_SLOT, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, type LandingAdmission, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
 import type { TestRun, TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
 import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
@@ -18,6 +24,15 @@ import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateChec
 import { resolveGateRun } from "../src/lib/runtime/gateCheckRecord";
 import { ownFixtureTree, stopFixtureTree } from "../src/lib/testing/fixtureProcess";
 import { bindMergerContract } from "../src/lib/pipelines/mergerContract.fixture";
+
+const fixtureAdmission: LandingAdmission = { reserve: async () => {}, release: async () => {} };
+const fixtureUuid = (ordinal: number) => `00000000-0000-4000-8000-${String(ordinal).padStart(12, "0")}`;
+class MergeBatch extends merger.MergeBatch {
+  constructor(...args: ConstructorParameters<typeof merger.MergeBatch>) {
+    args[6] ??= fixtureAdmission;
+    super(...args);
+  }
+}
 
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
 const recorded = (failures: TestSite[] = [], passed: TestSite[] = []): TestRun => ({
@@ -908,7 +923,7 @@ test("(e) full browser campaigns are opt-in and are named as skipped by default"
 
 function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green", runOverride?: CommandRunner,
   setupRun?: (data: ReturnType<typeof fixture>) => CommandRunner,
-  landingAdmission?: (repository: string, members: readonly { number: number }[], land: () => Promise<void>) => Promise<void>) {
+  landingAdmission?: LandingAdmission) {
   const f = fixture();
   const stateFile = join(f.root, "merge-batch.json");
   const calls: string[][] = [];
@@ -1017,21 +1032,196 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
   return { ...f, batch, calls, commands, forge };
 }
 
-test("batch landing holds an active member lane and proceeds after its release", async () => {
-  let owner: string | null = "refresh-lane";
-  const admission = async (_repository: string, members: readonly { number: number }[], land: () => Promise<void>) => {
-    if (owner && members.some(member => member.number === 12)) throw new Error(`Batch held: PR #12 has active delivery owner lane ${owner}`);
-    await land();
+test.each(["numbered", "branch-only"] as const)("a sandboxed merger respects a %s owner in the Viewer and lands after completion", async kind => {
+  const f = landingFixture();
+  const previousState = process.env.LLV_STATE_DIR;
+  closeAgentRegistryForTests();
+  process.env.LLV_STATE_DIR = join(f.root, "viewer-state");
+  try { await landWithSandboxedMerger(f, kind); }
+  finally {
+    closeAgentRegistryForTests();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
+});
+
+async function landWithSandboxedMerger(f: ReturnType<typeof landingFixture>, kind: "numbered" | "branch-only") {
+  const capability = (kind === "numbered" ? "C" : "D").repeat(43);
+  const repository = "example/fixture";
+  const headRepository = kind === "branch-only" ? "fork/fixture" : repository;
+  const remote = "https://github.com/example/fixture.git";
+  const project = projectIdentityFromRemote(remote, f.repo)!.project;
+  const registry = agentRegistry();
+  const launch = registry.beginSpawnRequest({
+    engine: "codex", cwd: f.repo, role: "merger", explicitProject: project,
+    spawnCapabilityDigest: createHash("sha256").update(capability).digest("hex"),
+    launchProfile: { title: "Batch merger", cwd: f.repo },
+  });
+  if (launch.kind !== "created") throw new Error("Expected a new merger launch");
+  expect(registry.settleSpawn(launch.receipt.launchId, {
+    key: { engine: "codex", sessionId: fixtureUuid(kind === "numbered" ? 12 : 13) },
+    artifactPath: join(f.root, "merger.jsonl"), cwd: f.repo, accountId: null, status: "live", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null,
+  }).kind).toBe("settled");
+  const target = { repository: project, remote: `ssh://github.com/${headRepository.toUpperCase()}.git`, branch: "refs/heads/topic-12",
+    ...(kind === "numbered" ? { pr: 12, branch: "refs/heads/alternate" } : {}) };
+  const ownerId = `fixture-owner-${kind}`;
+  const draft = (id: string) => buildPipeline({ id, task: "Refresh fixture", project, repoDir: f.repo, stages: [{
+    id: "build", kind: "run", prompt: "build", next: null,
+    effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null },
+  }],
+    srcPath: null, srcConversationId: null, now: FIXED_CARRY_TIME, state: "draft" });
+  await createPipelineWithDelivery(draft(ownerId), target);
+  const previousKey = process.env.LLV_TOKEN;
+  process.env.LLV_TOKEN = "fixture-keyed-install";
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {
+    const next = new NextRequest(request);
+    const perimeter = proxy(next);
+    return perimeter.headers.get("x-middleware-next") === "1" ? batchLanding(next) : perimeter;
+  } });
+  try {
+    const env = withAgentConfigSandbox({ ...isolatedEnvironment(join(f.root, "child"), process.env),
+      LLV_VIEWER_CONTROL_URL: server.url.origin, LLV_SPAWN_CAPABILITY: capability },
+      { ...process.env, TMPDIR: f.root }, join(f.root, "agent"));
+    expect(env.LLV_STATE_DIR).not.toBe(process.env.LLV_STATE_DIR);
+    const allow = ["PATH", "HOME", "LLV_STATE_DIR", "NODE_ENV"];
+    const shell = agentCodexPublicationPolicy(kind === "numbered" ? { include_only: allow }
+      : { filters: Object.fromEntries(allow.map(key => [key, "include"])) }, env);
+    const included = new Set<string>(kind === "numbered" ? shell.include_only as string[]
+      : [...allow, ...Object.keys(shell.filters as Record<string, string>)]);
+    expect(shell.set).not.toHaveProperty("LLV_SPAWN_CAPABILITY");
+    const childEnv = Object.fromEntries(Object.entries(env).filter(([key]) => included.has(key)));
+    const admission = merger.viewerLandingAdmission(childEnv);
+    const head = f.addPr(12, "held.txt", "member patch");
+    if (kind === "branch-only") Object.assign(f.views.get(12)!, { isCrossRepository: true, headRepositoryOwner: { login: "fork" } });
+    const spawnProbe = Bun.spawn([process.execPath, "-e", `
+      const {viewerLandingAdmission} = await import("./scripts/merge-batch.ts");
+      const {id, repository, targets} = JSON.parse(process.env.FIXTURE_RESERVATION);
+      try { await viewerLandingAdmission().reserve({id, repository, admitUntil: Date.now() + 15000}, targets); }
+      catch (error) { console.log(error.message); process.exit(23); }
+    `], { env: { ...childEnv, FIXTURE_RESERVATION: JSON.stringify({
+      id: fixtureUuid(3), repository,
+      targets: [{ number: 12, headRepository, branch: "refs/heads/topic-12" },
+        { number: 99, headRepository: repository, branch: "refs/heads/merge-batch/fixture" }],
+    }) }, stdout: "pipe", stderr: "pipe" });
+    const [probe, output, errors] = await Promise.all([spawnProbe.exited, new Response(spawnProbe.stdout).text(), new Response(spawnProbe.stderr).text()]);
+    expect(probe, errors).toBe(23);
+    expect(output.trim()).toBe(`Batch held: PR #12 has active delivery owner lane ${ownerId}`);
+
+    const dispatched = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
+    const gh = async (args: string[]) => {
+      if (args[0] === "pr" && args[1] === "merge" && args[2] === "99") {
+        dispatched.resolve();
+        await finish.promise;
+      }
+      return f.batch.gh(args);
+    };
+    const batch = new merger.MergeBatch(f.repo, f.batch.stateFile, f.batch.run, gh, async () => {}, () => FIXED_CARRY_TIME, admission);
+    await batch.build(`12@${head}`);
+    await batch.gate();
+    await expect(merger.viewerLandingAdmission({ ...childEnv, LLV_SPAWN_CAPABILITY: "" }).release({
+      id: fixtureUuid(1), repository,
+    })).rejects.toThrow("requires a merger launch capability");
+    await expect(admission.release({
+      id: fixtureUuid(1), repository: "example/another",
+    })).rejects.toThrow("launched for this repository");
+    await expect(batch.land()).rejects.toThrow(`Batch held: PR #12 has active delivery owner lane ${ownerId}`);
+    expect(f.calls.filter(args => args[1] === "merge")).toHaveLength(0);
+
+    withDeliveryMutation(tx => {
+      const current = tx.get(ownerId)!;
+      current.state = "completed";
+      current.closedAt = FIXED_CARRY_TIME;
+      current.cursor = null;
+      if (kind === "branch-only") current.delivery!.operation = { id: "member-publisher", sha: head, epoch: 1, state: "running" };
+      tx.put(current);
+    });
+    if (kind === "branch-only") {
+      await expect(batch.land()).rejects.toThrow(`Batch held: PR #12 has active delivery owner lane ${ownerId}`);
+      expect(f.calls.filter(args => args[1] === "merge")).toHaveLength(0);
+      withDeliveryMutation(tx => {
+        const current = tx.get(ownerId)!;
+        delete current.delivery!.operation;
+        tx.put(current);
+      });
+    }
+    const landing = batch.land();
+    try {
+      await Promise.race([dispatched.promise, landing.then(() => { throw new Error("Batch merge did not dispatch"); })]);
+      const deadline = performance.now() + 2000;
+      await expect(createPipelineWithDelivery(draft(`during-${ownerId}`), target, false, { admissionDeadline: deadline }))
+        .rejects.toThrow("merge is in flight");
+      expect((await createPipelineWithDelivery(draft(`other-${ownerId}`), { ...target, pr: 13, branch: "refs/heads/peer" },
+        false, { admissionDeadline: deadline })).delivery?.disposition).toBe("owner");
+    } finally {
+      finish.resolve();
+      await landing;
+    }
+    expect((await landing).rows[0]!.status).toBe("merged");
+    expect(f.calls.filter(args => args[1] === "merge")).toHaveLength(1);
+    expect((await createPipelineWithDelivery(draft(`after-${ownerId}`), target)).delivery?.disposition).toBe("owner");
+  } finally {
+    await server.stop(true);
+    if (previousKey === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previousKey;
+  }
+}
+
+test("batch re-gates a member moved during reservation before dispatching the reduced batch", async () => {
+  const calls: number[][] = [];
+  const released: string[] = [];
+  const f = landingFixture("green", undefined, undefined, {
+    reserve: async (_reservation, targets) => {
+      calls.push(targets.map(member => member.number));
+      if (calls.length === 1) f.views.get(12)!.headRefOid = "a".repeat(40);
+    },
+    release: async reservation => { released.push(reservation.id); },
+  });
+  const first = f.addPr(12, "moving.txt", "superseded");
+  const second = f.addPr(13, "kept.txt", "still reviewed");
+  await f.batch.build(`12@${first},13@${second}`);
+  const tested = await f.batch.gate();
+  const landed = await f.batch.land();
+  expect(calls.map(numbers => numbers.filter(number => number !== 99))).toEqual([[12, 13], [13]]);
+  expect(released).toHaveLength(2);
+  expect(landed.rows.map(row => row.status)).toEqual(["head-moved", "merged"]);
+  expect(landed.gated?.candidate.prs).toEqual([{ number: 13, head: second }]);
+  expect(landed.gated!.tip).not.toBe(tested.gated!.tip);
+  expect(f.calls.filter(args => args[1] === "merge").map(args => args.at(-1))).toEqual([landed.tip]);
+  expect(git(f.repo, ["ls-tree", "origin/main", "moving.txt"])).toBe("");
+});
+
+test("an unknown batch merge retains its reservation and only reconciles on restart", async () => {
+  const f = landingFixture();
+  const held = new Set<string>();
+  let sent: string[] | undefined;
+  let dispatches = 0;
+  const admission: LandingAdmission = {
+    reserve: async ({ id }) => { held.add(id); },
+    release: async ({ id }) => { held.delete(id); },
   };
-  const f = landingFixture("green", undefined, undefined, admission);
+  const gh = async (args: string[]) => {
+    if (args[0] === "pr" && args[1] === "merge" && args[2] === "99") {
+      sent = args;
+      dispatches++;
+      throw new Error("merge response lost before the first read");
+    }
+    return f.batch.gh(args);
+  };
+  const restart = () => new merger.MergeBatch(f.repo, f.batch.stateFile, f.batch.run, gh, async () => {}, () => FIXED_CARRY_TIME, admission);
   const head = f.addPr(12, "held.txt", "member patch");
-  await f.batch.build(`12@${head}`);
-  await f.batch.gate();
-  await expect(f.batch.land()).rejects.toThrow("Batch held: PR #12 has active delivery owner lane refresh-lane");
-  expect(f.calls.some(args => args[0] === "pr" && args[1] === "merge")).toBe(false);
-  owner = null;
-  expect((await f.batch.land()).rows[0]!.status).toBe("merged");
-  expect(f.calls.some(args => args[0] === "pr" && args[1] === "merge")).toBe(true);
+  const initial = restart();
+  await initial.build(`12@${head}`);
+  await initial.gate();
+  await expect(initial.land()).rejects.toThrow("Batch merge did not settle at the intended head");
+  const id = initial.read().landingReservation!.id;
+  expect(held).toEqual(new Set([id]));
+  await expect(restart().land()).rejects.toThrow("Batch merge outcome is unresolved");
+  expect(dispatches).toBe(1);
+  expect(held.has(id)).toBe(true);
+
+  await f.batch.gh(sent!); // The delayed forge side of the original request settles.
+  expect((await restart().land()).rows[0]!.status).toBe("merged");
+  expect(dispatches).toBe(1);
+  expect(held.size).toBe(0);
 });
 
 test("one run lands healthy PRs in order and reports the unchanged culprit with test evidence", async () => {
@@ -1811,7 +2001,7 @@ const batchView = (f: ReturnType<typeof landingFixture>, conclusion = "SUCCESS",
 });
 
 function restartBatch(f: ReturnType<typeof landingFixture>, gh = f.batch.gh, run = f.batch.run) {
-  return new MergeBatch(f.repo, f.batch.stateFile, run, gh, async () => {}, () => FIXED_CARRY_TIME);
+  return new MergeBatch(f.repo, f.batch.stateFile, run, gh, async () => {}, () => FIXED_CARRY_TIME, f.batch.landingAdmission);
 }
 
 test("T1 four main-only moves carry the original validation, rerun publication privacy and merge the fourth tip", async () => {
@@ -2318,7 +2508,7 @@ test.each(["candidate privacy", "body privacy", "create", "edit", "reviews", "me
     if (boundary === "edit" && !preparedEdit && args[0] === "pr" && args[1] === "view" && args[2] === "99") {
       preparedEdit = true; f.seed("advance-edit.txt", "prepare edit"); return batchView(f, "SUCCESS", "BEHIND");
     }
-    if (!moved && boundary === "merge refusal" && args[1] === "merge" && !args.includes("--help")) { advance(); throw new Error("strict protection refused stale main"); }
+    if (!moved && boundary === "merge refusal" && args[1] === "merge" && !args.includes("--help")) { advance(); throw new merger.BatchMergeRefused("strict protection refused stale main"); }
     const result = await f.batch.gh(args);
     if (!moved && ((args[0] === "pr" && args[1] === boundary) || (boundary === "reviews" && args[1]?.includes("/99/reviews?")))) advance();
     return result;

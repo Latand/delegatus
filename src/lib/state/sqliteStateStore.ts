@@ -30,6 +30,8 @@ import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, Datab
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
 import { noteWriterAdmitted } from "./admissionWitness";
+import { deliveryLandingIdentity, landingKeys, type LandingIdentity } from "@/lib/forge/landingIdentity";
+import type { Pipeline } from "@/lib/pipelines/types";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
 
 export const STATE_LEASE_MAX_AGE_MS = 15 * 60_000;
@@ -296,8 +298,11 @@ export interface StateBoundedTransaction<T> {
   /** Indexed task evidence; each project seek and returned row spends budget. */
   taskProjectRows(projects: readonly string[]): T[];
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
-  activeMergeForPullRequest(repository: string, prNumber: number): T | null;
-  activeDeliveryOwnerForPullRequest(prNumber: number, matches: (pipeline: T) => boolean): T | null;
+  activeDirectMerge(identity: LandingIdentity): T | null;
+  activeDeliveryOwnerForLanding(identity: LandingIdentity, except?: string): T | null;
+  batchLandingConflict(identity: LandingIdentity): boolean;
+  reserveBatchLanding(id: string, repository: string, keys: readonly string[]): boolean;
+  releaseBatchLanding(id: string, repository: string): void;
   hasUnfinishedPipeline(query: {
     repository: string;
     branch: string;
@@ -600,7 +605,24 @@ const interruptionRecipientIndex = `CREATE INDEX IF NOT EXISTS state_rows_interr
   ON state_rows(collection, ${interruptionRecipientExpression}, row_key)
   WHERE collection GLOB 'interruption_obligations:*'`;
 
+const activeLandingDelivery = `collection='pipelines' AND json_valid(value_json)
+  AND json_extract(value_json,'$.delivery.active')=1
+  AND json_extract(value_json,'$.delivery.disposition')='owner'
+  AND json_extract(value_json,'$.delivery.publish')='enabled'
+  AND json_extract(value_json,'$.delivery.ownerId')=row_key
+  AND CASE WHEN json_extract(value_json,'$.state') NOT IN ('completed','closed')
+    OR json_extract(value_json,'$.delivery.operation.state')='running' THEN 1 ELSE 0 END = 1`;
+const activeLandingMerge = `collection='pipelines' AND json_valid(value_json)
+  AND CASE WHEN json_extract(value_json,'$.merge.state')='merging'
+    OR json_extract(value_json,'$.merge.effectUncertain')=1 THEN 1 ELSE 0 END = 1`;
+
 const stateSchema = [
+  `CREATE TABLE IF NOT EXISTS batch_landing_keys (
+    target_key TEXT PRIMARY KEY,
+    reservation TEXT NOT NULL,
+    repository TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS batch_landing_reservation ON batch_landing_keys(reservation)`,
   // The source and its recipient index share the same SQLite transaction.
   `CREATE TABLE IF NOT EXISTS state_collections (
     collection TEXT PRIMARY KEY,
@@ -621,6 +643,8 @@ const stateSchema = [
     PRIMARY KEY(collection, row_key),
     FOREIGN KEY(collection) REFERENCES state_collections(collection) ON DELETE CASCADE
   )`,
+  `CREATE INDEX IF NOT EXISTS active_landing_delivery ON state_rows(row_key) WHERE ${activeLandingDelivery}`,
+  `CREATE INDEX IF NOT EXISTS active_landing_merge ON state_rows(row_key) WHERE ${activeLandingMerge}`,
   // Keep the privacy clock outside the pruned change journal and surviving
   // rows. All writers, including imports and physical deletes, advance it in
   // their own transaction; request and scope bookkeeping leave it untouched.
@@ -2872,37 +2896,28 @@ export class SqliteStateCollection<T> {
               consume();
               return this.lookupPipeline(db, query);
             },
-            activeMergeForPullRequest: (repository, prNumber) => {
-              consume();
-              if (this.options.collection !== "pipelines") throw new Error("merge reservation lookup requires the pipeline collection");
-              const row = db.query<{ value_json: string }, [string, number]>(`
-                SELECT value_json FROM state_rows WHERE collection='pipelines' AND json_valid(value_json)
-                  AND json_extract(value_json,'$.merge.state')='merging'
-                  AND lower(json_extract(value_json,'$.merge.repository'))=lower(?)
-                  AND json_extract(value_json,'$.merge.prNumber')=? ORDER BY row_key LIMIT 1
-              `).get(repository, prNumber);
-              if (!row) return null;
-              const value = this.decodeRow(row.value_json, db);
-              if (!value) throw new Error("invalid merge reservation row");
-              return this.options.clone(value);
-            },
-            activeDeliveryOwnerForPullRequest: (prNumber, matches) => {
-              if (this.options.collection !== "pipelines") throw new Error("delivery owner lookup requires the pipeline collection");
-              const rows = db.query<{ value_json: string }, [number, number]>(`
-                SELECT value_json FROM state_rows WHERE collection='pipelines' AND json_valid(value_json)
-                  AND json_extract(value_json,'$.delivery.active')=1
-                  AND json_extract(value_json,'$.delivery.disposition')='owner'
-                  AND json_extract(value_json,'$.delivery.target.pr')=?
-                  AND json_extract(value_json,'$.state') NOT IN ('completed','closed')
-                ORDER BY row_key LIMIT ?
-              `).all(prNumber, remaining + 1);
-              for (const row of rows) {
-                consume();
-                const value = this.decodeRow(row.value_json, db);
-                if (!value) throw new Error("invalid active delivery owner row");
-                if (matches(value)) return this.options.clone(value);
+            activeDirectMerge: identity => this.activeLandingPipeline(db, identity, "merge", consume, () => remaining),
+            activeDeliveryOwnerForLanding: (identity, except) =>
+              this.activeLandingPipeline(db, identity, "delivery", consume, () => remaining, except),
+            batchLandingConflict: (identity) => this.batchLandingConflict(db, identity),
+            reserveBatchLanding: (id, repository, keys) => {
+              const retained = db.query<{ target_key: string; repository: string }, [string]>(
+                "SELECT target_key, repository FROM batch_landing_keys WHERE reservation=? ORDER BY target_key"
+              ).all(id);
+              if (retained.length) {
+                if (retained.length !== keys.length || retained.some((row, i) => row.target_key !== keys[i] || row.repository !== repository)) {
+                  throw new Error("Batch landing reservation arguments changed");
+                }
+                return true;
               }
-              return null;
+              const conflicts = db.query("SELECT 1 FROM batch_landing_keys WHERE target_key=?");
+              if (keys.some(key => conflicts.get(key))) return false;
+              const insert = db.query("INSERT INTO batch_landing_keys VALUES (?, ?, ?)");
+              for (const key of keys) insert.run(key, id, repository);
+              return true;
+            },
+            releaseBatchLanding: (id, repository) => {
+              db.query("DELETE FROM batch_landing_keys WHERE reservation=? AND repository=?").run(id, repository);
             },
             hasUnfinishedPipeline: (query) => {
               consume();
@@ -3033,6 +3048,58 @@ export class SqliteStateCollection<T> {
 
   async boundedPatchAsync<R>(limit: number, operation: (tx: StateBoundedTransaction<T>) => R, lockWaitMs?: number): Promise<R> {
     return waitForStateLock("state.boundedPatch", () => this.boundedPatch(limit, operation), { waitMs: lockWaitMs, subject: this.options.collection });
+  }
+
+  private batchLandingConflict(db: Database, identity: LandingIdentity): boolean {
+    return landingKeys(identity).some(key => db.query("SELECT 1 FROM batch_landing_keys WHERE target_key=?").get(key));
+  }
+
+  /** Only the candidate PR number or branch can match. Decode candidates to
+   * compare the canonical GitHub identity, including SSH and fork targets. */
+  private activeLandingPipeline(db: Database, identity: LandingIdentity, kind: "delivery" | "merge",
+    consume: () => void, remaining: () => number, except = ""): T | null {
+    if (this.options.collection !== "pipelines") throw new Error("landing lookup requires the pipeline collection");
+    const keys = new Set(landingKeys(identity));
+    if (!keys.size) return null;
+    consume();
+    const byDelivery = kind === "delivery";
+    const active = byDelivery ? activeLandingDelivery : activeLandingMerge;
+    const target = byDelivery
+      ? `(json_extract(value_json,'$.delivery.target.pr')=? OR json_extract(value_json,'$.delivery.target.branch')=?)`
+      : `(json_extract(value_json,'$.merge.prNumber')=?
+        OR json_extract(value_json,'$.merge.landingBranch')=?
+        OR (json_extract(value_json,'$.merge.landingBranch') IS NULL AND
+          (json_extract(value_json,'$.delivery.target.branch')=? OR json_extract(value_json,'$.branch')=?)))`;
+    const branch = identity.branch ?? null;
+    const args = [except, identity.prNumber ?? null, branch];
+    if (!byDelivery) args.push(branch, branch?.slice("refs/heads/".length) ?? null);
+    args.push(remaining() + 1);
+    const rows = db.query<{ value_json: string }, (string | number | null)[]>(`
+      SELECT value_json FROM state_rows
+        WHERE ${active} AND row_key<>? AND ${target} ORDER BY row_key LIMIT ?
+    `).all(...args);
+    for (const row of rows) {
+      consume();
+      const decoded = this.decodeRow(row.value_json, db);
+      if (!decoded) throw new Error("invalid landing pipeline row");
+      const lane = decoded as unknown as Pipeline;
+      const delivery = lane.delivery?.target ? deliveryLandingIdentity(lane.delivery.target) : undefined;
+      const merge = lane.merge;
+      const candidate = byDelivery ? delivery! : {
+        prRepository: merge!.repository, prNumber: merge!.prNumber,
+        headRepository: merge!.landingRepository ?? delivery?.headRepository ?? merge!.repository,
+        branch: merge!.landingBranch ?? delivery?.branch ?? `refs/heads/${lane.branch}`,
+      };
+      if (landingKeys(candidate).some(key => keys.has(key))) return this.options.clone(decoded);
+    }
+    return null;
+  }
+
+  /** The legacy task-claim path already holds the pipeline writer lease. */
+  deliveryLandingConflict(identity: LandingIdentity): boolean {
+    let remaining = 4096;
+    return this.batchLandingConflict(this.readDb, identity) || !!this.activeLandingPipeline(this.readDb, identity, "merge",
+      () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); }, () => remaining);
   }
 
   private lookupPipeline(db: Database, query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null {

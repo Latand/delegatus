@@ -1473,6 +1473,12 @@ export type PipelineMerge = {
       A missing PR stays null while blocked or retrying its resolution. */
   repository: string;
   prNumber: number | null;
+  /** Forge head identity captured at direct merge admission. Legacy records
+      fall back to the delivery target or the lane branch. */
+  landingRepository?: string;
+  landingBranch?: string;
+  /** Forge refused this exact head. A stale read may not re-admit it. */
+  rejectedLandingHead?: string;
   /** The setting's `changedAt` the lane was queued under. */
   policyChangedAt: string;
   /** The head the lane finished on (its `lastPassedCommit`). */
