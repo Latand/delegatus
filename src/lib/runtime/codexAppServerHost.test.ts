@@ -20,6 +20,7 @@ import { Database } from "bun:sqlite";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { procBackend } from "@/lib/proc";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 
@@ -813,6 +814,43 @@ test.each([false, true])(`socket resume restores the delegated skills decision (
     expect(config?.skills).toEqual(omitSkillsInstructions ? { include_instructions: false } : undefined);
     if (stdioViewer) expect(config?.mcp_servers).toMatchObject({ viewer: { command: "fixture-viewer" } });
   } finally { await host?.release(); reconnect.mockRestore(); }
+});
+
+test.skipIf(process.platform === "win32")("a replaced startup adapter disconnects without signalling the native Codex listener", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "cb-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const child = new FakeAppServer();
+  const signals: NodeJS.Signals[] = [];
+  const disconnected = Promise.withResolvers<void>();
+  const listener = Bun.serve({
+    unix: socket,
+    fetch(request, server) { return server.upgrade(request) ? undefined : new Response(null, { status: 400 }); },
+    websocket: {
+      open(connection) { child.stdout.on("data", chunk => { connection.send(String(chunk).trimEnd()); }); },
+      message(_connection, message) { child.stdin.write(String(message) + "\n"); },
+      close() { disconnected.resolve(); },
+    },
+  });
+  fs.chmodSync(socket, 0o600);
+  let host: CodexAppServerHost | undefined;
+  try {
+    host = await CodexAppServerHost.adopt("thread-149", {
+      cwd: directory, eventStore: new MemoryEventStore(),
+      socketOwner: { endpoint: `codex-unix:${socket}`, process: captureProcessIdentity(process.pid) },
+      signalProcess: (_pid, signal) => { signals.push(signal); },
+      shutdownGraceMs: 25,
+    });
+    host.setWriterFence(() => false);
+    host.detachAfterStartupCustodyLoss();
+    await host.release();
+    await disconnected.promise;
+    expect(signals).toEqual([]);
+    expect(fs.statSync(socket).isSocket()).toBe(true);
+  } finally {
+    listener.stop(true);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("Codex drains resume notifications before awaiting Viewer discovery", async () => {

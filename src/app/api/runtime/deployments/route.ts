@@ -45,7 +45,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
   const startup = structuredStartupStatus();
-  const startupDetails = startup && startup.phase !== "waiting for structured startup" ? { structuredHostStartup: startup } : {};
+  const startupDetails = startup && (startup.state === "failed" || startup.phase !== "waiting for structured startup")
+    ? { structuredHostStartup: startup } : {};
   const decision = await selfUpdateService().decide();
   if (decision.mode === "checkout" || decision.mode === "package") {
     await selfUpdateService().snapshot();

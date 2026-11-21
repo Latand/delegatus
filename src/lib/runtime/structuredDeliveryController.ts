@@ -122,7 +122,11 @@ interface HostAttachment {
   stopEvents: () => Promise<void>;
 }
 
-type PreparedStartupPublication = { registry: AgentRegistry; snapshot: RegistryFile };
+type PreparedStartupPublication = {
+  registry: AgentRegistry;
+  snapshot: RegistryFile;
+  ownsHost?: (item: StructuredDeliveryHost) => boolean;
+};
 
 /* One lifecycle per host (#1191). The seat a delivery resolves the host from
    and the registration that owns its state subscription, event pump and
@@ -2383,7 +2387,13 @@ export async function bindStructuredDeliveryQueue(
         });
       }, assertActive);
       await phase("registering structured delivery hosts");
-      for (const item of items) await register(item);
+      for (const item of items) {
+        assertActive();
+        await register(item, prepared?.ownsHost ? async () => {
+          assertActive();
+          return prepared.ownsHost!(item);
+        } : undefined);
+      }
       assertActive();
       if (superseded()) {
         const successor = state.completeActive;

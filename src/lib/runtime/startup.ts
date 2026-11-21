@@ -27,7 +27,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, conversationIdsResolvingTo, normalizeRegistry, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
-import { registryKeysMatching, registryRowsMatching, registryConversationsForEntryKey, hotRegistryRows, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
+import { registryKeysMatching, registryRowsMatching, registryConversationsForEntryKey, hotRegistryRows, registryStartupSelectionProof, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -50,13 +50,14 @@ import {
   reconcileDeadStructuredRegistryHostsOffLoop,
   type AdoptedClaudeHost,
   type AdoptedCodexHost,
+  type AdoptedHostCustody,
   type StructuredHostAdoptionFilter,
 } from "./registry";
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { RUNTIME_RPC_DEADLINE_MS, RUNTIME_STARTUP_READ_DEADLINE_MS } from "./deadlines";
 import { forEachStartupBatch, STRUCTURED_STARTUP_PASS_DEADLINE_MS, StructuredStartupDeadlineError, type StructuredStartupDeadline } from "./startupWork";
 import type { RuntimeSession } from "./contracts";
-import { terminalRetryOperationId, type RuntimeOperationResult } from "./contracts";
+import { STARTUP_SESSION_VERSION_BATCH, terminalRetryOperationId, type RuntimeOperationResult, type StartupRuntimeSession } from "./contracts";
 import {
   bindStructuredDeliveryQueue,
   completeStructuredDeliveryQueueStartup,
@@ -135,6 +136,8 @@ interface StartupPassCheckpoint extends StartupMembershipCheckpoint {
   signal?: AbortSignal;
   restartCuts: Map<string, RestartCutTranscriptRead>;
   transcripts: Map<string, TranscriptRefreshCheckpoint>;
+  runtime?: RuntimeStartupCheckpoint;
+  continuationSessions?: RuntimeStartupCheckpoint;
 }
 // Instrumentation and routes can load separate module instances in standalone.
 const processStartup = process as typeof process & {
@@ -160,6 +163,8 @@ function startupPassState(registry: AgentRegistry): StartupPassState {
     Held here, every host adopted at boot stayed reachable for the life of
     the process with all it kept in memory. */
 const releasedStartupHosts = new WeakSet<object>();
+const startupHostCustody = new WeakMap<object, AdoptedHostCustody>();
+type StartupHostHandle = { key: SessionKey; host: object };
 
 /** The hosts of a pass, less any released while the pass was running. */
 function unreleasedStartupHosts(hosts: AdoptedStructuredHost[]): AdoptedStructuredHost[] {
@@ -233,13 +238,14 @@ function retainAdoptedHosts(
 
 function retainedStartupHostIsCurrent(
   snapshot: RegistryFile,
-  item: AdoptedStructuredHost,
+  item: StartupHostHandle,
   retainedTerminalHostKeys: ReadonlySet<string> = new Set(),
   seats: readonly OrchestratorSeat[] = [],
 ): boolean {
   const key = sessionKeyId(item.key);
   const entry = snapshot.entries[key];
-  if (!entry?.structuredHost || entry.status === "dead" || entry.status === "unhosted") return false;
+  if (releasedStartupHosts.has(item.host) || !entry?.structuredHost || entry.status === "dead" || entry.status === "unhosted"
+    || !startupHostOwnsEntry(item, entry)) return false;
   const conversation = registryConversationsForEntryKey(snapshot, key).find((candidate) =>
     candidate.engine === item.key.engine
       && candidate.generations.at(-1)?.id === item.key.sessionId);
@@ -253,28 +259,62 @@ function retainedStartupHostIsCurrent(
     && (conversation.turn.state !== "terminal" || retainedTerminalHostKeys.has(key) || currentIdleSeat));
 }
 
+function rememberStartupHostCustody(registry: AgentRegistry, item: AdoptedStructuredHost): void {
+  if (startupHostCustody.has(item.host)) return;
+  if (item.custody) {
+    startupHostCustody.set(item.host, item.custody);
+    return;
+  }
+  // Injected adopters may omit the binding evidence. Capture it on their
+  // first callback or return, before that adapter can be carried to a retry.
+  const entry = startupHostSnapshot(registry, item.key).entries[sessionKeyId(item.key)];
+  if (!entry?.structuredHost) return;
+  const { endpoint, process, writerClaimEpoch } = entry.structuredHost;
+  startupHostCustody.set(item.host, {
+    claimOwner: entry.claimOwner, claimEpoch: entry.claimEpoch, writerEpoch: writerClaimEpoch, endpoint, process,
+  });
+}
+
+function startupHostOwnsEntry(item: StartupHostHandle, entry: AgentRegistryEntry | undefined): boolean {
+  const custody = startupHostCustody.get(item.host);
+  const host = entry?.structuredHost;
+  return !!(custody && entry && host && entry.claimOwner === custody.claimOwner && entry.claimEpoch === custody.claimEpoch
+    && host.writerClaimEpoch === custody.writerEpoch && host.endpoint === custody.endpoint
+    && (custody.process && host.process
+      ? sameRecordedProcessIdentity(host.process, custody.process) && host.process.bootEpoch === custody.process.bootEpoch
+      : host.process === custody.process));
+}
+
 async function revalidateRetainedStartupHosts(
   registry: AgentRegistry,
   retained: readonly AdoptedStructuredHost[],
-  prepared: RegistryFile | undefined = undefined,
   retainedTerminalHostKeys: ReadonlySet<string> = new Set(),
   currentSeats: () => readonly OrchestratorSeat[] = () => [],
+  onReplacement?: (key: SessionKey) => void,
 ): Promise<AdoptedStructuredHost[]> {
   let remaining = [...retained];
-  let preparedSnapshot = prepared;
   for (;;) {
     const current: AdoptedStructuredHost[] = [];
-    const retired: AdoptedStructuredHost[] = [];
+    const retired: Array<{ item: AdoptedStructuredHost; ownsEntry: boolean }> = [];
     for (const item of remaining) {
-      const snapshot = preparedSnapshot ?? startupHostSnapshot(registry, item.key);
-      if (!startupHostInScope(registry, sessionKeyId(item.key))
+      const key = sessionKeyId(item.key);
+      const snapshot = startupHostSnapshot(registry, item.key);
+      if (!startupHostInScope(registry, key)
         || retainedStartupHostIsCurrent(snapshot, item, retainedTerminalHostKeys, currentSeats())) current.push(item);
-      else retired.push(item);
+      else {
+        const entry = snapshot.entries[key];
+        const ownsEntry = startupHostOwnsEntry(item, entry);
+        if (!ownsEntry && entry?.structuredHost && entry.status !== "dead" && entry.status !== "unhosted") onReplacement?.(item.key);
+        retired.push({ item, ownsEntry });
+      }
     }
     // Return a fresh set without a cleanup await after its retention checks.
     // Each cleanup pass removes at least one candidate, bounding rechecks.
     if (retired.length === 0) return current;
-    await forEachStartupBatch(retired, async item => {
+    await forEachStartupBatch(retired, async ({ item, ownsEntry }) => {
+      const stillOwns = ownsEntry
+        && startupHostOwnsEntry(item, startupHostSnapshot(registry, item.key).entries[sessionKeyId(item.key)]);
+      if (!stillOwns && "detachAfterStartupCustodyLoss" in item.host) item.host.detachAfterStartupCustodyLoss();
       const release = () => withHostStopOrigin({ path: "startup-retained-host-release", operationId: sessionKeyId(item.key) }, async () => {
         if (!await releaseStructuredDeliveryHost(item.key, item.host)) {
           await item.host.release();
@@ -282,11 +322,12 @@ async function revalidateRetainedStartupHosts(
         }
         forgetReleasedStartupHost(item.host);
       });
-      if (item.key.engine === "claude") await releaseClaudeHostForDemotion(registry, item.key, item.host, {}, release, assertStartupReadActive);
+      if (item.key.engine === "claude" && stillOwns) {
+        await releaseClaudeHostForDemotion(registry, item.key, item.host, {}, release, assertStartupReadActive);
+      }
       else await release();
-    });
+    }, assertStartupReadActive);
     remaining = current;
-    preparedSnapshot = undefined;
   }
 }
 
@@ -317,6 +358,7 @@ interface StructuredStartupSignals {
     deliveredAt: number | null;
     pending: boolean;
   }[]>;
+  evidenceIsCurrent?: () => Promise<boolean>;
 }
 
 const TRANSCRIPT_REFRESH_CONCURRENCY = 16;
@@ -1838,9 +1880,28 @@ function canonicalConversationId(registry: AgentRegistry, conversationId: string
 
 /** Every send or steer the runtime snapshot shows admitted, by canonical
     conversation. */
+type StartupRuntimeRead = {
+  sessions: StartupRuntimeSession[];
+  recentOperations: Awaited<ReturnType<RuntimeHostClient["snapshot"]>>["recentOperations"];
+};
+type StartupRuntimeWitness = { version: string; effectsVersion: string; generation: string | null };
+type RuntimeStartupCheckpoint = {
+  generation?: string | null;
+  sessions: Map<string, { stamp: string | number | null; evidence: StartupRuntimeSession | null }>;
+  effects?: StartupRuntimeEffects;
+};
+type StartupRuntimeEffects = {
+  version: string | undefined;
+  afterEventSeq: number;
+  complete: boolean;
+  waitingSwitches: Set<string>;
+  pending: Set<string>;
+  continuations: Set<string>;
+};
+
 async function admittedRuntimeMessages(
   registry: AgentRegistry,
-  runtime: Pick<Awaited<ReturnType<RuntimeHostClient["snapshot"]>>, "sessions" | "recentOperations">,
+  runtime: StartupRuntimeRead,
 ): Promise<StructuredStartupSignals["admittedMessages"]> {
   const admittedMessages = new Map<string, { idempotencyKey: string; deliveredAt: number | null; pending: boolean }[]>();
   let snapshot: RegistryFile | undefined;
@@ -1903,7 +1964,7 @@ async function startupRuntimeConversationIds(
 async function readStartupRuntime(
   client: RuntimeHostClient,
   conversationIds: readonly string[],
-): Promise<Pick<Awaited<ReturnType<RuntimeHostClient["snapshot"]>>, "sessions" | "recentOperations">> {
+): Promise<StartupRuntimeRead> {
   // Compatibility with older embedders; the production client has session-read.
   if (!client.readSession) {
     const { signal, timeoutMs } = startupRuntimeReadOptions();
@@ -1926,14 +1987,150 @@ function startupRuntimeReadOptions(maxMs = RUNTIME_STARTUP_READ_DEADLINE_MS) {
   return { signal: budget?.signal, timeoutMs: Math.max(1, Math.min(maxMs, Math.ceil(remaining))) };
 }
 
+async function startupRuntimeWitness(client: RuntimeHostClient, knownVersion?: string): Promise<StartupRuntimeWitness | null> {
+  if (client.startupSessionEvidence) {
+    const witness = await client.startupSessionEvidence([], startupRuntimeReadOptions());
+    if (witness) return witness;
+  }
+  // The preceding host protocol has a journal-wide conditional effect
+  // witness. It proves unchanged session reads as well, at coarser granularity.
+  const page = await client.effectPage?.([], 0, knownVersion, startupRuntimeReadOptions());
+  return page?.version ? { version: page.version, effectsVersion: page.version, generation: null } : null;
+}
+
+async function startupRuntimeWitnessIsCurrent(client: RuntimeHostClient, witness: StartupRuntimeWitness): Promise<boolean> {
+  const current = await startupRuntimeWitness(client, witness.version);
+  assertStartupReadActive();
+  return current?.version === witness.version && current.generation === witness.generation && current.effectsVersion === witness.effectsVersion;
+}
+
+async function readCheckpointedStartupRuntime(
+  client: RuntimeHostClient,
+  conversationIds: readonly string[],
+  witness: StartupRuntimeWitness,
+  checkpoint: RuntimeStartupCheckpoint,
+  onProgress?: (completed: number, total: number) => void,
+): Promise<StartupRuntimeRead | null> {
+  if (checkpoint.generation !== witness.generation) {
+    checkpoint.generation = witness.generation;
+    checkpoint.sessions.clear();
+  }
+  const selected = new Set(conversationIds);
+  for (const id of checkpoint.sessions.keys()) {
+    if (!selected.has(id)) checkpoint.sessions.delete(id);
+  }
+  const stamps = new Map<string, string | number | null>();
+  if (witness.generation !== null) {
+    for (let offset = 0; offset < conversationIds.length; offset += STARTUP_SESSION_VERSION_BATCH) {
+      const ids = conversationIds.slice(offset, offset + STARTUP_SESSION_VERSION_BATCH);
+      const page = await client.startupSessionEvidence!(ids, startupRuntimeReadOptions());
+      assertStartupReadActive();
+      if (!page || page.version !== witness.version || page.generation !== witness.generation) return null;
+      for (const [index, id] of ids.entries()) stamps.set(id, page.sessions[index]!);
+    }
+  } else {
+    for (const id of conversationIds) stamps.set(id, witness.version);
+  }
+  const remaining = conversationIds.filter(id => checkpoint.sessions.get(id)?.stamp !== stamps.get(id));
+  let completed = conversationIds.length - remaining.length;
+  onProgress?.(completed, conversationIds.length);
+  await forEachStartupBatch(remaining, async conversationId => {
+    if (witness.generation !== null) {
+      const read = await client.startupSessionEvidence!([conversationId], { ...startupRuntimeReadOptions(), includeEvidence: true });
+      if (!read || read.generation !== witness.generation) return;
+      checkpoint.sessions.set(conversationId, { stamp: read.sessions[0]!, evidence: read.evidence ?? null });
+      onProgress?.(++completed, conversationIds.length);
+      return;
+    }
+    const session = await client.readSession!({ conversationId }, startupRuntimeReadOptions());
+    // Keep only the evidence startup consumes. A later pass must prove this
+    // stamp again before it can use the answer, including an absent session.
+    const evidence = session && {
+      conversationId: session.conversationId, host: session.host, turn: session.turn, recentReceipts: session.recentReceipts,
+    };
+    checkpoint.sessions.set(conversationId, { stamp: stamps.get(conversationId)!, evidence });
+    onProgress?.(++completed, conversationIds.length);
+  }, assertStartupReadActive);
+  if (completed !== conversationIds.length) return null;
+  const sessions = conversationIds.flatMap(id => {
+    const evidence = checkpoint.sessions.get(id)?.evidence;
+    return evidence ? [evidence] : [];
+  });
+  return { sessions, recentOperations: sessions.flatMap(session => session.recentReceipts ?? []) };
+}
+
+async function readStartupRuntimeEffects(
+  client: RuntimeHostClient,
+  witness: StartupRuntimeWitness | null,
+  checkpoint: RuntimeStartupCheckpoint,
+): Promise<StartupRuntimeEffects> {
+  const cached = witness && checkpoint.effects?.version === witness.effectsVersion ? checkpoint.effects : undefined;
+  const effects: StartupRuntimeEffects = cached ?? {
+    version: witness?.effectsVersion, afterEventSeq: 0, complete: false,
+    waitingSwitches: new Set(), pending: new Set(), continuations: new Set(),
+  };
+  checkpoint.effects = witness ? effects : undefined;
+  while (!effects.complete) {
+    const batch = await client.effectBatch(STRUCTURED_HOST_OPERATION_EFFECT_KINDS, effects.afterEventSeq, startupRuntimeReadOptions(RUNTIME_RPC_DEADLINE_MS));
+    effects.complete = batch.length < RUNTIME_EFFECT_PAGE_SIZE;
+    if (!effects.complete) {
+      const next = Math.max(...batch.map(effect => effect.eventSeq));
+      if (!Number.isSafeInteger(next) || next <= effects.afterEventSeq) {
+        throw new Error("structured startup operation page did not advance");
+      }
+      effects.afterEventSeq = next;
+    }
+    for (const effect of batch) {
+      const { conversationId, accountId, operationId } = effect.payload;
+      // An account pick waits for the conversation's next engagement. Its
+      // message, once there is one, still counts as work.
+      if (effect.kind === "runtime.reconfigure" && typeof accountId === "string" && typeof operationId === "string") {
+        effects.waitingSwitches.add(operationId);
+        continue;
+      }
+      if (typeof conversationId !== "string") continue;
+      effects.pending.add(conversationId);
+      if (effect.kind === "runtime.send" && typeof operationId === "string"
+        && operationId.startsWith(`${INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX}-`)) {
+        effects.continuations.add(conversationId);
+      }
+    }
+    assertStartupReadActive();
+  }
+  return effects;
+}
+
+async function readStartupContinuationMessages(
+  registry: AgentRegistry,
+  client: RuntimeHostClient,
+  ids: readonly string[],
+  checkpoint: RuntimeStartupCheckpoint,
+): Promise<StructuredStartupSignals["admittedMessages"]> {
+  for (;;) {
+    const witness = await startupRuntimeWitness(client);
+    const runtime = witness && (witness.generation !== null || client.readSession)
+      ? await readCheckpointedStartupRuntime(client, ids, witness, checkpoint)
+      : await readStartupRuntime(client, ids);
+    if (!runtime) continue;
+    const messages = await admittedRuntimeMessages(registry, runtime);
+    if (!witness || await startupRuntimeWitnessIsCurrent(client, witness)) return messages;
+  }
+}
+
 export async function structuredStartupSignals(
   registry: AgentRegistry,
   client: RuntimeHostClient | null,
   owedConversationIds: ReadonlySet<string> = new Set(),
   scope: ReadonlySet<string> | null = null,
   prepared?: RegistryFile,
+  options?: {
+    checkpoint?: RuntimeStartupCheckpoint;
+    beforeUse?: () => Promise<void>;
+    onProgress?: (completed: number, total: number) => void;
+  },
 ): Promise<StructuredStartupSignals> {
   if (!client) {
+    await options?.beforeUse?.();
     return {
       hostedRunningConversationIds: new Set(),
       pendingOperationConversationIds: new Set(),
@@ -1941,62 +2138,42 @@ export async function structuredStartupSignals(
       admittedMessages: new Map(),
     };
   }
-  // This view selects identities only. Runtime and settlement evidence below
-  // are read after selection, and adoption still checks current custody by key.
-  const selection = prepared && registryStartupSelectionUnchanged(prepared) === true
-    ? prepared : await preparedStartupSnapshot(registry);
-  const runtime = await readStartupRuntime(client, await startupRuntimeConversationIds(registry, owedConversationIds, selection, scope));
-  /* #1846: an account pick waits for the conversation's next engagement, so on its own it is no work that
-     needs a host at startup. Its message, once there is one, is. */
-  const waitingSwitches = new Set<string>();
-  const hostedRunningConversationIds = new Set(runtime.sessions
-    .filter((session) => session.host === "hosted"
-      && (session.turn === "running" || session.turn === "interrupt_requested"))
-    .map((session) => canonicalConversationId(registry, session.conversationId)));
-  const pendingOperationConversationIds = new Set<string>();
-  const pendingCodexContinuationConversationIds = new Set<string>();
-  let afterEventSeq = 0;
-  while (true) {
-    const batch = await client.effectBatch(STRUCTURED_HOST_OPERATION_EFFECT_KINDS, afterEventSeq, startupRuntimeReadOptions(RUNTIME_RPC_DEADLINE_MS));
+  const checkpoint: RuntimeStartupCheckpoint = options?.checkpoint ?? { sessions: new Map() };
+  let selection = prepared;
+  for (;;) {
+    if (!selection || registryStartupSelectionUnchanged(selection) !== true) selection = await preparedStartupSnapshot(registry);
+    const ids = await startupRuntimeConversationIds(registry, owedConversationIds, selection, scope);
+    const witness = await startupRuntimeWitness(client, checkpoint.effects?.version);
+    const runtime = witness && (witness.generation !== null || client.readSession)
+      ? await readCheckpointedStartupRuntime(client, ids, witness, checkpoint, options?.onProgress)
+      : await readStartupRuntime(client, ids);
+    if (!runtime) continue;
+    const effects = await readStartupRuntimeEffects(client, witness, checkpoint);
+    await options?.beforeUse?.();
+    const admittedMessages = await admittedRuntimeMessages(registry, runtime);
+    const selected = selection;
+    const evidenceIsCurrent = async () =>
+      (!witness || await startupRuntimeWitnessIsCurrent(client, witness)) && registryStartupSelectionUnchanged(selected) !== false;
+    if (!await evidenceIsCurrent()) continue;
     assertStartupReadActive();
-    for (const effect of batch) {
-      const conversationId = effect.payload.conversationId;
-      if (effect.kind === "runtime.reconfigure"
-        && typeof effect.payload.accountId === "string"
-        && typeof effect.payload.operationId === "string") {
-        waitingSwitches.add(effect.payload.operationId);
-        continue;
-      }
-      if (typeof conversationId === "string") {
-        const canonicalId = canonicalConversationId(registry, conversationId);
-        pendingOperationConversationIds.add(canonicalId);
-        if (effect.kind === "runtime.send"
-          && typeof effect.payload.operationId === "string"
-          && effect.payload.operationId.startsWith(`${INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX}-`)) {
-          pendingCodexContinuationConversationIds.add(canonicalId);
-        }
-      }
+    const canonical = (id: string) => canonicalConversationId(registry, id);
+    const pendingOperationConversationIds = new Set([...effects.pending].map(canonical));
+    for (const receipt of runtime.recentOperations) {
+      if (receipt.status !== "pending" && receipt.status !== "queued" && receipt.status !== "delivering" && receipt.status !== "applying") continue;
+      if (receipt.kind === "kill") continue;
+      if (receipt.kind === "reconfigure" && receipt.status !== "applying" && effects.waitingSwitches.has(receipt.operationId)) continue;
+      pendingOperationConversationIds.add(canonical(receipt.conversationId));
     }
-    if (batch.length < RUNTIME_EFFECT_PAGE_SIZE) break;
-    const next = Math.max(...batch.map((effect) => effect.eventSeq));
-    if (!Number.isSafeInteger(next) || next <= afterEventSeq) {
-      throw new Error("structured startup operation page did not advance");
-    }
-    afterEventSeq = next;
+    return {
+      hostedRunningConversationIds: new Set(runtime.sessions
+        .filter(session => session.host === "hosted" && (session.turn === "running" || session.turn === "interrupt_requested"))
+        .map(session => canonical(session.conversationId))),
+      pendingOperationConversationIds,
+      pendingCodexContinuationConversationIds: new Set([...effects.continuations].map(canonical)),
+      admittedMessages,
+      ...(witness ? { evidenceIsCurrent } : {}),
+    };
   }
-  for (const receipt of runtime.recentOperations) {
-    if (receipt.status !== "pending" && receipt.status !== "queued" && receipt.status !== "delivering" && receipt.status !== "applying") continue;
-    if (receipt.kind === "kill") continue;
-    if (receipt.kind === "reconfigure" && receipt.status !== "applying" && waitingSwitches.has(receipt.operationId)) continue;
-    pendingOperationConversationIds.add(canonicalConversationId(registry, receipt.conversationId));
-  }
-  const admittedMessages = await admittedRuntimeMessages(registry, runtime);
-  return {
-    hostedRunningConversationIds,
-    pendingOperationConversationIds,
-    pendingCodexContinuationConversationIds,
-    admittedMessages,
-  };
 }
 
 /** Like LLV_HOST_RETIREMENT_IDLE_HOURS, this bounds speculative host residency.
@@ -2168,31 +2345,74 @@ interface PipelineStartupEvidence {
   membershipIdentity?: string;
 }
 
+type StartupMembershipPart = {
+  canonicalIds: Map<string, ViewerConversationId>;
+  memberships: RegistryFile["memberships"];
+  bindings: Array<{ id: ViewerConversationId; artifactPath: string; sessionId: string; generationPath?: string }>;
+};
+type StartupMembershipParts = {
+  hosts: Map<string, StartupMembershipPart>;
+  receipts: Map<string, StartupMembershipPart>;
+};
+
+function projectStartupMembershipRow(snapshot: RegistryFile, key: string, receipt: boolean): StartupMembershipPart {
+  const part: StartupMembershipPart = { canonicalIds: new Map(), memberships: {}, bindings: [] };
+  const take = (conversationId: ViewerConversationId) => {
+    const canonical = resolveConversationAlias(snapshot, conversationId);
+    if (part.canonicalIds.has(canonical)) return canonical;
+    for (const id of conversationIdsResolvingTo(snapshot, canonical)) {
+      part.canonicalIds.set(id, canonical);
+      if (snapshot.memberships[id]) part.memberships[id] = snapshot.memberships[id];
+    }
+    return canonical;
+  };
+  if (receipt) {
+    const row = snapshot.receipts[key];
+    if (row) take(row.conversationId);
+  } else {
+    const entry = snapshot.entries[key];
+    if (entry) {
+      for (const conversation of registryConversationsForEntryKey(snapshot, key)) {
+        const generation = conversation.generations.at(-1);
+        part.bindings.push({
+          id: take(conversation.id), artifactPath: entry.artifactPath, sessionId: entry.key.sessionId,
+          generationPath: generation?.id === entry.key.sessionId ? generation.path : undefined,
+        });
+      }
+    }
+  }
+  return part;
+}
+
 function* pipelineStartupMembershipSteps(
   registry: AgentRegistry,
   host?: AgentRegistryEntry,
   prepared?: RegistryFile,
   onCount?: (total: number) => void,
+  parts?: StartupMembershipParts,
 ) {
   const sourceSnapshot = host ? startupHostSnapshot(registry, host.key) : prepared ?? registry.readOnlySnapshot();
-  // Only hosts this pass may adopt need membership evidence. Keyed generation
-  // lookups keep retained conversations and memberships off the retry loop.
   const snapshot = host ? sourceSnapshot : startupSnapshot(registry, sourceSnapshot);
   const memberships: RegistryFile["memberships"] = {};
   const byPipeline = new Map<string, string[]>();
   const byAgentPath = new Map<string, Set<string>>(), bySessionId = new Map<string, Set<string>>();
-  const bind = (index: Map<string, Set<string>>, value: string | null | undefined, id: string) => {
+  const canonicalIds = new Map<string, ViewerConversationId>();
+  const bind = (index: Map<string, Set<string>>, value: string | undefined, id: string) => {
     if (!value) return;
     const ids = index.get(value) ?? new Set<string>(); ids.add(id); index.set(value, ids);
   };
-  const canonicalIds = new Map<string, ViewerConversationId>();
-  const take = (conversationId: ViewerConversationId) => {
-    if (canonicalIds.has(conversationId)) return;
-    const canonical = resolveConversationAlias(snapshot, conversationId);
-    for (const id of conversationIdsResolvingTo(snapshot, canonical)) {
+  const add = (key: string, receipt: boolean) => {
+    const cache = receipt ? parts?.receipts : parts?.hosts;
+    let part = cache?.get(key);
+    const examined = !part;
+    if (!part) {
+      part = projectStartupMembershipRow(snapshot, key, receipt);
+      cache?.set(key, part);
+    }
+    for (const [id, canonical] of part.canonicalIds) {
       if (canonicalIds.has(id)) continue;
       canonicalIds.set(id, canonical);
-      const entries = snapshot.memberships[id];
+      const entries = part.memberships[id];
       if (!entries) continue;
       memberships[id] = entries;
       for (const entry of entries) {
@@ -2202,33 +2422,66 @@ function* pipelineStartupMembershipSteps(
         byPipeline.set(entry.containerId, ids);
       }
     }
+    for (const binding of part.bindings) {
+      bind(byAgentPath, binding.artifactPath, binding.id);
+      bind(bySessionId, binding.sessionId, binding.id);
+      bind(byAgentPath, binding.generationPath, binding.id);
+    }
+    return examined;
   };
   const hostKeys = host ? [sessionKeyId(host.key)] : registryKeysMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp"]);
+  // Pending structured spawns need the same unreadable-pipeline fence.
   const receiptKeys = host ? [] : registryKeysMatching(snapshot, "receipts", "state", ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"]);
   onCount?.(hostKeys.length + receiptKeys.length);
   for (const key of hostKeys) {
-    const entry = snapshot.entries[key];
-    if (entry && startupHostInScope(registry, key)) {
-      for (const conversation of registryConversationsForEntryKey(snapshot, sessionKeyId(entry.key))) {
-        take(conversation.id);
-        const id = resolveConversationAlias(snapshot, conversation.id);
-        bind(byAgentPath, entry.artifactPath, id);
-        bind(bySessionId, entry.key.sessionId, id);
-        const generation = conversation.generations.at(-1);
-        if (generation?.id === entry.key.sessionId) bind(byAgentPath, generation.path, id);
-      }
-    }
-    yield;
+    yield startupHostInScope(registry, key) ? add(key, false) : true;
   }
-  // Pending structured spawns can have membership before an entry exists.
-  // They need the same unreadable-pipeline fence as resident hosts.
   for (const key of receiptKeys) {
-    const receipt = snapshot.receipts[key];
-    if (receipt) take(receipt.conversationId);
-    yield;
+    yield add(key, true);
   }
   const resolve = (id: string) => canonicalIds.get(id) ?? resolveConversationAlias(snapshot, id as ViewerConversationId);
   return { memberships, resolve, byPipeline, byAgentPath, bySessionId, selectedIds: new Set(canonicalIds.keys()), snapshot: sourceSnapshot };
+}
+
+function rebaseStartupMembershipParts(census: StartupMembershipCensus, snapshot: RegistryFile): StartupMembershipParts {
+  const prior = registryStartupSelectionProof(census.snapshot);
+  const { hosts, receipts } = census.parts;
+  if (!prior) {
+    return { hosts: new Map(), receipts: new Map() };
+  }
+  const current = registryStartupSelectionProof(snapshot);
+  // Both views must describe the same journal cut. A row could have moved
+  // away and back between separate currentness checks.
+  if (!current || current.identity !== prior.identity || current.revision !== prior.revision || current.changes.length > 0) {
+    throw new StartupMembershipChangedError();
+  }
+  const changedIds = new Set<string>();
+  for (const { collection, key } of prior.changes) {
+    if (collection === "entries") hosts.delete(key);
+    else if (collection === "receipts") receipts.delete(key);
+    else if (collection === "memberships") changedIds.add(key);
+    else if (collection === "conversationAliases") {
+      const id = key as ViewerConversationId;
+      changedIds.add(id);
+      changedIds.add(resolveConversationAlias(census.snapshot, id));
+      changedIds.add(resolveConversationAlias(snapshot, id));
+    } else {
+      // Generation changes can move a conversation into another host's
+      // projection, including one which previously had no conversation.
+      for (const row of [census.snapshot.conversations[key], snapshot.conversations[key]]) {
+        if (!row) continue;
+        for (const generation of row.generations) hosts.delete(sessionKeyId({ engine: row.engine, sessionId: generation.id }));
+      }
+    }
+  }
+  if (changedIds.size > 0) {
+    for (const cache of [hosts, receipts]) {
+      for (const [key, part] of cache) {
+        if ([...part.canonicalIds.keys()].some(id => changedIds.has(id))) cache.delete(key);
+      }
+    }
+  }
+  return census.parts;
 }
 
 /** A host, conversation, pending launch, alias or membership changed after
@@ -2249,6 +2502,7 @@ export function pipelineStartupMemberships(registry: AgentRegistry, host?: Agent
 type StartupMembershipCensus = {
   snapshot: RegistryFile;
   steps: ReturnType<typeof pipelineStartupMembershipSteps>;
+  parts: StartupMembershipParts;
   completed: number;
   total: number | null;
   value?: ReturnType<typeof pipelineStartupMemberships>;
@@ -2271,18 +2525,18 @@ export async function pipelineStartupMembershipsAsync(
     const deadline = "startup membership deadline exceeded";
     assertStartupBudget(budget, deadline);
     const checkpoint = budget.checkpoint ?? {};
-    if (checkpoint.census && !membershipSnapshotIsCurrent(registry, checkpoint.census.snapshot)) {
-      checkpoint.census.steps.return(undefined as never);
-      checkpoint.census = undefined;
-    }
-    if (!checkpoint.census) {
+    const prior = checkpoint.census;
+    if (!prior || !membershipSnapshotIsCurrent(registry, prior.snapshot)) {
       const snapshot = prepared && registryStartupSelectionUnchanged(prepared) === true ? prepared
         : await readStartupRegistry(registry, budget, deadline);
-      const steps = pipelineStartupMembershipSteps(registry, undefined, snapshot, total => { census.total = total; });
-      const census: StartupMembershipCensus = { snapshot, steps, completed: 0, total: null };
+      if (!membershipSnapshotIsCurrent(registry, snapshot)) throw new StartupMembershipChangedError();
+      const parts = prior ? rebaseStartupMembershipParts(prior, snapshot) : { hosts: new Map(), receipts: new Map() };
+      prior?.steps.return(undefined as never);
+      const steps = pipelineStartupMembershipSteps(registry, undefined, snapshot, total => { census.total = total; }, parts);
+      const census: StartupMembershipCensus = { snapshot, steps, parts, completed: parts.hosts.size + parts.receipts.size, total: null };
       checkpoint.census = census;
     }
-    const census = checkpoint.census;
+    const census = checkpoint.census!;
     try {
       if (census.total !== null) budget.onProgress?.(census.completed, census.total - census.completed);
       while (!census.value) {
@@ -2294,7 +2548,7 @@ export async function pipelineStartupMembershipsAsync(
           for (let count = 0; count < 16; count++) {
             const next = census.steps.next();
             if (next.done) { census.value = next.value; break; }
-            census.completed++;
+            if (next.value) census.completed++;
             if (performance.now() - began >= 8) break;
           }
         });
@@ -2304,9 +2558,9 @@ export async function pipelineStartupMembershipsAsync(
       if (!membershipSnapshotIsCurrent(registry, census.snapshot)) throw new StartupMembershipChangedError();
       return census.value;
     } catch (error) {
-      // Keep a partially consumed immutable projection only across its deadline.
-      // A changed revision or retirement requires a new selection.
-      if (!budget.checkpoint || !(error instanceof StructuredStartupDeadlineError)) {
+      // A deadline keeps the cursor. A changed selection keeps only the
+      // row projections whose inputs the next snapshot can still prove.
+      if (!budget.checkpoint || (!(error instanceof StructuredStartupDeadlineError) && !(error instanceof StartupMembershipChangedError))) {
         census.steps.return(undefined as never);
         checkpoint.census = undefined;
       }
@@ -3080,7 +3334,7 @@ async function adoptStructuredHostsPass(
     const retainedRecoveryHostKeys = () => new Set([...orchestratorHostKeys, ...interruptedHostKeys]);
     const retained = retainAdoptedHosts(startupPasses.get(registry)?.ready ?? [], startupPasses.get(registry)?.retained ?? []);
     let nextAdoptedHosts = retained.length ? await revalidateRetainedStartupHosts(
-      registry, retained, undefined, retainedRecoveryHostKeys(), orchestratorSeats,
+      registry, retained, retainedRecoveryHostKeys(), orchestratorSeats,
     ) : [];
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     /* Off the loop (rule c); refused, it is skipped this pass and the next
@@ -3102,14 +3356,21 @@ async function adoptStructuredHostsPass(
       || delayedRows.has(sessionKeyId(entry.key))
       || evidenceMoved(entry), assertActive, recoveryBoundarySnapshot);
     reportCensusPhase("reading runtime startup signals");
+    if (checkpoint) checkpoint.runtime ??= { sessions: new Map() };
     const signals = await structuredStartupSignals(
       registry,
       client,
       new Set(unresolvedInterruptions.map((obligation) => canonicalConversationId(registry, obligation.conversationId))),
       resumeDeferred,
       recoveryBoundarySnapshot,
+      {
+        checkpoint: checkpoint?.runtime,
+        beforeUse: async () => { pipelineEvidence = await readBulkEvidence("reading startup signals"); },
+        onProgress: (completedHosts, totalHosts) => {
+          if (!resumeDeferred) markStructuredHostStartupProgress({ phase: "reading runtime startup signals", completedHosts, totalHosts });
+        },
+      },
     );
-    pipelineEvidence = await readBulkEvidence("reading startup signals");
     /* Only a continuation not yet admitted forces its row's adoption. One the
        queue holds is pending work of its own, which makes the row eligible for
        as long as it stays unsettled. */
@@ -3137,6 +3398,10 @@ async function adoptStructuredHostsPass(
       interruptedHostKeys,
       resumeDeferred,
     );
+    if (nextAdoptedHosts.length) {
+      nextAdoptedHosts = await revalidateRetainedStartupHosts(registry, nextAdoptedHosts, retainedRecoveryHostKeys(), orchestratorSeats);
+      rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
+    }
     const retainedHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
     const skippedHostKeys = new Set<string>();
     const shouldAdopt: StructuredHostAdoptionFilter = (entry) => {
@@ -3157,6 +3422,9 @@ async function adoptStructuredHostsPass(
     };
     const adoptionCandidates = (await startupStructuredHostEntries(adoptionSnapshot, assertActive)).filter((entry) =>
       entry.structuredHost && shouldAdopt(entry));
+    if (signals.evidenceIsCurrent && !await signals.evidenceIsCurrent()) {
+      throw new Error("structured startup runtime evidence changed before adoption");
+    }
     /* Nothing is launched that this pass cannot hand to a delivery controller.
        `controllerBoundEarly` is exactly "this pass has a runtime client", and it
        is also the condition on the claim assertion below — so without one, the
@@ -3232,34 +3500,38 @@ async function adoptStructuredHostsPass(
     // writer claims. Keep each handle before the batch can reject, so the
     // retry can publish it instead of waiting on its own engine forever.
     const publicationTails = new Map<string, Promise<void>>();
+    const ownsStartupPublication = (item: StartupHostHandle): boolean => {
+      assertActive();
+      const snapshot = startupHostSnapshot(registry, item.key);
+      return retainedStartupHostIsCurrent(snapshot, item, retainedRecoveryHostKeys(), orchestratorSeats());
+    };
+    const publicationItem = (item: AdoptedStructuredHost) => ({
+      ...item, writerEpoch: startupHostCustody.get(item.host)?.writerEpoch ?? null,
+    });
+    const changedCustody = new Map<string, SessionKey>();
+    const onReplacement = (key: SessionKey) => { changedCustody.set(sessionKeyId(key), key); };
+    const requireReplacementAdopted = () => {
+      for (const [key, session] of changedCustody) {
+        if (!hasStructuredDeliveryHost(session)) throw Object.assign(new Error("structured startup host custody changed"), { hostKey: key });
+      }
+    };
     const onAdopted = (item: AdoptedStructuredHost) => {
+      rememberStartupHostCustody(registry, item);
       nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, [item]);
       rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
       if (!controllerBoundEarly || rowRetry) return;
       const key = sessionKeyId(item.key);
-      const captured = startupHostSnapshot(registry, item.key).entries[key];
-      if (!captured?.structuredHost || !captured.claimOwner) return;
-      const claimOwner = captured.claimOwner;
-      const claimEpoch = captured.claimEpoch;
-      const writerEpoch = captured.structuredHost.writerClaimEpoch;
+      if (!startupHostCustody.get(item.host)?.claimOwner) return;
       const owns = async (): Promise<boolean> => {
         try { assertActive(); } catch { return false; }
         if (heldHostKeys.has(key) || deferredHostKeys.has(key) || skippedHostKeys.has(key)) return false;
-        const snapshot = startupHostSnapshot(registry, item.key);
-        const current = snapshot.entries[key];
-        if (!retainedStartupHostIsCurrent(snapshot, item, retainedRecoveryHostKeys(), orchestratorSeats())) return false;
-        if (!current?.structuredHost || current.status === "dead" || current.status === "unhosted"
-          || current.claimOwner !== claimOwner || current.claimEpoch !== claimEpoch
-          || current.structuredHost.writerClaimEpoch !== writerEpoch) return false;
-        const conversation = registry.conversationForPath(current.artifactPath);
-        return !!conversation && !conversation.supersededBy
-          && conversation.generations.at(-1)?.id === item.key.sessionId;
+        return ownsStartupPublication(item);
       };
       // Keep a host's publications ordered without making another host wait
       // for its health or journal reads. A failed publish retains the adopted
       // handle for the normal completion retry.
       const publication = (publicationTails.get(key) ?? Promise.resolve()).then(async () => {
-        if (await owns()) await publishStructuredDeliveryHost(item, owns);
+        if (await owns()) await publishStructuredDeliveryHost(publicationItem(item), owns);
       }).catch(error => {
         console.warn("[structured hosts] early host publication deferred", {
           key, error: error instanceof Error ? error.message : String(error),
@@ -3363,6 +3635,7 @@ async function adoptStructuredHostsPass(
       { onAdopted, onFailure, claimHost, assertActive, preparedSnapshot: adoptionSnapshot, ...(dependencies.adoptCodexHost ? { adoptHost: dependencies.adoptCodexHost } : {}) },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount);
+    for (const item of codex) rememberStartupHostCustody(registry, item);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, codex);
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     await reportProgress("adopting Claude hosts");
@@ -3427,6 +3700,7 @@ async function adoptStructuredHostsPass(
       { onAdopted, onFailure, claimHost, assertActive, preparedSnapshot: adoptionSnapshot },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount + claudeCandidateCount);
+    for (const item of claude) rememberStartupHostCustody(registry, item);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, claude);
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     const contestedHostKeys = await unresolvedEligibleHosts(
@@ -3451,9 +3725,9 @@ async function adoptStructuredHostsPass(
     nextAdoptedHosts = await revalidateRetainedStartupHosts(
       registry,
       nextAdoptedHosts,
-      undefined,
       retainedRecoveryHostKeys(),
       orchestratorSeats,
+      onReplacement,
     );
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     const candidateHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
@@ -3539,9 +3813,9 @@ async function adoptStructuredHostsPass(
     nextAdoptedHosts = await revalidateRetainedStartupHosts(
       registry,
       nextAdoptedHosts,
-      publicationSnapshot,
       retainedRecoveryHostKeys(),
       orchestratorSeats,
+      onReplacement,
     );
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     const finalShouldAdopt = await structuredStartupAdoptionFilter(
@@ -3606,12 +3880,17 @@ async function adoptStructuredHostsPass(
         for (const item of nextAdoptedHosts) {
           if (!startupHostInScope(registry, sessionKeyId(item.key))) continue;
           assertActive();
-          await publishStructuredDeliveryHost(item);
+          await publishStructuredDeliveryHost(publicationItem(item), async () => ownsStartupPublication(item));
         }
       } else {
-        await completeStructuredDeliveryQueueStartup(nextAdoptedHosts, reportProgress, assertActive, contestedConversations,
-          { registry, snapshot: publicationSnapshot });
+        await completeStructuredDeliveryQueueStartup(nextAdoptedHosts.map(publicationItem), reportProgress, assertActive, contestedConversations,
+          { registry, snapshot: publicationSnapshot, ownsHost: ownsStartupPublication });
       }
+      nextAdoptedHosts = await revalidateRetainedStartupHosts(
+        registry, nextAdoptedHosts, retainedRecoveryHostKeys(), orchestratorSeats, onReplacement,
+      );
+      rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
+      requireReplacementAdopted();
       assertAdoptedHostsAreClaimed(nextAdoptedHosts, dependencies.hostClaimed);
     }
     const waitingContinuationHostKeys = new Set<string>();
@@ -3629,9 +3908,12 @@ async function adoptStructuredHostsPass(
           /* A held row's proposal waits for its evidence, even where pending
              work took the row after the re-probe's cap. */
           && !heldHostKeys.has(obligation.hostKey));
-      const latestRuntime = unresolvedAfterAdoption.length === 0 ? null
-        : await readStartupRuntime(client, [...new Set(unresolvedAfterAdoption.map(item => item.conversationId))]);
-      const latestMessages = latestRuntime ? await admittedRuntimeMessages(registry, latestRuntime) : new Map();
+      if (checkpoint && unresolvedAfterAdoption.length > 0) checkpoint.continuationSessions ??= { sessions: new Map() };
+      const latestMessages = unresolvedAfterAdoption.length === 0 ? new Map()
+        : await readStartupContinuationMessages(registry, client,
+          [...new Set(unresolvedAfterAdoption.map(item => item.conversationId))],
+          checkpoint?.continuationSessions ?? { sessions: new Map() },
+        );
       const owedInterruptions = unresolvedAfterAdoption.length === 0 ? [] : dischargeInterruptionObligations(
         registry,
         interruptions,
@@ -3769,11 +4051,12 @@ async function adoptStructuredHostsPass(
     // Publication, health and recovery all await. Re-read designation after
     // the final await so a seat changed during those phases leaves no adapter.
     nextAdoptedHosts = await revalidateRetainedStartupHosts(
-      registry, nextAdoptedHosts, undefined, retainedRecoveryHostKeys(), orchestratorSeats,
+      registry, nextAdoptedHosts, retainedRecoveryHostKeys(), orchestratorSeats, onReplacement,
     );
     adoptedHosts = unreleasedStartupHosts(nextAdoptedHosts);
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     assertActive();
+    requireReplacementAdopted();
     if (rowRetry) {
       if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0 || retryHostKeys.size > 0) {
         rememberDeferredStructuredStartup(

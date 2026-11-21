@@ -44,6 +44,7 @@ import {
   publishStructuredDeliveryHost,
   releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
+import { STRUCTURED_STARTUP_PASS_DEADLINE_MS } from "./startupWork";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { createFakeDeliveryLedger, FakeEngineHost } from "./fixtures/fakeEngineHost";
@@ -1575,6 +1576,87 @@ test("scheduled startup retry continues through the retained Codex host", async 
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test.each([
+  ["between passes", "replacement"],
+  ["between passes", "endpoint"],
+  ["during registration", "writer"],
+  ["during registration", "process"],
+] as const)(
+  "Viewer releases the old adapter when the same session changes custody %s (%s)", async (boundary, movement) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-changed-custody-"));
+    const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
+    const self = captureProcessIdentity(process.pid);
+    const key = { engine: "codex" as const, sessionId: "00000000-0000-0000-0000-000000000000" };
+    const id = `codex:${key.sessionId}`;
+    const inspected = new Error("replacement eligibility was inspected");
+    let clock = 0, releases = 0, cursorReads = 0;
+    const eligibility: boolean[] = [];
+    const time = spyOn(performance, "now").mockImplementation(() => clock);
+    setSystemTime(new Date("2026-10-16T00:00:00Z"));
+    try {
+      addStructuredRestartConversation(registry, root, { sessionId: key.sessionId, status: "idle", turn: "idle" });
+      const row = () => registry.readOnlySnapshot().entries[id]!;
+      registry.upsert({ ...row(), pendingAction: "handoff", claimOwner: `structured-host:${JSON.stringify(self)}` });
+      const replace = () => {
+        const before = row();
+        const epoch = before.claimEpoch + 1;
+        registry.upsert({
+          ...before,
+          ...(movement === "replacement" ? { claimEpoch: epoch, claimOwner: null } : {}),
+          structuredHost: {
+            ...before.structuredHost!,
+            ...(movement === "replacement" || movement === "endpoint" ? { endpoint: "stdio:replacement" } : {}),
+            ...(movement === "replacement" || movement === "writer" ? { writerClaimEpoch: epoch } : {}),
+            ...(movement === "process" ? { process: self } : {}),
+          },
+        });
+      };
+      const host = {
+        health: async () => { replace(); return { status: "idle", endpoint: "stdio:retained" }; },
+        release: async () => { releases++; },
+      };
+      const client = {
+        ...runtimeJournalClient(journal),
+        producerCursor: async () => { cursorReads++; return 0; },
+      };
+      const options: NonNullable<Parameters<typeof adoptStructuredHostsAtStartup>[0]> = {
+        registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+        pipelineEvidence: () => ({ settled: new Set<string>(), deferred: new Set<string>() }),
+        adopt: async (_registry, _options, _env, eligible, _progress, hooks) => {
+          eligibility.push(eligible!(row()));
+          if (eligibility.length > 1) throw inspected;
+          const item = { key, host: host as never };
+          if (boundary === "during registration") return [item];
+          hooks!.onAdopted!(item);
+          clock += STRUCTURED_STARTUP_PASS_DEADLINE_MS;
+          return [];
+        },
+        adoptClaude: async () => [], schedule: () => ({}),
+      };
+      if (boundary === "between passes") {
+        await expect(adoptStructuredHostsAtStartup(options)).rejects.toThrow("deadline exceeded");
+        replace();
+      } else {
+        await expect(adoptStructuredHostsAtStartup(options)).rejects.toMatchObject({ hostKey: id, message: "structured startup host custody changed" });
+      }
+      await expect(adoptStructuredHostsAtStartup(options)).rejects.toBe(inspected);
+      expect(eligibility).toEqual([true, true]);
+      expect(releases).toBe(1);
+      expect(cursorReads).toBe(0);
+      expect(hasStructuredDeliveryHost(key)).toBe(false);
+      if (movement === "replacement" || movement === "endpoint") expect(row().structuredHost?.endpoint).toBe("stdio:replacement");
+    } finally {
+      time.mockRestore();
+      setSystemTime();
+      await bindStructuredDeliveryQueue([], { registry, client: null });
+      journal.close();
+      registry.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test.each(["terminal", "demoted-superseded", "new-generation", "superseded-during-signals"] as const)(
   "scheduled startup retry releases a %s retained host",

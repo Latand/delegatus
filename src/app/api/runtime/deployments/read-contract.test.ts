@@ -292,3 +292,21 @@ test("deployment list sends the Viewer's current adoption progress beside the ru
     expect(methods).toEqual(["viewer-deployment-list"]);
   } finally { markStructuredHostStartupReady(); }
 });
+
+test("deployment list includes the deadline and retry time before the first Viewer census", async () => {
+  const methods = await serveRuntime({ deployments: [], nextCursor: null, hasMore: false });
+  markStructuredHostStartupProgress({ phase: "waiting for structured startup", completedHosts: 0, totalHosts: null });
+  const failure = {
+    deadline: "structured startup pass deadline exceeded", hostKey: null,
+    nextRetryAt: "2026-10-16T00:00:05.000Z",
+  };
+  markStructuredHostStartupFailed("timeout", failure);
+  try {
+    const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ deployments: [], structuredHostStartup: {
+      state: "failed", phase: "waiting for structured startup", failurePhase: "waiting for structured startup", ...failure,
+    } });
+    expect(methods).toEqual(["viewer-deployment-list"]);
+  } finally { markStructuredHostStartupReady(); }
+});

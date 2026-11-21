@@ -15,6 +15,8 @@ import * as activity from "@/lib/scanner/activity";
 import { addStructuredRestartConversation } from "./startupRecipient.fixture";
 import { structuredStartupStatus } from "./startupStatus";
 import { STRUCTURED_STARTUP_PASS_DEADLINE_MS } from "./startupWork";
+import { runtimeScope, type RuntimePendingEffect } from "./contracts";
+import type { RuntimeHostClient } from "./client";
 import { runStructuredHostStartup } from "@/lib/viewerInstrumentation";
 
 const NOW = Date.parse("2026-10-16T00:00:00Z");
@@ -182,6 +184,54 @@ test("membership retries finish a census larger than one budget and discard a ch
     expect(reads.get("codex:reader-0")).toBe(2);
     expect(reads.get("codex:reader-80")).toBe(1);
   } finally { time.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Viewer membership census keeps verified rows as late memberships change between deadlines", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-membership-churn-"));
+  const file = seeded(root, 63);
+  const host = file.entries["codex:reader-0"]!.structuredHost!;
+  for (const entry of Object.values(file.entries)) entry.structuredHost = host;
+  const store = new SqliteAgentRegistryStore(path.join(root, "registry.sqlite"), { initialSnapshot: file, normalize: normalizeRegistry });
+  const registry = { readOnlySnapshot: () => store.readOnlySnapshot().file } as AgentRegistry;
+  let clock = 0;
+  const time = spyOn(performance, "now").mockImplementation(() => clock);
+  const checkpoint = {};
+  const changed = "conversation_reader_63";
+  let completed = 0;
+  let changes = 0;
+  try {
+    let result: Awaited<ReturnType<typeof pipelineStartupMembershipsAsync>> | undefined;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const saved = completed;
+      let firstReport = true;
+      try {
+        result = await pipelineStartupMembershipsAsync(registry, {
+          checkpoint, deadline: clock + 24,
+          onProgress: count => {
+            const previous = firstReport ? (count >= saved ? saved : 0) : completed;
+            clock += count - previous;
+            completed = count;
+            firstReport = false;
+          },
+        });
+        break;
+      } catch (error) {
+        expect(error).toMatchObject({ deadline: "startup membership deadline exceeded" });
+      }
+      changes++;
+      store.mutate(rows => { rows.memberships[changed]![0]!.containerId = `moved-${changes}`; }, false);
+    }
+    expect(changes).toBeGreaterThan(0);
+    expect(completed).toBe(65);
+    expect(result?.selectedIds.size).toBe(66);
+    expect(result?.byPipeline.get("lane-0")).toEqual(["conversation_reader_0", "conversation_reader_alias"]);
+    expect(result?.byPipeline.get(`moved-${changes}`)).toEqual([changed]);
+    expect(result?.byPipeline.has("lane-63")).toBe(false);
+  } finally {
+    time.mockRestore();
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test.each(["off", "sqlite"] as const)("Viewer startup checkpoints transcript batches and re-reads changed transcripts (%s)", async sqliteMode => {
@@ -513,6 +563,138 @@ function emptyJournalClient(journal: import("@/runtime-host/journal").RuntimeJou
     effectBatch: async () => [],
   } as unknown as import("./client").RuntimeHostClient;
 }
+
+test("Viewer completes runtime evidence across session and operation deadlines and consumes only current evidence", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-runtime-evidence-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
+  let clock = 0;
+  const time = spyOn(performance, "now").mockImplementation(() => clock);
+  setSystemTime(NOW);
+  const abort = new AbortController();
+  const visits = new Map<string, number>();
+  const effectCursors: number[] = [];
+  let retry = Promise.withResolvers<() => void>();
+  let completion: Promise<void> | undefined;
+  let changedSession: string | undefined;
+  let sessionReads = 0;
+  let changeEffectsBeforeUse = false;
+  let effectsChanged = false;
+  let pageFinished = false;
+  let candidateEvidence: boolean[] = [];
+  try {
+    const fixtures = Array.from({ length: 257 }, (_, index) => addStructuredRestartConversation(registry, root, {
+      sessionId: retirementSession(index), status: "idle", turn: "idle",
+    }));
+    const [removed, added] = fixtures.slice(-2);
+    const table = new Map(fixtures.map((fixture, i) => [fixture.conversation.id, i]));
+    const pending = (seq: number, conversationId: string): RuntimePendingEffect => ({
+      id: `test-effect-${seq}`, kind: "runtime.send", eventSeq: seq, payload: { conversationId },
+    });
+    const startupSessionEvidence: NonNullable<RuntimeHostClient["startupSessionEvidence"]> = async (ids, options) => {
+      const read = journal.startupSessionEvidence(ids, options?.includeEvidence);
+      if (options?.includeEvidence) {
+        await Promise.resolve();
+        if (sessionReads++ % 16 === 0) clock += 18_000;
+        visits.set(ids[0]!, (visits.get(ids[0]!) ?? 0) + 1);
+      }
+      return read;
+    };
+    const client: RuntimeHostClient = {
+      ...emptyJournalClient(journal),
+      append: async event => journal.append(event),
+      startupSessionEvidence,
+      // This also meters the session reads made before checkpoint support.
+      readSession: async ({ conversationId }) => {
+        if (structuredStartupStatus()?.phase === "reading runtime startup signals") {
+          await Promise.resolve();
+          if (sessionReads++ % 16 === 0) clock += 18_000;
+          visits.set(conversationId!, (visits.get(conversationId!) ?? 0) + 1);
+        }
+        return journal.readSession({ conversationId });
+      },
+      effectBatch: async (kinds, after = 0) => {
+        if (!kinds?.includes("runtime.spawn") || structuredStartupStatus()?.phase !== "reading runtime startup signals") return [];
+        effectCursors.push(after);
+        clock += 145_000;
+        const rows = Array.from({ length: 201 }, (_, index) => pending(index + 1,
+          (effectsChanged ? added : removed)!.conversation.id)).slice(after, after + 100);
+        pageFinished = rows.length < 100;
+        return rows;
+      },
+    };
+    const startup = {
+      registry, client, signal: abort.signal, orchestratorSeats: () => [],
+      pipelineEvidence: () => {
+        if (changeEffectsBeforeUse && !effectsChanged && pageFinished) {
+          effectsChanged = true;
+          journal.append({ scope: runtimeScope("session", added!.conversation.id), kind: "session-status",
+            payload: { host: "hosted", turn: "running", hostKind: "codex-app-server" } });
+          const operation = journal.executeOperation({ kind: "send", conversationId: added!.conversation.id, text: "queued",
+            idempotencyKey: "startup-effect-changed" });
+          expect(journal.effectBatch(1, ["runtime.send"])).toMatchObject([{ payload: { operationId: operation.operationId } }]);
+        }
+        return { settled: new Set<string>(), deferred: new Set<string>() };
+      },
+      adopt: async (_registry, _options, _env, eligible) => {
+        candidateEvidence = [removed, added].map(fixture => {
+          const index = table.get(fixture!.conversation.id)!;
+          const key = sessionKeyId({ engine: "codex", sessionId: retirementSession(index) });
+          return eligible!(registry.readOnlySnapshot().entries[key]!);
+        });
+        return [];
+      },
+      adoptClaude: async () => [], schedule: () => ({}),
+    } satisfies NonNullable<Parameters<typeof adoptStructuredHostsAtStartup>[0]>;
+    completion = runStructuredHostStartup(() => {
+      sessionReads = 0;
+      return adoptStructuredHostsAtStartup(startup);
+    }, () => {}, {
+      signal: abort.signal, waitUntilReady: true, jitterRatio: 0,
+      schedule: callback => { retry.resolve(callback); return {}; },
+    });
+    void completion.catch(() => {});
+    const advance = async () => {
+      const callback = await Promise.race([retry.promise, completion!.then(() => null)]);
+      if (!callback) return false;
+      expect(structuredStartupStatus()).toMatchObject({ state: "failed", deadline: "structured startup read deadline exceeded" });
+      retry = Promise.withResolvers<() => void>();
+      callback();
+      return true;
+    };
+    await retry.promise;
+    changedSession = visits.keys().next().value!;
+    expect(visits.size).toBeGreaterThan(0);
+    expect(effectCursors).toEqual([]);
+    journal.append({ scope: runtimeScope("session", changedSession), kind: "session-status", payload: { turn: "running" } });
+    expect(await advance()).toBe(true);
+    await retry.promise;
+    expect(effectCursors).toEqual([0, 100]);
+    // A different session version still leaves those operation pages current.
+    journal.append({ scope: runtimeScope("session", changedSession), kind: "session-status", payload: { turn: "idle" } });
+    changeEffectsBeforeUse = true;
+    for (let attempt = 0; attempt < 4 && await advance(); attempt++) { /* Each retry gets the same pass budget. */ }
+    expect(structuredStartupStatus()).toMatchObject({ state: "ready", deadline: null, nextRetryAt: null });
+    await completion;
+    expect(visits.size).toBe(257);
+    expect(visits.get(changedSession)).toBe(3);
+    expect(visits.get(added!.conversation.id)).toBe(2);
+    expect([...visits.values()].filter(count => count === 1)).toHaveLength(255);
+    expect(effectCursors).toEqual([0, 100, 200, 0, 100, 200]);
+    expect(candidateEvidence).toEqual([false, true]);
+  } finally {
+    abort.abort();
+    await completion?.catch(() => {});
+    setSystemTime();
+    time.mockRestore();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 60_000);
 
 for (const mode of ["current", "copied", "other-registry", "changed-before-completion", "marker-changed-before-completion"] as const) test(`startup publication validates its prepared selection (${mode})`, async () => {
   const { RuntimeJournal } = await import("@/runtime-host/journal");

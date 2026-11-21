@@ -4,21 +4,24 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { once } from "node:events";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { runInNewContext } from "node:vm";
 import { NextRequest } from "next/server";
-import { POST as deploymentPost } from "@/app/api/runtime/deployments/route";
+import { GET as deploymentList, POST as deploymentPost } from "@/app/api/runtime/deployments/route";
 import { GET as deploymentCapabilities } from "@/app/api/runtime/deployments/capabilities/v1/route";
-import { markStructuredHostStartupFailed, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
+import { markStructuredHostStartupFailed, markStructuredHostStartupProgress, markStructuredHostStartupReady } from "@/lib/runtime/startupStatus";
 import { setDeploymentRuntimeForTests } from "@/lib/runtime/deploymentRuntime";
 import { productionDeps, setSelfUpdateServiceForTests } from "@/lib/selfUpdate/instance";
 import { SelfUpdateService } from "@/lib/selfUpdate/service";
 import { ViewerDeploymentCoordinator } from "../../runtime-host/deployment";
 import { FakeDeploymentAdapter } from "../../runtime-host/fixtures/fakeDeploymentAdapter";
 import { RuntimeJournal } from "../../runtime-host/journal";
+import { RuntimeHost } from "../../runtime-host/host";
+import { serveRuntimeHost } from "../../runtime-host/socket";
 import { productionViewerControlDependencies, viewerMcpBindings, viewerMcpToolPolicy, type ViewerControlDependencies } from "./bindings";
 import { createMcpToolService, createViewerMcpServer, McpDeploymentPendingError, SqliteMcpReceiptStore } from "./server";
 import { handleMcpHttpRequest, setMcpHttpDependenciesForTests } from "./http";
@@ -51,6 +54,10 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
   adapter.promotedHealth = { ...healthy, ok: false, detail: "Viewer writer and live-host proof is incomplete" };
   const coordinator = new ViewerDeploymentCoordinator(journal, adapter, { pid: 27, startIdentity: "27:1" });
   const incumbent = adapter.current;
+  const runtimeSocket = path.join(root, "runtime.sock");
+  const runtime = serveRuntimeHost(runtimeSocket, new RuntimeHost(journal, undefined, coordinator));
+  const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+  process.env.LLV_RUNTIME_HOST_SOCKET = runtimeSocket;
   const store = new SqliteMcpReceiptStore(path.join(root, "mcp.sqlite"));
   setSelfUpdateServiceForTests(new SelfUpdateService({ ...productionDeps(), mode: async () => ({ mode: "managed", record: null, reason: null }) }));
   setDeploymentRuntimeForTests((request, authorize) => {
@@ -62,10 +69,7 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
     const { pathname } = new URL(request.url);
     if (pathname === "/api/mcp") return handleMcpHttpRequest(new NextRequest(request));
     if (pathname.endsWith("/capabilities/v1")) return deploymentCapabilities();
-    if (request.method === "GET") {
-      const { structuredHostStartup } = await deploymentCapabilities().json();
-      return Response.json({ count: 0, deployments: [], structuredHostStartup });
-    }
+    if (request.method === "GET") return deploymentList(new NextRequest(request));
     posts++;
     return deploymentPost(new NextRequest(request));
   } });
@@ -90,11 +94,20 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
     stderr: "pipe",
   });
   try {
+    await once(runtime, "listening");
     await client.connect(new StreamableHTTPClientTransport(new URL("/api/mcp", server.url), {
       requestInit: { headers: { "x-llv-spawn-capability": "a".repeat(43) } },
     }));
     const call = async (request = args) => (await client.callTool({ name: "deploy_exact_sha", arguments: request })).structuredContent;
-    markStructuredHostStartupFailed("timeout");
+    const failure = {
+      deadline: "structured startup pass deadline exceeded", hostKey: null,
+      nextRetryAt: "2026-10-16T00:00:05.000Z",
+    };
+    const failBeforeCensus = () => {
+      markStructuredHostStartupProgress({ phase: "waiting for structured startup", completedHosts: 0, totalHosts: null });
+      markStructuredHostStartupFailed("timeout", failure);
+    };
+    failBeforeCensus();
     expect(await call()).toMatchObject({ ok: true, state: "accepted" });
     const admitted = journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)!;
     expect(admitted.revision).toBe(SHA);
@@ -103,7 +116,7 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
     expect(journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)).toMatchObject({
       phase: "rolled-back", terminal: true, error: "Viewer writer and live-host proof is incomplete",
     });
-    markStructuredHostStartupFailed("timeout");
+    failBeforeCensus();
     expect(await call()).toMatchObject({ ok: true, deploymentId: admitted.deploymentId, replayed: true });
     adapter.promotedHealth = healthy;
     adapter.verifyHostFailure = new Error("runtime-host handoff evidence is unavailable");
@@ -117,7 +130,9 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
     for (const reader of [client, stdioClient]) {
       for (const [name, args] of [["get_orchestrator", { project: PROJECT }], ["deployment_status", {}]] as const) {
         expect((await reader.callTool({ name, arguments: args })).structuredContent)
-          .toMatchObject({ ok: true, structuredHostStartup: { state: "failed", failureCategory: "timeout" } });
+          .toMatchObject({ ok: true, structuredHostStartup: {
+            state: "failed", phase: "waiting for structured startup", failureCategory: "timeout", ...failure,
+          } });
       }
     }
     designated = false;
@@ -134,7 +149,10 @@ test("startup timeouts leave durable deploy admission open and unsafe handoff fa
       if (admitted) await coordinator.waitForDeployment(admitted.deploymentId);
     }
     markStructuredHostStartupReady();
-    store.close(); server.stop(true); journal.close();
+    store.close(); server.stop(true);
+    await new Promise<void>(resolve => { runtime.close(() => resolve()); });
+    journal.close();
+    if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
     if (previous === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }

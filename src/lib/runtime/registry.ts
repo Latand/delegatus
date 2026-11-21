@@ -281,7 +281,10 @@ function sameMaterialHostState(left: HostState, right: HostState): boolean {
     && sameStrings(left.activeFlags, right.activeFlags);
 }
 
-export type StructuredHostPersistenceStop = (() => Promise<void>) & { flush(): Promise<void> };
+export type StructuredHostPersistenceStop = (() => Promise<void>) & {
+  flush(): Promise<void>;
+  custody: AdoptedHostCustody;
+};
 
 const persistenceGlobal = globalThis as typeof globalThis & {
   __delegatusHostPersistence?: WeakMap<object, StructuredHostPersistenceStop>;
@@ -639,8 +642,10 @@ async function bindStructuredHostPersistence(
     throw error;
   }
   if (stopped) unsubscribe();
+  const { endpoint, process } = columnsFromState(initialState, writerClaimEpoch);
   const binding = Object.assign(stop, {
     flush: () => withoutOperationLease(() => enqueue(() => withoutOperationLease(persistPending))),
+    custody: { claimOwner, claimEpoch: writerClaimEpoch, writerEpoch: writerClaimEpoch, endpoint, process },
   });
   hostPersistence.set(host, binding);
   host.setPersistenceFlush?.(binding.flush);
@@ -734,14 +739,24 @@ export async function bindCopilotHostPersistence(
   );
 }
 
+export interface AdoptedHostCustody {
+  claimOwner: AgentRegistryEntry["claimOwner"];
+  claimEpoch: number;
+  writerEpoch: StructuredHostColumns["writerClaimEpoch"];
+  endpoint: string;
+  process: ProcessIdentity | null;
+}
+
 export interface AdoptedCodexHost {
   key: SessionKey;
   host: CodexAppServerHost;
+  custody?: AdoptedHostCustody;
 }
 
 export interface AdoptedClaudeHost {
   key: SessionKey;
   host: ClaudeStreamBrokerHost;
+  custody?: AdoptedHostCustody;
 }
 
 export type StructuredHostAdoptionFilter = (entry: AgentRegistryEntry) => boolean;
@@ -1490,10 +1505,11 @@ export async function adoptCodexRegistryHosts(
             ? dependencies.adoptHost(entry.key.sessionId, options)
             : CodexAppServerHost.adopt(entry.key.sessionId, options));
           memberCurrent?.();
-          await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
+          const binding = await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
             "unhosted", { onCheckpoint: custody?.checkpoint });
-          adopted.push({ key: entry.key, host });
-          dependencies.onAdopted?.({ key: entry.key, host });
+          const item = { key: entry.key, host, custody: binding.custody };
+          adopted.push(item);
+          dependencies.onAdopted?.(item);
         } catch (error) {
           try { await custody?.cleanup(); } catch { /* live setup remains durably owned for reconciliation */ }
           if (error instanceof StructuredHostAdoptionCleanupError
@@ -1659,10 +1675,11 @@ export async function adoptClaudeRegistryHosts(
             ? dependencies.adoptHost(entry.key.sessionId, options)
             : ClaudeStreamBrokerHost.adopt(entry.key.sessionId, options));
           memberCurrent?.();
-          await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
+          const binding = await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
             "unhosted", { onCheckpoint: custody?.checkpoint });
-          adopted.push({ key: entry.key, host });
-          dependencies.onAdopted?.({ key: entry.key, host });
+          const item = { key: entry.key, host, custody: binding.custody };
+          adopted.push(item);
+          dependencies.onAdopted?.(item);
         } catch (error) {
           try { await custody?.cleanup(); } catch { /* live setup remains durably owned for reconciliation */ }
           if (error instanceof StructuredHostAdoptionCleanupError
