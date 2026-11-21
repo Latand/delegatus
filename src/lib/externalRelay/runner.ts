@@ -21,7 +21,7 @@ import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline, remainingMs } from "./deadline";
 import { ownerRelayAuthorized, liveOwnerRelayRequest, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized, ownerRunSettingsAllow } from "./ownerAuthority";
-import { canonicalRelayProject } from "./trustedRequesters";
+import { canonicalRelayProject, requesterEntries } from "./trustedRequesters";
 import { ownerRequestTimeoutText } from "./requestTimeout";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
@@ -747,6 +747,9 @@ export async function runClaimedRequest(
     const trigger = request.input.conversation.find(message => message.id === ownerMessage?.messageId);
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
+    const prototypeBoundToEarlierSwitch = prototype && (target.ownerTier === true
+      || requesterEntries(relay, target).some(entry => entry.source === "earlier-switch"
+        && canonicalRelayProject(entry.project) === canonicalRelayProject(target.project)));
     const current = target.ownerTier || target.requesters || recovery ? readRelayStore() : null;
     const paired = current?.relays.find(item => item.id === relay.id && item.credential === relay.credential);
     const currentTarget = paired?.targets.find(item => item.id === target.id);
@@ -824,7 +827,7 @@ export async function runClaimedRequest(
         ...(requesterTier ? { leaseDeadlineAt: serviceDeadline.at } : {}),
         request: { text: owner.text, requestText: owner.requestText },
         ...(owner.bridgeReport ? { bridgeReport: owner.bridgeReport } : {}),
-        ...(prototype ? { prototype: true as const } : {}) } } : {}),
+        ...(prototype && !prototypeBoundToEarlierSwitch ? { prototype: true as const } : {}) } } : {}),
     };
     let admissionDecline: ExternalRelayCompletion | null = null;
     let wakeHold: (() => void) | null = null;
