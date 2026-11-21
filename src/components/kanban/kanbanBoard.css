@@ -1902,8 +1902,10 @@
   .kb .gs-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; padding: 0 8px; }
   .kb .gs-unit { flex-direction: column; }
   .kb .stab { padding: 0 6px; min-width: 0; }
-  .kb .stab-cond, .kb .stab-off { min-height: 28px; border-bottom-width: 0; }
-  .kb .stab-cond[aria-selected="true"], .kb .stab-off[aria-selected="true"] { border-bottom-width: 2px; }
+  .kb .stab-cond { min-height: 28px; border-bottom-width: 0; }
+  .kb .stab-cond[aria-selected="true"] { border-bottom-width: 2px; }
+  /* A detached stage is the first line of its own cell: a step's height and size, so it sits on its row's line and never reads as a third line of the cell above. */
+  .kb .stab-off { font-size: var(--text-ui); }
 }
 /* Narrow: two lines, the state's mark and the number, then the name. */
 @media (max-width: 699px) {
@@ -1913,10 +1915,11 @@
   .kb .stab .smark { display: inline; order: 1; }
   .kb .stab .snum, .kb .stab .sret, .kb .stab .stab-skip { order: 2; }
   .kb .stab .slbl { order: 3; flex: 1 0 100%; }
-  .kb .stab-cond .slbl, .kb .stab-off .slbl { flex: 0 1 auto; }
+  .kb .stab-cond .slbl { flex: 0 1 auto; }
+  .kb .stab-off { font-size: var(--text-label); }
 }
 @media (pointer: coarse) {
-  .kb .stab-cond, .kb .stab-off { min-height: 44px; }
+  .kb .stab-cond { min-height: 44px; }
   .kb .pane .attempts button, .kb .lane-bar .btn, .kb .btn.gtoggle, .kb .gs-waits { min-height: 44px; }
   .kb .msg.user.draft .bedit, .kb .draft-acts .btn, .kb .draft-notice button, .kb .draft-added summary { min-height: 44px; min-width: 44px; }
   .kb .msg.user.draft .bubble { padding-right: 80px; }

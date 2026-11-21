@@ -7975,13 +7975,18 @@ describe("redesign S2 the Stages window as tabs", () => {
    *
    * Every shape is opened at 1440 and 1100 px (the strip's row layout) and at
    * 1099, 820, 760 and 700 px (its grid, narrowest before the phone rules) in English and Ukrainian, light and dark; the
-   * popover, the graph, a conditional tab and a detached tab are framed on the
-   * lanes that have them. Gated, from text ranges: every tab name whole and
+   * popover, the graph, a selected conditional tab and a selected detached tab
+   * are framed on the lanes that have them, at 1440 (the strip's row) and 820
+   * (its grid), in both languages and themes. Gated, from text ranges: every
+   * tab name whole and
    * never ellipsized; no scroller in the strip; the waits-on line whole on the
    * first screen; the popover inside the head and over no text; every rule line
    * whole; one tab panel, one pane and at most one reader; a conditional tab's
    * word that differs from the waiting word; a skipped tab's mark that differs
-   * from a waiting tab's. Frames and the manifest go to $LLV_EVIDENCE_DIR.
+   * from a waiting tab's; a detached tab that stands on the line of the step tabs
+   * in its grid row, at the same height, so it never reads as a third line of the
+   * cell above; a selected detached tab's pane that says «off the chain» and keeps
+   * its ⋯. Frames and the manifest go to $LLV_EVIDENCE_DIR.
    */
   const OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "redesign-s2-stages");
   type Frame = { file: string; lane: string; width: number; lang: string; scheme: string; state: string; failures: string[] };
@@ -8023,12 +8028,22 @@ describe("redesign S2 the Stages window as tabs", () => {
           outside: rects.some((rect) => rect.right > (strip?.getBoundingClientRect().right ?? 1e9) + 0.5 || rect.left < (strip?.getBoundingClientRect().left ?? -1e9) - 0.5),
           skipMark: Boolean(tab.querySelector(".stab-skip")),
           ariaLabel: tab.getAttribute("aria-label") ?? "",
+          top: Math.round(tab.getBoundingClientRect().top * 10) / 10,
+          height: Math.round(tab.getBoundingClientRect().height * 10) / 10,
+          unitTop: Math.round((tab.closest(".gs-unit")?.getBoundingClientRect().top ?? 0) * 10) / 10,
         };
       }),
       stripScrolls: strip ? strip.scrollWidth > strip.clientWidth + 1 : false,
       waits: waits ? { text: waits.textContent ?? "", cut: cut(waits, box), height: Math.round(waits.getBoundingClientRect().height) } : null,
       pop: pop ? { text: pop.textContent ?? "", inHead: Boolean(header && pop.getBoundingClientRect().top >= header.getBoundingClientRect().top - 1 && pop.getBoundingClientRect().bottom <= (waits?.getBoundingClientRect().bottom ?? 0) + pop.getBoundingClientRect().height + 8), cut: cut(pop, box) } : null,
       rules: [...sheet.querySelectorAll<HTMLElement>(".gs-rule")].map((rule) => ({ text: rule.textContent ?? "", cut: cut(rule, box) || rule.scrollWidth > rule.clientWidth + 1, arc: rule.dataset.arcState ?? "rest", back: rule.dataset.ruleBack === "1", shape: rule.dataset.ruleShape ?? "" })),
+      pane: (() => {
+        const pane = sheet.querySelector<HTMLElement>(".pane");
+        const state = pane?.querySelector<HTMLElement>(".pstate");
+        const menu = pane?.querySelector<HTMLElement>("[data-pane-menu]");
+        const menuBox = menu?.getBoundingClientRect();
+        return { stage: pane?.dataset.stage ?? "", state: state?.textContent ?? "", menu: Boolean(menuBox && menuBox.width > 0 && menuBox.height > 0 && menuBox.right <= box.right + 0.5 && menuBox.left >= box.left - 0.5) };
+      })(),
       panels: sheet.querySelectorAll('[role="tabpanel"]').length,
       panes: sheet.querySelectorAll(".pane").length,
       readers: sheet.querySelectorAll("[data-kanban-reader]").length,
@@ -8047,6 +8062,15 @@ describe("redesign S2 the Stages window as tabs", () => {
     for (const tab of read.tabs) {
       if (tab.clipped || tab.outside) failures.push(`${frame}: tab ${tab.stage} "${tab.name}" is cut`);
       if (tab.word && !tab.ariaLabel) failures.push(`${frame}: tab ${tab.stage} has no label`);
+    }
+    /* A detached stage is the first line of its own cell: on the line of the step tabs in its row, at their height, so it is not a third line of the cell above it. */
+    const steps = read.tabs.filter((tab) => tab.kind === "step");
+    for (const tab of read.tabs.filter((candidate) => candidate.kind === "detached")) {
+      const row = steps.filter((step) => Math.abs(step.unitTop - tab.unitTop) <= 1);
+      if (Math.abs(tab.top - tab.unitTop) > 1) failures.push(`${frame}: detached tab ${tab.stage} sits ${tab.top - tab.unitTop} px below its cell's top`);
+      for (const step of row) if (Math.abs(step.top - tab.top) > 1) failures.push(`${frame}: detached tab ${tab.stage} top ${tab.top} is off the step tabs' line ${step.top}`);
+      const shortest = Math.min(...steps.map((step) => step.height));
+      if (steps.length && tab.height < shortest - 1) failures.push(`${frame}: detached tab ${tab.stage} is ${tab.height} px high, the shortest step tab ${shortest}`);
     }
     if (read.stripScrolls) failures.push(`${frame}: the tab strip scrolls`);
     if (!read.waits || read.waits.cut) failures.push(`${frame}: the waits-on line is cut or missing`);
@@ -8084,8 +8108,6 @@ describe("redesign S2 the Stages window as tabs", () => {
       for (const lang of ["en", "uk"] as const) {
         for (const scheme of ["light", "dark"] as const) {
           for (const width of WIDTHS) {
-            const dense = lang === "en" && scheme === "light" || width === 1440 || width <= 820;
-            if (!dense) continue;
             const opened = await openFixture(browser, `${server.base}?scenario=stageshapes&lang=${lang}`, { width, height: width >= 1100 ? 900 : 1000 }, scheme, lang);
             try {
               await boardReady(opened.page);
@@ -8127,7 +8149,7 @@ describe("redesign S2 the Stages window as tabs", () => {
                     await opened.page.waitForTimeout(150);
                   }
                 }
-                if (width === 1440 && lang === "en" && scheme === "light") {
+                if (width === 1440 || width === 820) {
                   /* The popover, in the head and over no text. */
                   await opened.page.click("[data-stages-sheet] .gs-waits");
                   await opened.page.waitForSelector("[data-stages-sheet] .gs-waits-pop");
@@ -8141,15 +8163,22 @@ describe("redesign S2 the Stages window as tabs", () => {
                   await opened.page.keyboard.press("Escape");
                   await opened.page.waitForSelector("[data-stages-sheet] .gs-waits-pop", { state: "detached" });
                   if (!(await opened.page.evaluate(() => document.querySelector("[data-stages-sheet]") !== null))) failures.push(`${label}: Escape closed the whole sheet while the popover was open`);
-                  /* A conditional or detached tab, selected. */
-                  const other = read.tabs.find((tab) => tab.kind !== "step");
-                  if (other) {
+                  /* A conditional tab and a detached tab, each selected, on the lanes that have one. */
+                  for (const kind of ["conditional", "detached"] as const) {
+                    const other = read.tabs.find((tab) => tab.kind === kind);
+                    if (!other) continue;
                     await opened.page.click(`[data-stages-sheet] [role="tab"][data-tab-stage="${other.stage}"]`);
                     await opened.page.waitForTimeout(250);
                     const picked = await readSheet(opened.page);
                     const pickFailures: string[] = [];
                     if (!picked || picked.tabs.find((tab) => tab.selected)?.stage !== other.stage) pickFailures.push(`${label}: the ${other.kind} tab did not select`);
-                    else check(`${label}-${other.kind}`, picked, shape.strip, pickFailures);
+                    else {
+                      check(`${label}-${other.kind}`, picked, shape.strip, pickFailures);
+                      if (picked.pane.stage !== other.stage) pickFailures.push(`${label}: the ${other.kind} tab's pane is ${picked.pane.stage}`);
+                      if (!picked.pane.menu) pickFailures.push(`${label}: the ${other.kind} tab's pane has no whole ⋯`);
+                      const words = { ifNeeded: lang === "en" ? "if needed" : "за потреби", notNeeded: lang === "en" ? "not needed" : "не знадобився", offChain: lang === "en" ? "off the chain" : "поза ланцюжком", notRun: lang === "en" ? "never ran" : "не запускався" } as const;
+                      if (other.word && !picked.pane.state.includes(words[other.word as keyof typeof words])) pickFailures.push(`${label}: the ${other.kind} tab's pane says «${picked.pane.state}», not «${words[other.word as keyof typeof words]}»`);
+                    }
                     const pickFile = `${label}-${other.kind}-tab.png`;
                     await opened.page.screenshot({ path: path.join(OUT, pickFile) });
                     frames.push({ file: pickFile, lane: shape.slug, width, lang, scheme, state: `${other.kind}-tab`, failures: pickFailures });
@@ -8176,6 +8205,19 @@ describe("redesign S2 the Stages window as tabs", () => {
       if (!seen("ifNeeded").length) failures.push("no lane drew an «if needed» tab");
       if (!seen("notNeeded").length) failures.push("no lane drew a «not needed» tab");
       if (!seen("offChain").length && !seen("notRun").length) failures.push("no lane drew a detached tab");
+      /* Every state the brief names is framed in both languages and themes at the strip's row width and at the grid width. */
+      for (const lang of ["en", "uk"]) {
+        for (const scheme of ["light", "dark"]) {
+          for (const width of [1440, 820]) {
+            for (const state of ["popover", "graph", "conditional-tab", "detached-tab"]) {
+              if (!frames.some((frame) => frame.state === state && frame.lang === lang && frame.scheme === scheme && frame.width === width)) failures.push(`no ${state} frame at ${width} px in ${lang} ${scheme}`);
+            }
+          }
+          for (const width of [1100, 1099]) {
+            if (!frames.some((frame) => frame.state === "sheet" && frame.lang === lang && frame.scheme === scheme && frame.width === width)) failures.push(`no sheet frame at ${width} px in ${lang} ${scheme}`);
+          }
+        }
+      }
       const manifest = { driver: "src/components/kanban/kanbanBoard.browser.test.tsx", describe: "redesign S2 the Stages window as tabs", scenario: "stageshapes", widths: WIDTHS, frames, failures };
       fs.writeFileSync(path.join(OUT, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
       expect(failures).toEqual([]);

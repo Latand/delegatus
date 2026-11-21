@@ -15041,6 +15041,8 @@ describe("redesign S2 the Stages window on the phone", () => {
           stage: tab.dataset.tabStage ?? "", kind: tab.dataset.tabKind ?? "", word: tab.dataset.tabWord ?? null, selected: tab.getAttribute("aria-selected") === "true",
           cut: name.scrollWidth > name.clientWidth + 1 || ranges(name).some((rect) => stripBox ? rect.right > stripBox.right + 0.5 || rect.left < stripBox.left - 0.5 : false),
           height: Math.round(tab.getBoundingClientRect().height),
+          top: Math.round(tab.getBoundingClientRect().top * 10) / 10,
+          unitTop: Math.round((tab.closest(".gs-unit")?.getBoundingClientRect().top ?? 0) * 10) / 10,
         };
       }),
       columns: strip ? getComputedStyle(strip).gridTemplateColumns.split(" ").length : 0,
@@ -15082,6 +15084,13 @@ describe("redesign S2 the Stages window on the phone", () => {
                 if (strip && read.columns !== 4) fail(`the tab grid has ${read.columns} columns`);
                 if (!strip && read.tabs.length) fail(`a single stage drew ${read.tabs.length} tab(s)`);
                 for (const tab of read.tabs) if (tab.cut) fail(`tab ${tab.stage} is cut`);
+                /* A detached stage is the first line of its own cell: on the line of the step tabs in its row, so it is not a third line of the cell above. */
+                const stepTabs = read.tabs.filter((tab) => tab.kind === "step");
+                for (const tab of read.tabs.filter((candidate) => candidate.kind === "detached")) {
+                  if (Math.abs(tab.top - tab.unitTop) > 1) fail(`detached tab ${tab.stage} sits ${tab.top - tab.unitTop}px below its cell's top`);
+                  for (const step of stepTabs.filter((candidate) => Math.abs(candidate.unitTop - tab.unitTop) <= 1)) if (Math.abs(step.top - tab.top) > 1) fail(`detached tab ${tab.stage} top ${tab.top} is off the step tabs' line ${step.top}`);
+                  if (stepTabs.length && tab.height < Math.min(...stepTabs.map((step) => step.height)) - 1) fail(`detached tab ${tab.stage} is ${tab.height}px high, shorter than the step tabs`);
+                }
                 if (read.title.cut) fail(`the bar's title is cut: ${JSON.stringify(read.title)}`);
                 if (!read.waits || read.waits.cut) fail(`the waits-on line is cut or missing: ${JSON.stringify(read.waits)}`);
                 if (read.rules.some((rule) => rule.cut)) fail("a rule line is cut");
@@ -15093,6 +15102,22 @@ describe("redesign S2 the Stages window on the phone", () => {
                 await page.screenshot({ path: path.join(S2_OUT, sheetFile) });
                 frames.push({ file: sheetFile, lane: slug, lang, scheme, state: "screen" });
                 {
+                  const detached = read.tabs.find((tab) => tab.kind === "detached");
+                  const initial = read.tabs.find((tab) => tab.selected)?.stage;
+                  if (detached && initial) {
+                    /* A selected detached stage: its pane says it is off the chain and keeps its ⋯. */
+                    await page.tap(`[role="tab"][data-tab-stage="${detached.stage}"]`);
+                    await pause(page, 300);
+                    const pane = await page.evaluate(() => ({ state: document.querySelector(".pane .pstate")?.textContent ?? "", menu: Boolean(document.querySelector(".pane [data-pane-menu]")), stage: document.querySelector<HTMLElement>(".pane")?.dataset.stage ?? "" }));
+                    if (pane.stage !== detached.stage) fail(`the detached tab's pane is ${pane.stage}`);
+                    if (!pane.menu) fail("the detached tab's pane has no ⋯");
+                    if (detached.word && !pane.state.includes(lang === "en" ? (detached.word === "notRun" ? "never ran" : "off the chain") : (detached.word === "notRun" ? "не запускався" : "поза ланцюжком"))) fail(`the detached tab's pane says «${pane.state}»`);
+                    const file = `${key}-detached-tab.png`;
+                    await page.screenshot({ path: path.join(S2_OUT, file) });
+                    frames.push({ file, lane: slug, lang, scheme, state: "detached-tab" });
+                    await page.tap(`[role="tab"][data-tab-stage="${initial}"]`);
+                    await pause(page, 300);
+                  }
                   const shot = async (state: string) => {
                     const file = `${key}-${state}.png`;
                     await page.screenshot({ path: path.join(S2_OUT, file) });

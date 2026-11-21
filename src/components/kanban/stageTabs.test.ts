@@ -170,8 +170,8 @@ test("a rule goes back only to a step that reads earlier; a conditional or detac
     stage("fix", "builder", "review"),
   ]));
   expect(shared.rules.map((rule) => [rule.from, rule.to, rule.back])).toEqual([["review", "fix", false], ["visual", "fix", false]]);
-  const detached = tabsOf(lane([stage("build", "builder", "review"), stage("review", "reviewer", null, failTo("opus-fix")), stage("opus-fix", "builder", null)]));
-  expect(detached.rules[0]).toMatchObject({ back: false });
+  const orphan = tabsOf(lane([stage("build", "builder", "review"), stage("review", "reviewer", null, failTo("opus-fix")), stage("opus-fix", "builder", null)]));
+  expect(orphan.rules[0]).toMatchObject({ back: false });
   const self = tabsOf(lane([stage("upgrade", "builder", null, failTo("upgrade"))]));
   expect(self.rules[0]).toMatchObject({ shape: "self", back: true });
 });
