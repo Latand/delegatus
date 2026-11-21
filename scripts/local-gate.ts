@@ -12,7 +12,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
-import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, shellStartupFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
@@ -649,6 +649,9 @@ export interface StepPasses { reused(step: Step, until?: number): boolean; passe
 /** The bytes and configuration every local check actually consumes. */
 export function gateInputSnapshot(root: string, base: string, steps: readonly Step[], env: NodeJS.ProcessEnv = process.env) {
   const checkEnv = checkEnvironment(env);
+  // The caller's paths never reach a local step. Its executor allocates them.
+  for (const key of ISOLATED_DIRECTORY_KEYS) delete checkEnv[key];
+  delete checkEnv.LLV_GATE_RUNNER;
   const toolRoot = path.resolve(import.meta.dir, "..");
   const toolFiles = gateToolFiles(toolRoot);
   let unavailableReason = "dirty worktree";
@@ -671,7 +674,7 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
         ...["node_modules/.bun/lock", "node_modules/typescript/package.json", "node_modules/eslint/package.json"].map(file => path.join(root, file))];
       // Hash what the checks receive, never store its values. Execution roots,
       // deadlines and CPU tickets belong to a run, rather than its result.
-      const environment = environmentFingerprint(checkEnv);
+      const environment = fingerprint([environmentFingerprint(checkEnv), shellStartupFingerprint(root, env.BASH_ENV)]);
       const toolchain = [...tools.map(file => file ? fileFingerprint(file) : "missing"), ...toolFiles.map(file => fileFingerprint(path.join(toolRoot, file)))];
       const components = {
         head: fingerprint(head), tree: fingerprint(tree), base: fingerprint(base),

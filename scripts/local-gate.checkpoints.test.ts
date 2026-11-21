@@ -266,6 +266,73 @@ test("fixture contract", async () => {
   verifyCleanup(rows, hookRoots);
 }, 120_000);
 
+serviceTest.each(["declared gate variable", "BASH_ENV bytes"])("native pre-push rejects stale step passes after changing %s", input => {
+  const project = path.resolve(import.meta.dir, "..");
+  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-step-")); roots.push(scratch);
+  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  mkdirSync(path.join(f.dir, "scripts/gate-runner"));
+  const origin = path.join(scratch, "origin.git");
+  f.git("clone", "--bare", "--shared", ".", origin);
+  f.git("remote", "add", "origin", origin);
+  const marker = path.join(scratch, "samples");
+  const startup = path.join(scratch, "startup.sh");
+  const temporary = path.join(scratch, "tmp"); mkdirSync(temporary);
+  const fromShell = input === "BASH_ENV bytes";
+  const names = `${fromShell ? "BASH_ENV" : "LLV_GATE_REVIEW_MODE"},HOME,TMPDIR,XDG_STATE_HOME,XDG_RUNTIME_DIR`;
+  writeFileSync(path.join(f.dir, "shims/bun"), `#!/bin/sh
+case "$1" in scripts/privacy-publication-gate.ts|scripts/eslint-changes.ts) exit 0 ;; esac
+exec "$LLV_GATE_BUN" "$@"
+`);
+  writeFileSync(path.join(f.dir, "shims/bunx"), "#!/bin/sh\nexit 0\n");
+  symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
+  for (const name of ["a", "b"]) writeFileSync(path.join(f.dir, `${name}.test.ts`), `
+import { appendFileSync } from "node:fs";
+import { expect, test } from "bun:test";
+test("fixture contract", () => {
+  appendFileSync(${JSON.stringify(marker)}, "${name}\\n");
+  ${name === "a" ? `expect(${fromShell ? "process.umask()" : "process.env.LLV_GATE_REVIEW_MODE"}).toBe(${fromShell ? '0o22' : '"green"'});` : ""}
+});`);
+  f.git("config", "core.hooksPath", "/dev/null");
+  f.git("add", "."); f.git("commit", "-m", "Add whole-step checkpoint fixtures");
+
+  let invocation = 0;
+  const run = (mode: "green" | "red", freshCallerState = false) => {
+    const caller = path.join(scratch, `caller-${++invocation}`);
+    const env = isolatedEnvironment(caller, f.env);
+    if (fromShell) writeFileSync(startup, mode === "green" ? "umask 022\n" : "umask 077\n");
+    const admission = path.join(caller, "admission.sqlite");
+    const result = spawnSync("bash", ["scripts/gate-slot.sh", "bash", ".githooks/pre-push"], {
+      cwd: f.dir, encoding: "utf8", timeout: 45_000,
+      env: { ...env, TMPDIR: temporary, LLV_GATE_CHECK_ENV: names,
+        XDG_STATE_HOME: freshCallerState ? env.XDG_STATE_HOME : path.join(scratch, "state"),
+        ...(fromShell ? { BASH_ENV: startup } : { LLV_GATE_REVIEW_MODE: mode }),
+        LLV_GATE_LOCK_DIR: caller, LLV_CHECK_ADMISSION_FILE: admission, LLV_GATE_CHECK_ADMISSION_FILE: admission },
+    });
+    return { status: result.status, output: result.stdout + result.stderr };
+  };
+  const samples = () => readFileSync(marker, "utf8").trim().split("\n").sort();
+  const cold = run("red");
+  expect(cold.status, cold.output).toBe(1);
+  const failure = cold.output.split("\n").find(line => line.startsWith("NEW a.test.ts"));
+  expect(failure).toBeDefined();
+
+  const green = run("green"); expect(green.status, green.output).toBe(0);
+  expect(green.output).toContain("head selected 2 files");
+  const before = samples();
+  const same = run("green"); expect(same.status, same.output).toBe(0);
+  expect(same.output).toContain("touched tests: reused pass");
+  expect(samples()).toEqual(before);
+
+  const warm = run("red");
+  expect(warm.status, warm.output).toBe(cold.status);
+  expect(warm.output).toContain(failure!);
+  expect(samples().filter(name => name === "a").length).toBeGreaterThan(before.filter(name => name === "a").length);
+
+  const freshRoots = run("green", true);
+  expect(freshRoots.status, freshRoots.output).toBe(0);
+  expect(freshRoots.output).toContain("touched tests: reused pass");
+}, 180_000);
+
 serviceTest("local check-step invalidates warm and cold retries when BASH_ENV bytes change", () => {
   const project = path.resolve(import.meta.dir, "..");
   const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-bash-env-")); roots.push(scratch);

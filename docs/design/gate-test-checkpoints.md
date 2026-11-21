@@ -16,15 +16,18 @@ becomes a passing receipt for the whole selection.
   gate and runtime bytes, Git configuration, execution environment, selection
   and budgets. The existing gate input snapshot supplies the source and tool
   fingerprints. The head key also binds the physical checkout directory.
+- Whole-step receipts bind explicit `LLV_GATE_CHECK_ENV` values, including
+  names that match a transport prefix. The local hook supplies fresh isolation
+  directories, so caller values for those directories do not key its receipts.
 - The comparator also binds its unfiltered caller environment: it retains
   custom variables that the publication wrapper normally strips. Identity,
   privacy and proxy/certificate values consumed by direct calls are bound too.
-  The effective `BASH_ENV` startup file is also bound by its declared path,
-  resolved file identity and content digest. The `bash` wrappers in
+  Whole-step and head-file receipts bind the `BASH_ENV` startup file by its
+  path, resolved file identity and content digest. The `bash` wrappers in
   `gate-slot.sh` read it before launching the comparator; its bytes stand for
   startup effects outside the environment, such as umask, resource limits, and
-  working directory. An absent, unreadable or non-file `BASH_ENV` input keeps
-  reusable head receipts cold; a change during the run invalidates checkpoint
+  working directory. A named `BASH_ENV` file that cannot be read keeps
+  reusable receipts cold. A change during the run invalidates checkpoint
   sealing or refuses reuse after a prior hit.
   For head checkpoints only, an active sandbox journal entry binds the local
   gate allocation to its device and inode. Both environment fingerprints omit
@@ -80,6 +83,9 @@ before file completion prevents sealing. It also checks receipt bytes, fresh
 declared directories, input and runner replacement, and manager identity loss
 or drift after reuse. The `check-step "touched tests"` regression covers warm
 and cold retries after changing only the external `BASH_ENV` bytes.
+The native hook also declines stale whole-step receipts after changes to a
+declared variable or the startup file. Warm retries report the same assertion
+failure as cold runs and reuse the pass when only private allocations change.
 
 This repairs the Delegatus repository's publication integration. The generic
 cross-project execution contract remains tracked in #3622.
