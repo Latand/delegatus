@@ -406,9 +406,9 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2
       ? `; over half the ${budgets.fileMs / 1000} s file budget; split it` : "";
-    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
     results[index] = { failures, passed, completed, elapsedMs: 0 };
     options.onFile?.(results[index]!, cleanupConfirmed);
+    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
   }
   }));
   // All owned runners have settled. Completed file diagnostics and filtered
@@ -588,7 +588,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   };
   const env = isolatedEnvironment(sandbox, inherited);
   const git = (...args: string[]) => command(["git", ...args], root, env);
-  let sealHeadSamples: (() => (() => void) | undefined) | undefined;
+  let verifyHeadReuse: (() => void) | undefined;
   try {
     const base = git("rev-parse", "--verify", `${baseRef}^{commit}`).trim();
     const headCommit = git("rev-parse", "--verify", "HEAD^{commit}").trim();
@@ -606,7 +606,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const initial = inputs?.snapshot();
     const headCache = initial ? headFileCache(root) : undefined;
     const headKey = (file: string) => fingerprint([4, initial?.key, checkpointEnvironment?.key, cleanupIdentity, files, budgets, file]);
-    const reused: TestRun[] = [], pending: string[] = [], freshGreen: TestRun[] = [];
+    const reused: TestRun[] = [], pending: string[] = [];
     for (const file of files) {
       const cached = headCache?.read(headKey(file));
       if (cached?.completed[0] === file) {
@@ -614,22 +614,23 @@ export async function touchedTests(root: string, baseRef: string, selected: read
         log(`touched-tests: reused complete green head file ${file}; identical source, selection, toolchain and environment`);
       } else pending.push(file);
     }
-    // Compare inputs only at the invocation boundaries, never once per file.
-    // The caller still gets the aggregate failure, but completed files survive
-    // that failure for a retry of exactly the same inputs. A killed supervisor
-    // or failed cleanup cannot seal a checkpoint.
-    sealHeadSamples = () => {
-      if (!initial || !headCache || (!reused.length && !freshGreen.length)) return;
-      if (serviceCleanupIdentity(root, env) !== cleanupIdentity || headCheckpointEnvironment(root, sandbox, inherited)?.key !== checkpointEnvironment?.key
-        || inputs?.snapshot()?.key !== initial.key) {
-        if (reused.length) throw new Error("head checkpoint inputs changed during this run; fresh checks required");
-        return;
-      }
-      return () => { for (const run of freshGreen) headCache.write(headKey(run.completed[0]!), run); };
+    let inputsChanged = false;
+    const sameHeadInputs = () => !inputsChanged && (serviceCleanupIdentity(root, env) === cleanupIdentity
+      && headCheckpointEnvironment(root, sandbox, inherited)?.key === checkpointEnvironment?.key
+      && inputs?.snapshot()?.key === initial?.key);
+    if (reused.length) verifyHeadReuse = () => {
+      if (!sameHeadInputs()) throw new Error("head checkpoint inputs changed during this run; fresh checks required");
     };
     const workers = comparisonFileWorkers(files, HEAD_FILE_WORKERS, sharesPortableRunner());
+    // A hook deadline can kill the comparator before its finally runs. Seal
+    // a green file after its runner and sandbox have been cleaned, with the
+    // same inputs verified on both sides of that file's execution.
     const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers,
-      onFile: headCache ? (run, cleanupConfirmed) => { if (cleanupConfirmed && isGreenHeadFile(run)) freshGreen.push(run); } : undefined });
+      onFile: headCache ? (run, cleanupConfirmed) => {
+        if (!cleanupConfirmed || !isGreenHeadFile(run)) return;
+        if (sameHeadInputs()) headCache.write(headKey(run.completed[0]!), run);
+        else inputsChanged = true;
+      } : undefined });
     const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
       completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
@@ -751,9 +752,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     return comparison;
   } finally {
     budget.close();
-    let persist: (() => void) | undefined;
-    try { persist = sealHeadSamples?.(); } finally { releaseGateSandbox(sandbox); }
-    persist?.();
+    try { verifyHeadReuse?.(); } finally { releaseGateSandbox(sandbox); }
   }
 }
 

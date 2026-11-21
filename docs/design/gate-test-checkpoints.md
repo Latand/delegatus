@@ -47,14 +47,16 @@ becomes a passing receipt for the whole selection.
 - Incomplete, timed-out and failed files run again. Baseline evidence retains
   its own confirmation rules. Diagnostic and flaky confirmation rounds remain
   fresh and never create head checkpoints.
-- The comparator waits for its owned file runners and cleans its private root
-  before sealing new receipts. A stopped supervisor or failed cleanup cannot
-  seal them. Input drift prevents sealing; drift after reusing a checkpoint
-  refuses the invocation.
+- The comparator seals each green receipt after its file runner has confirmed
+  owned cleanup, the file sandbox has been removed and the input snapshot
+  still matches. It writes eligible receipts before reporting file completion,
+  so a hook deadline can stop the comparator while leaving earlier receipts
+  available. Input drift prevents further sealing. Reused checkpoints also
+  require a final input check.
 
-Snapshots occur at invocation boundaries, so input hashing does not repeat for
-each file. Single-file selections keep whole-step reuse and skip this extra
-snapshot. Completed results remain in memory only for that bounded invocation.
+The comparator snapshots inputs before selecting reusable results and again
+before writing each new green receipt. Single-file selections keep whole-step
+reuse and skip these snapshots.
 The head-file cache limits the namespace to 8192 entries and 256 MiB, limits
 each record to 1 MiB, and treats malformed or unavailable records as misses.
 Head-file receipts expire after 24 hours. No additional service or timer runs.
@@ -71,11 +73,13 @@ incomplete file, source/environment/ignored-input invalidation, malformed
 receipts, and an aggregate deadline after eight of twelve files. The second
 invocation executes only the remaining four. The deadline is controlled in the
 parent; the child checks keep their real clocks and execution bounds.
-The native pre-push regression keeps one incomplete file alongside a green
-file and checks the receipt bytes, fresh declared directories, collection of
-the test services, input and runner replacement, and manager identity loss or
-drift. The `check-step "touched tests"` regression covers warm and cold retries
-after changing only the external `BASH_ENV` bytes.
+The native pre-push regression expires the hook after one file completes
+while another is still running. It checks that the services and directories
+were removed, the retry runs only the interrupted file, and a manager change
+before file completion prevents sealing. It also checks receipt bytes, fresh
+declared directories, input and runner replacement, and manager identity loss
+or drift after reuse. The `check-step "touched tests"` regression covers warm
+and cold retries after changing only the external `BASH_ENV` bytes.
 
 This repairs the Delegatus repository's publication integration. The generic
 cross-project execution contract remains tracked in #3622.
