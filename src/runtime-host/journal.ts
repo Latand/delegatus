@@ -814,6 +814,8 @@ export class RuntimeJournal {
        lawfully differ between a call and its replay), so it must never turn a
        legitimate idempotent replay into a request-hash conflict. */
     delete requestValue.origin;
+    // The first admission owns this Viewer snapshot, including on replay.
+    if (command.kind === "kill") delete requestValue.pendingSendIds;
     if (command.kind === "answer") requestValue.resolution = { sha256: createHash("sha256").update(stableJson(command.resolution)).digest("hex") };
     const requestJson = stableJson(requestValue);
     const requestHash = createHash("sha256").update(requestJson).digest("hex");
@@ -2936,6 +2938,7 @@ export class RuntimeJournal {
       idempotencyKey: command.idempotencyKey,
       conversationId: command.conversationId,
       kind: command.kind,
+      ...(command.kind === "kill" && command.pendingSendIds !== undefined ? { pendingSendIds: command.pendingSendIds } : {}),
       ...(command.kind === "kill" ? { origin: command.onlyIfIdle || command.origin?.kind === "agent" ? "system" as const : "operator" as const } : {}),
       ...(command.kind === "interrupt" ? { origin: command.origin?.kind === "agent" ? "system" as const : "operator" as const } : {}),
       ...((command.kind === "kill" || command.kind === "interrupt") && (command.origin || command.kind === "kill" && command.onlyIfIdle)

@@ -199,7 +199,7 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     const page = store.keyRange(pruneAfter, "\uffff", 64);
     const cutoff = Date.now() - 14 * 24 * 60 * 60_000;
     const stale = page.filter(row => {
-      if (row.state === "pending" || Date.parse(row.settledAt ?? row.createdAt) >= cutoff) return false;
+      if (row.state === "pending" || row.state === "failed" || Date.parse(row.settledAt ?? row.createdAt) >= cutoff) return false;
       // Keep the dispatch fence until its admitted warning has a durable
       // terminal projection. A queue may remain offline past alarm retention.
       if (row.recipientConversationId) {
@@ -213,7 +213,8 @@ export async function sweepSendFailureNotices(ports: SendFailureNoticePorts): Pr
     if (stale.length) store.boundedPatch(stale.length * 2, tx => {
       for (const row of stale) {
         const current = tx.get(row.operationId);
-        if (current && current.state !== "pending" && Date.parse(current.settledAt ?? current.createdAt) < cutoff) tx.delete(row.operationId);
+        if (current && (current.state === "sent" || current.state === "cancelled")
+          && Date.parse(current.settledAt ?? current.createdAt) < cutoff) tx.delete(row.operationId);
       }
     });
     pruneAfter = page.length === 64 ? page.at(-1)!.operationId : "";
