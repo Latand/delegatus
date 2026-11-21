@@ -1027,6 +1027,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return true;
   };
 
+  const [holdEditing, setHoldEditing] = useState<string | null>(null);
   const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean; hold?: Partial<TaskHold> | null } = {}) => {
     const task = card.task ? tasksById.current.get(card.task.id) ?? card.task : null;
     if (!task) return;
@@ -1037,16 +1038,20 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const written = settles();
     const entry: HistoryEntry = { kind: "status", taskId: task.id, title: short, from, to, fromHold: controller.holdFor(task) ?? null, toHold: null, settled: written.promise };
     historyRef.current.record(entry);
-    const receiptId = show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
-    entryReceipts.current.set(entry, receiptId);
     if (options.focus) focusMoved(card.id, to);
     void controller.move(task, to, Object.hasOwn(options, "hold") ? { hold: options.hold } : {}).then((outcome: StatusMoveOutcome) => {
-      if (outcome.kind === "saved") { entry.lineages = new Map([[task.id, outcome.lineage]]); entry.toHold = outcome.task.hold ?? null; }
+      if (outcome.kind === "saved") {
+        entry.to = outcome.task.status;
+        entry.lineages = new Map([[task.id, outcome.lineage]]);
+        entry.toHold = outcome.task.hold ?? null;
+        if (to === "blocked" && holdEditing === card.id) setHoldEditing(null);
+        const receiptId = show(t("kanban.moved", { title: short, status: statusLabel(t, outcome.task.status) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
+        entryReceipts.current.set(entry, receiptId);
+      }
       written.resolve(outcome.kind === "saved");
       /* The server already held the status: nothing of this board's is left to undo. */
-      if (outcome.kind === "settled") dismiss(receiptId);
+      if (outcome.kind === "settled") return;
       if (outcome.kind === "failed") {
-        dismiss(receiptId);
         flash(card.id);
         show(t("kanban.moveFailed", { title: short, error: outcome.error }), {
           label: t("kanban.retry"),
@@ -1056,7 +1061,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
           },
         }, { error: true });
       } else if (outcome.kind === "conflict") {
-        dismiss(receiptId);
         flash(card.id);
         show(t("kanban.movedElsewhere", { title: short, status: statusLabel(t, outcome.serverStatus) }), {
           label: t("kanban.moveAnyway"),
@@ -1067,8 +1071,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         }, { error: true });
       }
     });
-  }, [controller, dismiss, flash, focusMoved, show, step, t]);
-  const [holdEditing, setHoldEditing] = useState<string | null>(null);
+  }, [controller, dismiss, flash, focusMoved, holdEditing, show, step, t]);
   const moveToColumn = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean } = {}) => {
     if (to === "blocked") { setHoldEditing(card.id); return; }
     move(card, to, options);
@@ -2972,7 +2975,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
     else onOpenConversations?.();
   });
   const cardSaveHold = useStableCallback((card: KanbanCardModel, hold: Partial<TaskHold> | null) => {
-    setHoldEditing(null);
     const hasOwner = card.task?.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state));
     move(card, hold ? "blocked" : hasOwner ? "assigned" : "inbox", { hold, focus: true });
   });
