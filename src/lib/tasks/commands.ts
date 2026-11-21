@@ -6,7 +6,7 @@ import { readFindingKey } from "./finding";
 import { canonicalProject } from "@/lib/projects/aliases";
 
 import { holdParks, validateTaskHoldInput, readTaskHold, storedTaskHold } from "./hold";
-import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
+import { prototypeReviewSummary, prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
 import { isTaskAttachment } from "./attachments";
 import { taskRevision } from "./revision";
 import { taskMutationView } from "./mutationView";
@@ -755,13 +755,14 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   const restoringHold = Object.hasOwn(input, "restoreHold");
   const writingHold = Object.hasOwn(input, "hold");
   const ownerColumn = (): TaskStatus => task.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state)) ? "assigned" : "inbox";
+  const hasCurrentDecision = prototypeWaitsOnOperator(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary, task);
   if (restoringHold) {
     if (options.actor !== "operator" || Object.hasOwn(input, "hold")) return { ok: false, status: 400, error: "restoreHold is reserved for fenced operator undo" };
     patch.hold = storedTaskHold(input.restoreHold, notes);
     if (input.restoreHold !== null && !patch.hold) return { ok: false, status: 400, error: "invalid hold snapshot" };
     // Undo restores provenance and hold data; it cannot restore a Waiting
     // placement for work whose next action belongs to the seat or an agent.
-    if (patch.status === "blocked" && (!patch.hold || !(holdParks(patch.hold) || prototypeWaitsOnOperator(task.prototypeReview, task)))) patch.status = ownerColumn();
+    if (patch.status === "blocked" && (!patch.hold || !(holdParks(patch.hold) || hasCurrentDecision))) patch.status = ownerColumn();
   }
   if (writingHold) {
     const holdError = validateTaskHoldInput(input.hold);
@@ -771,7 +772,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     if (patch.hold?.kind === "operator" && (task.hold?.kind !== "operator" || patch.hold.note !== task.hold.note)) {
       patch.hold.since = now;
     }
-    if (patch.hold?.kind === "operator" && !patch.hold.note.trim() && !prototypeWaitsOnOperator(task.prototypeReview, task)
+    if (patch.hold?.kind === "operator" && !patch.hold.note.trim() && !hasCurrentDecision
       && (patch.status === "blocked" || !patch.status && task.status === "blocked")) {
       patch.status = ownerColumn();
       notes.push(WAITING_OPERATOR_NOTE);
@@ -782,7 +783,7 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
     else patch.hold = readTaskHold(hold ?? { kind: "unstated" }, now, options.actor ?? "operator", hold, options.conversationId);
   }
   if (!restoringHold && patch.status !== "done") {
-    const parks = patch.hold && (holdParks(patch.hold) || patch.hold.kind === "operator" && prototypeWaitsOnOperator(task.prototypeReview, task));
+    const parks = patch.hold && (holdParks(patch.hold) || patch.hold.kind === "operator" && hasCurrentDecision);
     if (patch.status === "blocked" && !parks) {
       patch.status = ownerColumn();
       if (options.actor === "agent") notes.push(WAITING_OPERATOR_NOTE);

@@ -1068,14 +1068,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }
     });
   }, [controller, dismiss, flash, focusMoved, show, step, t]);
+  const [holdEditing, setHoldEditing] = useState<string | null>(null);
+  const moveToColumn = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean } = {}) => {
+    if (to === "blocked") { setHoldEditing(card.id); return; }
+    move(card, to, options);
+  }, [move]);
   const cardsByIdRef = useRef(cardsById);
   cardsByIdRef.current = cardsById;
 
   const shift = useCallback((card: KanbanCardModel, delta: -1 | 1) => {
     const index = KANBAN_STATUSES.indexOf(card.status) + delta;
     const target = KANBAN_STATUSES[index];
-    if (target) move(card, target, { focus: true });
-  }, [move]);
+    if (target) moveToColumn(card, target, { focus: true });
+  }, [moveToColumn]);
 
   /* ── Inline title and description (prototype `startEdit`/`commitEdit`) ── */
   /* Drafts belong to the board, keyed by card, so a card that re-ranks, moves
@@ -1484,16 +1489,19 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [model]);
 
   /* ── Menus ───────────────────────────────────────────────────────────── */
-  const [holdEditing, setHoldEditing] = useState<string | null>(null);
+  useEffect(() => {
+    if (!holdEditing) return;
+    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(`[data-kanban-card="${CSS.escape(holdEditing)}"]`)?.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" }));
+  }, [holdEditing]);
   const statusItems = useCallback((card: KanbanCardModel, hints: boolean): KanbanMenuItem[] => [
     ...KANBAN_STATUSES.map((status): KanbanMenuItem => ({
       type: "radio", id: `status:${status}`, status, label: statusLabel(t, status),
       why: hints ? t(`kanban.statusHint.${status}`) : null,
       checked: card.status === status,
-      onSelect: () => status === "blocked" ? setHoldEditing(card.id) : move(card, status, { focus: true }),
+      onSelect: () => moveToColumn(card, status, { focus: true }),
     })),
     { type: "item", id: "hold", label: t("kanban.hold.edit"), keepFocus: true, onSelect: () => setHoldEditing(card.id) },
-  ], [move, t]);
+  ], [moveToColumn, t]);
   const menuFor = (): { label: string; items: KanbanMenuItem[] } | null => {
     const open = menu.open;
     if (!open) return null;
@@ -2003,14 +2011,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
       status: card.status,
       event,
       hint: dragHintText,
-      onDrop: (to) => move(card, to),
+      onDrop: (to) => moveToColumn(card, to),
       onActive: (active) => {
         dragHold.held = active;
         dragHold.now = dragHold.latest;
         if (!active) setDragReleased((count) => count + 1);
       },
     });
-  }, [move, dragHintText, dragHold]);
+  }, [moveToColumn, dragHintText, dragHold]);
 
   /* ── Keys: undo and redo, find ───────────────────────────────────────── */
   /* The Stages sheet stands over the board: while it is open, no key the

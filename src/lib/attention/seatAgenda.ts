@@ -98,7 +98,7 @@ function laneLine(pipeline: Pipeline): string {
   const escalate = `if only the operator can decide, ask them with publish_prototype_review, then dismiss_attention escalate {reviewId} with target {kind:"pipeline", pipelineId:"${pipeline.id}"}`;
   switch (laneNeedKind(pipeline)) {
     case "lane-merge":
-      return `${kind}${title} — completed, its merge stopped: ${clip(pipeline.merge?.reason ?? "no reason recorded", QUESTION_MAX)}; ${mergeStep(pipeline)}; ${escalate}`;
+      return `${kind}${title} — completed; ${mergeStep(pipeline)}; merge reason: ${clip(pipeline.merge?.reason ?? "no reason recorded", QUESTION_MAX)}; ${escalate}`;
     case "lane-review":
       return `${kind}${title} —${stage} review budget spent, the last fix was not re-reviewed; pipeline_action accept-head once it holds; ${escalate}`;
     default: {
@@ -180,7 +180,7 @@ export function seatAgendaAsks(
       return pages.map((page, index) => {
         const waiting = page?.length ? `After settling this lane, move Waiting task(s) ${page.join(", ")} by re-sending or clearing their holds. ` : "";
         const key = agendaKey(route) + (page ? `@waiting:${index + 1}:${waitingTaskIds!.length}:${page.join(",")}` : "");
-      return { key, id: pipeline.id, label: clip(waiting + returnedNote(route) + laneLine(pipeline), LABEL_MAX),
+      return { key, id: pipeline.id, label: clip(`${laneLine(pipeline)} ${returnedNote(route)} ${waiting}`, LABEL_MAX),
           ...(page ? { waitingTaskIds: page } : {}), sinceMs: state.sinceMs,
           seatOwnedLane: { id: pipeline.id, title: pipeline.task || pipeline.id, sinceMs: state.sinceMs,
             reason: `${kind}: ${pipeline.merge?.state === "blocked" ? clip(pipeline.merge.reason ?? "merge stopped", 120) : pipeline.stateDetail ?? state.stop?.kind ?? pipeline.state}` } };

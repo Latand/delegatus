@@ -1491,6 +1491,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       case "permission-request": return item.kind === "permission";
       case "release-settled": return item.kind === "signal" && item.id.startsWith("release-settled:");
       case "release-blocked": return item.kind === "signal" && item.id.startsWith("release-blocked:");
+      case "maintenance-settled": return item.kind === "maintenance";
       case "worker-ask": return item.kind === "ask";
       case "disk-pressure": return item.kind === "signal" && item.id === "disk-space";
       case "lane-event": return item.mergeEventSeq !== undefined;
@@ -1500,7 +1501,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       default: return false;
     }
   });
-  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "overdue-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure", "release-settled", "release-blocked"]);
+  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "overdue-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure", "release-settled", "release-blocked", "maintenance-settled"]);
   const cards: SeatTickCard[] = [];
   const reasons: SeatTickWakeReason[] = [];
   let guardHeld = 0;

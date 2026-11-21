@@ -73,7 +73,7 @@ import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/promp
 import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor, orchestratorSeatRevocationSource } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
-import { loadArchivedPipelinesForList, loadArchivedPipelinesForListAsync, loadPipelinesForList, loadPipelinesForListAsync } from "@/lib/pipelines/store";
+import { loadArchivedPipelinesForList, loadArchivedPipelinesForListAsync, loadPipelinesForList, loadPipelinesForListAsync, loadPipelinesForTask } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
 import { forgeCacheView } from "@/lib/forge/cache";
@@ -897,8 +897,10 @@ export function defaultSeatTickSources(): SeatTickSources {
         const ids = (lane.taskIds ?? []).filter(id => tasksById.has(id));
         if (ids.length) pauseWaitingTasks[lane.id] = [...new Set([...(pauseWaitingTasks[lane.id] ?? []), ...ids])].sort();
       }
-      const relevantArchived = projectRows(loadArchivedPipelinesForList(), project)
-        .filter(lane => lane.taskIds?.some(id => tasksById.has(id)));
+      const relevantArchived = [...new Map(tasks.filter(task => task.status !== "done")
+        .flatMap(task => loadPipelinesForTask(task.id))
+        .filter(lane => canonicalProject(lane.project) === project && lane.hiddenAt)
+        .map(lane => [lane.id, lane] as const)).values()];
       let asks = [...result.asks];
       if (relevantArchived.length) {
         const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
@@ -3440,8 +3442,8 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   const deployThrough = Math.max(...settledDeploys.map(deploy => Date.parse(deploy.settledAt ?? "") || 0));
   const deployResumeTasks = new Map<string, string[]>();
   if (deployThrough > 0) {
-    const eligible = new Set(paused.filter(lane => lane.pause?.actor?.kind === "agent"
-      && lane.pause.actor.conversationId === seat.conversationId
+    const eligible = new Set(paused.filter(lane => !pausedByOperator(lane)
+      && (lane.pause?.actor?.kind !== "agent" || lane.pause.actor.conversationId === seat.conversationId)
       && Date.parse(lane.pausedAt ?? "") <= deployThrough
       && (!lane.pause.resumeCondition || pauseReminderDue(lane.pause, lane.pausedAt, now,
         pauses.get(lane.id)?.pauseConditionMet ?? false))).map(lane => lane.id));

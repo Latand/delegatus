@@ -110,7 +110,7 @@ export function waitingRoute(task: WaitingTask, input: ReturnType<typeof waiting
     return seat("wait-cleared", "its recorded prerequisite cleared", "Start or continue the work, then clear the hold.");
   }
   if (until > now || hold?.kind === "postponed") return { owner: "agents", rule: "dated", action: "Keep the recorded postponement or reset time." };
-  const dependencyHasOwner = !!dependency && (dependency.assignments.some(a => a.state === "delivered" || a.state === "spawning" || a.state === "handoff")
+  const dependencyHasOwner = !!dependency && (dependency.assignments.some(a => !!a.conversationId && ["delivered", "spawning", "handoff"].includes(a.state))
     || dependency.status === "blocked" && [...(input.lanesByTask.get(dependency.id) ?? [])].some(laneActive))
     || !!dependencyLane && laneActive(dependencyLane);
   if (dependencyHasOwner || open.length && (hold?.kind === "pr" || hold?.kind === "issue")) {
