@@ -40,19 +40,22 @@ const clockTime = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2
     and what is added when it starts. It has no composer (#2148): until the
     stage starts there is nothing to reply to, and the line above the message
     already says when it will. */
-export function StageDraftFeed({ pipeline, stage, names, drafts, ports }: {
+export function StageDraftFeed({ pipeline, stage, names, drafts, ports, fromConversation = false }: {
   pipeline: Pipeline;
   stage: PipelineStage;
   names: ReadonlyMap<string, string>;
   drafts: StageDrafts;
   ports: PipelinePorts;
+  fromConversation?: boolean;
 }) {
   const { t } = useLocale();
   const name = names.get(stage.id) ?? stage.id;
   const facts = draftFacts(pipeline, stage);
   const nameOf = (id: string) => names.get(id) ?? id;
+  /* A stage nothing passes into but a fail edge reaches runs only when that stage fails: it does not start first. */
+  const failedFrom = facts.after || pipeline.stages[0]?.id === stage.id ? null : pipeline.stages.find((candidate) => candidate.onFail?.to === stage.id)?.id ?? null;
   const when = [
-    facts.after ? t("kanban.draft.startsAfter", { stage: nameOf(facts.after) }) : t("kanban.draft.startsFirst"),
+    facts.after ? t("kanban.draft.startsAfter", { stage: nameOf(facts.after) }) : failedFrom ? t("kanban.draft.startsOnFail", { stage: nameOf(failedFrom) }) : t("kanban.draft.startsFirst"),
     facts.then ? t("kanban.draft.then", { stage: nameOf(facts.then) }) : t("kanban.draft.last"),
     facts.onFail ? t("kanban.draft.onFail", { stage: nameOf(facts.onFail.to), max: facts.onFail.max }) : null,
   ].filter(Boolean).join(" · ");
@@ -60,7 +63,7 @@ export function StageDraftFeed({ pipeline, stage, names, drafts, ports }: {
   return (
     <div className="feed draft-feed" role="log" aria-label={t("kanban.draft.feedAria", { stage: name })}>
       <div className="msg event"><i className="edot" aria-hidden="true" /><span>{when}</span></div>
-      <StageDraftMessage pipeline={pipeline} stage={stage} name={name} drafts={drafts} ports={ports} />
+      <StageDraftMessage pipeline={pipeline} stage={stage} name={name} drafts={drafts} ports={ports} fromConversation={fromConversation} />
       <AddedAtStart pipeline={pipeline} stage={stage} />
       {ended ? <p className="draft-note">{t("kanban.draft.noteEnded")}</p> : null}
     </div>

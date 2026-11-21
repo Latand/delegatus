@@ -259,36 +259,6 @@ export function ReturnSuffix({ arc, title }: { arc: LoopArc; title: string }) {
   );
 }
 
-/** The Stages sheet's loop chip (#1743): the leading glyph becomes the same
-    circled number the arrow draws once the edge has fired, and a spent budget
-    inverts the chip so "no return left" reads without colour.
-
-    The sheet's nav is the one surface this still belongs on — it lists what the
-    graph holds, where a fail edge IS one of the things listed. The card's lane
-    row carries the same edge as a suffix on the failing pill instead, because
-    a chip there sits in the row of steps and reads as one (#1798).
-
-    The chip is one line, so its parts are separate: the stage names truncate,
-    and the budget — the fact the chip exists for — never does. */
-export function LoopChip({ loop, from, to }: { loop: KanbanPipeline["loops"][number]; from: string; to: string }) {
-  const { t } = useLocale();
-  const exhausted = loop.fired >= loop.max;
-  const title = [
-    t("kanban.loopTitle", { from, to, fired: loop.fired, max: loop.max }),
-    exhausted ? t("kanban.graph.noneLeft") : null,
-  ].filter(Boolean).join(" · ");
-  return (
-    <span className={`ploop fail${loop.fired ? " taken" : ""}${exhausted ? " spent" : ""}`} title={title}>
-      {loop.fired
-        ? <CountCircle n={loop.fired} tone="fail" filled={!exhausted} label={t("kanban.graph.firedTitle", { count: loop.fired })} />
-        : <span className="lglyph" aria-hidden="true">↺</span>}
-      <span className="lnames">{t("kanban.loopNames", { from, to })}</span>
-      <span className="lbudget">{t("kanban.loopUsed", { fired: loop.fired, max: loop.max })}</span>
-      {exhausted ? <span className="lnone">{t("kanban.graph.noneLeft")}</span> : null}
-    </span>
-  );
-}
-
 /** How long an edge an attempt just travelled stays marked. */
 const LIVE_EDGE_MS = 2_400;
 

@@ -248,10 +248,12 @@ test("with a helper conversation adopted last on Implement, the graph keeps the 
     expect(graphView(host).querySelector<HTMLElement>('[data-strip="verify:fail:implement"]')?.dataset.stripFired).toBe("1");
     expect(graphView(host).querySelector('.pnode[data-stage="implement"] .pattempt')?.textContent).toBe(" · 2");
     click(graphView(host).querySelector('.pnode[data-stage="implement"]'));
-    expect(await inWindow(host)).toBe("conversation_implement-2");
+    await tick();
+    /* The node selects its stage in the sheet, whose pane holds the marked attempt's conversation; no window opens. */
+    expect(host.querySelector("[data-agent-window]")).toBeNull();
+    expect(host.querySelector('[data-stages-sheet] .pane[data-stage="implement"] [data-kanban-reader]')?.getAttribute("data-kanban-reader")).toBe("conversation_implement-2");
     expect(card(host).querySelector("[data-kanban-reader]")).toBeNull();
     expect(graphView(host).querySelector('.pnode[data-stage="implement"]')?.getAttribute("aria-pressed")).toBe("true");
-    expect(card(host).querySelector('.pb-pills [data-stage="implement"]')?.className).toContain("selected");
     click(host.querySelector("[data-sheet-close]"));
     await tick();
     /* The helper stays reachable, listed as what it is. */

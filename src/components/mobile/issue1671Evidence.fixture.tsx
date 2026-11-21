@@ -36,6 +36,7 @@ import { reconnectEvidence } from "@/components/voiceCompanion/reconnectEvidence
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { buildStageShapes } from "@/components/kanban/stageShapes.fixture";
 import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
@@ -799,6 +800,20 @@ if (KANBAN && MANY_CARDS > 0) {
       { id: "implement", state: "passed", ago: 1_800 }, { id: "review", state: "running", ago: 240 + index, role: "reviewer" }, { id: "verify" },
     ]));
     kanbanTasks.push(kanbanTask(id, "assigned", title, { assignments: [kanbanAssign(worker)], updatedAt: iso(600 + index * 60) }));
+  }
+}
+if (KANBAN && new URLSearchParams(location.search).has("stageshapes")) {
+  /* Redesign S2: the lanes of every graph shape the Stages window draws (`stageShapes.fixture.ts`), on a task each. */
+  const uk = localStorage.getItem("llv_lang") === "uk";
+  for (const entry of buildStageShapes({
+    project: PROJECT, iso, L: (en, ukText) => (uk ? ukText : en),
+    file: (_id, title, live) => {
+      const path = kanbanConversation(title, live ? "working" : "settled", live ? 400 : 3_600);
+      return { path, conversationId: idOf(path) };
+    },
+  })) {
+    kanbanPipelines.push(entry.pipeline);
+    kanbanTasks.push(kanbanTask(`t-shape-${entry.slug}`, "assigned", entry.pipeline.task));
   }
 }
 if (KANBAN) {
