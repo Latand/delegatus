@@ -18,6 +18,12 @@ export interface TimelineAttempt {
   completedAtMs: number | null;
   /** Attempt lifecycle end, including waits; never an active-work duration. */
   endAtMs: number | null;
+  /**
+   * The last instant at which work is evidenced: the settled end, the clock
+   * for a live attempt, the end of an observed closed turn for an open idle
+   * one, otherwise null. The chart's thick segment never reaches past it.
+   */
+  workEndAtMs: number | null;
   /** The single native turn visible in the authorized board snapshot, not total work. */
   observedTurn: { startedAtMs: number; endAtMs: number } | null;
   activity: "working" | "idle" | "unknown";
@@ -98,6 +104,8 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number, fileFor: (identity:
       const confirmedIdle = !!file && (file.proc === "killed" || file.proc === "done"
         || typeof file.lastTurn?.endedAt === "number" && Number.isFinite(file.lastTurn.endedAt) && file.lastTurn.endedAt <= nowMs);
       const endAtMs = stoppedEnd !== null ? Math.min(stoppedEnd, completedEnd ?? Infinity) : completedEnd ?? (operational ? nowMs : null);
+      const observed = observedTurn(file, startedAtMs, endAtMs, nowMs, live);
+      const workEndAtMs = stoppedEnd !== null || completedEnd !== null ? endAtMs : operational ? live ? nowMs : observed?.endAtMs ?? null : null;
       if (operational && identity) liveConversations.add(identity);
       if (identity && stoppedAtMs !== null && stoppedAtMs <= nowMs) {
         stoppedConversations.set(identity, Math.max(stoppedConversations.get(identity) ?? -Infinity, stoppedAtMs));
@@ -118,7 +126,8 @@ function timelinePipeline(pipeline: Pipeline, nowMs: number, fileFor: (identity:
         startedAtMs,
         completedAtMs,
         endAtMs,
-        observedTurn: observedTurn(file, startedAtMs, endAtMs, nowMs, live),
+        workEndAtMs,
+        observedTurn: observed,
         activity: live ? "working" : confirmedIdle ? "idle" : "unknown",
         live,
         stopped: stoppedEnd !== null && LIVE_STATES.has(attempt.state),
@@ -215,6 +224,7 @@ export function projectTaskTimelines(input: {
     rows.push({ key, pipelineId: null, stageId: "", kind: "run", attempt: 1, state: "running", historical: false,
       roleId: file.durableLineage?.role ?? null, engine: file.engine === "shell" ? null : file.engine,
       model: file.model, startedAtMs, completedAtMs: null, endAtMs: startedAtMs === null ? null : nowMs,
+      workEndAtMs: startedAtMs === null ? null : nowMs,
       observedTurn: observedTurn(file, startedAtMs, startedAtMs === null ? null : nowMs, nowMs, true), activity: "working", live: true, stopped: false });
     members.set(taskId, rows);
   }

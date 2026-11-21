@@ -27,6 +27,11 @@ test("documentation, fixtures, tooling and release PRs do not trigger", async ()
   expect((await releaseState(input)).state).toBe("not-due");
 });
 
+test("a pending request cannot run ancestry checks while releases are off", async () => {
+  const input = { ...ready(), enabled: false, requested: true, isAncestor: () => { throw new Error("ancestry read while disabled"); } };
+  expect(await releaseState(input)).toMatchObject({ state: "blocked", reason: "releases-off", cut: null });
+});
+
 test.each([
   [1, { enabled: false }], [2, { tickEnabled: false }], [3, { mergeEnabled: false }],
   [4, { live: true }], [4, { mainVersion: "1.1.0" }], [4, { registryHasTag: false }],

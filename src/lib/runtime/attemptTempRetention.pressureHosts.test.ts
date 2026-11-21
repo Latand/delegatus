@@ -41,7 +41,7 @@ for (const sqliteMode of ["off", "sqlite"] as const) for (const lowSpace of [fal
       expect(owner.pipelineId).toBeNull();
       access = materializeStructuredHostAccess(false, process.env, null, undefined, owner);
       const store = new AttemptTempStore();
-      const owned = store.pressurePage(32);
+      const owned = store.retentionPage(32);
       for (const row of owned) store.measure(row.directory, 12288);
       store.close();
       expect(owned).toHaveLength(2);
@@ -92,7 +92,7 @@ test("real parent and restarted helper reclaim a thousand-root inventory five ti
   const store = new AttemptTempStore(path.join(state, "attempt-temp.sqlite"));
   const held: string[] = [];
   try {
-    const ended = finishedLane(root, new Date(NOW - 3600_000).toISOString());
+    const ended = finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString());
     const live = buildPipeline({ id: "pressure-live", task: "Live pressure fixture", project: "fixture", repoDir: root,
       stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: ended.stages[0]!.effectiveRole }],
       srcPath: null, srcConversationId: null, now: "2030-01-19T00:00:00Z" });

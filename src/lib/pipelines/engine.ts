@@ -33,6 +33,7 @@ import { stageAttemptPushRefusal, settleStageAttemptPush } from "./stageAttemptP
 import { prepareStageGitGuard } from "@/lib/git/stageAttemptGuard";
 import { buildReleaseTagPolicy } from "./releaseTagPolicy";
 import { controllerClosedHosts, controllerPipelineKeys, controllerAttemptSelected, controllerReferences, controllerCloseBudget, controllerRuns, controllerTickFingerprint, controllerOffWindowGuard, controllerAssignmentAttached, controllerSettledAttempt, controllerOffWindowWorkingHost, withControllerPipelineScope } from "./controllerScope";
+import { withProvisioningTurn } from "./provisioningTurn";
 import { startPipelineControllerJob, pipelineControllerJobLanes, reportProvisioningPhase, waitForPipelineControllerJob } from "./controllerJobs";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leasedOperationPorts, OperationLease, OperationLeaseExpiredError, operationPortIdentity, withoutOperationLease } from "@/lib/operationLease";
@@ -8606,15 +8607,16 @@ async function spawnCorrelatedRunStage(
     const assertSetupCurrent = () => {
       const current = findPipelineRecord(pipeline.id);
       if (attempt.activation) {
-        const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.find(item => item.n === attempt.n);
+        const currentAttempt = current?.runs.find(run => run.stageId === stage.id)?.attempts.at(-1);
         if (!current || activationFence(current) !== attempt.activation.fence
           || current.repoDir !== pipeline.repoDir || current.worktreeDir !== pipeline.worktreeDir || current.branch !== pipeline.branch
-          || currentAttempt?.activation?.id !== attempt.activation.id) throw new ActivationSuperseded();
+          || currentAttempt?.n !== attempt.n || currentAttempt.activation?.id !== attempt.activation.id
+          || currentAttempt.activation.cancelRequested) throw new ActivationSuperseded();
       }
       assertProactivePipelineExecution(current ?? pipeline);
     };
     const setupWatch = attempt.activation ? setInterval(() => {
-      try { assertSetupCurrent(); } catch { setupAbort.abort(); }
+      try { assertSetupCurrent(); } catch (error) { setupAbort.abort(error); }
     }, 100) : null;
     try {
       if (!ports.worktreePresent(pipeline.worktreeDir)) {
@@ -8624,9 +8626,16 @@ async function spawnCorrelatedRunStage(
       // Validate Delegatus's shared graph even on a resumed stage. Other
       // repositories release old source links before package code can run.
       lockedDependencies = await performanceSpans.wait("pipeline.shared",
-        () => prepareLockedDependencies(pipeline.worktreeDir, { exec: ports.exec }));
+        () => prepareLockedDependencies(pipeline.worktreeDir, {
+          exec: ports.exec, signal: setupAbort.signal, assertCurrent: assertSetupCurrent, repository: pipeline.repoDir,
+        }));
+      assertSetupCurrent();
       if (!lockedDependencies) isolateWorktreeDependencies(pipeline);
       await preparePipelineSetup(pipeline, stage, attempt, ports.now, persist, ports.executeProjectSetup, setupAbort.signal, assertSetupCurrent);
+    } catch (error) {
+      setupAbort.signal.throwIfAborted();
+      assertSetupCurrent();
+      throw error;
     } finally { if (setupWatch) clearInterval(setupWatch); }
     if (!lockedDependencies && fs.existsSync(path.join(pipeline.repoDir, "node_modules")) && !fs.existsSync(path.join(pipeline.worktreeDir, "node_modules"))) {
       const ignored = await ports.exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
@@ -11430,7 +11439,7 @@ function provisionFence(pipeline: Pipeline): PipelineProvisionOutcome["fence"] {
   };
 }
 
-async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal): Promise<PipelineProvisionOutcome> {
+async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: ProvisionExecPort, signal: AbortSignal, checkoutReady: () => void): Promise<PipelineProvisionOutcome> {
   const fence = provisionFence(pipeline);
   // Legacy non-draft records did not retain caller pin provenance. Preserve
   // their published-head default; new records carry the explicit marker.
@@ -11444,12 +11453,10 @@ async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: Provision
     if (!resolved.ok) return { id: pipeline.id, fence, base: null, head: null, error: resolved.error };
     base = { baseBranch: resolved.baseBranch, baseRef: resolved.baseRef, baseRefPinned };
   }
-  const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal);
+  const provisioned = await provisionPipelineWorktreeAsync({ ...pipeline, ...base }, exec, signal, checkoutReady);
   return { id: pipeline.id, fence, base, head: provisioned.ok ? provisioned.sha : null, error: provisioned.ok ? null : provisioned.error,
     ...(provisioned.preservedLocalRef ? { preservedLocalRef: provisioned.preservedLocalRef } : {}) };
 }
-
-const provisioningHost = globalThis as typeof globalThis & { __llvProvisioningRepositories?: Map<string, Promise<void>> };
 
 /**
  * Fetch and provision outside the lease (#1799). Scoped controller passes
@@ -11501,7 +11508,6 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
   // Close/delete may originate in another process. Indexed row revisions
   // invalidate only changed jobs; polling needs no lease or close-path hook.
   const watch = setInterval(revalidate, 50);
-  const repositoryTails = provisioningHost.__llvProvisioningRepositories ??= new Map<string, Promise<void>>();
   const diskAdmission = ports.worktreeDiskWait ?? ((repoDir: string, worktreeDir: string, usesClaude: boolean) =>
     worktreeDiskWait(repoDir, worktreeDir, undefined, undefined, undefined, usesClaude));
   try {
@@ -11539,8 +11545,6 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           });
         }
       };
-      let releaseRepository: (() => void) | undefined;
-      let repository: string | undefined, tail: Promise<void> | undefined;
       try {
         // Linked worktrees share refs and Git locks even when repoDir differs.
         // Resolve through Git asynchronously, then serialize each common dir.
@@ -11552,23 +11556,18 @@ async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: num
           });
           return;
         }
-        repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
-        const previous = repositoryTails.get(repository);
-        tail = new Promise<void>((resolve) => { releaseRepository = resolve; });
-        repositoryTails.set(repository, tail);
-        if (previous) await waitForRepository(previous);
-        const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal);
-        revalidate();
-        if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
+        const repository = path.resolve(job.pipeline.repoDir, common.stdout.trim());
+        await withProvisioningTurn(repository, job.pipeline.worktreeDir, waitForRepository, async checkoutReady => {
+          const outcome = await provisionPipelineOutsideLease(job.pipeline, guardedExec, job.abort.signal, checkoutReady);
+          revalidate();
+          if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, outcome);
+        });
       } catch (error) {
         revalidate();
         if (!job.abort.signal.aborted) outcomes.set(job.pipeline.id, {
           id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null,
           error: `pipeline provisioning failed: ${String(error)}`,
         });
-      } finally {
-        releaseRepository?.();
-        if (repository && repositoryTails.get(repository) === tail) repositoryTails.delete(repository);
       }
     }));
   } finally { clearInterval(watch); }

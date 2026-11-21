@@ -3,6 +3,7 @@
 import { ChevronUp } from "lucide-react";
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
+import { COMPOSER_FIELD_RESIZE_EVENT } from "@/lib/composerFocus";
 import { seatGrowth } from "@/lib/composerScroll";
 import { useLocale } from "@/lib/i18n";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -138,6 +139,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
       measure();
     });
     observer.observe(section, { subtree: true, childList: true, attributes: true, attributeFilter: ["style"] });
+    section.addEventListener(COMPOSER_FIELD_RESIZE_EVENT, measure);
     window.addEventListener("resize", measure);
     /* The seat eases its height, so the commit that sets a new height is
        measured against the old one: what the form lacks at the grip's lower
@@ -146,6 +148,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     section.addEventListener("transitionend", arrived);
     return () => {
       observer.disconnect();
+      section.removeEventListener(COMPOSER_FIELD_RESIZE_EVENT, measure);
       window.removeEventListener("resize", measure);
       section.removeEventListener("transitionend", arrived);
       section.style.removeProperty("--seat-grow");

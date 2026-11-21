@@ -14,18 +14,36 @@ becomes a passing receipt for the whole selection.
 - Reuse requires the same clean worktree, commit, tree, branch, comparison base,
   full working inputs (including ignored files), installed dependency bytes,
   gate and runtime bytes, Git configuration, execution environment, selection
-  and budgets. The existing gate input snapshot supplies these identities.
+  and budgets. The existing gate input snapshot supplies the source and tool
+  fingerprints. The head key also binds the physical checkout directory.
 - The comparator also binds its unfiltered caller environment: it retains
   custom variables that the publication wrapper normally strips. Identity,
   privacy and proxy/certificate values consumed by direct calls are bound too.
+  The effective `BASH_ENV` startup file is also bound by its declared path,
+  resolved file identity and content digest. The `bash` wrappers in
+  `gate-slot.sh` read it before launching the comparator; its bytes stand for
+  startup effects outside the environment, such as umask, resource limits, and
+  working directory. An absent, unreadable or non-file `BASH_ENV` input keeps
+  reusable head receipts cold; a change during the run invalidates checkpoint
+  sealing or refuses reuse after a prior hit.
+  For head checkpoints only, an active sandbox journal entry binds the local
+  gate allocation to its device and inode. The comparator can then omit the
+  inherited `XDG_STATE_HOME` and `XDG_RUNTIME_DIR` paths that it replaces before
+  running every file. The selected temporary parent and caller-declared
+  inputs retain their identities. External paths keep their exact keys.
+  The Linux worker entry issues fresh process and supervisor IDs for each
+  file, so the parent invocation's IDs do not key these checkpoints.
 - Dirty trees, index flags and unreadable input identities receive fresh runs.
 - A file must have at least one passing assertion, no failed assertion or
   diagnostic, a complete report and successful owned cleanup.
 - Reusable files use Linux service cgroup cleanup. The portable fallback is
   best effort; its samples never become head checkpoints. Other platforms
   retain their existing fresh-file execution and whole-step receipt rules.
-  Current service availability is checked before reading and sealing receipts;
-  the manager transport and supervisor executables are part of the key.
+  Before reading or sealing receipts, the comparator probes the same user
+  service route as a file worker from a fresh runtime directory. A local Unix
+  socket, its D-Bus instance and its systemd manager's unique connection must
+  be identifiable. The route and launcher/probe executable bytes are part of
+  the key. An unknown manager leaves the head files cold.
 - Incomplete, timed-out and failed files run again. Baseline evidence retains
   its own confirmation rules. Diagnostic and flaky confirmation rounds remain
   fresh and never create head checkpoints.
@@ -37,7 +55,7 @@ becomes a passing receipt for the whole selection.
 Snapshots occur at invocation boundaries, so input hashing does not repeat for
 each file. Single-file selections keep whole-step reuse and skip this extra
 snapshot. Completed results remain in memory only for that bounded invocation.
-The existing gate cache limits the namespace to 256 entries and 32 MiB, limits
+The head-file cache limits the namespace to 8192 entries and 256 MiB, limits
 each record to 1 MiB, and treats malformed or unavailable records as misses.
 Head-file receipts expire after 24 hours. No additional service or timer runs.
 
@@ -53,6 +71,10 @@ incomplete file, source/environment/ignored-input invalidation, malformed
 receipts, and an aggregate deadline after eight of twelve files. The second
 invocation executes only the remaining four. The deadline is controlled in the
 parent; the child checks keep their real clocks and execution bounds.
+The ordinary `check-step "touched tests"` regression keeps one incomplete file
+alongside a green file and checks the receipt bytes, fresh directory lifetimes,
+declared input and runner replacement, manager identity loss or drift, and
+warm/cold retries after changing only the external `BASH_ENV` bytes.
 
 This repairs the Delegatus repository's publication integration. The generic
 cross-project execution contract remains tracked in #3622.

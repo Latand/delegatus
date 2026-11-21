@@ -569,10 +569,12 @@ for this surface; later cases are added to it):
   reuse without putting it in process arguments or logs. `ps` must show the
   listener's launcher as
   `…/Delegatus/Runtime/bun/bin/bun …/Runtime/packages/node_modules/delegatus-cli/bin/cli.mjs`
-  under this run's data root. A listing of the case home taken before the first
-  launch and after this case may differ only under `Library/`, `.config/`
-  and `.cache/`, so no shell profile appears or changes. The check covers the
-  case home only: the runner user is unprivileged, but the smoke does not watch
+  under this run's data root. The immediate entries of the case home are listed before the first
+  launch and again after this case. The smoke rejects any new top-level entry
+  other than `Library`, `.config` and `.cache`, so a top-level shell profile
+  such as `.zshrc` fails it. The comparison reads names only: it does not look
+  inside those three directories or at changes to entries that already
+  existed. The check covers the case home only: the runner user is unprivileged, but the smoke does not watch
   the rest of the runner's disk. The log must show `STATE ready` and
   `WEB language=en…`.
 - **Case `reuse`.** End the app by its PID. The server must keep answering.

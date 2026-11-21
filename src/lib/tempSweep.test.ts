@@ -1,3 +1,4 @@
+import { STRUCTURED_HOST_STAMP_ENV } from "@/lib/scanner/process";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import * as attemptRemoval from "./runtime/attemptTempRemoval";
@@ -14,6 +15,7 @@ import {
   recordTempSweep,
   runTempSweep,
   runTempSweepInHelper,
+  discoverSweepRoots,
   scanProcesses,
   startTempSweep,
   stopTempSweep,
@@ -131,6 +133,19 @@ test.each(["checkout", "bare"])("an owned stale temp tree preserves a %s reposit
   expect(fs.readFileSync(path.join(repository, "index.js"), "utf8")).toBe("x".repeat(8192));
 });
 
+/** These fixtures own the listed processes. Their real proc entries exercise
+ * cwd, descriptors, maps and environment without walking unrelated host jobs. */
+function fixtureProcRoot(children: readonly { pid?: number }[]): string | undefined {
+  if (!fs.existsSync("/proc/self/ns/mnt")) return undefined;
+  const proc = tempRoot();
+  fs.symlinkSync("/proc/self", path.join(proc, "self"));
+  for (const { pid } of children) {
+    if (!pid) throw new Error("fixture process did not start");
+    fs.symlinkSync("/proc/" + pid, path.join(proc, String(pid)));
+  }
+  return proc;
+}
+
 test("a sweep removes old owned directories and keeps young, foreign, shared, in-use and worktree ones", async () => {
   const root = tempRoot();
   const outside = tempRoot();
@@ -151,14 +166,15 @@ test("a sweep removes old owned directories and keeps young, foreign, shared, in
   /* Three idle holders: one sits in a directory, one keeps a file open, one
      only carries its scratch directory in TMPDIR, the way a stage agent whose
      shell is between commands does. */
-  await started(spawn("sleep", ["30"], { cwd: cwdHeld, stdio: "ignore" }));
-  await started(spawn("sh", ["-c", "exec 3<\"$1\"; exec sleep 30", "sh", path.join(fdHeld, "file.txt")], { stdio: "ignore" }));
-  await started(spawn("sleep", ["30"], { env: { NODE_ENV: "test", PATH: process.env.PATH, TMPDIR: path.join(envHeld, "tmp") }, stdio: "ignore" }));
+  const cwdOwner = await started(spawn("sleep", ["30"], { cwd: cwdHeld, stdio: "ignore" }));
+  const fileOwner = await started(spawn("sh", ["-c", "exec 3<\"$1\"; exec sleep 30", "sh", path.join(fdHeld, "file.txt")], { stdio: "ignore" }));
+  const environmentOwner = await started(spawn("sleep", ["30"], { env: { NODE_ENV: "test", PATH: process.env.PATH, TMPDIR: path.join(envHeld, "tmp") }, stdio: "ignore" }));
 
   const report = await sweepStaleTempDirs({
     maxAgeMs: DAY,
     roots: [{ path: root, via: "" }],
     worktrees: [worktree],
+    procRoot: fixtureProcRoot([cwdOwner, fileOwner, environmentOwner]),
   });
 
   expect(report.removed.map((removal) => path.basename(removal.path)).sort()).toEqual(["llv-test-run-old", "pending-producer-old"]);
@@ -253,6 +269,36 @@ test("a root read through another namespace is skipped once that namespace is no
   expect(report.errors[0]).toContain("namespace");
 });
 
+test.skipIf(process.platform === "win32")("root discovery agrees with a full scan and only reads foreign mount stamps", () => {
+  const proc = tempRoot();
+  const mount = (name: string, namespace: string) => {
+    fs.mkdirSync(path.join(proc, name, "ns"), { recursive: true });
+    fs.symlinkSync(namespace, path.join(proc, name, "ns", "mnt"));
+  };
+  mount("self", "mnt:[1]");
+  for (const [pid, namespace, env] of [
+    ["10", "mnt:[1]", "tag"], ["20", "mnt:[2]", "near"], ["21", "mnt:[2]", "tag"],
+    ["22", "mnt:[2]", "tag"], ["30", "mnt:[3]", "missing"],
+  ] as const) {
+    mount(pid, namespace);
+    if (env !== "missing") fs.writeFileSync(path.join(proc, pid, "environ"),
+      env === "tag" ? "PATH=/bin\0" + STRUCTURED_HOST_STAMP_ENV + "=yes\0" : "X" + STRUCTURED_HOST_STAMP_ENV + "=yes\0");
+  }
+  const roots = [path.join(proc, "temp")];
+  const full = sweepRoots(scanProcesses(proc), roots, proc);
+  const read = spyOn(fs, "readFileSync"), dirs = spyOn(fs, "readdirSync");
+  try {
+    expect(discoverSweepRoots(roots, proc)).toEqual(full);
+    expect(full).toHaveLength(3);
+    expect(full[1]?.anchor?.namespace).toBe("mnt:[2]");
+    expect([21, 22]).toContain(full[1]!.anchor!.pid);
+    expect(full[2]?.anchor).toEqual(full[1]?.anchor);
+    expect(read.mock.calls.every(args => String(args[0]).endsWith("/environ"))).toBe(true);
+    expect(read.mock.calls.some(args => String(args[0]) === path.join(proc, "10/environ"))).toBe(false);
+    expect(dirs.mock.calls.map(args => String(args[0]))).toEqual([proc]);
+  } finally { dirs.mockRestore(); read.mockRestore(); }
+});
+
 test("the host temp roots are read through an agent process in another mount namespace, once per namespace", () => {
   const scan: ProcessScan = {
     ownNamespace: "mnt:[1]",
@@ -341,7 +387,8 @@ test.each(["claimed", "nested"])("a %s temp root set after process startup stays
   const directory = JSON.parse(fs.readFileSync(marker, "utf8")) as string;
   const old = new Date(Date.now() - 3 * DAY);
   for (const entry of [...fs.readdirSync(directory).map(name => path.join(directory, name)), directory]) fs.utimesSync(entry, old, old);
-  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], maxAgeMs: DAY });
+  const procRoot = fixtureProcRoot([owner]);
+  const report = await sweepStaleTempDirs({ procRoot, roots: [{ path: root, via: "" }], maxAgeMs: DAY });
   expect(report.removed).toEqual([]);
   expect(report.kept.inUse).toBe(1);
   expect(fs.existsSync(directory)).toBeTrue();
@@ -349,7 +396,7 @@ test.each(["claimed", "nested"])("a %s temp root set after process startup stays
     owner.once("exit", () => resolve());
     owner.kill("SIGKILL");
   });
-  const settled = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], maxAgeMs: DAY });
+  const settled = await sweepStaleTempDirs({ procRoot, roots: [{ path: root, via: "" }], maxAgeMs: DAY });
   expect(settled.removed.map(entry => entry.path)).toEqual([directory]);
 });
 
