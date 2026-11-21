@@ -22,7 +22,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest as runClaimedRequestWithLeaseWorker, runningCount } from "./runner";
 import { relayActivity, relayOutcomeLabel } from "./activity";
-import { changeRun, dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
+import { changeRun, dropRun, externalRelayFile, readRelayStore, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
@@ -1796,7 +1796,7 @@ async function runLoopCase(options: {
   response?: (body: WireCall, attempt: number) => { status?: number; body?: unknown; drop?: boolean } | Promise<{ status?: number; body?: unknown; drop?: boolean }>;
   completeResponse?: (body: unknown, attempt: number) => { status?: number; body?: unknown };
   runtime?: ToolLoopRuntime & { ownerPorts?: import("./ownerRun").OwnerRunPorts };
-  relayId?: string; ownerTier?: boolean;
+  relayId?: string; ownerTier?: boolean; owner?: PairedRelay["owner"];
   reverseReadArrival?: boolean;
   heartbeatResponse?: (seq: number) => { status?: number; body?: unknown };
   features?: string[];
@@ -1843,6 +1843,7 @@ async function runLoopCase(options: {
   });
   const paired = relay(`${server.origin}/v1`);
   if (options.features) paired.features = options.features;
+  if (options.owner) paired.owner = options.owner;
   paired.id = options.relayId ?? `loop_${crypto.randomUUID()}`;
   paired.targets[0] = { ...paired.targets[0]!, id: request.target_id, memberLimitPerHour: null, ...(options.ownerTier !== undefined ? { ownerTier: options.ownerTier } : {}) };
   const previousSelection = accountManager.resolveHeadlessSpawn;
@@ -3059,9 +3060,10 @@ test("chain switches preserve the service wire and legacy record fields", async 
   const cases = ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin", "action_react", "action_ban"];
   const surfaces: Record<string, unknown> = {};
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  const owner = { namespace: "test", id: "owner", display_name: "Owner", handle: null };
   async function replay(role: string, ownerTier?: boolean) {
     const request = x1Request(role.startsWith("action_") ? "actions_admin" : role);
-    const run = await runLoopCase({ request, ownerTier, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
+    const run = await runLoopCase({ request, owner, ownerTier, relayId: "baseline_relay", ...(role.startsWith("action_") ? { plan: actionPlan(role === "action_react" ? "react_to_message" : "ban_participant") } : {}) });
     const record = { ...run.record, startedAt: "time", finishedAt: "time", durationMs: 0 };
     if (record.profile) { record.profile = { ...record.profile }; delete record.profile.pageRead; }
     const view = (await import("./store")).publicRelay({ ...run.paired, origin: "https://fixture.example", api_base: "https://fixture.example/v1", pairedAt: "time" });
