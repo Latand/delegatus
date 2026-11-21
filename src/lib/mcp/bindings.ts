@@ -7154,7 +7154,7 @@ async function deploymentStatus(
   const limit = Math.max(1, Math.min(100, integer(args.limit, 25)));
   const cursor = text(args.cursor);
   const query = `limit=${limit}${args.compact === true ? "&compact=true" : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
-  const result = await readViewerControl(control, `/api/runtime/deployments?${query}`)
+  const result: Record<string, unknown> = await readViewerControl(control, `/api/runtime/deployments?${query}`)
     .catch(async (error: unknown) => {
       if (!isUnservedControlRoute(error)) throw error;
       if (cursor) throw new Error("Viewer deployment pagination is unavailable during hand-over; restart the list");
