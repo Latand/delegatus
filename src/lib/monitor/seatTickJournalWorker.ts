@@ -115,7 +115,7 @@ function worker(): Held | null {
  * Hand one record to the journal worker. Null when no worker runs here: the
  * caller appends on its own thread.
  */
-export function appendThroughSeatTickJournalWorker(record: SeatTickRunRecord, filePath: string): Promise<void> | null {
+export function appendThroughSeatTickJournalWorker(record: SeatTickRunRecord, filePath: string, replayId?: string): Promise<void> | null {
   const state = worker();
   if (!state) return null;
   const id = ++state.next;
@@ -124,15 +124,18 @@ export function appendThroughSeatTickJournalWorker(record: SeatTickRunRecord, fi
       if (!state.pending.delete(id)) return;
       consecutiveFailures += 1;
       // A worker that stopped answering is replaced; what it held is rejected.
-      retire(state, new FileTransactionBusyError("the seat tick journal worker did not answer"));
-      reject(new FileTransactionBusyError("the seat tick journal worker did not answer"));
+      // A worker may have committed before losing its reply. This is distinct
+      // from a busy store, where the append never committed.
+      const error = new Error("the seat tick journal worker did not answer");
+      retire(state, error);
+      reject(error);
     }, ANSWER_TIMEOUT_MS);
     timer.unref?.();
     // A pending append keeps the process alive until it is answered.
     if (state.pending.size === 0) state.worker.ref();
     state.pending.set(id, { resolve, reject, timer });
     try {
-      state.worker.postMessage({ type: "seat-tick-journal-append", id, record, filePath });
+      state.worker.postMessage({ type: "seat-tick-journal-append", id, record, filePath, replayId });
     } catch (error) {
       state.pending.delete(id);
       clearTimeout(timer);

@@ -63,6 +63,106 @@ test("a check awaits its production journal and closes completed phase spans", a
   }
 });
 
+async function withCheckJournal(name: string, worker: boolean, run: (file: string) => Promise<void>) {
+  const { stopSeatTickJournalWorkerForTests } = await import("./seatTickJournalWorker");
+  const previous = {
+    LLV_SEAT_TICK_AUDIT_FILE: process.env.LLV_SEAT_TICK_AUDIT_FILE,
+    LLV_SEAT_TICK_JOURNAL_WORKER: process.env.LLV_SEAT_TICK_JOURNAL_WORKER,
+  };
+  const file = path.join(SANDBOX, name, "runs.ndjson");
+  process.env.LLV_SEAT_TICK_AUDIT_FILE = file;
+  process.env.LLV_SEAT_TICK_JOURNAL_WORKER = worker ? "1" : "0";
+  try { await run(file); }
+  finally {
+    if (worker) await stopSeatTickJournalWorkerForTests();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+test("the next sweep records a check once after a legacy journal writer releases its lock", async () => {
+  const { readSeatTickRecords } = await import("./journalStore");
+  const { withFileTransactionAsync } = await import("@/lib/state/fileTransaction");
+  await withCheckJournal("busy-legacy-journal", false, async file => {
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    const entered = deferred(), release = deferred();
+    const held = withFileTransactionAsync(file, "fixture journal writer", async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    try {
+      await entered.promise;
+      await reconcileSeatTick(rig.deps, [PROJECT]);
+      expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
+    } finally {
+      release.resolve();
+      await held;
+    }
+    await reconcileSeatTick(rig.deps, []);
+    await reconcileSeatTick(rig.deps, []);
+    expect(readSeatTickRecords(10, file, PROJECT)).toEqual([expect.objectContaining({
+      project: PROJECT, at: new Date(NOW).toISOString(),
+    })]);
+  });
+});
+
+test("a persistently busy SQLite journal yields, warns once and saves the result across a restart", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
+  await withCheckJournal("busy-sqlite-journal", true, async file => {
+    importLegacySeatTickJournal(file);
+    const database = new Database(statePath("state.sqlite"));
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    let checks = 0;
+    rig.deps.workStarted = () => { checks++; };
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const recoverInNewProcess = async () => {
+      const child = Bun.spawn([process.execPath, "-e", `
+        import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+        await reconcileSeatTick({ ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null }, []);
+      `], { stdout: "pipe", stderr: "pipe" });
+      const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      const journalWarnings = stderr.split("\n")
+        .filter(line => /^\[seat tick\].*(journal is busy|could not be journaled)/.test(line));
+      expect({ exit, journalWarnings }).toEqual({ exit: 0, journalWarnings: [] });
+    };
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      await reconcileSeatTick(rig.deps, [PROJECT]);
+      await reconcileSeatTick(rig.deps, [PROJECT]);
+      await recoverInNewProcess();
+      expect(checks).toBe(1);
+      expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
+      expect(warn.mock.calls.filter(([message]) => String(message).includes("journal is busy"))).toEqual([
+        [expect.stringContaining("retry on the next sweep")],
+      ]);
+    } finally {
+      database.close();
+      warn.mockRestore();
+    }
+    const pendingDir = `${file}.pending-checks`;
+    const [batch] = fs.readdirSync(pendingDir);
+    expect(batch).toBeDefined();
+    const pending = path.join(pendingDir, batch!);
+    const bytes = fs.readFileSync(pending);
+    await recoverInNewProcess();
+    expect(fs.existsSync(pending)).toBe(false);
+    // Replay the same bytes as if the previous process stopped after commit
+    // and before it could remove the batch.
+    fs.writeFileSync(pending, bytes, { flag: "wx", mode: 0o600 });
+    await recoverInNewProcess();
+    expect(fs.existsSync(pending)).toBe(false);
+    expect(readSeatTickRecords(10, file, PROJECT)).toEqual([expect.objectContaining({
+      project: PROJECT, at: new Date(NOW).toISOString(),
+    })]);
+  });
+}, 15_000);
+
 function deployRig() {
   const rig = harness({ state: RECENT, seatDeployments: [{ deploymentId: "deploy-own", conversationId: CONVERSATION }],
     deployments: { "deploy-own": { phase: "succeeded", terminal: true, revision: "a".repeat(40) } },
