@@ -545,6 +545,9 @@ const SEAT_TELEGRAM = SEAT_HEAD ? new URLSearchParams(location.search).get("tele
    (`&tick=driver`): the driver holds the tick's record and answers the
    settings route, so a drag reads back the way the real route answers. */
 const SEAT_TICK_DRIVER = SEAT_HEAD && new URLSearchParams(location.search).get("tick") === "driver";
+/* `&tickSeed=1` carries the tick's summary on the seat read the way the real
+   route does: the driver supplies it, so the toggle can paint with the card. */
+const SEAT_TICK_SEED = SEAT_TICK_DRIVER && new URLSearchParams(location.search).get("tickSeed") === "1";
 /* Ghost cards: placeholder tasks no agent will name. A conversation the
    backfill adopted months after it ended, a launch that never produced a
    transcript (the leaked fixture's), a young task whose agent is still at
@@ -1382,7 +1385,7 @@ const mergeStatePipelines: Pipeline[] = MERGE_STATES ? (() => {
     lane("stop", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "t-merge-stop", 45 * MIN,
       merge("blocked", 45 * MIN, { reason: 'check "privacy-publication" failed', blockedAt: iso(30 * MIN) })),
     lane("done", L("Conversation: wider agent replies", "Розмова: ширші відповіді агентів"), "t-merge-done", 90 * MIN,
-      merge("merged", 90 * MIN, { by: "auto-merge", mergedHead: HEAD, mergeCommit: "e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a6f7e8d9", method: "squash", mergedAt: iso(70 * MIN) })),
+      merge("merged", 90 * MIN, { by: "auto-merge", ...(new URLSearchParams(location.search).get("optional") === "1" ? { optionalFailedChecks: ["Minimum macOS SQLite", "Windows (native)", "build"] } : {}), mergedHead: HEAD, mergeCommit: "e0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a6f7e8d9", method: "squash", mergedAt: iso(70 * MIN) })),
   ];
 })() : [];
 
@@ -1830,7 +1833,7 @@ const STAGE_PLACE = SCENARIO === "stage-place";
 const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-place", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "t-stage-place", "running",
   [stage("implement", "builder", "review", { runtime: "claude-cloud" }), stage("review", "builder", "verify", { runtime: "claude-cloud" }), stage("verify", "builder", null, { runtime: "claude-cloud" })],
   [
-    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(30 * MIN), definition: { runtime: "claude-cloud" }, cloud: { phase: "completed" } })] },
+    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(30 * MIN), definition: { runtime: "claude-cloud" }, cloud: { phase: "completed", taskId: "task_7f3a9c21", taskUrl: "https://example.com/cloud/tasks/task_7f3a9c21" } })] },
     { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
   ],
   { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
@@ -5282,7 +5285,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/orchestrator/seat") {
     evidence.seatReads += 1;
     evidence.seatReadsByScope[url.searchParams.get("scope") === "all" ? "all" : "project"] += 1;
+    const tick = SEAT_TICK_SEED && url.searchParams.get("scope") !== "all" ? await (await serverFetch("/__seat-tick-seed")).json() : null;
     return json({
+      ...(tick ? { tick } : {}),
       seat: {
         project: PROJECT, seatEpoch: 3, conversationId: orchestrator.conversationId, path: orchestrator.path, mandate: ROTATION_MANDATE?.mandate ?? "Keep the project moving.",
         promptVersion: ROTATION_MANDATE ? ROTATION_MANDATE.promptVersion : SEAT_HEAD ? ORCHESTRATOR_PROMPT_VERSION - 1 : null, predecessorConversationId: null, state: "active",

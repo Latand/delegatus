@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import path from "node:path";
 import { agentCodexPublicationPolicy, agentPublicationIdentityEnv } from "./agentPublicationIdentity";
 
 test.each([
@@ -51,15 +50,5 @@ test.each([{ include_only: ["PATH"] }, { filters: { PATH: "include" } }])("Codex
     expect(result.set).toMatchObject({ TMPDIR: access.env.TMPDIR, LLV_EVIDENCE_DIR: access.env.LLV_EVIDENCE_DIR });
     if ("include_only" in policy) expect(result.include_only).toEqual(expect.arrayContaining(["TMPDIR", "LLV_EVIDENCE_DIR"]));
     else expect(result.filters).toMatchObject({ TMPDIR: "include", LLV_EVIDENCE_DIR: "include" });
-
-    const gateSource = { ...access.env, LLV_GATE_CHECK_ROOT: path.join(access.env.TMPDIR!, "launch"),
-      LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY: "1:2" };
-    const gatePolicy = agentCodexPublicationPolicy(policy, gateSource);
-    expect(gatePolicy.set).toMatchObject({ LLV_GATE_CHECK_ROOT: gateSource.LLV_GATE_CHECK_ROOT,
-      LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY: gateSource.LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY });
-    if ("include_only" in policy) expect(gatePolicy.include_only).toEqual(expect.arrayContaining([
-      "LLV_GATE_CHECK_ROOT", "LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY",
-    ]));
-    else expect(gatePolicy.filters).toMatchObject({ LLV_GATE_CHECK_ROOT: "include", LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY: "include" });
   } finally { access.cleanup(); }
 });

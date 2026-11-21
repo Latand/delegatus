@@ -15,7 +15,7 @@ import { deepFreeze } from "@/lib/deepFreeze";
 import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { shortId } from "@/lib/shortIds";
-import { seatTickCatchUp } from "./seatTick";
+import { seatTickCatchUp, seatTickSignalVersion } from "./seatTick";
 import { pendingAutonomyReports } from "./autonomy";
 import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
@@ -30,6 +30,7 @@ import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { memoryProblemSignals, prepareMemoryProblemRead } from "@/lib/memory/roleProblems";
+import { acknowledgeCurationNoAccountWarning, curationNoAccountWarning } from "@/lib/memory/curation/store";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
@@ -61,7 +62,7 @@ import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 import { scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
-import type { SeatTickReportRow } from "./seatTickReports";
+import type { SeatTickReportLog } from "./seatTickReports";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
@@ -245,6 +246,7 @@ export function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string
 export interface SeatTickJournalReceipt {
   status: RuntimeReceiptStatus;
   reason: string | null;
+  primaryFailure?: SendReceipt["primaryFailure"];
 }
 
 /**
@@ -288,7 +290,8 @@ export interface SeatTickWakeObservation {
     under the id. Throws when the host cannot be asked. */
 export async function journalReceipt(operationId: string, client: RuntimeHostClient): Promise<SeatTickJournalReceipt | null> {
   const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null } : null;
+  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null,
+    ...(current.receipt.primaryFailure ? { primaryFailure: current.receipt.primaryFailure } : {}) } : null;
 }
 
 /**
@@ -547,6 +550,9 @@ export interface SeatTickSources {
   workerAsks?: (project: string, seatConversationId?: string) => Promise<readonly SeatTickWorkerAskInput[] | import("./types").SeatTickAgendaInput | null>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   recoverQuota?: (project: string) => Promise<boolean>;
+  /** Start a fresh host for a designated seat whose host is gone, without a
+      model turn. Absent: the check records the loss and revives nothing. */
+  reviveSeatHost?: import("./seatHostRecovery").SeatHostRevival;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
@@ -622,7 +628,7 @@ export interface SeatTickSources {
       language (§5.1). Absent: the check keeps no report ledger, as with bridge
       reports off. */
   reports?: {
-    log: (project: string) => readonly SeatTickReportRow[] | Promise<readonly SeatTickReportRow[]>;
+    log: (project: string) => SeatTickReportLog | Promise<SeatTickReportLog>;
     enabled: (project: string) => boolean;
     operatorLocale: () => "en" | "uk" | null;
   };
@@ -752,9 +758,9 @@ export async function settleRecordFromJournal(
   target: WakeRecordTarget,
   receipt: SeatTickJournalReceipt,
 ): Promise<SendReceipt | null> {
-  const verdict = journalVerdict(receipt.status, receipt.reason);
-  /* Only what {@link journalWakeState} would act on: the settlement's own
-     unverified `failed` classifies as lost here and is not one. */
+  const verdict = journalVerdict(receipt.status, receipt.reason, receipt.primaryFailure);
+  /* Only what {@link journalWakeState} would act on. Unverified outcomes
+     retain their duplicate risk and cannot settle the wake as safely lost. */
   if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
   /* Off the loop (docs/design/delivery-progress-and-drain.md, C2); refused,
      it answers null like an undecidable verdict, and the next tick reads it
@@ -768,7 +774,7 @@ export async function settleRecordFromJournal(
     } else if (target.deliveryId) {
       const deliveryId = target.deliveryId;
       const written = await registry.deliveryWrite(correlation,
-        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost"));
+        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost", null, verdict.primaryFailure));
       if (!written.acquired) return null;
     } else {
       return null;
@@ -779,9 +785,16 @@ export async function settleRecordFromJournal(
   return sendReceiptFor(registry.readOnlySnapshot(), target.operationId);
 }
 
-function seatProjectResolver(): (project: string) => string {
-  const resolve = projectAliasResolver();
-  return project => resolve(project.trim());
+type SeatProjectResolver = ((project: string) => string) & { keys(project: string): string[] };
+function seatProjectResolver(): SeatProjectResolver {
+  const snapshot = projectAliasSnapshot();
+  const resolve = projectAliasResolver(snapshot);
+  const resolver = ((project: string) => resolve(project.trim())) as SeatProjectResolver;
+  resolver.keys = (project: string) => {
+    const canonical = resolve(project.trim());
+    return [canonical, ...Object.keys(snapshot.aliases).filter(key => key !== canonical && resolve(key) === canonical)];
+  };
+  return resolver;
 }
 
 export function defaultSeatTickSources(): SeatTickSources {
@@ -831,6 +844,8 @@ export function defaultSeatTickSources(): SeatTickSources {
     },
     wakeResponse: observeSeatWakeResponse,
     recoverQuota: recoverSeatQuota,
+    reviveSeatHost: async (request, dependencies) =>
+      (await import("@/lib/runtime/structuredRecovery")).recoverDeadStructuredConversation(request, dependencies),
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
@@ -888,7 +903,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     reports: {
       log: (project) => withViewerOperation("seat-tick.reports", () => performanceSpans.wait("seat-tick.reports", async () => {
         const { runSeatSourceInWorker } = await import("@/lib/scanner/filesResponseWorker");
-        return JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project })).body) as SeatTickReportRow[];
+        return JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project })).body) as SeatTickReportLog;
       })),
       enabled: (project) => bridgeReportsEnabled(project),
       operatorLocale: () => operatorLocale(),
@@ -947,15 +962,18 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
     /* A row is the project's when its key folds to the project: a seat recorded
        before its folder changed key filed under the old one, and those rows
        still discharge what they covered. */
-    const manager = (await port.log(project)).filter((report) => !!report.project && report.origin?.kind === "manager"
+    const log = await port.log(project);
+    const applicable = log.reports.filter((report) => !!report.project
       && (report.project === project || canonicalOrchestratorProject(report.project) === project));
+    const manager = applicable.filter(report => report.origin?.kind === "manager");
     const filedUnder = [...new Set([project, ...manager.map((report) => report.project!)])];
     const reportedIds = new Set<string>();
+    const coveredIds = new Set<string>();
     let lastReportAt: string | null = null;
     let latestCoversOwedAt: string | null = null;
     for (const report of manager) {
       reportedIds.add(report.id);
-      for (const id of report.covers ?? []) reportedIds.add(id);
+      for (const id of report.covers ?? []) coveredIds.add(id);
       if (!lastReportAt || Date.parse(report.at) > Date.parse(lastReportAt)) lastReportAt = report.at;
       if (report.coversOwedAt && (!latestCoversOwedAt || Date.parse(report.coversOwedAt) > Date.parse(latestCoversOwedAt))) latestCoversOwedAt = report.coversOwedAt;
     }
@@ -964,6 +982,9 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
       operatorLocale: port.operatorLocale(),
       lastReportAt,
       reportedIds: [...reportedIds],
+      coveredIds: [...coveredIds],
+      reservedIds: log.reservedIds,
+      occupiedIds: [...new Set([...(log.occupiedIds ?? []), ...applicable.map(report => report.id)])],
       reportIdsFor: (key) => filedUnder.map((filed) => scopedReportId(filed, key)),
       latestCoversOwedAt,
     };
@@ -1595,8 +1616,30 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
   return { covered: false, sweeps };
 }
 
-function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
+function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources, shown: readonly string[] = [], projectKeys: readonly string[] = [project]): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
+  if (seat) {
+    try {
+      const warning = curationNoAccountWarning(projectKeys);
+      if (warning) {
+        const signal = {
+          id: "curator-no-account", episode: warning.episode, actionable: true,
+          label: "The role memory curator could not run because no account was available for this project (no-account).",
+        };
+        if (shown.includes(seatTickSignalVersion(signal, seat))) acknowledgeCurationNoAccountWarning(warning.project, warning.episode);
+        else found.push(signal);
+      }
+    } catch { /* An unreadable curation store leaves other wake evidence available. */ }
+  }
+  for (const lane of projectRows(sources.pipelines(), project)) {
+    const names = lane.merge?.optionalFailedChecks;
+    if (lane.hiddenAt || !names?.length) continue;
+    found.push({
+      id: `optional-check-failures:${lane.id}`,
+      actionable: true,
+      label: redactBounded(`Note: optional checks failed on PR #${lane.merge!.prNumber}: ${names.join(", ")}; merge depends on required checks only`, 800),
+    });
+  }
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }
@@ -2442,6 +2485,7 @@ interface ChildEvidence {
   children: SeatTickChildInput[];
   unavailable: SeatTickChildrenGap | null;
   catchUpPending: boolean;
+  ledgerWarnings: SeatTickSignalInput[];
 }
 
 /** The one token a check carries when several conditions stand: the first in
@@ -2496,8 +2540,8 @@ async function childWork(
   policy: SeatTickPolicy,
   sources: SeatTickSources,
 ): Promise<ChildEvidence> {
-  if (!seat) return { children: [], unavailable: null, catchUpPending: false };
-  if (!state.accounting) return { children: [], unavailable: "registry-unreadable", catchUpPending: false };
+  if (!seat) return { children: [], unavailable: null, catchUpPending: false, ledgerWarnings: [] };
+  if (!state.accounting) return { children: [], unavailable: "registry-unreadable", catchUpPending: false, ledgerWarnings: [] };
   assertSeatTickWork();
   const accounting = guardedSeatTickPort(new SeatTickAccounting(state.accounting.filename, project), "accounting.children");
   const registry = sources.registry();
@@ -2507,6 +2551,7 @@ async function childWork(
   const migration = accountingGap(state.accounting.gap);
   if (migration) gaps.add(migration);
   const children: SeatTickChildInput[] = [];
+  const ledgerWarnings = new Map<string, SeatTickSignalInput>();
   /* Enumerated once per check and handed to every projection (#1783): the
      roots decide whether a child's transcript is one this Viewer can read. */
   const roots = transcriptRoots();
@@ -2632,13 +2677,25 @@ async function childWork(
     } else if (retainedLatestSettlement) {
       child.input = { ...child.input, status: "terminal", outcome: previousInput.outcome, terminalAt: previousInput.terminalAt };
     }
-    unplaced();
     bytesLeft -= read.bytes;
     // A vanished host and both records gone have a named failure receipt.
     // Keep the cursor and every earlier outcome for a later recovery.
-    if (source.cursor.gap !== null && !lost) gaps.add("ledger-gap");
+    const ledgerGap = source.cursor.gap !== null && !lost;
+    if (ledgerGap && !read.cursor.atEnd && read.outcomes.length >= OUTCOME_LIMIT) readablePageLimited = true;
+    if (ledgerGap) {
+      if (child.input.status === "unknown") children.push(child.input);
+      const id = `child-ledger:${child.input.conversationId}:${generation.id}`;
+      ledgerWarnings.set(id, {
+        id, episode: JSON.stringify([source.cursor.identity, source.cursor.gap]), actionable: true,
+        label: `${child.input.title} — spawned child's event ledger has incomplete evidence (${source.cursor.gap})`,
+      });
+    } else unplaced();
     child.generationIndex = (child.generationIndex + 1) % generations.length;
-    /* A read the budget stopped short of the end resumes first next check. */
+    /* Resume budget-limited healthy reads first. A damaged ledger keeps its
+       cursor and rotates so it cannot repeatedly hold up healthy children. */
+    // A readable page of a damaged ledger still owes a bounded continuation.
+    // Keep that ticket ahead of the frozen catch-up cutoff until the readable
+    // prefix is exhausted; healthy children retain their independent tickets.
     const cut = !read.cursor.atEnd && (read.bytes >= budget || read.outcomes.length >= OUTCOME_LIMIT);
     if (child.input.status === "terminal" && read.bytes === 0 && read.outcomes.length === 0 && read.cursor.atEnd
       && child.generationIndex === previousGeneration && JSON.stringify(previousCursor) === JSON.stringify(read.cursor)
@@ -2648,6 +2705,7 @@ async function childWork(
   };
 
   let catchUpPending = false;
+  let readablePageLimited = false;
   try {
     const active = await seatTickMutation("owner", () => accounting.owner(seat.conversationId, seat.seatEpoch));
     if (await seatTickMutation("discoverRevokedOwners", () => accounting.discoverRevokedOwners(orchestratorSeatRevocationSource(), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project))) {
@@ -2738,8 +2796,8 @@ async function childWork(
       const next = accounting.page("poll", 1)[0];
       const pending = next?.kind === "poll" && (next.key.startsWith(`poll/${encodeURIComponent(project)}/!`)
         || Number(next.key.slice(next.key.lastIndexOf("/") + 1)) <= catchUpPollThrough);
-      catchUpPending = !!pending;
-      if (pending) gaps.add("ledger-pending");
+      catchUpPending = !!pending || readablePageLimited;
+      if (catchUpPending) gaps.add("ledger-pending");
       else await seatTickMutation("endCatchUpPoll", () => accounting.endCatchUpPoll());
     }
     // Page the persisted ready queue, yielding between pages. The cutoff is
@@ -2803,7 +2861,7 @@ async function childWork(
       });
     }
   } catch { gaps.add("registry-unreadable"); }
-  return { children, unavailable: worstChildrenGap(gaps), catchUpPending };
+  return { children, unavailable: worstChildrenGap(gaps), catchUpPending, ledgerWarnings: [...ledgerWarnings.values()] };
 }
 
 function stageAttempt(lane: Pipeline) {
@@ -3446,7 +3504,7 @@ async function gatherSeatTickInputWork(
   try {
     const release = readReleaseProject(canonical);
     for (const run of release.history) if (now - run.at <= policy.backlogAfterMs) releaseAlerts.push({ kind: "release-settled", id: `release-settled:${run.key}:${run.at}`, label: `Release ${run.outcome}; task ${run.taskId}, lane ${run.pipelineId}. Read its stage summaries for any product defect seen in the README pictures.` });
-    if (release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
+    if (settings.release?.enabled && release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
   } catch { /* The release controller journals store failures; other seat work still wakes. */ }
 
 
@@ -3464,7 +3522,7 @@ async function gatherSeatTickInputWork(
   }
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources, catchUp);
   await yieldToRuntime();
-  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending } = await withViewerOperation("seat-tick.children", () => childWork(canonical, seat, state, policy, sources));
+  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending, ledgerWarnings } = await withViewerOperation("seat-tick.children", () => childWork(canonical, seat, state, policy, sources));
   /* An unreadable board costs this check its routed asks, never the check:
      the waits stay routed and the next check reads them again. */
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
@@ -3529,7 +3587,7 @@ async function gatherSeatTickInputWork(
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...signals(canonical, seat, sources), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

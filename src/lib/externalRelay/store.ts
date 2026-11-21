@@ -13,6 +13,7 @@ export type RelayTargetSettings = {
   id: string;
   name: string;
   answered_by: "install" | "service";
+  answered_elsewhere?: boolean;
   fallback: "service" | "none";
   enabled: boolean;
   engine: "claude" | "codex" | "codex-cloud" | null;
@@ -115,7 +116,7 @@ export type RunRecord = {
       parts?: { payload: import("./cloneSend").CloneSendInput; firstAttemptAt?: number;
         receipt?: Extract<import("./cloneSend").CloneSendResult, { kind: "sent" }> }[];
       status?: "retry" | "pending-delivery-context" | "uncertain" | "retry-expired" | "refused" };
-    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
+    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string; retryOfOperationId?: string; deadlineAt?: string; failureReason?: string; primaryFailure?: OwnerTurnDiagnostic["primaryFailure"] }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
     /** When the cutoff was first written; older rows are stamped on recovery. */
     cancelledAt?: string;
     /** Terminal local recovery; executor termination is still unproven. The
@@ -562,6 +563,7 @@ export function newTargetSettings(
     id: target.target_id,
     name: target.name,
     answered_by: target.answered_by,
+    answered_elsewhere: target.answered_elsewhere,
     fallback: target.fallback,
     enabled: true,
     engine: "codex-cloud",
@@ -590,6 +592,7 @@ export function mergeRelayTargets(
           ...kept,
           name: target.name,
           answered_by: target.answered_by,
+          answered_elsewhere: target.answered_elsewhere,
           fallback: target.fallback,
         }
       : newTargetSettings(target);

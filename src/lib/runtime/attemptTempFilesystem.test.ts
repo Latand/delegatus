@@ -5,6 +5,7 @@ import net from "node:net";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { statePath } from "@/lib/configDir";
+import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
@@ -19,7 +20,7 @@ import type { ProcessScan } from "@/lib/tempSweep";
 const exec = promisify(execFile);
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(statePath("report-media"), { recursive: true, force: true }); });
+afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(reportMediaRoot(), { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
 
 test("native recursive removal is awaited, killed at the shared cutoff, and reported as a deferral", async () => {

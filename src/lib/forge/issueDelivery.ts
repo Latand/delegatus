@@ -1,3 +1,4 @@
+import { publicationLanguageHints } from "./publicationLanguage";
 import fs from "node:fs";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -9,7 +10,7 @@ import { githubReadBackoff } from "./githubReadFailure";
 import type { ForgeCacheFile } from "./cache";
 import { landedPullRequests } from "./landedPullRequests";
 import { isMergeBatchHead, parseMergeBatchTitle } from "./mergeBatchTitle";
-import type { CarriedBranchLanding } from "./batchLanding";
+import type { CarriedBranchLanding, CarriedLandingHint } from "./batchLanding";
 import { normalizeWorkLinkInput, workLinkKey, MAX_WORK_LINKS, boundedRepository, type ForgeCacheView, type StoredWorkLink } from "./workLinks";
 
 /** One durable outcome per lane and issue; no provider text is retained. */
@@ -132,7 +133,7 @@ export interface IssueDeliveryPorts {
   run(args: string[]): Promise<string>;
   /** Commit graph reads use a separate contents-read App token. */
   readLanding?(args: string[]): Promise<string>;
-  carriedLanding?(lane: Pipeline, repository: string, pr: number, base: string, head: string, hint: { commit?: string; after?: string }): Promise<CarriedBranchLanding>;
+  carriedLanding?(lane: Pipeline, repository: string, pr: number, base: string, head: string, hint: CarriedLandingHint): Promise<CarriedBranchLanding>;
   write: ForgeAppWriter;
   mutate(id: string, change: (live: Pipeline) => boolean): Promise<boolean>;
   inspectTitle(title: string): Promise<boolean>;
@@ -226,7 +227,9 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
       try {
         await save(); current();
         let primary = await read(`repos/${receipt.repository}/pulls/${receipt.batch ?? receipt.pr}`);
-        if (receipt.batch && (receipt.batchHead || !isMergeBatchHead(primary.head?.ref ?? ""))) {
+        // A stored carrier without a reviewed head is only a retry hint
+        // unless the native batch index independently names it.
+        if (receipt.batch && (receipt.batchHead || receipt.batch !== landing.batch || !isMergeBatchHead(primary.head?.ref ?? ""))) {
           const owner = current();
           const known = owner.merge?.reviewedHead || owner.lastPassedCommit || undefined;
           const head = known ?? (await read(`repos/${receipt.repository}/pulls/${receipt.pr}`)).head?.sha;
@@ -237,7 +240,7 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
           }
         }
         let verifiedCarried = false;
-        const carried = async () => {
+        const carried = async (hint: CarriedLandingHint = { commit: receipt.batchCommit, after: receipt.batchAfter }) => {
           const original = receipt.batch ? await read(`repos/${receipt.repository}/pulls/${receipt.pr}`) : primary;
           if (original.state !== "closed") throw new Error("Batch work PR is invalid");
           const owner = current();
@@ -246,12 +249,13 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
           if (typeof head !== "string" || !/^[0-9a-f]{40}$/i.test(head)) throw new Error("Reviewed batch head is invalid");
           headFence = { head, fromKnown: !!known };
           const found = await ports.carriedLanding?.(owner, receipt.repository, receipt.pr,
-            original.base?.repo?.default_branch ?? "", head, { commit: receipt.batchCommit, after: receipt.batchAfter });
+            original.base?.repo?.default_branch ?? "", head, hint);
           current();
           const live = current();
           const liveHead = live.merge?.reviewedHead || live.lastPassedCommit || undefined;
           if (liveHead ? liveHead !== head : (await read(`repos/${receipt.repository}/pulls/${receipt.pr}`)).head?.sha !== head) throw new DeliveryChanged();
           if (!found || found.state === "waiting") {
+            if (hint.carrier) throw new Error("Merged batch lacks reviewed delivery proof");
             if (found?.batch) receipt.batch = found.batch;
             if (found?.commit || found?.batch) receipt.batchHead = head; else delete receipt.batchHead;
             if (found?.commit) receipt.batchCommit = found.commit; else delete receipt.batchCommit;
@@ -260,11 +264,16 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
             receipt.failures = 0; receipt.retryAt = new Date(ports.now() + 300_000).toISOString();
             await save(); return false;
           }
+          if (hint.carrier && (found.batch !== hint.carrier.number || found.commit !== hint.commit?.toLowerCase())) throw new Error("Batch carrier changed");
+          primary = await read(`repos/${receipt.repository}/pulls/${found.batch}`);
+          if (primary.number !== found.batch || primary.merged_at !== found.mergedAt
+            || hint.carrier && (primary.merge_commit_sha !== hint.carrier.merge_commit_sha || primary.base?.ref !== hint.carrier.base?.ref
+              || primary.base?.ref !== primary.base?.repo?.default_branch)) throw new Error("Batch carrier changed");
           receipt.batch = found.batch;
-          receipt.batchHead = head;
-          receipt.batchCommit = found.commit; delete receipt.batchAfter;
-          primary = await read(`repos/${receipt.repository}/pulls/${receipt.batch}`);
-          if (primary.number !== found.batch || primary.merged_at !== found.mergedAt) throw new Error("Batch carrier changed");
+          if (!hint.carrier) {
+            receipt.batchHead = head;
+            receipt.batchCommit = found.commit; delete receipt.batchAfter;
+          }
           verifiedCarried = true;
           return true;
         };
@@ -273,29 +282,31 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
         }
         // A runner batch receipt may precede the forge cache. Its verified
         // landing commit identifies the integration PR without scanning history.
-        let associatedCarrier = false;
-        const workMergeCommit = lane.merge?.mergeCommit ?? primary.merge_commit_sha;
-        if (!receipt.batch && workMergeCommit
+        const workMergeCommit = current().merge?.mergeCommit ?? primary.merge_commit_sha;
+        if (!receipt.batch && typeof workMergeCommit === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(workMergeCommit)
           && (!primary.merged_at || primary.base?.ref !== primary.base?.repo?.default_branch)) {
           const associated = await read(`repos/${receipt.repository}/commits/${workMergeCommit}/pulls?per_page=100`);
           if (!Array.isArray(associated)) throw new Error("Invalid landing PRs");
-          const carrier = associated.find(p => p.base?.ref === p.base?.repo?.default_branch
+          const carrier = associated.find(p => positive(p.number) && p.base?.ref === p.base?.repo?.default_branch
             && p.number !== receipt.pr && (p.state === "open" || p.merged_at));
           if (carrier) {
-            receipt.batch = carrier.number;
-            primary = await read(`repos/${receipt.repository}/pulls/${receipt.batch}`);
-            if (primary.number !== carrier.number || primary.base?.ref !== primary.base?.repo?.default_branch) throw new Error("Default-branch carrier changed");
-            associatedCarrier = true;
+            const candidate = await read(`repos/${receipt.repository}/pulls/${carrier.number}`);
+            if (candidate.number !== carrier.number || candidate.base?.ref !== candidate.base?.repo?.default_branch) throw new Error("Default-branch carrier changed");
+            if (!candidate.merged_at) {
+              receipt.retryAt = new Date(ports.now() + 300_000).toISOString();
+              await save(); continue;
+            }
+            if (!await carried({ commit: workMergeCommit, carrier: candidate })) continue;
           }
         }
         if (!primary.merged_at) {
           receipt.retryAt = new Date(ports.now() + 300_000).toISOString();
           await save(); continue;
         }
-        if (receipt.batch && !verifiedCarried && !associatedCarrier && !isMergeBatchHead(primary.head?.ref ?? "")) {
+        if (receipt.batch && !verifiedCarried && (receipt.batchHead || !isMergeBatchHead(primary.head?.ref ?? ""))) {
           if (!await carried()) continue;
         }
-        if (receipt.batch && !verifiedCarried && !associatedCarrier && isMergeBatchHead(primary.head?.ref ?? "")
+        if (receipt.batch && !verifiedCarried && isMergeBatchHead(primary.head?.ref ?? "")
           && !parseMergeBatchTitle(primary.title).includes(receipt.pr)) throw new Error("Batch membership unconfirmed");
         if (!date(primary.merged_at) || !primary.base?.ref || !primary.base?.repo?.default_branch) throw new Error("Invalid landing record");
         if (primary.base.ref === primary.base.repo.default_branch && Date.parse(primary.merged_at) < since) { receipt.state = "skipped"; await save(); continue; }
@@ -344,7 +355,7 @@ export async function sweepIssueDelivery(ports: IssueDeliveryPorts): Promise<voi
         if (mode === "part") {
           const titled = receipt.batch ? await read(`repos/${receipt.repository}/pulls/${receipt.pr}`) : primary;
           const title = typeof titled.title === "string" ? titled.title : "";
-          const safe = title && await ports.inspectTitle(title); current();
+          const safe = title && !publicationLanguageHints("title", title).length && await ports.inspectTitle(title); current();
           note = `Part of this issue landed in ${target}${safe ? `: ${title}` : "."}`;
         }
         // gh 2.45 emits one JSON page per line with --jq @json.

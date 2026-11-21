@@ -718,6 +718,24 @@ test.each(["running", "passed", "failed", "needs_decision"] as const)("stage age
   expect(opened).toEqual([current.path, old.path]);
 });
 
+test("a stage that ran in the cloud opens its stored cloud task from the same row, in both languages", () => {
+  const taskUrl = "https://example.com/cloud/tasks/task_abc123";
+  const cloudPipeline = (cloud: Record<string, unknown>) => parkedPipeline({
+    stages: [STAGES[0]!], state: "completed", cursor: null,
+    runs: [{ stageId: "design", attempts: [attempt({ n: 1, state: "passed", agentPath: null, conversationId: null, definition: { runtime: "codex-cloud" }, cloud })] }],
+  } as unknown as Partial<Pipeline>);
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const host = mount(<MobilePipelineScreen pipeline={cloudPipeline({ phase: "completed", taskId: "task_abc123", taskUrl })} files={[]} now={NOW} onOpenConversation={() => { throw new Error("cloud stages have no transcript"); }} />);
+    const link = q(host, '.pb-stage[data-stage="design"] a.pb-open-conv[data-open-cloud="design"]') as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe(taskUrl);
+    expect(link.textContent).toBe(translate(lang, "pipelineStage.openCloudTask"));
+    expect(q(host, "[data-open-conversation]")).toBeNull();
+    const bare = mount(<MobilePipelineScreen pipeline={cloudPipeline({ phase: "failed", taskId: null, taskUrl: null, error: "refused", submissionUnresolved: false })} files={[]} now={NOW} onOpenConversation={() => {}} />);
+    expect(q(bare, "[data-open-cloud]")).toBeNull();
+  }
+});
+
 test("a conversation id missing from the scan still offers Open agent and uses the normal reader link in Ukrainian", () => {
   setLocale("uk");
   const p = parkedPipeline({ stages: [STAGES[0]!], cursor: { stageId: "design", state: "needs_decision", input: null, activatedBy: null }, runs: [{ stageId: "design", attempts: [attempt({ state: "needs_decision", conversationId: "conversation_design", report: { verdict: { status: "needs_decision", findings: [] }, summary: "Який варіант обрати?" } })] }] } as unknown as Partial<Pipeline>);

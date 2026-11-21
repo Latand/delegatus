@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { openSeatAuthIncident, normalizeSeatAuthIncident, seatAuthIncidentRecovered, seatAuthNotice, type SeatTurnOutcome } from "./seatAuthIncident";
+import { openSeatAuthIncident, normalizeSeatAuthIncident, normalizeSeatAuthTelegramNotice, seatAuthIncidentRecovered, seatAuthNotice, type SeatTurnOutcome } from "./seatAuthIncident";
 import { seatTickStateForEpoch } from "./seatTickState";
 import { emptySeatTickState, type SeatTickSeatInput } from "./types";
 
@@ -8,6 +8,16 @@ const seat: SeatTickSeatInput = { conversationId: "conversation_fixture", seatEp
   designatedAt: "2026-10-08T00:00:00Z", turn: "idle", activity: null, mandateCarriesTickContract: true };
 const outcome: SeatTurnOutcome = { engine: "claude", accountId: null, path: "fixture.jsonl",
   auth: { ts: failedAt, text: "OAuth session expired and could not be refreshed" }, normalTurnTs: null };
+
+test("only operator notice debt survives normalization; legacy report destinations are discarded", () => {
+  const notice = { id: "seat-auth:fixture:7:1", audience: "operator" as const, text: "Fixture diagnostic" };
+  expect(normalizeSeatAuthTelegramNotice(notice)).toEqual(notice);
+  expect(normalizeSeatAuthTelegramNotice({ id: notice.id, chat: "fixture-report", html: "Fixture diagnostic" })).toBeNull();
+  for (const invalid of [{ ...notice, chat: "fixture-report" }, { ...notice, topicId: 1 }, { ...notice, html: "old" },
+    { ...notice, audience: "project" }, { ...notice, text: "" }, { ...notice, id: "other" }, null]) {
+    expect(normalizeSeatAuthTelegramNotice(invalid)).toBeNull();
+  }
+});
 
 test("first auth turn opens a durable identity and designation/re-login watermarks exclude stale turns", () => {
   const incident = openSeatAuthIncident("fixture", seat, outcome)!;

@@ -4395,9 +4395,13 @@ function queuedCommandRecords(uuid: string, text: string, at: string): string {
 
 test("a journal `failed` written for a send it could not answer for keeps its duplicate risk", async () => {
   const { journalVerdict } = await import("./sendSettlement");
-  expect(journalVerdict("failed", LATE_TIMEOUT_REASON)).toEqual({ state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON });
+  for (const status of ["failed", "rejected"] as const)
+  for (const reason of [LATE_TIMEOUT_REASON, SEND_UNVERIFIED_REASON, SEND_UNRECORDED_REASON, SEND_UNSETTLEABLE_REASON])
+    expect(journalVerdict(status, reason)).toEqual({ state: "failed", disposition: "unverified",
+      reason: reason === LATE_TIMEOUT_REASON ? SEND_UNVERIFIED_REASON : reason });
   /* Every other `failed` still proves the send never reached the engine. */
-  expect(journalVerdict("failed", "fixture host refused the send")).toEqual({ state: "failed", disposition: "lost", reason: SEND_LOST_REASON });
+  expect(journalVerdict("failed", "fixture host refused the send")).toEqual({ state: "failed", disposition: "lost", reason: SEND_LOST_REASON,
+    primaryFailure: { status: "failed", reason: "fixture host refused the send" } });
 });
 
 test("a send whose projection was owed when the journal failed it unverified is never called safe to resend", async () => {
@@ -4599,3 +4603,489 @@ test("native combined result settles original receipts with the shared turn afte
     expect(new FileClaudeDeliveryLedger().load(sessionId).find(state => state.entry.id === legacy.operationId)?.delivered).toBe(false);
   } finally { active.close(); }
 });
+
+test("confirmed native input observes admission before the consumed ledger fsync returns", async () => {
+  const { readConfirmedSendEvidence } = await import("./confirmedSend");
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000040"].join("-");
+  const active = fixture(sessionId, { engine: "claude", sqlite: true });
+  const { operationId } = acceptSend(active, { text: "fixture late incumbent", operationId: "native-close-boundary" });
+  const ledger = new FileClaudeDeliveryLedger();
+  const inputUuid = ["00000000", "0000", "4000", "8000", "000000000041"].join("-");
+  const native = { version: 1 as const, sessionId, writerId: ["00000000", "0000", "4000", "8000", "000000000042"].join("-"),
+    process: { pid: 4100, startIdentity: "4100:fixture" }, inputUuid, intent: "may-have-written" as const };
+  let releaseClose!: () => void;
+  const heldClose = new Promise<void>(resolve => { releaseClose = resolve; });
+  let closeEntered!: () => void;
+  const closing = new Promise<void>(resolve => { closeEntered = resolve; });
+  let restoreClose: (() => void) | undefined;
+  let admission = false;
+  try {
+    await ledger.recordNativeIntent(sessionId, { id: operationId, text: "fixture late incumbent" }, "turn-started", native);
+    const originalOpen = fs.promises.open.bind(fs.promises);
+    const close = spyOn(fs.promises, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await originalOpen(filePath, flags, mode);
+      if (String(filePath).endsWith(`${encodeURIComponent(sessionId)}.jsonl`) && flags === "a+") {
+        const closeHandle = handle.close.bind(handle);
+        handle.close = async () => { closeEntered(); await heldClose; return closeHandle(); };
+      }
+      return handle;
+    });
+    restoreClose = () => close.mockRestore();
+    const consuming = ledger.recordNativeConsumed(sessionId, { ...native, canonicalUuid: inputUuid,
+      entryId: operationId, contentDigest: ledger.load(sessionId)[0]!.entry.contentDigest, turnId: operationId }, () => { admission = true; });
+    await closing;
+    expect(admission).toBe(true);
+    expect(await readConfirmedSendEvidence(active.registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId))
+      .toMatchObject({ source: "claude-native-input", turnId: operationId, inputUuid });
+    releaseClose();
+    await consuming;
+    expect(await readConfirmedSendEvidence(active.registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId))
+      .toMatchObject({ source: "claude-native-input", turnId: operationId, inputUuid });
+  } finally {
+    releaseClose();
+    restoreClose?.();
+    active.close();
+  }
+});
+
+for (const status of ["failed", "rejected"] as const) test(`lost ${status} retains its primary refusal through durable projection and replay`, async () => {
+  const active = fixture(`primary-${status}`, { sqlite: true });
+  const primary = `idle-continuation-refused: ${"fixture detail ".repeat(24)}`;
+  const clientMessageId = `primary-${status}`;
+  const text = "Fixture instruction";
+  const { operationId, deliveryId } = acceptSend(active, { clientMessageId, text });
+  try {
+    active.journal.transitionOperation(operationId, status, { reason: primary });
+    const first = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client });
+    expect(first).toMatchObject({ state: "failed", resend: "safe", duplicateRisk: false,
+      reason: SEND_LOST_REASON, primaryFailure: { status, reason: primary } });
+    const stored = active.registry.deliverySnapshotForOperation(operationId);
+    expect(stored.heldDeliveries[deliveryId]?.error).toBe(first!.reason);
+    expect(stored.deliveryOperationOwners[operationId]?.terminalReason).toBe(first!.reason);
+    expect(stored.heldDeliveries[deliveryId]?.primaryFailure).toEqual({ status, reason: primary });
+    expect(stored.deliveryOperationOwners[operationId]?.primaryFailure).toEqual({ status, reason: primary });
+    const reopened = new AgentRegistry(active.registryPath, undefined, undefined, { sqliteMode: "sqlite",
+      sqliteFilename: path.join(path.dirname(active.registryPath), "agent-registry.sqlite") });
+    try {
+      const replay = await resolveSendReceipt(operationId, { registry: reopened, client: null });
+      expect(replay).toMatchObject({ reason: first!.reason, state: "failed", resend: "safe", primaryFailure: { status, reason: primary } });
+      const { runtimeReceiptForSend } = await import("./sendSettlement");
+      expect(runtimeReceiptForSend(replay!)).toMatchObject({ reason: SEND_LOST_REASON, primaryFailure: { status, reason: primary } });
+    } finally { reopened.close(); }
+    const host = recordingHost(active.generationId);
+    const queue = new StructuredDeliveryQueue(stalePortFor(active, operationId, clientMessageId, text), () => host.host);
+    await queue.drain().catch(() => undefined);
+    expect(host.received).toEqual([]);
+  } finally { active.close(); active.registry.close(); }
+});
+
+
+for (const mode of ["off", "sqlite"] as const)
+for (const writer of ["reservation", "operation", "retry", "direct"] as const)
+test(`primary refusal survives the ${writer} writer and ${mode} reader`, async () => {
+  const active = fixture(`primary-${writer}-${mode}`, { sqlite: true });
+  if (mode === "off") {
+    const filename = path.join(path.dirname(active.registryPath), "json-registry.json");
+    fs.writeFileSync(filename, JSON.stringify(active.registry.snapshot()));
+    active.registry.close();
+    active.registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+    active.registryPath = filename;
+  }
+  const primaryFailure = { status: "rejected" as const, reason: "fixture original refusal ".repeat(25) };
+  let operationId = "";
+  try {
+    const admitted = acceptSend(active, { clientMessageId: `primary-${writer}-${mode}`, text: "Fixture instruction" });
+    operationId = admitted.operationId;
+    if (writer === "reservation") active.registry.recordDeliveryOutcome(admitted.deliveryId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);
+    if (writer === "operation") {
+      active.registry.recordDeliveryOutcome(admitted.deliveryId, "delivery-uncertain");
+      active.registry.recordDeliveryOutcomeForOperation(active.conversationId, operationId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);
+    }
+    if (writer === "retry") {
+      active.registry.recordDeliveryOutcome(admitted.deliveryId, "failed", SEND_LOST_REASON, "lost");
+      expect(active.registry.recordDeliveryRetryAttempt(operationId, `fixture-primary-retry-${mode}`)).toBe(true);
+      operationId = `fixture-primary-retry-${mode}`;
+      active.registry.settleDeliveryRetryAttempt(operationId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);
+    }
+    if (writer === "direct") {
+      const owner = active.registry.recordDirectAdmission({ handOff: { conversationId: active.conversationId, clientMessageId: `fixture-primary-direct-${mode}`,
+        command: { operationId: `fixture-primary-direct-${mode}`, kind: "send", policy: "queue" }, text: "Fixture instruction", contentDigest: null,
+        evidenceText: "Fixture instruction", evidenceImageCount: 0 } })!;
+      operationId = owner.command.operationId;
+      active.registry.settleDirectAdmission(operationId, "failed", SEND_LOST_REASON, "lost", null, primaryFailure);
+    }
+    const expected = { state: "failed", reason: SEND_LOST_REASON, resend: "safe", primaryFailure };
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: null, progress: null })).toMatchObject(expected);
+    const reopened = new AgentRegistry(active.registryPath, undefined, undefined, { sqliteMode: mode,
+      ...(mode === "sqlite" ? { sqliteFilename: path.join(path.dirname(active.registryPath), "agent-registry.sqlite") } : {}) });
+    try {
+      const replay = await resolveSendReceipt(operationId, { registry: reopened, client: null, progress: null });
+      expect(replay).toMatchObject(expected);
+      const { runtimeReceiptForSend } = await import("./sendSettlement");
+      expect(runtimeReceiptForSend(replay!)).toMatchObject({ reason: SEND_LOST_REASON, primaryFailure });
+    } finally { reopened.close(); }
+  } finally { active.close(); active.registry.close(); }
+});
+
+
+test("a five-week switching-account hold closes without a receipt reader and stays fenced after restart", async () => {
+  const accepted = Date.parse("2026-10-13T12:00:00Z");
+  setSystemTime(accepted);
+  const { active } = completionFixture("old-switch-hold", { now: () => accepted, sqlite: true });
+  try {
+    active.registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual",
+      requestId: "old-switch", expectedRevision: active.registry.engineRouting("codex").revision });
+    const held = active.registry.holdDelivery(active.conversationId, "retained instruction", "old-switch-message");
+    setSystemTime();
+    expect(held.state).toBe("held");
+    const { settlementDeadlineForRow } = await import("./sendSettlement");
+    expect(settlementDeadlineForRow(active.registry, { delivery: held })?.deadlineAt).toBe(new Date(accepted + SETTLEMENT_WINDOW_MS).toISOString());
+    const now = () => Date.parse("2026-11-17T12:00:00Z");
+    const result = await settleDueSends({ registry: active.registry, client: null, now });
+    expect(result.settled).toEqual([{ operationId: held.command.operationId, state: "failed", duplicateRisk: false }]);
+    active.registry.close();
+    const reopened = new AgentRegistry(active.registryPath, undefined, undefined, { sqliteMode: "sqlite" });
+    try {
+      expect(sendReceiptFor(reopened.deliverySnapshotForOperation(held.command.operationId), held.command.operationId))
+        .toMatchObject({ state: "failed", resend: "safe" });
+      expect(reopened.beginDeliveryAttempt(held.id, active.generationId)).toBeNull();
+    } finally { reopened.close(); }
+  } finally { active.close(); }
+});
+
+test("proven target death fences a queued send before its ordinary deadline", async () => {
+  const { active } = completionFixture("dead-target-pending");
+  try {
+    const { operationId } = acceptSend(active);
+    const entry = active.registry.readOnlySnapshot().entries[`codex:${active.generationId}`]!;
+    active.registry.upsert({ ...entry, status: "dead", structuredHost: null });
+    const answer = await resolveSendReceipt(operationId, { registry: active.registry, client: active.client });
+    expect(answer).toMatchObject({ state: "failed", resend: "safe" });
+    expect(active.journal.effectBatch(100, ["runtime.send"])).toEqual([]);
+  } finally { active.close(); }
+});
+
+test("a queued instruction to a suspended attempt retains its sender warning through sender recovery", async () => {
+  // Notice dispatch and prune cursors belong to their store. Give this replay
+  // its own store so earlier cases cannot advance past the warning under test.
+  const priorState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(isolated, "suspended-sender-notices-"));
+  const accepted = Date.parse("2026-11-17T12:00:00Z");
+  setSystemTime(accepted);
+  const { active, child: sender } = completionFixture("suspended-attempt-notice", { sqlite: true });
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "suspended-attempt-message",
+      origin: { kind: "agent", role: "worker", conversationId: sender.conversationId } });
+    active.journal.transitionOperation(operationId, "failed", { reason: "pipeline attempt is suspended; its controller owns recovery" });
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client });
+    let available = false;
+    const { readSendFailureNotice, sweepSendFailureNotices, sendFailureSignals } = failureNotices;
+    await sweepSendFailureNotices({ registry: active.registry, assertActive: () => {},
+      receipt: id => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
+      recipient: () => available ? { kind: "deliver", conversationId: sender.conversationId, path: sender.transcriptPath }
+        : { kind: "skip", reason: "sender is suspended" }, deliver: async () => { throw Error("sender is offline"); } });
+    expect(readSendFailureNotice(operationId)?.state).toBe("failed");
+    // Sender recovery can outlast ordinary terminal-delivery retention.
+    setSystemTime(accepted + 35 * 24 * 60 * 60_000);
+    try {
+      await sweepSendFailureNotices({ registry: active.registry, assertActive: () => {},
+        receipt: id => resolveSendReceipt(id, { registry: active.registry, client: active.client }),
+        recipient: () => ({ kind: "skip", reason: "sender remains suspended" }),
+        deliver: async () => { throw Error("no delivery while sender is offline"); } });
+      expect(readSendFailureNotice(operationId)?.state).toBe("failed");
+    } finally { setSystemTime(accepted); }
+    available = true;
+    const code = `const m = await import(${JSON.stringify(new URL("./sendFailureNotice.ts", import.meta.url).pathname)});
+console.log(JSON.stringify(m.sendFailureSignals(${JSON.stringify(sender.conversationId)})));`;
+    const restarted = spawnSync(process.execPath, ["-e", code], { env: process.env, encoding: "utf8" });
+    expect(restarted.status).toBe(0);
+    expect(JSON.parse(restarted.stdout)).toContainEqual(expect.objectContaining({ id: `send-failed:${operationId}` }));
+    expect(sendFailureSignals(sender.conversationId)).toContainEqual(expect.objectContaining({ id: `send-failed:${operationId}` }));
+  } finally {
+    active.close(); setSystemTime();
+    if (priorState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = priorState;
+  }
+});
+
+
+test("fresh native work protects a held send after the in-turn ceiling while its Viewer writer is gone", async () => {
+  const accepted = Date.parse("2026-11-17T08:00:00Z");
+  setSystemTime(accepted);
+  const { active } = completionFixture("working-held-native", { engine: "claude" });
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null, () => accepted + 2 * 60 * 60_000);
+  try {
+    const { captureProcessIdentity } = await import("@/lib/processIdentity");
+    const key = `claude:${active.generationId}`;
+    const entry = active.registry.readOnlySnapshot().entries[key]!;
+    active.registry.upsert({ ...entry, status: "live", claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_000, startIdentity: "gone-writer" })}`,
+      structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid), activeTurnRef: "working-turn" } });
+    active.registry.commitMigrationIntent({ engine: "claude", targetId: "target", origin: "manual", requestId: "working-held-switch",
+      expectedRevision: active.registry.engineRouting("claude").revision });
+    const held = active.registry.holdDelivery(active.conversationId, "new requirement", "working-held-native-message");
+    const now = accepted + 2 * 60 * 60_000;
+    setSystemTime(now);
+    fs.writeFileSync(active.transcriptPath, [
+      { type: "user", timestamp: new Date(now - 1000).toISOString(), message: { role: "user", content: "work" } },
+      { type: "assistant", timestamp: new Date(now).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "work", name: "Bash", input: {} }] } },
+    ].map(row => JSON.stringify(row)).join("\n") + "\n");
+    progress.note(held.command.operationId, active.conversationId, { waitReason: "switch-after-turn", admittedAt: held.createdAt });
+    const swept = await settleDueSends({ registry: active.registry, client: null, progress, now: () => now });
+    expect(swept.settled).toEqual([]);
+    expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId)?.state).toBe("in-flight");
+    expect(progress.get(held.command.operationId)).toMatchObject({ deadlineAt: new Date(now + SETTLEMENT_WINDOW_MS).toISOString(), deadlinePolicy: "turn-boundary" });
+  } finally { setSystemTime(); progress.close(); active.close(); }
+});
+
+
+test("the reservation attempt limit is enforced by the writer after a process restart", async () => {
+  const { active } = completionFixture("reservation-attempt-bound", { sqlite: true });
+  try {
+    const row = active.registry.holdDelivery(active.conversationId, "bounded retries", "bounded-reservation");
+    for (let attempt = 1; attempt <= 12; attempt++) {
+      expect(active.registry.beginDeliveryAttempt(row.id, active.generationId)?.attempts).toBe(attempt);
+      active.registry.requeueUnactuatedDelivery(row.id, "pre-dispatch refusal");
+    }
+    const code = `
+      const { AgentRegistry } = await import(${JSON.stringify(new URL("../agent/registry.ts", import.meta.url).pathname)});
+      const registry = new AgentRegistry(${JSON.stringify(active.registryPath)}, undefined, undefined, { sqliteMode: "sqlite" });
+      console.log(JSON.stringify(registry.beginDeliveryAttempt(${JSON.stringify(row.id)}, ${JSON.stringify(active.generationId)})));
+      registry.close();
+    `;
+    const child = spawnSync(process.execPath, ["-e", code], { env: process.env, encoding: "utf8" });
+    expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout)).toBeNull();
+    expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(row.command.operationId), row.command.operationId))
+      .toMatchObject({ state: "failed", resend: "verify-first", reason: expect.stringContaining("attempt limit") });
+  } finally { active.close(); }
+});
+
+
+test("an actual recorded host exit fences pending receipts without changing its registry status", async () => {
+  const { active } = completionFixture("recorded-host-exit");
+  const child = Bun.spawn([process.execPath, "-e", 'console.log("ready"); await Bun.stdin.text();'],
+    { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: process.env });
+  let closed = false;
+  try {
+    const reader = child.stdout.getReader();
+    const ready = await reader.read(); reader.releaseLock();
+    expect(new TextDecoder().decode(ready.value)).toContain("ready");
+    const { captureProcessIdentity } = await import("@/lib/processIdentity");
+    const key = `codex:${active.generationId}`;
+    const entry = active.registry.readOnlySnapshot().entries[key]!;
+    active.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(child.pid) } });
+    const { operationId } = acceptSend(active, { clientMessageId: "recorded-host-exit-message" });
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client }))
+      .toMatchObject({ state: "in-flight" });
+    closed = true; child.stdin.end(); await child.exited;
+    expect(active.registry.readOnlySnapshot().entries[key]?.status).toBe("idle");
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client }))
+      .toMatchObject({ state: "failed", resend: "safe" });
+    expect(active.journal.effectBatch(100, ["runtime.send"])).toEqual([]);
+  } finally {
+    if (!closed) child.stdin.end();
+    await child.exited;
+    active.close();
+  }
+});
+
+for (const engine of ["codex", "claude"] as const) {
+  for (const target of ["working", "working-claimed", "working-before-cutoff", "idle", "dead", "killed"] as const) {
+    test(`${engine} ${target} target starting during settlement admission is observed again before expiry`, async () => {
+      const accepted = Date.parse("2026-11-17T08:00:00Z");
+      setSystemTime(accepted);
+      const { active } = completionFixture(`admission-race-${engine}-${target}`, { engine, sqlite: true });
+      const { captureProcessIdentity } = await import("@/lib/processIdentity");
+      const key = `${engine}:${active.generationId}`;
+      const entry = active.registry.readOnlySnapshot().entries[key]!;
+      active.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+      if (target !== "working-claimed") active.registry.commitMigrationIntent({ engine, targetId: "target", origin: "manual", requestId: `admission-race-${engine}-${target}`,
+        expectedRevision: active.registry.engineRouting(engine).revision });
+      const held = active.registry.holdDelivery(active.conversationId, "new requirement", `admission-race-send-${engine}-${target}`);
+      const now = accepted + 2 * 60 * 60_000;
+      setSystemTime(now);
+      const original = active.registry.deliveryWrite.bind(active.registry);
+      let admissions = 0;
+      const admission = spyOn(active.registry, "deliveryWrite").mockImplementation((async (...args: Parameters<typeof original>) => {
+        if (args[0].label === "delivery.settle-pristine" && ++admissions === 1) {
+          const current = active.registry.readOnlySnapshot().entries[key]!;
+          active.registry.upsert({ ...current, status: target === "dead" ? "dead" : target === "idle" ? "idle" : "live",
+            structuredHost: target === "dead" ? null : { ...current.structuredHost!, activeTurnRef: target === "idle" ? null : "working-turn" } });
+          if (target === "working-claimed") expect(active.registry.beginDeliveryAttempt(held.id, active.generationId)).not.toBeNull();
+          if (target !== "idle") {
+            const rows = engine === "codex" ? [
+              { type: "event_msg", timestamp: new Date(now - 1000).toISOString(), payload: { type: "task_started", turn_id: "working-turn" } },
+              { type: "response_item", timestamp: new Date(now).toISOString(), payload: { type: "function_call", call_id: "work", name: "exec_command", arguments: "{}" } },
+            ] : [
+              { type: "user", timestamp: new Date(now - 1000).toISOString(), message: { role: "user", content: "work" } },
+              { type: "assistant", timestamp: new Date(now).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "work", name: "Bash", input: {} }] } },
+            ];
+            fs.writeFileSync(active.transcriptPath, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+            const { readTranscriptCutEvidence } = await import("./liveness");
+            expect(await readTranscriptCutEvidence(engine, active.transcriptPath)).toMatchObject({ verified: true, turn: "busy" });
+          }
+        }
+        return original(...args);
+      }) as typeof original);
+      try {
+        const answer = await resolveSendReceipt(held.command.operationId, { registry: active.registry, client: null, now: () => now,
+          ...(target === "killed" ? { absoluteDeadline: now } : target === "working-before-cutoff" ? { absoluteDeadline: now + 60_000 } : {}) });
+        expect(admissions).toBeGreaterThan(0);
+        expect(answer).toMatchObject(target.startsWith("working") ? { state: "in-flight" } : { state: "failed", resend: "safe" });
+      } finally { admission.mockRestore(); setSystemTime(); active.close(); }
+    });
+  }
+}
+
+
+for (const engine of ["codex", "claude"] as const) {
+  test.each(["append", "replace", "create", "idle", "killed", "dead", "changing"] as const)(
+    `${engine} transcript-only work during writer admission is observed before expiry (%s)`, async mutation => {
+      const accepted = Date.parse("2026-11-17T08:00:00Z");
+      setSystemTime(accepted);
+      const now = accepted + 2 * 60 * 60_000;
+      const { active } = completionFixture(`native-admission-${engine}-${mutation}`, { engine, sqlite: true });
+      const { captureProcessIdentity } = await import("@/lib/processIdentity");
+      const { DeliveryProgressStore } = await import("./deliveryProgress");
+      const progress = new DeliveryProgressStore(null, () => now);
+      const key = `${engine}:${active.generationId}`;
+      const entry = active.registry.readOnlySnapshot().entries[key]!;
+      active.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+      active.registry.commitMigrationIntent({ engine, targetId: "target", origin: "manual", requestId: `native-admission-${engine}-${mutation}`,
+        expectedRevision: active.registry.engineRouting(engine).revision });
+      const held = active.registry.holdDelivery(active.conversationId, "new requirement", `native-admission-send-${engine}-${mutation}`);
+      setSystemTime(now);
+      progress.note(held.command.operationId, active.conversationId, { waitReason: "switch-after-turn", admittedAt: held.createdAt });
+      const idle = JSON.stringify(engine === "codex"
+        ? { type: "event_msg", timestamp: new Date(accepted).toISOString(), payload: { type: "task_complete" } }
+        : { type: "assistant", timestamp: new Date(accepted).toISOString(),
+          message: { model: "claude", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } }) + "\n";
+      if (mutation !== "create") fs.writeFileSync(active.transcriptPath, idle);
+      const original = active.registry.deliveryWrite.bind(active.registry);
+      let admissions = 0;
+      const admission = spyOn(active.registry, "deliveryWrite").mockImplementation((async (...args: Parameters<typeof original>) => {
+        if (args[0].label === "delivery.settle-pristine" && (++admissions === 1 || mutation === "changing")) {
+          const rows = engine === "codex" ? [
+            { type: "event_msg", timestamp: new Date(now - 1000).toISOString(), payload: { type: "task_started", turn_id: "working-turn" } },
+            { type: "response_item", timestamp: new Date(now).toISOString(), payload: { type: "function_call", call_id: "work", name: "exec_command", arguments: "{}" } },
+          ] : [
+            { type: "user", timestamp: new Date(now - 1000).toISOString(), message: { role: "user", content: "work" } },
+            { type: "assistant", timestamp: new Date(now).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "work", name: "Bash", input: {} }] } },
+          ];
+          const content = mutation === "idle" || mutation === "changing" ? idle : rows.map(row => JSON.stringify(row)).join("\n") + "\n";
+          if (mutation === "replace") {
+            fs.writeFileSync(`${active.transcriptPath}.next`, content);
+            fs.renameSync(`${active.transcriptPath}.next`, active.transcriptPath);
+          } else fs.appendFileSync(active.transcriptPath, content);
+          const { readTranscriptCutEvidence } = await import("./liveness");
+          expect(await readTranscriptCutEvidence(engine, active.transcriptPath)).toMatchObject({ verified: true,
+            turn: mutation === "idle" || mutation === "changing" ? "terminal" : "busy" });
+          // Native work does not require a registry publication by the old Viewer.
+          expect(active.registry.readOnlySnapshot().entries[key]).toEqual(entryBeforeNative);
+        }
+        return original(...args);
+      }) as typeof original);
+      const entryWithProcess = active.registry.readOnlySnapshot().entries[key];
+      if (mutation === "dead") active.registry.upsert({ ...entryWithProcess!, status: "dead", structuredHost: null });
+      const entryBeforeNative = active.registry.readOnlySnapshot().entries[key];
+      try {
+        const answer = await resolveSendReceipt(held.command.operationId, { registry: active.registry, client: null, now: () => now, progress,
+          ...(mutation === "killed" ? { absoluteDeadline: now } : {}) });
+        const retained = ["append", "replace", "create", "changing"].includes(mutation);
+        expect(answer).toMatchObject(retained ? { state: "in-flight" } : { state: "failed", resend: "safe" });
+        expect(admissions).toBe(mutation === "changing" || mutation === "idle" ? 2 : 1);
+        if (retained && mutation !== "changing") expect(progress.get(held.command.operationId))
+          .toMatchObject({ deadlineAt: new Date(now + SETTLEMENT_WINDOW_MS).toISOString(), deadlinePolicy: "turn-boundary" });
+      } finally { admission.mockRestore(); setSystemTime(); progress.close(); active.close(); }
+    },
+  );
+}
+
+for (const owner of ["claimed", "retry"] as const)
+for (const engine of ["codex", "claude"] as const) {
+  test.each(["append", "replace", "create", "idle", "killed", "dead", "changing"] as const)(
+    `${engine} ${owner} transcript-only work during writer admission is observed before expiry (%s)`, async mutation => {
+      const accepted = Date.parse("2026-11-17T08:00:00Z");
+      setSystemTime(accepted);
+      const now = accepted + 2 * 60 * 60_000;
+      const { active } = completionFixture(`native-admission-${owner}-${engine}-${mutation}`, { engine, sqlite: true });
+      const { captureProcessIdentity } = await import("@/lib/processIdentity");
+      const { DeliveryProgressStore } = await import("./deliveryProgress");
+      const progressPath = path.join(path.dirname(active.registryPath), "native-progress.sqlite");
+      const progress = new DeliveryProgressStore(progressPath, () => now);
+      const key = `${engine}:${active.generationId}`;
+      const entry = active.registry.readOnlySnapshot().entries[key]!;
+      active.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+      const held = active.registry.holdDelivery(active.conversationId, "new requirement", `native-admission-send-${owner}-${engine}-${mutation}`);
+      expect(active.registry.beginDeliveryAttempt(held.id, active.generationId)).not.toBeNull();
+      let operationId = held.command.operationId;
+      if (owner === "retry") {
+        active.registry.recordDeliveryOutcome(held.id, "failed", SEND_LOST_REASON, "lost");
+        const retryId = `native-admission-retry-${engine}-${mutation}`;
+        expect(active.registry.recordDeliveryRetryAttempt(operationId, retryId)).toBe(true);
+        operationId = retryId;
+      }
+      setSystemTime(now);
+      progress.note(operationId, active.conversationId, { waitReason: "switch-after-turn", admittedAt: held.createdAt });
+      const idle = JSON.stringify(engine === "codex"
+        ? { type: "event_msg", timestamp: new Date(accepted).toISOString(), payload: { type: "task_complete" } }
+        : { type: "assistant", timestamp: new Date(accepted).toISOString(),
+          message: { model: "claude", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } }) + "\n";
+      if (mutation !== "create") fs.writeFileSync(active.transcriptPath, idle);
+      const original = active.registry.deliveryWrite.bind(active.registry);
+      let admissions = 0;
+      const admission = spyOn(active.registry, "deliveryWrite").mockImplementation((async (...args: Parameters<typeof original>) => {
+        if (args[0].label === (owner === "retry" ? "delivery.settle-retry" : "delivery.settle") && (++admissions === 1 || mutation === "changing")) {
+          const rows = engine === "codex" ? [
+            { type: "event_msg", timestamp: new Date(now - 1000).toISOString(), payload: { type: "task_started", turn_id: "working-turn" } },
+            { type: "response_item", timestamp: new Date(now).toISOString(), payload: { type: "function_call", call_id: "work", name: "exec_command", arguments: "{}" } },
+          ] : [
+            { type: "user", timestamp: new Date(now - 1000).toISOString(), message: { role: "user", content: "work" } },
+            { type: "assistant", timestamp: new Date(now).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "work", name: "Bash", input: {} }] } },
+          ];
+          const content = mutation === "idle" || mutation === "changing" ? idle : rows.map(row => JSON.stringify(row)).join("\n") + "\n";
+          if (mutation === "replace") {
+            fs.writeFileSync(`${active.transcriptPath}.next`, content);
+            fs.renameSync(`${active.transcriptPath}.next`, active.transcriptPath);
+          } else fs.appendFileSync(active.transcriptPath, content);
+          const { readTranscriptCutEvidence } = await import("./liveness");
+          expect(await readTranscriptCutEvidence(engine, active.transcriptPath)).toMatchObject({ verified: true,
+            turn: mutation === "idle" || mutation === "changing" ? "terminal" : "busy" });
+          // Native work does not require a registry publication by the old Viewer.
+          expect(active.registry.readOnlySnapshot().entries[key]).toEqual(entryBeforeNative);
+        }
+        return original(...args);
+      }) as typeof original);
+      const entryWithProcess = active.registry.readOnlySnapshot().entries[key];
+      if (mutation === "dead") active.registry.upsert({ ...entryWithProcess!, status: "dead", structuredHost: null });
+      const entryBeforeNative = active.registry.readOnlySnapshot().entries[key];
+      try {
+        const answer = await resolveSendReceipt(operationId, { registry: active.registry, client: null, now: () => now, progress,
+          ...(mutation === "killed" ? { absoluteDeadline: now } : {}) });
+        const retained = ["append", "replace", "create", "changing"].includes(mutation);
+        expect(answer).toMatchObject(retained ? { state: "in-flight" } : { state: "failed", resend: "verify-first" });
+        expect(active.registry.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe(owner === "retry" ? "failed" : retained ? "delivery-uncertain" : "failed");
+        expect(admissions).toBe(mutation === "changing" || mutation === "idle" ? 2 : 1);
+        if (retained && mutation !== "changing") expect(progress.get(operationId))
+          .toMatchObject({ deadlineAt: new Date(now + SETTLEMENT_WINDOW_MS).toISOString(), deadlinePolicy: "turn-boundary" });
+        if (mutation === "append") {
+          progress.close();
+          const code = `
+            const { AgentRegistry } = await import(${JSON.stringify(new URL("../agent/registry.ts", import.meta.url).pathname)});
+            const { DeliveryProgressStore } = await import(${JSON.stringify(new URL("./deliveryProgress.ts", import.meta.url).pathname)});
+            const { resolveSendReceipt } = await import(${JSON.stringify(new URL("./sendSettlement.ts", import.meta.url).pathname)});
+            const registry = new AgentRegistry(${JSON.stringify(active.registryPath)}, undefined, undefined, { sqliteMode: "sqlite" });
+            const progress = new DeliveryProgressStore(${JSON.stringify(progressPath)}, () => ${now});
+            const answer = await resolveSendReceipt(${JSON.stringify(operationId)}, { registry, client: null, now: () => ${now}, progress });
+            console.log(JSON.stringify({ answer, progress: progress.get(${JSON.stringify(operationId)}) }));
+            progress.close(); registry.close();`;
+          const restarted = spawnSync(process.execPath, ["-e", code], { env: process.env, encoding: "utf8" });
+          expect(restarted.status).toBe(0);
+          expect(JSON.parse(restarted.stdout)).toMatchObject({ answer: { state: "in-flight" },
+            progress: { deadlineAt: new Date(now + SETTLEMENT_WINDOW_MS).toISOString(), deadlinePolicy: "turn-boundary" } });
+        }
+      } finally { admission.mockRestore(); setSystemTime(); progress.close(); active.close(); }
+    },
+  );
+}

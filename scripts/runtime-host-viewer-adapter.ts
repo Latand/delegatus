@@ -49,6 +49,7 @@ import { isExactRevision } from "../src/lib/runtime/canonicalRevision";
 import { connectionFailure, retryTransientNetwork } from "../src/lib/git/transientFailure";
 import { allocateBuiltCandidatePort, candidatePortsFromEnvironmentLists, isCandidatePortAvailable } from "../src/runtime-host/candidatePort";
 import { withBootstrapMcpHealthProbeAdmission } from "../src/runtime-host/bootstrapMcpHealthProbeAdmission";
+import { ensureReleaseBuilder, retainReleaseDockerData } from "../src/runtime-host/releaseDockerRetention";
 import { viewerCandidateContainerName, viewerCandidateImageName, viewerComposeSnapshotPath } from "../src/runtime-host/deploymentArtifacts";
 import { runtimeHostServiceImageTag } from "../src/runtime-host/dockerNames";
 import { bootstrapViewerRelease } from "../src/runtime-host/deploymentBootstrap";
@@ -366,8 +367,10 @@ async function buildCandidate(deploymentId: string, revision: string): Promise<V
       "--profile", "*", "config", "--format", "json",
     ]);
     writeComposeConfig(container, composeConfig);
+    const builder = await ensureReleaseBuilder(stateDir, args => command(["docker", ...args]));
+    writeJsonDurably(path.join(deploymentDir, deploymentId, "docker-build.json"), { image, builder, startedAt: Date.now() });
     await retryBuildNetwork([
-      "docker", "build", "--pull",
+      "docker", "build", "--pull", "--builder", builder, "--load",
       "--build-arg", `LLV_RUNTIME_HOME=${runtimeHome}`,
       "--label", `dev.live-log-viewer.revision=${revision}`,
       "-t", image, sourceDir,
@@ -379,7 +382,7 @@ async function buildCandidate(deploymentId: string, revision: string): Promise<V
     try { dockerfile = fs.readFileSync(path.join(sourceDir, "Dockerfile"), "utf8"); } catch { /* the build above read its own */ }
     if (dockerfileHasCandidateGate(dockerfile)) {
       await retryBuildNetwork([
-        "docker", "build", "--target", CANDIDATE_GATE_TARGET,
+        "docker", "build", "--target", CANDIDATE_GATE_TARGET, "--builder", builder, "--load",
         "--build-arg", `LLV_RUNTIME_HOME=${runtimeHome}`,
         "--label", `dev.live-log-viewer.revision=${revision}`,
         "-t", candidateGateImageName(image), sourceDir,
@@ -475,6 +478,20 @@ async function retainOnly(releases: ViewerReleaseIdentity[]): Promise<void> {
     }
   }
   mcpRuntimeStore.retainOnly(releases.flatMap((item) => item.mcpRuntime ? [item.mcpRuntime] : []));
+  const reportFile = path.join(deploymentDir, "docker-retention.json");
+  const deadline = Date.now() + 25_000;
+  try {
+    const report = await retainReleaseDockerData(stateDir, releases, args => {
+      const timeoutMs = deadline - Date.now();
+      if (timeoutMs <= 0) throw new Error("Docker retention deadline");
+      return command(["docker", ...args], { timeoutMs });
+    });
+    writeJsonDurably(reportFile, { ...report, at: new Date().toISOString() });
+  } catch {
+    // Release health already passed. Keep retention failures out of rollback.
+    writeJsonDurably(reportFile, { state: "incomplete", at: new Date().toISOString() });
+    console.warn("[deployment] Docker retention incomplete");
+  }
 }
 
 function serviceToken(candidate: ViewerReleaseIdentity): string | null {

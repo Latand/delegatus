@@ -1,3 +1,5 @@
+import { isRoleConfig, isStoredFlow } from "./validation";
+export { isStoredFlow } from "./validation";
 import { legacyImportAllowed } from "@/lib/state/legacyImport";
 import { smallStore } from "@/lib/state/smallStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -15,7 +17,7 @@ import { resolveRole } from "@/lib/roles/registry";
 import { loadRoleDefinitionsOrDefaults } from "@/lib/roles/store";
 import type { RoleDefinition } from "@/lib/roles/types";
 
-import { isFlow, decodeFlow } from "@/lib/reviewHistory/decode";
+import { decodeFlow } from "@/lib/reviewHistory/decode";
 
 import type { Flow, FlowPreset, Round } from "./types";
 
@@ -94,15 +96,6 @@ function isPreset(value: unknown): value is FlowPreset {
   return typeof preset.name === "string" && isRoleConfig(preset.implementer) && isRoleConfig(preset.reviewer) && (preset.managed === undefined || preset.managed === "role-registry");
 }
 
-function isRoleConfig(value: unknown): value is FlowPreset["implementer"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const role = value as Partial<FlowPreset["implementer"]>;
-  return (
-    (role.engine === "claude" || role.engine === "codex") &&
-    (role.model === null || typeof role.model === "string") &&
-    (role.effort === null || typeof role.effort === "string")
-  );
-}
 
 /** Seed missing names only: persisted selections, including formerly managed
     seeds, belong to the operator and are never migrated on read. */
@@ -203,15 +196,6 @@ function normalizeRelayHold(hold: Round["relayHold"]): Round["relayHold"] {
   return hold ? { ...hold, resetKnown: hold.resetKnown ?? true } : null;
 }
 
-/** The shared history validator is deliberately permissive. A live store also
-    validates the fields its decoder dereferences before admitting the row. */
-export function isStoredFlow(value: unknown): value is Flow {
-  try {
-    return isFlow(value) && typeof value.project === "string"
-      && Boolean(value.roles && isRoleConfig(value.roles.implementer) && isRoleConfig(value.roles.reviewer))
-      && value.rounds.every((round) => round !== null && typeof round === "object" && !Array.isArray(round));
-  } catch { return false; }
-}
 
 function parseFlowsFromDisk(): unknown[] {
   const document = readFlowStateJson();

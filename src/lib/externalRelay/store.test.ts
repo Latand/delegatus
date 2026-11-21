@@ -6,6 +6,8 @@ import path from "node:path";
 import {
   dropRun,
   mergeRelayTargets,
+  newTargetSettings,
+  publicRelay,
   reserveRun,
   reserveRunAsync,
   claimRelayRequestAsync,
@@ -286,4 +288,23 @@ test("an old claim whose owner process is gone leaves the ledger with the next c
     const kept = (JSON.parse(fs.readFileSync(file, "utf8")) as { claims: { requestId: string }[] }).claims.map(claim => claim.requestId);
     expect(kept.sort()).toEqual(["abandoned-recent", "claim-after-abandoned"]);
   } finally { if (prior) fs.writeFileSync(file, prior); else fs.rmSync(file, { force: true }); }
+});
+
+test("pairing and refresh retain ownership through the persisted and public store, clearing stale elsewhere flags", () => {
+  const remote = { target_id: "elsewhere", name: "Elsewhere clone", answered_by: "service" as const, fallback: "service" as const, answered_elsewhere: true };
+  const settings = newTargetSettings(remote);
+  expect(settings.answered_elsewhere).toBe(true);
+  updateRelayStore(store => ({ ...store, relays: [{ id: "ownership", origin: "https://relay.example", api_base: "https://relay.example/v1", name: "Relay", description: "",
+    credential: "fixture", owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    pairedAt: "2026-11-17T12:00:00Z", paused: true, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: [settings] }] }));
+  const stored = readRelayStore().relays[0]!;
+  expect(publicRelay(stored).targets[0]!.answered_elsewhere).toBe(true);
+  const merged = mergeRelayTargets(stored.targets, [{ ...remote, target_id: "added" }, remote]);
+  expect(merged.map(t => t.answered_elsewhere)).toEqual([true, true]);
+  for (const flag of [false, undefined]) {
+    const refreshed = mergeRelayTargets(merged, [{ ...remote, answered_by: "install", answered_elsewhere: flag }]);
+    expect(refreshed[0]!.answered_elsewhere).toBe(flag);
+    updateRelayStore(store => ({ ...store, relays: [{ ...stored, targets: refreshed }] }));
+    expect(readRelayStore().relays[0]!.targets[0]!.answered_elsewhere).toBe(flag);
+  }
 });

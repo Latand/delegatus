@@ -12,6 +12,34 @@ import { collectFileScanInWorker, fileScanWorkerEnabled, fileScanWorkerLaunch } 
 
 const directories: string[] = [];
 
+test("scanner frames cross UTF-8 chunk boundaries and account for each input byte once", async () => {
+  const snapshot = (project: string) => ({ files: [], projectCatalog: [{ project, smt: 0, conversations: 0 }], complete: true });
+  const output = "\n" + JSON.stringify({ type: "resource", snapshot: snapshot("гілка") }) + "\n"
+    + JSON.stringify({ type: "resource", snapshot: snapshot("second") }) + "\n\n"
+    + JSON.stringify({ type: "complete", snapshot: snapshot("complete") }) + "\n";
+  const { directory, workerPath } = fixtureWorker(`
+    process.stdin.resume();
+    process.stdin.on("end", () => {
+      const bytes = Buffer.from(${JSON.stringify(output)});
+      const split = bytes.indexOf(Buffer.from("г")) + 1;
+      process.stdout.write(bytes.subarray(0, split));
+      setTimeout(() => process.stdout.write(bytes.subarray(split)), 15);
+    });
+  `);
+  const resources: string[] = [];
+  performanceSpans.clear();
+  try {
+    const complete = await collectFileScanInWorker({ persist: false, persistIndex: false },
+      partial => resources.push(partial.projectCatalog[0]!.project), {
+        launch: { executable: process.execPath, workerPath }, cwd: directory, transcriptIndexScheduler: () => {},
+      });
+    expect(resources).toEqual(["гілка", "second"]);
+    expect(complete.projectCatalog[0]!.project).toBe("complete");
+    const frames = performanceSpans.snapshot().records.filter(row => performanceSites[row.site] === "scanner.ipc-frame");
+    expect(frames.reduce((sum, row) => sum + row.bytes, 0)).toBe(Buffer.byteLength(output));
+  } finally { performanceSpans.clear(); }
+});
+
 for (const invalid of [false, true]) {
   test(`scanner diagnostics: ${invalid ? "decode refusal" : "successful publication"}`, async () => {
     const catalog = [{ path: "/sessions/fixture.jsonl", project: "repo-fixture", engine: "codex", size: 100, mtime: 100 }];

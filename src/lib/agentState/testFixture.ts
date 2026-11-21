@@ -9,6 +9,37 @@ export const FIXTURE_CONVERSATION = ["conversation", "central-state-fixture"].jo
 export const FIXTURE_TURN = "native-turn-one";
 export const at = (offset: number) => new Date(FIXTURE_NOW + offset).toISOString();
 export type FixtureEngine = "codex" | "claude" | "copilot";
+/** Current session JSONL shape, with invented ids and empty message bodies. */
+export function currentClaudeRecords(rounds = 1) {
+  const open: Record<string, unknown>[] = [{ type: "user", uuid: "native-prompt-one", timestamp: at(0),
+    message: { role: "user", content: [{ type: "text", text: "" }] } }];
+  let parentUuid = "native-prompt-one";
+  for (const type of ["environment", "model", "deferred_tools_delta", "mcp_instructions_delta", "skill_listing", "auto_mode",
+    "instructions", "session_context", "date", "credential_org", "remote_session_change", "prompt_snapshot"]) {
+    const uuid = `context-${type}`;
+    open.push({ type: "attachment", uuid, parentUuid, timestamp: at(10), attachment: { type } });
+    parentUuid = uuid;
+  }
+  for (let round = 0; round < rounds; round++) {
+    const uuid = `tool-${round}`;
+    open.push({ type: "assistant", uuid, parentUuid, timestamp: at(100 + round * 2),
+      message: { role: "assistant", model: "provider", stop_reason: "tool_use", content: [{ type: "tool_use", id: `call-${round}`, name: "fixture", input: {} }] } });
+    parentUuid = `output-${round}`;
+    open.push({ type: "user", uuid: parentUuid, parentUuid: uuid, timestamp: at(101 + round * 2),
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: `call-${round}`, content: "" }] } });
+  }
+  const close: Record<string, unknown>[] = [
+    { type: "attachment", uuid: "environment-frame", parentUuid, timestamp: at(900), attachment: { type: "environment" } },
+    { type: "api-request-blob", message: { role: "user", content: [{ type: "text", text: "" }] } },
+    { type: "api-request", id: "request-fixture", timestamp: at(910), params: {}, tail: [] },
+    { type: "last-prompt", lastPrompt: "", leafUuid: "environment-frame" },
+    { type: "session-owner" },
+    { type: "atis-latch", atis: {} },
+    { type: "assistant", uuid: "terminal-frame", parentUuid: "environment-frame", timestamp: at(1000), apiBlockIndex: 0,
+      message: { id: "provider-answer", role: "assistant", model: "provider", stop_reason: "end_turn", content: [{ type: "text", text: "" }] } },
+  ];
+  return { open, close };
+}
 export function fixtureRecords(engine: FixtureEngine) {
   if (engine === "codex") return {
     open: [{ type: "event_msg", timestamp: at(0), payload: { type: "task_started", turn_id: FIXTURE_TURN } },

@@ -31,7 +31,8 @@ async function beat() {
   try {
     const response = await relayCall(start.relay.api_base, `/requests/${encodeURIComponent(start.requestId)}/heartbeat`, "POST",
       { lease_id: start.leaseId, seq: current, progress: sent }, start.relay.credential,
-      { timeoutMs: 5000, maxBytes: start.relay.limits.max_response_bytes });
+      { timeoutMs: 5000, maxBytes: start.relay.limits.max_response_bytes,
+        onHttpRefusal: record => send({ type: "http_refusal", record }) });
     send({ type: "heartbeat", seq: current, phase: "acknowledged", status: response.status });
     if (progress === sent) progress = null;
   } catch (error) {
@@ -76,7 +77,8 @@ input.on("line", line => {
       command.ownerAuthorization ? () => command.ownerAuthorization === "status"
         ? ownerRelayStatusReplyAuthorized(start!.relay.id, start!.targetId, start!.requestId, body, command.plainMax)
         : (command.ownerAuthorization === "failure" ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(start!.relay.id, start!.targetId, start!.requestId) : undefined,
-      async () => { send({ type: "refresh_features" }); }, command.plainMax)
+      async () => { send({ type: "refresh_features" }); }, command.plainMax,
+      refusal => send({ type: "refusal", refusal }), record => send({ type: "http_refusal", record }))
       .then(async result => {
         completionInFlight = false;
         if (result.delivery === "accepted") completionAccepted = true;

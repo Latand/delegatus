@@ -13,7 +13,7 @@ import { autoRotationRetryAt, type AutoRotationAttempt } from "./seatAutoRotatio
 import { boardMaintenanceAnswer, type BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
 import { SEAT_TICK_INTERVAL_ELIGIBILITY, seatTickSettingsCardText } from "./cards";
-import { readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
+import { readSeatTickAlarmRecords, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickPolicy, seatTickSettingsCardDetail } from "./seatTick";
 import {
   defaultSeatTickSettings,
@@ -168,8 +168,21 @@ export interface SeatTickSettingsAnswer {
   journalError: string | null;
 }
 
+/** The alarm reads the last three completed
+    checks; the rest of the window absorbs reconciliation rows between them. */
+const SKIP_JOURNAL_ALARM_RECORDS = 30;
+
 export interface SeatTickSettingsAnswerPorts {
   summary?: boolean;
+  /** Read only the compact tail the check-error alarm needs (timing rows
+      unread, {@link SKIP_JOURNAL_ALARM_RECORDS} rows at most) and leave the
+      run and delivery summaries unread: `lastRun` stays null and `journalError`
+      says so, which the client words as unknown rather than as a quiet tick.
+      The alarm is still computed, so a tick whose last checks failed never
+      reads as healthy. An unreadable tail throws: the caller then sends no
+      answer, because an answer without the alarm would claim health. For an
+      answer carried on a poll that must stay cheap. */
+  skipJournal?: boolean;
   curation?: typeof curationAnswer;
   now?: () => number;
   settings?: typeof readSeatTickSettings;
@@ -259,7 +272,11 @@ export function seatTickSettingsAnswer(
   let lastDelivery: { at: string; outcome: string } | null = null;
   let journalError: string | null = null;
   let checkErrorAlarm: SeatTickCheckErrorAlarm | null = null;
-  try {
+  if (ports.skipJournal) {
+    journalError = "the tick's journal was not read for this answer";
+    const tail = ports.records ? ports.records(SKIP_JOURNAL_ALARM_RECORDS) : readSeatTickAlarmRecords(SKIP_JOURNAL_ALARM_RECORDS, undefined, project);
+    checkErrorAlarm = seatTickCheckErrorAlarm(tail.filter((entry) => entry.project === project));
+  } else try {
     const own = (ports.records ? ports.records(SEAT_TICK_RUN_HISTORY) : readSeatTickRecords(SEAT_TICK_RUN_HISTORY, undefined, project)).filter((entry) => entry.project === project);
     checkErrorAlarm = seatTickCheckErrorAlarm(own);
     const record = own.at(-1) ?? null;

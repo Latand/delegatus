@@ -362,6 +362,10 @@ export type StructuredHostTerminationOutcome =
 
 export interface StructuredHostTerminationDependencies {
   stopOrigin?: HostStopOrigin;
+  /** The registry whose row this termination ends. Once the tree is proven
+      gone, the row's orphan alarm, if one is recorded, is closed there: the
+      host it warned about no longer runs. */
+  orphanAlarmRegistry?: import("@/lib/agent/registry").AgentRegistry;
   processIdentity?(pid: number): string | null;
   bootEpoch?(): string | null;
   pidAlive?(pid: number): boolean;
@@ -444,7 +448,17 @@ export async function terminateStructuredHostTree(
   ref: StructuredHostKillRef,
   dependencies: StructuredHostTerminationDependencies = {},
 ): Promise<StructuredHostTerminationOutcome> {
-  return withRecordedHostFence(ref, () => terminateStructuredHostTreeFenced(ref, dependencies));
+  const outcome = await withRecordedHostFence(ref, () => terminateStructuredHostTreeFenced(ref, dependencies));
+  if (outcome.ok && ref.sessionId && dependencies.orphanAlarmRegistry) {
+    const key: SessionKey = { engine: ref.engine, sessionId: ref.sessionId };
+    try {
+      const { closeOrphanedHostAlarm } = await import("./orphanedHostAlarm");
+      await closeOrphanedHostAlarm(dependencies.orphanAlarmRegistry, key);
+    } catch (error) {
+      console.error("[structured hosts] orphaned host alarm closure after a stop deferred", { key: sessionKeyId(key), error: String(error) });
+    }
+  }
+  return outcome;
 }
 
 async function terminateStructuredHostTreeFenced(
@@ -646,7 +660,7 @@ async function terminateStructuredHostTreeFenced(
     return {
       ok: false,
       status: 409,
-      error: "structured termination evidence could not be persisted",
+      error: dependencies.authorize?.()?.error ?? "structured termination evidence could not be persisted",
       remaining: tree.filter(candidate => alive(candidate)),
       survivors: capturedIdentities.filter(identity => {
         try { return processIdentityStatus(identity, identityProbe) !== "dead"; }
@@ -789,7 +803,7 @@ async function terminateStructuredHostTreeFenced(
             added = true;
           }
           if (added && dependencies.persistCapturedTree && !await dependencies.persistCapturedTree([...identities.values()])) {
-            return { ok: false, status: 409, error: "structured termination evidence could not be persisted", remaining: survivors(), ...partialEvidence() };
+            return { ok: false, status: 409, error: dependencies.authorize?.()?.error ?? "structured termination evidence could not be persisted", remaining: survivors(), ...partialEvidence() };
           }
           const refused = await readAuthority() ?? authorityRefusal();
           if (refused) return refused;

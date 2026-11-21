@@ -1,3 +1,4 @@
+import { RelayPollDiagnostics, relayPollFailure } from "./pollDiagnostics";
 import { ownerTierFor } from "./profile";
 import { ownerRunRoot } from "./runDirectory";
 import { ownerTurnDiagnostic } from "./diagnostic";
@@ -17,7 +18,8 @@ import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/st
 import { isStagingMode } from "@/lib/staging";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity, relayOutcomeLabel } from "./activity";
-import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
+import { pruneAnswerRecords, recordAnswerCompletionRefusal, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
+import { recordCompletionRefusal } from "./completionRefusal";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
 import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
 import { RELAY_HISTORY_MEDIA, RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
@@ -65,6 +67,7 @@ type PollerController = {
   descriptorRefreshes?: Map<string, TargetRefresh>;
   forcedDescriptorRefreshes?: Map<string, TargetRefresh>;
   prunedAt?: number;
+  pollDiagnostics?: Map<string, RelayPollDiagnostics>;
 };
 const globalRelay = globalThis as typeof globalThis & {
   __llvExternalRelayPoller?: PollerController;
@@ -75,6 +78,7 @@ const controller: PollerController = (globalRelay.__llvExternalRelayPoller ??= {
   armed: false,
 });
 const loops = controller.loops;
+const pollDiagnostics = controller.pollDiagnostics ??= new Map<string, RelayPollDiagnostics>();
 const targetRefreshes = (controller.targetRefreshes ??= new Map<
   string,
   TargetRefresh
@@ -91,7 +95,7 @@ function waitForPollRetry(loop: PollLoop, ms: number): Promise<void> {
 }
 export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
-  const status = { state: loop ? loop.state : ("paused" as const), ...relayActivity(id) };
+  const status = { state: loop ? loop.state : ("paused" as const), ...relayActivity(id), poll: pollDiagnostics.get(id)?.snapshot() ?? null };
   try {
     const runs = readRunLedger().runs;
     // Retained custody that needs the operator is reported beside the last
@@ -232,7 +236,8 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     if (recoveryRelay && recoveryRequest && interruptedOwner && held.ownerTurn?.restartRetries && !held.ownerTurn.quarantinedAt) {
       const request = requestSchema.parse(recoveryRequest);
       const owner = held.ownerTurn.context ?? ownerTierFor({ ownerTier: true }, request);
-      const diagnostic = ownerTurnDiagnostic("exception", "The owner retry was interrupted by another install restart. Resend the request.");
+      const diagnostic = { ...ownerTurnDiagnostic("exception", held.ownerTurn.continuation?.failureReason ?? "The owner retry was interrupted by another install restart. Resend the request.", [recoveryRelay.credential], held.ownerTurn.continuation?.primaryFailure),
+        ...(held.ownerTurn.continuation?.failureReason ? { deliveryFailure: true as const } : {}) };
       const answer = owner && ownerFailureAnswer(request, owner, diagnostic, [recoveryRelay.credential]);
       if (answer) {
         changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, diagnostic,
@@ -286,6 +291,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         }, Date.now() + 5000);
         if (!claimed) continue;
       }
+      let responseStatus = 0;
       try {
         await relayCall(
           relay.api_base,
@@ -293,7 +299,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
           "POST",
           body,
           relay.credential,
-          { prepareBody: () => {
+          { onResponseStatus: status => { responseStatus = status; }, prepareBody: () => {
             if (answer && !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId))
               throw new ExternalRelayError("cancelled", 401);
             return body;
@@ -301,9 +307,12 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         );
         delivery = "accepted";
       } catch (error) {
+        if (responseStatus >= 300) recordCompletionRefusal(
+          error instanceof ExternalRelayError ? error : new ExternalRelayError("unreachable"), responseStatus, run.requestId,
+          refusal => recordAnswerCompletionRefusal(run.relayId, run.targetId, run.requestId, refusal));
         // A terminal refusal proves this completion was not accepted; a
         // transient error leaves its delivery uncertain.
-        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 426].includes(error.status)
+        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 415, 422, 426].includes(error.status)
           && !(answer && error.status === 409 && error.code === "already_completed"))
           delivery = "refused";
       }
@@ -514,6 +523,8 @@ async function poll(
   relay: PairedRelay,
   loop: PollLoop,
 ) {
+  const diagnostics = pollDiagnostics.get(relay.id) ?? new RelayPollDiagnostics();
+  pollDiagnostics.set(relay.id, diagnostics);
   let backoff = 5000;
   while (!loop.stopped) {
     await refreshRelayTargets(relay.id, TARGETS_REFRESH_IN_LOOP_MS);
@@ -521,6 +532,9 @@ async function poll(
     if (loop.stopped) break;
     await refreshRelayDescriptorFeatures(relay.id, DESCRIPTOR_REFRESH_ON_READ_MS);
     if (loop.stopped) break;
+    let responseStatus: number | undefined;
+    let observed = false;
+    const timeoutMs = (Math.min(25, relay.limits.max_wait_s) + 15) * 1000;
     try {
       const result = await withViewerOperation("telegram.review-polls", () => relayCall<{ request?: unknown }>(
         relay.api_base,
@@ -529,10 +543,16 @@ async function poll(
         relayClaimBody(relay),
         relay.credential,
         {
-          timeoutMs: (Math.min(25, relay.limits.max_wait_s) + 15) * 1000,
+          timeoutMs,
+          signal: AbortSignal.timeout(timeoutMs),
+          detailedErrors: true,
+          onResponseStatus: status => { responseStatus = status; },
           maxBytes: relay.limits.max_response_bytes,
         },
       ));
+      diagnostics.record({ outcome: result.status === 204 || result.status === 200 && !result.body?.request
+        ? "ok-empty" : result.status === 200 ? "claimed" : `http:${result.status}`, status: result.status });
+      observed = true;
       if (!loop.stopped) loop.state = "polling";
       backoff = 5000;
       const current = readRelayStore().relays.find((item) => item.id === relay.id);
@@ -559,6 +579,7 @@ async function poll(
       }
       if (loop.stopped || !current) break;
     } catch (error) {
+      if (!observed) diagnostics.record(relayPollFailure(error, responseStatus));
       if (loop.stopped) break;
       if (error instanceof ExternalRelayError && error.status === 401) {
         loop.state = "credential_rejected";
@@ -603,6 +624,7 @@ export async function waitForExternalRelayRuns(): Promise<void> {
   while (activeRelayRequests.size) await Promise.allSettled([...activeRelayRequests]);
 }
 async function sweepAndRefresh(): Promise<void> {
+  for (const diagnostics of pollDiagnostics.values()) diagnostics.summarize();
   try {
     await sweepExternalRelayOrphans();
   } catch (error) {
@@ -627,6 +649,7 @@ async function sweepAndRefresh(): Promise<void> {
 export function refreshExternalRelayPollers(changedId?: string): void {
   if (!controller.armed || isStagingMode()) return;
   const relays = readRelayStore().relays;
+  for (const id of pollDiagnostics.keys()) if (!relays.some(relay => relay.id === id)) pollDiagnostics.delete(id);
   for (const [id, loop] of loops)
     if (
       id === changedId ||

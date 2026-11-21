@@ -20,7 +20,8 @@ else.
 ## What is kept
 
 When one of the hooked texts is written, every absolute or `~/` picture path
-in it is looked at. A picture is copied to `<state>/report-media/` when:
+in it is looked at. A picture is copied to the XDG cache's `report-media/`
+directory when:
 
 - it lies, as written and with its links resolved, under a root the path
   routes already serve (a known project or checkout, the stage scratch, an
@@ -29,6 +30,11 @@ in it is looked at. A picture is copied to `<state>/report-media/` when:
   agent's text names is read;
 - it is a raster (PNG, JPEG, GIF, WebP, AVIF, BMP) whose bytes agree with its
   extension, within the per-picture size.
+
+The store uses XDG cache rather than application state so its files stay outside
+the private config/state boundary. Copies from the former state location are
+not read or migrated; a still-present admissible source can be copied again,
+while a picture whose only copy was in state is unavailable.
 
 Copies are named by content hash; `index.json` maps each written path to its
 copy, to the lane whose report named it and to the project the picture lay

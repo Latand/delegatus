@@ -8,6 +8,11 @@ export class HostedCloudError extends Error {
   constructor(message: string, readonly category: HostedCloudFailure, readonly diagnostic = false) { super(message); }
 }
 
+/** A local session deadline is decisive even when a receipt RPC is pending. */
+export class HostedSessionTimeout extends HostedCloudError {
+  constructor() { super("Codex Cloud session deadline expired", "invalid"); }
+}
+
 /** How a provider refusal reads: a known limit, a proven error in the stage's
  * own configuration, or an unknown cause that proves nothing about the stage. */
 export type HostedRefusalKind = "account-limit" | "cloud-limit" | "configuration" | "unknown";

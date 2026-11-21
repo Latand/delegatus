@@ -1,7 +1,7 @@
 import type { ProcessIdentity } from "@/lib/processIdentity";
 import type { Determinable } from "@/lib/runtime/determinable";
 
-export const AGENT_STATE_POLICY = Object.freeze({ version: 1, reconcileMs: 2 * 60_000, observationMs: 5000, stuckMs: 10 * 60_000, startupGraceMs: 5 * 60_000, idleMs: 3_600_000 });
+export const AGENT_STATE_POLICY = Object.freeze({ version: 1, reconcileMs: 2 * 60_000, observationMs: 5000, stuckMs: 10 * 60_000, startupGraceMs: 5 * 60_000, idleMs: 3_600_000, abandonedTurnMs: 6 * 3_600_000 });
 export type AgentState = "working" | "waiting-operator" | "idle" | "stuck" | "unowned" | "dead";
 export interface Evidence {
   source: "proc" | "host-memory" | "native-transcript" | "registry-cache" | "operation-ledger";
@@ -48,6 +48,8 @@ export interface TranscriptVersion {
   mtimeMs: number;
   coveredFrom: number;
   bytesRead: number;
+  /** Missing on persisted summaries produced before versioned boundaries. */
+  boundaryVersion?: number;
 }
 export interface AgentFacts {
   subject: string;
@@ -93,6 +95,7 @@ export function evaluateAgentState(facts: AgentFacts, now: number, policy = AGEN
           else if (available("transcript")) {
             state = stuck ? "stuck" : "working";
             reason = stuck ? "open turn with silent transcript" : facts.turn.value.opening === "accepted" ? "accepted work awaiting a native prompt" : "verified open turn";
+            if (facts.turn.evidence.ref === "native-open-after-idle-conflict-grace") reason += "; idle-memory conflict exceeded native write grace";
             if (stuck && facts.activity?.determined && facts.activity.value.flags.length) reason += `; ${facts.activity.value.flags.join(", ")}`;
           }
         }
@@ -123,6 +126,8 @@ export interface AgentProjection {
   verdict: AgentVerdict;
   revision: number;
   pendingPublication: boolean;
+  /** Cleared with the publication acknowledgement. Older pending rows owe a refresh. */
+  pendingFilesRevision?: boolean;
   publishable?: boolean;
   divergence: string | null;
   divergenceKey?: string | null;
@@ -237,6 +242,7 @@ export function validAgentFacts(value: unknown): value is AgentFacts {
         || !["nativeId", "localRef", "opening", "closing"].every(k => v[k] === null || typeof v[k] === "string" && v[k].length <= 256)
         || !(v.at === null || number("at")))) return false;
       if (key === "transcript" && (!number("size") || !number("mtimeMs") || !number("coveredFrom") || !number("bytesRead")
+        || v.boundaryVersion !== undefined && (!Number.isSafeInteger(v.boundaryVersion) || (v.boundaryVersion as number) < 1)
         || typeof v.signature !== "string" || v.signature.length > 256 || typeof v.artifact !== "string" || !/^[a-f0-9]{24}$/.test(v.artifact))) return false;
       if (key === "activity" && (!number("tools") || !strings(v.flags, 16, 64) || typeof v.providerRetry !== "boolean")) return false;
     }

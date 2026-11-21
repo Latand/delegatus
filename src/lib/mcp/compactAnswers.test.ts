@@ -39,6 +39,7 @@ const { agentRegistry } = await import("@/lib/agent/registry");
 const { CORPUS_BODY_MARKERS, pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
 const { savePipelines } = await import("@/lib/pipelines/store");
 const { MAX_SCAFFOLD_LENGTH } = await import("@/lib/roles/store");
+const { parseStageVerdict } = await import("@/lib/pipelines/verdict");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 let requestedTicks = 0;
 // Bind all controller signals in this suite to its own in-process controller.
@@ -265,6 +266,115 @@ function metadataPipeline() {
   };
   return { pipeline, stage, attempt };
 }
+
+function cloudPipeline() {
+  const fixture = metadataPipeline();
+  const { stage, attempt } = fixture;
+  stage.runtime = "codex-cloud";
+  stage.model = stage.effectiveRole.model;
+  attempt.definition!.runtime = "codex-cloud";
+  const parsed = parseStageVerdict('Cloud verification completed.\nThe focused checks passed.\n```json\n{"status":"pass","findings":[]}\n```');
+  if (!parsed || "failureReason" in parsed) throw new Error("Cloud fixture verdict was rejected");
+  Object.assign(attempt, {
+    state: "passed", executionRuntime: "cloud", report: undefined,
+    conversationId: null, launchId: null, agentPath: null, sessionId: null,
+    completedAt: "2026-11-16T10:00:00.000Z",
+    verdict: parsed.verdict, output: parsed.output,
+  });
+  const taskId = [8, 4, 4, 4, 12].map(length => "0".repeat(length)).join("-");
+  attempt.cloud = {
+    phase: "completed", environmentId: "asenvcfg_fixture", branch: "pipeline/fixture",
+    headSha: "a".repeat(40), deadlineAt: "2026-11-16T10:30:00.000Z",
+    nextPollAt: "2026-11-16T10:00:00.000Z", polls: 1,
+    taskId, taskUrl: `codex://threads/${taskId}?hostId=durable`,
+    model: "gpt-6.1-sol", accountId: "account-cloud",
+    result: parsed,
+  };
+  return fixture;
+}
+
+test("settled Cloud output and receipt reach stage, compact and list reads without local identities", async () => {
+  const { pipeline, stage, attempt } = cloudPipeline();
+  // Current launch intent is deliberately different from the confirmed receipt.
+  attempt.effectiveRole.model = "gpt-5.6-sol";
+  attempt.accountId = "account-local";
+  const before = structuredClone(pipeline);
+  const expected = {
+    summary: attempt.output, result: "Cloud verification completed.",
+    runtime: { engine: "codex", model: "gpt-6.1-sol", effort: "high", accountId: "account-cloud" },
+    execution: { executionRuntime: "cloud", taskId: attempt.cloud!.taskId, taskUrl: attempt.cloud!.taskUrl },
+  };
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({
+    ...expected, conversationId: null, launchId: null,
+  });
+  expect(pipeline).toEqual(before);
+  savePipelines([pipeline]);
+  const bindings = viewerMcpBindings();
+  const detail = await bindings.get_pipeline({ pipelineId: pipeline.id, stageId: stage.id });
+  expect(detail).toMatchObject({ attempt: { ...expected, conversationId: null, launchId: null } });
+  const compact = await bindings.get_pipeline({ pipelineId: pipeline.id }) as { stages: unknown[] };
+  expect(compact.stages[0]).toMatchObject({ latestAttempt: expected });
+  for (const compact of [true, false]) {
+    const listed = await bindings.list_pipelines({ compact }) as { pipelines: Array<{ stages: unknown[] }> };
+    expect(listed.pipelines[0]!.stages[0]).toMatchObject({ latestAttempt: expected });
+  }
+});
+
+test("Cloud conclusions stay bounded, preserve reports and require settled output", () => {
+  const { pipeline, stage, attempt } = cloudPipeline();
+  attempt.output = "x".repeat(4_000);
+  const bounded = pipelineStageRead(pipeline, stage.id).attempt!;
+  expect(bounded.summary).toBe("x".repeat(2_000) + "…");
+  expect(bounded.result).toBe("x".repeat(159) + "…");
+  attempt.output = " \n ";
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({ summary: null, result: null });
+  attempt.output = "Unsettled output";
+  attempt.verdict = null;
+  attempt.state = "running";
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({ summary: null, result: null });
+  attempt.report = { ...reviewedPipeline().runs[0]!.attempts.at(-1)!.report!, summary: "Accepted report", result: "Report result" };
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({ summary: "Accepted report", result: "Report result" });
+});
+
+test.each(["reserved", "submitting", "failed"] as const)("Cloud %s without a receipt does not expose launch intent as runtime", phase => {
+  const { pipeline, stage, attempt } = cloudPipeline();
+  Object.assign(attempt.cloud!, { phase, taskId: null, taskUrl: null });
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({ runtime: null, summary: null, result: null });
+  delete attempt.definition;
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({ runtime: null, summary: null, result: null });
+});
+
+test("Cloud polling, rejection and legacy local fallback preserve their own evidence", () => {
+  const { pipeline, stage, attempt } = cloudPipeline();
+  attempt.cloud!.phase = "polling";
+  attempt.verdict = null;
+  attempt.output = null;
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({
+    runtime: { model: "gpt-6.1-sol", accountId: "account-cloud" }, summary: null, result: null,
+  });
+  attempt.cloud!.model = null;
+  delete attempt.cloud!.accountId;
+  attempt.accountId = null;
+  expect(pipelineStageRead(pipeline, stage.id).attempt!.runtime).toMatchObject({ model: null, accountId: null });
+  attempt.cloud!.phase = "failed";
+  attempt.cloud!.error = "Cloud execution failed";
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({ summary: null, result: null });
+  attempt.executionRuntime = "cloud-then-local";
+  attempt.conversationId = "conversation-local";
+  attempt.launchId = "launch-local";
+  attempt.output = "Local output stays out of Cloud conclusions";
+  attempt.accountId = "account-local";
+  expect(pipelineStageRead(pipeline, stage.id).attempt).toMatchObject({
+    runtime: { model: attempt.effectiveRole.model, accountId: "account-local" },
+    summary: null, result: null, execution: { executionRuntime: "local-after-cloud-failure" },
+  });
+  delete attempt.definition;
+  attempt.conversationId = null;
+  attempt.launchId = null;
+  expect(pipelineStageRead(pipeline, stage.id).attempt!.runtime).toMatchObject({
+    model: attempt.effectiveRole.model, accountId: "account-local",
+  });
+});
 
 test("stage metadata separates configured policy from the selected attempt's persisted runtime", () => {
   const { pipeline, stage, attempt } = metadataPipeline();

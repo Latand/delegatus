@@ -14,6 +14,7 @@ import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } f
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { yieldToRuntime } from "@/lib/cooperative";
+import { verifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { AGENT_STATE_POLICY, evaluateAgentState, fact, unknown, type AgentFacts, type AgentProjection, type Evidence, type NativeTurn } from "./model";
 import { AgentTranscriptCache, fileSignature } from "./transcript";
 import { acknowledgeAgentProjection, artifactRevision, commitAgentObservation, conversationRevision, entryRevision,
@@ -30,6 +31,7 @@ export interface AgentStatePorts {
   memory: (entry: AgentRegistryEntry, conversationId: string | null) => Memory | null;
   publish: (projection: AgentProjection, current: () => boolean) => Promise<boolean>;
   release: string;
+  backgroundWork?: typeof verifiedBackgroundWork;
   settleMemory?: (entry: AgentRegistryEntry, conversationId: string | null, turn: NativeTurn) => boolean;
 }
 function snapshotFacts(file: RegistryFile, entry: AgentRegistryEntry) {
@@ -247,6 +249,14 @@ export class AgentStateService {
     const native = await this.cache.acquire({ engine: entry.key.engine, path: entry.artifactPath ?? "", revision: artifactRevision(entry),
       localRef: entry.structuredHost!.activeTurnRef, observedAt: now(), anchor: entry.structuredHost!.agentStateNativePromptAnchor });
     if (!allowed()) return null;
+    const background = entry.key.engine === "claude" && native.transcript.determined && source.artifactBound
+      ? await (this.ports.backgroundWork ?? verifiedBackgroundWork)(entry.artifactPath!, now()) : null;
+    if (!allowed()) return null;
+    if (entry.key.engine === "claude" && native.transcript.determined) {
+      try {
+        if (fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })) !== native.transcript.value.signature) return null;
+      } catch { return null; }
+    }
     const ledgerPath = entry.key.engine === "claude" && entry.structuredHost!.activeTurnRef && (!native.turn.determined || native.turn.value.nativeId !== entry.structuredHost!.agentStateNativeTurnId)
       ? statePath("structured-host-events", `${encodeURIComponent(entry.key.sessionId)}.jsonl`) : null;
     const ledger = ledgerPath ? await this.cache.acquire({ engine: "claude-ledger", path: ledgerPath, revision: artifactRevision(entry),
@@ -292,11 +302,17 @@ export class AgentStateService {
     const localRef = memory?.activeTurnRef ?? entry.structuredHost!.activeTurnRef;
     const idleMemoryNativeOpen = Boolean(memory && memory.activeTurnRef === null && source.artifactBound
       && native.turn.determined && native.turn.value.state === "open");
+    const idleConflictDeadline = idleMemoryNativeOpen && entry.key.engine === "claude" && native.transcript.determined
+      ? native.transcript.value.mtimeMs + AGENT_STATE_POLICY.startupGraceMs : null;
+    const idleConflictExpired = idleConflictDeadline !== null && observedAt >= idleConflictDeadline;
     if (idleMemoryNativeOpen) {
-      // A live host's idle snapshot cannot prove that its native turn ended.
-      // Keep the transcript's opposing evidence visible and block effects until
-      // a later observation establishes the order of the two boundaries.
-      turn = unknown("host-memory-idle-conflicts-with-native-open-turn", ev("native-transcript", "open-turn"));
+      // Give delayed native writes one startup grace. An unchanged transcript
+      // cannot leave an idle Claude host undetermined forever, including after
+      // restart: the deadline comes from the file version's durable mtime.
+      // Expiry preserves native open work; it never manufactures a terminal.
+      turn = idleConflictExpired && native.turn.determined
+        ? fact({ ...native.turn.value, localRef: null }, ev("native-transcript", "native-open-after-idle-conflict-grace"))
+        : unknown("host-memory-idle-conflicts-with-native-open-turn", ev("native-transcript", "open-turn"));
     }
     const nativeClosed = native.turn.determined && native.turn.value.state === "closed";
     const correlation = nativeClosed && source.artifactBound && (entry.key.engine === "codex"
@@ -309,6 +325,14 @@ export class AgentStateService {
     const currentMemoryBoundary = !memory || entry.key.engine === "codex"
       || entry.key.engine === "claude" && (memory.nativeTurnId != null && native.turn.determined && native.turn.value.nativeId === memory.nativeTurnId)
       || entry.key.engine === "copilot" && (memory.promptOrdinal != null && native.turn.determined && native.turn.value.promptOrdinal === memory.promptOrdinal);
+    // An idle Claude broker clears both turn references. Keep its held-owner
+    // evidence alongside the generation-bound native terminal, so retirement
+    // can distinguish completion from a memory-only idle observation. Any
+    // retained native id must still agree; a later accepted turn stays ahead.
+    if (entry.key.engine === "claude" && memory?.activeTurnRef === null && localRef === null
+      && source.artifactBound && nativeClosed
+      && (entry.structuredHost!.agentStateNativeTurnId == null || correlation)
+      && (memory.nativeTurnId == null || currentMemoryBoundary)) turn = native.turn;
     if (localRef !== null && nativeClosed && !correlation && !memory) turn = unknown("boundary-unresolved", ev("native-transcript", "correlation"));
     const superseded = entry.key.engine === "codex" && source.artifactBound && native.turn.determined && native.turn.value.state === "open"
       && native.turn.value.nativeId !== null && native.turn.value.nativeId !== localRef && native.turn.value.opening !== null;
@@ -320,14 +344,24 @@ export class AgentStateService {
         ? (repair ? superseded ? "native-start-superseded-cache" : "native-terminal-cache-open" : "boundary-unresolved") : null;
     const attention = memory?.pendingAttention ?? entry.structuredHost!.agentStateAttention?.pending ?? entry.structuredHost!.pendingAttention;
     const attentionUnverified = memory?.attentionUnverified ?? entry.structuredHost!.agentStateAttention?.unverified ?? false;
+    const cachedBackground = background?.state === "unreadable"
+      && native.transcript.determined && previous?.facts.transcript.determined && previous.facts.transcript.value.signature === native.transcript.value.signature
+      && previous.facts.obligations.determined
+      && previous.facts.obligations.evidence.ref === `background-ledger:${native.transcript.value.signature}`
+      ? previous.facts.obligations.value.filter(value => value.startsWith("background:")) : null;
+    const backgroundKnown = entry.key.engine !== "claude" || background?.state === "read" || cachedBackground !== null;
+    const backgroundObligations = background?.state === "read" ? background.names.map(name => `background:${name}`) : cachedBackground ?? [];
     const facts: AgentFacts = { subject: subjectId(entry), engine: entry.key.engine, revision, process: processFact, owner, turn,
       attention: attentionUnverified || entry.structuredHost!.attentionVerified === false || attention.length > 16 || attention.some(ref => ref.length > 128) ? unknown("attention evidence missing", ev("registry-cache", "attention"))
         : fact(attention.slice(0, 32), ev(memory ? "host-memory" : "registry-cache", "attention", Boolean(memory))),
       activity: native.turn.determined ? fact({ tools: native.turn.value.tools,
         flags: blockingHostActivityFlags(entry.structuredHost!.activeFlags).slice(0, 16).map(flag => flag.slice(0, 64)),
         providerRetry: native.turn.value.state === "open" && Boolean(entry.structuredHost!.providerRetry) }, ev(memory ? "host-memory" : "registry-cache", "activity"))
-        : unknown("native activity boundary unavailable", ev("native-transcript", "activity")), transcript: native.transcript, obligations: !source.obligationsComplete || source.obligations.length > 32 ? unknown("obligation coverage truncated", ev("operation-ledger", "obligations"))
-        : fact(source.obligations, ev("operation-ledger", "obligations")) };
+      : unknown("native activity boundary unavailable", ev("native-transcript", "activity")), transcript: native.transcript, obligations: !backgroundKnown
+        ? unknown("background work coverage unavailable", ev("operation-ledger", "background-work"))
+        : !source.obligationsComplete || source.obligations.length + backgroundObligations.length > 32 ? unknown("obligation coverage truncated", ev("operation-ledger", "obligations"))
+        : fact([...source.obligations, ...backgroundObligations], ev("operation-ledger",
+          entry.key.engine === "claude" && native.transcript.determined ? `background-ledger:${native.transcript.value.signature}` : "obligations")) };
     if (repair && native.turn.determined) facts.turn = fact({ ...native.turn.value, localRef: null }, native.turn.evidence);
     const repairConversation = source.conversationCurrent && owner.determined && owner.value === "absent" && facts.turn.determined
       && facts.turn.evidence.source === "native-transcript" && (facts.turn.value.state === "open" ? source.conversationTurnState !== "busy"
@@ -382,8 +416,9 @@ export class AgentStateService {
         ...committed, facts: { ...facts, revision: committed.facts.revision },
         verdict: { ...projection.verdict, projectionRevision: committed.revision },
       });
-      const due = committed.facts.turn.determined && committed.facts.turn.value.state === "open" && committed.facts.transcript.determined
-        ? committed.facts.transcript.value.mtimeMs + AGENT_STATE_POLICY.stuckMs : null;
+      const due = idleConflictDeadline !== null && !idleConflictExpired ? idleConflictDeadline
+        : committed.facts.turn.determined && committed.facts.turn.value.state === "open" && committed.facts.transcript.determined
+          ? committed.facts.transcript.value.mtimeMs + AGENT_STATE_POLICY.stuckMs : null;
       this.due.delete(committed.subject);
       if (due !== null && due > now()) this.due.set(committed.subject, due);
       while (this.due.size > 4096) this.due.delete(this.due.keys().next().value!);
@@ -392,24 +427,31 @@ export class AgentStateService {
       const publicationEntry = registry.hostEntry(entry.key);
       const publicationSource = publicationEntry ? registry.agentStateRead(file => snapshotFacts(file, publicationEntry)) : null;
       const publicationMemory = digest(publicationEntry ? this.ports.memory(publicationEntry, committed.conversationId) : null);
-      const stillCurrent = () => allowed() && readAgentProjection(registry, committed.subject)?.revision === committed.revision
-        && (() => {
-          const row = registry.hostEntry(entry.key);
-          if (!row || entryRevision(row) !== committed.facts.revision || this.ports.process(process) !== processStatus) return false;
-          if (claimIdentity && this.ports.process(claimIdentity) !== claimStatus) return false;
-          const currentSource = registry.agentStateRead(file => snapshotFacts(file, row));
-          if (!publicationSource || !currentSource.conversationCurrent || currentSource.conversationId !== committed.conversationId
-            || currentSource.conversationRevision !== publicationSource.conversationRevision
-            || currentSource.obligationsRevision !== publicationSource.obligationsRevision) return false;
-          if (digest(this.ports.memory(row, committed.conversationId)) !== publicationMemory) return false;
-          const held = this.ports.memory(row, committed.conversationId);
-          if (held && committed.facts.turn.determined && held.activeTurnRef !== committed.facts.turn.value.localRef) return false;
-          if (committed.facts.transcript.determined) {
-            try { return fileSignature(fs.statSync(row.artifactPath!, { bigint: true })) === committed.facts.transcript.value.signature; }
-            catch { return false; }
-          }
-          return true;
-        })();
+      const stillCurrent = () => {
+        if (!allowed() || !publicationSource) return false;
+        // Check all registry facts against a single read transaction. A second
+        // connection can write between publication checks and must be seen.
+        const row = registry.agentStateRead(file => {
+          const current = file.entries[committed.entryKey];
+          if (file.agentStates[committed.subject]?.revision !== committed.revision || !current
+            || entryRevision(current) !== committed.facts.revision || this.ports.process(process) !== processStatus) return null;
+          if (claimIdentity && this.ports.process(claimIdentity) !== claimStatus) return null;
+          const source = snapshotFacts(file, current);
+          if (!source.conversationCurrent || source.conversationId !== committed.conversationId
+            || source.conversationRevision !== publicationSource.conversationRevision
+            || source.obligationsRevision !== publicationSource.obligationsRevision) return null;
+          return copyAgentStateRow(current);
+        });
+        if (!row) return false;
+        const held = this.ports.memory(row, committed.conversationId);
+        if (digest(held) !== publicationMemory) return false;
+        if (held && committed.facts.turn.determined && held.activeTurnRef !== committed.facts.turn.value.localRef) return false;
+        if (committed.facts.transcript.determined) {
+          try { return fileSignature(fs.statSync(row.artifactPath!, { bigint: true })) === committed.facts.transcript.value.signature; }
+          catch { return false; }
+        }
+        return true;
+      };
       if (await this.ports.publish(committed, stillCurrent) && stillCurrent()) {
         await registry.deliveryWriteOrBusy({ label: "agent-state.publish-ack" }, () => {
           if (stillCurrent()) acknowledgeAgentProjection(registry, committed.subject, committed.revision, now());
@@ -426,7 +468,8 @@ export async function startAgentStateService(): Promise<void> {
   if (global.__llvAgentStateService) return;
   const generation = global.__llvAgentStateGeneration ?? 0;
   const controller = await import("@/lib/runtime/structuredDeliveryController");
-  const { runtimeHostClient, readRuntimeSession } = await import("@/lib/runtime/client");
+  const { publishAgentProjection } = await import("./publication");
+  const { runtimeHostClient } = await import("@/lib/runtime/client");
   const registry = agentRegistry();
   const owns = () => viewerReleaseOwnsTraffic() && controller.structuredDeliveryPublicationState() === "ready";
   const service = new AgentStateService({ registry, now: Date.now, owns, process: observeAgentProcess,
@@ -443,24 +486,8 @@ export async function startAgentStateService(): Promise<void> {
       const held = controller.structuredDeliveryHostForConversation(conversationId, registry);
       return held?.reconcileAgentStateTerminal?.(turn.localRef, turn.nativeId, turn.at, turn.outcome) ?? false;
     },
-    publish: async (projection, current) => {
-      const client = runtimeHostClient();
-      if (!client || !projection.conversationId || !current()) return false;
-      const session = await readRuntimeSession(client, { conversationId: projection.conversationId });
-      if (!current() || !session || sessionKeyId(session.sessionKey) !== projection.entryKey) return false;
-      const entry = registry.agentStateRead(file => file.entries[projection.entryKey]);
-      if (!entry || !projection.facts.turn.determined || !projection.facts.owner.determined || !projection.facts.process.determined) return false;
-      const writerClaim = entry.claimOwner ? `${entry.claimOwner}:${entry.structuredHost!.writerClaimEpoch}` : null;
-      if (session.writerClaim && writerClaim !== session.writerClaim) return false;
-      await controller.publishStructuredHostProjection(client, { scope: { type: "session", id: projection.conversationId }, kind: "session-status",
-        expectedSessionRevision: session.revision,
-        producer: { kind: "viewer", eventKey: `agent-state:${projection.subject}:${projection.revision}` },
-        payload: { conversationId: projection.conversationId, sessionKey: entry.key,
-          host: projection.facts.process.determined && projection.facts.process.value.status === "dead" ? "dead" : projection.facts.owner.determined && projection.facts.owner.value === "held" ? "hosted" : "unhosted",
-          turn: projection.facts.turn.value.state === "open" ? "running" : "idle",
-          activeTurnId: projection.facts.turn.value.localRef, writerClaim, reconciliationRevision: projection.revision } });
-      return current();
-    } });
+    publish: (projection, current) => publishAgentProjection(registry, runtimeHostClient(), projection, current),
+  });
   // Publication may still be rebinding when startup installs controllers.
   // Keep the scheduler armed; each cycle refuses work until serving custody
   // is ready. A demotion during the imports revokes this pending installation.

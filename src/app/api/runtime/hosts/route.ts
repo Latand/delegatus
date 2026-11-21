@@ -76,6 +76,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<KillResponse 
   const observed = key ? agentRegistry().readOnlySnapshot().entries[sessionKeyId(key)] : null;
   const outcome = await terminateStructuredHostTree(ref, {
     stopOrigin: { path: `resources-${intent.kind}-kill`, operationId: randomUUID() },
+    orphanAlarmRegistry: agentRegistry(),
     retainedSurvivors: observed?.structuredTerminationSurvivors ?? [],
     persistCapturedTree: identities => ref.sessionId === null || agentRegistry().deliveryWriteOrBusy({ label: "registry.operator-stop-capture" }, () => {
       if (structuredHostKillRefusal(ref, intent, body.includeSeat === true)) return false;

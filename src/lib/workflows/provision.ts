@@ -1,3 +1,4 @@
+import { publicationSummary, publicationTitle } from "@/lib/forge/publicationLanguage";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -218,9 +219,9 @@ export function setupStatus(wf: Workflow, now: number = Date.now()): SetupStatus
 
 export type FinishResult = { ok: true; prUrl: string | null } | { ok: false; error: string; recoveryRequired?: boolean };
 
-/** First line of the task as the PR title, in the repo's usual short form. */
+/** Derive the English public title in the workflow's usual short form. */
 export function prTitle(wf: Workflow): string {
-  const line = wf.task.split("\n").map((part) => part.trim()).find(Boolean) ?? wf.name;
+  const line = publicationTitle(wf.task || wf.name);
   return line.length > 72 ? line.slice(0, 69) + "…" : line;
 }
 
@@ -237,7 +238,7 @@ export async function finishPr(wf: Workflow, body: string, exec: ExecPort): Prom
   if (push.code !== 0) return failure("git push", push);
   const create = (await exec(
     "gh",
-    ["pr", "create", "--title", prTitle(wf), "--body", body, "--base", wf.baseBranch, "--head", wf.branch],
+    ["pr", "create", "--title", prTitle(wf), "--body", publicationSummary(body), "--base", wf.baseBranch, "--head", wf.branch],
     wf.worktreeDir,
     forge,
   ));

@@ -79,7 +79,7 @@ function settledRow(pristine: BoardTask, before: ReturnType<typeof snapshotTasks
   return sameStoredCompletion(stored, pristine) ? stored : undefined;
 }
 
-function committedRows(drafts: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean, sync?: { write: TaskSyncWrite; groups: ReadonlyMap<string, GroupSnapshot> }): unknown[] {
+function committedRows(drafts: BoardTask[], before: ReturnType<typeof snapshotTasks>, replacements: boolean, sync?: { write: TaskSyncWrite; groups: ReadonlyMap<string, GroupSnapshot> }, admittedDb?: import("bun:sqlite").Database): unknown[] {
   const canonical = projectAliasResolver();
   const unread = sync ? undefined : unreadDrafts.get(drafts);
   const settled = new Map<number, unknown>();
@@ -117,7 +117,7 @@ function committedRows(drafts: BoardTask[], before: ReturnType<typeof snapshotTa
       before.set(id, { ...prior, fingerprint: taskFingerprint(stored), pristine: undefined });
     }
   }
-  if (sync) stampLinkedRows(tasks, sync.groups, sync.write, taskFingerprint);
+  if (sync) stampLinkedRows(tasks, sync.groups, sync.write, taskFingerprint, admittedDb);
   stampTaskRevisions(tasks, before, replacements);
   const rows = tasks.map(task => {
     const prior = before.get(task.id);
@@ -829,6 +829,8 @@ function fileBody(rows: unknown[], recentCreates: RecentCreate[], migrations: Ta
 function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: NonNullable<ReturnType<typeof tombstoneCollection>>; pending: () => { records: TombstoneRow[]; deleteKeys: string[] } } | null {
   const context = linkedContext();
   if (!context.self || context.all.size === 0) return null;
+  const taskStore = openTaskCollection(legacyDatabasePath(filePath));
+  taskStore.prepareTaskTimesBeforeWrite();
   const companion = tombstoneCollection(legacyDatabasePath(filePath), true)!;
   const puts = new Map<string, TombstoneRow>();
   const removed = new Set<string>();
@@ -836,9 +838,9 @@ function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: Non
   const aliases = projectAliasSnapshot().aliases;
   const write: TaskSyncWrite = {
     linked: context.all, self: context.self, now: Date.now,
-    projectWatermark: project => {
+    projectWatermark: (project, admittedDb) => {
       const projects = [project, ...Object.keys(aliases).filter(alias => canonicalProject(alias) === project)];
-      return openTaskCollection(legacyDatabasePath(filePath)).maxTaskProjectStamp(projects, context.self!.prefix);
+      return taskStore.maxTaskProjectStamp(projects, context.self!.prefix, admittedDb);
     },
     read: (key) => puts.get(key) ?? (removed.has(key) ? null : companion.get(key)),
     put: (row) => { const key = tombstoneRowKey(row); puts.set(key, row); removed.delete(key); },
@@ -855,13 +857,13 @@ function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: Non
     are deleted in the same transaction. */
 function writeTaskState<R>(
   filePath: string,
-  prepare: (current: TasksFileState, sync: TaskSyncWrite | null, pristine: readonly BoardTask[], originalDraft: (index: number) => BoardTask) => { next: { rows: unknown[]; recentCreates: RecentCreate[]; migrations: TaskMigrations } | undefined; result: R },
+  prepare: (current: TasksFileState, sync: TaskSyncWrite | null, pristine: readonly BoardTask[], originalDraft: (index: number) => BoardTask, admittedDb: import("bun:sqlite").Database) => { next: { rows: unknown[]; recentCreates: RecentCreate[]; migrations: TaskMigrations } | undefined; result: R },
   options: { afterPersist?: () => void } = {},
 ): R {
   const collection = taskCollection(filePath, "write")!;
   const sync = taskSyncWrite(filePath);
   let result: R;
-  collection.patchSync(() => {
+  collection.patchSync((admittedDb) => {
     const committed = collection.loadReadonly();
     const aliases = JSON.stringify(projectAliasSnapshot().aliases);
     let baseline = writeSnapshots.get(committed);
@@ -871,7 +873,7 @@ function writeTaskState<R>(
     }
     const draft = taskDrafts(baseline.state.tasks);
     const current = { tasks: draft.tasks, recentCreates: structuredClone(baseline.state.recentCreates), migrations: { ...baseline.state.migrations } };
-    const outcome = prepare(current, sync?.write ?? null, baseline.state.tasks, draft.original);
+    const outcome = prepare(current, sync?.write ?? null, baseline.state.tasks, draft.original, admittedDb);
     result = outcome.result;
     const companion = sync?.pending();
     if (!outcome.next) return { records: [], ...(companion ? { companion } : {}) };
@@ -1295,12 +1297,12 @@ function prepareTaskRowsLeased(filePath: string, options: { afterPersist?: () =>
   const effects = ["doneAt", "doneAdmissions", "findingKey", "finding", "accounting", "proactive", "project", "machine", "sync"];
   const counts = Object.fromEntries([...effects, "projection"].map(field => [field, 0]));
   const at = Date.now();
-  const changed = writeTaskState(filePath, (current, sync, pristine, originalDraft) => {
+  const changed = writeTaskState(filePath, (current, sync, pristine, originalDraft, admittedDb) => {
     // Recheck under the collection lease: another process may have prepared it.
     if (preparedRevision(filePath) === revision) return { next: undefined, result: 0 };
     const before = snapshotTasks(current.tasks, pristine, originalDraft);
     const step = syncStep(current.tasks, sync ? { ...sync, now: () => at } : null);
-    const rows = committedRows(current.tasks.slice(), before, true, step);
+    const rows = committedRows(current.tasks.slice(), before, true, step, admittedDb);
     let changed = 0;
     for (let index = 0; index < rows.length; index++) {
       const prior = persistedRows.get(pristine[index]!) as Record<string, unknown>;
@@ -1333,7 +1335,7 @@ function writeTaskCommands<R>(filePath: string,
   const sync = taskSyncWrite(filePath);
   const prepared = preparationRevision(filePath);
   let result: R;
-  collection.patchSync(() => {
+  collection.patchSync((admittedDb) => {
     if (preparedRevision(filePath) !== prepared || preparationRevision(filePath) !== prepared) throw new TaskPreparationRequired("task preparation dependencies changed; retry");
     const aliases = projectAliasSnapshot();
     const aliasKey = JSON.stringify(aliases.aliases);
@@ -1554,7 +1556,7 @@ function writeTaskCommands<R>(filePath: string,
         const index = full.indices.get(id);
         if (index !== undefined) before.set(id, { ...prior, ref: mutable.get(id)?.original(0) ?? full.draft.original(index), pristine: full.pristine.tasks[index] });
       }
-      const rows = committedRows(tasks, before, true, syncStep(baseline, sync?.write ?? null));
+      const rows = committedRows(tasks, before, true, syncStep(baseline, sync?.write ?? null), admittedDb);
       const committed = baseline.map(task => persistedRows.get(task) as TaskStateRow);
       const deleteKeys = deleted.map(task => `t:${task.id}`);
       const nextMigrations = outcome.state.migrations ?? migrations;
@@ -1572,18 +1574,18 @@ function writeTaskCommands<R>(filePath: string,
 }
 
 export function saveTasks(tasks: BoardTask[], filePath = TASKS_FILE): void {
-  writeTaskState(filePath, ({ tasks: current, recentCreates, migrations }, sync) => {
+  writeTaskState(filePath, ({ tasks: current, recentCreates, migrations }, sync, _pristine, _originalDraft, admittedDb) => {
     /* Preserve the idempotency receipts a tasks-only save (patch/delete/send)
        doesn't touch, so a create replay still resolves after them. */
-    const rows = committedRows(tasks, snapshotTasks(current), false, syncStep(current, sync));
+    const rows = committedRows(tasks, snapshotTasks(current), false, syncStep(current, sync), admittedDb);
     return { next: { rows, recentCreates, migrations: migrations ?? {} }, result: undefined };
   });
   replaceProjectKeySource(`tasks:${filePath}`, canonicalProjectKeys(tasks.map(task => task.project)));
 }
 
 export function saveTasksFile(state: TasksFileState, filePath = TASKS_FILE): void {
-  writeTaskState(filePath, (persisted, sync) => {
-    const rows = committedRows(state.tasks, snapshotTasks(persisted.tasks), false, syncStep(persisted.tasks, sync));
+  writeTaskState(filePath, (persisted, sync, _pristine, _originalDraft, admittedDb) => {
+    const rows = committedRows(state.tasks, snapshotTasks(persisted.tasks), false, syncStep(persisted.tasks, sync), admittedDb);
     return { next: { rows, recentCreates: state.recentCreates, migrations: state.migrations ?? persisted.migrations ?? {} }, result: undefined };
   });
   replaceProjectKeySource(`tasks:${filePath}`, canonicalProjectKeys(state.tasks.map(task => task.project)));
@@ -1694,7 +1696,10 @@ export function mutateTaskPrototypeRound<R>(taskId: string, reviewId: string,
         groupDigest(task, group as keyof typeof prior.digests) !== digest);
       // Poll bookkeeping leaves replicated groups intact. Only a semantic
       // group change needs the project's watermark; peer views stay shared.
-      if (groupChanged) stampLinkedRows([task], ownGroups, sync.write, taskFingerprint);
+      if (groupChanged) stampLinkedRows([task], ownGroups, { ...sync.write, projectWatermark: project => {
+        const projects = [project, ...Object.keys(projectAliasSnapshot().aliases).filter(alias => canonicalProject(alias) === project)];
+        return tx.maxTaskProjectStamp(projects, sync.write.self.prefix);
+      } }, taskFingerprint);
     }
     const row = committedRows([task], before, false)[0]!;
     tx.put(row as TaskStateRow);

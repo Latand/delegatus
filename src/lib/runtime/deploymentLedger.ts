@@ -88,6 +88,7 @@ export function ledgerDeployments(
   const db = openLedger(env);
   if (!db) return checkout.length ? { state: "ok", value: checkout.slice().reverse().slice(0, limit) } : unreadable();
   try {
+    prepareDeploymentTimes(db);
     const rows = db.query<{ id: string; state_json: string }, [string, number]>(
       `SELECT id, state_json FROM entities WHERE kind = ?${NEWEST_DEPLOYMENT_FIRST} LIMIT ?`,
     ).all("deployment", Math.max(1, limit));
@@ -105,29 +106,28 @@ export function ledgerDeployments(
   }
 }
 
-/**
- * Recency, expressed to the store rather than guessed at in memory.
- *
- * A deployment's start instant lives in the JSON value, not in a column, so the
- * ordering has to reach into it — which the ledger's own queries already do
- * (`json_extract` over `state_json` is how the runtime snapshot separates live
- * sessions from dead ones). `julianday` turns the ISO-8601 text `createdAt`
- * carries into a number, and answers NULL for anything it cannot read as a
- * time; SQLite sorts NULL last under DESC, which is where a record that cannot
- * say when it started belongs. `updatedAt` stands in only for a record with no
- * readable start at all, and the row's write clock and then the id break a tie
- * between two deployments admitted in the same instant.
- *
- * Ordering on an expression means no index can serve it, so the store sorts the
- * deployment rows to answer. That is the whole cost, it is bounded by how many
- * deployments this host has ever run, and it buys an answer that does not
- * depend on the newest record happening to fall inside a window.
+/** Rebuild a connection-local projection from authoritative time text. The
+ * journal stays read-only, including journals written by older hosts. As with
+ * the former expression sort, preparation visits deployment metadata only;
+ * selected payloads alone are decoded and validated. SQLite never parses time.
  */
+function prepareDeploymentTimes(db: Database): void {
+  db.exec("BEGIN");
+  db.exec("CREATE TEMP TABLE deployment_times(id TEXT PRIMARY KEY, started_ms INTEGER)");
+  const insert = db.query("INSERT INTO deployment_times VALUES (?,?)");
+  const instant = (value: unknown) => {
+    const ms = typeof value === "string" ? Date.parse(value) : NaN;
+    return Number.isFinite(ms) ? ms : null;
+  };
+  for (const row of db.query<{ id: string; created: string | null; updated: string | null }, []>(`
+    SELECT id,json_extract(state_json,'$.createdAt') AS created,json_extract(state_json,'$.updatedAt') AS updated
+    FROM entities WHERE kind='deployment'`).iterate()) {
+    insert.run(row.id, instant(row.created) ?? instant(row.updated));
+  }
+}
+
 const NEWEST_DEPLOYMENT_FIRST = `
-  ORDER BY COALESCE(
-      julianday(json_extract(state_json, '$.createdAt')),
-      julianday(json_extract(state_json, '$.updatedAt'))
-    ) DESC,
+  ORDER BY (SELECT started_ms FROM deployment_times WHERE deployment_times.id=entities.id) DESC,
     COALESCE(updated_at, 0) DESC,
     id DESC
 `;
@@ -155,6 +155,7 @@ export function latestLedgerDeployment(
   const db = openLedger(env);
   if (!db) return checkout ? { state: "ok", value: checkout } : unreadable();
   try {
+    prepareDeploymentTimes(db);
     const row = db.query<{ id: string; state_json: string }, [string]>(
       `SELECT id, state_json FROM entities WHERE kind = ?${NEWEST_DEPLOYMENT_FIRST} LIMIT 1`,
     ).get("deployment");

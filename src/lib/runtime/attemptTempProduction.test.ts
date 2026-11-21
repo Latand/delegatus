@@ -347,6 +347,7 @@ test.each([false, true])("six-day retention keeps the check and excludes human p
       authority, scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
     expect(report.removed).toBe(0); expect(recordedRootHeld(directory)).toBeTrue();
     expect(store.owner(directory)?.checkedAt).toBe(expiresAt);
+    expect(store.retentionExpiry(directory)).toBe(expiresAt);
     expect(store.retention(now).upcomingBytes > 0).toBe(!keep);
     const checks = new RecordedCheckStore();
     try { expect(checks.get(id)?.acknowledgement).toBeNull(); } finally { checks.close(); }
@@ -622,7 +623,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_BENCHMARK !== "1")("retention benchmark
   }
 }, 180_000);
 
-test("the real sweep shares checkout inventory with production lane authority across roots and rechecks", async () => {
+test("the real sweep keeps open-lane roots without reading checkout inventories", async () => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
   const { attemptTempState } = await import("./attemptTempProduction");
   const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
@@ -651,8 +652,8 @@ test("the real sweep shares checkout inventory with production lane authority ac
     }
     const report = await sweepAttemptTemps(store, { now: () => 2, maxRoots: 8, capBytes: 0,
       state: attemptTempState, references: async () => true, scan: () => ({ ownNamespace: null, processes: [] }) });
-    expect(report).toMatchObject({ checked: 8, removed: 8, errors: 0 });
-    expect([...inventories].reduce((sum, inventory) => sum + inventory.walks.length, 0)).toBe(1);
+    expect(report).toMatchObject({ checked: 8, removed: 0, liveHeld: 8, errors: 0 });
+    expect([...inventories].reduce((sum, inventory) => sum + inventory.walks.length, 0)).toBe(0);
   } finally { observed.mockRestore(); store.close(); }
 });
 
@@ -665,10 +666,10 @@ test("a checkout link created after the first authority inventory keeps its atte
   const pipeline = buildPipeline({ id: "late-link-lane", task: "Late checkout link", project: "fixture", repoDir: root,
     stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
     srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
-  pipeline.state = "running";
+  pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z";
   pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "late-link-launch", effectiveRole: role,
     conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
-    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+    startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:01:00Z", input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
   fs.mkdirSync(path.join(pipeline.worktreeDir!, ".git"), { recursive: true });
   savePipelines([pipeline]);
   const directory = path.join(root, "llv-stage-late-link"); fs.mkdirSync(directory);
@@ -703,7 +704,7 @@ test("a checkout link created after the first authority inventory keeps its atte
   } finally { observed.mockRestore(); store.close(); }
 });
 
-test.each([0, 1, 2, 3, 4, 5, 6, 7])("a restored checkout holds scratch across authority boundary %i (zero is the removal control)", async boundary => {
+test.each([0, 1, 2, 3, 4])("a restored checkout holds scratch across consumer await boundary %i (zero is the removal control)", async boundary => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
   const { attemptTempState } = await import("./attemptTempProduction");
   const { RepositoryLinkInventory } = await import("./attemptTempFilesystem");
@@ -712,10 +713,10 @@ test.each([0, 1, 2, 3, 4, 5, 6, 7])("a restored checkout holds scratch across au
   const pipeline = buildPipeline({ id: "restored-lane", task: "Checkout restoration", project: "fixture", repoDir: root,
     stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
     srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
-  pipeline.state = "running";
+  pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z";
   pipeline.runs = [{ stageId: "build", attempts: [{ n: 1, state: "passed", launchId: "restored-launch", effectiveRole: role,
     conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
-    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
+    startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:01:00Z", input: null, activatedBy: null, output: null, verdict: null, error: null }] }];
   const repository = pipeline.worktreeDir!;
   roots.push(repository, repository + "-previous");
   fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
@@ -726,36 +727,28 @@ test.each([0, 1, 2, 3, 4, 5, 6, 7])("a restored checkout holds scratch across au
   store.register({ directory, pipelineId: pipeline.id, launchId: "restored-launch", retainUntilClose: false, createdAt: 1 });
   store.measure(directory, 4096); store.release(directory);
   const exists = fs.existsSync;
-  let observations = 0, disappeared = false, restored = false;
-  const existence = spyOn(fs, "existsSync").mockImplementation(file => {
-    const present = exists(file);
-    if (file === repository && ++observations === boundary && present) {
-      disappeared = true; fs.renameSync(repository, repository + "-previous");
-    }
-    return present;
-  });
-  const targets = RepositoryLinkInventory.prototype.targets;
-  const reads = spyOn(RepositoryLinkInventory.prototype, "targets").mockImplementation(async function (this: InstanceType<typeof RepositoryLinkInventory>, repo: string) {
-    try { return await targets.call(this, repo); }
-    finally {
-      if (disappeared && !restored && repo === repository) {
-        restored = true; fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
-        fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
-      }
-    }
-  });
+  let observations = 0, restored = false;
   let inventory: InstanceType<typeof RepositoryLinkInventory>;
   try {
     const report = await sweepAttemptTemps(store, { now: () => 2, maxRoots: 1, capBytes: 0,
       state: (owner, current) => { inventory = current; return attemptTempState(owner, current); },
-      references: (original, current, scan) => attemptReferencesClear(original, current, scan, async () => true, inventory!),
-      scan: () => ({ ownNamespace: null, processes: [] }) });
+      references: async (original, current, scan) => {
+        const clear = await attemptReferencesClear(original, current, scan, async () => true, inventory!);
+        if (++observations === boundary) {
+          fs.renameSync(repository, repository + "-previous");
+          fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
+          fs.symlinkSync(directory, path.join(repository, "dependency"), "dir");
+          restored = true;
+        }
+        return clear;
+      },
+      scan: () => ({ ownNamespace: null, processes: [{ pid: 123, namespace: null, stamped: false, paths: [repository] }] }) });
     if (boundary === 0) {
       expect(report).toMatchObject({ removed: 1, errors: 0 });
-      expect(observations).toBeGreaterThanOrEqual(6);
+      expect(observations).toBeGreaterThanOrEqual(4);
       expect(exists(directory)).toBeFalse();
     } else {
-      expect(disappeared).toBeTrue(); expect(restored).toBeTrue();
+      expect(restored).toBeTrue();
       expect(report.removed).toBe(0);
       // Absence now refuses the inventory. The earlier presence mismatch
       // still returns unknown; both paths must preserve the same payload.
@@ -764,10 +757,10 @@ test.each([0, 1, 2, 3, 4, 5, 6, 7])("a restored checkout holds scratch across au
       expect(fs.readFileSync(path.join(directory, "data"), "utf8")).toBe("retained payload");
       expect(fs.readlinkSync(path.join(repository, "dependency"))).toBe(directory);
     }
-  } finally { reads.mockRestore(); existence.mockRestore(); store.close(); }
+  } finally { store.close(); }
 });
 
-test("production settlement retires the attempt scratch and config sandbox", async () => {
+test("production retains settled scratch while open and retires it after close", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-production-")); roots.push(root);
   const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
   const pipeline = buildPipeline({ id: "temp-lane", task: "Temp lifetime", project: "fixture", repoDir: root,
@@ -794,7 +787,14 @@ test("production settlement retires the attempt scratch and config sandbox", asy
   if (production) {
     const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
     const store = new AttemptTempStore();
-    try { await sweepAttemptTemps(store, { state: production.attemptTempState, references, scan: () => ({ ownNamespace: null, processes: [] }) }); }
+    try {
+      const options = { state: production.attemptTempState, references, scan: () => ({ ownNamespace: null, processes: [] }) };
+      expect((await sweepAttemptTemps(store, options)).removed).toBe(0);
+      expect(fs.existsSync(access.scratchDirectory!)).toBeTrue();
+      pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z"; savePipelines([pipeline]);
+      for (const directory of [access.scratchDirectory!, sandbox!]) store.release(directory);
+      await sweepAttemptTemps(store, options);
+    }
     finally { store.close(); }
   } else {
     await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], maxAgeMs: 86400000, scan: { ownNamespace: null, processes: [] } });
@@ -918,27 +918,18 @@ test.each(["passed", "failed", "needs_decision", "skipped", "committing"] as con
   savePipelines([pipeline]);
   const { attemptTempState } = await import("./attemptTempProduction");
   const owner = { directory: path.join(root, "llv-stage-fixture"), pipelineId: pipeline.id, launchId: "state-launch", retainUntilClose: false, createdAt: 1 };
-  expect(await attemptTempState(owner)).toBe(state === "committing" ? "live" : "settled");
+  expect(await attemptTempState(owner)).toBe("live");
   pipeline.runs[0]!.attempts[0]!.retiredLaunches = [{ launchId: "prior-launch", conversationId: null,
     error: "startup retired", retiredAt: "2026-10-22T12:01:00Z" }]; savePipelines([pipeline]);
-  expect(await attemptTempState({ ...owner, launchId: "prior-launch" })).toBe("settled");
+  expect(await attemptTempState({ ...owner, launchId: "prior-launch" })).toBe("live");
   expect(await attemptTempState({ ...owner, launchId: "unrecorded-launch" })).toBe("unknown");
   fs.mkdirSync(path.join(pipeline.worktreeDir!, "nested"), { recursive: true });
-  if (state !== "committing") {
-    const filesystem = await import("./attemptTempFilesystem");
-    const changed = spyOn(filesystem, "repositoryReferencesAttemptTemp").mockImplementation(async () => {
-      await Promise.resolve(); pipeline.runs[0]!.attempts[0]!.state = "running"; savePipelines([pipeline]); return false;
-    });
-    try { expect(await attemptTempState(owner)).toBe("unknown"); }
-    finally { changed.mockRestore(); }
-    pipeline.runs[0]!.attempts[0]!.state = state; savePipelines([pipeline]);
-  }
   fs.symlinkSync(path.join(owner.directory, "packages"), path.join(pipeline.worktreeDir!, "nested/node_modules"), "dir");
   expect(await attemptTempState(owner)).toBe("live");
   pipeline.stages[0]!.effectiveRole = { ...role, access: "read-only" };
   pipeline.stages[0]!.outputs = ["evidence"]; savePipelines([pipeline]);
   expect(await attemptTempState(owner)).toBe("live");
-  expect(await attemptTempState({ ...owner, directory: path.join(root, "llv-stage-config-fixture") })).toBe(state === "committing" ? "live" : "settled");
+  expect(await attemptTempState({ ...owner, directory: path.join(root, "llv-stage-config-fixture") })).toBe("live");
   for (const terminal of ["completed", "closed"] as const) {
     if (state !== "committing") pipeline.runs[0]!.attempts[0]!.completedAt = "2026-10-22T12:01:00Z";
     pipeline.state = terminal; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z"; savePipelines([pipeline]);
@@ -1036,7 +1027,7 @@ test.each(["closed", "completed"] as const)("an absent open-lane checkout holds 
     scan: () => ({ ownNamespace: null, processes }) });
   try {
     const owner = store.owner(directory)!;
-    expect(await attemptTempState(owner)).toBe("unknown");
+    expect(await attemptTempState(owner)).toBe("live");
     expect(await sweep()).toMatchObject({ removed: 0, held: 1, errors: 0 });
     expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("keep");
     // Closing a lane releases its own missing-checkout hold. A separate live

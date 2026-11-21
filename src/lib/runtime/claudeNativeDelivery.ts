@@ -195,6 +195,8 @@ export function deliveryRecord(value: unknown): ClaudeDeliveryRecord | null {
   if (candidate?.kind === "native-turn-boundary" && object(candidate.evidence)) return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-terminal" && object(candidate.evidence)) return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-consumed" && object(candidate.evidence)) return candidate as unknown as ClaudeDeliveryRecord;
+  if (candidate?.kind === "native-admission-restored"
+    && typeof candidate.entryId === "string" && typeof candidate.inputUuid === "string") return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-result" && object(candidate.proof)) return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "native-no-write" && typeof candidate.entryId === "string" && typeof candidate.inputUuid === "string") return candidate as unknown as ClaudeDeliveryRecord;
   if (candidate?.kind === "queued") {
@@ -290,6 +292,10 @@ export function replayClaudeDeliveries(records: ClaudeDeliveryRecord[], sessionI
       state.nativeConsumed = evidence;
       state.engineMessageId = evidence.canonicalUuid;
       if (evidence.turnId) { state.delivered = true; state.confirmation = "operation-bound"; }
+    } else if (row.kind === "native-admission-restored") {
+      // Tolerate proposal ledgers. Owned consumption already carries the proof;
+      // this redundant record can neither add authority nor be required for it.
+      continue;
     } else if (row.kind === "native-result") {
       const proof = nativeResult(row.proof);
       if (!proof || proof.sessionId !== sessionId || boundaries.has(proof.resultUuid)) continue;

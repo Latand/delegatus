@@ -1,3 +1,4 @@
+import { relayImages, relayImageGuard, relayImageNote, withRelayImages, MAX_RELAY_IMAGE_CONTENT_BYTES, RELAY_IMAGE_LIMIT_NOTE } from "@/lib/externalRelay/ownerToolContent";
 import { declaredClassSchema, repeatReasonSchema } from "@/lib/pipelines/accounting";
 import { taskDeclarationSchema, acceptTaskSchema } from "@/lib/tasks/accounting";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -7,7 +8,7 @@ import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
-import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { assertStateStartupMutation, mayRunStateStartupMutation, MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
 import { normalizeShortIdArgs } from "./shortIdArgs";
@@ -343,25 +344,44 @@ function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs):
 
 export type McpToolArgs = Record<string, unknown> & { clientRequestId?: unknown };
 export type McpToolPayload = Record<string, unknown>;
-/** Call-local checks survive awaited service/SDK wrappers, never a wire frame. */
+const BOARD_READ_TOOLS = new Set(["list_tasks", "list_pipelines"]);
 export interface McpResponseAuthority { checks: Array<() => void> }
+
+function boardReadFailure(tool: string, args: McpToolArgs, error: unknown): McpToolResult {
+  const details = error instanceof McpToolRefusal ? error.details : undefined;
+  return failure(tool, clientRequestId(args), typeof details?.code === "string" ? details.code : "tool_failed",
+    error instanceof Error ? error.message : String(error), details ? details.retryable === true : true, false, details);
+}
 
 function responseAuthorityResult(tool: string, args: McpToolArgs, authority: McpResponseAuthority | undefined, result: McpToolResult): McpToolResult {
   try { for (const check of authority?.checks ?? []) check(); return result; }
   catch (error) {
+    if (BOARD_READ_TOOLS.has(tool)) return boardReadFailure(tool, args, error);
     const code = error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "caller_unidentified";
     return failure(tool, clientRequestId(args), code, code === "workspace_forbidden" ? "workspace access denied" : "caller authority changed before response", false, false, { code });
   }
 }
 
-function retainResponseAuthority(context: McpToolCallContext, check: () => void): void {
+export function retainResponseAuthority(context: McpToolCallContext, check: () => void): void {
   if (!context.responseAuthority) return;
-  const runInCallerContext = AsyncLocalStorage.snapshot();
-  context.responseAuthority.checks.push(() => runInCallerContext(check));
+  const withinCall = AsyncLocalStorage.snapshot();
+  context.responseAuthority.checks.push(() => withinCall(check));
+}
+
+export interface McpBoardRead {
+  project: string;
+  scope: string;
+  assert(): void;
 }
 
 export interface McpToolCallContext {
   responseAuthority?: McpResponseAuthority;
+  /** Board selection and current authority captured before normalization can await. */
+  boardRead?: McpBoardRead;
+  /** Canonical selection resolved by the workspace fence; never a wire argument. */
+  resolvedBoardProject?: string;
+  /** Authenticated in-process operator selection; never read from tool arguments. */
+  operatorBoardProject?: string;
   /** Call-local curator disclosure fence, retained through SDK serialization. */
   curatorResponse?: { assertCurrent?: () => void };
   /** Trusted read projection; never accepted from serialized tool arguments. */
@@ -468,6 +488,7 @@ function curatorDisclosureResult(tool: string, args: McpToolArgs, authority: Mcp
   }
 }
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
+  captureBoardRead?: (args: McpToolArgs, context: McpToolCallContext) => McpBoardRead;
   /** Curator apply only: pin current disclosure authority and read its atomic
    * domain acknowledgement. This hook must never dispatch an apply. */
   curatorApplyRecovery?: (args: McpToolArgs) => Promise<{ assertCurrent: () => void; recoverCommitted: () => McpToolPayload | null }>;
@@ -2893,6 +2914,10 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        if (BOARD_READ_TOOLS.has(typedTool)) result = responseAuthorityResult(typedTool, args, context.responseAuthority, result);
+        const images = relayImages(result);
+        const imageGuard = relayImageGuard(result);
+        const imageNote = relayImageNote(result);
         if (!result.replayed) result = bindMcpPageCursorResult(typedTool, result, pageCaller);
         result = withoutPrototypeTaskFields(result);
         context.assertResult?.(result);
@@ -2900,11 +2925,12 @@ export function createMcpToolService(
         // Receipt identities and acknowledgement digests are protocol values.
         // The consumer must receive the exact bytes the custody ledger stores.
         // Media SHA-256 is content verification data used by the caller.
-        const exactHistoryMedia = typedTool === "relay_owner_history" && effectiveArgs.action === "media";
+        const exactHistoryMedia = typedTool === "relay_service_tools" || typedTool === "relay_owner_history" && effectiveArgs.action === "media";
         if (effectiveArgs.full !== true && typedTool !== "recorded_check" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }
+        withRelayImages(result, images, imageGuard, imageNote);
         const serializationStartedAt = performance.now();
         let resultSizeBytes: number | undefined;
         try {
@@ -2932,6 +2958,7 @@ export function createMcpToolService(
           error instanceof Error ? error.message : String(error), details.code === undefined, false, details),
           context.signal?.aborted ? "cancelled" : "failure");
       }
+      try { context.boardRead?.assert(); } catch (error) { return boardReadFailure(typedTool, args, error); }
       const retention: ReceiptRetention = MUTATING_MCP_TOOL_NAMES.has(typedTool) ? "durable" : "bounded";
       const requestId = clientRequestId(effectiveArgs);
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
@@ -2944,12 +2971,14 @@ export function createMcpToolService(
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
         try {
           await measure("caller", async () => bindings[typedTool].authorizeReceipt?.(effectiveArgs));
+          context.boardRead?.assert();
           if (context.signal?.aborted) throw context.signal.reason;
           const payload = await measure("binding", () => bindings[typedTool](effectiveArgs, context));
           if (context.signal?.aborted) throw context.signal.reason;
           return finish({ ...payload, ...(normalized.clamped ? { clamped: normalized.clamped } : {}),
             ok: true, toolName: typedTool, clientRequestId: null, replayed: false }, "success");
         } catch (error) {
+          if (BOARD_READ_TOOLS.has(typedTool)) return finish(boardReadFailure(typedTool, args, error), "failure");
           const reason = context.signal?.aborted ? context.signal.reason : error;
           const outcome = reason instanceof DeadlineExceededError ? "deadline" : context.signal?.aborted ? "cancelled" : "failure";
           return finish(failure(typedTool, null,
@@ -2991,6 +3020,7 @@ export function createMcpToolService(
       let curatorApply: Awaited<ReturnType<NonNullable<McpToolBinding["curatorApplyRecovery"]>>> | undefined;
       let scope: string | null;
       try {
+        context.boardRead?.assert();
         if (typedTool === "curate_rules" && effectiveArgs.action === "apply") {
           curatorApply = await bindings[typedTool].curatorApplyRecovery?.(effectiveArgs);
           curatorApply?.assertCurrent();
@@ -2998,9 +3028,11 @@ export function createMcpToolService(
           const assertCaller = context.assertCaller;
           if (curatorApply) context = { ...context, assertCaller: () => { assertCaller?.(); curatorApply!.assertCurrent(); } };
         }
-        scope = await measure("caller", async () => await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
+        scope = await measure("caller", async () => context.boardRead?.scope ?? await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
         curatorApply?.assertCurrent();
+        context.boardRead?.assert();
       } catch (error) {
+        if (BOARD_READ_TOOLS.has(typedTool)) return finish(boardReadFailure(typedTool, args, error), "failure");
         // Nothing is claimed yet, so the same key may be tried again as it is.
         if (error instanceof McpToolRefusal && error.details.code === "short_id_ambiguous") {
           return finish(failure(typedTool, requestId, "short_id_ambiguous", error.message, false, false, error.details), "failure");
@@ -3597,7 +3629,9 @@ export function createMcpToolService(
             }, false);
           }
         }
-        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding));
+        context.boardRead?.assert();
+        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding, context.boardRead?.assert));
+        context.boardRead?.assert();
         curatorApply?.assertCurrent();
         if (claim.kind === "conflict") {
           outcome = "conflict";
@@ -3644,8 +3678,7 @@ export function createMcpToolService(
           && (claim.result.code === "outcome_unknown" && claim.result.details?.outcome === "unknown"
             || claim.result.code === "send_uncertain");
         // A recorded bridge report owns its row deduplication and bot send key.
-        // Re-enter its binding to reconcile pending Telegram bookkeeping; a
-        // refusal before the row was stored keeps its existing receipt behaviour.
+        // Re-enter its binding to reconcile pending Telegram bookkeeping.
         const bridgeTelegram = typedTool === "bridge_report" && claim.kind === "replay" && claim.result.ok
           && isRecord(claim.result.destinations) && isRecord(claim.result.destinations.telegram)
           ? claim.result.destinations.telegram : null;
@@ -3722,6 +3755,7 @@ export function createMcpToolService(
         let unadmitted = false;
         const bindingStartedAt = performance.now();
         try {
+          context.boardRead?.assert();
           const payload = await bindings[typedTool](effectiveArgs, typedTool === "deploy_exact_sha" && (retryDeployment || claim.kind === "pending")
             ? { ...context, priorAttemptUncertain: true,
               ...(retryDeployment && claim.result.ok && claim.result.state === "accepted"
@@ -3739,6 +3773,11 @@ export function createMcpToolService(
           };
           outcome = "success";
         } catch (error) {
+          if (retryBridgeReport && claim.kind === "replay" && error instanceof McpUnadmittedRefusal) {
+            // A refused recovery attempt cannot undo the recorded report.
+            outcome = "replay";
+            return { ...claim.result, replayed: true };
+          }
           const reason = context.signal?.aborted ? context.signal.reason : error;
           outcome = reason instanceof DeadlineExceededError
             ? "deadline"
@@ -3772,7 +3811,7 @@ export function createMcpToolService(
           /* Named issue, cross-project and orchestrator refusals preserve the
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || typedTool === "github_app_connect" || typedTool === "message_receipt" || typedTool === "leave_lesson" || typedTool === "pipeline_action" || error.details.code === "cross_project_refused"
+            && (error instanceof McpUnadmittedRefusal || BOARD_READ_TOOLS.has(typedTool) || typedTool === "issue_report" || typedTool === "github_app_connect" || typedTool === "message_receipt" || typedTool === "leave_lesson" || typedTool === "pipeline_action" || error.details.code === "cross_project_refused"
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel", "deploy_exact_sha"].includes(typedTool)
               || error.details.code === "CONVERSATION_NOT_FOUND" && error.details.retryable === false)
             ? { code: error.details.code, retryable: error.details.retryable } : null;
@@ -3847,11 +3886,12 @@ export function createMcpToolService(
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
-        // Authority is a disclosure verdict. Preserve the committed witness
-        // and the unsettled claim when the owner is no longer authorized.
+        // Preserve the curator committed witness if disclosure authority changes.
         curatorApply?.assertCurrent();
+        context.boardRead?.assert();
         settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
         await measure("completion", () => receipts.complete(key, digest, settled, retention));
+        context.boardRead?.assert();
         curatorApply?.assertCurrent();
         return settled;
       })();
@@ -3895,11 +3935,36 @@ export function createMcpToolService(
       return await runWithMcpCallerResolution(() => service.callTool(tool, args, context));
     } finally { finish(); }
   } });
-  return { async callTool(tool, args, context = {}) {
-    const authority = context.responseAuthority ?? (tool === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined);
+  return { callTool: async function callTool(tool: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
+    const board = BOARD_READ_TOOLS.has(tool);
+    // Establish native proof and the canonical board before cursor filter matching.
+    if (board && "nativeCallerProof" in args) {
+      const { nativeCallerProof, ...logicalArgs } = args;
+      if (nativeCallerProof !== undefined && (typeof nativeCallerProof !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(nativeCallerProof))) {
+        return failure(tool, clientRequestId(args), "invalid_request", "nativeCallerProof must be a hook-generated proof; do not invent or copy it", false);
+      }
+      return runWithNativeCallProof(typeof nativeCallerProof === "string" ? nativeCallerProof : undefined, tool, logicalArgs,
+        () => callTool(tool, logicalArgs, context));
+    }
     const curatorResponse = context.curatorResponse ?? (tool === "curate_rules" ? {} : undefined);
-    const result = await paged.callTool(tool, args, { ...context, responseAuthority: authority, curatorResponse });
-    return responseAuthorityResult(tool, args, authority, curatorDisclosureResult(tool, args, curatorResponse, result));
+    const authority = context.responseAuthority ?? (board || tool === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined);
+    context = { ...context, responseAuthority: authority, curatorResponse };
+    try {
+      if (board) {
+        const boardRead = runWithMcpCallerResolution(() => bindings[tool as McpToolName].captureBoardRead?.(args, context));
+        if (boardRead) {
+          context = { ...context, boardRead };
+          args = { ...args, project: boardRead.project };
+          retainResponseAuthority(context, boardRead.assert);
+          boardRead.assert();
+        }
+      }
+      const result = await paged.callTool(tool, args, context);
+      return responseAuthorityResult(tool, args, authority, curatorDisclosureResult(tool, args, curatorResponse, result));
+    } catch (error) {
+      if (board) return responseAuthorityResult(tool, args, authority, boardReadFailure(tool, args, error));
+      throw error;
+    }
   } };
 }
 
@@ -3998,6 +4063,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes, import batch and any one-time machine budgetSweep candidate counts; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, unexplained sweep archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note: 1–1000 UTF-16 code units after schema trimming, recommended target 750. Rule/why bounds count normalized Unicode code points, 20–300/1–160. Role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Read always returns a fresh authorized observation. A committed apply returns its operation identity, revisions, placeholders, counts and maintenance status; exact-key replay returns that historical disposition. Changed arguments conflict. Pending maintenance grants no publication permission. For new work after CURATE_STALE, read again. An authority refusal can withhold a committed result. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
   leave_lesson: [
+    "If the answer is store_busy with details.nextAction set to retry-same-key, repeat the call with the same clientRequestId and identical arguments.",
     "When an operator corrects a result or reveals a misunderstood task, call in that same turn with correction:true and lesson, naming the misread in why and the preventing practice in rule at the narrowest true level. This includes seat-relayed corrections. Any recorded stage conversation, including a clean or review role, may leave corrections before stage_report or after settlement; each call is independent of the closing request. A registered role conversation outside a pipeline may also leave corrections, using its server-attributed role and project. Correction calls carry no applied/misled measurements. New work alone needs no correction lesson.",
     "Rule: 20–300 normalized Unicode code points; why/none: 1–160. Rule and why each need at least 16 letters or digits after NFKC matching normalization (this counter does not rewrite stored Unicode spelling). Recommended rule/why targets: 240/120; hard maxima: 300/160. Whitespace is trimmed and collapsed. Omit unused role; null is invalid. A length refusal names the field and actual length: rewrite without losing provenance, then submit the corrected payload with a new key after the no-effect refusal.",
     "Any stage answer may include applied and misled, each up to five distinct exact ids of rules this attempt received: applied changed what you did; misled was wrong or stale. An id may appear in only one field. These measurements are optional and may accompany none, lesson, rewrite or problem.",
@@ -4014,15 +4080,15 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   backfill_worktree_projects: "Read-only diagnostic for the automatic worktree project recovery that runs at Viewer startup and after full catalog rescans. dryRun defaults to true and writes nothing, including no MCP receipt. dryRun:false is refused. Optional project narrows the target repository. Reports corroborated folded candidates and leftAlone entries with reasons.",
   search_memory: "Search Claude and Codex memories, global instructions, single-fact skills and active learned role rules. Role rules use their exact r_ ids and are read live from the role-memory store. Supply query with optional project and kind; results rank by text relevance and include source paths, kinds, scopes and dates, bounded to 16 KB. Omit project for cross-project search. Supply a hit id in a second call to open its bounded body and record an opened outcome. Background information may be stale; verify the source before relying on it. The engines remain the only writers of their memory stores.",
   get_conversation: "Read a conversation summary and its recent messages and tools, newest kept within an answer budget: each record keeps its first maxChars characters with truncated:true when cut, and omitted counts the older records left out. full:true returns complete records and tail lines. With tailLines, conversationId or selectedContext uses the bounded identity path, while transcriptPath uses the validated pinned reader; both return a bounded raw tail without a corpus scan. For normalized, filtered, paged messages use conversation_messages.",
-  conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, synchronizing, superseded, and unknown are distinct conditions.",
+  conversation_deliverability: "Read whether one conversation currently has a deliverable host from the durable registry record. An accepted resume stays synchronizing until the current generation records a claimed process; reclaimed, orphaned (the engine runs but its recorded owner process is gone), synchronizing, superseded, and unknown are distinct conditions.",
   conversation_messages: "Read one conversation newest-first as engine-normalized records; Claude and Codex return the same shape, while hook attachments and usage envelopes are omitted. Identity accepts conversationId, transcriptPath, or selectedContext and resolves through the same bounded paths as get_conversation. kinds is a non-empty subset of message | reasoning | tool_call | tool_result | trace (default message). roles is a non-empty subset of user | assistant | system | tool (default all). since is an inclusive ISO timestamp lower bound. limit clamps to 1..200 (default 20); maxChars clamps to 1..16000 (default 4000), and truncated marks cut text after secret redaction. Records are newest-first. Pass the opaque cursor unchanged with an omitted or fresh clientRequestId for each next-older page while hasMore is true; cursors are bound to the transcript and filters. A normal empty page returns records: []. File work is bounded by the page, so a 100 MB rollout is never parsed in full.",
   deploy_exact_sha: "Deploy the serving Delegatus application by commit SHA or unique prefix of at least 7 characters on the tracked branch. Never a branch name. Only its server-attributed designated seat deploys; other projects cannot deploy through this tool. Idempotent by clientRequestId; deployments serialize at admission. Green means the tracked branch's required checks passed on the requested SHA. A not-green refusal gives outcome:not-executed, the green state and check names; retry the same key once green. A permanently closed key gives outcome:not-executed and nextAction:new-request-permitted. Checkout admission has a ten-second work budget plus admission-lock settlement, and waits up to one second for a transient holder at each custody observation. Busy names a live deployment, retention, update or pending restart, without a finished deployment id; it is not executed and the same key can be retried after its holder settles. A control timeout gets a separate five-second admission reconciliation budget: accepted names the deployment id; a fenced absence gives not-executed. If the reconciliation source itself is unavailable, preserve the original key for recovery. A matching SHA already deploying joins that deployment; a different SHA stays busy. An accepted deploy records wakeOnSettle:true for the seat: end the turn, and its next wake reports the terminal phase and paused lanes.",
   get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit. Use full:true for delivery ownership, closeReport, work links and retained bodies. Compact by default; full:true or compact:false returns the whole record, prompts, role scaffolds and attempt transcripts included. `stageId` narrows the answer to that stage and one attempt (the latest by default, or `attempt`): its verdict, findings, reported summary, conversation and error, with no prompts or transcripts. `compact: true` answers the list_pipelines compact row plus the digests.",
   board_snapshot: "Read a bounded, redacted snapshot of the Delegatus board, durable placement, and the selected project's hidden conversation count.",
-  list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
+  list_pipelines: "Accepts a project key, display name or repository folder in any letter case; omission uses the caller's existing board scope. List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
   conversation_action: "Control or archive Delegatus conversations. speed applies serviceTier in place without cutting a turn; stage conversations use the stage runtime switch. interrupt, kill, resume, compact and permission accept one conversation by id, transcript path, or selected-card reference. A host's tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
-  list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
+  list_tasks: "Accepts a project key, display name or repository folder in any letter case; omission uses the caller's existing board scope. List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
   deployment_status: "Read Delegatus deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project lets its designated seat and Delegatus-spawned workers read their own project. The server attributes your session; workers resolve their own spawn receipt automatically. Optional callerLaunchId selects an explicit receipt belonging to your session; a designated seat needs no receipt. This reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. `refusedByFlag` counts, across the whole sweep and every project, the flags behind each no-active-flags refusal, and a refused item names its own `flags`. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
   resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). A process with no observation yet answers within a second: freshness.pending is true with reason \"collecting\", the system block is current and the session table is empty until a later call; fresh:true waits for the collection instead. When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. Launched agents delegate this read to the Viewer, over either transport. A legacy stdio client without a launch capability measures locally and returns viewer:null with viewerUnavailable \"not-the-viewer\".",
@@ -4048,6 +4114,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A worker's ask, question, plan, memory kill or permission request and a parked lane in a project with a seat wait on that seat first and are off the operator's list; your wakes name them. Answer each where it asked (send_message to the conversation, conversation_action answer or permission, pipeline_action resolve-decision or accept-head). Only when the operator alone can decide, ask them in a decision form (publish_prototype_review with questions, in their language), then pass escalate {reviewId} with a conversation target and its reasonId, or a pipeline target: the form's row stands for the wait until they answer, and their answer comes to you to carry back. undo:true withdraws it.",
   ].join(" "),
   bridge_report: [
+    "If the answer is store_busy with details.nextAction set to retry-same-key, repeat the call with the same clientRequestId and identical arguments.",
     "The complete summary, headings and items joined by newlines must fit 8192 UTF-8 bytes (recommended target 6000). The displayed and Telegram copies omit over-limit items; only the complete voice copy retains them, with a warning. Preserve every owed decision in the displayed copy. On report_too_large, shorten whole items or split into complete reports with distinct keys after the no-effect refusal.",
     "Append one report to the durable bridge log: the report log beside the orchestrator chat, the voice relay, and, for the designated orchestrator of a project that set one, the project's Telegram chat, posted by Delegatus from the same report. Callable from any session; the origin is labeled server-side and a non-orchestrator report is visibly attributed to its own session. While the project's Bridge reports setting is off, nothing is stored and the answer says so (recorded:false, bridgeReports:false).",
     "Pass `summary` (one line, display limit 120 UTF-16 code units: what is now true, or the ask on blocked and question) and `sections` of short items: prod (on production), merged (merged, goes out with the next deploy), inProgress, queued (what comes next), decision (what the operator must answer or do). Each item is one or two plain sentences with a display limit of 200 UTF-16 code units; an item over 200 is omitted whole from the stored display body and Telegram, retained only in the complete voice copy, with a warning. Supply at most three decisions, each at most 200 units: further decisions appear only as a count in the displayed and Telegram copies. Name work by its title and #PR, a deploy by its 8-character sha, and no URLs. Delegatus renders the header, local time, emoji and, on a deploy report, task changes since the previous deploy; it shortens summaries and cuts whole items to fit the display budget. `body` is the older free-text form.",
@@ -4136,7 +4203,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "A secret, dot-directory or outside-roots refusal offers `details.confirmation` with an expiring Delegatus URL. The paired owner signs in and approves there; that action rechecks and sends this exact file to this exact chat and topic once. Show the owner the link and detector reasons. Agents cannot approve, and ordinary retries still run all detectors. The confirmation expires after ten minutes and becomes unavailable after Viewer restart. `document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. Success includes sentBy; per-bot refusals and selection follow telegram_bot_send. The post appears in telegram_bot_messages with kind document and its filename.",
   ].join(" "),
   relay_answer: relayAnswerDescription,
-  relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Refused in any other conversation and once answered.",
+  relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Ready photos and video frames include image content beside metadata; in code mode, forward image blocks with image(block). Reuse unexpired photo refs as seed_media_refs only on generate_image or update_self_profile_photo. Video frames cannot be seeds. relay_answer attachments can select media_ref from this request. Refused in any other conversation and once answered.",
   relay_owner_history: [
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. editsReported says whether the service reports edits; editedAt marks one. Media includes kind, fileName, mimeType, size, duration, dimensions and fetch availability when the service supplies them. Older services cannot report edits or all media facts. Telegram-side deletions may remain stored. Author ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
     "action media takes chat, messageId and optional directory: pass your LLV_EVIDENCE_DIR, an existing directory under the installation's evidence root; the default is evidence/relay-media. It streams one photo, document or video through the paired service, up to 2 GiB, and returns done with path, kind, mimeType, size and SHA-256 only after verification. Repeat the identical call on in_progress to join the same job. not_offered means the paired service must implement relay_owner_media first; too_large names the limit and how to lift it. Files, their contents and original names stay private to this conversation: never copy them into reports, messages to other agents, tasks, commits, pull requests, issues, lessons, Telegram hand-off folders or other chats.",
@@ -4513,7 +4580,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       rejectedHead: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("Commit SHA or unique local commit prefix (7+ hex)."),
       comparison: z.boolean().optional(),
     }).optional().describe("Delivery target, using the PR head repository remote and full branch. The canonical repository plus branch has one Delegatus publisher. A competing creation becomes an internal comparison lane and names its owner; host Git/gh tools remain unchanged."),
-    task: z.string().min(1).describe("Board title for the pipeline."),
+    task: z.string().min(1).describe("Board title for the pipeline, in the operator's language."),
+    prTitle: z.string().trim().min(1).max(120).regex(/^[^\r\n]+$/).optional().describe("English public PR title, separate from the board title. When omitted, derives an English title from the task or stage report."),
     taskIds: z.array(z.string()).optional()
       .describe("Board tasks this pipeline's work belongs to (#1720), recorded durably on the pipeline. EVERY stage launch — run, review-loop, retry, fail branch — reads this list at launch time and joins those tasks, so passing it in the create call is what keeps one product outcome on one card; a pipeline created without it is given a placeholder task of its own. Each id must name an existing task in the pipeline's project. pipeline_action \"link-task\" adds one afterwards, for the stages that have not started yet."),
     finishesTask: z.union([z.boolean(), z.array(z.string())]).optional()
@@ -4760,7 +4828,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema.optional(),
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
-    project: z.string().optional(),
+    project: z.string().optional().describe("Project key, display name or repository folder, case-insensitive. Omission uses the designated seat or workspace project; unrestricted readers retain all projects."),
     state: z.unknown().optional()
       .describe("A pipeline state or array of states; open includes every state except completed and closed. Unknown values are ignored."),
     includeClosed: z.boolean().optional(),
@@ -4825,7 +4893,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema.optional(),
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
-    project: z.string().optional(),
+    project: z.string().optional().describe("Project key, display name or repository folder, case-insensitive. Omission uses the designated seat or workspace project; unrestricted readers retain all projects."),
     status: z.unknown().optional().describe("One status or an array: inbox, assigned, blocked, done. Unknown values are ignored."),
     statuses: z.unknown().optional().describe("Alias for a status set; takes precedence over status."),
     openOnly: z.unknown().optional().describe("true excludes done tasks."),
@@ -5123,8 +5191,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   issue_report: z.object({
     clientRequestId: clientRequestIdSchema,
     action: z.enum(["hints", "preview", "show", "publish"]).describe("hints: advisory pointers without storage. preview: store text and agent judgment. show: read a preview back. publish: file an approved preview."),
-    title: z.string().optional().describe("preview only: the issue title, one line."),
-    body: z.string().optional().describe("preview only: the issue body in the repository's issue style: symptom, observed evidence, impact, expected behaviour, suggested investigation."),
+    title: z.string().optional().describe("preview only: the public issue title in English, one line."),
+    body: z.string().optional().describe("preview only: the public issue body in English in the repository's issue style: symptom, observed evidence, impact, expected behaviour, suggested investigation."),
     privacyJudgment: z.object({
       assessment: z.string().trim().min(1).max(3000),
       removed: z.string().trim().min(1).max(3000),
@@ -5263,10 +5331,32 @@ export function mcpTextResultClient(name: unknown): boolean {
 }
 
 export function mcpToolResponse(result: McpToolResult, textOnly: boolean) {
+  const supplied = result.ok && result.toolName === "relay_service_tools" ? relayImages(result) : [];
+  const actionSent = result.ok && result.actionSent === true;
+  let images = supplied;
+  let unavailable: string | undefined;
+  try { if (images.length) relayImageGuard(result)?.(); }
+  catch (error) {
+    images = [];
+    unavailable = error && typeof error === "object" && "code" in error && error.code === "lease_lost" ? "lease_lost" : "media_unavailable";
+  }
+  if (unavailable) return {
+    content: [{ type: "text" as const, text: JSON.stringify({ ok: false, toolName: result.toolName, code: unavailable,
+      clientRequestId: null, replayed: false, actionSent,
+      error: `Images unavailable: ${unavailable}.${actionSent ? " Service actions may already have run; do not repeat them." : ""}`, retryable: false }) }], isError: true,
+  };
+  const content = [{ type: "text" as const, text: JSON.stringify(result) }, ...images];
+  const note = relayImageNote(result);
+  if (note) content.push({ type: "text", text: note });
+  // Ten 1 MiB previews plus the bounded service text fit below 14 MiB.
+  if (images.length && Buffer.byteLength(JSON.stringify({ content })) > MAX_RELAY_IMAGE_CONTENT_BYTES) {
+    content.splice(1);
+    content.push({ type: "text", text: RELAY_IMAGE_LIMIT_NOTE });
+  }
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    ...(textOnly ? {} : { structuredContent: result }),
-    ...(result.ok ? {} : { isError: true }),
+    content,
+    ...(textOnly || supplied.length || note ? {} : { structuredContent: Object.fromEntries(Object.entries(result)) }),
+    ...(result.ok && !(result.toolName === "relay_service_tools" && result.status === "relay_tools_unavailable") ? {} : { isError: true }),
   };
 }
 
@@ -5334,7 +5424,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
       });
       const finishClaim = trackMcpClaim(`${toolName}:${clientRequestId(args as McpToolArgs) ?? "unkeyed"}`);
       try {
-        const authority: McpResponseAuthority | undefined = toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
+        const authority: McpResponseAuthority | undefined = BOARD_READ_TOOLS.has(toolName) || toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
         const curatorResponse: McpToolCallContext["curatorResponse"] = toolName === "curate_rules" ? {} : undefined;
         const call = () => service.callTool(toolName, args as McpToolArgs, {
           responseAuthority: authority,
@@ -5419,6 +5509,9 @@ function mcpHttpCallerFromAuthInfo(authInfo: unknown): (McpHttpCaller & { cancel
  * Forwarded stdio calls use that same service and original request key.
  */
 export async function createProductionViewerMcpService(hostHealthProbe = false, stdio = false, taskExecutor = false): Promise<McpToolService> {
+  // The admitted probe and its file scanner share the incumbent's registry
+  // before promotion. Both must open it without running the new schema.
+  if (stdio && hostHealthProbe) process.env[MCP_PROBE_READ_ONLY_ENV] = "1";
   /* Forward before importing policy, bindings or receipts. The Viewer owns
      one service and rechecks authority before disclosing a saved result.
      Linux native clients prove their process through a per-call Unix peer
@@ -5486,6 +5579,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   }
   const controlDependencies = productionViewerControlDependencies(hostHealthProbe);
   const { withWorkspaceMcpFence } = await import("./workspaceFence");
+  const { prepareAgentRegistry } = await import("@/lib/agent/registry");
   const service = createMcpToolService(
     viewerMcpBindings(undefined, controlDependencies),
     await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
@@ -5494,7 +5588,10 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
     viewerMcpToolPolicy(undefined, hostHealthProbe),
     { timings: productionMcpToolTimings, recovery: viewerMcpRecoverableTools() },
   );
-  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(service, productionDomainDependencies));
+  return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(
+    service, productionDomainDependencies,
+    async () => (await prepareAgentRegistry()).prepareNativeCallerArtifacts(),
+  ));
 }
 
 /** The executor took the call and stopped before answering it. */

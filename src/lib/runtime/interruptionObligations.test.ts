@@ -262,7 +262,8 @@ test("canonical replacement and deletion update incoming and absent recipients a
   const cut = store.record(releaseCut).obligation;
   await initializeRecipientInterruptionIndex(obligations);
   const moved = { ...cut, conversationId: "conversation_replaced" as const };
-  sourceSql(obligations, (db, collection) => db.query("INSERT OR REPLACE INTO state_rows SELECT collection,row_key,?,row_order,row_revision,controller_active FROM state_rows WHERE collection=? AND row_key=?")
+  sourceSql(obligations, (db, collection) => db.query(`INSERT OR REPLACE INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+    SELECT collection,row_key,?,row_order,row_revision,controller_active FROM state_rows WHERE collection=? AND row_key=?`)
     .run(JSON.stringify(moved), collection, cut.id));
   expect(recipientInterruptionEvidence(obligations, [moved.conversationId]).records).toEqual([moved]);
   expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toEqual([]);

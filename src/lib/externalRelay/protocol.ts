@@ -1,4 +1,4 @@
-import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
+import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, normalizeInputMediaDescriptor, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
 import { z } from "zod";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
@@ -25,6 +25,8 @@ export const targetSchema = z.object({
   target_id: id,
   name: label,
   answered_by: z.enum(["install", "service"]),
+  // Relative to this pairing: service routing may belong to another install (§B.2 rule 10).
+  answered_elsewhere: z.boolean().optional(),
   fallback: z.enum(["service", "none"]),
 });
 // Endpoint 6. One entry per target id: a list naming a target twice cannot
@@ -97,6 +99,7 @@ const inputMediaSchema = z.object({
   mime_type: boundedString(100).optional(), filename: boundedString(128).optional(),
   byte_size: z.number().int().positive().max(20971520).optional(), expires_at: time.optional(),
 }).strict();
+const claimMediaSchema = inputMediaSchema.extend({ byte_size: z.number().int().positive().safe().optional() });
 const mentionSchema = z.object({ author_key: id, offset: z.number().int().min(0).max(31999), length: z.number().int().min(1).max(128) }).strict();
 const messageSchema = z.object({
   id,
@@ -122,6 +125,26 @@ const requesterSchema = z.object({
   is_anonymous_admin: z.boolean(),
   is_owner: z.boolean(),
 });
+type RequesterAnchor = {
+  requester?: z.infer<typeof requesterSchema> | null;
+  respond_to: string | null;
+  conversation: readonly z.infer<typeof messageSchema>[];
+};
+
+/** A requester identifies the unique, human-authored trigger in this claim. */
+export function requesterTrigger(input: RequesterAnchor) {
+  if (!input.requester || input.respond_to === null) return null;
+  const matches = input.conversation.filter(message => message.id === input.respond_to);
+  const trigger = matches[0];
+  return matches.length === 1 && trigger && !trigger.author.self && trigger.author.key === input.requester.key
+    ? trigger : null;
+}
+
+export function ownerRequesterTrigger(input: RequesterAnchor) {
+  return input.requester?.is_owner === true && !input.requester.is_anonymous_admin ? requesterTrigger(input) : null;
+}
+
+export const INVALID_REQUESTER_DETAIL = "Requester does not match the triggering author or the owner delivery context.";
 const toolSchema = z.object({
   name: boundedString(64).refine((value) => value.length > 0),
   summary: boundedString(240),
@@ -131,13 +154,13 @@ const toolSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).refine((value) => Buffer.byteLength(JSON.stringify(value)) <= 8192).optional(),
   audience: z.enum(["admin", "owner"]).optional(),
 });
-export const relayAnswerDescription = "Only while you answer a relay message as its owner: text is your reply posted in the chat (without it, your last message is posted); format, buttons, mentions and attachments choose how it is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; mentions annotates person labels at original Unicode-scalar offsets; attachments are files under your document roots. Photo references use stable attachment_id values from the receipt; several photos form one carousel with your message. Each call replaces the previous one. Refused in every other conversation and after the answer.";
+export const relayAnswerDescription = "Only while you answer a relay message as its owner: text is your reply posted in the chat (without it, your last message is posted); format, buttons, mentions and attachments choose how it is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; mentions annotates person labels at original Unicode-scalar offsets; attachments select exactly one path under your document roots or an unexpired media_ref downloaded in this request. Photo references use stable attachment_id values from the receipt; several photos form one carousel with your message. Each call replaces the previous one. Refused in every other conversation and after the answer.";
 export const relayAnswerSchema = z.object({
   text: z.string().min(1).max(32000).optional().describe("Your reply as posted in the chat."),
   mentions: z.array(mentionSchema).max(16).optional(),
   format: z.enum(["plain","rich_markdown"]).optional(),
   buttons: z.array(z.array(z.object({text:boundedString(64).refine(v => v.length > 0),url:boundedString(2048).refine(v => v.length > 0)})).min(1).max(3)).max(2).optional(),
-  attachments: z.array(z.object({path:z.string().min(1).max(4096),kind:z.enum(["photo","document","audio","video"]),caption:z.string().max(1024).optional(),filename:boundedString(128).refine(v => v.length > 0).optional()})).max(4).optional(),
+  attachments: z.array(z.object({path:z.string().min(1).max(4096).optional(),media_ref:z.string().regex(/^media_[0-9a-f]{32}$/).optional(),kind:z.enum(["photo","document","audio","video"]),caption:z.string().max(1024).optional(),filename:boundedString(128).refine(v => v.length > 0).optional()}).refine(v => (v.path !== undefined) !== (v.media_ref !== undefined), { message: "Choose exactly one path or media_ref" })).max(4).optional(),
 });
 
 export const mediaKindSchema = z.enum(["photo", "document", "audio", "video"]);
@@ -180,9 +203,9 @@ export const inputSchema = z.object({
     )
     .optional(),
 }).superRefine((input, context) => {
+  const ownerTrigger = ownerRequesterTrigger(input);
   for (const [index, message] of input.conversation.entries()) {
-    const prototypeReply = input.requester?.is_owner === true && input.requester.is_anonymous_admin === false
-      && message.id === input.respond_to && message.author.key === input.requester.key && !message.author.self
+    const prototypeReply = message === ownerTrigger
       && /#proto-[a-f0-9]{8}\b/i.test(message.text.replace(/\\([#-])/g, "$1"));
     if ([...message.text].length > 16000 && !prototypeReply) context.addIssue({ code: "custom",
       path: ["conversation", index, "text"], message: "expected at most 16000 Unicode code points" });
@@ -217,16 +240,28 @@ const answerRequestSchema = z.object({
     progress: z.enum(["notes", "none"]),
   }),
 });
-/** Normalize each history photo independently; anchor media stays fail-closed. */
+/** Normalize item policy refusals on anchors; malformed anchors stay fail-closed. */
 export const requestSchema = z.preprocess(raw => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const value = raw as Record<string, unknown>;
+  let value = raw as Record<string, unknown>;
   const inbound = Array.isArray(value.features) && value.features.includes("relay_media_in");
   if (!value.input || typeof value.input !== "object" || Array.isArray(value.input)) return raw;
-  const input = value.input as Record<string, unknown>;
+  let input = value.input as Record<string, unknown>;
   const trigger = Array.isArray(input.conversation) ? input.conversation.find(message =>
     message && typeof message === "object" && message.id === input.respond_to) : undefined;
   const allowed = new Set([trigger?.id, trigger?.reply_to].filter(candidate => typeof candidate === "string"));
+  if (inbound && Array.isArray(input.conversation)) {
+    input = { ...input, conversation: input.conversation.map(message => {
+      if (!message || !allowed.has(message.id) || !Array.isArray(message.media)) return message;
+      return { ...message, media: message.media.map((rawMedia: unknown) => {
+        const parsed = claimMediaSchema.safeParse(rawMedia);
+        if (!parsed.success) return rawMedia;
+        try { return normalizeInputMediaDescriptor(parsed.data, value.features as string[]); }
+        catch { return rawMedia; }
+      }) };
+    }) };
+    value = { ...value, input };
+  }
   const history = inbound && (value.delivery === "guest" || (value.features as string[]).includes(RELAY_HISTORY_MEDIA));
   // Anchor descriptors take precedence over conflicting historical copies.
   const refs = new Map<string, InputMedia>();
@@ -269,9 +304,16 @@ export const requestSchema = z.preprocess(raw => {
     }) } : {}),
   } };
 }, answerRequestSchema.superRefine((request, context) => {
+  const { input } = request;
+  const invalidRequester = request.delivery === "guest" ? !ownerRequesterTrigger(input)
+    : input.requester && (!requesterTrigger(input) ||
+        input.requester.is_owner && input.requester.is_anonymous_admin ||
+        request.owner_delivery && !input.requester.is_owner);
+  if (invalidRequester)
+    context.addIssue({ code: "custom", path: ["input", "requester"], message: INVALID_REQUESTER_DETAIL });
   if (request.delivery === "guest") {
     if (request.answer.progress !== "none" || request.owner_delivery || request.input.format || request.answer.attachments
-      || request.input.requester?.is_owner !== true || request.input.tools?.some(tool => tool.mode !== "handoff")
+      || request.input.tools?.some(tool => tool.mode !== "handoff")
       || !hasInboundMedia(request) && (request.input.conversation.some(message => message.media?.length)
         || request.input.documents.some(document => document.media_ref !== undefined)))
       context.addIssue({ code: "custom", message: "invalid guest delivery contract" });
@@ -282,6 +324,17 @@ export const requestSchema = z.preprocess(raw => {
 }));
 export type ExternalRelayRequest = z.infer<typeof requestSchema>;
 export type ExternalRelayTool = z.infer<typeof toolSchema>;
+export function relayToolAudience(request: ExternalRelayRequest) {
+  const requester = request.input.requester;
+  const matched = requesterTrigger(request.input) !== null;
+  const owner = matched && requester?.is_owner === true && !requester.is_anonymous_admin && request.delivery !== "guest";
+  const admin = matched && requester?.is_admin === true;
+  return (audience?: string) => audience === undefined || (audience === "admin" && admin) || (audience === "owner" && owner);
+}
+export function visibleRelayTools(request: ExternalRelayRequest) {
+  const mayQuote = relayToolAudience(request);
+  return (request.input.tools ?? []).filter(tool => mayQuote(tool.audience));
+}
 export const RELAY_TOOLS_ON_DEMAND = "relay_tools_on_demand";
 export const RELAY_OWNER_TOOLS = "relay_owner_tools";
 /** I9 uses the offered audience; operation names and schemas stay service-owned. */
@@ -379,7 +432,7 @@ export const replyAnswerSchema = {
 } as const;
 /** Guest delivery can return to the hosted assistant even without a tool index. */
 export const offersHandoff = (request: ExternalRelayRequest) =>
-  request.delivery === "guest" || (request.input.tools?.length ?? 0) > 0;
+  request.delivery === "guest" || visibleRelayTools(request).length > 0;
 export type RelayMention = { author_key: string; offset: number; length: number };
 export type RelayUrlButton = { text: string; url: string };
 export type RelayAttachment = { attachment_id: string; kind: RelayMediaKind; caption?: string };

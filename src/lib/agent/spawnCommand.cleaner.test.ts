@@ -16,6 +16,9 @@ import { CodexAppServerHost, type CodexAppServerHostOptions } from "@/lib/runtim
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { defaultStartHost, structuredHostWorkingDirectory, materializeStructuredHostAccess, structuredHostAccessPolicy } from "@/lib/runtime/structuredSpawn";
 import { CLEANER_SANDBOX_READY } from "@/lib/runtime/cleanerSandboxProbe";
+import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
+import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
+import { claimCleanerRun, updateActiveCleanerRun } from "@/lib/cleaner/store";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cleaner-launch-"));
 const env = {
@@ -52,7 +55,27 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-async function launch(id: string, body: Record<string, unknown> = {}) {
+async function cleanerAttempt(episode: string) {
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, `state-${episode}`);
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const run = await claimCleanerRun({ project: "repo-test", cwd, now: Date.now,
+    evidence: { volumes: [], categories: [] }, allowed: () => true, episode });
+  if (typeof run === "string") throw new Error(`failed to seed Cleaner controller run: ${run}`);
+  await updateActiveCleanerRun(run.runId, () => true, current => ({ ...current, launchedAt: new Date().toISOString(), launchBody: {
+    role: "cleaner", roleParams: { mode: "disk" }, cwd, project: "repo-test", taskId: current.taskId,
+    clientAttemptId: current.runId, prompt: "Inspect temporary work.", mcpServers: ["viewer"], notifyLauncher: false,
+  } }));
+  return { runId: run.runId, taskId: run.taskId, project: run.project, cleanup() {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  } };
+}
+
+async function launch(id: string, body: Record<string, unknown> = {}, controls: {
+  defer?: (work: () => Promise<void>) => void;
+  held?: () => boolean;
+  spawn?: (input: Parameters<NonNullable<SpawnCommandDependencies["spawnStructuredConversation"]>>[0]) => Promise<never>;
+} = {}) {
   const account = { engine: "codex" as const, accountId: "fixture-codex", kind: "managed" as const,
     home: path.join(root, "codex"), transcriptRoot: path.join(root, "codex", "sessions"), env: { NODE_ENV: "test" as const } };
   const request = { headers: new Headers({ host: "127.0.0.1", ...internalServiceHeaders("orchestrator"),
@@ -66,13 +89,128 @@ async function launch(id: string, body: Record<string, unknown> = {}) {
     resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
     runtimeHostClient: () => ({} as RuntimeHostClient),
     // Admission persists the profile; no fixture starts a real host or a model.
-    defer: () => {}, storeImages: () => [],
-    spawnStructuredConversation: async () => { throw new Error("fixture must not dispatch a host"); },
+    defer: controls.defer ?? (() => {}), storeImages: () => [],
+    autonomousAdmissionHeld: controls.held,
+    authorizeAutonomousLaunch: () => { if (controls.held?.()) throw new Error("held during drain"); },
+    spawnStructuredConversation: controls.spawn ?? (async () => { throw new Error("fixture must not dispatch a host"); }),
   } as SpawnCommandDependencies);
   const payload = await response.json();
   if (response.status === 500) throw new Error(`fixture admission failed: ${JSON.stringify(payload)}`);
   return { status: response.status, body: payload, receipt: registry.spawnReceiptForClientAttempt(id) };
 }
+
+test("an accepted disk cleaner request stays replayable when a drain starts after 202", async () => {
+  let held = false;
+  let deferred: (() => Promise<void>) | undefined;
+  let actuations = 0;
+  const cleanerSeed = await cleanerAttempt("cleaner-drain-after-acceptance");
+  const id = cleanerSeed.runId;
+  const accepted = await launch(id, {}, {
+    held: () => held,
+    defer: work => { deferred = work; },
+    spawn: async input => {
+      actuations++;
+      expect(input.receipt.clientAttemptId).toBe(id);
+      expect(input.receipt.queuedPinnedSpawn?.prompt).toBeTruthy();
+      return { state: "running" } as never;
+    },
+  });
+  expect(accepted.status).toBe(202);
+  expect(accepted.receipt?.scheduledCleanerRunId).toBeUndefined();
+  expect(deferred).toBeDefined();
+  const payload = accepted.receipt!.queuedPinnedSpawn;
+  held = true;
+  writeDrain(drainFile(), { id: "cleaner-after-202", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 });
+  try {
+    await deferred!();
+    const deferredReceipt = registry.spawnReceipt(accepted.receipt!.launchId)!;
+    expect(deferredReceipt.state).toBe("starting");
+    expect(deferredReceipt.error).toBeNull();
+    expect(deferredReceipt.queuedPinnedSpawn).toEqual(payload);
+    expect(deferredReceipt.clientAttemptId).toBe(id);
+    expect(actuations).toBe(0);
+    held = false;
+    releaseDrain(drainFile(), "cleaner-after-202");
+    await terminalizeStaleStructuredSpawns(registry, { effectBatch: async () => [], operationStatus: async () => null,
+      snapshot: async () => ({ revision: 0, sessions: [] }) } as unknown as RuntimeHostClient, {
+      resolveSpawnAccount: () => ({ engine: "codex", accountId: "fixture-codex", kind: "managed", home: path.join(root, "codex"),
+        transcriptRoot: path.join(root, "codex", "sessions"), env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async input => {
+        actuations++;
+        expect(input.receipt.clientAttemptId).toBe(id);
+        expect(input.receipt.queuedPinnedSpawn?.prompt).toBeTruthy();
+        return { state: "running" } as never;
+      },
+    });
+    expect(actuations).toBe(1);
+    expect(registry.spawnReceiptForClientAttempt(id)?.clientAttemptId).toBe(id);
+  } finally { releaseDrain(drainFile(), "cleaner-after-202"); cleanerSeed.cleanup(); }
+});
+
+test("manual Cleaner launch cannot claim scheduled provenance by reusing the active run id", async () => {
+  const cleanerSeed = await cleanerAttempt("cleaner-provenance-shape-mismatch");
+  try {
+    const accepted = await launch(cleanerSeed.runId, {});
+    expect(accepted.status).toBe(202);
+    expect(accepted.receipt?.scheduledCleanerRunId).toBeUndefined();
+  } finally { cleanerSeed.cleanup(); }
+});
+
+test("a drain during runtime admission retries a refused lease release and replays the same launch", async () => {
+  let held = false, deferred: (() => Promise<void>) | undefined, refusals = 1;
+  let actuations = 0;
+  const cleanerSeed = await cleanerAttempt("cleaner-runtime-admission-drain-retry");
+  const id = cleanerSeed.runId;
+  const originalWrite = registry.deliveryWrite.bind(registry);
+  const releaseSpy = spyOn(registry, "deliveryWrite").mockImplementation(async (correlation, write, correlate) => {
+    if (correlation.label === "spawn.cleaner-drain-hold" && refusals-- > 0) return { acquired: false };
+    return originalWrite(correlation, write, correlate);
+  });
+  const accepted = await launch(id, {}, {
+    held: () => held,
+    defer: work => { deferred = work; },
+    spawn: async input => {
+      held = true;
+      writeDrain(drainFile(), { id: "cleaner-during-runtime-admission", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 });
+      await input.authorize?.();
+      actuations++;
+      return { state: "running" } as never;
+    },
+  });
+  try {
+    expect(accepted.status).toBe(202);
+    await deferred!();
+    expect(refusals).toBe(-1);
+    expect(releaseSpy).toHaveBeenCalledTimes(2);
+    expect(registry.spawnReceiptForClientAttempt(id)).toMatchObject({
+      state: "starting", clientAttemptId: id, queuedPinnedSpawn: accepted.receipt?.queuedPinnedSpawn,
+    });
+    expect(actuations).toBe(0);
+    held = false;
+    releaseDrain(drainFile(), "cleaner-during-runtime-admission");
+    const options = {
+      resolveSpawnAccount: () => ({ engine: "codex" as const, accountId: "fixture-codex", kind: "managed" as const,
+        home: path.join(root, "codex"), transcriptRoot: path.join(root, "codex", "sessions"), env: { NODE_ENV: "test" as const } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible" as const, basis: "current" as const, stale: false, retryAt: null }),
+      spawnStructuredConversation: async (input: Parameters<NonNullable<SpawnCommandDependencies["spawnStructuredConversation"]>>[0]) => {
+        actuations++;
+        expect(input.receipt.clientAttemptId).toBe(id);
+        return { state: "running" } as never;
+      },
+    };
+    await terminalizeStaleStructuredSpawns(registry, { effectBatch: async () => [], operationStatus: async () => null,
+      snapshot: async () => ({ revision: 0, sessions: [] }) } as unknown as RuntimeHostClient, options);
+    await terminalizeStaleStructuredSpawns(registry, { effectBatch: async () => [], operationStatus: async () => null,
+      snapshot: async () => ({ revision: 0, sessions: [] }) } as unknown as RuntimeHostClient, options);
+    expect(actuations).toBe(1);
+  } finally {
+    releaseSpy.mockRestore();
+    held = false;
+    releaseDrain(drainFile(), "cleaner-during-runtime-admission");
+    cleanerSeed.cleanup();
+  }
+});
 
 test("disk cleaner admission persists a read-only profile and the Viewer grant", async () => {
   const result = await launch("cleaner_disk_admission");

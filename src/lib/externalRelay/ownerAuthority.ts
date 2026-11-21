@@ -26,6 +26,15 @@ function liveOwnerRelayRun(conversationId: string): RunRecord | null {
     if (ledger.v !== 1 || store.v !== 1) return null;
     return ledger.runs.find(run => {
       if (!run.ownerTurn || run.ownerTurn.cancel || run.conversationId !== conversationId || !run.ownerIdentity || procBackend.processIdentity(run.ownerPid) !== run.ownerIdentity) return false;
+      // The preceding turn can still call MCP while the reply waits in the queue.
+      // Only delivery of this request grants its conversation the owner's tools.
+      const continuation = run.ownerTurn.continuation;
+      if (continuation) {
+        const snapshot = agentRegistry().deliverySnapshotForOperation(continuation.operationId);
+        const owner = snapshot.deliveryOperationOwners[continuation.operationId];
+        const delivery = owner && snapshot.heldDeliveries[owner.deliveryId];
+        if (delivery?.conversationId !== conversationId || delivery.state !== "delivered") return false;
+      }
       const relay = store.relays.find(r => r.id === run.relayId);
       const target = relay?.targets.find(t => t.id === run.targetId);
       return relay?.paused === false && target?.enabled === true && target.ownerTier === true;
@@ -129,6 +138,9 @@ export function ownerRelayOperationAuthorized(operationId: string, conversationI
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
     const run = ledger.runs.find(row => row.ownerTurn?.continuation?.operationId === operationId
       && row.conversationId === conversationId);
+    const continuation = run?.ownerTurn?.continuation;
+    if (continuation?.retryOfOperationId && (!Number.isFinite(Date.parse(continuation.deadlineAt ?? ""))
+      || Date.now() >= Date.parse(continuation.deadlineAt!))) return false;
     return !!run?.ownerTurn && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
       && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId);
   } catch { return false; }

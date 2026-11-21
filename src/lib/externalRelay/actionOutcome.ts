@@ -49,6 +49,7 @@ export async function establishActionOutcome(tool: string, read: (signal: AbortS
   };
   let reason = "no settled outcome";
   let delay = 1000;
+  let unresolved: ToolCallResult | undefined;
   try {
     for (let attempt = runtime.initial ? -1 : 0; attempt < ACTION_VERIFICATION_READS; attempt++) {
       signal.throwIfAborted();
@@ -64,9 +65,11 @@ export async function establishActionOutcome(tool: string, read: (signal: AbortS
         if (runtime.now() >= deadline || bounded.aborted) { reason = "verification deadline expired"; break; }
         const outcome = definiteActionOutcome(result);
         if (outcome) return { result, outcome };
-        if (result.status === "denied" || result.status === "confirmation_pending") {
+        if (result.status === "confirmation_pending") return { result };
+        if (result.status === "denied") {
           reason = result.code ?? result.status; break;
         }
+        if (result.status === "outcome_unknown") unresolved = result;
         reason = result.status;
         delay = (result.retry_after_s ?? 1) * 1000;
       } catch (error) {
@@ -80,7 +83,7 @@ export async function establishActionOutcome(tool: string, read: (signal: AbortS
         if (bounded.aborted) break;
       }
     }
-    return verificationFailed(tool, reason);
+    return { ...verificationFailed(tool, reason), result: unresolved ?? null };
   } finally { clearTimeout(timer); }
 }
 
@@ -92,17 +95,22 @@ export function verificationFailed(tool: string, reason: string): ActionResoluti
 /** A group receives the established outcome even if the agent ignores its
  * result or fails to produce a final answer. Service output stays audience-bound. */
 export function actionOutcomeAnswer(request: ExternalRelayRequest,
-  results: readonly { tool: string; outcome?: ActionOutcome }[]): ExternalRelayAnswer | null {
-  const outcomes = results.filter(result => result.outcome);
+  results: readonly { tool: string; outcome?: ActionOutcome; status?: string; effect?: "action"; execution_unknown?: true }[]): ExternalRelayAnswer | null {
+  const outcomes = results.filter(result => result.outcome || result.effect === "action" && (result.status === "confirmation_pending" || result.status === "outcome_unknown" && result.execution_unknown));
   if (!outcomes.length) return null;
   const source = request.input.request_text ?? request.input.conversation.find(message => message.id === request.input.respond_to)?.text ?? "";
   const ukrainian = /[а-яіїєґ]/iu.test(source);
-  const text = outcomes.map(({ tool, outcome }) => {
+  const text = outcomes.map(({ tool, outcome, status }) => {
     const label = Object.hasOwn(actionOutcomeReads, tool) ? actionOutcomeReads[tool]!.label[ukrainian ? "uk" : "en"] : tool;
+    if (status === "confirmation_pending") return ukrainian
+      ? `Підтвердження для дії «${label}» опубліковано в чаті. Його подальший результат мені недоступний.`
+      : `A confirmation for ${label} was posted in the chat. Its eventual outcome is not visible to me.`;
+    if (status === "outcome_unknown" && !outcome) return ukrainian
+      ? `Результат дії «${label}» залишається невідомим.` : `The outcome of ${label} remains unknown.`;
     return outcome === "done" ? ukrainian ? `Виконано: ${label}.` : `Done: ${label}.`
       : outcome === "not_done" ? ukrainian ? `Не виконано: ${label}.` : `Not done: ${label}.`
-        : ukrainian ? `Не вдалося перевірити результат дії «${label}»: збережений результат недоступний.`
-          : `Verification failed for ${label}: the saved action outcome could not be read.`;
+        : ukrainian ? `Не вдалося перевірити результат дії «${label}»: збережений результат недоступний.${status === "outcome_unknown" ? " Результат залишається невідомим." : ""}`
+          : `Verification failed for ${label}: the saved action outcome could not be read.${status === "outcome_unknown" ? " The outcome remains unknown." : ""}`;
   }).join("\n");
   return { action: "reply", text: text.slice(0, request.answer.max_chars), reply_to: request.input.respond_to };
 }

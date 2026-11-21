@@ -45,8 +45,8 @@ import {
  * one set back before every step it is run with no sweep started at its stop,
  * in every order of resuming, reopened between every two steps.
  *
- * This module is the table and its runner. Two test files run it, one per
- * kind of clock, so that neither is long. Every registry is a private
+ * This module is the table and its runner. The forward clock rows are split
+ * between two files; another file covers the other clocks. Every registry is a private
  * temporary file.
  */
 
@@ -423,8 +423,9 @@ export function declareSweepStateTest(): void {
 const ORDERING_ROW_TIMEOUT_MS = 240_000;
 
 /** One test per row and clock: every plan of the row against its run with every sweep finished. */
-export function declareOrderingTests(clocks: readonly OrderingClock[]): void {
-  for (const row of orderingRows) {
+export function declareOrderingTests(clocks: readonly OrderingClock[], partition?: "even" | "odd"): void {
+  for (const [index, row] of orderingRows.entries()) {
+    if (partition && index % 2 !== (partition === "even" ? 0 : 1)) continue;
     const every = sweepPlans(row.steps.filter(decision => "stop" in decision).length);
     for (const clockName of clocks) {
       const plans = clockName === "running forward" ? every.slice(1) : every.filter(unstartedReopened);

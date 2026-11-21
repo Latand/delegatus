@@ -293,6 +293,8 @@ export type PipelineGraphEdit = {
   /** The first attempt of `stageId` that runs under this edit; null for an
       edge or an order change, which apply at the next routing decision. */
   appliesFromAttempt: number | null;
+  /** An account value explicitly set or cleared by this override. */
+  accountOverride?: string | null;
   summary: string;
   runtimeSwitch?: { attempt: number; id: string };
 };
@@ -539,6 +541,8 @@ export type PipelineStageAttempt = {
       Each failed operation is counted once; `exhausted` waits for an explicit
       push, while publicationRecovery keeps the per-head automatic bound. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
+  /** Advisory script hints survive settlement and reach the seat lifecycle journal. */
+  publicationLanguageHints?: { at: string; hints: import("@/lib/forge/publicationLanguage").PublicationLanguageHint[] };
   /** Gate infrastructure retries are independent of producer summary repairs.
       The accepted head and due time survive controller restarts. */
   pullRequestInspection?: { sha: string; failures: number; retryAt: string; detail: string; exhausted?: boolean };
@@ -732,7 +736,10 @@ export type PipelineStageAttempt = {
     /** Keyed delivery evidence; safeToReplace requires affirmative no-dispatch evidence. */
     delivery?: PipelineRepairDelivery;
     /** Missing on older settled repairs, which already permitted a commit. */
-    outcome?: { status: "accepted" } | { status: "rejected"; reason: string };
+    outcome?: { status: "accepted" } | { status: "rejected"; reason: string;
+      /** Only a lost publication repair delivery permits dead-producer adoption.
+          Missing on legacy refusals, which must restore before any recommit. */
+      source?: "abandonment" };
     settledAt?: string;
     /** Consumes the one recommit before Git runs. Recovery must advance from
         this head; a refused recommit checkpoints a rejected outcome. */
@@ -748,6 +755,15 @@ export type PipelineStageAttempt = {
     operationId: string;
     stageId: string;
     attempt: number;
+    /** Clean checkpoint proved before the repair continuation was delivered. */
+    cleanHead?: { sha: string; branch: string;
+      /** Existing ignored files or collapsed directories, captured before delivery. */
+      ignoredPaths?: string[] };
+    /** Original trees retain refused output; phase makes cleanup replayable. */
+    rollback?: { index: string; tree: string; afterTree: string; tracked: string[]; untracked: string[];
+      /** Producer-created head proved before restoring the pre-repair ref. */
+      head?: string;
+      phase: "restore" | "clean" | "done" };
     commitStartedHead?: string;
     /** Dead-producer custody pins the branch and staged tree before committing.
         An unchanged intent can retry; a moved head needs the controller receipt. */
@@ -1047,12 +1063,14 @@ export type PipelinePublicationRecovery = {
   sha: string;
   /** Recoverable failures across attempts, manual retries and ownership epochs. */
   failures: number;
+  /** Failed publication attempts; superseded admissions are excluded. */
   totalAttempts: number;
   /** First verified App git 403 for this accepted head, retained on takeover. */
   app403Since?: string;
-  /** Newest 64 failed operations; totalAttempts includes omitted older records. */
+  /** Newest 64 refusal and supersession records. totalAttempts also counts
+      failed attempts omitted from this bounded history. */
   history: Array<{ operationId: string; epoch: number; at: string;
-    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403" | "environment" | "remote-refusal";
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure" | "app-git-403" | "environment" | "remote-refusal" | "superseded";
     detail: string; retryAt: string | null }>;
 };
 
@@ -1089,7 +1107,7 @@ export type PipelinePublicationResult = (
   | { ok: true; sha: string; remote: "published" | "unavailable"; detail?: string; uncertain?: boolean }
   | { ok: true; sha: string; remote: "unreachable"; detail: string; uncertain?: boolean }
   | { ok: false; error: string }
-) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" };
+) & { failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded" };
 
 export type PipelineDelivery = {
   target: PipelineDeliveryTarget;
@@ -1257,6 +1275,8 @@ export type Pipeline = {
   creationRequest?: { key: string; digest: string };
   id: string;
   task: string;
+  /** Public PR title, independent of the board title. Defaults to derived English prose. */
+  prTitle?: string;
   /** Durable board-task membership. The legacy `task` field remains the title. */
   taskIds: string[];
   /** Launch-correlated creation evidence reserved before task-spawn actuation. */
@@ -1467,6 +1487,8 @@ export type PipelineMerge = {
   updates: Array<{ requestedAt: string; head: string | null; commit?: string; base?: string }>;
   /** Every check name seen on any head of this PR, a union. */
   seenChecks: string[];
+  /** Optional red checks on the last observed open head; retained after landing. */
+  optionalFailedChecks?: string[];
   /** The head the check clock runs for, when it was first seen, and the check
       names of the previous read of that head. */
   head: string | null;
@@ -1496,6 +1518,8 @@ export type CreatePipelineRequest = {
   /** `prRepository`: see {@link PipelineDeliveryTarget}; it must be the checkout's origin. */
   delivery?: { branch: string; remote?: string; pr?: number; prRepository?: string; rejectedHead?: string; comparison?: boolean };
   task: string;
+  /** Public PR title, independent of the board title. Defaults to derived English prose. */
+  prTitle?: string;
   taskIds?: string[];
   /** #2187 §5.1: `true` marks every linked task as one this pipeline
       finishes, a list marks those ids; an id outside `taskIds` is dropped

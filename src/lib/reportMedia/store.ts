@@ -281,7 +281,7 @@ export async function keepWrittenPictures(written: readonly string[], options: K
     await admitted.handle.close().catch(() => {});
     candidates.push(named);
     const row = before.get(named);
-    pending ||= !row || row.hiddenPathPolicy !== 1 || row.bytes !== admitted.bytes || row.mtimeMs !== admitted.mtimeMs || now - row.at > FRESH_MENTION_MS
+    pending ||= !row || row.hiddenPathPolicy !== 2 || row.bytes !== admitted.bytes || row.mtimeMs !== admitted.mtimeMs || now - row.at > FRESH_MENTION_MS
       || (options.lane !== undefined && row.lane !== options.lane) || row.goneAt !== undefined;
   }
   if (candidates.length === 0) return [];
@@ -303,7 +303,7 @@ export async function keepWrittenPictures(written: readonly string[], options: K
       try {
         const held = rows.get(named);
         const lane = options.lane ?? held?.lane;
-        let file: string | null = held?.hiddenPathPolicy === 1 && held.bytes === admitted.bytes && held.mtimeMs === admitted.mtimeMs
+        let file: string | null = held?.hiddenPathPolicy === 2 && held.bytes === admitted.bytes && held.mtimeMs === admitted.mtimeMs
           && await present(path.join(reportMediaRoot(), held.file)) ? held.file : null;
         if (file === null) {
           if (admitted.bytes > budget) continue;
@@ -312,7 +312,7 @@ export async function keepWrittenPictures(written: readonly string[], options: K
           if (file === null) continue;
         }
         rows.set(named, { path: named, file, bytes: admitted.bytes, mtimeMs: admitted.mtimeMs, at: now,
-          ...(lane ? { lane } : {}), project: projectOf(path.dirname(admitted.resolved)) ?? null, hiddenPathPolicy: 1 });
+          ...(lane ? { lane } : {}), project: projectOf(path.dirname(admitted.resolved)) ?? null, hiddenPathPolicy: 2 });
       } finally {
         await admitted.handle.close().catch(() => {});
       }

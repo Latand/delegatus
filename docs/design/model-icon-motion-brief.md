@@ -115,7 +115,7 @@ lane's attempts (`agentPath` or `conversationId`) to that set, and
 ### The applied tier
 
 - `FileEntry.serviceTier` (`src/lib/types.ts:261`) is set by the scanner
-  (`src/lib/scanner/observe.ts:99-103`, `effort.ts:115-142`) from the
+  (`src/lib/scanner/index.ts`, `src/lib/scanner/effort.ts`) from the
   process argv `service_tier`, else from the newest `thread_settings_applied`
   event in the transcript tail (the applied value, see
   `docs/design/codex-service-tier.md`), else from the registry launch profile.

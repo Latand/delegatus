@@ -904,3 +904,5 @@ body {
    chip and the own-message navigator. Both are drawn into it from elsewhere
    (the receipts, the feed), so the row takes no room while it holds neither. */
 [data-composer-status-line]:not(:has([data-receipts-chip], [data-own-steps])) { display: none; }
+
+textarea[data-composer-field] { field-sizing: content; }

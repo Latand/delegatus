@@ -231,7 +231,7 @@ export type CloneCreateState = ReturnType<typeof useCloneCreate>;
 /** One automatic retry after a failed setup step, then the card says so and offers «Повторити». */
 const SETUP_TRIES = 2;
 const SETUP_RETRY_MS = 3_000;
-type SetupTarget = { id: string; engine: string | null; answered_by: "install" | "service" };
+type SetupTarget = { id: string; engine: string | null; answered_by: "install" | "service"; answered_elsewhere?: boolean };
 
 /**
  * Sets a created clone up to be answered here: the default engine with its
@@ -269,7 +269,7 @@ export function useCloneSetup({ relayId, phase, recorded, target, engine, onChan
         const set = await call(base, "PATCH", { target: { id: current.id, engine: chosen, model: chosen === "codex-cloud" ? "gpt-6.1-sol" : defaultModelFor(chosen) } });
         if (!set.ok) error = set.error;
       }
-      if (!error && current && current.answered_by !== "install") {
+      if (!error && current && !current.answered_elsewhere && current.answered_by !== "install") {
         const routed = await call(`${base}/targets/${encodeURIComponent(current.id)}`, "PATCH", { answered_by: "install" });
         if (!routed.ok) error = routed.error;
       }

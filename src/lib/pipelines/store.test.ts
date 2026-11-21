@@ -1,16 +1,26 @@
 import { Database } from "bun:sqlite";
 import { stateLockProcessKind } from "@/lib/state/lockWait";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission, pipelineTaskBindingSource } from "./store";
-import type { Pipeline, PipelineStage } from "./types";
+import type { Pipeline, PipelineStage, PipelineStageAttempt } from "./types";
 import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
 
 const ARCHIVE_CHILD = path.join(import.meta.dir, "archive.sqliteChild.ts");
+
+test("publication title survives the production store while the board title stays local", () => isolatedDelivery(() => {
+  const p = buildPipeline({ id: "publication-title", task: "Виправити публікацію", prTitle: "Fix publication text",
+    project: "viewer", repoDir: "/repo", stages: [], srcPath: null, srcConversationId: null,
+    now: "2026-11-16T00:00:00.000Z", state: "draft" });
+  savePipelines([p]);
+  expect(loadPipelines()[0]!.prTitle).toBe("Fix publication text");
+  expect(loadPipelinesForStartup()[0]!.task).toBe("Виправити публікацію");
+}));
 
 test("conversation source survives storage, independent reads and archival without becoming creator lineage", async () => isolatedDelivery(async () => {
   const source = { conversationId: "conversation_source", branch: "fix/source", head: "a".repeat(40), capturedAt: "2026-10-01T00:00:00.000Z" };
@@ -90,6 +100,18 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
   }
 }
 
+async function readStoreChild(child: Bun.ReadableSubprocess) {
+  const reads = [child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()] as const;
+  try {
+    const [exit, stdout, stderr] = await Promise.all(reads);
+    return { exit, stdout, stderr };
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await Promise.allSettled(reads);
+    throw error;
+  }
+}
+
 test.each([false, true])("a closed stageless draft round-trips and archives (pinned base: %s)", async (pinned) => isolatedDelivery(async () => {
   const pipeline = buildPipeline({ id: "empty-closed", task: "Discard empty draft", project: "fixture", repoDir: "/repo",
     stages: [], srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft" });
@@ -149,8 +171,9 @@ test("promoted Viewer loads historical severity-only verdicts before hot-state a
   const child = Bun.spawn([process.execPath, "-e", script], {
     env: { ...process.env, LLV_STATE_DIR: root, LLV_STATE_OWNER: "viewer" }, stdout: "pipe", stderr: "pipe",
   });
-  const stderr = await new Response(child.stderr).text();
-  expect({ exit: await child.exited, stderr }).toEqual({ exit: 0, stderr: "" });
+  const { exit, stdout, stderr } = await readStoreChild(child);
+  assertStateChildSuccess(exit, stderr);
+  expect(stdout).toBe("");
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.findings).toEqual(["P1", "P2"]);
 }));
 
@@ -160,51 +183,69 @@ test.each([
 ])("$name", async ({ contendedRelease }) => isolatedDelivery(async (root) => {
   savePipelines([]);
   const modulePath = path.join(import.meta.dir, "store.ts");
+  const operationId = "pipeline-store-delivery";
   const script = `import { createPipelineWithDelivery } from ${JSON.stringify(modulePath)};
-    import { injectStateWriteFaultForTests } from ${JSON.stringify(path.join(import.meta.dir, "../state/sqliteStateStore.ts"))};
+    import { withWaitCorrelation } from ${JSON.stringify(path.join(import.meta.dir, "../blockingWaits.ts"))};
+    import { injectStateWriteFaultForTests, stateLeaseHoldsInFlight } from ${JSON.stringify(path.join(import.meta.dir, "../state/sqliteStateStore.ts"))};
     if (process.env.CONTENDED_RELEASE === "1") injectStateWriteFaultForTests({
       site: "release", collection: "pipelines", times: 1,
       error: Object.assign(new Error("database is locked"), { name: "SQLiteError", code: "SQLITE_BUSY" }),
     });
     const pipeline = JSON.parse(process.env.DELIVERY_FIXTURE);
-    console.log(JSON.stringify(await createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET))));`;
-  const run = (record: Pipeline, contend = false) => Bun.spawn([process.execPath, "-e", script], {
+    console.log(JSON.stringify(await withWaitCorrelation({ operationId: ${JSON.stringify(operationId)} }, () =>
+      createPipelineWithDelivery(pipeline, JSON.parse(process.env.DELIVERY_TARGET)))));
+    if (process.env.CONTENDED_RELEASE === "1") {
+      const deadline = Date.now() + 10000;
+      while (stateLeaseHoldsInFlight().some(hold => hold.collection === "pipelines")) {
+        if (Date.now() >= deadline) throw new Error("pipeline lease cleanup did not settle");
+        await Bun.sleep(5);
+      }
+    }`;
+  const run = async (record: Pipeline, contend = false) => readStoreChild(Bun.spawn([process.execPath, "-e", script], {
     env: { ...process.env, LLV_STATE_DIR: root, CONTENDED_RELEASE: contend ? "1" : "0",
       DELIVERY_FIXTURE: JSON.stringify(record), DELIVERY_TARGET: JSON.stringify(deliveryTarget) },
     stdout: "pipe", stderr: "pipe",
-  });
+  }));
   // A committed write can defer lease cleanup when a competing process holds
-  // SQLite's writer lock. Only that exact diagnostic is allowed; the exit,
-  // durable ownership and restart replay still have to prove success.
-  const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked\n";
-  const admissionWarning = "[state lease] abandoned pipelines: StateLockDeferredError: state admission is busy at state.lease.release\n";
-  const collect = async (child: ReturnType<typeof run>) => {
-    const [output, errors, exit] = await Promise.all([
-      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
-    ]);
-    expect(exit).toBe(0);
-    const waits = errors.split("\n").filter(line => line.startsWith("[blocking-wait] "));
-    for (const line of waits) expect(JSON.parse(line.slice("[blocking-wait] ".length)).site).toBe("state-write-lock");
-    const warnings = errors.split("\n").filter(line => line && !line.startsWith("[blocking-wait] ")).join("\n");
-    expect(["", releaseWarning.trim(), admissionWarning.trim()]).toContain(warnings);
-    return { record: JSON.parse(output) as Pipeline, errors: warnings };
+  // SQLite's writer lock. Keep those exact lease lines separate from the
+  // shared state timing diagnostics, and retain the cleanup proof.
+  const releaseWarning = "[state lease] abandoned pipelines: SQLiteError: database is locked";
+  const admissionWarning = "[state lease] abandoned pipelines: StateLockDeferredError: state admission is busy at state.lease.release";
+  const clearedLease = /^\[state lease\] cleared abandoned pipelines after \d+ ms$/;
+  // Bun prints the lease-hold timing object as a multiline console warning.
+  const leaseHold = /^\[state lease-hold\] \{\r?\n  collection: "pipelines",\r?\n  operation: "pipelines\.mutation",\r?\n  heldMs: [1-9]\d{3,},\r?\n(?:  inFlight: true,\r?\n)?\}(?:\r?\n|$)/gm;
+  const parseResult = ({ exit, stdout, stderr }: Awaited<ReturnType<typeof run>>) => {
+    const leaseWarnings: string[] = [];
+    const diagnostics = stderr.replace(leaseHold, "").split(/(?<=\n)/).filter(line => {
+      const warning = line.replace(/\r?\n$/, "");
+      if (warning !== releaseWarning && warning !== admissionWarning && !clearedLease.test(warning)) return true;
+      leaseWarnings.push(warning);
+      return false;
+    }).join("");
+    assertStateChildSuccess(exit, diagnostics, { correlatedOperationId: operationId });
+    return { record: JSON.parse(stdout) as Pipeline, leaseWarnings };
   };
-  const children = [run(deliveryFixture("owner-a"), contendedRelease), run(deliveryFixture("owner-b"))];
-  const completed = await Promise.all(children.map(collect));
-  if (contendedRelease) expect([releaseWarning.trim(), admissionWarning.trim()]).toContain(completed[0]!.errors);
+  // Join both contenders before parsing either result or removing the fixture state.
+  const children = await Promise.allSettled([run(deliveryFixture("owner-a"), contendedRelease), run(deliveryFixture("owner-b"))]);
+  const completed = children.map(result => {
+    if (result.status === "rejected") throw result.reason;
+    return parseResult(result.value);
+  });
+  if (contendedRelease) expect(completed[0]!.leaseWarnings.some(line => clearedLease.test(line))).toBe(true);
   const results = completed.map(({ record }) => record);
   const owner = results.find((record) => record.delivery?.active)!;
   const comparison = results.find((record) => record.delivery?.disposition === "comparison")!;
   expect(results.filter((record) => record.delivery?.active)).toHaveLength(1);
   expect(comparison).toMatchObject({ publication: "internal", delivery: { publish: "disabled", ownerId: owner.id, epoch: 1 } });
-  const replay = run(deliveryFixture(owner.id));
-  expect((await collect(replay)).record).toEqual(owner);
+  const replay = parseResult(await run(deliveryFixture(owner.id)));
+  expect(replay.record).toEqual(owner);
   expect(loadPipelines().sort((a, b) => a.id.localeCompare(b.id))).toEqual(results.sort((a, b) => a.id.localeCompare(b.id)));
   const database = new Database(path.join(root, "state.sqlite"));
   try {
     const duplicate = { ...owner, id: "uncoordinated-owner", creationRequest: { key: "independent-request", digest: "different" } };
-    expect(() => database.query("INSERT INTO state_rows SELECT collection, ?, ?, row_order, row_revision, controller_active FROM state_rows WHERE collection='pipelines' AND row_key=?")
-      .run(duplicate.id, JSON.stringify(duplicate), owner.id)).toThrow();
+    expect(() => database.query(`INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+      SELECT collection, ?, ?, row_order, row_revision, controller_active FROM state_rows WHERE collection='pipelines' AND row_key=?`)
+      .run(duplicate.id, JSON.stringify(duplicate), owner.id)).toThrow(/UNIQUE constraint failed: index 'pipeline_delivery_owner'/);
   } finally { database.close(); }
 }));
 
@@ -1404,4 +1445,36 @@ test("a failed archive page retains its source rows and the next sweep completes
   expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(17);
   expect(loadPipelines()).toEqual([]);
   expect(new Set(loadArchivedPipelines().map(row => row.id)).size).toBe(33);
+}));
+
+
+test("repair rollback heads validate and survive independent store reads", async () => isolatedDelivery(async () => {
+  const { pipelineCorpus } = await import("./fixtures/corpus");
+  const { isStoredPipeline } = await import("./store");
+  const lane = pipelineCorpus(2, 1)[1]!;
+  const accepted = "a".repeat(40), head = "b".repeat(40);
+  const repair: NonNullable<PipelineStageAttempt["publicationRepair"]> = {
+    sha: accepted, baseSha: accepted, operationId: "refused-operation", stageId: "build", attempt: 1,
+    refusedAt: "2026-10-11T04:02:00.000Z", messageTs: 0, detail: "hook refused", paths: [],
+    cleanHead: { sha: accepted, branch: lane.branch, ignoredPaths: ["local-context.txt", "cache/"] },
+    rollback: { index: head, tree: head, afterTree: accepted, tracked: ["file.txt"], untracked: [], head, phase: "restore" },
+  };
+  lane.runs[0]!.attempts[0]!.publicationRepair = repair;
+  expect(isStoredPipeline(lane)).toBe(true);
+  savePipelines([lane]);
+  expect(loadPipelinesForStartup()[0]!.runs[0]!.attempts[0]!.publicationRepair).toEqual(repair);
+  for (const invalid of [null, "HEAD", "", "../branch", "c".repeat(39)]) {
+    const malformed = structuredClone(lane);
+    Object.assign(malformed.runs[0]!.attempts[0]!.publicationRepair!.rollback!, { head: invalid });
+    expect(isStoredPipeline(malformed)).toBe(false);
+  }
+  for (const invalid of [null, "cache/", ["../context"], ["/context"], [""], ["bad\0path"], [1]]) {
+    const malformed = structuredClone(lane);
+    Object.assign(malformed.runs[0]!.attempts[0]!.publicationRepair!.cleanHead!, { ignoredPaths: invalid });
+    expect(isStoredPipeline(malformed)).toBe(false);
+  }
+  const legacy = structuredClone(lane);
+  delete legacy.runs[0]!.attempts[0]!.publicationRepair!.cleanHead!.ignoredPaths;
+  delete legacy.runs[0]!.attempts[0]!.publicationRepair!.rollback!.head;
+  expect(isStoredPipeline(legacy)).toBe(true);
 }));

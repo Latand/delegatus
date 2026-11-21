@@ -1004,7 +1004,7 @@ test.each([[12, 1], [21, 2]])("%s due failures yield to a healthy follower with 
   }
 });
 
-test("a stopped merge is stored, raises lane-merge with its two answers, and retry-merge requeues it; a merge is journaled", async () => {
+test.each(["conflict", "legacy optional failure"])("a stopped %s is stored and retry-merge requeues and merges it", async mode => {
   resetAutoMergeForTests();
   savePipelines([completedLane("pipe-merge")]);
   let clock = T0;
@@ -1023,13 +1023,14 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
         return JSON.stringify({
           state: merged ? "MERGED" : "OPEN", isDraft: false, headRefOid: HEAD, baseRefName: "main",
           mergeable: mergeState === "DIRTY" ? "CONFLICTING" : "MERGEABLE", mergeStateStatus: merged ? "UNKNOWN" : mergeState,
-          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: iso(T0) }],
+          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: iso(T0) },
+            ...(mode === "legacy optional failure" ? [{ __typename: "CheckRun", name: "optional-audit", status: "COMPLETED", conclusion: "FAILURE" }] : [])],
           mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? iso(clock) : null,
         });
       }
       if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
       if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[]";
-      if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
+      if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return JSON.stringify(["ci"]);
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { mergeState = "MERGED"; return ""; }
       throw new Error(`unexpected gh ${args.join(" ")}`);
@@ -1039,8 +1040,15 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
   ports.write = (args) => ports.run(args);
 
   await sweepAutoMerge(ports);
+  const reason = mode === "legacy optional failure" ? 'check "optional-audit" failed' : MERGE_REASONS.conflict;
+  if (mode === "legacy optional failure") {
+    // Replay a record written by the earlier runner, through the real reader.
+    const lanes = loadPipelines();
+    lanes.find(lane => lane.id === "pipe-merge")!.merge!.reason = reason;
+    savePipelines(lanes);
+  }
   const blocked = loadPipelines().find((pipeline) => pipeline.id === "pipe-merge")!;
-  expect(blocked.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.conflict, repository: REPO, prNumber: 7, chain: [HEAD] });
+  expect(blocked.merge).toMatchObject({ state: "blocked", reason, repository: REPO, prNumber: 7, chain: [HEAD] });
 
   const need = laneNeed(blocked);
   expect(need?.cleared).toBeNull();
@@ -1070,6 +1078,7 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
   expect(merged.merge).toMatchObject({ state: "merged", by: "auto-merge", mergedHead: HEAD, mergeCommit: "f".repeat(40), method: "squash" });
   expect(calls.filter((args) => args[1] === "merge")).toEqual([["pr", "merge", "7", "--repo", REPO, "--squash", "--match-head-commit", HEAD]]);
 
+  if (mode === "legacy optional failure") expect(merged.merge?.optionalFailedChecks).toEqual(["optional-audit"]);
   refreshLifecycleJournal({ pipelines: [merged] }, { force: true });
   const events = queryLifecycleEvents({ pipelineId: "pipe-merge", limit: 50 }).events;
   expect(events.filter((event) => event.type === "pipeline_merged").map((event) => event.summary)).toEqual([`pull request #7 merged by Delegatus, head ${HEAD} — ship the merge runner`]);

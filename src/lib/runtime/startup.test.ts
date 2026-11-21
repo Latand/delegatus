@@ -8,11 +8,12 @@ import { spawn } from "node:child_process";
 import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { Database } from "bun:sqlite";
 import { readHostExit, recordHostStop } from "./hostExit";
-import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, setSystemTime, spyOn, test } from "bun:test";
 
 // Durable startup fixtures yield between phases. Supervise their whole pass
 // without leaving a five-second caller running into the next test's controller.
 setDefaultTimeout(60_000);
+afterEach(() => setSystemTime());
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
@@ -44,6 +45,7 @@ import {
   releaseStructuredDeliveryHost,
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
+import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { createFakeDeliveryLedger, FakeEngineHost } from "./fixtures/fakeEngineHost";
 import {
   adoptClaudeRegistryHosts,
@@ -797,7 +799,12 @@ test("startup socket recovery retains a partially adopted host and drains its he
   );
   const ledger = createFakeDeliveryLedger();
   const listeners = new Set<() => void>();
-  const host = Object.assign(new FakeEngineHost(ledger), {
+  const processIdentity = captureProcessIdentity(process.pid);
+  const host = Object.assign(new FakeEngineHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: "fake:partial-adoption", pid: processIdentity.pid,
+    processStartIdentity: processIdentity.startIdentity, eventCursor: 0, protocolVersion: "fixture",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  }), {
     onStateChange: () => {
       const listener = () => {};
       listeners.add(listener);
@@ -807,6 +814,7 @@ test("startup socket recovery retains a partially adopted host and drains its he
   const scheduled: Array<() => void> = [];
   let adoptedProcesses = 0;
   let effectCalls = 0;
+  let socketFailures = 0;
   const startupClient = {
     ...client,
     producerCursor: async (producerKind: string, eventKeyPrefix: string) =>
@@ -814,6 +822,7 @@ test("startup socket recovery retains a partially adopted host and drains its he
     effectBatch: async (kinds?: readonly string[], afterEventSeq?: number) => {
       effectCalls += 1;
       if (effectCalls === 2) {
+        socketFailures += 1;
         throw new RuntimeHostUnavailableError("runtime socket failed after host adoption");
       }
       return journal.effectBatch(100, kinds, afterEventSeq);
@@ -825,7 +834,6 @@ test("startup socket recovery retains a partially adopted host and drains its he
     adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => {
       const entry = received.snapshot().entries[`codex:${sessionId}`];
       if (!entry || !shouldAdopt(entry) || adoptedProcesses > 0) return [];
-      const processIdentity = { pid: process.pid, startIdentity: "partial-adoption-process" };
       const claimed = received.claimStructuredHost(key, processIdentity, { allowUnhosted: true });
       if (!claimed?.structuredHost || !claimed.claimOwner) throw new Error("partial adoption claim was unavailable");
       const persisted = received.setStructuredHostClaimed(key, {
@@ -841,6 +849,8 @@ test("startup socket recovery retains a partially adopted host and drains its he
   };
 
   let now = Date.now();
+  const previousQueueNow = STRUCTURED_DELIVERY_TIMING.now;
+  STRUCTURED_DELIVERY_TIMING.now = () => now;
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   try {
     await runStructuredHostStartup(
@@ -856,8 +866,14 @@ test("startup socket recovery retains a partially adopted host and drains its he
     );
 
     expect(adoptedProcesses).toBe(1);
-    expect(scheduled).toHaveLength(1);
-    scheduled.shift()!();
+    expect(socketFailures).toBe(1);
+    expect(scheduled).toEqual([]);
+    expect(didStructuredHostStartupFail()).toBe(false);
+    expect(ledger.writes).toEqual([]);
+    // The queue owns the socket retry; elapse its one-second listing backoff.
+    now += 1000;
+    await kickStructuredDeliveryQueue();
+    expect(effectCalls).toBeGreaterThan(2);
     await waitFor(() => !didStructuredHostStartupFail());
     expect(hasStructuredDeliveryHost(key)).toBe(true);
 
@@ -880,6 +896,7 @@ test("startup socket recovery retains a partially adopted host and drains its he
       deliver: async () => { throw new Error("delivered hold must not drain twice"); },
     }, registry);
 
+    await waitFor(() => ledger.writes.length === 1);
     expect(structuredStartupHosts()).toMatchObject([{ key, host }]);
     expect(ledger.writes).toEqual([expect.objectContaining({
       id: operationId,
@@ -892,13 +909,14 @@ test("startup socket recovery retains a partially adopted host and drains its he
     expect(registry.snapshot().entries[`codex:${sessionId}`]).toMatchObject({
       claimOwner: expect.any(String),
       structuredHost: {
-        process: { pid: process.pid, startIdentity: "partial-adoption-process" },
+        process: processIdentity,
         writerClaimEpoch: expect.any(Number),
       },
     });
   } finally {
-    clock.mockRestore();
     await bindStructuredDeliveryQueue([], { registry, client: null });
+    clock.mockRestore();
+    STRUCTURED_DELIVERY_TIMING.now = previousQueueNow;
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -2311,7 +2329,7 @@ test("startup defers hosts belonging to a preserved future pipeline and still ad
   }
 });
 
-test("SQLite startup releases a completed stage host claim with pending delivery after its recorded process dies", async () => {
+test("SQLite startup releases a dead completed-stage claim and drains pending work through one replacement", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-dead-stage-owner-"));
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
     sqliteMode: "sqlite",
@@ -2337,21 +2355,84 @@ test("SQLite startup releases a completed stage host claim with pending delivery
       process: { pid: 2_000_000_000, startIdentity: "dead-stage-host" },
     },
     claimEpoch: stored.claimEpoch,
-    claimOwner: `structured-host:${JSON.stringify({ pid: process.pid, startIdentity: null })}`,
+    claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_001, startIdentity: "dead-stage-viewer" })}`,
     pendingAction: stored.pendingAction,
   });
   const delivery = registry.holdDelivery(conversation.id, "deliver after dead stage recovery", "dead-stage-pending");
 
-  expect(await startupAdoptionAttempts(registry)).toEqual([]);
-  expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({
-    status: "dead",
-    structuredHost: null,
-    claimOwner: null,
-  });
-  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ id: delivery.id, state: "assigned" }]);
-
-  await bindStructuredDeliveryQueue([], { registry, client: null });
-  fs.rmSync(directory, { recursive: true, force: true });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  const identity = captureProcessIdentity(process.pid);
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: "fake:replacement-stage-host", pid: identity.pid,
+    processStartIdentity: identity.startIdentity, eventCursor: 0, protocolVersion: "fixture",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  }), { onStateChange: () => () => {} });
+  let replacements = 0;
+  const selected: string[] = [];
+  const dependencies: StructuredStartupDependencies = {
+    registry, client, schedule: () => ({ unref() {} }),
+    adopt: async (received, _optionsFor, _env, shouldAdopt = () => true) => {
+      const entry = received.readOnlySnapshot().entries[`codex:${sessionId}`];
+      if (entry?.structuredHost && shouldAdopt(entry)) selected.push(sessionId);
+      return [];
+    },
+    adoptClaude: async () => [],
+  };
+  const deliveryPorts: NonNullable<Parameters<typeof deliverHeldStructuredMessage>[1]> = {
+    enabled: () => true, client: () => client, registry: () => registry,
+    recover: async request => {
+      expect(request.conversationId).toBe(conversation.id);
+      expect(request.path).toBe(stored.artifactPath);
+      const claimed = registry.claimStructuredHost(stored.key, identity, {
+        allowUnhosted: true, setupHost: { ...stored.structuredHost!, process: null },
+      });
+      if (!claimed?.structuredHost || !claimed.claimOwner) throw new Error("replacement host claim unavailable");
+      expect(registry.setStructuredHostClaimed(stored.key, { ...claimed.structuredHost,
+        endpoint: "fake:replacement-stage-host", process: identity,
+      }, "idle", claimed.claimOwner, claimed.claimEpoch)).toBeTruthy();
+      await publishStructuredDeliveryHost({ key: stored.key, host: host as never });
+      replacements += 1;
+      return { target: null, path: stored.artifactPath, conversationId: conversation.id, spawned: true };
+    },
+  };
+  const drain = () => drainHeldDeliveries(conversation.id, {
+    deliver: async ({ delivery: held, path: deliveryPath, clientMessageId }) =>
+      await deliverHeldStructuredMessage({ conversationId: conversation.id, path: deliveryPath,
+        deliveryId: held.id, clientMessageId, text: held.text, command: held.command,
+      }, deliveryPorts) ?? "delivery-uncertain",
+  }, registry);
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    expect(selected).toEqual([]);
+    expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({
+      status: "dead", structuredHost: null, claimOwner: null,
+    });
+    expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ id: delivery.id, state: "assigned" }]);
+    // Reclaiming the dead row publishes the replacement; the next drain admits its held message.
+    await drain();
+    expect(replacements).toBe(1);
+    await drain();
+    await kickStructuredDeliveryQueue();
+    await waitFor(() => ledger.writes.length === 1);
+    expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]).toMatchObject({
+      status: "idle", structuredHost: { process: identity, endpoint: "fake:replacement-stage-host" },
+      claimOwner: expect.any(String),
+    });
+    expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "delivered", text: "" });
+    expect(ledger.writes).toEqual([expect.objectContaining({ text: "deliver after dead stage recovery" })]);
+    await adoptStructuredHostsAtStartup(dependencies);
+    await kickStructuredDeliveryQueue();
+    await drainHeldDeliveries(conversation.id, { deliver: async () => { throw new Error("delivered hold must not drain twice"); } }, registry);
+    expect(replacements).toBe(1);
+    expect(ledger.writes).toHaveLength(1);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("startup adoption replaces an incumbent owner whose boot epoch is dead", async () => {
@@ -5565,6 +5646,10 @@ test("startup terminalizes a delivered Claude spawn whose unverifiable host clai
   await client.transitionOperation(begun.receipt.launchId, "delivered");
   const receiptIds = Object.keys(registry.snapshot().receipts);
 
+  // The old producer has exited; no admission custody survives the simulated reboot.
+  for (const receipt of Object.values(registry.snapshot().receipts)) {
+    if (receipt.admissionOwner) expect(registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, receipt.admissionOwner).released).toBe(true);
+  }
   const dependencies: StructuredStartupDependencies = {
     registry,
     client,
@@ -5734,6 +5819,10 @@ test("startup settles a delivered pipeline retry and collapses its rebooted pred
   const conversationIds = Object.keys(before.conversations).sort();
   expect(before.conversations[predecessor.receipt.conversationId]?.supersededBy).toBeNull();
 
+  // The old producer has exited; no admission custody survives the simulated reboot.
+  for (const receipt of Object.values(registry.snapshot().receipts)) {
+    if (receipt.admissionOwner) expect(registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, receipt.admissionOwner).released).toBe(true);
+  }
   const dependencies: StructuredStartupDependencies = {
     registry,
     client,
@@ -5810,6 +5899,7 @@ test("deferred pipeline evidence completes the pass with both engines retained, 
   const receiptFor = (title: string) => {
     const begun = registry.beginSpawnRequest({ engine: "claude", cwd: directory, transport: "structured", accountId: null, launchProfile: { title } });
     if (begun.kind !== "created") throw new Error(`${title} receipt was unavailable`);
+    expect(registry.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner!).released).toBe(true);
     return begun.receipt.launchId;
   };
   const fencedLaunch = receiptFor("fenced pending launch");
@@ -7149,4 +7239,108 @@ test.each(["cancel", "retire", "runtime"] as const)("startup %s during generatio
     journal.close(); registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+
+test.each([false, true])("fresh work from a proven live engine closes its restart-cut hold only within the observed runtime generation (replaced=%s)", async replaced => {
+  const cutAt = Date.parse("2026-11-17T12:00:00Z");
+  setSystemTime(cutAt);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-continuing-engine-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const sessionId = ["f4000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const hostKey = `claude:${sessionId}`;
+  const records = recentClaudeRecords("tool-call");
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "continuing-turn",
+    transcriptRecords: records, transcriptSuffix: "\n{\"type\":\"assist",
+  });
+  const entry = registry.readOnlySnapshot().entries[hostKey]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  let runtimeGeneration = "first-runtime";
+  const journal = new RuntimeJournal(path.join(directory, "generation-runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  client.startupGeneration = async () => runtimeGeneration;
+  const viewer = restartCutStartup(registry, directory, { client });
+  const { restartCutEvidenceUnresolved } = await import("./restartCutHold");
+  try {
+    await viewer.boot();
+    expect(restartCutEvidenceUnresolved(hostKey)).toBe(true);
+    const working = registry.readOnlySnapshot().entries[hostKey]!;
+    registry.upsert({ ...working, structuredHost: { ...working.structuredHost!, eventCursor: working.structuredHost!.eventCursor + 1 } });
+    setSystemTime(cutAt + 1000);
+    const afterCut = { type: "assistant", timestamp: new Date(cutAt + 1000).toISOString(),
+      message: { role: "assistant", content: [{ type: "text", text: "Still working on the same turn." }] } };
+    fs.writeFileSync(artifactPath, [...records, afterCut].map(record => JSON.stringify(record)).join("\n") + "\n");
+    if (replaced) {
+      runtimeGeneration = "successor-runtime";
+      await viewer.boot();
+      expect(viewer.cuts()).toContainEqual(expect.objectContaining({ hostKey, reason: "viewer-restart", state: "owed" }));
+      return;
+    }
+    await (viewer.scheduled.shift()!() as unknown as Promise<void>);
+    expect(restartCutEvidenceUnresolved(hostKey)).toBe(false);
+    expect(viewer.cuts()).toEqual([]);
+    expect(viewer.attempts).toEqual([]);
+    expect(registry.readOnlySnapshot().entries[hostKey]?.structuredHost?.process).toEqual(captureProcessIdentity(process.pid));
+  } finally { journal.close(); await viewer.close(); }
+});
+
+test("work published before restart cannot disprove its cut", async () => {
+  const checkpoint = Date.parse("2026-11-17T12:00:00Z");
+  setSystemTime(checkpoint);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-precut-work-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const sessionId = ["f5000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const hostKey = `claude:${sessionId}`;
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "precut-turn",
+    transcriptRecords: [],
+  });
+  const entry = registry.readOnlySnapshot().entries[hostKey]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  const workAt = checkpoint + 1000;
+  fs.writeFileSync(artifactPath, [
+    { type: "user", uuid: "precut-user", timestamp: new Date(workAt).toISOString(), message: { role: "user", content: "work" } },
+    { type: "assistant", uuid: "precut-tool", timestamp: new Date(workAt).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "tool", name: "Bash", input: {} }] } },
+  ].map(record => JSON.stringify(record)).join("\n") + "\n");
+  setSystemTime(checkpoint + 60_000);
+  const viewer = restartCutStartup(registry, directory, {
+    readHostTurnRecord: () => ({ state: "absent" }),
+  });
+  try {
+    await viewer.boot();
+    expect(viewer.cuts()).toContainEqual(expect.objectContaining({ hostKey, reason: "viewer-restart", state: "owed" }));
+  } finally { await viewer.close(); }
+});
+
+
+test("a replaced transcript cannot prove that its predecessor turn survived startup", async () => {
+  const cutAt = Date.parse("2026-11-17T13:00:00Z");
+  setSystemTime(cutAt);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-replaced-transcript-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const sessionId = ["f6000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const hostKey = `claude:${sessionId}`;
+  const records = recentClaudeRecords("tool-call");
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "predecessor-turn",
+    transcriptRecords: records, transcriptSuffix: "\n{\"type\":\"assist",
+  });
+  const entry = registry.readOnlySnapshot().entries[hostKey]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  const viewer = restartCutStartup(registry, directory);
+  const { restartCutEvidenceUnresolved } = await import("./restartCutHold");
+  try {
+    await viewer.boot();
+    expect(restartCutEvidenceUnresolved(hostKey)).toBe(true);
+    setSystemTime(cutAt + 1000);
+    const replacement = `${artifactPath}.replacement`;
+    fs.writeFileSync(replacement, [...records, { type: "assistant", timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: [{ type: "text", text: "Work from a replacement file." }] } }]
+      .map(record => JSON.stringify(record)).join("\n") + "\n");
+    fs.renameSync(replacement, artifactPath);
+    await (viewer.scheduled.shift()!() as unknown as Promise<void>);
+    expect(restartCutEvidenceUnresolved(hostKey)).toBe(true);
+    expect(viewer.attempts).toEqual([]);
+  } finally { await viewer.close(); }
 });

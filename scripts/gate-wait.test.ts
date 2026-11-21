@@ -8,13 +8,14 @@ import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import { waitForGateCompletion, gateSnapshot, logTail, waitForGate, closedQueueSpans } from "./gate-wait";
+import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../src/lib/runtime/gateCheckRecord";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { stopFixtureIdentity, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
-import { bindGateCheckRoot, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_PHYSICAL_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
-import { buildManifest, digest, writeEnvelope, readEnvelope, terminalSchema, descriptorSchema, reportSchema } from "../src/lib/recordedChecks/wire";
+import { buildManifest, digest, writeEnvelope, readEnvelope, terminalSchema, descriptorSchema, reportSchema, physical } from "../src/lib/recordedChecks/wire";
 
 const roots: string[] = [];
 const children: ChildProcess[] = [];
@@ -170,191 +171,20 @@ function background(args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
   return { child, closed, ticketReady, output: () => ({ stdout, stderr }) };
 }
 
-function withoutInheritedRecorderBinding(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  // A private recorder follows the fixture's TMPDIR. Keep explicit absences so
-  // spreading a parent environment cannot restore its native launch binding.
-  for (const key of [GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_PHYSICAL_ENV, GATE_CHECK_ROOT_IDENTITY_ENV]) env[key] = undefined;
-  return env;
-}
-
 function portableEnvironment(f: ReturnType<typeof fixture>) {
-  const env = withoutInheritedRecorderBinding(withoutInheritedGate(isolatedEnvironment(f.root, checkEnvironment(process.env))));
+  const env = withoutInheritedGate(isolatedEnvironment(f.root, checkEnvironment(process.env)));
   const bin = path.join(f.root, "bin"); fs.mkdirSync(bin);
   // The fixture owns its one slot and queue. No real systemd service or live state.
   for (const name of ["bash", "date", "mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm", "which", "true"]) {
     fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
   }
-  Object.assign(env, { PATH: bin, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: f.root,
-    TMPDIR: f.root,
+  Object.assign(env, { TMPDIR: f.root, PATH: bin, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: f.root,
     LLV_GATE_SLOTS: "1", LLV_GATE_POLL_SECONDS: "0.02", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_AGENT_CPU: "off" });
+  env[GATE_CHECK_ROOT_ENV] = f.root;
+  env[GATE_CHECK_LAUNCH_ROOT_ENV] = f.root;
+  env[GATE_CHECK_ROOT_IDENTITY_ENV] = physical(f.root);
   return env;
 }
-
-function bindRecorderEnvironment(env: NodeJS.ProcessEnv, root: string): NodeJS.ProcessEnv {
-  const stat = fs.statSync(root);
-  return { ...env, [GATE_CHECK_ROOT_ENV]: root, [GATE_CHECK_ROOT_PHYSICAL_ENV]: fs.realpathSync(root),
-    [GATE_CHECK_ROOT_IDENTITY_ENV]: `${stat.dev}:${stat.ino}` };
-}
-
-test.skipIf(process.platform !== "linux")("recorder admission stays on the native launch root when TMPDIR changes", async () => {
-  const f = fixture(), launchRoot = path.join(f.root, "launch-root"), changedRoot = path.join(f.root, "changed-root");
-  fs.mkdirSync(launchRoot); fs.mkdirSync(changedRoot);
-  const log = path.join(changedRoot, "check.log"), marker = path.join(f.root, "executed");
-  const env = bindRecorderEnvironment(portableEnvironment(f), launchRoot);
-  env.TMPDIR = changedRoot;
-  const recording = background(["--record", log, process.execPath, "-e",
-    'require("node:fs").writeFileSync(process.argv[1], "started"); process.exitCode = 23;', marker], env);
-
-  expect(await recording.closed).toBe(2);
-  expect(recording.output().stderr).toContain(`root=${JSON.stringify(launchRoot)}`);
-  expect(recording.output().stdout).not.toContain("recording started");
-  expect(fs.existsSync(marker)).toBe(false);
-  expect(fs.existsSync(`${log}.gate`)).toBe(false);
-}, 30_000);
-
-test.skipIf(process.platform !== "linux")("recorder admission refuses a launch-root symlink whose target changed", async () => {
-  const f = fixture(), firstTarget = path.join(f.root, "first-target"), replacement = path.join(f.root, "replacement");
-  const alias = path.join(f.root, "launch-alias");
-  fs.mkdirSync(firstTarget); fs.mkdirSync(replacement); fs.symlinkSync(firstTarget, alias, "dir");
-  const env = bindRecorderEnvironment(portableEnvironment(f), alias);
-  fs.unlinkSync(alias); fs.symlinkSync(replacement, alias, "dir");
-  const log = path.join(alias, "check.log"), marker = path.join(f.root, "executed");
-  const recording = background(["--record", log, process.execPath, "-e",
-    'require("node:fs").writeFileSync(process.argv[1], "started"); process.exitCode = 23;', marker], env);
-
-  expect(await recording.closed).toBe(2);
-  expect(recording.output().stderr).toContain("stage temporary root identity changed");
-  expect(recording.output().stderr).toContain(`root=${JSON.stringify(alias)}`);
-  expect(recording.output().stdout).not.toContain("recording started");
-  expect(fs.existsSync(marker)).toBe(false);
-  expect(fs.existsSync(`${log}.gate`)).toBe(false);
-}, 30_000);
-
-test.skipIf(process.platform !== "linux")("recorder refuses a moved launch root even when its alias still reaches the same inode", async () => {
-  const f = fixture(), originalTarget = path.join(f.root, "target"), movedTarget = path.join(f.root, "moved-target");
-  const alias = path.join(f.root, "launch-alias");
-  fs.mkdirSync(originalTarget); fs.symlinkSync(originalTarget, alias, "dir");
-  const env = bindRecorderEnvironment(portableEnvironment(f), alias);
-  fs.renameSync(originalTarget, movedTarget);
-  fs.unlinkSync(alias); fs.symlinkSync(movedTarget, alias, "dir");
-  const log = path.join(alias, "check.log"), marker = path.join(f.root, "executed");
-  const recording = background(["--record", log, process.execPath, "-e",
-    'require("node:fs").writeFileSync(process.argv[1], "started"); process.exitCode = 23;', marker], env);
-
-  expect(await recording.closed).toBe(2);
-  expect(recording.output().stderr).toContain("stage temporary root physical path changed");
-  expect(recording.output().stderr).toContain(`root=${JSON.stringify(alias)}`);
-  expect(recording.output().stdout).not.toContain("recording started");
-  expect(fs.existsSync(marker)).toBe(false);
-  expect(fs.existsSync(`${log}.gate`)).toBe(false);
-}, 30_000);
-
-test.skipIf(process.platform !== "linux")("a missing foreign log parent refuses before start and names the launch root", async () => {
-  const f = fixture(), launchRoot = path.join(f.root, "launch-root"); fs.mkdirSync(launchRoot);
-  const env = bindRecorderEnvironment(portableEnvironment(f), launchRoot);
-  const log = path.join(f.root, "missing", "foreign", "check.log"), marker = path.join(f.root, "executed");
-  const recording = background(["--record", log, process.execPath, "-e",
-    'require("node:fs").writeFileSync(process.argv[1], "started"); process.exitCode = 23;', marker], env);
-
-  expect(await recording.closed).toBe(2);
-  expect(recording.output().stderr).toContain("gate log parent cannot be resolved under the stage temporary root");
-  expect(recording.output().stderr).toContain(`root=${JSON.stringify(launchRoot)}`);
-  expect(recording.output().stdout).not.toContain("recording started");
-  expect(fs.existsSync(marker)).toBe(false);
-  expect(fs.existsSync(`${log}.gate`)).toBe(false);
-}, 30_000);
-
-test.skipIf(process.platform !== "linux")("a launch-root log remains readable when command TMPDIR is narrower", async () => {
-  const f = fixture(), launchRoot = path.join(f.root, "launch-root"), nestedRoot = path.join(f.root, "launch-root", "nested");
-  fs.mkdirSync(nestedRoot, { recursive: true });
-  const env = bindRecorderEnvironment(portableEnvironment(f), launchRoot);
-  env.TMPDIR = nestedRoot;
-  const log = path.join(launchRoot, "check.log");
-  const recording = background(["--record", log, "/bin/bash", "-c", 'printf "verdict\\n"; exit 23'], env);
-  await recording.ticketReady;
-  const result = await runGateCheckTool({ log, reason: "narrow TMPDIR regression" }, bindGateCheckRoot(launchRoot), new AbortController().signal);
-
-  expect(await recording.closed).toBe(23);
-  expect(result.success).toBe(true);
-  expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, state: "finished exit=23", code: 23 });
-});
-
-for (const shape of ["absolute", "parent", "symlink", "prefix"] as const) test.skipIf(process.platform !== "linux")(`recording refuses a foreign ${shape} log before starting its command`, async () => {
-  const f = fixture(), env = portableEnvironment(f);
-  env.TMPDIR = path.join(f.root, "tmpdir");
-  const root = env.TMPDIR!;
-  let log = f.log;
-  if (shape === "parent") log = `${root}/../check.log`;
-  if (shape === "symlink") {
-    fs.symlinkSync(f.root, path.join(root, "foreign"), "dir");
-    log = path.join(root, "foreign", "check.log");
-  }
-  if (shape === "prefix") {
-    const sibling = `${root}-sibling`; fs.mkdirSync(sibling);
-    log = path.join(sibling, "check.log");
-  }
-  const marker = path.join(f.root, "executed");
-  const recording = background(["--record", log, process.execPath, "-e",
-    'require("node:fs").writeFileSync(process.argv[1], "started"); process.exitCode = 37;', marker], env);
-  const code = await recording.closed;
-  // Before the fix this is a completed run whose native waiter refuses it.
-  const result = await runGateCheckTool({ log, reason: "foreign log regression" }, bindGateCheckRoot(root), new AbortController().signal);
-  expect(result.success).toBe(false);
-  expect(result.contentItems[0].text).toContain("outside this stage's temporary root");
-  expect(code).toBe(2);
-  expect(recording.output().stderr).toContain(`root=${JSON.stringify(root)}`);
-  expect(recording.output().stdout).not.toContain("recording started");
-  expect(fs.existsSync(marker)).toBe(false);
-  expect(fs.existsSync(log)).toBe(false);
-  expect(fs.existsSync(`${log}.gate`)).toBe(false);
-}, 30_000);
-
-for (const shape of ["direct", "root-alias", "internal-link"] as const) test.skipIf(process.platform !== "linux")(`an admitted ${shape} recording returns its real verdict through the native waiter`, async () => {
-  const f = fixture(), env = portableEnvironment(f);
-  const root = env.TMPDIR!;
-  let log = path.join(root, "check.log");
-  if (shape === "root-alias") {
-    const alias = path.join(f.root, "alias"); fs.symlinkSync(root, alias, "dir");
-    env.TMPDIR = alias; log = path.join(alias, "check.log");
-  }
-  if (shape === "internal-link") {
-    fs.symlinkSync(root, path.join(root, "nested"), "dir");
-    log = path.join(root, "nested", "check.log");
-  }
-  const recording = background(["--record", log, "/bin/bash", "-c", 'printf "verdict\\n"; exit 37'], env);
-  await recording.ticketReady;
-  const result = await runGateCheckTool({ log, reason: "accepted log regression" }, bindGateCheckRoot(env.TMPDIR!), new AbortController().signal);
-  expect(await recording.closed).toBe(37);
-  expect(result.success).toBe(true);
-  expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, state: "finished exit=37", code: 37 });
-  expect(JSON.parse(result.contentItems[0].text).tail).toContain("verdict");
-}, 30_000);
-
-for (const admitted of [false, true]) test.skipIf(process.platform !== "linux")(`a manifest evidence root cannot override temporary-root admission (admitted=${admitted})`, async () => {
-  const f = fixture(), env = portableEnvironment(f);
-  env.TMPDIR = path.join(f.root, "tmpdir");
-  const script = path.join(f.root, "command.ts"), declaration = path.join(f.root, "manifest.json");
-  const marker = path.join(f.root, "executed");
-  fs.writeFileSync(script, 'import fs from "node:fs"; fs.writeFileSync(import.meta.dir + "/executed", "started"); console.log("verdict"); process.exitCode = 37;');
-  const manifest = await buildManifest({ executionEnvironment: {}, cwd: f.root, deadline: Date.now() + 30_000,
-    executionMs: 10_000, selection: ["manifest admission"], configurationDigest: digest({ fixture: true }),
-    roots: [{ directory: f.root, purpose: "evidence" }], inputs: [{ root: f.root, file: "command.ts" }],
-    outputs: [{ root: f.root, file: "executed" }], completion: { root: f.root, file: "complete.json" } });
-  writeEnvelope(declaration, manifest);
-  const log = admitted ? path.join(env.TMPDIR, "check.log") : f.log;
-  const recording = background(["--record", log, "--manifest", declaration, "--", process.execPath, script], env, f.root);
-  expect(await recording.closed).toBe(admitted ? 37 : 2);
-  expect(fs.existsSync(marker)).toBe(admitted);
-  expect(fs.existsSync(`${log}.gate`)).toBe(admitted);
-  if (admitted) {
-    const result = await runGateCheckTool({ log, reason: "manifest admission" }, bindGateCheckRoot(env.TMPDIR), new AbortController().signal);
-    expect(result.success).toBe(true);
-    expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, code: 37 });
-  } else {
-    expect(recording.output().stderr).toContain(`root=${JSON.stringify(env.TMPDIR)}`);
-    expect(recording.output().stdout).not.toContain("recording started");
-  }
-}, 30_000);
 
 test.skipIf(process.platform !== "linux")("demonstration: a real queued gate finishes in two wait calls, including a fresh waiter", async () => {
   const f = fixture(), env = portableEnvironment(f);
@@ -391,14 +221,19 @@ test.skipIf(process.platform !== "linux")("one native completion hold spans queu
   await once(lock.stdout!, "data");
   const recording = background(["--record", f.log, "/bin/bash", "-c", 'printf "done\\n"; exit 37'], env);
   await recording.ticketReady;
+  const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
+  expect(runId).toHaveLength(64);
   let settled = false;
-  const held = waitForGateCompletion(f.log).then(result => { settled = true; return result; });
+  const held = runGateCheckTool({ runId, log: path.join(f.root, "wrong/check.log"), reason: "queued recorded check" },
+    bindGateCheckRoot(f.root), new AbortController().signal).then(result => { settled = true; return result; });
   for (let i = 0; i < 100; i++) fs.appendFileSync(f.log, `progress ${i}\n`);
   await Promise.resolve();
   expect(settled).toBe(false);
   lock.stdin!.end("release\n"); await lockClosed;
   expect(await recording.closed).toBe(37);
-  expect((await held).code).toBe(37);
+  const answer = await held;
+  expect(answer.success).toBe(true);
+  expect(JSON.parse(answer.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
   // A second reader sees the durable result after its recorder exits.
   expect((await waitForGateCompletion(f.log)).code).toBe(37);
 }, 30_000);
@@ -406,6 +241,105 @@ test.skipIf(process.platform !== "linux")("one native completion hold spans queu
 test("an unregistered gate cannot supply a completion result", async () => {
   const f = fixture(); ticket(f);
   await expect(waitForGateCompletion(f.log)).rejects.toThrow();
+});
+
+test.skipIf(process.platform !== "linux")("a real recorder's run id survives wrong and omitted paths in fresh readers", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const recording = background(["--record", f.log, "/bin/bash", "-c", "exit 37"], env);
+  await recording.ticketReady;
+  const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
+  expect(runId).toHaveLength(64);
+  expect(await recording.closed).toBe(37);
+  const reader = path.join(f.root, "reader.ts");
+  fs.writeFileSync(reader, `import { bindGateCheckRoot, runGateCheckTool } from ${JSON.stringify(path.join(import.meta.dir, "../src/lib/runtime/gateCheckTool.ts"))};
+const [root, runId, log] = process.argv.slice(2);
+console.log(JSON.stringify(await runGateCheckTool({ runId, ...(log ? { log } : {}), reason: "persisted check" }, bindGateCheckRoot(root), new AbortController().signal)));`);
+  for (const log of [f.log, path.join(f.root, "missing/check.log"), undefined]) {
+    const result = spawnSync(process.execPath, [reader, f.root, runId!, ...(log ? [log] : [])], { env, encoding: "utf8", timeout: 10_000 });
+    expect(result.status).toBe(0);
+    const answer = JSON.parse(result.stdout);
+    expect(answer.success).toBe(true);
+    expect(JSON.parse(answer.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
+  }
+  const foreign = fixture();
+  expect((await runGateCheckTool({ runId, log: f.log, reason: "foreign run" }, bindGateCheckRoot(foreign.root), new AbortController().signal)).success).toBe(false);
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("nested check TMPDIR publishes its run under the native launch root", async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const nestedTmp = path.join(f.root, "nested-tmp"); fs.mkdirSync(nestedTmp);
+  env.TMPDIR = nestedTmp;
+  env[GATE_CHECK_ROOT_ENV] = f.root;
+  env[GATE_CHECK_ROOT_IDENTITY_ENV] = physical(f.root);
+  const log = path.join(nestedTmp, "nested-check.log");
+  const recording = background(["--record", log, "/bin/bash", "-c", "exit 37"], env);
+  await recording.ticketReady;
+  const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
+  expect(runId).toHaveLength(64);
+  expect(await recording.closed).toBe(37);
+  expect(fs.existsSync(path.join(f.root, ".gate-runs", `${runId}.json`))).toBe(true);
+  expect(fs.existsSync(path.join(nestedTmp, ".gate-runs", `${runId}.json`))).toBe(false);
+
+  const binding = bindGateCheckRoot(f.root);
+  for (const logHint of [path.join(f.root, "wrong/check.log"), undefined]) {
+    const result = await runGateCheckTool({ runId, ...(logHint ? { log: logHint } : {}), reason: "nested TMPDIR check" }, binding, new AbortController().signal);
+    expect(result.success).toBe(true);
+    expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
+  }
+  const foreign = fixture();
+  expect((await runGateCheckTool({ runId, reason: "foreign nested run" }, bindGateCheckRoot(foreign.root), new AbortController().signal)).success).toBe(false);
+}, 30_000);
+
+test.each(["outside", "indirect", "linked-file", "missing-parent", "standalone", "index-link"])("a recorder refuses %s before starting the command", async fault => {
+  const f = fixture(), other = fixture(), env = portableEnvironment(f);
+  const marker = path.join(f.root, "command-started");
+  let log = f.log;
+  if (fault === "outside" || fault === "standalone") log = other.log;
+  if (fault === "missing-parent") log = path.join(other.root, "absent/check.log");
+  if (fault === "indirect") { fs.symlinkSync(other.root, path.join(f.root, "indirect"), "dir"); log = path.join(f.root, "indirect/check.log"); }
+  if (fault === "linked-file") {
+    const nested = path.join(f.root, "nested"); fs.mkdirSync(nested);
+    fs.writeFileSync(other.log, "existing external target\n");
+    log = path.join(nested, "check.log"); fs.symlinkSync(other.log, log);
+  }
+  if (fault === "index-link") fs.symlinkSync(other.root, path.join(f.root, ".gate-runs"), "dir");
+  if (fault === "standalone") {
+    const alias = path.join(other.root, "allowed");
+    fs.symlinkSync(f.root, alias, "dir");
+    env.TMPDIR = alias;
+    env[GATE_CHECK_ROOT_ENV] = env[GATE_CHECK_LAUNCH_ROOT_ENV] = env[GATE_CHECK_ROOT_IDENTITY_ENV] = undefined;
+  }
+  const recording = background(["--record", log, "/usr/bin/touch", marker], env);
+  expect(await recording.closed).toBe(2);
+  expect(recording.output().stdout).not.toContain("recording started");
+  expect(fs.existsSync(marker)).toBe(false);
+  if (fault !== "index-link") {
+    expect(recording.output().stderr).toContain(`resolvedRoot=${JSON.stringify(fs.realpathSync(f.root))}`);
+    for (const entry of [`${log}.gate`, path.join(f.root, ".gate-runs"), path.join(other.root, ".gate-runs")]) {
+      expect(fs.existsSync(entry)).toBe(false);
+    }
+    if (fault === "linked-file") expect(fs.readlinkSync(log)).toBe(other.log);
+  }
+});
+
+test.skipIf(process.platform !== "linux")("a moved launch root replaced by its old-path symlink refuses before dispatch", () => {
+  const f = fixture(), env = portableEnvironment(f);
+  env.LLV_GATE_RUNNER = "off";
+  const retained = `${f.root}.retained`, marker = `${f.root}.marker`;
+  roots.push(retained, marker);
+  fs.renameSync(f.root, retained);
+  fs.symlinkSync(retained, f.root, "dir");
+
+  const result = spawnSync("/bin/bash", [wrapper, "--record", path.join(f.root, "check.log"),
+    "/bin/bash", "-c", 'touch "$1"; exit 37', "fixture", marker], {
+    env: { ...env, MARKER: marker }, encoding: "utf8", timeout: 10_000,
+  });
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("gate launch root identity changed");
+  expect(result.stdout).not.toContain("recording started");
+  expect(fs.existsSync(marker)).toBe(false);
+  expect(fs.existsSync(path.join(retained, "check.log"))).toBe(false);
+  expect(fs.existsSync(path.join(retained, "check.log.gate"))).toBe(false);
 });
 
 test.skipIf(process.platform !== "linux")("a running record forwards cancellation and publishes only after gate cleanup", async () => {
@@ -426,17 +360,19 @@ test.skipIf(process.platform !== "linux")("a running record forwards cancellatio
 
 test("recording refuses an existing caller log without leaving a ticket", async () => {
   const f = fixture(); fs.writeFileSync(f.log, "keep\n");
-  const result = background(["--record", f.log, "/bin/true"], withoutInheritedRecorderBinding({ ...process.env, TMPDIR: f.root, LLV_GATE_BUN: process.execPath }));
+  const result = background(["--record", f.log, "/bin/true"], {
+    ...checkEnvironment(process.env), TMPDIR: f.root, LLV_GATE_BUN: process.execPath,
+    [GATE_CHECK_ROOT_ENV]: undefined, [GATE_CHECK_LAUNCH_ROOT_ENV]: undefined, [GATE_CHECK_ROOT_IDENTITY_ENV]: undefined,
+  });
   expect(await result.closed).toBe(2);
+  expect(result.output().stderr).toContain("EEXIST");
   expect(fs.readFileSync(f.log, "utf8")).toBe("keep\n");
   expect(fs.existsSync(f.dir)).toBe(false);
 });
 
 test("a gate refused before admission still publishes its exit for later waits", async () => {
   const f = fixture();
-  const result = background(["--record", f.log, "/bin/true"], withoutInheritedRecorderBinding({
-    ...process.env, TMPDIR: f.root, LLV_GATE_BUN: process.execPath, LLV_GATE_SLOTS: "0",
-  }));
+  const result = background(["--record", f.log, "/bin/true"], { ...portableEnvironment(f), LLV_GATE_SLOTS: "0" });
   expect(await result.closed).toBe(2);
   expect(gateSnapshot(f.log)).toEqual({ state: "finished exit=2", code: 2, tail: "LLV_GATE_SLOTS must be a positive integer" });
   expect(cli(f.log).status).toBe(2);
@@ -581,4 +517,53 @@ test.skipIf(process.platform !== "linux")("a plain recorded foreground gate supp
     expect(spans.some(span => span.kind === "checkQueue")).toBe(true);
     expect(spans.every(span => Number.isFinite(span.start) && span.end >= span.start)).toBe(true);
   } finally { access.cleanup(); }
+}, 30_000);
+
+test.each(["unchanged", "nested", "retargeted"])("review: launch TMPDIR alias %s agrees at dispatch and wait", async shape => {
+  const f = fixture(), aliases = fixture(), foreign = fixture();
+  const link = path.join(aliases.root, "launch-tmp");
+  fs.symlinkSync(f.root, link, "dir");
+  const binding = bindGateCheckRoot(link);
+  const env = portableEnvironment(f);
+  env.TMPDIR = link;
+  env[GATE_CHECK_LAUNCH_ROOT_ENV] = link;
+  env[GATE_CHECK_ROOT_ENV] = fs.realpathSync(link);
+  env[GATE_CHECK_ROOT_IDENTITY_ENV] = physical(fs.realpathSync(link));
+  env.LLV_GATE_RUNNER = "off";
+  if (shape === "nested") {
+    env.TMPDIR = path.join(f.root, "nested-tmp");
+    fs.mkdirSync(env.TMPDIR);
+  }
+  if (shape === "retargeted") {
+    fs.unlinkSync(link);
+    fs.symlinkSync(foreign.root, link, "dir");
+  }
+  const marker = path.join(f.root, "command-started");
+  const recording = background(["--record", f.log, "/bin/bash", "-c", 'touch "$1"; exit 37', "fixture", marker], env);
+  const code = await recording.closed;
+  const started = recording.output().stdout.includes("recording started");
+  const runId = recording.output().stdout.match(/runId=([a-f0-9]{64})/)?.[1];
+  const answer = runId ? await runGateCheckTool({ runId, reason: "launch alias binding" }, binding, new AbortController().signal) : null;
+  console.log(JSON.stringify({ shape, code, started, marker: fs.existsSync(marker), waitSuccess: answer?.success,
+    waiterRefusedRoot: answer?.contentItems[0].text.includes("stage temporary root identity changed") }));
+  if (shape !== "retargeted") {
+    expect(code).toBe(37);
+    expect(started).toBe(true);
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(answer?.success).toBe(true);
+    for (const log of [f.log, path.join(foreign.root, "absent/check.log"), undefined]) {
+      const result = await runGateCheckTool({ runId, log, reason: "launch alias log hint" }, binding, new AbortController().signal);
+      expect(result.success).toBe(true);
+      expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId });
+    }
+    for (const owner of [bindGateCheckRoot(foreign.root), null]) {
+      expect((await runGateCheckTool({ runId, reason: "unverified alias run" }, owner, new AbortController().signal)).success).toBe(false);
+    }
+  } else {
+    expect(code).toBe(2);
+    expect(recording.output().stderr).toContain("gate launch root identity changed");
+    expect(started).toBe(false);
+    expect(fs.existsSync(marker)).toBe(false);
+    for (const entry of [f.log, f.dir, path.join(f.root, ".gate-runs")]) expect(fs.existsSync(entry)).toBe(false);
+  }
 }, 30_000);

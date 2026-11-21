@@ -11,7 +11,7 @@ import { callableReads } from "@/lib/externalRelay/toolLoop";
 import { x1Request } from "@/lib/externalRelay/toolLoop.fixture";
 import type { AccountContext } from "@/lib/accounts/contracts";
 
-const root = fs.mkdtempSync(path.join("/tmp", "relay-profile-probe-"));
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-profile-probe-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 const marker = "PERSONAL_INSTRUCTION_MARKER";

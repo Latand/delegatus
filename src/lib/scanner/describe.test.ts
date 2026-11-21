@@ -1498,3 +1498,16 @@ test("deleted worktree still groups under its parent repo after SQLite import", 
   globalCache("worktree-git").clear();
   expect(projectInfoFromCwd(path.join(cwd, "src"))).toMatchObject({ project: identity.project, repo, worktree: "slice6-lane" });
 });
+
+
+test("relay media refs are excluded from catalog titles and search prompts", async () => {
+  const { conversationSearchText } = await import("./describe");
+  const ref = `media_${"a".repeat(32)}`;
+  for (const [engine, row] of [
+    ["claude", { type: "user", message: { content: `Inspect ${ref}` } }],
+    ["codex", { type: "event_msg", payload: { type: "user_message", message: `Inspect ${ref}` } }],
+  ] as const) {
+    const text = conversationSearchText(JSON.stringify(row), engine);
+    expect(text.firstPrompt).toContain("Inspect"); expect(JSON.stringify(text)).not.toContain(ref);
+  }
+});

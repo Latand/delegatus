@@ -1,6 +1,10 @@
+/** Maximum automatic claims of one admitted message across recovery and migration. */
+export const DELIVERY_ATTEMPT_LIMIT = 12;
+
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import type { AgentEngine } from "@/lib/agent/cli";
+import type { RuntimeDeliveryFailure } from "@/lib/runtime/contracts";
 import type { QuotaEngine } from "./quotaPolicy";
 import { grantedMcpServers, type McpGrantPolicy } from "@/lib/agent/mcpAllowlist";
 import { grantedPlugins } from "@/lib/agent/pluginAllowlist";
@@ -480,6 +484,7 @@ export interface HeldDelivery {
   assignedAt: string | null;
   deliveredAt: string | null;
   error: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
 }
 
 export interface SuccessorProviderPort {

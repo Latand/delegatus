@@ -708,15 +708,57 @@ test("seat report worker persists outcomes once, filters foreign projects, and r
     await expect(runSeatSourceInWorker({ type: "seat-rule-reports", project: "fixture", at: "invalid" }, runtime)).rejects.toThrow("invalid request");
     await produce();
     const first = await read("fixture");
-    expect(first).toHaveLength(2);
-    expect(first.map((row: { origin: { conversationId: string } }) => row.origin.conversationId)).toEqual(["conversation_fixture", "conversation_fixture"]);
-    expect(await read("elsewhere")).toEqual([]);
+    expect(first.reports).toHaveLength(2);
+    expect(first.reports.map((row: { origin: { conversationId: string } }) => row.origin.conversationId)).toEqual(["conversation_fixture", "conversation_fixture"]);
+    expect(first.reservedIds).toEqual([]);
+    expect(await read("elsewhere")).toEqual({ reports: [], reservedIds: [], occupiedIds: [] });
     await produce();
     expect(await read("fixture")).toEqual(first);
     await drainFilesResponseWorker("restart report reader");
     expect(await read("fixture")).toEqual(first);
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 }, 15_000);
+
+test("seat agenda worker is byte-identical to the unscoped projection across alias moves and requests", async () => {
+  const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
+  const { needsYouAnswer } = await import("@/lib/attention/needsYouProjection");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { seatReadBoard, SEAT_READ_NOW } = await import("@/lib/monitor/seatReads.fixture");
+  const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const state = scratchState(), runtime = runtimeFor(state);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  try {
+    persistProjectAliases([{ source: "old", target: "current", displayName: "Fixture" }]);
+    const body = seatReadBoard();
+    const directory = path.join(state, "files-response-results");
+    fs.mkdirSync(directory, { recursive: true });
+    const bodyFile = path.join(directory, "fixture-agenda.json");
+    fs.writeFileSync(bodyFile, JSON.stringify(body));
+    for (const project of ["current", "moved", "foreign"]) {
+      if (project === "moved") persistProjectAliases([{ source: "current", target: "moved", displayName: "Fixture" }]);
+      // The reference reproduces the original full worker projection without
+      // a scoped snapshot; the resident worker must see each later alias move.
+      const forms = needsYouAnswer({ ...body, files: [] }, null, SEAT_READ_NOW, project, {
+        tasks: body.tasks, pipelines: body.pipelines, dismissals: [], reports: null, admissions: [], unavailable: [], seatConversationId: "conversation_seat",
+      }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
+      const expected = { asks: seatAgendaAsks(body, SEAT_READ_NOW, project), forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
+      expect(expected.asks.length).toBeGreaterThan(0);
+      expect(expected.forms.count).toBeGreaterThan(0);
+      const actual = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile, project, now: SEAT_READ_NOW, seatConversationId: "conversation_seat" }, runtime);
+      expect(actual.body).toBe(JSON.stringify(expected));
+    }
+    await expect(runSeatSourceInWorker({ type: "seat-agenda", bodyFile: path.join(state, "outside.json"), project: "current", now: SEAT_READ_NOW }, runtime))
+      .rejects.toThrow("outside the worker result directory");
+    await drainFilesResponseWorker("restart agenda reader");
+    const restarted = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile, project: "moved", now: SEAT_READ_NOW, seatConversationId: "conversation_seat" }, runtime);
+    expect(JSON.parse(restarted.body).asks.length).toBeGreaterThan(0);
+  } finally {
+    await stopTestWorker();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+}, 30_000);
 
 test.each(["STATE_ADMISSION_BUSY", "DEADLINE_EXCEEDED"] as const)("seat report worker preserves retryable source failure %s", async errorCode => {
   const { runSeatSourceInWorker } = await import("./filesResponseWorker");

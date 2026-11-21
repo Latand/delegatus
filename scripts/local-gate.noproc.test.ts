@@ -114,9 +114,10 @@ test("with neither /proc nor ps the stop says it could not find the step's proce
 }, 30_000);
 test("a ps that answers slowly is cut off by the cleanup allowance, and the stop says what it could not prove", async () => {
   const dir = real.mkdtempSync(path.join(tmpdir(), "gate-noproc-")); roots.push(dir);
-  // Every query takes two seconds before the real ps answers.
+  // The ps shim itself is the slow process. Replacing it with sleep means
+  // spawnSync's timeout owns and reaps it without leaving a shell descendant.
   const slow = path.join(dir, "bin"); real.mkdirSync(slow);
-  real.writeFileSync(path.join(slow, "ps"), `#!/bin/sh\nsleep 2\nexec ${Bun.which("ps")} "$@"\n`, { mode: 0o755 });
+  real.writeFileSync(path.join(slow, "ps"), `#!/bin/sh\nexec ${Bun.which("sleep")} 60\n`, { mode: 0o755 });
   const searched = process.env.PATH;
   process.env.PATH = `${slow}${path.delimiter}${searched}`;
   try {

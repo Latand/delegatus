@@ -5,7 +5,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { accountManager } from "@/lib/accounts/manager";
 import type { AccountContext } from "@/lib/accounts/contracts";
-import { requestSchema, checkedAnswer, guestAnswerSchema, offersHandoff, type ExternalRelayRequest } from "./protocol";
+import { requestSchema, checkedAnswer, guestAnswerSchema, INVALID_REQUESTER_DETAIL, offersHandoff, type ExternalRelayRequest } from "./protocol";
 import { relayClaimBody } from "./poller";
 import { relayCall } from "./client";
 import { ownerTierFor } from "./profile";
@@ -41,17 +41,18 @@ function paired(origin: string, ownerTier = true): PairedRelay {
       engine: "claude", model: "fixture", ownerTier, memberLimitPerHour: null }] };
 }
 
-test("service guest bytes, additive delivery and existing authority selector", () => {
+test("service guest bytes preserve delivery and use the restricted authority selector", () => {
   expect(source.length).toBe(4721);
   expect(createHash("sha256").update(source).digest("hex")).toBe("61d6d384f956e70d9b0097da80ab855772b4091a5184efa41bf3e1d4df9ca4f5");
   const request = guest(); expect(request.delivery).toBe("guest");
   expect(request).toEqual(JSON.parse(source.toString()).request);
   const ordinary = { ...request }; delete ordinary.delivery;
-  expect(ownerTierFor({ ownerTier: true }, request)).toEqual(ownerTierFor({ ownerTier: true }, ordinary));
+  expect(ownerTierFor({ ownerTier: true }, ordinary)).not.toBeNull();
+  expect(ownerTierFor({ ownerTier: true }, request)).toBeNull();
   expect(ownerTierFor({ ownerTier: false }, request)).toBeNull();
   for (const changed of [{ is_owner: false }, { is_anonymous_admin: true }, { key: "foreign" }]) {
     const hostile = { ...request, input: { ...request.input, requester: { ...request.input.requester!, ...changed } } };
-    expect(ownerTierFor({ ownerTier: true }, hostile)).toBeNull();
+    expect(requestSchema.safeParse(hostile).success).toBe(false);
   }
   expect(relayClaimBody(paired("http://127.0.0.1:1")).features).toContain("relay_guest_answers");
 });
@@ -69,11 +70,69 @@ test("guest contract refuses direct service tools, progress, destinations and ri
     answer: { ...request.answer, attachments: rich.answer.attachments }, features: ["relay_rich_messages", "relay_media_out"] }, "codex")).toMatchObject({ rich: false, media: false, generate: false });
 });
 
+for (const delivery of ["ordinary", "guest"] as const) for (const scenario of ["forged owner flag", "swapped trigger author", "owner flag cleared", "duplicate trigger"] as const)
+  test(`${delivery} rejects ${scenario} before choosing a session or loading the tool index`, async () => {
+    const request = guest();
+    const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
+    if (delivery === "ordinary") {
+      delete request.delivery;
+      request.input.tools = [{ name: "private_lookup", summary: "Private lookup", audience: "owner",
+        mode: "direct", effect: "read", spec: "1".repeat(16) }];
+    }
+    if (scenario === "forged owner flag") {
+      trigger.author = { key: "member", name: "Member", self: false };
+    } else if (scenario === "swapped trigger author") {
+      request.input.conversation.push({ ...trigger, id: "different_trigger",
+        author: { key: "other_author", name: "Participant", self: false } });
+      request.input.respond_to = "different_trigger";
+    } else if (scenario === "duplicate trigger") {
+      request.input.conversation.push({ ...trigger, author: { ...trigger.author, key: "other_author" } });
+    } else {
+      request.input.requester!.is_owner = false;
+      if (delivery === "ordinary")
+        request.owner_delivery = { chat_id: 42, reply_to_message_id: 1, message_thread_id: null };
+    }
+    expect(requestSchema.safeParse(request).success).toBe(false);
+    const endpoints: string[] = [];
+    const server = await startTestRelay(req => { endpoints.push(req.url!.split("/").at(-1)!); return { body: { status: "ok" } }; });
+    const selection = spyOn(accountManager, "resolveHeadlessSpawn");
+    const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-06T12:00:01Z"));
+    try {
+      const relay = paired(server.origin);
+      const completion = await runClaimedRequest(relay, request, undefined, { leaseWorker: false });
+      expect(completion).toMatchObject({ outcome: "declined", reason: "invalid_request", detail: INVALID_REQUESTER_DETAIL });
+      expect(endpoints).toEqual(["complete"]);
+      expect(selection).not.toHaveBeenCalled();
+      expect(readRunLedger().runs).toEqual([]);
+      expect(readConversations()).toEqual([]);
+      expect(readAnswerRecord(relay.id, request.target_id, request.request_id)).toMatchObject({
+        profile: null, admitted: false, requester: null, input: null,
+      });
+    } finally { clock.mockRestore(); selection.mockRestore(); await server.close(); }
+  });
+
+test("a Telegram private owner delivery must match the paired owner before admission", async () => {
+  const request = guest();
+  delete request.delivery;
+  request.owner_delivery = { chat_id: 43, reply_to_message_id: 1, message_thread_id: null };
+  expect(requestSchema.safeParse(request).success).toBe(true);
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-06T12:00:01Z"));
+  try {
+    const relay = paired(server.origin);
+    relay.owner = { ...relay.owner, namespace: "telegram", id: "42" };
+    expect(await runClaimedRequest(relay, request, undefined, { leaseWorker: false })).toMatchObject({
+      outcome: "declined", reason: "invalid_request", detail: "Owner delivery does not match this relay's paired owner.",
+    });
+    expect(readRunLedger().runs).toEqual([]);
+  } finally { clock.mockRestore(); await server.close(); }
+});
+
 for (const populated of [false, true]) test(`guest handoff and final text validation with tools=${populated}`, async () => {
   const request = guest(); if (!populated) request.input.tools = [];
   expect(offersHandoff(request)).toBe(true);
   expect(callableTools(request)).toEqual([]);
-  const owner = ownerTierFor({ ownerTier: true }, request)!;
+  const owner = ownerTierFor({ ownerTier: true }, { ...request, delivery: undefined })!;
   for (const action of ["reply", "handoff", "ignore"] as const) {
     const result = checkedAnswer({ action, text: "Done.", reply_to: request.input.respond_to }, request);
     expect(result?.action ?? null).toBe(action === "ignore" ? null : action);

@@ -527,11 +527,13 @@ test(`boot sweep settles dead owners, keeps live owners, and removes ${location}
 test("orphan records distinguish terminal refusal from uncertain delivery and a removed pairing", async () => {
   const priorStore = readRelayStore();
   let status = 409;
-  const server = await startTestRelay(() => ({ status, body: { error: { code: "unavailable", message: "No receipt" } } }));
+  const server = await startTestRelay(() => ({ status, body: { error: { code: status === 422 ? "invalid_format" : "unavailable", reason: status === 422 ? "rich_limit_exceeded" : undefined, message: "private parser response" } } }));
+  const journal: string[] = [];
+  const info = spyOn(console, "info").mockImplementation((...args) => { journal.push(args.join(" ")); });
   try {
-    const paired = readRelayStore().relays[0]!;
+    const paired = { ...clonePairing(server.origin), id: "relay", api_base: `${server.origin}/v1` };
     updateRelayStore((store) => ({ ...store, relays: [{ ...paired, api_base: `${server.origin}/v1` }] }));
-    for (const code of [400, 401, 404, 409, 413, 426, 503, null]) {
+    for (const code of [400, 401, 404, 409, 413, 422, 426, 503, null]) {
       status = code ?? 503;
       if (code === null) updateRelayStore((store) => ({ ...store, relays: [] }));
       const requestId = `orphan_${code ?? "removed"}`;
@@ -546,12 +548,22 @@ test("orphan records distinguish terminal refusal from uncertain delivery and a 
       await sweepExternalRelayOrphans();
       expect(readAnswerRecord("relay", "target", requestId)).toMatchObject({
         state: "finished", outcome: "failed:install_restarted",
-        delivery: code === 503 || code === null ? "unconfirmed" : "refused",
+        delivery: code === 400 || code === 401 || code === 404 || code === 409 || code === 413 || code === 422 || code === 426 ? "refused" : "unconfirmed",
+        ...(code === 422 ? { completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] } : {}),
       });
+      if (code === 422) {
+        expect(journal.some(line => line.includes('"event":"relay_completion_refused"') && line.includes('"code":"invalid_format"')
+          && line.includes('"reason":"rich_limit_exceeded"'))).toBe(true);
+        expect(journal.join(" ")).not.toContain("private parser response");
+        const child = Bun.spawnSync([process.execPath, "-e", `import { readAnswerRecord } from './src/lib/externalRelay/answers.ts'; console.log(JSON.stringify(readAnswerRecord('relay', 'target', ${JSON.stringify(requestId)})));`], { env: { ...process.env } });
+        expect(child.exitCode).toBe(0);
+        expect(JSON.parse(child.stdout.toString())).toMatchObject({ completionRefusals: [{ status: 422, code: "invalid_format", reason: "rich_limit_exceeded" }] });
+      }
       expect(readRunLedger().runs.some((run) => run.requestId === requestId)).toBe(false);
       expect(fs.existsSync(runDir)).toBe(false);
     }
   } finally {
+    info.mockRestore();
     updateRelayStore(() => priorStore);
     await server.close();
   }
