@@ -3,7 +3,7 @@ export interface ReleaseDeployment { revision: string; at: number }
 export interface ReleaseChange { subject: string; files: string[] }
 export interface ReleaseInput {
   now: number; enabled: boolean; requested: boolean; tickEnabled: boolean; mergeEnabled: boolean;
-  live: boolean; mainVersion: string; lastTag: { name: string; version: string; at: number };
+  live: boolean; mainVersion: string; lastTag: { name: string; version: string; at: number; boundary?: string | null };
   registryHasTag: boolean; checks: "green" | "red" | "pending"; hold: string | null;
   draining: boolean; deploying: boolean; tools: string[]; minChanges: number; minGapHours: number;
   changes: ReleaseChange[]; deployments: ReleaseDeployment[];

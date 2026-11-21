@@ -53,11 +53,11 @@ options.
   the gap and keeps every blocker. Replayed over 2026-10-01 to 2026-10-12 the
   rule gives eight releases of 30 or 31 user-visible PRs each, 14 to 63 hours
   apart.
-- **The cut.** The six-hour production cut fixes the changelog range,
-  eligibility and product boundary. Preparation stays at that cut and does
-  not merge newer product work. The queue may refresh the release PR, but
-  preflight refuses a first parent containing product changes after the cut;
-  the seat then starts a fresh release from a newer verified cut.
+- **The cut.** The six-hour production cut fixes the changelog range and
+  eligibility. Preparation stays at that cut and does not merge newer product
+  work. The queue may squash the release PR onto a newer main tree; preflight
+  checks the release PR's own delta and cut ancestry, then the annotated tag
+  records the cut so later product PRs stay eligible for the next changelog.
 - **Classification.** Paths decide the trigger: a PR that touches only docs,
   tests, scripts, CI or the landing site is internal. Against the changelog
   headings of the last three releases (225 PRs) this marks user-visible PRs
@@ -165,7 +165,7 @@ to measure each kind of evidence against.
 --state merged` misses them. Every first-parent commit on main since `v1.10.0`
 names its PR in the subject (`… (#N)`, or `Merge pull request #N`), and most
 commit messages (69 of the 78 since `v1.11.0`) carry the PR's description. So
-`git log --first-parent <last tag>..<cut>` is the list, and `gh pr view N` reads
+`git log --first-parent <last release cut>..<cut>` is the list, and `gh pr view N` reads
 every PR, closed or merged.
 
 | Evidence | Coverage | Agreement with the changelog | Verdict |
@@ -289,14 +289,14 @@ no cut, and the release setting is not offered there (Deferred).
 **Where the tag goes.** The controller starts the preparation branch at the
 cut. Preparation refreshes the verifier and hook with
 `scripts/bootstrap-release-tools.ts` without merging or rebasing newer product
-work into the branch. The ordinary queue can refresh the PR before merging it
-into main. Preflight requires the merged PR number, verifies that the tag
-commit is on current `origin/main`, and checks both the release PR's first
-parent delta and the range from the cut to that parent. Product paths in that
-range mean main advanced beyond the verified boundary: preflight blocks with
-instructions to restart from a fresh cut and regenerate the changelog. This
-keeps later product PRs eligible for the next release's changelog. The tag is
-created only after the boundary check passes.
+work into the branch. The ordinary queue can squash the PR onto a newer main
+tree. Preflight requires the merged PR number, verifies that the tagged commit
+is on current `origin/main`, checks the release PR's own delta, and verifies
+that the frozen cut is its ancestor. The annotated tag records the boundary as
+`Release-Cut: <full-cut-sha>`. The next changelog starts at that recorded cut,
+so product PRs merged after the cut remain eligible even when squash
+integration makes them ancestors of this release tag. The tag is created only
+after the integrated release commit and boundary pass preflight.
 
 ## 4. Blockers
 
@@ -394,7 +394,7 @@ runs preflight on the integrated commit and passes to the deployer
 
 The controller's brief carries the facts, so the agent does not rediscover them:
 the last tag, the cut with its deploy time and soak, the trigger, and the PR
-list of `git log --first-parent <last tag>..<cut>` with each subject and its
+list of `git log --first-parent <last release cut>..<cut>` with each subject and its
 path class.
 
 The agent:
@@ -508,9 +508,12 @@ with `needs_decision` until a quoted operator go names them. Its brief:
   `bun scripts/release-verify.ts --preflight --cut <cut> --tag vX.Y.Z --pr <number>`
   at that exact commit. Preflight rejects a moved checkout, a commit off
   main, invalid provenance, conflicting release tags or a product path in
-  the diff from the commit's first parent. It reports the verified commit and
-  whether to create a tag, push a matching local tag or verify an existing
-  remote tag. See the [package release procedure](../RELEASING.md#package-release).
+  the release PR's own diff from the commit's first parent. It permits later
+  product commits already present in main, provided the frozen cut is an
+  ancestor. The annotated tag records that cut for the next changelog. It
+  reports the verified commit and whether to create a tag, push a matching
+  local tag or verify an existing remote tag. See the [package release
+  procedure](../RELEASING.md#package-release).
 - A pushed tag runs the publisher workflow carried by the tagged commit.
   The macOS consumer on the default branch verifies the publisher's release
   receipt and installs the exact version.
@@ -723,9 +726,9 @@ its monitor note.
 **Slice 2: release mechanics in the repository.**
 
 - `scripts/release-verify.ts` checks the merged PR, exact commit, version, tag
-  refs, npm and README provenance. It checks the release PR delta and rejects
-  product paths between the frozen cut and the integrated first parent. Tests
-  cover a missing PR, a product-path change and main advancing before
+  refs, npm and README provenance. It checks the release PR delta and frozen
+  cut ancestry. The annotated tag stores the cut for the next changelog range.
+  Tests cover a missing PR, a product-path change and main advancing before
   preparation or squash integration.
 - `macos-newcomer.yml` runs for a release after `publish.yml` succeeds
   (`workflow_run` on «Publish to npm», `completed`, success only) and keeps its
@@ -799,13 +802,14 @@ turns it off and on (§5.4, §7).
 **Q3. What should a release contain?**
 - A (recommended): what production on this machine has served for 6 hours
   with no rollback. The tag goes on a release branch on top of that version,
-  and newer merges wait for the next release.
+  and the next changelog starts at the cut recorded in the annotated tag.
 - B: main's tip at the moment of the release, as 1.11.0 did, held back only by
   the blockers.
 
-**Answer: A.** The six-hour production cut remains the release boundary; newer
-product changes must wait for a fresh cut and changelog. The current contract
-is in §3.2.
+**Answer: A.** The six-hour production cut remains the changelog boundary.
+Newer product changes remain eligible for the next release's changelog even
+when the release PR is squash-integrated onto a newer main tree. The current
+contract is in §3.2.
 
 **Q4. Should automatic releases recapture the README screenshots?**
 - A (recommended): no. The README text is updated with each release;

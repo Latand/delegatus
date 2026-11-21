@@ -55,7 +55,7 @@ async function repository() {
 test("the newest stable real tag supplies both lastTag and the visible change range", async () => {
   const h = await repository();
   const tag = await latestReleaseTag(h.repo);
-  expect(tag).toEqual({ name: "v1.15.0", version: "1.15.0", at: Date.parse("2026-10-20T00:00:00Z") });
+  expect(tag).toEqual({ name: "v1.15.0", version: "1.15.0", at: Date.parse("2026-10-20T00:00:00Z"), boundary: null });
   const changes = await changesSinceRelease(h.repo, tag.name, h.next);
   expect(changes.map(change => change.subject)).toEqual(["Next fix (#5)", "Next feature (#4)"]);
   const policy = { ...ready(), now: Date.parse("2026-10-22T23:30:00Z"), mainVersion: tag.version,
@@ -63,12 +63,22 @@ test("the newest stable real tag supplies both lastTag and the visible change ra
   expect(await releaseState(policy)).toMatchObject({ state: "due", count: 2 });
 });
 
+test("a squash-integrated release keeps post-cut product PRs in the next changelog", async () => {
+  const h = await repository();
+  await h.git("tag", "-a", "v1.16.0", h.next, "-m", "Delegatus 1.16.0", "-m", `Release-Cut: ${h.released}`);
+  await h.git("push", "origin", "refs/tags/v1.16.0");
+  const tag = await latestReleaseTag(h.repo);
+  expect(tag).toMatchObject({ name: "v1.16.0", boundary: h.released });
+  const changes = await changesSinceRelease(h.repo, tag.name, h.next, undefined, tag.boundary);
+  expect(changes.map(change => change.subject)).toEqual(["Next fix (#5)", "Next feature (#4)"]);
+});
+
 test("a local-only failed-push version cannot replace the last remote release tag", async () => {
   const h = await repository();
   await h.git("tag", "-a", "v9.9.9", h.next, "-m", "Delegatus 9.9.9");
   const remoteRelease = await latestReleaseTag(h.repo);
   expect(remoteRelease).toMatchObject({ name: "v1.15.0", version: "1.15.0" });
-  expect((await changesSinceRelease(h.repo, remoteRelease.name, h.next)).map(change => change.subject))
+  expect((await changesSinceRelease(h.repo, remoteRelease.name, h.next, undefined, remoteRelease.boundary)).map(change => change.subject))
     .toEqual(["Next fix (#5)", "Next feature (#4)"]);
 });
 

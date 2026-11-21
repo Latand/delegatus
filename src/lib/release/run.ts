@@ -200,7 +200,7 @@ export function productionReleaseController(ports: ReleasePorts): ReleaseControl
       const request: CreatePipelineRequest = { task: `Реліз Delegatus (після ${observed.policy.lastTag.version})`, repoDir: observed.repoDir,
         src: observed.src, baseBranch: "main", baseRef: cut, autoStart: true, publication: "remote-branch",
         spec: `Production cut ${cut}, served since ${new Date(decision.cut.at).toISOString()}. Trigger: ${decision.reason}; ${decision.count} visible candidates.`,
-        stages: releaseStages({ cut, lastTag: observed.policy.lastTag.name, changes: observed.policy.changes, askBeforePublish: setting?.askBeforePublish ?? true,
+        stages: releaseStages({ cut, lastTag: observed.policy.lastTag.name, lastTagBoundary: observed.policy.lastTag.boundary, changes: observed.policy.changes, askBeforePublish: setting?.askBeforePublish ?? true,
           approval: setting && !setting.askBeforePublish ? JSON.stringify(setting.publishApproval ?? { at: setting.updatedAt, by: setting.setBy, why: setting.why }) : undefined }) };
       // Claim before the task write; a second process adopts the same frozen request.
       mutateReleaseProject(project, current => current.live ? current : { ...current,

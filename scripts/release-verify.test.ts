@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { releasePreflight, releasePublished, verifyRelease, type ReleasePreflight, type VerifyPorts } from "./release-verify";
+import { releaseCutFromTag, releasePreflight, releasePublished, verifyRelease, type ReleasePreflight, type VerifyPorts } from "./release-verify";
 const valid = (): ReleasePreflight => ({ tag: "v1.2.0", version: "1.2.0", localTag: "absent", remoteTag: "absent", npmVersion: false,
   files: ["CHANGELOG.md", "package.json", "docs/media/readme/board.svg"], provenance: true, clean: true });
 test("preflight refuses product changes, existing tags or packages, stale frames and dirty heads", () => {
@@ -16,12 +16,13 @@ test("preflight refuses product changes, existing tags or packages, stale frames
   expect(releasePreflight({ ...valid(), remoteTag: "matching" })).toContain("release tag conflicts with the reviewed local or remote object");
 });
 
-test("preflight preserves the cut boundary when the integration parent contains newer product paths", () => {
+test("preflight keeps the changelog boundary independent from product paths integrated after the cut", () => {
   const base: ReleasePreflight = { tag: "v1.2.0", version: "1.2.0", localTag: "absent", remoteTag: "absent",
     npmVersion: false, files: ["CHANGELOG.md", "package.json"], provenance: true, clean: true };
-  expect(releasePreflight({ ...base, postCutFiles: ["scripts/release-verify.ts"] })).toEqual([]);
-  expect(releasePreflight({ ...base, postCutFiles: ["src/feature.ts"] })).toContain(
-    "main contains product changes after the release cut; restart from a fresh cut and regenerate the changelog");
+  expect(releasePreflight(base)).toEqual([]);
+  const cut = "b".repeat(40);
+  expect(releaseCutFromTag(`object a\ntype commit\ntag v1.2.0\n\nDelegatus 1.2.0\n\nRelease-Cut: ${cut}`)).toBe(cut);
+  expect(releaseCutFromTag("object a\ntype commit\ntag v1.2.0\n\nDelegatus 1.2.0")).toBeNull();
 });
 
 test("real verifier consumes recorded read-only git, workflow, npm and image responses", async () => {
@@ -138,7 +139,7 @@ test("the preflight CLI requires the merged PR number", () => {
 
 test("preflight distinguishes a matching local-only tag, a confirmed remote tag, and conflicts", async () => {
   const head = "b".repeat(40); const object = "d".repeat(40);
-  const runPreflight = async (local: boolean, localCommit: string, remoteLines: string, packagePublished = false, message = "Delegatus 1.2.0") => verifyRelease("v1.2.0", "a".repeat(40), {
+  const runPreflight = async (local: boolean, localCommit: string, remoteLines: string, packagePublished = false, message = `Delegatus 1.2.0\n\nRelease-Cut: ${"a".repeat(40)}`) => verifyRelease("v1.2.0", "a".repeat(40), {
     now: () => 0, wait: async () => {}, provenance: () => true, registry: async () => packagePublished ? { version: "1.2.0" } : null,
     command: async (file, args) => {
       if (file === "gh") return JSON.stringify({ state: "MERGED", baseRefName: "main", mergeCommit: { oid: head } });
@@ -302,11 +303,11 @@ test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "
     git("add", "."); git("commit", "-m", "base");
     const cut = git("rev-parse", "HEAD");
     git("remote", "add", "origin", remote); git("push", "origin", "HEAD:refs/heads/main");
-    git("checkout", "-b", "release", cut);
     if (scenario === "main advanced before preparation") {
-      git("checkout", "main"); fs.writeFileSync(path.join(lane, "src-feature.ts"), "export const newer = true;\n");
-      git("add", "."); git("commit", "-m", "New product after cut (#8)"); git("push", "origin", "main"); git("checkout", "release");
+      fs.writeFileSync(path.join(lane, "src-feature.ts"), "export const newer = true;\n");
+      git("add", "."); git("commit", "-m", "New product after cut (#8)"); git("push", "origin", "main");
     }
+    git("checkout", "-b", "release", cut);
     fs.writeFileSync(path.join(lane, "package.json"), JSON.stringify({ name: "package-example", version: "1.2.0" }));
     if (scenario === "renamed product path") {
       fs.mkdirSync(path.join(lane, "scripts"));
@@ -337,10 +338,11 @@ test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "
     };
     const run = () => verifyRelease("v1.2.0", cut, ports, "7");
     const result = await run();
-    if (scenario === "squash") {
+    if (["squash", "main advanced before preparation", "main advanced before squash"].includes(scenario)) {
       expect(result).toEqual({ errors: [], nextStep: "create-and-push", tagCommit: merged });
-      expect(merged).not.toBe(reviewed);
-      git("tag", "-a", "v1.2.0", merged, "-m", "Delegatus 1.2.0");
+      if (scenario === "squash") expect(merged).not.toBe(reviewed);
+      if (scenario !== "squash") expect(git("show", `${merged}:src-feature.ts`)).toBe("export const newer = true;");
+      git("tag", "-a", "v1.2.0", merged, "-m", "Delegatus 1.2.0", "-m", `Release-Cut: ${cut}`);
       expect(await run()).toEqual({ errors: [], nextStep: "push-existing", tagCommit: merged });
       git("push", "origin", "refs/tags/v1.2.0");
       expect(await run()).toEqual({ errors: [], nextStep: "verify-remote", tagCommit: merged });
@@ -354,12 +356,10 @@ test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "
         "renamed product path": "diff includes product paths",
         "off main": "release tag commit is not on origin/main",
         "unreadable main": "cannot refresh origin/main",
-        "main advanced before preparation": "main contains product changes after the release cut",
-        "main advanced before squash": "main contains product changes after the release cut",
       };
       expect(result.errors.join("\n")).toContain(reasons[scenario]);
       expect(result.nextStep).toBeUndefined();
-      expect(registryReads).toBe(["checkout moved", "renamed product path", "main advanced before preparation", "main advanced before squash"].includes(scenario) ? 1 : 0);
+      expect(registryReads).toBe(["checkout moved", "renamed product path"].includes(scenario) ? 1 : 0);
       expect(git("tag", "--list")).toBe("");
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

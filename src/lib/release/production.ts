@@ -12,6 +12,7 @@ import { pipelineDeliveryLookup } from "@/lib/pipelines/store";
 import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { isReleasePublishStage } from "@/lib/pipelines/releaseTagPolicy";
 import { createPipelineFromRequest } from "@/lib/pipelines/engine";
+import { releaseCutFromTag } from "../../../scripts/release-verify";
 import type { CreatePipelineRequest, Pipeline } from "@/lib/pipelines/types";
 import { MAX_STAGE_PROMPT_LENGTH } from "@/lib/pipelines/limits";
 import { productionReleaseController, releaseRequestDigest, ReleaseValidationRefusal, type ReleasePorts } from "./run";
@@ -38,9 +39,15 @@ export async function latestReleaseTag(repoDir: string, run: typeof command = co
   const name = ref.slice("refs/tags/".length);
   const local = await run("git", ["rev-parse", ref], repoDir);
   if (local !== object) throw new Error("latest remote release tag is missing or differs locally");
+  const annotation = await run("git", ["cat-file", "-p", ref], repoDir);
+  const boundary = releaseCutFromTag(annotation);
+  if (boundary) {
+    try { await run("git", ["merge-base", "--is-ancestor", boundary, `${name}^{commit}`], repoDir); }
+    catch { throw new Error("latest remote release tag has an invalid changelog boundary"); }
+  }
   const timestamp = await run("git", ["for-each-ref", "--format=%(creatordate:unix)", ref], repoDir);
   if (!/^\d+$/.test(timestamp)) throw new Error("latest remote release tag date is unreadable");
-  return { name, version: name.slice(1), at: Number(timestamp) * 1000 };
+  return { name, version: name.slice(1), at: Number(timestamp) * 1000, boundary };
 }
 async function registryHasRelease(packageName: string, version: string): Promise<boolean> {
   const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/${version}`, { signal: AbortSignal.timeout(15_000) });
@@ -75,10 +82,10 @@ export async function supersedingReleaseTag(repoDir: string, saved: { cut: strin
   }
   return null;
 }
-export async function changesSinceRelease(repoDir: string, tag: string, cut: string, run: typeof command = command): Promise<ReleaseChange[]> {
+export async function changesSinceRelease(repoDir: string, tag: string, cut: string, run: typeof command = command, boundary?: string | null): Promise<ReleaseChange[]> {
   const git = (...args: string[]) => run("git", args, repoDir);
   const changes: ReleaseChange[] = [];
-  const commits = (await git("log", "--first-parent", "--format=%H %s", `${tag}..${cut}`)).split("\n").filter(Boolean);
+  const commits = (await git("log", "--first-parent", "--format=%H %s", `${boundary || tag}..${cut}`)).split("\n").filter(Boolean);
   for (const line of commits) {
     const space = line.indexOf(" "); const sha = line.slice(0, space); const subject = line.slice(space + 1);
     if (!/(\(#\d+\)|Merge pull request #\d+)/.test(subject)) continue;
@@ -215,7 +222,7 @@ export function releaseControllerForSources(sources: SeatTickSources) {
         if (d.phase === "succeeded" && d.terminal && await isAncestor(d.revision, main)) deployments.push({ revision: d.revision, at: Date.parse(d.updatedAt) });
       }
       const cut = frozenCut ? { revision: frozenCut } : await releaseCut(deployments, isAncestor, sources.now());
-      const changes = cut ? await changesSinceRelease(repoDir, name, cut.revision) : [];
+      const changes = cut ? await changesSinceRelease(repoDir, name, cut.revision, command, tag.boundary) : [];
       const pkg = JSON.parse(await git("show", "origin/main:package.json"));
       const registryHasTag = await registryHasRelease(pkg.name, version);
       const repo = await command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], repoDir);

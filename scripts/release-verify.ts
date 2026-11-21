@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 export interface ReleasePreflight {
   tag: string; version: string; localTag: "absent" | "matching" | "conflict"; remoteTag: "absent" | "matching" | "conflict"; npmVersion: boolean;
-  files: string[]; postCutFiles?: string[]; provenance: boolean; clean: boolean;
+  files: string[]; provenance: boolean; clean: boolean;
 }
 export type PreflightAction = "create-and-push" | "push-existing" | "verify-remote";
 export function releasePreflight(input: ReleasePreflight): string[] {
@@ -18,7 +18,6 @@ export function releasePreflight(input: ReleasePreflight): string[] {
   if (!input.clean) errors.push("release head is dirty");
   if (!input.provenance) errors.push("README provenance does not match");
   if (input.files.some(f => !/^(CHANGELOG\.md|package\.json|bun\.lock|README\.md)$/.test(f) && !/^(patches|scripts|docs\/media\/readme)\//.test(f))) errors.push("diff includes product paths");
-  if (input.postCutFiles?.some(f => !/^(CHANGELOG\.md|package\.json|bun\.lock|README\.md)$/.test(f) && !/^(patches|scripts|docs\/media\/readme)\//.test(f))) errors.push("main contains product changes after the release cut; restart from a fresh cut and regenerate the changelog");
   return errors;
 }
 export interface PublishedRelease {
@@ -32,11 +31,22 @@ export function releasePublished(input: PublishedRelease): string[] {
   if (input.images.length !== 3 || new Set(input.images.map(i => i.digest)).size !== 1 || input.images.some(i => !i.digest || !["linux/amd64", "linux/arm64"].every(p => i.platforms.includes(p)))) errors.push("Docker tags/digest/platforms not verified");
   return errors;
 }
-function isReleaseTagObject(content: string, tag: string, commit: string, version: string): boolean {
-  const [headers, message] = content.split("\n\n", 2);
+function isReleaseTagObject(content: string, tag: string, commit: string, version: string, cut?: string): boolean {
+  const separator = content.indexOf("\n\n");
+  const headers = separator < 0 ? "" : content.slice(0, separator);
+  const tagMessage = separator < 0 ? "" : content.slice(separator + 2).trimEnd();
+  const validMessage = cut
+    ? tagMessage === `Delegatus ${version}\n\nRelease-Cut: ${cut}`
+    : tagMessage === `Delegatus ${version}` || new RegExp(`^Delegatus ${version}\\n\\nRelease-Cut: [a-f0-9]{40}$`).test(tagMessage);
   return !!headers && headers.split("\n").includes(`object ${commit}`)
     && headers.split("\n").includes("type commit") && headers.split("\n").includes(`tag ${tag}`)
-    && message?.trimEnd() === `Delegatus ${version}`;
+    && validMessage;
+}
+export function releaseCutFromTag(content: string): string | null {
+  const separator = content.indexOf("\n\n");
+  const message = separator < 0 ? "" : content.slice(separator + 2).trimEnd();
+  const match = /^Delegatus \d+\.\d+\.\d+\n\nRelease-Cut: ([a-f0-9]{40})$/.exec(message);
+  return match?.[1] ?? null;
 }
 export function readmeProvenance(root: string): boolean {
   try {
@@ -149,7 +159,7 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
       const content = await git("cat-file", "-p", `refs/tags/${tag}`);
       const tagged = JSON.parse(await git("show", `${tag}:package.json`));
       localTag = type === "tag" && localCommit === tagCommit && tagged.version === version
-        && isReleaseTagObject(content, tag, tagCommit, version) ? "matching" : "conflict";
+        && isReleaseTagObject(content, tag, tagCommit, version, cut) ? "matching" : "conflict";
     }
     const remote = (await git("ls-remote", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`)).split("\n")
       .map(line => line.trim().split(/\s+/)).filter(parts => parts.length === 2 && parts[0]);
@@ -162,9 +172,6 @@ export async function verifyRelease(tag: string, cut: string | null, ports: Veri
       npmVersion: !!await ports.registry(`${registryURL}/${version}`),
       // Compare the release PR's own files with its integrated first parent.
       files: (await git("--no-replace-objects", "diff", "--no-renames", "--name-only", `${tagCommit}^1`, tagCommit)).split("\n").filter(Boolean),
-      // The release notes are frozen at the production cut. A queue refresh may
-      // advance main after review; never tag that newer product tree unnoticed.
-      postCutFiles: (await git("--no-replace-objects", "diff", "--no-renames", "--name-only", cut, `${tagCommit}^1`)).split("\n").filter(Boolean),
       clean: !(await git("status", "--porcelain")), provenance: ports.provenance() });
     if (await git("rev-parse", "HEAD") !== head) return { errors: ["release checkout head moved during preflight; review the new head before tagging"] };
     const nextStep: PreflightAction | undefined = errors.length ? undefined : remoteTag === "matching" ? "verify-remote"
@@ -232,7 +239,7 @@ if (import.meta.main) {
     }
     const result = await verifyRelease(tag, cut, productionPorts, args.includes("--pr") ? args[args.indexOf("--pr") + 1] : undefined);
     if (result.errors.length) { console.error(result.errors.join("\n")); process.exitCode = 1; }
-    else if (result.nextStep === "create-and-push") console.log(`release preflight passed; create the approved annotated tag on verified main commit ${result.tagCommit}, then push it`);
+    else if (result.nextStep === "create-and-push") console.log(`release preflight passed; create the approved annotated tag on verified main commit ${result.tagCommit} with message "Delegatus ${tag.slice(1)}" and "Release-Cut: ${cut}", then push it`);
     else if (result.nextStep === "push-existing") console.log(`release preflight passed for ${result.tagCommit}; push the existing matching annotated tag object without retagging`);
     else if (result.nextStep === "verify-remote") console.log(`remote release tag matches ${result.tagCommit}; perform read-only publication verification and do not push`);
     else console.log("npm, Docker and macOS installation verified");

@@ -511,8 +511,12 @@ test.each(["normal", "lost-reply", "busy"])("fresh processes retire a real valid
     console.log(JSON.stringify({ error, row, dispatches, lanes: lanes.map(lane => ({ id: lane.id, creationRequest: lane.creationRequest, taskIds: lane.taskIds, baseRef: lane.baseRef })),
       tasks: loadTasks().map(task => task.id), digest: row.live?.request ? releaseRequestDigest(row.live.request) : null }));
   `;
-  const run = async (mode: string, worker: string) => JSON.parse((await promisify(execFile)(process.execPath, ["-e", script, mode, worker],
-    { env: { ...process.env }, timeout: 30_000 })).stdout);
+  const run = async (mode: string, worker: string) => {
+    const child = await promisify(execFile)(process.execPath, ["-e", script, mode, worker], { env: { ...process.env }, timeout: 30_000 });
+    const result = child.stdout.trim().split(/\r?\n/).at(-1) ?? "";
+    try { return JSON.parse(result); }
+    catch { throw new Error(`release child returned invalid JSON: ${child.stdout.slice(0, 500)} ${child.stderr.slice(0, 500)}`); }
+  };
   const retired = await run("retire", "1");
   expect(retired.error).toBeNull();
   expect(retired.row.live).toBeNull();
@@ -765,10 +769,16 @@ test("a refreshed release is blocked when product changes arrive after its cut a
     } };
   expect(await verifyRelease("v1.1.0", cut, ports)).toEqual({ errors: ["release preflight requires --pr with the merged release PR number"] });
   const result = await verifyRelease("v1.1.0", cut, ports, String(lane.merge?.prNumber));
-  expect(result).toEqual({ errors: ["main contains product changes after the release cut; restart from a fresh cut and regenerate the changelog"] });
+  expect(result.errors).toEqual([]);
+  expect(result.nextStep).toBe("create-and-push");
   expect(git("tag", "--list", "v1.1.0")).toBe("");
-  expect((await changesSinceRelease(root, "v1.0.0", merged!)).map(change => change.subject))
+  git("tag", "-a", "v1.1.0", merged!, "-m", "Delegatus 1.1.0", "-m", `Release-Cut: ${cut}`);
+  git("push", "origin", "refs/tags/v1.1.0");
+  const { latestReleaseTag } = await import("./production");
+  const tag = await latestReleaseTag(root);
+  expect(tag).toMatchObject({ name: "v1.1.0", boundary: cut });
+  expect((await changesSinceRelease(root, "v1.0.0", merged!, undefined, tag.boundary)).map(change => change.subject))
     .toContain("main advances after cut (#81)");
-  expect((await changesSinceRelease(root, "v1.0.0", merged!)).map(change => change.subject))
+  expect((await changesSinceRelease(root, "v1.0.0", merged!, undefined, tag.boundary)).map(change => change.subject))
     .toContain("main advances after review (#82)");
 });

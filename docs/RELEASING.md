@@ -203,8 +203,10 @@ chooses «Випустити й більше не питати» or turns the ch
    or rebase newer product changes into it. Run `bun scripts/bootstrap-release-tools.ts`.
    Limit the release PR's own changes to `CHANGELOG.md`, `package.json`,
    `bun.lock`, `patches/**`, `README.md`, `docs/media/readme/**` and `scripts/**`.
-2. Write the changelog from `git log --first-parent <last-tag>..<cut>`, including
-   closed batch-merged PRs. Pick minor for additions/changes, patch for
+2. Write the changelog from `git log --first-parent <last-release-cut>..<cut>`, including
+   closed batch-merged PRs. The annotated tag records the previous release cut
+   in `Release-Cut: <full-sha>`; older tags without that field use the tag commit.
+   Pick minor for additions/changes, patch for
    fixes/security. Breaking changes require an operator decision. Bump
    `package.json` and open the release PR.
 3. Build and run `scripts/capture-readme-media.ts` under isolated state through
@@ -216,17 +218,17 @@ chooses «Випустити й більше не питати» or turns the ch
    `bun scripts/release-verify.ts --preflight --cut <full-cut-sha> --tag vX.Y.Z --pr <number>`
    with the version from that commit's `package.json`. Preflight verifies the
    merged PR, current `origin/main`, ancestry from the cut and README provenance.
-   It checks release paths against the integrated commit's first parent and
-   checks the first-parent tree against the cut for newer product paths. If
-   main advanced with product changes, preflight blocks; the seat must start a
-   fresh release from a newer verified cut and regenerate the changelog. This
-   keeps those changes eligible for that next changelog.
+   It checks the release PR's own delta and verifies that the frozen cut is an
+   ancestor of the integrated main commit. A squash may include product PRs
+   merged after the cut. The release tag records the cut, so those later PRs
+   remain eligible for the next changelog.
 5. Obtain the operator's go when the release setting requires it. Recheck
    release blockers and rerun the same preflight immediately before any push.
    Follow its action:
 
    - `create-and-push` permits creating and pushing the annotated `vX.Y.Z` tag
-     on the verified commit with message `Delegatus X.Y.Z`.
+     on the verified commit with messages `Delegatus X.Y.Z` and
+     `Release-Cut: <full-cut-sha>`.
    - `push-existing` permits pushing the matching local tag object.
    - `verify-remote` proceeds directly to publication verification.
 6. Every `v*` tag starts `publish.yml` and `docker-image.yml`. After immutable

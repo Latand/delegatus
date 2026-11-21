@@ -855,6 +855,15 @@ browserTest("automatic releases rendered in the shared tick panel, English and U
           await page.waitForSelector(phone ? "[data-seat-tick-row]" : "[data-seat-tick-chip]");
           await page.click(phone ? '[data-mobile2-open="tick"]' : "[data-seat-tick-chip]");
           await page.waitForSelector("[data-seat-tick-release-reason]");
+          const topMismatch = await page.locator("[data-seat-tick-release-reason-top]").evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            const host = document.querySelector("[data-seat-tick-popover]") ?? document.querySelector('[data-mobile2-sheet="tick"]')!;
+            const bounds = host.getBoundingClientRect();
+            return { top: rect.top, bottom: rect.bottom, hostTop: bounds.top, hostBottom: bounds.bottom,
+              text: element.textContent, fullTextVisible: rect.top >= Math.max(0, bounds.top) && rect.bottom <= Math.min(innerHeight, bounds.bottom) };
+          });
+          expect(topMismatch.text).toBe(translate(locale, "seatTick.release.wait.versionMismatch"));
+          expect(topMismatch.fullTextVisible, `${locale} ${theme} ${layout.width}: ${JSON.stringify(topMismatch)}`).toBe(true);
           const mismatch = await page.locator("[data-seat-tick-release-reason]").evaluate(element => {
             const rect = element.getBoundingClientRect();
             const host = document.querySelector("[data-seat-tick-popover]") ?? document.querySelector('[data-mobile2-sheet="tick"]')!;

@@ -113,8 +113,8 @@ async function observe(rows: Pipeline[], archived: Pipeline[] = [], versionAhead
   const bin = path.join(directory, "bin"); fs.mkdirSync(bin, { recursive: true });
   const priorPath = process.env.PATH, priorFetch = globalThis.fetch;
   let archiveReads = 0;
-  const script = `#!${process.execPath}\nconst tool=process.argv[1].split('/').at(-1),a=process.argv.slice(2);let out='';
-if(tool==='git'){if(a[0]==='ls-remote')out='${"a".repeat(40)}\\trefs/tags/v1.0.0';else if(a[0]==='for-each-ref')out='1793318400';else if(a[0]==='rev-parse'&&a[1]==='refs/tags/v1.0.0')out='${"a".repeat(40)}';else if(a[0]==='rev-parse')out='${head}';else if(a[0]==='show')out=JSON.stringify({name:'package-example',version:'${versionAhead ? "1.1.0" : "1.0.0"}'});}
+const script = `#!${process.execPath}\nconst tool=process.argv[1].split('/').at(-1),a=process.argv.slice(2);let out='';
+if(tool==='git'){if(a[0]==='ls-remote')out='${"a".repeat(40)}\\trefs/tags/v1.0.0';else if(a[0]==='for-each-ref'&&a.includes('refs/tags/v*'))out='${versionAhead ? "v1.1.0 1793404800\\nv1.0.0 1793318400" : "v1.0.0 1793318400"}';else if(a[0]==='for-each-ref')out='1793318400';else if(a[0]==='rev-parse'&&a[1]==='refs/tags/v1.0.0')out='${"a".repeat(40)}';else if(a[0]==='rev-parse')out='${head}';else if(a[0]==='show')out=JSON.stringify({name:'package-example',version:'${versionAhead ? "1.1.0" : "1.0.0"}'});}
 if(tool==='gh'){if(a[0]==='repo')out='example/release';else if(a[1]?.includes('/branches/'))out=JSON.stringify({protection:{required_status_checks:{contexts:[]}}});else if(a[1]?.includes('/check-runs'))out=JSON.stringify({check_runs:[]});else out=JSON.stringify({statuses:[]});}
 if(tool==='bun')out=JSON.stringify({missing:[],chrome:'/fixture/chrome'});console.log(out);`;
   try {
@@ -134,8 +134,11 @@ test("a successful publish lane ceases to block future releases", async () => {
   expect(archiveReads).toBe(0);
   expect(await releaseState({ ...ready(), live: policy.live })).toMatchObject({ state: "due" });
 });
-test("production observation ignores an unpublished local-only tag and reports the version mismatch", async () => {
-  const { policy } = await observe([lane("publisher-observation", true)], [], true);
+test("production observation reports a version mismatch when only a local tag remains and no publisher is live", async () => {
+  const publisher = lane("closed-publisher-observation", true);
+  publisher.state = "closed";
+  const { policy } = await observe([publisher], [], true);
+  expect(policy.live).toBe(false);
   expect(policy).toMatchObject({ lastTag: { name: "v1.0.0", version: "1.0.0" }, mainVersion: "1.1.0" });
   expect(await releaseState({ ...ready(), mainVersion: policy.mainVersion, lastTag: policy.lastTag,
     registryHasTag: policy.registryHasTag })).toMatchObject({ state: "blocked", blocker: 11, reason: "release-version-mismatch" });
@@ -206,8 +209,12 @@ test("a lost successor handoff receipt recovers one real publish lane across pro
   `;
   const scriptPath = path.join(directory, "restart.ts");
   fs.writeFileSync(scriptPath, script);
-  const restart = async (mode: string) => JSON.parse((await promisify(execFile)(process.execPath, [scriptPath, mode],
-    { env: { ...process.env }, timeout: 30_000 })).stdout);
+  const restart = async (mode: string) => {
+    const child = await promisify(execFile)(process.execPath, [scriptPath, mode], { env: { ...process.env }, timeout: 30_000 });
+    const result = child.stdout.trim().split(/\r?\n/).at(-1) ?? "";
+    try { return JSON.parse(result); }
+    catch { throw new Error(`release child returned invalid JSON: ${child.stdout.slice(0, 500)} ${child.stderr.slice(0, 500)}`); }
+  };
   const lost = await restart("lose");
   expect(lost.error).toBe("lost receipt");
   expect(lost.creates).toBe(1);

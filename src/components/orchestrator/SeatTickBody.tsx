@@ -673,7 +673,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         {read.answer?.journalError ? (
           <p role="status" data-seat-tick-journal-unreadable className="pl-3 text-caption leading-4 text-warning">{t("seatTick.journalUnreadable")}</p>
         ) : null}
-        {releaseMismatch ? <p data-seat-tick-release-reason role="status" className="text-caption leading-4 text-warning">{t("seatTick.release.wait.versionMismatch")}</p> : null}
+        {releaseMismatch ? <p data-seat-tick-release-reason data-seat-tick-release-reason-top role="status" className="text-caption leading-4 text-warning">{t("seatTick.release.wait.versionMismatch")}</p> : null}
         {state.storedAutonomy.state !== "off" ? <AutonomyStatus stored={state.storedAutonomy} now={now} locale={locale} /> : null}
         <TurboStatus control={turbo} now={now} locale={locale} />
         {maintenanceView ? (
