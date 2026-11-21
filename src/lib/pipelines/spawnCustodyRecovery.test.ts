@@ -177,8 +177,10 @@ async function killedSetup(f: Awaited<ReturnType<typeof fixture>>, state: "start
   const lane = f.row();
   const run = lane.runs[0]!;
   const first = run.attempts[0]!;
+  const accounting = first.accounting!;
   const attempt = { ...structuredClone(first), n: 6, state: "spawning" as const, spawnCalls: 1,
     startedAt: "2026-11-21T09:08:05.907Z", completedAt: null, error: KILLED_SETUP,
+    accounting: { ...accounting, repeatReason: "unknown" as const },
     restartContext: { previousAttempt: 5, transcriptPath: null } };
   const { receipt } = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: lane.worktreeDir!,
     transport: "structured", clientAttemptId: `pipeline_${lane.id}_plan_6`,
@@ -227,6 +229,7 @@ async function killedSetup(f: Awaited<ReturnType<typeof fixture>>, state: "start
   f.registry.releaseStructuredSpawnAdmissionOwner(launchId, admissionOwner!);
   run.attempts = Array.from({ length: 5 }, (_, index) => ({
     ...structuredClone(first), n: index + 1, state: "failed", completedAt: attempt.startedAt,
+    accounting: { ...accounting, repeatReason: index === 0 ? null : "unknown" as const },
   }));
   Object.assign(attempt, { launchId, conversationId });
   run.attempts.push(attempt);
