@@ -47,7 +47,7 @@ import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal, type Na
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
-import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { liveOwnerRelayConversation, liveOwnerRelayRequest, ownerRelayPayload, ownerRelayProjectMatches, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
@@ -2384,7 +2384,6 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   }
   const maintainer = dependencies ? maintenanceCaller(dependencies) : null;
   const caller = dependencies ? attributionOf(dependencies) : null;
-  const ownerRelay = dependencies ? ownerRelayCaller(dependencies) : false;
   assertMaintenanceWrite(maintainer, args, undefined, true);
   refuseCrossProjectFromSeat("create_task", () => text(args.project) || null, args, dependencies);
   const input: CreateTaskInput = {
@@ -2399,7 +2398,8 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     let outcome = createTask(state.tasks, input, state.recentCreates, { requireDue: true, dueTimeZone: operatorTimeZone() ?? undefined, explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
     // Replays and matched findings retain the task's existing status.
-    if (outcome.ok && !outcome.replay && !outcome.matched && ownerRelay && !outcome.task.hold) {
+    if (outcome.ok && !outcome.replay && !outcome.matched && !outcome.task.hold && dependencies
+      && ownerRelayCaller(dependencies, outcome.task.project)) {
       const assigned = patchTask(outcome.tasks, outcome.task.id, { status: "assigned" }, outcome.task.createdAt,
         { actor: "agent", ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
       if (!assigned.ok) return { state: undefined, result: assigned };
@@ -8572,11 +8572,12 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
   const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
-  // Match HTTP admission: a designated seat takes precedence even when the
-  // root caller's general attribution also identifies it as the voice gateway.
-  const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+  const relayPayload = attribution.conversationId && !attribution.via ? ownerRelayPayload(message, attribution.conversationId) : null;
+  const owner = attribution.kind === "agent" || relayPayload?.requesterRequestId ? relayPayload : null;
+  // The active requester grant scopes this turn even if the conversation has
+  // an independent seat designation.
+  const seat = owner?.requesterRequestId ? null : (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find((candidate) => candidate.conversationId === attribution.conversationId);
-  const owner = ownerRelayCaller(dependencies) ? ownerRelayPayload(message, attribution.conversationId!) : null;
   if (!seat && !owner && (attribution.kind !== "gateway" || !attribution.conversationId)) {
     throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation; continue the requested work with your tools, or explain the failure and the owner's next action", {
       code: "orchestrator_relay_refused", retryable: false,
@@ -8584,6 +8585,7 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
   }
   const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
   if (!seat && owner && project && !ownerRelayTargetMatches(attribution.conversationId!, project, orchestratorSeatFor(project).active?.conversationId)) {
+    if (owner.requesterRequestId) throw new McpToolRefusal("the trusted requester's handoff must stay within its granted project", { code: "trusted_requester_project_refused", retryable: false });
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
@@ -8607,7 +8609,8 @@ function resolveRemoteSeatMachine(machine: string, project: string, dependencies
   const caller = attributionOf(dependencies);
   const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find(seat => seat.conversationId === caller.conversationId && seat.project && canonicalOrchestratorProject(seat.project) === project);
-  if (!seat || caller.via) throw new McpToolRefusal("only this project's designated seat may relay over a link", { code: "orchestrator_relay_refused", retryable: false });
+  if (!seat || caller.via || liveOwnerRelayRequest(seat.conversationId)?.tier === "requester")
+    throw new McpToolRefusal("only this project's designated seat may relay over a link", { code: "orchestrator_relay_refused", retryable: false });
   try { return resolveSeatMessageMachine(machine, project); }
   catch (error) {
     if (error instanceof SeatMessageRefusal) throw new McpToolRefusal(error.message, { code: error.code, outcome: "not-executed", nextAction: "new-request-permitted" });
@@ -8616,9 +8619,10 @@ function resolveRemoteSeatMachine(machine: string, project: string, dependencies
 }
 
 /** The Viewer binds this ordinary agent to one live owner request. */
-function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies): boolean {
+function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies, project?: string): boolean {
   const caller = attributionOf(dependencies);
-  return caller.kind === "agent" && !caller.via && !!caller.conversationId && liveOwnerRelayConversation(caller.conversationId);
+  if (caller.kind !== "agent" || caller.via || !caller.conversationId) return false;
+  return project === undefined ? liveOwnerRelayConversation(caller.conversationId) : ownerRelayProjectMatches(caller.conversationId, project);
 }
 
 /** Seats, the gateway and live owner relay agents can message a seat.

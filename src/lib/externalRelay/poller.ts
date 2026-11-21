@@ -3,8 +3,8 @@ import { ownerTierFor } from "./profile";
 import { ownerRunRoot } from "./runDirectory";
 import { ownerTurnDiagnostic } from "./diagnostic";
 import { deliverOwnerLateAnswer, expireOwnerLateAnswer, ownerLateAnswerTerminal, ownerLateAnswerUndeliverable, ownerRecoveryRequest } from "./ownerLateDelivery";
-import { ownerFailureAnswer, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
-import { ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
+import { ownerFailureAnswer, confirmOwnerStop, revokeOwnerRuns, type OwnerRunPorts } from "./ownerRun";
+import { ownerRelayFailureReplyAuthorized, ownerRunSettingsAllow } from "./ownerAuthority";
 import { changeRun, changeRunAsync, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
 import { sweepConversationsAsync } from "./conversations";
 import { readRelaySwitches } from "./switches";
@@ -36,7 +36,7 @@ import {
   mergeRelayTargets,
   readRelayStore,
   readRunLedger,
-  updateRelayStore,
+  updateRelayStoreAsync,
   type PairedRelay,
   type RunRecord,
 } from "./store";
@@ -221,11 +221,12 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       continue;
     }
     if (held.ownerTurn?.lateAnswer) continue;
-    const recoveryRelay = readRelayStore().relays.find(item => item.id === run.relayId);
+    const currentStore = readRelayStore();
+    const recoveryRelay = currentStore.relays.find(item => item.id === run.relayId);
     const recoveryRequest = recoveryRelay && ownerRecoveryRequest(held, recoveryRelay);
     if (recoveryRelay && recoveryRequest && held.ownerTurn && !held.ownerTurn.restartRetries
       && interruptedOwner && !held.ownerTurn.quarantinedAt
-      && recoveryRelay.paused === false && recoveryRelay.targets.some(target => target.id === run.targetId && target.enabled && target.ownerTier)) {
+      && held.ownerTurn.entry?.tier !== "requester" && ownerRunSettingsAllow(held, currentStore)) {
       changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, restartRetries: 1 } }));
       ownerRecoveries.add(run.requestId);
       void runClaimedRequest(recoveryRelay, recoveryRequest, undefined, { ownerPorts, ownerRecovery: held })
@@ -260,7 +261,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     const failureAnswer = request && failureOwner && saved
       ? ownerFailureAnswer(request, failureOwner, held.ownerTurn?.diagnostic ?? ownerTurnDiagnostic("exception", "Owner request could not be completed"), [relay!.credential])
       : null;
-    if (relay && saved && failureAnswer && Date.now() >= Date.parse(saved.until)
+    if (relay && saved && failureAnswer && held.ownerTurn?.entry?.tier !== "requester" && Date.now() >= Date.parse(saved.until)
       && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) {
       const body = { lease_id: run.leaseId, outcome: "answered" as const, answer: failureAnswer,
         duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) };
@@ -422,7 +423,7 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
       return "failed";
     }
     let changed = false;
-    updateRelayStore((store) => ({
+    await updateRelayStoreAsync((store) => ({
       ...store,
       relays: store.relays.map((item) => {
         if (item.id !== id) return item;
@@ -435,7 +436,10 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
     }));
     // A new loop advertises slots from the new list, so a dropped target
     // stops being offered and an added one waits for its settings.
-    if (changed) refreshExternalRelayPollers(id);
+    if (changed) {
+      await revokeOwnerRuns(id);
+      refreshExternalRelayPollers(id);
+    }
     return changed ? "changed" : "unchanged";
   } catch (error) {
     console.error(
@@ -506,7 +510,7 @@ async function refreshRelayDescriptorFeaturesNow(id: string, options: { quiet?: 
     const { descriptor } = await discoverRelay(relay.origin);
     const features = descriptor.features ?? [];
     let changed = false;
-    updateRelayStore((store) => ({ ...store, relays: store.relays.map((item) => {
+    await updateRelayStoreAsync((store) => ({ ...store, relays: store.relays.map((item) => {
       if (item.id !== id || JSON.stringify(item.features ?? []) === JSON.stringify(features)) return item;
       changed = true;
       return { ...item, features };

@@ -11,7 +11,7 @@ import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { messageOriginProject, sameMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lookupOriginalSend, type SendReceipt } from "@/lib/runtime/sendSettlement";
 import { admittedVoiceBinding } from "@/lib/voiceCompanion/admission";
-import { ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { liveOwnerRelayRequest, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 
 import { authorizedManagerSeats, type AuthorizedManagerSeat } from "./authority";
 import { deputyAskerOf } from "./deputyAsker";
@@ -109,11 +109,13 @@ export function admitOrchestratorRelay(
   if (!conversationId && request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
     return relayRefused("caller_unidentified", "the relay caller's conversation could not be identified");
   }
-  const seat = conversationId
+  const relayPayload = conversationId ? ownerRelayPayload(text, conversationId) : null;
+  const requester = relayPayload?.requesterRequestId !== undefined;
+  const seat = conversationId && !requester
     ? authorizedManagerSeats(productionManagerAuthoritySources()).find((candidate) => candidate.conversationId === conversationId)
     : null;
-  const gateway = conversationId && !seat ? deputyAskerOf(request) : null;
-  const owner = conversationId && !seat && !gateway?.ok ? ownerRelayPayload(text, conversationId) : null;
+  const gateway = conversationId && !seat && !requester ? deputyAskerOf(request) : null;
+  const owner = !seat && !gateway?.ok ? relayPayload : null;
   const operator = !conversationId && (inProcessPerson || operatorBrowserRequest(request));
   if ((!seat && !gateway?.ok && !owner && !operator) || (seat && !seat.project)) {
     return relayRefused(seat ? "sender_seat_without_project" : "sender_not_authorized",
@@ -139,7 +141,16 @@ export function admitOrchestratorRelay(
   // Recover the frozen recipient before comparing report custody. A retry may
   // settle the original source seat's receipt after its designation rotates.
   if (owner && !ownerRelayTargetMatches(conversationId!, project, resolved.ok ? resolved.recipient : recipient)) {
+    if (owner.requesterRequestId)
+      return refused("trusted_requester_project_refused", "the trusted requester's handoff must stay within its granted project", 403);
     return refused("owner_report_seat_unavailable", "the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", 409);
+  }
+  if (resolved.ok && owner?.requesterRequestId) {
+    return { ...resolved, admissionGuard: () => {
+      const live = liveOwnerRelayRequest(conversationId!);
+      if (live?.requestId !== owner.requesterRequestId || !ownerRelayTargetMatches(conversationId!, project, resolved.recipient))
+        throw new OrchestratorRelayRefusedError("sender_not_authorized");
+    } };
   }
   if (!resolved.ok || !seat) return resolved;
   const epoch = orchestratorSeatFor(seat.project!).active?.seatEpoch;
@@ -268,6 +279,7 @@ export function resolveOrchestratorRelay(
 /** Remote senders must be a designated seat of this shared project. */
 export function linkedRelayCaller(request: Pick<NextRequest, "headers">, project: string): AuthorizedManagerSeat | null {
   const conversationId = callerConversationId(request);
+  if (conversationId && liveOwnerRelayRequest(conversationId)?.tier === "requester") return null;
   return conversationId ? authorizedManagerSeats(productionManagerAuthoritySources())
     .find(seat => seat.conversationId === conversationId && !!seat.project && canonicalOrchestratorProject(seat.project) === canonicalOrchestratorProject(project)) ?? null : null;
 }

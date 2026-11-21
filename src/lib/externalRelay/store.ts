@@ -8,6 +8,7 @@ import type { OwnerBridgeContext } from "./ownerBridgeContext";
 import type { OwnerTurnDiagnostic } from "./diagnostic";
 import { ACTION_VERIFICATION_READS } from "./actionOutcome";
 import { ExternalRelayError } from "./errors";
+import type { RelayRunEntry, TrustedRequesterSettings } from "./trustedRequesters";
 
 export type RelayTargetSettings = {
   id: string;
@@ -27,6 +28,7 @@ export type RelayTargetSettings = {
   memberLimitPerHour?: number | null;
   /** Absent is off; only the operator can enable full owner agent runs. */
   ownerTier?: boolean;
+  requesters?: TrustedRequesterSettings;
 };
 /** The open «Створити клона» request (cloneCreate.ts), until it ends. */
 export type RelayCloneRequest = {
@@ -108,6 +110,8 @@ export type RunRecord = {
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
   ownerTurn?: { rawRequest?: unknown; context?: import("./profile").OwnerInstruction; restartRetries?: 1; restartPending?: true;
+    entry?: RelayRunEntry;
+    leaseDeadlineAt?: number;
     delivery?: import("./protocol").OwnerDelivery;
     /** Persisted before /complete; an absent ACK never authorizes /send. */
     completionAttempt?: { body: ExternalRelayCompletion; files: import("./attachments").StagedAttachment[] };
@@ -198,9 +202,16 @@ function withoutExpired(store: RelayStore): RelayStore {
 }
 export function readRelayStore(): RelayStore {
   const store = readStoredRelays();
-  return store.pending.some((item) => expired(item, Date.now()))
-    ? updateRelayStore((current) => current)
-    : store;
+  const current = withoutExpired(store);
+  if (current === store) return store;
+  try {
+    return updateRelayStore(value => value, 0);
+  } catch (error) {
+    // A concurrent writer prunes expired pairings before it writes. Hide
+    // them from readers immediately without waiting on that writer.
+    if (error instanceof RelayStoreBusy) return current;
+    throw error;
+  }
 }
 /** Authority reads never create settings or prune pending pairings. */
 export function pairedTelegramOwner(userId: string): boolean {
@@ -231,13 +242,22 @@ function readStoredRelays(): RelayStore {
 }
 export function updateRelayStore(
   change: (store: RelayStore) => RelayStore,
+  waitMs?: number,
 ): RelayStore {
   const file = externalRelayFile("relays");
   return withFileLock(file, () => {
     const next = withoutExpired(change(withoutExpired(readStoredRelays())));
     writeRelayFile(file, next);
     return next;
-  });
+  }, waitMs);
+}
+export async function updateRelayStoreAsync(change: (store: RelayStore) => RelayStore | Promise<RelayStore>): Promise<RelayStore> {
+  const file = externalRelayFile("relays");
+  return withFileLockAsync(file, async () => {
+    const next = withoutExpired(await change(withoutExpired(readStoredRelays())));
+    writeRelayFile(file, next);
+    return next;
+  }, Date.now() + 5_000);
 }
 export function readRunLedger(): RunLedger {
   const ledger = read(externalRelayFile("runs"), () => ({
@@ -288,7 +308,7 @@ export function withFileLock<T>(file: string, action: () => T, waitMs = 5_000): 
           fs.rmSync(lock, { force: true });
         }
       }
-      if (Date.now() >= deadline) throw new Error("relay store is busy");
+      if (Date.now() >= deadline) throw new RelayStoreBusy();
       // eslint-disable-next-line no-restricted-syntax -- Legacy relay-store write lock during serving relay mutations.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
@@ -602,7 +622,7 @@ export function publicRelay(
   relay: PairedRelay,
 ): Omit<PairedRelay, "credential"> {
   const { credential: _credential, ...publicRecord } = relay;
-  return publicRecord;
+  return { ...publicRecord, targets: relay.targets.map(({ requesters: _requesters, ...target }) => target) };
 }
 export function publicPending(
   pending: PendingRelay,

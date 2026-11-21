@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { crossOrigin, readJson, requireMember, teamErrorResponse, teamJson } from "@/lib/team/http";
 import { memberSummary, recolorMember, renameMember, restoreMember, revokeMember } from "@/lib/team/members";
 import { reconcileMemberRevocations } from "@/lib/team/memberRevocation";
+import { revokeOwnerRuns } from "@/lib/externalRelay/ownerRun";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,7 +43,9 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     if (body.status === "active") {
       if (store.memberRevocationPending(target.id))
         return teamJson({ error: "agent shutdown is still pending; retry after revocation completes", code: "revocation_pending" }, 409);
+      const wasInactiveOwner = target.role === "owner" && target.status !== "active";
       target = restoreMember(store, live.member, target);
+      if (wasInactiveOwner) await revokeOwnerRuns();
     }
     return teamJson({ ok: true, member: memberSummary(target) });
   } catch (error) {

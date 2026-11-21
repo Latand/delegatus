@@ -48,7 +48,7 @@ function request(role: Role, size = 77): ExternalRelayRequest {
 }
 function paired(origin: string, engine = "claude", ownerTier = true): PairedRelay {
   return { id: "history_fixture", origin, api_base: `${origin}/api/relay/v1`, name: "Fixture", description: "", credential: "x".repeat(43),
-    owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-10-06T12:00:00Z", paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: "2026-10-06T12:00:00Z", paused: false,
     features: ["relay_media_in", "relay_history_media"], limits: { max_wait_s: 25, max_response_bytes: 1048576, max_answer_chars: 4000 },
     targets: [{ ...newTargetSettings({ target_id: "target", name: "Fixture", answered_by: "install", fallback: "service" }),
       engine, model: "fixture", ownerTier, memberLimitPerHour: null }] } as PairedRelay;
