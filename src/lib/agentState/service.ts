@@ -461,7 +461,8 @@ export async function startAgentStateService(): Promise<void> {
   if (global.__llvAgentStateService) return;
   const generation = global.__llvAgentStateGeneration ?? 0;
   const controller = await import("@/lib/runtime/structuredDeliveryController");
-  const { runtimeHostClient, readRuntimeSession } = await import("@/lib/runtime/client");
+  const { publishAgentProjection } = await import("./publication");
+  const { runtimeHostClient } = await import("@/lib/runtime/client");
   const registry = agentRegistry();
   const owns = () => viewerReleaseOwnsTraffic() && controller.structuredDeliveryPublicationState() === "ready";
   const service = new AgentStateService({ registry, now: Date.now, owns, process: observeAgentProcess,
@@ -478,24 +479,8 @@ export async function startAgentStateService(): Promise<void> {
       const held = controller.structuredDeliveryHostForConversation(conversationId, registry);
       return held?.reconcileAgentStateTerminal?.(turn.localRef, turn.nativeId, turn.at, turn.outcome) ?? false;
     },
-    publish: async (projection, current) => {
-      const client = runtimeHostClient();
-      if (!client || !projection.conversationId || !current()) return false;
-      const session = await readRuntimeSession(client, { conversationId: projection.conversationId });
-      if (!current() || !session || sessionKeyId(session.sessionKey) !== projection.entryKey) return false;
-      const entry = registry.agentStateRead(file => file.entries[projection.entryKey]);
-      if (!entry || !projection.facts.turn.determined || !projection.facts.owner.determined || !projection.facts.process.determined) return false;
-      const writerClaim = entry.claimOwner ? `${entry.claimOwner}:${entry.structuredHost!.writerClaimEpoch}` : null;
-      if (session.writerClaim && writerClaim !== session.writerClaim) return false;
-      await controller.publishStructuredHostProjection(client, { scope: { type: "session", id: projection.conversationId }, kind: "session-status",
-        expectedSessionRevision: session.revision,
-        producer: { kind: "viewer", eventKey: `agent-state:${projection.subject}:${projection.revision}` },
-        payload: { conversationId: projection.conversationId, sessionKey: entry.key,
-          host: projection.facts.process.determined && projection.facts.process.value.status === "dead" ? "dead" : projection.facts.owner.determined && projection.facts.owner.value === "held" ? "hosted" : "unhosted",
-          turn: projection.facts.turn.value.state === "open" ? "running" : "idle",
-          activeTurnId: projection.facts.turn.value.localRef, writerClaim, reconciliationRevision: projection.revision } });
-      return current();
-    } });
+    publish: (projection, current) => publishAgentProjection(registry, runtimeHostClient(), projection, current),
+  });
   // Publication may still be rebinding when startup installs controllers.
   // Keep the scheduler armed; each cycle refuses work until serving custody
   // is ready. A demotion during the imports revokes this pending installation.
