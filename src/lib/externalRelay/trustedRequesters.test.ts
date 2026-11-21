@@ -20,6 +20,7 @@ import * as cloud from "./cloud";
 import { relayAnswerOp } from "./ownerAnswer";
 import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayOperationAuthorized, ownerRelayPayload, ownerRelaySpawnAuthorized, ownerRelayTargetMatches } from "./ownerAuthority";
 import { openOwnerServiceTools, relayServiceToolsOp } from "./ownerServiceTools";
+import { refreshRelayTargets } from "./poller";
 import { selectOwnerDestination } from "./ownerDestination";
 import { conversationAuthority, releaseConversation, reserveChainConversation } from "./conversations";
 import { requestSchema } from "./protocol";
@@ -28,7 +29,8 @@ import { richRequest } from "./rich.fixture";
 import { runClaimedRequest } from "./runner";
 import { setRelaySwitch } from "./switches";
 import { addPairedOwnerRequester, addTrustedRequester, removeTrustedRequester, trustedRequesterAuditFile } from "./trustedRequesterStore";
-import { changeRun, dropRun, externalRelayFile, mergeRelayTargets, readRunLedger, readRelayStore, reserveRun, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
+import { changeRun, dropRun, externalRelayFile, readRunLedger, readRelayStore, reserveRun, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
+import { startTestRelay } from "./testRelay";
 
 const addedAt = "2026-09-28T12:00:00Z";
 const project = "dir-example";
@@ -244,7 +246,7 @@ test("requester-tier Cloud output cannot redirect a final reply to another autho
   } finally { cloudRun.mockRestore(); environment.mockRestore(); wire.mockRestore(); }
 });
 
-test("legacy turns remain authorized and a refresh preserves only retained targets' entries", () => {
+test("a legacy run retains authority across the upgrade", () => {
   const legacy = { ...target, id: "legacy", ownerTier: true };
   const relay = paired([legacy, granted]);
   setRelays(relay);
@@ -252,14 +254,23 @@ test("legacy turns remain authorized and a refresh preserves only retained targe
   reserveRun({ requestId: id, leaseId: "lease", relayId: relay.id, targetId: legacy.id, ownerPid: process.pid,
     ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
     runDir: process.env.TMPDIR!, startedAt: addedAt, ownerTurn: { clientAttemptId: "relay-owner-old_request" } }, 1);
+  try { expect(ownerRelayAuthorized(relay.id, legacy.id, id)).toBe(true); }
+  finally { dropRun(id); }
+});
+
+test("poller refresh persists entries only on retained targets", async () => {
+  const remote = (target_id: string) => ({ target_id, name: "Refreshed", answered_by: "install", fallback: "none" });
+  const service = await startTestRelay(() => ({ body: { targets: [remote(target.id), remote("new_target")] } }));
+  const relay = { ...paired([granted, { ...granted, id: "dropped_target" }], "refresh_relay"),
+    origin: service.origin, api_base: `${service.origin}/v1` };
   try {
-    expect(ownerRelayAuthorized(relay.id, legacy.id, id)).toBe(true);
-    const remote = (target_id: string) => ({ target_id, name: "Refreshed", answered_by: "install" as const, fallback: "none" as const });
-    const refreshed = mergeRelayTargets(readRelayStore().relays[0]!.targets, [remote(target.id), remote("new_target")]);
+    setRelays(relay);
+    await refreshRelayTargets(relay.id, 0);
+    const refreshed = readRelayStore().relays[0]!.targets;
+    expect(refreshed.map(item => item.id)).toEqual([target.id, "new_target"]);
     expect(refreshed[0]).toMatchObject({ name: "Refreshed", requesters: granted.requesters });
     expect(refreshed[1]).not.toHaveProperty("requesters");
-    expect(refreshed.some(item => item.id === legacy.id)).toBe(false);
-  } finally { dropRun(id); }
+  } finally { await service.close(); }
 });
 
 test("an async MCP call rechecks its grant after awaiting acknowledgement", async () => {
