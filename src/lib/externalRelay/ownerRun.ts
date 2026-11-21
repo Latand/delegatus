@@ -65,7 +65,7 @@ export function cloudOwnerDirectory(project: string | null, selected?: string): 
   throw new CloudOwnerDirectoryError();
 }
 export class OwnerContinuationRefused extends Error {
-  constructor(public readonly reason: "busy" | "unavailable") { super(`owner continuation ${reason}`); }
+  constructor() { super("The conversation project directory is unavailable"); }
 }
 export type OwnerTurnObservation = SpawnedTurnObservation & RelayStepObservation & { firstMessagePending?: boolean; initialMessageOperationId?: string; finalTextChanged?: boolean; deliveryFailure?: true; primaryFailure?: SendReceipt["primaryFailure"] };
 
@@ -331,14 +331,22 @@ function ownerMissingOutcomeAnswer(request: ExternalRelayRequest, owner: OwnerIn
   return ownerAnswer(Array.from(explanation).length <= request.answer.max_chars ? explanation : compact, request, owner);
 }
 
+function continuationFailureText(diagnostic: OwnerTurnDiagnostic, ukrainian: boolean): string {
+  const cause = diagnostic.primaryFailure?.reason ?? diagnostic.message;
+  if (/history|transcript/i.test(cause)) return ukrainian ? "Історія розмови недоступна." : "The conversation history is unavailable.";
+  if (/account|quota/i.test(cause)) return ukrainian ? "Обліковий запис агента недоступний." : "The agent account is unavailable.";
+  if (/directory|project/i.test(cause)) return ukrainian ? "Папка проєкту недоступна." : "The project directory is unavailable.";
+  if (/different engine/i.test(cause)) return ukrainian ? "Ця розмова використовує інший рушій." : "This conversation uses a different engine.";
+  if (/host|runtime|structured delivery/i.test(cause)) return ukrainian ? "Не вдалося запустити сесію агента." : "The agent session could not start.";
+  return ukrainian ? "Не вдалося доставити продовження. Подробиці є в панелі чатів реле." : "Conversation continuation delivery failed. See the relay chats panel for details.";
+}
+
 export function ownerFailureAnswer(request: ExternalRelayRequest, owner: OwnerInstruction, diagnostic: OwnerTurnDiagnostic, credentials: readonly string[] = []): ExternalRelayAnswer | null {
   const ukrainian = /[а-яіїєґ]/iu.test(owner.text);
   // Diagnostics stay in durable custody and the journal. They may contain
   // internal exception names and are never suitable as chat copy.
   const oversized = diagnostic.promptBudget?.kind === "mandatory_core_too_large";
-  const sizeExplanation = diagnostic.deliveryFailure ? (ukrainian
-    ? "Не вдалося доставити продовження розмови. Перевірте стан розмови перед повторенням запиту."
-    : "Conversation continuation delivery failed. Check the conversation before retrying the request.") : oversized ? (ukrainian
+  const sizeExplanation = diagnostic.deliveryFailure ? continuationFailureText(diagnostic, ukrainian) : oversized ? (ukrainian
     ? "Текст вашого запиту завеликий. Скоротіть або розділіть сам запит."
     : "Your instruction text is too large. Shorten or split the instruction itself.") : ukrainian
     ? "Не вдалося завершити запит. Спробуйте ще раз."
@@ -414,10 +422,13 @@ export async function sendOwnerContinuation(run: OwnerSpawnedTurn, prompt: strin
   const conversation = registry.conversation(run.conversationId! as `conversation_${string}`);
   const generation = conversation?.generations.at(-1);
   const engine = target.engine === "codex-cloud" ? "codex" : target.engine;
-  const refuse = (): StructuredMessageResult => ({ ok: false, structured: true, outcome: "failed", status: 409,
-    admission: "refused", error: "automatic continuation unavailable: the conversation cannot be resumed" });
-  if (!conversation || conversation.engine !== engine || !generation?.accountId) return refuse();
-  try { if (!fs.statSync(generation.path).isFile()) return refuse(); } catch { return refuse(); }
+  const refuse = (error: string): StructuredMessageResult => ({ ok: false, structured: true, outcome: "failed", status: 409,
+    admission: "refused", error });
+  if (!conversation || !generation) return refuse("Conversation history is unavailable");
+  if (conversation.engine !== engine) return refuse("The conversation uses a different engine");
+  if (!generation.accountId) return refuse("The conversation account is unavailable");
+  try { if (!fs.statSync(generation.path).isFile()) return refuse("Conversation history is unavailable"); }
+  catch { return refuse("Conversation history is unavailable"); }
   const authorizeDirectory = () => {
     authorizeDelivery();
     if (run.continuation?.retryOfOperationId) {
@@ -431,9 +442,9 @@ export async function sendOwnerContinuation(run: OwnerSpawnedTurn, prompt: strin
         throw new Error("owner continuation retry custody changed");
     }
     if (!repositoryBound) return;
-    if (!generation.launchProfile?.cwd) throw new OwnerContinuationRefused("unavailable");
+    if (!generation.launchProfile?.cwd) throw new OwnerContinuationRefused();
     try { cloudOwnerDirectory(target.project, generation.launchProfile.cwd); }
-    catch { throw new OwnerContinuationRefused("unavailable"); }
+    catch { throw new OwnerContinuationRefused(); }
   };
   const authorizeGeneration = () => {
     authorizeDirectory();
@@ -441,27 +452,26 @@ export async function sendOwnerContinuation(run: OwnerSpawnedTurn, prompt: strin
     const current = registry.conversation(conversation.id);
     const active = current?.generations.at(-1);
     if (current?.engine !== engine || !active || active.id !== generation.id || active.path !== generation.path || active.accountId !== generation.accountId
-      || !active.launchProfile?.cwd || active.launchProfile.cwd !== generation.launchProfile?.cwd) throw new OwnerContinuationRefused("unavailable");
+      || !active.launchProfile?.cwd || active.launchProfile.cwd !== generation.launchProfile?.cwd) throw new OwnerContinuationRefused();
     authorizeDirectory();
   };
-  try { authorizeGeneration(); } catch (error) { if (error instanceof OwnerContinuationRefused) return refuse(); throw error; }
+  try { authorizeGeneration(); } catch (error) { if (error instanceof OwnerContinuationRefused) return refuse(error.message); throw error; }
   // A preferred id is only a tie-break. Remove every other account from the
   // candidate set so quota selection cannot move this pinned owner session.
   const accounts = engine === "claude" ? listClaudeAccounts() : listCodexAccounts();
   const unavailable = accounts.filter(account => account.id !== generation.accountId).map(account => account.id);
   const account = accountManager.resolveHeadlessSpawn(engine!, generation.accountId, [], target.project, target.model, unavailable);
-  if (account.kind !== "available" || account.account.accountId !== generation.accountId) return refuse();
-  try { authorizeGeneration(); } catch (error) { if (error instanceof OwnerContinuationRefused) return refuse(); throw error; }
+  if (account.kind !== "available" || account.account.accountId !== generation.accountId) return refuse("The conversation account is unavailable");
+  try { authorizeGeneration(); } catch (error) { if (error instanceof OwnerContinuationRefused) return refuse(error.message); throw error; }
   // Enqueue may admit before invoking a later guard or losing its reply.
   // From this boundary, a deadline cannot certify a pre-effect refusal.
   enqueueStarted = true;
   return enqueueStructuredMessage({ path: generation.path, conversationId: conversation.id, clientMessageId: run.continuation?.retryOfOperationId ? run.continuation.operationId : run.clientAttemptId,
     // The synchronous admission callback runs inside the registry mutation.
     // Read its active generation before that writer wait and again at dispatch.
-    operationId: run.continuation!.operationId, text: prompt, admissionGuard: authorizeDirectory,
+    operationId: run.continuation!.operationId, policy: "queue", text: prompt, admissionGuard: authorizeDirectory,
     admissionGuardAsync: async () => authorizeGeneration(), recoveryAuthorityGuard: authorizeGeneration,
-    origin: { kind: "agent", role: "owner-relay" } }, { authorizeDispatch: authorizeGeneration,
-    idleContinuationAllowed: () => { try { authorizeGeneration(); return true; } catch { return false; } } });
+    origin: { kind: "agent", role: "owner-relay" } }, { authorizeDispatch: authorizeGeneration });
 }
 
 const productionPorts: OwnerRunPorts = {
@@ -1062,18 +1072,16 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   const retryStop = () => {
     retryTimer = setTimeout(() => { void applyStop(); }, ownerStopRetryDelayMs(ports.stopRetryMs ?? 1000, stopFailures++));
   };
-  let reject!: (error: Error) => void;
   let resolve!: (result: EphemeralAgentResult) => void;
-  const done = new Promise<EphemeralAgentResult>((r, fail) => { resolve = r; reject = fail; });
+  const done = new Promise<EphemeralAgentResult>(r => { resolve = r; });
   const wake = new AbortController();
-  const finish = (status: EphemeralAgentResult["status"], answer: unknown = null, refusal?: OwnerContinuationRefused) => {
+  const finish = (status: EphemeralAgentResult["status"], answer: unknown = null) => {
     if (settled) return;
     settled = true;
     clearTimeout(timer); clearTimeout(admissionTimer); clearTimeout(retryTimer); clearTimeout(continuationRetryTimer); clearInterval(authorizationTimer);
     cancels.delete(input.request.request_id);
     activeOwnerRelays.delete(input.request.request_id);
     wake.abort();
-    if (refusal) { reject(refusal); return; }
     resolve({ status, answer, ...(diagnostic ? { diagnostic } : {}), durationMs: Date.now() - started, code: null, signal: null });
   };
   const persistStop = (): boolean => {
@@ -1277,17 +1285,15 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       launchAttempted = true;
       let launched: ReportSpawnResult;
       if (input.continuation) {
-        await input.onConversation(turn.conversationId!);
         await changeRunAsync(input.request.request_id, r => ({ ...r, conversationId: turn.conversationId!, ownerTurn: { ...r.ownerTurn!, continuation: turn.continuation } }), ownerRelayStoreDeadline());
+        await input.onConversation(turn.conversationId!);
         authorizeContinuation();
         const sent = await withViewerOperation("relay.owner-continuation.send", () => ports.continue?.(turn, continuationPrompt!, localTarget, authorizeContinuation, input.target.engine === "codex-cloud"));
         if (!sent || !sent.ok) {
-          // Only a proven refusal before reservation permits fallback or retry.
           if ((!sent || sent.admission === "refused") && !stopped) {
-            const error = sent?.error ?? "the conversation cannot be resumed";
-            const reason = error.includes("not ready for an idle continuation") ? "busy"
-              : /cannot be resumed|account is parked|no durable structured owner/.test(error) ? "unavailable" : null;
-            if (reason) { finish("failed", null, new OwnerContinuationRefused(reason)); return; }
+            diagnose("launch", sent?.error ?? "Structured delivery is unavailable", { deliveryFailure: true });
+            finish("failed");
+            return;
           }
           const terminal = sent?.receipt && sent.operationId === turn.continuation!.operationId
             ? journalVerdict(sent.receipt.status, sent.receipt.reason, sent.receipt.primaryFailure) : null;

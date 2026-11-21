@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 import { caretAtEnd, clampHeight, shouldPin } from "@/lib/composerScroll";
 
@@ -36,10 +36,44 @@ export function useAutosizePinned(
   value: string,
   { maxPx, minPx = 0, pinned, active = true, field }: AutosizePinnedOptions,
 ): void {
+  const native = useRef<{ element: HTMLTextAreaElement; edit: string | null } | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const view = el?.ownerDocument.defaultView;
+    if (!active || !el || !view?.CSS?.supports("field-sizing", "content")
+      || view.getComputedStyle(el).getPropertyValue("field-sizing") !== "content") return;
+    const style = el.style;
+    const previous = { height: style.height, min: style.minHeight, max: style.maxHeight };
+    style.height = "auto";
+    style.minHeight = `${minPx}px`;
+    style.maxHeight = `${maxPx}px`;
+    const state = { element: el, edit: null as string | null };
+    native.current = state;
+    const onInput = () => { state.edit = el.value; };
+    el.addEventListener("input", onInput, true);
+    return () => {
+      native.current = null;
+      el.removeEventListener("input", onInput, true);
+      style.height = previous.height;
+      style.minHeight = previous.min;
+      style.maxHeight = previous.max;
+    };
+  }, [ref, field, active, minPx, maxPx]);
+
   useLayoutEffect(() => {
     if (!active) return;
     const el = ref.current;
     if (!el) return;
+    if (native.current?.element === el) {
+      // Native edits already reveal the caret. Reading layout here would
+      // synchronously lay out the whole board before this keystroke paints.
+      const edited = native.current.edit === value;
+      native.current.edit = null;
+      if (!pinned && (edited || !caretAtEnd(el.selectionStart, el.selectionEnd, el.value.length))) return;
+      const view = el.ownerDocument.defaultView!;
+      const frame = view.requestAnimationFrame(() => { el.scrollTop = Number.MAX_SAFE_INTEGER; });
+      return () => view.cancelAnimationFrame(frame);
+    }
     fit(el, maxPx, minPx, pinned, true);
   }, [ref, value, maxPx, minPx, pinned, active, field]);
 
@@ -55,6 +89,7 @@ export function useAutosizePinned(
     if (!active) return;
     const el = ref.current;
     if (!el) return;
+    if (native.current?.element === el) return;
     const placeholder = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => {
       if (!el.value) fit(el, maxPx, minPx, pinned, false);
     });

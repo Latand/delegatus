@@ -7,6 +7,7 @@ import os
 import pathlib
 import re
 import select
+import selectors
 import shlex
 import signal
 import socket
@@ -23,6 +24,9 @@ import uuid
 
 CPU_SLICE = "delegatus.slice"
 CPU_WEIGHT = "1000"
+SAMPLE_TIMEOUT = 180
+PROTECTED_READERS = 4
+SAMPLE_RETRY_INTERVAL = 10
 
 
 def census_identity(value):
@@ -67,7 +71,7 @@ def protected_host_census(release, bun, state, target, timeout):
     child = subprocess.Popen([bun, "--no-env-file", str(release / "scripts/protected-host-census.ts"), target,
                               str(max(0, int(timeout * 1000)))], cwd=release,
                              env=census_environment(state), stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     data = bytearray()
     try:
         while True:
@@ -110,6 +114,7 @@ def protected_host_census(release, bun, state, target, timeout):
                     or host.get("kind") not in ["structured", "tmux", "headless", "none"]
                     or (host.get("state") == "alive" and (type(host.get("pid")) is not int or host["pid"] <= 0))
                     or row.get("turnState") not in ["busy", "idle", "unknown"]
+                    or ("lifecycle" in row and row.get("lifecycle") not in ["starting", "running", "waiting", "stalled", "completed", "failed", "blocked", "gone"])
                     or row.get("evidenceSource") not in ["transcript", "projection", "unreadable"]
                     or (row.get("conversationId") is not None and not isinstance(row["conversationId"], str))
                     or (pipeline is not None and (not isinstance(pipeline, dict)
@@ -124,11 +129,14 @@ def protected_host_census(release, bun, state, target, timeout):
                 raise RuntimeError("census row malformed")
         return answer
     finally:
-        # Kill the process group even when the leader exited with a pipe held by
-        # a descendant. Only this child's newly-created session is owned here.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(child.pid, signal.SIGKILL)
-        child.wait()
+        # This child inherits the evidence worker's process group, so the
+        # sampler can stop it with its owner at the phase cleanup boundary.
+        if child.poll() is None:
+            child.kill()
+        try:
+            child.wait(timeout=1)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("census cleanup unconfirmed") from error
         child.stdout.close()
 
 
@@ -165,13 +173,14 @@ def process_or_gone(adapter, entry):
 def ready(serving, target, placement=True):
     """The baseline is read with placement=False: putting the service into its
     configured slice is what a restart does, so only the replacement owes it."""
+    checks = ["http", "runtimeSocket", "mcp", "service"] + (["placement"] if placement else [])
     return all(serving.get(role, {}).get("sha") == target
                and serving.get(role, {}).get("healthy") is True
                for role in ["launcher", "viewer", "runtimeHost"]) and all(
-                   passed for name, passed in serving.get("checks", {}).items() if placement or name != "placement")
+                   serving.get("checks", {}).get(name) is True for name in checks)
 
 
-def run_switch(adapter, target, samples=21, interval=15, timeout=180):
+def run_switch(adapter, target, samples=21, interval=15, timeout=SAMPLE_TIMEOUT):
     # Keep termination deferred through recovery and the final cleanup, too.
     with deferred_termination():
         result = None
@@ -194,7 +203,9 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
                         diagnostic = "exit-recovery:" + type(error).__name__
                         if diagnostic not in relocation["diagnostics"]:
                             relocation["diagnostics"].append(diagnostic)
-                    if relocation["started"]:
+                    if (relocation["started"]
+                            and relocation.get("launchEvidence") != "unknown"
+                            and relocation.get("settlementEvidence") != "unknown"):
                         break
                     pending = {"state": "pending", "ownerPid": os.getpid(), "unit": adapter.unit}
                     # Report failure while recovery is outstanding, even if
@@ -208,10 +219,11 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
                     if result is not None:
                         result["recovery"] = completed
                     else:
+                        adapter.last_result = {"verdict": "fail", "target": target, "serving": {},
+                                               "diagnostics": ["exit-recovery:health-unverified"],
+                                               "relocation": relocation, "recovery": completed}
                         with contextlib.suppress(Exception):
-                            adapter.emit({"verdict": "fail", "target": target, "serving": {},
-                                          "diagnostics": ["exit-recovery:health-unverified"],
-                                          "relocation": relocation, "recovery": completed})
+                            adapter.emit(adapter.last_result)
                 if result is not None and (pending or relocation["startAttempts"] != attempts):
                     # The last health sample predates this recovery operation.
                     result["verdict"] = "fail"
@@ -226,7 +238,9 @@ def observe_switch(adapter, target, samples, interval, timeout):
     diagnostics = []
     serving = {}
     protected = []
+    interrupted, unreadable = None, ["interrupted:not-observed"]
     relocation = None
+    adapter.switch_attempted = True
     # Even a publication call which raises after its atomic rename owes samples.
     try:
         adapter.publish()
@@ -236,67 +250,457 @@ def observe_switch(adapter, target, samples, interval, timeout):
     finally:
         # A restart that raised after stopping still recorded what it did.
         relocation = relocation or getattr(adapter, "relocation", None)
+        last_owner_start = None
         for index in range(samples):
             if index:
                 adapter.clock.sleep(interval)
-            try:
-                for entry in old:
-                    process_or_gone(adapter, entry)
-            except Exception as error:
-                diagnostics.append(type(error).__name__)
-            protected = []
-            for host in hosts:
+            # Only the lock owner can recover a start. Recovery has its own
+            # job-settlement bounds and is outside the read-only sample.
+            recovered_during_sample = False
+            def owner_check(cutoff=None):
+                nonlocal recovered_during_sample, last_owner_start
+                if not relocation or not relocation["stopSubmitted"]:
+                    return False
+                now = adapter.clock.now()
+                if (relocation.get("started") is not True and last_owner_start is not None
+                        and now - last_owner_start < 5):
+                    return False
+                attempts = relocation.get("startAttempts", 0)
+                was_started = relocation.get("started") is True
                 try:
-                    if host.get("startIdentity") and process_or_gone(adapter, host) is not None:
-                        outcome = {"outcome": "preserved", "pipelineId": host.get("pipelineId"),
-                                   "stageId": host.get("stageId"), "attempt": host.get("attempt")}
-                    else:
-                        outcome = retry(lambda: adapter.stage(host), adapter.clock, timeout)
-                    protected.append(outcome)
+                    now_wall = time.monotonic()
+                    recovery_deadline = min(cutoff, now_wall + 0.8) if cutoff is not None else now_wall + 0.8
+                    adapter.recover_start(settle_timeout=0.25, command_deadline=recovery_deadline)
                 except Exception as error:
-                    protected.append({"outcome": "unknown", "pipelineId": host.get("pipelineId"),
-                                      "stageId": host.get("stageId"), "attempt": host.get("attempt")})
-                    diagnostics.append(type(error).__name__)
-            # Serving is sampled after potentially slow recovery reads, so the
-            # final verdict cannot quote a serving observation from before them.
-            serving = {}
-            def read_serving():
-                nonlocal serving
-                if relocation and relocation["stopSubmitted"]:
-                    adapter.recover_start()
-                serving = adapter.serving()
-                if not ready(serving, target):
-                    raise RuntimeError("replacement not ready")
-                return serving
+                    diagnostics.append("sample-recovery:" + type(error).__name__)
+                changed = relocation.get("startAttempts", 0) != attempts
+                settled = not was_started and relocation.get("started") is True
+                if changed or settled:
+                    last_owner_start = adapter.clock.now()
+                recovered = (changed or settled) and relocation.get("started") is True
+                recovered_during_sample |= recovered
+                return recovered
+            owner_check()
+            sample_started = adapter.clock.now()
+            sample = adapter.sample(old, hosts, target, started if index == samples - 1 else None, index, timeout,
+                                    owner_check=owner_check)
+            if recovered_during_sample and not ready(sample.serving, target):
+                sample.incomplete = True
+            serving, protected = sample.serving, sample.protected
+            interrupted, unreadable = sample.interrupted, sample.unreadable
+            for note in sample.diagnostics:
+                if note not in diagnostics:
+                    diagnostics.append(note)
             try:
-                retry(read_serving, adapter.clock, timeout)
-            except Exception as error:
-                diagnostics.append(type(error).__name__)
-            try:
-                adapter.emit({"sample": index + 1, "serving": serving, "protected": protected})
+                adapter.emit({"sample": index + 1, "serving": serving, "protected": protected,
+                              "elapsedMs": round((adapter.clock.now() - sample_started) * 1000),
+                              "budgetMs": round(timeout * 1000), "diagnostics": sample.diagnostics})
             except Exception as error:
                 diagnostics.append("sample-log:" + type(error).__name__)
-    # Read once the samples are over: the booting Viewer records its cuts
-    # before it re-hosts anything, long before the last sample. A list read
-    # with gaps names them in `interruptedUnreadable`; a list that could not be
-    # read at all is null. Either leaves the inventory unknown, which the seat
-    # has to look at, so the switch cannot pass on it.
-    try:
-        interrupted, unreadable = adapter.interrupted(started, hosts)
-    except Exception as error:
-        interrupted, unreadable = None, ["interrupted:" + type(error).__name__]
-        diagnostics.append(unreadable[0])
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
-    unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
+    unknown = ("unknown" in outcomes or interrupted is None or bool(unreadable) or sample.incomplete
+               or any("worker-cleanup-pending" in note for note in diagnostics)
+               or any(note.startswith(("recovery:", "sample-recovery:")) for note in diagnostics))
     relocation_ready = (relocation is not None and relocation.get("released") is True
                         and relocation.get("placement") == "placed" and relocation.get("started") is True)
     verdict = "fail" if not healthy or "lost" in outcomes or not relocation_ready else "needs_decision" if unknown else "pass"
     result = {"verdict": verdict, "target": target, "serving": serving,
               "protected": protected, "interrupted": interrupted,
               "interruptedUnreadable": unreadable, "relocation": relocation, "diagnostics": diagnostics}
+    if locals().get("recovered_during_sample"):
+        result["recovery"] = {"state": "complete", "ownerPid": os.getpid(), "unit": adapter.unit}
     adapter.last_result = result
     return result
+
+
+class EvidenceSample:
+    def __init__(self, hosts):
+        self.serving = {}
+        self.protected = [{"pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"),
+                           "attempt": host.get("attempt"), "captured": host,
+                           "outcome": "unknown", "reason": "not-observed"} for host in hosts]
+        self.interrupted, self.unreadable = None, ["interrupted:not-observed"]
+        self.diagnostics = []
+        self.incomplete = False
+
+    def accept(self, frame):
+        kind, value = frame
+        if kind == "protected":
+            index, outcome = value
+            row = self.protected[index]
+            coordinates = (outcome.get("pipelineId", row.get("pipelineId")),
+                           outcome.get("stageId", row.get("stageId")),
+                           outcome.get("attempt", row.get("attempt")))
+            previous = (row.get("pipelineId"), row.get("stageId"), row.get("attempt"))
+            if coordinates != previous:
+                for field in ("stageState", "observedConversationId", "hostState", "turnState", "lifecycle"):
+                    row.pop(field, None)
+            row.update(outcome)
+            if row["outcome"] != "unknown":
+                row.pop("reason", None)
+        elif kind == "reading":
+            if self.protected[value].get("reason") == "not-observed":
+                self.protected[value]["reason"] = "read-incomplete"
+        elif kind == "serving":
+            self.serving = value
+        elif kind == "interrupted":
+            self.interrupted, self.unreadable = value
+        elif kind == "diagnostic":
+            if value not in self.diagnostics:
+                self.diagnostics.append(value)
+
+    def unavailable(self, lane, reason):
+        kind, inputs = lane[:2]
+        self.accept(("diagnostic", kind + ":" + reason))
+        self.incomplete = True
+        if kind == "protected":
+            for index, _ in inputs:
+                row = self.protected[index]
+                if row.get("reason") in ["not-observed", "read-incomplete"]:
+                    row["reason"] = reason
+        elif kind == "interrupted" and self.unreadable == ["interrupted:not-observed"]:
+            self.unreadable = ["interrupted:" + reason]
+
+
+def evidence_frames(adapter, kind, inputs, deadline):
+    """Read-only work in one lane. Each host gets a first read before retries."""
+    clock = adapter.clock
+    if clock.now() >= deadline:
+        return
+    if kind == "protected":
+        pending = inputs
+        while pending and clock.now() < deadline:
+            remaining = []
+            for index, host in pending:
+                if clock.now() >= deadline:
+                    return
+                yield "reading", index
+                if clock.now() >= deadline:
+                    return
+                try:
+                    if host.get("startIdentity") and process_or_gone(adapter, host) is not None:
+                        outcome = {"outcome": "preserved", "attempt": host["attempt"]}
+                    else:
+                        outcome = adapter.stage(host)
+                except Exception as error:
+                    outcome = {"outcome": "unknown", "reason": "protected-read:" + type(error).__name__}
+                if clock.now() >= deadline:
+                    return
+                yield "protected", [index, outcome]
+                if outcome["outcome"] == "unknown":
+                    remaining.append((index, host))
+            pending = remaining
+            if pending and clock.now() + SAMPLE_RETRY_INTERVAL < deadline:
+                clock.sleep(SAMPLE_RETRY_INTERVAL)
+            else:
+                return
+    elif kind == "interrupted":
+        try:
+            answer = adapter.interrupted(*inputs)
+        except Exception as error:
+            reason = "interrupted:" + type(error).__name__
+            yield "diagnostic", reason
+            answer = None, [reason]
+        if clock.now() < deadline:
+            yield "interrupted", answer
+    elif kind == "serving":
+        old, target = inputs
+        try:
+            for entry in old:
+                if clock.now() >= deadline:
+                    return
+                process_or_gone(adapter, entry)
+        except Exception as error:
+            yield "diagnostic", type(error).__name__
+        while clock.now() < deadline:
+            try:
+                serving = adapter.serving()
+                if clock.now() >= deadline:
+                    return
+                yield "serving", serving
+                if ready(serving, target):
+                    return
+                yield "diagnostic", "serving:not-ready"
+            except Exception as error:
+                yield "diagnostic", "serving:" + type(error).__name__
+            clock.sleep(max(0, min(1, deadline - clock.now())))
+
+
+WORKER_CUSTODY = {}
+
+
+def reap_worker_custody():
+    """Reconcile previously killed workers without blocking this sample."""
+    for child_pid, custody in tuple(WORKER_CUSTODY.items()):
+        try:
+            waited, _ = os.waitpid(child_pid, os.WNOHANG)
+        except ChildProcessError:
+            waited = child_pid
+        if waited:
+            with contextlib.suppress(OSError):
+                os.close(custody["fd"])
+            WORKER_CUSTODY.pop(child_pid, None)
+
+
+def run_evidence_workers(adapter, lanes, sample, cutoff, owner_check=None):
+    # Leave part of this phase's allowance for bounded teardown. Fork returns
+    # before exec, so a slow interpreter startup cannot stall the sampler.
+    limit = cutoff - min(1, max(0, cutoff - time.monotonic()) / 10)
+    children = []
+    completed = set()
+    eof_pending = {}
+    reap_worker_custody()
+    # One slot is reserved for the serving lane that runs beside the protected
+    # reader pool in the same initial sample.
+    worker_limit = PROTECTED_READERS + 1
+    available = max(0, worker_limit - len(WORKER_CUSTODY))
+    with selectors.DefaultSelector() as incoming:
+        try:
+            for lane in lanes:
+                if len(children) >= available:
+                    sample.unavailable(lane, "worker-cleanup-pending")
+                    continue
+                try:
+                    kind, inputs = lane[:2]
+                    worker_cutoff = min(limit, lane[2]) if len(lane) > 2 else limit
+                    with tempfile.TemporaryFile() as request:
+                        request.write(json.dumps([kind, inputs, worker_cutoff, adapter.plan]).encode())
+                        request.seek(0)
+                        if time.monotonic() >= limit:
+                            sample.unavailable(lane, "sample-deadline")
+                            continue
+                        read_fd, write_fd = os.pipe()
+                        try:
+                            child_pid = os.fork()
+                        except OSError:
+                            os.close(read_fd)
+                            os.close(write_fd)
+                            raise
+                        if child_pid == 0:
+                            try:
+                                os.close(read_fd)
+                                os.dup2(request.fileno(), 0)
+                                os.dup2(write_fd, 1)
+                                null_fd = os.open(os.devnull, os.O_WRONLY)
+                                os.dup2(null_fd, 2)
+                                if null_fd > 2:
+                                    os.close(null_fd)
+                                os.close(write_fd)
+                                # Drop the inherited installation lock before
+                                # session setup or exec can stall.
+                                os.closerange(3, min(os.sysconf("SC_OPEN_MAX"), 65536))
+                                os.setsid()
+                                os.execve(sys.executable, [sys.executable, str(pathlib.Path(__file__).resolve()),
+                                                           "--evidence-worker", str(adapter.config_file)], os.environ)
+                            except BaseException as error:
+                                with contextlib.suppress(Exception):
+                                    os.write(1, (json.dumps(["worker-error", type(error).__name__]) + "\n").encode())
+                                os._exit(127)
+                        os.close(write_fd)
+                        children.append((child_pid, read_fd, lane))
+                        WORKER_CUSTODY[child_pid] = {"fd": read_fd, "lane": lane,
+                                                     "startIdentity": None}
+                        with contextlib.suppress(Exception):
+                            WORKER_CUSTODY[child_pid]["startIdentity"] = start_identity(proc_field(child_pid, "stat"))
+                        incoming.register(read_fd, selectors.EVENT_READ, (child_pid, lane, bytearray()))
+                except OSError as error:
+                    sample.unavailable(lane, "worker-start:" + type(error).__name__)
+            next_owner_check = time.monotonic()
+            while (incoming.get_map() or eof_pending) and time.monotonic() < limit:
+                if owner_check and time.monotonic() >= next_owner_check:
+                    try:
+                        owner_check(limit)
+                    except Exception as error:
+                        sample.unavailable(("owner", []), "owner-recovery:" + type(error).__name__)
+                    next_owner_check = time.monotonic() + 1
+                wait = max(0, limit - time.monotonic())
+                if owner_check:
+                    wait = min(wait, max(0, next_owner_check - time.monotonic()))
+                if eof_pending:
+                    wait = min(wait, 0.02)
+                for key, _ in incoming.select(wait):
+                    if time.monotonic() >= limit:
+                        break
+                    child_pid, lane, buffer = key.data
+                    chunk = os.read(key.fd, 65536)
+                    if not chunk:
+                        incoming.unregister(key.fileobj)
+                        eof_pending[child_pid] = (lane, buffer)
+                        continue
+                    buffer.extend(chunk)
+                    try:
+                        while (newline := buffer.find(b"\n")) >= 0 and time.monotonic() < limit:
+                            if newline > 4 * 1024 * 1024:
+                                raise ValueError("oversized frame")
+                            frame = json.loads(buffer[:newline])
+                            del buffer[:newline + 1]
+                            if time.monotonic() >= limit:
+                                break
+                            if frame[0] == "worker-error":
+                                sample.unavailable(lane, "worker:" + frame[1])
+                            elif frame[0] == "worker-done":
+                                completed.add(child_pid)
+                            else:
+                                sample.accept(frame)
+                        if len(buffer) > 4 * 1024 * 1024:
+                            raise ValueError("oversized buffer")
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        sample.unavailable(lane, "worker-output-invalid")
+                        incoming.unregister(key.fileobj)
+                for child_pid, (lane, buffer) in tuple(eof_pending.items()):
+                    try:
+                        status = os.waitid(os.P_PID, child_pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                    except ChildProcessError:
+                        status = True
+                    if status is None:
+                        continue
+                    eof_pending.pop(child_pid)
+                    exit_code = status.si_status if status is not True and status.si_code == os.CLD_EXITED else None
+                    exit_signal = status.si_status if status is not True and status.si_code in [os.CLD_KILLED, os.CLD_DUMPED] else None
+                    lane_cutoff = min(limit, lane[2]) if len(lane) > 2 else limit
+                    if buffer or child_pid not in completed or exit_code != 0:
+                        if child_pid not in completed and time.monotonic() >= lane_cutoff:
+                            cause = "sample-deadline"
+                        elif exit_code is not None:
+                            cause = "worker-exit:" + str(exit_code)
+                        elif exit_signal is not None:
+                            cause = "worker-signal:" + signal.Signals(exit_signal).name
+                        else:
+                            cause = "worker-output-incomplete"
+                        sample.unavailable(lane, cause if not buffer else "worker-output-incomplete:" + cause)
+            for key in incoming.get_map().values():
+                _, lane, _ = key.data
+                sample.unavailable(lane, "sample-deadline")
+            for lane, _ in eof_pending.values():
+                sample.unavailable(lane, "worker-exit-unconfirmed")
+        finally:
+            # Signal before reaping the leader, while its process-group id is
+            # still reserved. This also stops MCP or command descendants that
+            # held a read open. No worker inherits the installation lock.
+            for child_pid, _, _ in children:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(child_pid, signal.SIGKILL)
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(child_pid, signal.SIGKILL)
+            pending = {child_pid for child_pid, _, _ in children}
+            while pending and time.monotonic() < cutoff:
+                for child_pid in tuple(pending):
+                    try:
+                        waited, _ = os.waitpid(child_pid, os.WNOHANG)
+                    except ChildProcessError:
+                        waited = child_pid
+                    if waited:
+                        pending.remove(child_pid)
+                        custody = WORKER_CUSTODY.pop(child_pid, None)
+                        if custody:
+                            with contextlib.suppress(OSError):
+                                os.close(custody["fd"])
+                if pending:
+                    time.sleep(min(0.01, max(0, cutoff - time.monotonic())))
+            for child_pid, read_fd, lane in children:
+                if child_pid in pending:
+                    sample.unavailable(lane, "worker-cleanup-pending")
+                else:
+                    with contextlib.suppress(OSError):
+                        os.close(read_fd)
+
+
+def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collect=run_evidence_workers, owner_check=None):
+    deadline = adapter.clock.now() + timeout
+    sample = EvidenceSample(hosts)
+    recoveries = 0
+    def check_owner(cutoff=None):
+        nonlocal recoveries
+        if owner_check and owner_check(cutoff):
+            recoveries += 1
+    inventory_reserve = min(5, timeout / 10) if since else 0
+    protected_cutoff = deadline - timeout / 3
+    serving_cutoff = deadline - inventory_reserve
+    lanes = []
+    if hosts:
+        numbered = list(enumerate(hosts))
+        offset = index % len(numbered)
+        numbered = numbered[offset:] + numbered[:offset]
+        lanes.extend(("protected", numbered[i::PROTECTED_READERS], protected_cutoff)
+                     for i in range(min(len(hosts), PROTECTED_READERS)))
+    # Serving and protected evidence share the sample cutoff. Running them in
+    # one bounded batch prevents slow stage reads from starving serving proof.
+    lanes.append(("serving", [old, target], serving_cutoff))
+    collect(adapter, lanes, sample, serving_cutoff, owner_check=check_owner)
+    check_owner(deadline)
+    if since:
+        # The concurrent serving lane may finish before protected reads settle.
+        # Always take a fresh witness at the cut boundary, after owner recovery,
+        # and bind the inventory to the same recovery generation.
+        witness_generation = -1
+        while adapter.clock.now() < deadline:
+            if witness_generation != recoveries:
+                before = recoveries
+                collect(adapter, [("serving", [old, target])], sample, deadline, owner_check=check_owner)
+                check_owner(deadline)
+                if not ready(sample.serving, target):
+                    sample.incomplete = True
+                    sample.unavailable(("interrupted", [since, hosts]), "serving-witness-unavailable")
+                    break
+                if recoveries != before:
+                    continue
+                witness_generation = recoveries
+            inventory_generation = recoveries
+            collect(adapter, [("interrupted", [since, hosts])], sample, deadline, owner_check=check_owner)
+            check_owner(deadline)
+            if recoveries == inventory_generation:
+                if sample.interrupted is None:
+                    sample.incomplete = True
+                    if sample.unreadable == ["interrupted:not-observed"]:
+                        sample.unavailable(("interrupted", [since, hosts]),
+                                           "sample-deadline" if adapter.clock.now() >= deadline else "inventory-incomplete")
+                elif sample.unreadable:
+                    sample.incomplete = True
+                break
+        else:
+            sample.incomplete = True
+            sample.unavailable(("interrupted", [since, hosts]), "sample-deadline")
+        if adapter.clock.now() >= deadline and (sample.interrupted is None or sample.unreadable):
+            sample.incomplete = True
+    elif recoveries:
+        witness_generation = -1
+        while adapter.clock.now() < deadline and witness_generation != recoveries:
+            before = recoveries
+            collect(adapter, [("serving", [old, target])], sample, deadline, owner_check=check_owner)
+            check_owner(deadline)
+            if not ready(sample.serving, target):
+                sample.incomplete = True
+                break
+            if recoveries == before:
+                witness_generation = recoveries
+        if witness_generation != recoveries:
+            sample.incomplete = True
+    return sample
+
+
+def evidence_worker(config):
+    kind, inputs, deadline, plan = json.load(sys.stdin)
+    if time.monotonic() >= deadline:
+        return 0
+    try:
+        adapter = Checkout(config)
+        try:
+            if adapter.plan != plan:
+                raise RuntimeError("sample worker plan changed")
+            for frame in evidence_frames(adapter, kind, inputs, deadline):
+                if time.monotonic() >= deadline:
+                    break
+                print(json.dumps(frame), flush=True)
+            else:
+                if time.monotonic() < deadline:
+                    print(json.dumps(["worker-done"]), flush=True)
+        finally:
+            adapter.close()
+    except Exception as error:
+        if time.monotonic() < deadline:
+            print(json.dumps(["worker-error", type(error).__name__]), flush=True)
+    return 0
 
 
 def utc():
@@ -711,13 +1115,13 @@ def stage_outcome(host, attempts, activity):
         result["outcome"] = "lost" if lost else "completed"
     elif (current["state"] in ["running", "reviewing", "committing"]
           and activity.get("host", {}).get("state") == "alive"
-          and activity.get("lifecycle") not in ["failed", "interrupted", "stalled"]):
+          and activity.get("lifecycle") in ["running", "waiting", "blocked"]):
         result["outcome"] = "fresh attempt started" if current["n"] > host["attempt"] else "recovered"
     return result
 
 
-def complete_activity(answer):
-    """agent_activity is a capped selection; it has no pagination cursor."""
+def complete_census(answer):
+    """The census is a capped selection; it has no pagination cursor."""
     selection = answer.get("selection") or {}
     if (answer.get("unselectedCount") != 0
             or not isinstance(selection.get("matched"), int)
@@ -731,6 +1135,9 @@ def complete_activity(answer):
             or any(selection.get(key, 0) for key in ["projected", "unreadable"])
             or any(row.get("evidenceSource") != "transcript" for row in answer.get("conversations", []))):
         raise RuntimeError("protected activity capture incomplete")
+    if any("lifecycle" in row and row.get("lifecycle") not in ["starting", "running", "waiting", "stalled", "completed", "failed", "blocked", "gone"]
+           for row in answer.get("conversations", [])):
+        raise RuntimeError("protected activity capture incomplete")
     return answer["conversations"]
 
 
@@ -741,12 +1148,52 @@ def detached_command(script, config, state, run_id):
             sys.executable, script, "--approved", "--config", config, "--worker", run_id]
 
 
-def command(args, cwd=None):
-    result = subprocess.run(args, cwd=cwd, capture_output=True, timeout=10, text=True)
-    if result.returncode:
+COMMAND_CUSTODY = {}
+
+
+def reap_command_custody():
+    for pid, child in tuple(COMMAND_CUSTODY.items()):
+        if child.poll() is not None:
+            with contextlib.suppress(Exception):
+                child.communicate(timeout=0)
+            for stream in (child.stdout, child.stderr):
+                if stream is not None:
+                    with contextlib.suppress(OSError):
+                        stream.close()
+            COMMAND_CUSTODY.pop(pid, None)
+
+
+def command(args, cwd=None, timeout=10):
+    reap_command_custody()
+    deadline = time.monotonic() + timeout
+    child = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, start_new_session=True)
+    if time.monotonic() >= deadline:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        COMMAND_CUSTODY[child.pid] = child
+        raise TimeoutError("command deadline") from None
+    try:
+        stdout, _stderr = child.communicate(timeout=max(0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        # Never use communicate()'s post-SIGKILL unbounded wait. The command
+        # remains unknown if its owned process cannot be reaped immediately.
+        try:
+            child.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            COMMAND_CUSTODY[child.pid] = child
+            raise TimeoutError("command cleanup unconfirmed") from None
+        for stream in (child.stdout, child.stderr):
+            if stream is not None:
+                with contextlib.suppress(OSError):
+                    stream.close()
+        raise TimeoutError("command deadline") from None
+    if child.returncode:
         # Subprocess output and arguments can contain paths or credentials.
         raise RuntimeError("command refused")
-    return result.stdout.strip()
+    return stdout.strip()
 
 
 class Mcp:
@@ -782,6 +1229,33 @@ class Mcp:
         finally:
             child.stdout.close()
 
+    def connect(self):
+        if self.child is not None:
+            return
+        self.buffer = b""
+        self.child = subprocess.Popen([self.bun, str(self.checkout / "bin/mcp-server.mjs")],
+                                      cwd=self.checkout, env=self.env, stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.exchange("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
+                                     "clientInfo": {"name": "deploy-health", "version": "1"}})
+        self.child.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+        self.child.stdin.flush()
+
+    def probe(self):
+        try:
+            self.connect()
+            answer = self.exchange("tools/list", {})
+            if not isinstance(answer.get("tools"), list) or not any(
+                    isinstance(tool, dict) and tool.get("name") == "get_pipeline" for tool in answer["tools"]):
+                raise RuntimeError("MCP tool registry unavailable")
+            live = self.call("list_pipelines", {"limit": 1})
+            if not isinstance(live.get("pipelines"), list):
+                raise RuntimeError("MCP live read unavailable")
+            return True
+        except Exception:
+            self.close()
+            raise
+
     def exchange(self, method, params):
         self.sequence += 1
         request_id = self.sequence
@@ -808,18 +1282,11 @@ class Mcp:
 
     def call(self, tool, args):
         try:
-            if self.child is None:
-                self.buffer = b""
-                self.child = subprocess.Popen([self.bun, str(self.checkout / "bin/mcp-server.mjs")],
-                                              cwd=self.checkout, env=self.env, stdin=subprocess.PIPE,
-                                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                self.exchange("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
-                                             "clientInfo": {"name": "deploy-health", "version": "1"}})
-                self.child.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
-                self.child.stdin.flush()
-            # Reads use a fresh key on every observation, including retries, so
-            # a restart refusal cannot be replayed as the later serving state.
-            arguments = {**args, "clientRequestId": "deploy-checkout-" + uuid.uuid4().hex}
+            self.connect()
+            # get_pipeline is an optional-key pure read. Omitting the key keeps
+            # each sample fresh without creating a durable or bounded receipt.
+            arguments = (dict(args) if tool in ["get_pipeline", "list_pipelines"] else
+                         {**args, "clientRequestId": "deploy-checkout-" + uuid.uuid4().hex})
             result = self.exchange("tools/call", {"name": tool, "arguments": arguments}).get("structuredContent", {})
             if result.get("ok") is not True:
                 raise RuntimeError("MCP result unavailable")
@@ -928,14 +1395,49 @@ class Checkout:
     def close(self):
         self.mcp.close()
 
+    @contextlib.contextmanager
+    def bounded_command_scope(self, deadline):
+        execute = self.command
+        if deadline is None or execute is not command:
+            yield
+            return
+
+        def bounded(args, cwd=None):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                relocation = getattr(self, "relocation", None)
+                if relocation is not None and "recovery:command-deadline" not in relocation["diagnostics"]:
+                    relocation["diagnostics"].append("recovery:command-deadline")
+                raise TimeoutError("owner recovery command deadline")
+            try:
+                return command(args, cwd, timeout=min(0.15, remaining))
+            except TimeoutError:
+                relocation = getattr(self, "relocation", None)
+                if relocation is not None and "recovery:command-deadline" not in relocation["diagnostics"]:
+                    relocation["diagnostics"].append("recovery:command-deadline")
+                raise
+
+        self._command_deadline = deadline
+        self.command = bounded
+        try:
+            yield
+        finally:
+            self.command = execute
+            self._command_deadline = None
+
     def census(self, timeout=30):
         return self.census_adapter(self.release, self.plan["bun"], self.state, self.target, timeout)
+
+    def read_host_census(self, _conversation_id):
+        return self.census()
 
     def process(self, entry):
         return read_process(entry, self.process_read)
 
     def interrupted(self, since, hosts):
         return interrupted_conversations(self.state, since, hosts)
+
+    sample = collect_sample
 
     def head(self, directory):
         sha = self.command(["git", "rev-parse", "HEAD"], cwd=directory)
@@ -971,11 +1473,14 @@ class Checkout:
             serving = self.serving()
             if not ready(serving, self.baseline["sha"], placement=False):
                 raise BaselineReadinessError(serving, self.baseline["sha"])
-        retry(baseline_ready, self.clock, 30)
+        try:
+            retry(baseline_ready, self.clock, 30)
+        finally:
+            self.mcp.close()
         capture_deadline = self.clock.now() + 30
         def capture():
             answer = self.census(max(0, capture_deadline - self.clock.now()))
-            return complete_activity(answer)
+            return complete_census(answer)
         rows = retry(capture, self.clock, 30)
         self.custody_rows = rows
         hosts = []
@@ -1483,7 +1988,7 @@ class Checkout:
         Each is held as PID and start identity; only these, and processes
         whose parents still reach them, can later be proven leftovers."""
         record = json.loads(self.record_file.read_text())
-        rows = complete_activity(self.census())
+        rows = complete_census(self.census())
         self.custody_rows = rows
         for row in rows:
             host = row.get("host") or {}
@@ -1659,45 +2164,93 @@ class Checkout:
                 self.clock.sleep(min(0.2, deadline - self.clock.now()))
         return signalled
 
-    def start(self, relocation, attempts=START_ATTEMPTS):
+    def start(self, relocation, attempts=START_ATTEMPTS, settle_timeout=STOP_SETTLE):
         """Starts the unit, retrying a refused or failed start. Whatever the
         relocation found, this always runs once a stop was submitted."""
+        attempted = False
         for attempt in range(attempts):
+            deadline = getattr(self, "_command_deadline", None)
+            if deadline is not None and deadline - time.monotonic() <= 0:
+                break
             if attempt:
-                self.clock.sleep(5)
+                delay = min(5, deadline - time.monotonic()) if deadline is not None else 5
+                if delay <= 0:
+                    break
+                self.clock.sleep(delay)
+                if deadline is not None and deadline - time.monotonic() <= 0:
+                    break
             try:
+                if deadline is not None and deadline - time.monotonic() <= 0:
+                    break
                 relocation["startAttempts"] += 1
-                self.command(["systemctl", "--user", "--no-block", "start", self.unit])
+                attempted = True
+                relocation["launchEvidence"] = "unknown"
+                relocation.pop("settlementEvidence", None)
+                start_command = ["systemctl", "--user", "--no-block", "start", self.unit]
+                if self.command is command:
+                    self.command(start_command, timeout=0.5)
+                else:
+                    self.command(start_command)
+                relocation["launchEvidence"] = "submitted"
                 def settled():
                     if self.jobs():
                         raise RuntimeError("named start pending")
-                retry(settled, self.clock, STOP_SETTLE)
+                if deadline is None:
+                    retry(settled, self.clock, settle_timeout)
+                else:
+                    settle_deadline = min(deadline, time.monotonic() + settle_timeout)
+                    while True:
+                        remaining = settle_deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("owner recovery settlement deadline")
+                        try:
+                            settled()
+                            break
+                        except RuntimeError:
+                            time.sleep(min(0.02, max(0, settle_deadline - time.monotonic())))
+                relocation["settlementEvidence"] = "settled"
                 state = self.active_state()
                 if state == "active":
                     relocation["started"] = True
                     relocation["outcome"] = relocation["stopOutcome"]
                     return
             except Exception as error:
-                diagnostic = "start:" + type(error).__name__
+                if isinstance(error, TimeoutError):
+                    relocation["launchEvidence"] = "unknown"
+                    relocation["settlementEvidence"] = "unknown"
+                    if "recovery:start-unconfirmed" not in relocation["diagnostics"]:
+                        relocation["diagnostics"].append("recovery:start-unconfirmed")
+                diagnostic = ("start:command-deadline" if isinstance(error, TimeoutError)
+                              else "start:" + type(error).__name__)
                 if diagnostic not in relocation["diagnostics"]:
                     relocation["diagnostics"].append(diagnostic)
-        relocation["started"] = False
-        relocation["outcome"] = "start-failed"
+        if attempted and relocation.get("launchEvidence") != "unknown":
+            relocation["started"] = False
+            relocation["outcome"] = "start-failed"
 
-    def recover_start(self, attempts=1):
-        relocation = self.relocation
-        try:
-            if not self.jobs() and self.active_state() == "active":
-                relocation["started"] = True
-                relocation["outcome"] = relocation["stopOutcome"]
-                return
-        except Exception:
-            pass
-        self.start(relocation, attempts)
-        with contextlib.suppress(Exception):
-            observed = self.placement()
-            relocation["placement"] = "placed" if observed["actual"] == observed["expected"] else "failed"
-            relocation["to"] = observed["actual"]
+    def recover_start(self, attempts=1, settle_timeout=STOP_SETTLE, command_deadline=None):
+        if command_deadline is not None and time.monotonic() >= command_deadline:
+            relocation = self.relocation
+            if "recovery:command-deadline" not in relocation["diagnostics"]:
+                relocation["diagnostics"].append("recovery:command-deadline")
+            return
+        with self.bounded_command_scope(command_deadline):
+            relocation = self.relocation
+            try:
+                if not self.jobs() and self.active_state() == "active":
+                    relocation["started"] = True
+                    relocation["outcome"] = relocation["stopOutcome"]
+                    relocation["launchEvidence"] = "observed-active"
+                    relocation["settlementEvidence"] = "settled"
+                    return
+            except Exception:
+                pass
+            self.start(relocation, attempts, settle_timeout)
+            if command_deadline is None or time.monotonic() < command_deadline:
+                with contextlib.suppress(Exception):
+                    observed = self.placement()
+                    relocation["placement"] = "placed" if observed["actual"] == observed["expected"] else "failed"
+                    relocation["to"] = observed["actual"]
 
     def restart(self):
         """Stop, wait for the old cgroup to empty and be released, then start.
@@ -1767,24 +2320,67 @@ class Checkout:
         return relocation
 
     def stage(self, host):
-        answer = self.mcp.call("get_pipeline", {"pipelineId": host["pipelineId"], "full": True})
-        pipeline = answer["pipeline"]
-        run = next((r for r in pipeline["runs"] if r["stageId"] == host["stageId"]), None)
-        attempts = run["attempts"] if run else []
-        current = max((a for a in attempts if not a.get("historical")), key=lambda a: a["n"], default={})
+        outcome = {"outcome": "unknown"}
+        try:
+            answer = self.mcp.call("get_pipeline", {"pipelineId": host["pipelineId"], "full": True})
+            run = next((r for r in answer["pipeline"]["runs"] if r["stageId"] == host["stageId"]), None)
+            attempts = run["attempts"] if run else []
+            current = max((a for a in attempts if not a.get("historical")), key=lambda a: a["n"], default={})
+        except Exception as error:
+            return {**outcome, "reason": "pipeline-unavailable:" + type(error).__name__}
+        if not current:
+            return {**outcome, "reason": "stage-attempt-missing"}
+        state = current["state"]
+        outcome.update(attempt=current["n"], stageState=state)
+        if current["n"] < host["attempt"]:
+            return {**outcome, "reason": "stage-attempt-older-than-capture"}
         activity = {}
-        if current.get("conversationId") and current.get("state") in ["running", "reviewing", "committing"]:
-            result = self.mcp.call("agent_activity", {"conversationId": current["conversationId"], "compact": False, "includeGone": True})
-            rows = complete_activity(result)
-            if len(rows) == 1 and rows[0].get("conversationId") == current["conversationId"]:
-                activity = rows[0]
-                live = activity.get("host") or {}
-                if live.get("state") == "alive" and self.process({"pid": live.get("pid")}) is None:
-                    activity = {**activity, "host": {"state": "gone"}}
-        outcome = stage_outcome(host, attempts, activity)
-        if outcome["outcome"] == "unknown":
-            raise RuntimeError("protected stage recovery pending")
-        return {"pipelineId": host["pipelineId"], **outcome}
+        if state in ["running", "reviewing", "committing"]:
+            conversation = current.get("conversationId")
+            if not conversation:
+                return {**outcome, "reason": "stage-conversation-pending"}
+            outcome["observedConversationId"] = conversation
+            try:
+                result = self.read_host_census(conversation)
+            except Exception as error:
+                return {**outcome, "reason": "census-unavailable:" + type(error).__name__}
+            try:
+                rows = complete_census(result)
+            except Exception:
+                return {**outcome, "reason": "census-incomplete"}
+            matches = [row for row in rows if row.get("conversationId") == conversation]
+            if len(matches) != 1:
+                return {**outcome, "reason": "census-unmatched"}
+            activity = matches[0]
+            pipeline = activity.get("pipeline")
+            if (not isinstance(pipeline, dict)
+                    or pipeline.get("pipelineId") != host["pipelineId"]
+                    or pipeline.get("stageId") != host["stageId"]
+                    or pipeline.get("attempt") != current["n"]):
+                return {**outcome, "reason": "replacement-pipeline-mismatch"}
+            live = activity.get("host") or {}
+            outcome.update(hostState=live.get("state"), turnState=activity.get("turnState"))
+            if live.get("state") != "alive":
+                return {**outcome, "reason": "replacement-host-unconfirmed"}
+            identity = live.get("process")
+            if (not census_identity(identity) or identity.get("bootEpoch") != self.boot_epoch
+                    or identity.get("pid") != live.get("pid")
+                    or not re.fullmatch(str(live.get("pid")) + r":[0-9]+", identity["startIdentity"])):
+                return {**outcome, "reason": "replacement-process-identity-unverified"}
+            captured_identity = host.get("startIdentity")
+            if (captured_identity is not None
+                    and identity["startIdentity"].split(":", 1)[1] == captured_identity):
+                return {**outcome, "reason": "replacement-process-identity-not-fresh"}
+            try:
+                process = self.process({"pid": identity["pid"],
+                                        "startIdentity": identity["startIdentity"].split(":", 1)[1]})
+                if (process is None or identity["startIdentity"] != str(process["pid"]) + ":" + process["startIdentity"]):
+                    return {**outcome, "reason": "replacement-process-gone"}
+            except Exception as error:
+                return {**outcome, "reason": "replacement-process-unavailable:" + type(error).__name__}
+        outcome.update(stage_outcome(host, attempts, activity))
+        return ({**outcome, "reason": "replacement-lifecycle-unconfirmed" if activity else "stage-pending"}
+                if outcome["outcome"] == "unknown" else outcome)
 
     def serving(self):
         record = json.loads(self.record_file.read_text())
@@ -1829,7 +2425,8 @@ class Checkout:
             # loads the board store, but its answer is independent of board size.
             if not isinstance(json.loads(self.http(port, "/api/tasks?project=", self.token)).get("tasks"), list):
                 raise RuntimeError("board read unavailable")
-            update = json.loads(self.http(port, "/api/self-update", self.token))
+            # Serving identity and auto-update state need only the installation snapshot.
+            update = json.loads(self.http(port, "/api/self-update?work=0&readOnly=1", self.token))
             if update["auto"]["enabled"] or update["auto"].get("drain"):
                 raise RuntimeError("automatic update competes with external switch")
             for role, key in [("viewer", "web"), ("runtimeHost", "runtimeHost")]:
@@ -1838,7 +2435,7 @@ class Checkout:
                     raise RuntimeError("HTTP serving identity mismatch")
         check("http", web)
         check("runtimeSocket", lambda: self.runtime(record))
-        check("mcp", lambda: self.mcp.call("agent_activity", {"liveOnly": True, "limit": 1}))
+        check("mcp", self.mcp.probe)
         def service():
             if self.command(["systemctl", "--user", "show", self.unit, "-p", "ActiveState"]) != "ActiveState=active" or self.jobs():
                 raise RuntimeError("named service not settled")
@@ -1900,6 +2497,40 @@ class Checkout:
                         **({"recovery": recovery} if recovery else {})})
 
 
+def run_worker(adapter):
+    import fcntl
+    lock_file = adapter.run_dir.parent / ("lock-" + adapter.install)
+    status_file = adapter.run_dir / "status.json"
+    with open(lock_file, "a") as lock:
+        # A contender must not replace the incumbent's latest verdict, even
+        # with a refusal. Only the worker that owns the lock calls emit().
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            write_json(status_file, {"phase": "finished", "at": utc(), "verdict": "needs_decision",
+                                     "reason": "install-lock-held"})
+            raise
+        try:
+            write_json(status_file, {"phase": "running", "at": utc(), "pid": os.getpid()})
+            result = run_switch(adapter, adapter.target)
+            write_json(status_file, {"phase": "finished", "at": utc(), "verdict": result["verdict"]})
+            return {"pass": 0, "fail": 1, "needs_decision": 2}[result["verdict"]]
+        except Exception as error:
+            attempted = getattr(adapter, "switch_attempted", False)
+            verdict = "fail" if attempted else "needs_decision"
+            if getattr(adapter, "last_result", None) is None:
+                leftovers = error.members if isinstance(error, LeftoverProcesses) else None
+                adapter.emit({"verdict": verdict, "serving": {},
+                              "diagnostics": [type(error).__name__],
+                              "phase": "observation" if attempted else "before-switch",
+                              **({"leftovers": leftovers} if leftovers else {})})
+            write_json(status_file, {"phase": "finished", "at": utc(), "verdict": verdict,
+                                     "reason": type(error).__name__})
+            raise
+        finally:
+            adapter.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="private, explicit checkout deploy plan")
@@ -1914,7 +2545,6 @@ def main():
     if args.worker and not re.fullmatch(r"[0-9a-f]{32}", args.worker):
         parser.error("invalid worker id")
     adapter = None
-    result = None
     try:
         adapter = Checkout(args.config, args.worker)
         if args.preflight:
@@ -1940,21 +2570,10 @@ def main():
         expected = command(["systemctl", "--user", "show", "delegatus-deploy-" + args.worker + ".service", "-p", "MainPID", "--value"])
         if expected != str(os.getpid()):
             raise RuntimeError("worker must run in its own detached unit")
-        import fcntl
-        with open(adapter.run_dir.parent / ("lock-" + adapter.install), "a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            write_json(adapter.run_dir / "status.json", {"phase": "running", "at": utc(), "pid": os.getpid()})
-            result = run_switch(adapter, adapter.target)
-            write_json(adapter.run_dir / "status.json", {"phase": "finished", "at": utc(), "verdict": result["verdict"]})
-            return {"pass": 0, "fail": 1, "needs_decision": 2}[result["verdict"]]
+        return run_worker(adapter)
     except Exception as error:
         # Public console output never carries arbitrary exception text.
         leftovers = error.members if isinstance(error, LeftoverProcesses) else None
-        if adapter and adapter.run_dir:
-            observed = result or getattr(adapter, "last_result", None)
-            if observed is None:
-                adapter.emit({"verdict": "needs_decision", "serving": {}, "diagnostics": [type(error).__name__],
-                              "phase": "before-switch", **({"leftovers": leftovers} if leftovers else {})})
         for line in leftover_lines(leftovers or []):
             print(line, file=sys.stderr)
         if isinstance(error, BaselineReadinessError):
@@ -1968,4 +2587,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--evidence-worker":
+        sys.exit(evidence_worker(sys.argv[2]))
     sys.exit(main())

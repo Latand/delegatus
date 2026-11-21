@@ -2,7 +2,7 @@ import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { spawnParentForCaller } from "@/lib/orchestrator/deputies";
 import type { CallerAttribution } from "./bindings";
-import { agentRegistry, registryReceiptsForConversation } from "@/lib/agent/registry";
+import { agentRegistry } from "@/lib/agent/registry";
 
 /** A targeted read of accepted launch facts, with no admission or recovery. */
 export function spawnConversation(conversationId: string, resolveAccess: () => {
@@ -10,10 +10,7 @@ export function spawnConversation(conversationId: string, resolveAccess: () => {
   project: string | null;
   requestedProject?: string;
 }) {
-  const snapshot = agentRegistry().livenessConversationSnapshot(conversationId);
-  const receipt = registryReceiptsForConversation(snapshot, conversationId)
-    .filter(row => !row.rejection)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.launchId.localeCompare(a.launchId))[0];
+  const receipt = agentRegistry().latestAcceptedSpawnReceipt(conversationId);
   if (!receipt) return null;
   const access = resolveAccess();
   if (access.caller.kind === "unidentified") return null;

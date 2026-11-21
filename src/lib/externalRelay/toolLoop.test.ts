@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { callBody, callableReads, callableTools, canonical, createToolLoop, mayQuote } from "./toolLoop";
+import { callBody, callableReads, callableTools, canonical, createToolLoop } from "./toolLoop";
+import { relayToolAudience } from "./protocol";
 import { ownerRequest, x1Bodies, x1Errors, x1Request, x1Results } from "./toolLoop.fixture";
 import { setRelaySwitch } from "./switches";
 import { startTestRelay } from "./testRelay";
@@ -149,13 +150,15 @@ test("canonical call identity survives argument ordering and a new lease", () =>
   expect(canonical(JSON.parse('{"__proto__":{"z":1,"a":2}}'))).toBe('{"__proto__":{"a":2,"z":1}}');
 });
 test("X1 audience gates pending, timeout and replay alike, including anonymous admin", () => {
-  for (const role of ["member", "admin", "anonymous_admin", "owner"])
-    for (const name of ["admin", "admin_pending", "admin_timeout", "owner", "owner_pending", "owner_timeout"]) {
-      const requester = x1Request(role).input.requester;
-      expect(mayQuote(x1Results[name]!.audience, requester)).toBe(name.startsWith("owner") ? role === "owner" : role !== "member");
-    }
-  expect(mayQuote(undefined, null)).toBe(true);
-  expect(mayQuote("unknown", x1Request("owner").input.requester)).toBe(false);
+  for (const role of ["member", "admin", "anonymous_admin", "owner"]) {
+    const mayQuote = relayToolAudience(x1Request(role));
+    for (const name of ["admin", "admin_pending", "admin_timeout", "owner", "owner_pending", "owner_timeout"])
+      expect(mayQuote(x1Results[name]!.audience)).toBe(name.startsWith("owner") ? role === "owner" : role !== "member");
+  }
+  const request = x1Request("owner");
+  expect(relayToolAudience(request)("unknown")).toBe(false);
+  request.input.requester = null;
+  expect(relayToolAudience(request)(undefined)).toBe(true);
 });
 
 for (const rejection of ["unauthorized", "unsupported_version"])
@@ -207,7 +210,10 @@ test("2b callable indexes require requester and the index audience", () => {
   request.input.requester = null;
   expect(callableTools(request).every((tool) => tool.effect === "read")).toBe(true);
   for (const role of ["admin", "anonymous_admin", "owner"]) {
-    request.input.requester = x1Request(role).input.requester;
+    const { input } = x1Request(role);
+    request.input.requester = input.requester;
+    request.input.conversation = input.conversation;
+    request.input.respond_to = input.respond_to;
     request.input.tools = [{ name: "synthetic_owner_action", summary: "Synthetic action", mode: "direct", effect: "action", audience: "owner", parameters: { type: "object" } }];
     expect(callableTools(request)).toHaveLength(role === "owner" ? 1 : 0);
   }
