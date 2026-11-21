@@ -28,14 +28,16 @@ root and nested dependency binaries. The v4 cache leaves earlier cache
 generations untouched and rebuilds their graphs with this permission policy.
 Bun also changes executable file permissions during a matching reinstall.
 The completion receipt lists executable paths and root and nested CLI symlinks.
-After a full inventory check, the cache writer records a validation fingerprint
-beside that receipt. It binds the dependency input hash and completion receipt
-to filesystem identities for the graph root, required manifests, executables,
-CLI links and their relevant parents. With matching identities, a linked
-worktree can validate without the writer, and a new worktree can reuse the
-result while it holds the writer to link. A missing or stale fingerprint
-requires a fresh inventory check under the writer. Permission repair
-invalidates the fingerprint before changing the tree. A missing CLI link refuses
+After a full inventory check, the cache writer records a payload digest and a
+validation fingerprint beside the completion receipt. A bounded child scans
+metadata for every entry, including nested package files. The fingerprint
+also binds the dependency inputs, completion receipt and required manifest and
+CLI anchors. A linked worktree can verify a matching fingerprint without the
+writer. A new worktree scans after staging its link and while holding the
+writer. A missing or stale fingerprint requires the writer to verify payload
+bytes and file identities. Permission repair invalidates only the validation
+fingerprint before changing modes. A deleted or replaced entry in a previously
+recorded payload refuses preparation. A missing CLI link refuses
 setup with an `ENOENT` stage-environment cause, preserving the shared payload
 and previous worktree link. An ordinary frozen reinstall can restore the links.
 Update dependency inputs with `bun install --lockfile-only --ignore-scripts`,

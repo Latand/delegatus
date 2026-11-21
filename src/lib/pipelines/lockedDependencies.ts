@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import filesystem, { chmodSync, constants, lstatSync, promises as fs, readlinkSync, type BigIntStats } from "node:fs";
+import filesystem, { chmodSync, constants, promises as fs, readlinkSync, type BigIntStats } from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop, setTimeout as delay } from "node:timers/promises";
 import { tryLockFenceExclusive } from "../../runtime-host/fenceLock";
 import type { ExecPort, ExecResult } from "../workflows/provision";
+import { dependencyPayloadScan } from "./dependencyPayloadScan";
 
 const CACHE_VERSION = "v4";
 const BUDGET_MS = 180_000;
@@ -171,7 +172,7 @@ async function statBigInt(filename: string): Promise<BigIntStats | undefined> {
 }
 
 function entryNow(filename: string): BigIntStats | undefined {
-  return lstatSync(filename, { bigint: true, throwIfNoEntry: false });
+  return filesystem.lstatSync(filename, { bigint: true, throwIfNoEntry: false });
 }
 
 /** Only owned install trees reach this walker. Never follow package symlinks. */
@@ -276,7 +277,7 @@ type DependencyPlan = Awaited<ReturnType<typeof lockedDependencyInputs>>;
 function graphPaths(cache: string, key: string) {
   const target = path.join(cache, key);
   return { target, modules: path.join(target, "node_modules"), receipt: path.join(target, "installed.json"),
-    validation: path.join(target, "validated.sha256") };
+    payload: path.join(target, "payload.sha256"), validation: path.join(target, "validated.sha256") };
 }
 
 type GraphPaths = ReturnType<typeof graphPaths>;
@@ -291,13 +292,14 @@ async function readValidation(filename: string, entry: BigIntStats | undefined):
     if (!sameVersion(entry, await handle.stat({ bigint: true }))) return;
     const bytes = Buffer.alloc(65);
     const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-    if (bytesRead === 64 && sameVersion(entry, await handle.stat({ bigint: true }))) return bytes.toString("utf8", 0, bytesRead);
+    const digest = bytes.toString("utf8", 0, bytesRead);
+    if (bytesRead === 64 && /^[a-f0-9]{64}$/.test(digest) && sameVersion(entry, await handle.stat({ bigint: true }))) return digest;
   } finally { await handle.close(); }
 }
 
 function validationFingerprint(target: string, key: string, receipt: string,
   anchors: [string, BigIntStats | undefined][]): string {
-  const hash = createHash("sha256").update(JSON.stringify(["validated-v1", key, receipt]));
+  const hash = createHash("sha256").update(JSON.stringify(["validated-v2", key, receipt]));
   for (const [filename, entry] of anchors.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     hash.update(JSON.stringify([path.relative(target, filename), entry && [
       entry.dev, entry.ino, entry.mode,
@@ -308,15 +310,24 @@ function validationFingerprint(target: string, key: string, receipt: string,
   return hash.digest("hex");
 }
 
-async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () => void, allowWalk: boolean) {
-  const { target, modules, receipt, validation } = graph;
+type PayloadInventory = {
+  metadata: string; payload: string | false; reseal: boolean; executables: string[]; cliLinks: CliLink[];
+};
+type ScanPayload = (modules: string, content: boolean) => Promise<PayloadInventory>;
+
+async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () => void, scan: ScanPayload, allowWalk: boolean) {
+  const { target, modules, receipt, payload, validation } = graph;
   const reads = new ValidationReads();
-  const [directory, root, seal, validationEntry] = await Promise.all([
-    statBigInt(target), reads.read(modules), reads.read(receipt), statBigInt(validation),
+  const [directory, root, seal, validationEntry, payloadEntry] = await Promise.all([
+    statBigInt(target), reads.read(modules), reads.read(receipt), statBigInt(validation), statBigInt(payload),
   ]);
   check();
   if (!directory?.isDirectory() || !root?.isDirectory() || !seal?.isFile()) return null;
-  if (!allowWalk && !validationEntry?.isFile()) return null;
+  if (!allowWalk && (!validationEntry?.isFile() || !payloadEntry?.isFile())) return null;
+  const [savedStamp, savedPayload] = await Promise.all([
+    readValidation(validation, validationEntry), readValidation(payload, payloadEntry),
+  ]);
+  if (payloadEntry && !savedPayload) throw new Error("invalid dependency payload receipt");
   const receiptText = await fs.readFile(receipt, "utf8");
   check();
   const record = JSON.parse(receiptText);
@@ -333,58 +344,15 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
     || path.basename(path.dirname(link.file)) !== ".bin" || typeof link.target !== "string"
     || !link.target || path.isAbsolute(link.target))) throw new Error("invalid dependency CLI link receipt");
 
-  const needsSeal = (filename: string, entry: BigIntStats) => {
-    const writeBits = Number(entry.mode) & 0o222;
-    const bin = entry.isDirectory() && path.basename(filename) === ".bin"
-      && path.basename(path.dirname(filename)) === "node_modules";
-    return (writeBits & (bin ? 0o022 : 0o222)) !== 0;
-  };
-  let reseal = needsSeal(modules, root);
-  const actualExecutables = new Set<string>();
-  const actualCliLinks = new Map<string, string>();
-  const inventory = async (): Promise<void> => {
-    const directories = [modules];
-    while (directories.length) {
-      const current = directories.splice(0, 32);
-      const listings = await Promise.all(current.map(async directory => ({
-        directory, names: await fs.readdir(directory),
-      })));
-      check();
-      const filenames = listings.flatMap(({ directory, names }) => names.map(name => path.join(directory, name)));
-      const entries: { filename: string; entry: BigIntStats }[] = [];
-      await inBatches(filenames, async filename => {
-        check();
-        const entry = await reads.read(filename);
-        if (!entry) throw new Error("dependency graph changed during validation");
-        entries.push({ filename, entry });
-      });
-      for (const { filename, entry } of entries) {
-        check();
-        const mode = Number(entry.mode) & 0o777;
-        if (entry.isSymbolicLink()) {
-          if (path.basename(path.dirname(filename)) === ".bin") actualCliLinks.set(path.relative(modules, filename), await fs.readlink(filename));
-          continue;
-        }
-        if (!entry.isFile() && !entry.isDirectory()) throw new Error("unsupported dependency graph entry");
-        if (needsSeal(filename, entry)) reseal = true;
-        if (entry.isFile() && (mode & 0o111) !== 0) actualExecutables.add(path.relative(modules, filename));
-        if (entry.isDirectory()) directories.push(filename);
-      }
-    }
-  };
-  const bin = path.join(modules, ".bin");
-  const binEntry = await reads.read(bin);
-  if (binEntry && needsSeal(bin, binEntry)) reseal = true;
+  await reads.read(path.join(modules, ".bin"));
   const parents = async (filename: string) => {
     for (let parent = path.dirname(filename); parent !== modules; parent = path.dirname(parent)) {
-      const entry = await reads.read(parent);
-      if (entry?.isDirectory() && needsSeal(parent, entry)) reseal = true;
+      await reads.read(parent);
     }
   };
   await validateRequiredDependencies(modules, plan.required, check, async filename => {
     await parents(filename);
-    const entry = await reads.read(filename);
-    if (entry?.isFile() && (Number(entry.mode) & 0o222) !== 0) reseal = true;
+    await reads.read(filename);
   });
   await inBatches(executables, async file => {
     check();
@@ -393,7 +361,6 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
     const entry = await reads.read(filename);
     if (!(await fs.realpath(filename)).startsWith(modules + path.sep)) throw new Error("dependency executable leaves the installation");
     if (!entry?.isFile() || Number(entry.nlink) !== 1) throw new Error("dependency executable changed during preparation");
-    if (needsSeal(filename, entry)) reseal = true;
   });
   await inBatches(cliLinks as CliLink[], async link => {
     check();
@@ -411,30 +378,46 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
     if (!target?.isFile() || (Number(target.mode) & 0o111) === 0) throw new Error("dependency CLI target is not executable");
   });
   const anchors: [string, BigIntStats | undefined][] = [[target, directory], ...reads.snapshot()];
-  const fingerprint = validationFingerprint(target, plan.key, receiptText, anchors);
-  const reusable = !reseal && fingerprint === await readValidation(validation, validationEntry);
-  check();
-  if (!reusable) {
-    if (!allowWalk) {
-      // The fenced path can revalidate and refresh this graph. Pin the reads
-      // here too so a mutation during validation is still reported as such.
-      assertAnchors();
-      return null;
-    }
-    await inventory();
+  const anchorDigest = validationFingerprint(target, plan.key, receiptText, anchors);
+  const stamp = (metadata: string, payload: string) =>
+    createHash("sha256").update(anchorDigest + metadata + payload).digest("hex");
+  if (!allowWalk && !savedStamp) {
+    assertAnchors(false);
     check();
-    const recordedExecutables = new Set(executables as string[]);
-    const recordedLinks = new Map((cliLinks as CliLink[]).map(link => [link.file, link.target]));
-    if (recordedExecutables.size !== executables.length || recordedLinks.size !== cliLinks.length
-      || recordedExecutables.size !== actualExecutables.size || [...actualExecutables].some(file => !recordedExecutables.has(file))
-      || recordedLinks.size !== actualCliLinks.size || [...actualCliLinks].some(([file, target]) => recordedLinks.get(file) !== target)) {
-      throw new Error("dependency receipt inventory does not match the installed graph");
-    }
+    return null;
+  }
+  let inventory = await scan(modules, allowWalk && (!savedStamp || !savedPayload));
+  const reusable = !inventory.reseal && !!savedPayload && savedStamp === stamp(inventory.metadata, savedPayload);
+  check();
+  const recordedExecutables = new Set(executables as string[]);
+  const recordedLinks = new Map((cliLinks as CliLink[]).map(link => [link.file, link.target]));
+  if (recordedExecutables.size !== executables.length || recordedLinks.size !== cliLinks.length
+    || recordedExecutables.size !== inventory.executables.length || inventory.executables.some(file => !recordedExecutables.has(file))
+    || recordedLinks.size !== inventory.cliLinks.length || inventory.cliLinks.some(({ file, target }) => recordedLinks.get(file) !== target)) {
+    assertAnchors(false);
+    check();
+    throw new Error("dependency receipt inventory does not match the installed graph");
+  }
+  if (!reusable && !allowWalk) {
+    assertAnchors(false);
+    check();
+    return null;
+  }
+  if (!reusable && !inventory.payload) {
+    const verified = await scan(modules, true);
+    if (verified.metadata !== inventory.metadata) throw new Error("dependency graph changed during validation; retry setup");
+    inventory = verified;
+  }
+  if (!reusable && savedPayload && savedPayload !== inventory.payload) {
+    throw new Error("dependency payload changed since the installation was validated");
   }
 
-  function assertAnchors() {
-    if (reusable && !sameVersion(validationEntry, entryNow(validation))) {
+  function assertAnchors(reuse: boolean, expectedPayload = payloadEntry) {
+    if (reuse && !sameVersion(validationEntry, entryNow(validation))) {
       throw new Error("dependency validation receipt changed during preparation; retry setup");
+    }
+    if (!sameVersion(expectedPayload, entryNow(payload))) {
+      throw new Error("dependency payload receipt changed during validation; retry setup");
     }
     for (const [filename, expected] of anchors) {
       const current = entryNow(filename);
@@ -447,9 +430,11 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
     // the final anchor check immediately before any return or link commit.
     installed.reads.assertCurrentNow("shared dependency manifest changed during preparation; retry setup");
   }
-  const confirmInventory = reusable ? undefined : () =>
-    reads.assertCurrent("dependency installation changed during validation; retry setup", check);
-  return { reseal, fingerprint, confirmInventory, assertAnchors };
+  const payloadDigest = savedPayload || inventory.payload;
+  if (!payloadDigest) throw new Error("dependency payload scan did not certify its contents");
+  return { reseal: inventory.reseal, reusable, metadata: inventory.metadata,
+    payload: payloadDigest, newPayload: !savedPayload,
+    fingerprint: stamp(inventory.metadata, payloadDigest), assertAnchors };
 }
 
 /** Match Git's registration backlink, so a copied .git pointer cannot give a
@@ -528,6 +513,17 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
       : `dependency repository lookup failed (exit ${result.code ?? "interrupted"})`);
     return result.stdout.trim();
   };
+  const scan: ScanPayload = async (modules, content) => {
+    const result = await worktreeDependencyExec(process.execPath, ["--no-env-file", "-e", dependencyPayloadScan, modules, content ? "content" : "metadata"],
+      path.dirname(process.execPath), {}, { signal: options.signal, timeoutMs: remaining() });
+    remaining();
+    if (result.code !== 0) throw new Error("dependency graph changed during validation or could not be scanned");
+    const inventory: PayloadInventory = JSON.parse(result.stdout);
+    if (!/^[a-f0-9]{64}$/.test(inventory.metadata) || (content && (!inventory.payload || !/^[a-f0-9]{64}$/.test(inventory.payload)))) {
+      throw new Error("invalid dependency payload scan");
+    }
+    return inventory;
+  };
 
   try {
     if (!await usesLockedDependencies(cwd)) return false;
@@ -575,7 +571,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
       const plan = await capturePlan();
       const graph = graphPaths(cache, plan.key);
       if (linksDirectlyTo(local, graph.modules) && await dependencyTarget(local) === graph.modules) {
-        const checked = await inspectGraph(graph, plan, remaining, false);
+        const checked = await inspectGraph(graph, plan, remaining, scan, false);
         if (checked) {
           assertCurrent();
           assertCache();
@@ -583,13 +579,14 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
           if (!sameVersion(before, entryNow(local)) || !linksDirectlyTo(local, graph.modules)) {
             throw new Error("dependency link changed during validation; retry setup");
           }
-          checked.assertAnchors();
+          checked.assertAnchors(true);
           assertCurrent();
           return true;
         }
       }
     }
 
+    remaining();
     enter("wait", "repository writer fence");
     // Create the namespace one component at a time and refuse symlink aliases.
     assertCurrent();
@@ -647,9 +644,8 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
       const plan = await capturePlan();
       const graph = graphPaths(cache, plan.key);
       const { target, modules } = graph;
-      let checked = await inspectGraph(graph, plan, remaining, true);
-      if (!checked) {
-        if (await stat(target)) throw new Error("incomplete shared dependency entry; preserve it for inspection");
+      const existing = await stat(target);
+      if (!existing) {
         enter("commit", "cold cache cleanup");
         // Eviction is needed only to reserve room for a new completed graph.
         // With three unused graphs reserved here, one more may become unused
@@ -723,48 +719,66 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
           assertFence();
           await fs.unlink(activeBuild);
         }
-        enter("validation", "new graph seal");
-        checked = await inspectGraph(graph, plan, remaining, true);
-      }
-      if (!checked) throw new Error("shared dependency seal unavailable");
-      if (checked.reseal) {
-        await checked.confirmInventory?.();
-        enter("commit", "permission repair");
-        assertWriter();
-        checked.assertAnchors();
-        // Invalidate before allowing any reader to see a repair in progress.
-        await fs.rm(graph.validation, { force: true });
-        assertWriter();
-        checked.assertAnchors();
-        await dependencyPermissions(modules, false, assertWriter);
-        enter("validation", "repaired graph seal");
-        checked = await inspectGraph(graph, plan, remaining, true);
-        if (!checked || checked.reseal) throw new Error("shared dependency permissions could not be sealed");
       }
 
-      const { confirmInventory, assertAnchors, fingerprint } = checked;
-      const persistValidation = async () => {
-        if (!confirmInventory) return;
-        enter("validation", "confirm graph inventory");
-        const temporary = graph.validation + ".next";
-        // The writer owns this pathname, including a leftover from a crash.
-        await fs.rm(temporary, { force: true });
-        assertWriter();
-        try {
-          await fs.writeFile(temporary, fingerprint, { flag: "wx", mode: 0o600 });
-          await confirmInventory();
+      const validateForLink = async () => {
+        enter("validation", existing ? "fenced graph" : "new graph seal");
+        let checked = await inspectGraph(graph, plan, remaining, scan, true);
+        if (!checked) throw new Error("incomplete shared dependency entry; preserve it for inspection");
+        if (checked.reseal) {
+          enter("commit", "permission repair");
           assertWriter();
-          assertAnchors();
-          filesystem.renameSync(temporary, graph.validation);
-        } catch (error) {
-          await fs.rm(temporary, { force: true });
-          throw error;
+          checked.assertAnchors(false);
+          // Invalidate before allowing any reader to see a repair in progress.
+          if (!entryNow(graph.validation)?.isDirectory()) await fs.rm(graph.validation, { force: true });
+          assertWriter();
+          checked.assertAnchors(false);
+          await dependencyPermissions(modules, false, assertWriter);
+          enter("validation", "repaired graph seal");
+          checked = await inspectGraph(graph, plan, remaining, scan, true);
+          if (!checked || checked.reseal) throw new Error("shared dependency permissions could not be sealed");
+        }
+        const { assertAnchors } = checked;
+        if (checked.reusable) return () => assertAnchors(true);
+
+        enter("validation", "confirm graph inventory");
+        let saveStamp = true;
+        if (entryNow(graph.validation)?.isDirectory()) {
+          try { await fs.rmdir(graph.validation); }
+          catch (error) {
+            if (!["ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+            saveStamp = false;
+          }
+        }
+        const records: [string, string][] = [];
+        if (checked.newPayload) records.push([graph.payload, checked.payload]);
+        if (saveStamp) records.push([graph.validation, checked.fingerprint]);
+        const temporary = (file: string) => file + ".next";
+        let committedRecords = false;
+        try {
+          for (const [file, digest] of records) {
+            assertWriter();
+            await fs.rm(temporary(file), { force: true });
+            assertWriter();
+            await fs.writeFile(temporary(file), digest, { flag: "wx", mode: 0o600 });
+          }
+          if ((await scan(modules, false)).metadata !== checked.metadata) {
+            throw new Error("dependency graph changed during validation; retry setup");
+          }
+          assertWriter();
+          assertAnchors(false);
+          for (const [file] of records) filesystem.renameSync(temporary(file), file);
+          const payloadEntry = entryNow(graph.payload);
+          committedRecords = true;
+          return () => assertAnchors(false, payloadEntry);
+        } finally {
+          if (!committedRecords) for (const [file] of records) await fs.rm(temporary(file), { force: true });
         }
       };
 
       const previous = entryNow(local);
       if (previous?.isSymbolicLink() && linksDirectlyTo(local, modules) && await dependencyTarget(local) === modules) {
-        if (confirmInventory) await persistValidation();
+        const assertAnchors = await validateForLink();
         assertWriter();
         assertInputsNow(plan);
         if (!sameVersion(previous, entryNow(local)) || !linksDirectlyTo(local, modules)) {
@@ -792,10 +806,8 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
           preserved = await fs.mkdtemp(path.join(cache, "preserved-"));
         }
         assertWriter();
-        if (confirmInventory) {
-          await persistValidation();
-          enter("commit", "worktree link");
-        }
+        const assertAnchors = await validateForLink();
+        enter("commit", "worktree link");
         assertWriter();
         assertInputsNow(plan);
         if (!sameVersion(previous, entryNow(local)) || !sameVersion(staged, entryNow(link))) {
