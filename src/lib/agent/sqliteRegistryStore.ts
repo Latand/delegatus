@@ -481,6 +481,7 @@ interface RegistryFileReaders {
   startupSelection: WeakMap<RegistryFile, () => boolean>;
   projection: WeakMap<object, ProjectionReader>;
   liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
+  structuredProcess?: WeakMap<object, (pids: readonly number[]) => boolean>;
 }
 /* Next standalone evaluates instrumentation and route handlers in separate
    bundle realms, each with its own copy of this module, while the process
@@ -507,6 +508,15 @@ const endedOwnerReaders = fileReaders.endedOwner;
 const startupSelectionReaders = fileReaders.startupSelection ??= new WeakMap();
 const projectionReaders = fileReaders.projection;
 const livenessReaders = fileReaders.liveness;
+const structuredProcessReaders = fileReaders.structuredProcess ??= new WeakMap();
+
+/** An extant process slot, including scope custody on a terminal row, belongs
+ * to registered host recovery. Never seize it through orphan discovery. */
+export function registryHasStructuredProcess(file: RegistryFile, pids: readonly number[]): boolean {
+  // A caller without a keyed view cannot prove vacancy within the sweep's
+  // bound. Leave custody with the registry until an indexed read is available.
+  return structuredProcessReaders.get(file)?.(pids) ?? true;
+}
 
 /**
  * A narrow, immutable reading of every row of one collection (#2761).
@@ -5899,6 +5909,21 @@ export class SqliteAgentRegistryStore {
         } finally { statement.finalize(); }
       }
       return false;
+    });
+    structuredProcessReaders.set(file, pids => {
+      // A writer may already have installed another process in this view.
+      // Refuse vacancy while entry changes have yet to reach the index.
+      if (dirtyRows.get("entries")?.size || reorderedCollections.has("entries")) return true;
+      const occupied = this.db.query<{ present: number }, [number, number]>(`
+        SELECT 1 AS present FROM registry_rows
+          WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.process.pid')=?
+        UNION ALL
+        SELECT 1 AS present FROM registry_rows
+          WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid')=?
+            AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
+              OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)
+        LIMIT 1`);
+      return pids.some(pid => occupied.get(pid, pid) !== null);
     });
     boundedReaders.set(file, (collection, filters, limit) => this.matchingRowKeysBounded(collection, filters, limit));
     keyedReaders.set(file, (collection, field, value) => {

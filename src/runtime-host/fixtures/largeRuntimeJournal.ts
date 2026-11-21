@@ -12,7 +12,17 @@ function canonical(value: unknown): string {
 export function largeJournal(filename: string, count = 300_000, options: { migrated?: boolean; missingNonEngineReceipts?: number; emptyReceipts?: boolean } = {}): void {
   new RuntimeJournal(filename).close();
   const db = new Database(filename, { strict: true });
-  db.exec("PRAGMA journal_mode=WAL; BEGIN IMMEDIATE");
+  // The seed is private and disposable. Write its pages once, then restore
+  // WAL before handing the database to a journal startup or succession test.
+  db.exec("PRAGMA journal_mode=MEMORY");
+  db.exec("PRAGMA synchronous=OFF");
+  db.exec("BEGIN IMMEDIATE");
+  // Bulk-build the real event indexes after inserting the history to avoid
+  // updating their trees on every insert. Preserve the journal's own DDL.
+  const eventIndexes = db.query<{ name: string; sql: string }, []>(
+    "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'events' AND sql IS NOT NULL ORDER BY name",
+  ).all();
+  for (const { name } of eventIndexes) db.exec(`DROP INDEX "${name.replaceAll('"', '""')}"`);
   const insert = db.query(`INSERT INTO events VALUES ($seq,$event_id,$scope,$revision,$kind,$payload_json,$created_at,$occurred_at,$recorded_at,$producer_kind,$producer_account_id,$producer_key,$producer_host_epoch,$operation_id,$causation_id,$correlation_id,$prev_hash,$hash)`);
   const receipt = db.query("INSERT INTO producer_receipts VALUES (?,?,?) ON CONFLICT(producer_kind,producer_key) DO UPDATE SET event_json=excluded.event_json");
   const latest = new Map<string, number>();
@@ -57,7 +67,9 @@ export function largeJournal(filename: string, count = 300_000, options: { migra
   for (const [key, value] of [["seq", String(count)], ["published_seq", String(count)], ["hash", previous]]) db.query("UPDATE journal_meta SET value=? WHERE key=?").run(value!, key!);
   if (options.migrated) db.query("INSERT OR REPLACE INTO journal_meta VALUES (?,?)").run("producer_receipts_backfill_version", "1");
   if (!options.migrated) db.exec("DELETE FROM journal_meta WHERE key='producer_receipts_backfill_version'");
-  db.exec("COMMIT; PRAGMA wal_checkpoint(TRUNCATE)");
+  for (const { sql } of eventIndexes) db.exec(sql);
+  db.exec("COMMIT");
+  db.exec("PRAGMA journal_mode=WAL");
   db.close();
 }
 

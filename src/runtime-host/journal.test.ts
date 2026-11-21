@@ -4444,6 +4444,9 @@ test.each(["live", "unverified", "dead"])("automatic retirement claim protects t
       child.kill(9);
       await child.exited;
       expect(journal.transitionOperation("exclusive-retire", "queued", {}, { retirementClaim: contender }).receipt.retirementClaim).toBeNull();
+      expect(journal.executeOperation({ kind: "send", operationId: "owner-held-send", idempotencyKey: "owner-held-send",
+        conversationId, policy: "queue", text: "after actuation" }).receipt.status).toBe("queued");
+      journal.transitionOperation("exclusive-retire", "failed", { reason: "fixture-released" }, { fromStatuses: ["queued"] });
     } else {
       // The executor releases only after its own actuation has returned.
       expect(journal.transitionOperation("exclusive-retire", "failed", {}, { retirementClaim: owner }).receipt.retirementClaim).toBeNull();
