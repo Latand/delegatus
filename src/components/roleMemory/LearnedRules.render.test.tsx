@@ -50,7 +50,7 @@ async function withWindow(options: { view: RoleMemoryProjectView; project?: stri
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
     await check({ dom, act, posts, closed,
-      key: (key, init) => act(() => { dom.window.dispatchEvent(new dom.KeyboardEvent("keydown", { key, ...init })); }),
+      key: (key, init) => act(async () => { dom.window.dispatchEvent(new dom.KeyboardEvent("keydown", { key, ...init })); }),
       text: selector => dom.document.querySelector(selector)?.textContent ?? "" });
   } finally {
     await act(() => root.unmount());
@@ -386,12 +386,12 @@ test("on a phone the list is the first screen, a row opens its level behind a ba
     await act(async () => press(dom, '[data-profile-level="project:atlas"]'));
     expect(dom.document.querySelector("[data-memory-profile]")).toBeNull();
     expect(paneIds(dom)).toEqual(["p1"]);
-    expect(dom.document.activeElement).toBe(dom.document.querySelector("[data-level-back]"));
+    expect(dom.document.activeElement === dom.document.querySelector("[data-level-back]")).toBe(true);
     expect(dom.document.querySelector("[data-rules-window-close]")).not.toBeNull();
     await act(async () => press(dom, "[data-level-back]"));
     expect(dom.document.querySelector("[data-level-pane]")).toBeNull();
     expect((dom.document.querySelector("[data-memory-profile]") as unknown as HTMLElement).scrollTop).toBe(120);
-    expect(dom.document.activeElement).toBe(dom.document.querySelector('[data-profile-level="project:atlas"]'));
+    expect(dom.document.activeElement === dom.document.querySelector('[data-profile-level="project:atlas"]')).toBe(true);
   });
 });
 
@@ -431,8 +431,10 @@ test("the counterpart link of a rule that left selects the counterpart's level a
   });
 });
 
+type Topics = NonNullable<NonNullable<MemoryProfileView["slices"][number]["summary"]>["answer"]["topics"]>;
+
 test("an overall topic names itself once over one section per level with only its rules; a level's pill does the same for that level", async () => {
-  const part = (scope: string, topics: MemoryProfileView["slices"][number]["summary"] extends infer P ? NonNullable<P>["answer"]["topics"] : never) => ({ scope, createdAt: "2026-10-08T10:00:00Z", durationMs: 1, model: "sample", promptVersion: 1, stale: false, answer: { headline: `Headline of ${scope}`, text: `Text of ${scope}.`, topics } });
+  const part = (scope: string, topics: Topics) => ({ scope, createdAt: "2026-10-08T10:00:00Z", durationMs: 1, model: "sample", promptVersion: 1, stale: false, answer: { headline: `Headline of ${scope}`, text: `Text of ${scope}.`, topics } });
   const profile = (base: MemoryProfileView): MemoryProfileView => ({ ...base,
     overall: part("overall", [{ title: "Colour checks", text: "Colours are checked before saving.", ruleIds: ["b1", "p1"] }]),
     slices: base.slices.map(slice => slice.scope === "role:atlas:builder" ? { ...slice, summary: part(slice.scope, [{ title: "Builder pill", ruleIds: ["b2"] }]) } : slice) });
@@ -465,13 +467,13 @@ test("a removal draws the undo in the row's place inside the pane", async () => 
 test("the window is a modal: Tab wraps within it and Escape closes it once", async () => {
   await withWindow({ view: levelsView() }, async ({ dom, act, key, closed }) => {
     const frame = dom.document.querySelector("[data-rules-window]")!;
-    const controls = [...frame.querySelectorAll<HTMLElement>("button")].filter(control => !(control as HTMLButtonElement).disabled);
+    const controls = ([...frame.querySelectorAll("button")] as unknown as HTMLButtonElement[]).filter(control => !control.disabled);
     expect(controls[0]!.hasAttribute("data-rules-window-close")).toBe(true);
     await act(async () => controls.at(-1)!.focus());
     await key("Tab");
-    expect(dom.document.activeElement).toBe(controls[0]);
+    expect((dom.document.activeElement as unknown) === controls[0]).toBe(true);
     await key("Tab", { shiftKey: true });
-    expect(dom.document.activeElement).toBe(controls.at(-1));
+    expect((dom.document.activeElement as unknown) === controls.at(-1)).toBe(true);
     await key("Escape");
     expect(closed).toHaveLength(1);
   });
