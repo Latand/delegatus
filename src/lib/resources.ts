@@ -352,7 +352,7 @@ function isoFromUnix(seconds: number): string {
 
 export interface ResourceSnapshotDependencies {
   readFiles(fresh: boolean): Promise<ResourceFileObservation[]>;
-  proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory">;
+  proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory" | "resourceSystemMemory" | "resourcePpidMap" | "resourceProcessMemory">;
   bootEpoch?(): string | null;
   /** Structured-host records the registry holds. The viewer reads them and
       hands them to the collector; nothing here ever opens the registry. */
