@@ -1616,7 +1616,10 @@ test.each(["recovers", "exhausts"] as const)("existing dependency validation tim
       "bun.lock": JSON.stringify({ lockfileVersion: 1, workspaces: { "": { name: "delegatus-cli" } }, packages: {} }),
     });
     const { prepareLockedDependencies } = await import("./lockedDependencies");
-    expect(await prepareLockedDependencies(h.repo)).toBe(true);
+    // Bun discards empty lockfiles. Seed the sealed empty graph through the
+    // real preparation code without asking the installer to rewrite its inputs.
+    expect(await prepareLockedDependencies(h.repo, { exec: (command, ...args) => command === "bun" && args[0][0] === "install"
+      ? Promise.resolve({ code: 0, stdout: "", stderr: "" }) : realExec(command, ...args) })).toBe(true);
     const link = path.join(h.repo, "node_modules");
     const installed = fs.readlinkSync(link);
     const marker = path.join(h.root, "hook-runs");
