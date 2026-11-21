@@ -6,11 +6,12 @@ import { spawn } from "node:child_process";
 import { runRetentionPass } from "./retentionPass";
 import type { LauncherRecord } from "./launcher";
 import type { RetentionInputs } from "./retention";
+import { quarantineTree } from "./gatedTrash";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function fixture(count = 12) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-retention-pass-")); roots.push(root);
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "llv-retention-pass-"))); roots.push(root);
   const releasesDir = path.join(root, "releases"); fs.mkdirSync(releasesDir);
   const now = Date.UTC(2030, 0, 1);
   const dirs = Array.from({ length: count }, (_, i) => {
@@ -28,6 +29,47 @@ function fixture(count = 12) {
   const ended = () => expect(() => process.kill(Number(fs.readFileSync(path.join(root, "helper-pid"), "utf8")), 0)).toThrow();
   return { root, dirs, record, inputs, options, ended };
 }
+
+test.each(["empty", "releases", "journal", "releases and journal"])("Darwin retention keeps uncertain data without procfs (%s)", async state => {
+  const hasReleases = state.includes("releases");
+  const hasJournal = state.includes("journal");
+  const h = fixture(hasReleases ? 6 : hasJournal ? 1 : 0);
+  if (state === "empty") fs.rmdirSync(h.record.releasesDir);
+  const journal = path.join(h.root, "package-trash-pending.json");
+  const quarantined = hasJournal ? quarantineTree(h.dirs.at(-1)!, journal) : null;
+  if (hasJournal) expect(quarantined).not.toBeNull();
+  const originalJournal = quarantined && fs.readFileSync(journal, "utf8");
+  if (quarantined) fs.chmodSync(quarantined.gate, 0);
+  const launch = { ...h.options.launch, args: [h.root, "darwin"] };
+  const claims: string[] = [];
+  const fence = (claim: string) => { claims.push(claim); return true; };
+  if (hasReleases) h.inputs.rollbackPackage = h.dirs[1]!;
+  try {
+    const report = await runRetentionPass(h.record, h.inputs, { ...h.options, launch, fence });
+    h.ended();
+    expect(report.errors).toEqual([]);
+    expect(fs.existsSync(path.join(h.root, "proc-reads"))).toBeFalse();
+    expect(claims).toEqual([]);
+    expect(report.removed).toEqual([]);
+    expect(report.reclaimedCacheBytes).toBe(0);
+    expect(JSON.parse(fs.readFileSync(h.options.reportFile, "utf8"))).toEqual(report);
+    const remaining = hasJournal ? h.dirs.slice(0, -1) : h.dirs;
+    const reason = "process-inventory-unavailable:darwin";
+    expect(report.kept).toHaveLength(h.dirs.length);
+    for (const [index, dir] of remaining.entries()) {
+      expect(report.kept).toContainEqual({ dir, reason: index === 0 ? "active" : index === 1 ? "rollback" : reason, bytes: 0 });
+      expect(fs.readFileSync(path.join(dir, "package.json"), "utf8")).toBe("{}");
+    }
+    if (quarantined) {
+      expect(report.kept).toContainEqual({ dir: quarantined.directory, reason, bytes: 0 });
+      expect(fs.readFileSync(journal, "utf8")).toBe(originalJournal);
+      expect(fs.statSync(quarantined.gate).mode & 0o777).toBe(0);
+    }
+  } finally {
+    if (quarantined && fs.existsSync(quarantined.gate)) fs.chmodSync(quarantined.gate, 0o700);
+  }
+  if (quarantined) expect(fs.readFileSync(path.join(quarantined.trash, "package.json"), "utf8")).toBe("{}");
+}, 30_000);
 
 test.skipIf(process.platform !== "linux")("fresh pass processes resume a bounded cursor past permanently kept releases off the caller loop", async () => {
   const h = fixture();

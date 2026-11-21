@@ -22,7 +22,10 @@ function resolvePhysicalPath(candidate: string): string {
 }
 /** This process's initial environment, read while its /proc files are its
  * own: sealed for a removal, they belong to root and environ is unreadable. */
-const OWN_ENVIRON = (() => { try { return fs.readFileSync("/proc/self/environ", "utf8"); } catch { return null; } })();
+const OWN_ENVIRON = (() => {
+  if (process.platform !== "linux") return null;
+  try { return fs.readFileSync("/proc/self/environ", "utf8"); } catch { return null; }
+})();
 const fields = (stat: string) => stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
 const exited = (stat: string) => ["Z", "X", "x"].includes(fields(stat)[0]!);
 const unescapeMount = (value: string) => value.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));

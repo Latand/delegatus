@@ -17,6 +17,7 @@ import { retentionErrorDetails } from "./retentionLog";
 
 const DAY = 86_400_000;
 const TRASH_JOURNAL = /^(cache|package|release-output|release)-trash-.*\.json$/;
+const DARWIN_PROCESS_HOLD = "process-inventory-unavailable:darwin";
 export type RetentionInputs = {
   rollbackPointers?: (string | null)[];
   rollbackPackage?: string | null;
@@ -34,6 +35,8 @@ export type RetentionReport = {
 export type RetentionCurrent = { record: LauncherRecord; inputs: RetentionInputs; fenced?: boolean };
 export type RetentionPorts = {
   inspection?: RetentionInspection;
+  /** Selects the inventory policy for fixtures with synthetic process evidence. */
+  platform?: NodeJS.Platform;
   git?: typeof runGit; scan?: () => ProcessScan & Partial<Pick<RetentionScan, "uncertain">>; mountPoints?: (directory: string) => string[];
   now?: () => number; env?: Readonly<Record<string, string | undefined>>; reportFile?: string;
   /** Called with `claim`, the release about to be removed, for the final read. */
@@ -149,7 +152,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       return under(target, dir) || under(physical(target), dir);
     }) || proc.references?.some(entry => entry.includes(dir)));
   };
-  const protect = (candidate: Candidate, current: Awaited<ReturnType<typeof read>>, processes: ProcessScan, recovering = false): string | null => {
+  const protect = (candidate: Candidate, current: Awaited<ReturnType<typeof read>>, processes: ProcessScan | null, recovering = false): string | null => {
     const { record: owner, inputs: state } = current;
     if (owner.releasesDir !== record.releasesDir || owner.checkout !== record.checkout || owner.releasePointer !== record.releasePointer)
       throw new Error("installation changed during retention");
@@ -161,6 +164,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     if ((state.rollbackPointers ?? []).some(raw => names(pointerDir(raw))) || names(state.rollbackPackage ?? null)) return "rollback";
     if ((state.inFlight ?? []).some(names)) return "in-flight";
     if ([owner.web.revision, owner.runtimeHost.revision, owner.launcher.revision].some(sha => sha && candidate.sha.startsWith(sha))) return "serving";
+    if (!processes) return DARWIN_PROCESS_HOLD;
     const uncertainty = uncertainReason(candidate.dir, processes);
     if (uncertainty) return uncertainty;
     if (heldByProcess(candidate.dir, processes)) return "process";
@@ -209,7 +213,9 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     // In particular, it needs no Linux procfs inventory on other platforms.
     if (!previousTrash.some(file => TRASH_JOURNAL.test(file))
       && fs.lstatSync(root, { throwIfNoEntry: false }) === undefined) return;
-    const processes = await scan();
+    // The portable process backend cannot prove a complete holder inventory.
+    // Darwin keeps releases and quarantined data until that proof is available.
+    const processes = (ports.platform ?? process.platform) === "darwin" ? null : await scan();
     const initial = await read();
     // The cache is created by the first update, not by the initial install.
     // Only absence is empty; aliases and unreadable/invalid roots still fail.
@@ -245,7 +251,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     // with, and recovery restores it when it is one of them.
     const quarantined: Candidate[] = [];
     const recentQuarantine = new Set<string>();
-    for (const file of previousTrash) {
+    for (const file of processes ? previousTrash : []) {
       const releaseJournal = file.startsWith("release-trash-");
       if (!TRASH_JOURNAL.test(file) || !releaseJournal && !file.startsWith("package-trash-") || releaseJournal !== !!record.checkout) continue;
       try {
@@ -284,7 +290,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           report.kept.push({ dir: candidate.dir, reason: reason ?? "pass-budget", bytes: 0 }); continue;
         }
         // Unknown ownership also protects generated contents of the release.
-        if (uncertainReason(candidate.dir, processes)) {
+        if (!processes || uncertainReason(candidate.dir, processes)) {
           report.kept.push({ dir: candidate.dir, reason: reason!, bytes: 0 }); continue;
         }
         worked++;
@@ -492,6 +498,10 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         } else {
           const candidate = candidates.find(candidate => row.directory === path.join(candidate.dir, ".next/cache/webpack"));
           if (!candidate || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity) continue;
+        }
+        if (!processes) {
+          report.kept.push({ dir: row.directory, reason: DARWIN_PROCESS_HOLD, bytes: 0 });
+          continue;
         }
         const wholeRelease = packageTrash || releaseTrash;
         if (mounts(row.trash).length) { report.kept.push({ dir: row.directory, reason: "mount-boundary", bytes: 0 }); continue; }
