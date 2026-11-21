@@ -10,7 +10,6 @@ import {
   confirmRelayPairing,
 } from "@/lib/externalRelay/pairing";
 import { refreshExternalRelayPollers } from "@/lib/externalRelay/poller";
-import { revokeOwnerRuns } from "@/lib/externalRelay/ownerRun";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ id: string }> };
@@ -36,7 +35,6 @@ export async function POST(req: NextRequest, context: Context) {
       (await context.params).id,
       body.ownerId,
     );
-    await revokeOwnerRuns();
     refreshExternalRelayPollers(relay.id);
     return NextResponse.json({ relay });
   } catch (error) {

@@ -2,6 +2,7 @@ import { sweepConversationsAsync } from "./conversations";
 import { randomUUID } from "node:crypto";
 import { forgetRelayActivity } from "./activity";
 import { discoverRelay, ExternalRelayError, relayCall } from "./client";
+import { revokeOwnerRuns } from "./ownerRun";
 import { refreshRelayTargets } from "./poller";
 import {
   pairingConfirmedSchema,
@@ -118,6 +119,7 @@ export async function confirmRelayPairing(
     relays: [...store.relays.filter((item) => item.id !== id), relay],
     pending: store.pending.filter((item) => item.id !== id),
   }));
+  await revokeOwnerRuns();
   // A service can confirm before the owner's targets are linked to the
   // pairing; ask once for the list it holds now, so the caller (the setup
   // step's default engine among them) sees the targets that exist.
@@ -161,6 +163,7 @@ export async function unpairRelay(id: string): Promise<{ warned: boolean }> {
     ...store,
     relays: store.relays.filter((item) => item.id !== id),
   }));
+  await revokeOwnerRuns();
   await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000, undefined, id);
   forgetRelayActivity(id);
   return { warned };

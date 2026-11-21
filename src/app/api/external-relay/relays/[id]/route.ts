@@ -130,7 +130,6 @@ export async function DELETE(req: NextRequest, context: Context) {
   if (denied) return denied;
   try {
     const result = await unpairRelay((await context.params).id);
-    await revokeOwnerRuns();
     refreshExternalRelayPollers((await context.params).id);
     return NextResponse.json(result);
   } catch (error) {
