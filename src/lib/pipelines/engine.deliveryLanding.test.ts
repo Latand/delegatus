@@ -27,8 +27,8 @@ const NOW = "2026-09-25T10:00:00.000Z";
 const HEAD = "a".repeat(40);
 
 function setupDelivery(id: string) {
-  const builder = { roleId: "builder", engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
-  const reviewer = { ...builder, roleId: "reviewer", access: "read-only" } as const;
+  const builder = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const reviewer = { ...builder, access: "read-only" } as const;
   const lane = buildPipeline({ id, task: "Publish a tested change", project: "repo-delivery-fixture", repoDir: path.join(sandbox, "repo"),
     stages: [
       { id: "build", kind: "run", prompt: "Build", next: "review", effectiveRole: builder },
