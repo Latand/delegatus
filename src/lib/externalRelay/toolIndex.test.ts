@@ -81,3 +81,26 @@ test("compact and describe respect audiences and truncate at whole tool boundari
   expect(described.tools.length).toBeLessThan(16);
   expect(Buffer.byteLength(JSON.stringify(described))).toBeLessThanOrEqual(65_536);
 });
+
+test("on-demand hydration keeps the claimed audience when lookup omits it", async () => {
+  const request = requestSchema.parse(fixture("claimed_tools_on_demand_owner").request);
+  const ownerClaim = request.input.tools!.find(tool => tool.audience === "owner" && tool.mode === "direct" && tool.spec && !tool.parameters)!;
+  const guest = structuredClone(request);
+  const trigger = guest.input.conversation.find(message => message.id === guest.input.respond_to)!;
+  trigger.author.key = "guest-key";
+  guest.input.requester = { ...guest.input.requester!, key: "owner-key", is_owner: true, is_anonymous_admin: false };
+  const resultFixture = fixture("lookup_results");
+  const abort = new AbortController();
+  const server = await startTestRelay((_req, body) => {
+    const call = body as { call_id: string };
+    const first = resultFixture.truncated.tools[0];
+    return { body: { ...resultFixture.truncated, call_id: call.call_id,
+      tools: [{ ...first, name: ownerClaim.name, audience: undefined }], truncated: false } };
+  });
+  try {
+    const hydrated = await index.hydrateToolIndex({ ...destinationRelay(), api_base: `${server.origin}/v1` }, guest,
+      { signal: abort.signal, ack: async () => true, lose: () => abort.abort() }, {});
+    expect(hydrated.request.input.tools!.find(tool => tool.name === ownerClaim.name)?.audience).toBe("owner");
+    expect(index.describeToolIndex(hydrated.request, [ownerClaim.name]).tools).toEqual([]);
+  } finally { await server.close(); }
+});

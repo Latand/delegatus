@@ -10,13 +10,28 @@ import type { OwnerBridgeContext } from "./ownerBridgeContext";
 export type RelayAnswerProfile = { webSearch: boolean; pageRead?: boolean; owner?: true; prototype?: string };
 
 export type OwnerInstruction = { localContext?: import("./ownerOutboundContext").OwnerOutboundContext | null; messageId: string; text: string; requestText: string | null; bridgeReport?: OwnerBridgeContext | null };
+/** An owner claim is authoritative only when it names the author of the triggering message. */
+export function requesterIsVerifiedOwner(request: ExternalRelayRequest): boolean {
+  const requester = request.input.requester;
+  if (!requester || requester.is_owner !== true || requester.is_anonymous_admin !== false) return false;
+  const message = request.input.respond_to ? request.input.conversation.find(m => m.id === request.input.respond_to) : undefined;
+  return !!message && !message.author.self && message.author.key === requester.key;
+}
+/** Keep prompt and chain identity tied to the author of the message being answered. */
+export function effectiveRequester(request: ExternalRelayRequest): ExternalRelayRequest["input"]["requester"] {
+  const requester = request.input.requester;
+  const trigger = request.input.respond_to && request.input.conversation.find(message => message.id === request.input.respond_to);
+  if (!requester || !trigger || trigger.author.self) return requester;
+  if (requester.key === trigger.author.key || requester.is_owner !== true) return requester;
+  return { ...requester, key: trigger.author.key, is_admin: false, can_restrict_members: false,
+    can_delete_messages: false, is_owner: false, is_anonymous_admin: false };
+}
 /** Only the triggering message authored by the service-identified owner grants host access. */
 export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, request: ExternalRelayRequest): OwnerInstruction | null {
   if (target.ownerTier !== true) return null;
-  const requester = request.input.requester;
-  if (!requester || requester.is_owner !== true || requester.is_anonymous_admin !== false) return null;
+  if (!requesterIsVerifiedOwner(request)) return null;
   const message = request.input.respond_to ? request.input.conversation.find(m => m.id === request.input.respond_to) : undefined;
-  if (!message || message.author.self || message.author.key !== requester.key) return null;
+  if (!message) return null;
   return { messageId: message.id, text: message.text, requestText: request.input.request_text };
 }
 export function answerProfileFor(

@@ -151,11 +151,14 @@ test("canonical call identity survives argument ordering and a new lease", () =>
 test("X1 audience gates pending, timeout and replay alike, including anonymous admin", () => {
   for (const role of ["member", "admin", "anonymous_admin", "owner"])
     for (const name of ["admin", "admin_pending", "admin_timeout", "owner", "owner_pending", "owner_timeout"]) {
-      const requester = x1Request(role).input.requester;
-      expect(mayQuote(x1Results[name]!.audience, requester)).toBe(name.startsWith("owner") ? role === "owner" : role !== "member");
+      const request = x1Request(role);
+      expect(mayQuote(x1Results[name]!.audience, request)).toBe(name.startsWith("owner") ? role === "owner" : role !== "member");
     }
-  expect(mayQuote(undefined, null)).toBe(true);
-  expect(mayQuote("unknown", x1Request("owner").input.requester)).toBe(false);
+  const request = x1Request("member"); request.input.requester = null;
+  expect(mayQuote(undefined, request)).toBe(true);
+  expect(mayQuote("unknown", x1Request("owner"))).toBe(false);
+  const forged = x1Request("owner"); forged.input.conversation[0]!.author.key = "different_sender";
+  expect(mayQuote("owner", forged)).toBe(false);
 });
 
 for (const rejection of ["unauthorized", "unsupported_version"])
@@ -206,8 +209,10 @@ test("2b callable indexes require requester and the index audience", () => {
   expect(callableTools(request)).toHaveLength(12);
   request.input.requester = null;
   expect(callableTools(request).every((tool) => tool.effect === "read")).toBe(true);
+  const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
   for (const role of ["admin", "anonymous_admin", "owner"]) {
     request.input.requester = x1Request(role).input.requester;
+    if (role === "owner" && request.input.requester) trigger.author.key = request.input.requester.key;
     request.input.tools = [{ name: "synthetic_owner_action", summary: "Synthetic action", mode: "direct", effect: "action", audience: "owner", parameters: { type: "object" } }];
     expect(callableTools(request)).toHaveLength(role === "owner" ? 1 : 0);
   }

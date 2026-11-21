@@ -112,6 +112,27 @@ test("a requester and their authority scope every chain", () => {
   expect(reserveChainConversation(relay, target, { ...reply, input: { ...reply.input, requester: { ...reply.input.requester!, key: "another-requester" } } }, "owner-tier")!.id).not.toBe(first.id);
   expect(reserveChainConversation(relay, target, reply, "owner-tier")!.id).toBe(first.id);
 });
+test("conflicting owner metadata cannot select an owner chain, while the verified owner can continue", () => {
+  const ownerRequest = request();
+  ownerRequest.input.requester = { ...ownerRequest.input.requester!, is_admin: false, is_owner: true };
+  const record = reserveChainConversation(relay, target, ownerRequest, "owner")!;
+  releaseConversation(record.id);
+  const ownerReply = request("owner-reply", "root");
+  ownerReply.input.conversation.unshift({ ...ownerRequest.input.conversation[0]!, id: "root", reply_to: null });
+  ownerReply.input.requester = { ...ownerRequest.input.requester! };
+  expect(reserveChainConversation(relay, target, ownerReply, "owner")!.id).toBe(record.id);
+  releaseConversation(record.id);
+
+  const conflict = request("guest-reply", "root");
+  conflict.input.conversation.unshift({ ...ownerRequest.input.conversation[0]!, id: "root", reply_to: null });
+  conflict.input.conversation[1]!.author.key = "guest-key";
+  conflict.input.requester = { ...ownerRequest.input.requester! };
+  expect(reserveChainConversation(relay, target, conflict, "member")!.id).not.toBe(record.id);
+  const prompt = conversationTurnPrompt(conflict, record, "[round]").prompt;
+  expect(prompt).toContain('"key":"guest-key"');
+  expect(prompt).toContain('"is_admin":false');
+  expect(prompt).toContain('"is_owner":false');
+});
 test("an owner skips a member pin; learned bot anchors survive a truncated window", () => {
   const owner = reserveChainConversation(relay, target, request(), "owner-tier")!; releaseConversation(owner.id);
   const member = reserveChainConversation(relay, target, request("member", "root"), "member")!; releaseConversation(member.id);
