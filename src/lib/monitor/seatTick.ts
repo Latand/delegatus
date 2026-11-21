@@ -2432,6 +2432,7 @@ export function seatTickSignalVersion(signal: SeatTickSignalInput, recipient: Pi
 
 function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | undefined {
   if (item.itemVersion) return item.itemVersion;
+  if (item.maintenance) return `maintenance:${item.maintenance.runId}:page:${item.maintenance.page}`;
   if (item.mergeEventSeq !== undefined) return mergeEventVersion(item.mergeEventSeq);
   /* A delivered idle alert belongs to the measured transcript episode. Lane
      title and update metadata can move while that episode stays unchanged. */
