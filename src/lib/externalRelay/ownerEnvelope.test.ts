@@ -47,7 +47,7 @@ const target = { id: "target_1", name: "Target", answered_by: "install", fallbac
 
 function pairedRelay(origin: string): PairedRelay {
   return { id: "relay_envelope", origin: origin, api_base: origin + "/v1", name: "Test", description: "Test",
-    credential: "x".repeat(43), owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    credential: "x".repeat(43), owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     pairedAt: at, paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets: [{ ...target }] };
 }
 beforeEach(() => { process.env.LLV_STATE_DIR = path.join(root, `case-${++caseNumber}`); });

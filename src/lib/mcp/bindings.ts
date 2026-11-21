@@ -47,7 +47,7 @@ import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal, type Na
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
-import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayProjectMatches, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
@@ -2380,7 +2380,6 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   }
   const maintainer = dependencies ? maintenanceCaller(dependencies) : null;
   const caller = dependencies ? attributionOf(dependencies) : null;
-  const ownerRelay = dependencies ? ownerRelayCaller(dependencies) : false;
   assertMaintenanceWrite(maintainer, args, undefined, true);
   refuseCrossProjectFromSeat("create_task", () => text(args.project) || null, args, dependencies);
   const input: CreateTaskInput = {
@@ -2395,7 +2394,8 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     let outcome = createTask(state.tasks, input, state.recentCreates, { requireDue: true, dueTimeZone: operatorTimeZone() ?? undefined, explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
     // Replays and matched findings retain the task's existing status.
-    if (outcome.ok && !outcome.replay && !outcome.matched && ownerRelay && !outcome.task.hold) {
+    if (outcome.ok && !outcome.replay && !outcome.matched && !outcome.task.hold && dependencies
+      && ownerRelayCaller(dependencies, outcome.task.project)) {
       const assigned = patchTask(outcome.tasks, outcome.task.id, { status: "assigned" }, outcome.task.createdAt,
         { actor: "agent", ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
       if (!assigned.ok) return { state: undefined, result: assigned };
@@ -8580,6 +8580,7 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
   }
   const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
   if (!seat && owner && project && !ownerRelayTargetMatches(attribution.conversationId!, project, orchestratorSeatFor(project).active?.conversationId)) {
+    if (owner.requesterRequestId) throw new McpToolRefusal("the trusted requester's handoff must stay within its granted project", { code: "trusted_requester_project_refused", retryable: false });
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
@@ -8612,9 +8613,10 @@ function resolveRemoteSeatMachine(machine: string, project: string, dependencies
 }
 
 /** The Viewer binds this ordinary agent to one live owner request. */
-function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies): boolean {
+function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies, project?: string): boolean {
   const caller = attributionOf(dependencies);
-  return caller.kind === "agent" && !caller.via && !!caller.conversationId && liveOwnerRelayConversation(caller.conversationId);
+  if (caller.kind !== "agent" || caller.via || !caller.conversationId) return false;
+  return project === undefined ? liveOwnerRelayConversation(caller.conversationId) : ownerRelayProjectMatches(caller.conversationId, project);
 }
 
 /** Seats, the gateway and live owner relay agents can message a seat.

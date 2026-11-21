@@ -137,7 +137,7 @@ function ownerRun(sender: ReturnType<typeof actor>, isOwner = true, switchOn = t
   const owner = ownerTierFor({ ownerTier: switchOn }, request);
   updateRelayStore(store => ({ ...store, relays: [{
     id: "paired", api_base: "http://127.0.0.1:1/v1", credential: "fixture-credential", name: "Relay", origin: "http://127.0.0.1:1", description: "Fixture", pairedAt: "2026-10-01T00:00:00Z", paused: false,
-    owner: { namespace: "fixture", id: "owner", display_name: "Owner", handle: null },
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target", name: "Target", answered_by: "install", fallback: "service", enabled: true, ownerTier: switchOn, engine: "codex", model: "auto", effort: "low", project: null, concurrency: 1, hardCapMinutes: 3 }],
   }] }));
@@ -200,6 +200,35 @@ test("verified owner turn reaches the designated seat through MCP and HTTP with 
   expect(response.status).toBe(200);
   expect(delivered[1].origin).toEqual(delivered[0].origin);
   expect(delivered[1].text).toBe(delivered[0].text);
+});
+
+test("trusted requester handoffs are delivered to the granted project on the MCP and HTTP paths", async () => {
+  const sender = actor(); const own = actor("project-b"); const other = actor("project-a"); ownerRun(sender);
+  const addedAt = "2026-10-01T00:00:00.000Z";
+  const entry = { id: "requester", kind: "requester" as const, key: "u1", project: "project-b",
+    label: "Trusted person", addedAt, source: "board" as const };
+  updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, targets: relay.targets.map(target => ({
+    ...target, ownerTier: undefined, project: entry.project, requesters: { revision: 1, entries: [entry] },
+  })) })) }));
+  changeRun("owner-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, leaseDeadlineAt: Date.now() + 60_000, entry: {
+    id: entry.id, kind: entry.kind, project: entry.project, label: entry.label, tier: "requester",
+  } } }));
+  const tools = toolsFor(sender);
+  expect(await tools.service.callTool("send_message_to_orchestrator", { ...relayArgs("cross-project"), project: "project-a" }))
+    .toMatchObject({ ok: false, code: "trusted_requester_project_refused" });
+  const rejected = await orchestratorPOST(request(sender.capability, {
+    ...relayArgs(), project: "project-a", conversationId: other.id, clientMessageId: "cross-project-http",
+  }));
+  expect(rejected.status).toBe(403);
+  expect(delivered).toHaveLength(0);
+  expect(await tools.service.callTool("send_message_to_orchestrator", relayArgs("own-project")))
+    .toMatchObject({ ok: true, conversationId: own.id });
+  const accepted = await orchestratorPOST(request(sender.capability, {
+    ...relayArgs(), conversationId: own.id, clientMessageId: "own-project-http",
+  }));
+  expect(accepted.status).toBe(200);
+  expect(delivered).toHaveLength(2);
+  for (const delivery of delivered) expect(delivery.text).toContain("Trusted person");
 });
 
 test("an owner report reply carries verbatim approval and stored report only to its source seat", async () => {

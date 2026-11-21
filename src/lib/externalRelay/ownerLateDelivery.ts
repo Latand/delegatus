@@ -120,7 +120,7 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
   let missingContextAlarm = false;
   try {
     await changeRunAsync(requestId, row => {
-      if (!row.ownerTurn || row.relayId !== relay.id || !authorize()) return row;
+      if (!row.ownerTurn || row.ownerTurn.entry?.tier === "requester" || row.relayId !== relay.id || !authorize()) return row;
       targetId = row.targetId;
       let pending: LateAnswer = { ...row.ownerTurn.lateAnswer, body: row.ownerTurn.lateAnswer?.body ?? body,
         files: row.ownerTurn.lateAnswer?.files ?? files };

@@ -10,9 +10,12 @@ import {
 import { refreshExternalRelayPollers } from "@/lib/externalRelay/poller";
 import { unpairRelay } from "@/lib/externalRelay/pairing";
 import { ExternalRelayError } from "@/lib/externalRelay/client";
+import { teamActor } from "@/lib/team/actor";
+import { canonicalRelayProject } from "@/lib/externalRelay/trustedRequesters";
+import { materializeEarlierSwitch } from "@/lib/externalRelay/trustedRequesterStore";
 import {
   publicRelay,
-  updateRelayStore,
+  updateRelayStoreAsync,
   type RelayTargetSettings,
 } from "@/lib/externalRelay/store";
 export const runtime = "nodejs";
@@ -48,15 +51,14 @@ export async function PATCH(req: NextRequest, context: Context) {
                 "concurrency",
                 "hardCapMinutes",
                 "memberLimitPerHour",
-                "ownerTier",
               ].includes(key),
           )))
     )
       return refusedHere();
     let updated: ReturnType<typeof publicRelay> | null = null;
-    updateRelayStore((store) => ({
+    await updateRelayStoreAsync(async store => ({
       ...store,
-      relays: store.relays.map((relay) => {
+      relays: await Promise.all(store.relays.map(async relay => {
         if (relay.id !== id) return relay;
         let targets = relay.targets;
         if (body.target) {
@@ -65,7 +67,7 @@ export async function PATCH(req: NextRequest, context: Context) {
           };
           if (!targets.some((target) => target.id === patch.id))
             throw new ExternalRelayError("not_found", 404);
-          targets = targets.map((target) => {
+          targets = await Promise.all(targets.map(async target => {
             if (target.id !== patch.id) return target;
             const next = { ...target, ...patch };
             if (
@@ -96,17 +98,23 @@ export async function PATCH(req: NextRequest, context: Context) {
                   next.memberLimitPerHour < 0 ||
                   next.memberLimitPerHour > 1000)) ||
               (next.cloudEnvironmentId != null && (typeof next.cloudEnvironmentId !== "string" || !next.cloudEnvironmentId.trim() || next.cloudEnvironmentId.length > 256)) ||
-              (next.ownerTier !== undefined && typeof next.ownerTier !== "boolean") ||
               typeof next.enabled !== "boolean"
             )
               throw new ExternalRelayError("refused_here", 400);
+            if (target.ownerTier === true && canonicalRelayProject(target.project) !== canonicalRelayProject(next.project)) {
+              const actor = teamActor(req);
+              const carried = await materializeEarlierSwitch(relay, target, {
+                surface: "board", approvedBy: actor.kind === "member" ? actor.memberId : actor.kind,
+              });
+              return { ...carried, ...patch };
+            }
             return next;
-          });
+          }));
         }
         const next = { ...relay, paused: body.paused ?? relay.paused, targets };
         updated = publicRelay(next);
         return next;
-      }),
+      })),
     }));
     if (!updated)
       return NextResponse.json({ error: "not_found" }, { status: 404 });
@@ -122,7 +130,7 @@ export async function DELETE(req: NextRequest, context: Context) {
   if (denied) return denied;
   try {
     const result = await unpairRelay((await context.params).id);
-    await revokeOwnerRuns((await context.params).id);
+    await revokeOwnerRuns();
     refreshExternalRelayPollers((await context.params).id);
     return NextResponse.json(result);
   } catch (error) {

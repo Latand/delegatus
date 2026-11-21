@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { crossOrigin, requireMember, teamErrorResponse, teamJson } from "@/lib/team/http";
 import { unlinkTelegram } from "@/lib/team/telegramSignIn";
+import { revokeOwnerRuns } from "@/lib/externalRelay/ownerRun";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,7 +15,9 @@ export async function DELETE(req: NextRequest): Promise<NextResponse> {
   const authed = requireMember(req);
   if (authed instanceof NextResponse) return authed;
   try {
-    unlinkTelegram(authed.store, authed.live.member);
+    const member = authed.live.member;
+    unlinkTelegram(authed.store, member);
+    if (member.role === "owner" && member.telegram) await revokeOwnerRuns();
     return teamJson({ ok: true });
   } catch (error) {
     return teamErrorResponse(error);

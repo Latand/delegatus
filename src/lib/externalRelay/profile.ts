@@ -1,15 +1,16 @@
-import { ownerRequesterTrigger, type ExternalRelayRequest, type ExternalRelayRequester } from "./protocol";
+import { ownerRequesterTrigger, requesterTrigger, type ExternalRelayRequest, type ExternalRelayRequester } from "./protocol";
 import type { PairedRelay, RelayTargetSettings } from "./store";
 import type { OwnerBridgeContext } from "./ownerBridgeContext";
+import { bindRequesterEntry, canonicalRelayProject, requesterEntries, type RelayRunEntry } from "./trustedRequesters";
 
 /**
  * What one relay answer may use (relay.md §B.6). Every requester gets the
- * restricted profile: the engine's native web search. Owner host access is
- * selected separately by ownerTierFor, after strict wire parsing.
+ * restricted profile as the default. Host access is selected separately by
+ * elevatedRequesterFor, after strict wire parsing.
  */
 export type RelayAnswerProfile = { webSearch: boolean; pageRead?: boolean; owner?: true; prototype?: string };
 
-export type OwnerInstruction = { localContext?: import("./ownerOutboundContext").OwnerOutboundContext | null; messageId: string; text: string; requestText: string | null; bridgeReport?: OwnerBridgeContext | null };
+export type OwnerInstruction = { localContext?: import("./ownerOutboundContext").OwnerOutboundContext | null; messageId: string; text: string; requestText: string | null; bridgeReport?: OwnerBridgeContext | null; entry?: RelayRunEntry };
 /** A verified Telegram private owner destination must match the paired user.
  * Group destinations and opaque requester keys carry no comparable user ID. */
 export function ownerBindingRefusal(relay: Pick<PairedRelay, "owner">, request: ExternalRelayRequest): string | null {
@@ -25,6 +26,24 @@ export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, req
   const message = ownerRequesterTrigger(request.input);
   if (!message) return null;
   return { messageId: message.id, text: message.text, requestText: request.input.request_text };
+}
+
+export function elevatedRequesterFor(relay: PairedRelay, target: RelayTargetSettings, request: ExternalRelayRequest, relays: readonly PairedRelay[]) {
+  const requester = request.input.requester;
+  if (request.delivery === "guest" || !requester?.key || requester.is_anonymous_admin !== false
+    || relay.paused !== false || target.enabled !== true || request.target_id !== target.id) return null;
+  const message = requesterTrigger(request.input);
+  if (!message) return null;
+  const project = canonicalRelayProject(target.project);
+  const entries = requesterEntries(relay, target).filter(entry => canonicalRelayProject(entry.project) === project);
+  const matched = (requester.is_owner ? entries.find(entry => entry.kind === "paired-owner") : undefined)
+    ?? entries.find(entry => entry.kind === "requester" && entry.key === requester.key);
+  if (!matched) return null;
+  const entry = bindRequesterEntry(relay, matched, relays);
+  return {
+    entry, source: matched.source,
+    instruction: { messageId: message.id, text: message.text, requestText: request.input.request_text, entry },
+  };
 }
 export function answerProfileFor(
   _requester: ExternalRelayRequester | null | undefined,

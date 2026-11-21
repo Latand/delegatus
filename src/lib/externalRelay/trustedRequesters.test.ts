@@ -1,0 +1,472 @@
+import { afterEach, expect, jest, spyOn, test } from "bun:test";
+import fs from "node:fs";
+import { NextRequest } from "next/server";
+import { accountManager } from "@/lib/accounts/manager";
+import * as ephemeral from "@/lib/agent/ephemeral";
+import { agentRegistry } from "@/lib/agent/registry";
+import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { runAsMcpHttpCaller } from "@/lib/mcp/callerContext";
+import { McpTaskExecutor } from "@/lib/mcp/taskExecutor";
+import { procBackend } from "@/lib/proc";
+import { MEMBER_COOKIE, mintSession } from "@/lib/team/sessions";
+import { DELETE as unlinkTelegram } from "@/app/api/team/telegram/route";
+import { resetTeamStoreForTests, teamStore, teamStoreFile } from "@/lib/team/store";
+import { loadTasks } from "@/lib/tasks/store";
+import { withTaskDue } from "@/lib/tasks/taskDue.fixture";
+import { partById } from "@/lib/transfer/sections";
+import { SourceSnapshot } from "@/lib/transfer/stores";
+import * as client from "./client";
+import * as cloud from "./cloud";
+import { relayAnswerOp } from "./ownerAnswer";
+import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayOperationAuthorized, ownerRelayPayload, ownerRelaySpawnAuthorized, ownerRelayTargetMatches } from "./ownerAuthority";
+import { openOwnerServiceTools, relayServiceToolsOp } from "./ownerServiceTools";
+import { selectOwnerDestination } from "./ownerDestination";
+import { conversationAuthority, releaseConversation, reserveChainConversation } from "./conversations";
+import { requestSchema, type ExternalRelayRequest } from "./protocol";
+import { contextRequest } from "./request.fixture";
+import { richRequest } from "./rich.fixture";
+import { runClaimedRequest } from "./runner";
+import { setRelaySwitch } from "./switches";
+import { addPairedOwnerRequester, addTrustedRequester, removeTrustedRequester, trustedRequesterAuditFile } from "./trustedRequesterStore";
+import { changeRun, dropRun, externalRelayFile, mergeRelayTargets, readRunLedger, readRelayStore, reserveRun, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
+
+const addedAt = "2026-09-28T12:00:00Z";
+const project = "dir-example";
+const otherProject = "dir-other";
+const entry = { id: "grant-one", kind: "requester" as const, key: "u1", project, source: "board" as const, label: "Trusted person", addedAt };
+const target: RelayTargetSettings = { id: "target_1", name: "Target", answered_by: "install", fallback: "none",
+  enabled: true, engine: "codex", model: "auto", effort: null, project, concurrency: 1, hardCapMinutes: 1 };
+const paired = (targets: RelayTargetSettings[], id = "relay_a", ownerId = "101"): PairedRelay => ({
+  id, name: "Relay", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1", credential: "transport-credential-placeholder",
+  description: "", owner: { namespace: "telegram", id: ownerId, display_name: "Pairing owner", handle: null },
+  pairedAt: addedAt, paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, targets,
+});
+const granted = { ...target, requesters: { revision: 1, entries: [entry] } };
+const setRelays = (...relays: PairedRelay[]) => updateRelayStore(store => ({ ...store, relays }));
+const request = (id: string, targetId = target.id) => structuredClone({
+  ...contextRequest, request_id: id, target_id: targetId, deadline_at: new Date(Date.now() + 20_000).toISOString(),
+  input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_admin: false } },
+}) as ExternalRelayRequest & { input: { requester: NonNullable<ExternalRelayRequest["input"]["requester"]> } };
+const snapshot = { id: entry.id, kind: entry.kind, tier: "requester" as const, project, label: entry.label };
+const link = { userId: "101", username: null, firstName: null, linkedAt: addedAt };
+const ownerMember = () => {
+  const store = teamStore();
+  store.insertMember({ id: "member-owner", name: "Owner", role: "owner", status: "active", color: "coral",
+    telegram: link, createdAt: addedAt, createdBy: "fixture", revokedAt: null });
+  return store;
+};
+const ownerRequest = () => {
+  const raw = request("paired_owner");
+  raw.input.requester.is_owner = true;
+  return requestSchema.parse(raw);
+};
+
+afterEach(() => {
+  resetTeamStoreForTests();
+  for (const file of [teamStoreFile(), teamStoreFile() + "-wal", teamStoreFile() + "-shm"]) fs.rmSync(file, { force: true });
+});
+
+test("only the bound key on its target launches a local elevated run", async () => {
+  const relay = paired([{ ...granted, engine: "codex-cloud", cloudEnvironmentId: "configured" },
+    { ...target, id: "target_2" }]);
+  setRelays(relay);
+  const picked = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: {} } });
+  const wire = spyOn(client, "relayCall").mockResolvedValue({ status: 200, body: { status: "ok" } } as never);
+  const environment = spyOn(cloud, "cloudEnvironment").mockReturnValue("configured");
+  const cloudRun = spyOn(cloud, "runCloudRelay").mockImplementation(() => { throw new Error("unexpected Cloud launch"); });
+  const restricted = spyOn(ephemeral, "runEphemeralAgent").mockResolvedValue({ pid: null, identity: null, cancel() {},
+    done: Promise.resolve({ status: "failed", answer: null, code: 1, signal: null, durationMs: 0 }) });
+  const launch = async (body: Record<string, unknown>) => {
+    launches.push(body);
+    expect(readRunLedger().runs.find(run => run.requestId === "trusted")?.ownerTurn?.entry).toEqual(snapshot);
+    return { status: 202, body: { conversationId: "conversation_trusted", initialMessage: "delivered" } };
+  };
+  const launches: Record<string, unknown>[] = [];
+  const ports = { launch, observe: async () => {
+    expect(await relayAnswerOp("conversation_trusted", { text: "Done", format: "plain", reply_to: "other_message" })).not.toBeNull();
+    return { state: "ended" as const, finalText: "Done" };
+  }, stop: async () => {} };
+  try {
+    const raw = request("trusted");
+    const rich = richRequest();
+    raw.features = rich.features;
+    raw.input.format = rich.input.format;
+    raw.input.conversation.push({ ...raw.input.conversation[0]!, id: "other_message", author: { key: "u2", name: "Other", self: false } });
+    expect(await runClaimedRequest(relay, raw, undefined, { leaseWorker: false, ownerPorts: ports }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Done", reply_to: "m1" } });
+    expect(launches[0]?.title).toBe("Relay · Target · Trusted person");
+    expect(launches[0]?.prompt).toContain("Trusted person");
+    expect(JSON.stringify(launches[0])).not.toContain(relay.credential);
+    expect(cloudRun).not.toHaveBeenCalled();
+    const other = request("other_target", "target_2");
+    const anonymous = request("anonymous");
+    anonymous.input.requester.is_anonymous_admin = true;
+    const display = request("display");
+    display.input.requester.key = "u2";
+    display.input.conversation[0]!.author = { key: "u2", name: entry.label, self: false };
+    // Restricted runs use a local engine in these negative cases.
+    const local = { ...relay, targets: relay.targets.map(item => ({ ...item, engine: "codex" as const })) };
+    setRelays(local);
+    for (const raw of [other, anonymous, display]) {
+      const before = restricted.mock.calls.length;
+      await runClaimedRequest(local, raw, undefined, { leaseWorker: false, ownerPorts: ports });
+      expect(restricted.mock.calls).toHaveLength(before + 1);
+    }
+    for (const self of [false, true]) {
+      const raw = request(self ? "clone_trigger" : "mismatched_author");
+      const malformed = { ...raw, input: { ...raw.input, conversation: [
+        { ...raw.input.conversation[0]!, author: { key: self ? "u1" : "u2", name: "Sender", self } },
+      ] } };
+      const before = restricted.mock.calls.length;
+      expect(await runClaimedRequest(local, malformed, undefined, { leaseWorker: false, ownerPorts: ports }))
+        .toMatchObject({ outcome: "declined", reason: "invalid_request" });
+      expect(restricted.mock.calls).toHaveLength(before);
+    }
+    expect(launches).toHaveLength(1);
+    expect(wire.mock.calls.some(([, url]) => url.endsWith("/send"))).toBe(false);
+  } finally { picked.mockRestore(); wire.mockRestore(); restricted.mockRestore(); environment.mockRestore(); cloudRun.mockRestore(); }
+});
+
+test("fresh authority rejects a suspended or removed entry at every durable boundary", async () => {
+  const relay = paired([granted]);
+  setRelays(relay);
+  const id = "leased_request";
+  const attempt = "relay-owner-leased_request";
+  const conversation = "conversation_granted";
+  const operation = "relay-owner-continuation";
+  const run = { requestId: id, leaseId: "lease", relayId: relay.id, targetId: target.id, ownerPid: process.pid,
+    ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null, runDir: process.env.TMPDIR!,
+    startedAt: addedAt, conversationId: conversation, ownerTurn: { clientAttemptId: attempt, entry: snapshot, leaseDeadlineAt: Date.now() + 60_000,
+      request: { text: "Work", requestText: null } } };
+  reserveRun(run, 1);
+  try {
+    expect(conversationAuthority(request("conversation").input.requester, snapshot)).toBe("trusted:grant-one");
+    expect(ownerRelayTargetMatches(conversation, project, null)).toBe(true);
+    expect(ownerRelayTargetMatches(conversation, otherProject, null)).toBe(false);
+    expect(ownerRelayPayload("context", conversation)?.text).toContain("Trusted person");
+    const check = async (allowed: boolean) => {
+      expect(ownerRelayAuthorized(relay.id, target.id, id)).toBe(allowed);
+      expect(await ownerRelayAuthorizedAsync(relay.id, target.id, id)).toBe(allowed);
+      expect(ownerRelaySpawnAuthorized(attempt)).toBe(allowed);
+    };
+    await check(true);
+    changeRun(id, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, leaseDeadlineAt: Date.now() - 1 } }));
+    await check(false);
+    changeRun(id, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, leaseDeadlineAt: run.ownerTurn.leaseDeadlineAt } }));
+    setRelays(paired([{ ...granted, project: otherProject }]));
+    await check(false);
+    setRelays(paired([{ ...granted, requesters: { revision: 2, entries: [entry, { ...entry, id: "other", key: "u2", label: "Other" }] } }]));
+    await check(true);
+    dropRun(id);
+    reserveRun({ ...run, ownerTurn: { ...run.ownerTurn, continuation: { operationId: operation } } }, 1);
+    expect(ownerRelayOperationAuthorized(operation, conversation)).toBe(true);
+    setRelays(paired([{ ...target, requesters: { revision: 3, entries: [{ ...entry, id: "new-id" }] } }]));
+    await check(false);
+    expect(ownerRelayOperationAuthorized(operation, conversation)).toBe(false);
+    expect(ownerRelayPayload("context", conversation)).toBeNull();
+  } finally { dropRun(id); }
+});
+
+test("a carried grant on the second pairing keeps Cloud and expires inside the lease", async () => {
+  const a = paired([target]);
+  const b = paired([{ ...target, ownerTier: true, engine: "codex-cloud", cloudEnvironmentId: "configured" }], "relay_b", "202");
+  setRelays(a, b);
+  ownerMember();
+  const leaseEnd = Date.now() + 10_000;
+  const raw = { ...ownerRequest(), deadline_at: new Date(leaseEnd).toISOString(),
+    owner_delivery: { chat_id: 202, reply_to_message_id: 1, message_thread_id: null } };
+  const environment = spyOn(cloud, "cloudEnvironment").mockReturnValue("configured");
+  let dispatched = false, cancelled = false;
+  const posts: string[] = [];
+  const wire = spyOn(client, "relayCall").mockImplementation(async (_base, route) => {
+    posts.push(route);
+    return { status: 200, body: { status: "ok" } } as never;
+  });
+  const launch = spyOn(cloud, "runCloudRelay").mockImplementation(input => {
+    expect(input.environmentId).toBe("configured");
+    expect(input.fullAccess).toBe(true);
+    expect(input.prompt).toContain("Owner of pairing Relay");
+    expect(input.timeoutMs).toBeLessThanOrEqual(10_000);
+    dispatched = true;
+    let settle!: (result: Awaited<ReturnType<typeof cloud.runCloudRelay>["done"]>) => void;
+    const done = new Promise<Awaited<ReturnType<typeof cloud.runCloudRelay>["done"]>>(resolve => { settle = resolve; });
+    return { pid: null, identity: null, done, cancel() {
+      cancelled = true;
+      settle({ status: "cancelled", answer: null, code: null, signal: null, durationMs: 0 });
+    } };
+  });
+  jest.useFakeTimers();
+  let now = leaseEnd - 10_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const pending = runClaimedRequest(b, raw, undefined, { leaseWorker: false });
+  try {
+    for (let i = 0; i < 300 && !dispatched; i++) {
+      jest.advanceTimersByTime(1);
+      await fs.promises.stat(process.cwd());
+    }
+    expect(dispatched).toBe(true);
+    now += 11_000;
+    jest.advanceTimersByTime(11_000);
+    await pending;
+    expect(cancelled).toBe(true);
+    expect(posts.some(route => route.endsWith("/send"))).toBe(false);
+  } finally {
+    launch.mock.results.forEach(result => { if (result.type === "return") result.value.cancel(); });
+    clock.mockRestore();
+    jest.useRealTimers();
+    try { await pending; } finally { launch.mockRestore(); environment.mockRestore(); wire.mockRestore(); }
+  }
+});
+
+test("requester-tier Cloud output cannot redirect a final reply to another author", async () => {
+  const relay = paired([{ ...target, ownerTier: true, engine: "codex-cloud", cloudEnvironmentId: "configured" }]);
+  setRelays(relay, paired([target], "relay_b", "202"));
+  const raw = request("cloud_reply");
+  raw.input.requester.is_owner = true;
+  raw.input.conversation.push({ ...raw.input.conversation[0]!, id: "other_message",
+    author: { key: "u2", name: "Other", self: false } });
+  const environment = spyOn(cloud, "cloudEnvironment").mockReturnValue("configured");
+  const wire = spyOn(client, "relayCall").mockResolvedValue({ status: 200, body: { status: "ok" } } as never);
+  const cloudRun = spyOn(cloud, "runCloudRelay").mockReturnValue({ pid: null, identity: null, cancel() {},
+    done: Promise.resolve({ status: "done", answer: { action: "reply", text: "Done", reply_to: "other_message" },
+      durationMs: 0, code: null, signal: null }),
+  });
+  try {
+    expect(await runClaimedRequest(relay, raw, undefined, { leaseWorker: false }))
+      .toMatchObject({ outcome: "answered", answer: { text: "Done", reply_to: "m1" } });
+    expect(cloudRun).toHaveBeenCalledTimes(1);
+    expect(wire.mock.calls.find(([, route]) => route.endsWith("/complete"))?.[3])
+      .toMatchObject({ answer: { reply_to: "m1" } });
+  } finally { cloudRun.mockRestore(); environment.mockRestore(); wire.mockRestore(); }
+});
+
+test("legacy turns remain authorized and a refresh preserves only retained targets' entries", () => {
+  const legacy = { ...target, id: "legacy", ownerTier: true };
+  const relay = paired([legacy, granted]);
+  setRelays(relay);
+  const id = "old_request";
+  reserveRun({ requestId: id, leaseId: "lease", relayId: relay.id, targetId: legacy.id, ownerPid: process.pid,
+    ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
+    runDir: process.env.TMPDIR!, startedAt: addedAt, ownerTurn: { clientAttemptId: "relay-owner-old_request" } }, 1);
+  try {
+    expect(ownerRelayAuthorized(relay.id, legacy.id, id)).toBe(true);
+    const remote = (target_id: string) => ({ target_id, name: "Refreshed", answered_by: "install" as const, fallback: "none" as const });
+    const refreshed = mergeRelayTargets(readRelayStore().relays[0]!.targets, [remote(target.id), remote("new_target")]);
+    expect(refreshed[0]).toMatchObject({ name: "Refreshed", requesters: granted.requesters });
+    expect(refreshed[1]).not.toHaveProperty("requesters");
+    expect(refreshed.some(item => item.id === legacy.id)).toBe(false);
+  } finally { dropRun(id); }
+});
+
+test("an async MCP call rechecks its grant after awaiting acknowledgement", async () => {
+  const relay = paired([granted]);
+  setRelays(relay);
+  const raw = request("async_tool");
+  raw.input.tools = [{ name: "lookup_notes", summary: "Look up notes", mode: "direct", effect: "read", parameters: { type: "object" } }];
+  const claim = requestSchema.parse(raw);
+  const conversationId = "conversation_async_tool";
+  reserveRun({ requestId: claim.request_id, leaseId: claim.lease_id, relayId: relay.id, targetId: target.id,
+    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
+    runDir: process.env.TMPDIR!, startedAt: addedAt, conversationId,
+    ownerTurn: { clientAttemptId: "relay-owner-async-tool", entry: snapshot, leaseDeadlineAt: Date.now() + 60_000 },
+  }, 1);
+  const wire = spyOn(client, "relayCall").mockResolvedValue({ status: 200, body: { status: "ok" } } as never);
+  let entered!: () => void, release!: (value: boolean) => void;
+  const acknowledging = new Promise<void>(resolve => { entered = resolve; });
+  const acknowledgement = new Promise<boolean>(resolve => { release = resolve; });
+  const adapter = openOwnerServiceTools(relay, granted, claim, [], {
+    signal: new AbortController().signal, lose() {},
+    ack: () => { entered(); return acknowledgement; },
+  }, {}, () => ownerRelayAuthorizedAsync(relay.id, target.id, claim.request_id));
+  adapter.bindConversation(conversationId);
+  const pending = relayServiceToolsOp(conversationId, { op: "call", calls: [{ tool: "lookup_notes", arguments: {} }] });
+  try {
+    await Promise.race([acknowledging, pending.then(() => { throw new Error("tool call did not reach acknowledgement"); })]);
+    setRelays(paired([{ ...target, requesters: { revision: 2, entries: [] } }]));
+    release(true);
+    expect(await pending).toMatchObject({ status: "relay_tools_unavailable", results: [] });
+    expect(wire).not.toHaveBeenCalled();
+    expect(await relayServiceToolsOp(conversationId, { op: "list" })).toBeNull();
+  } finally {
+    release(false);
+    await pending;
+    adapter.unbindConversation(conversationId);
+    await adapter.dispose();
+    wire.mockRestore();
+    dropRun(claim.request_id);
+  }
+});
+
+test("separate pairing owners and an unreadable team store cannot use the install-owner tier", async () => {
+  const { elevatedRequesterFor } = await import("./profile");
+  const a = paired([{ ...target, ownerTier: true }]);
+  const b = paired([{ ...target, ownerTier: true }], "relay_b", "202");
+  setRelays(b, a);
+  const store = ownerMember();
+  const claim = ownerRequest();
+  expect(elevatedRequesterFor(a, a.targets[0]!, claim, [b, a])?.entry.tier).toBe("owner");
+  expect(elevatedRequesterFor(b, b.targets[0]!, claim, [b, a])?.entry.tier).toBe("requester");
+  expect(selectOwnerDestination([b, a], a.origin)).toMatchObject({ chatId: "101" });
+  store.updateMember({ ...store.owner()!, telegram: null });
+  expect(elevatedRequesterFor(a, a.targets[0]!, claim, [b, a])?.entry.tier).toBe("requester");
+  resetTeamStoreForTests();
+  fs.writeFileSync(teamStoreFile(), "unreadable team database");
+  expect(elevatedRequesterFor(a, a.targets[0]!, claim, [a])?.entry.tier).toBe("requester");
+  expect(fs.existsSync(externalRelayFile("relays"))).toBe(true);
+});
+
+test("the same MCP executor loses owner relay treatment after an independent team write", async () => {
+  const store = ownerMember();
+  fs.writeFileSync(`${process.env.LLV_STATE_DIR}/project-aliases.json`, JSON.stringify({
+    schemaVersion: 1, aliases: {}, displayNames: { [project]: "Example project" },
+  }));
+  const relay = paired([{ ...target, ownerTier: true }]);
+  setRelays(relay);
+  const registry = agentRegistry();
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: process.env.TMPDIR!, role: "builder", origin: { kind: "operator" } });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  const capability = registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId);
+  const conversationId = begun.receipt.conversationId;
+  const requestId = "executor_authority";
+  reserveRun({ requestId, leaseId: "lease", relayId: relay.id, targetId: target.id, ownerPid: process.pid,
+    ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
+    runDir: process.env.TMPDIR!, startedAt: addedAt, conversationId,
+    ownerTurn: { clientAttemptId: "relay-owner-executor", entry: { id: "earlier-switch-target_1", kind: "paired-owner", tier: "owner", project, label: "Paired owner" } } }, 1);
+  const executor = new McpTaskExecutor();
+  try {
+    const create = async (name: string) => {
+      const result = await runAsMcpHttpCaller({ capability }, () => executor.callTool("create_task",
+        withTaskDue({ text: name, project, clientRequestId: name.toLowerCase().replaceAll(" ", "-") })));
+      if (!result.ok) throw new Error(`Task executor refused: ${JSON.stringify(result)}`);
+      return loadTasks().find(task => task.id === result.taskId);
+    };
+    expect((await create("Before owner relink"))?.status).toBe("assigned");
+    store.updateMember({ ...store.owner()!, telegram: { ...link, userId: "303" } });
+    expect((await create("After owner relink"))?.status).toBe("inbox");
+  } finally { await executor.close(); dropRun(requestId); }
+});
+
+test("first entry write preserves the legacy grant and audits it once", async () => {
+  const { elevatedRequesterFor } = await import("./profile");
+  const relay = paired([{ ...target, ownerTier: true }]);
+  setRelays(relay);
+  const claim = ownerRequest();
+  expect(elevatedRequesterFor(relay, relay.targets[0]!, claim, [relay])?.entry.id).toBe("earlier-switch-target_1");
+  expect(elevatedRequesterFor(relay, relay.targets[0]!, request("before_unlisted"), [relay])).toBeNull();
+  const actor = { surface: "board" as const, approvedBy: "operator" };
+  const auditFile = trustedRequesterAuditFile();
+  fs.mkdirSync(auditFile);
+  try {
+    await expect(addTrustedRequester(relay.id, target.id, 0, { key: "u2", label: "Second person" }, actor)).rejects.toBeTruthy();
+    expect(readRelayStore().relays[0]?.targets[0]).toMatchObject({ ownerTier: true });
+    expect(readRelayStore().relays[0]?.targets[0]).not.toHaveProperty("requesters");
+  } finally { fs.rmdirSync(auditFile); }
+  await addTrustedRequester(relay.id, target.id, 0, { key: "u2", label: "Second person" }, actor);
+  const [current] = readRelayStore().relays;
+  const [updated] = current!.targets;
+  expect(updated).not.toHaveProperty("ownerTier");
+  expect(updated?.requesters?.entries[0]).toMatchObject({ id: "earlier-switch-target_1", source: "earlier-switch", project });
+  expect(elevatedRequesterFor(current!, updated!, claim, [current!])?.entry.id).toBe("earlier-switch-target_1");
+  expect(elevatedRequesterFor(current!, updated!, request("unlisted"), [current!])).toBeNull();
+  const rows = fs.readFileSync(auditFile, "utf8").trim().split("\n").map(row => JSON.parse(row));
+  try {
+    expect(rows.filter(row => row.action === "earlier-switch")).toHaveLength(1);
+    expect(rows.every(row => !Object.hasOwn(row, "key"))).toBe(true);
+  } finally { fs.rmSync(auditFile); }
+});
+
+test("Add me refuses a second pairing and a solo install without an entry or audit write", async () => {
+  const a = paired([target]);
+  const b = paired([target], "relay_b", "202");
+  setRelays(a, b);
+  const before = fs.readFileSync(externalRelayFile("relays"), "utf8");
+  const audit = fs.existsSync(trustedRequesterAuditFile()) ? fs.readFileSync(trustedRequesterAuditFile(), "utf8") : null;
+  const request = new NextRequest("http://127.0.0.1:1");
+  await expect(addPairedOwnerRequester(request, a.id, target.id, 0)).rejects.toMatchObject({ code: "owner_required" });
+  const store = ownerMember();
+  const session = mintSession(store, store.owner()!.id, "telegram", { surface: "desktop", browser: "chrome" });
+  const ownerRequest = new NextRequest("http://127.0.0.1:1", { headers: { cookie: `${MEMBER_COOKIE}=${session.value}` } });
+  await expect(addPairedOwnerRequester(ownerRequest, b.id, target.id, 0)).rejects.toMatchObject({ code: "owner_required" });
+  expect(fs.readFileSync(externalRelayFile("relays"), "utf8")).toBe(before);
+  expect(fs.existsSync(trustedRequesterAuditFile()) ? fs.readFileSync(trustedRequesterAuditFile(), "utf8") : null).toBe(audit);
+});
+
+test("the transfer collector carries only the paired-owner entry", () => {
+  const pairedOwner = { id: "carried", kind: "paired-owner" as const, source: "earlier-switch" as const,
+    label: "Paired owner", project, addedAt };
+  setRelays(paired([{ ...target, requesters: { revision: 3, entries: [entry, pairedOwner] } }]));
+  const source = new SourceSnapshot(process.env.LLV_STATE_DIR!, process.env.XDG_CONFIG_HOME!, null, null);
+  try {
+    const output = partById.get("pending:relay-targets")!.collect(source);
+    expect(output).toMatchObject([{ value: { target: { requesters: { revision: 3, entries: [pairedOwner] } } } }]);
+    expect(JSON.stringify(output)).not.toContain(entry.id);
+    expect(JSON.stringify(output)).not.toContain('"key":"u1"');
+  } finally { source.close(); }
+});
+
+const entryWriter = { surface: "board" as const, approvedBy: "operator" };
+for (const state of ["queued", "running", "continuation", "unlink"] as const) {
+  test(`revocation cancels a ${state} turn before observation returns`, async () => {
+    const isOwner = state === "unlink";
+    const relay = paired([isOwner ? { ...target, ownerTier: true } : granted]);
+    setRelays(relay, ...(isOwner ? [paired([{ ...target, ownerTier: true }], "relay_b", "202")] : []));
+    const store = isOwner ? ownerMember() : null;
+    const raw = request(`revocation_${state}`);
+    raw.input.requester.is_owner = isOwner;
+    if (state === "continuation") {
+      raw.chat = { key: "trusted_reply_chain" };
+      const seed = reserveChainConversation(relay, granted, requestSchema.parse(raw), "trusted:grant-one")!;
+      releaseConversation(seed.id, { state: "idle", runningRequestId: null, conversationId: "conversation_revoked" });
+      raw.input.respond_to = "continuation_trigger";
+      raw.input.conversation.push({ ...raw.input.conversation[0]!, id: "continuation_trigger", reply_to: "m1" });
+      setRelaySwitch("chain_conversations", true);
+    }
+    const selected = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+      engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: {} } });
+    const wire = spyOn(client, "relayCall").mockResolvedValue({ status: 200, body: { status: "ok" } } as never);
+    let entered!: () => void, release!: () => void;
+    const observing = new Promise<void>(resolve => { entered = resolve; });
+    const observation = new Promise<void>(resolve => { release = resolve; });
+    const stops: string[] = [];
+    const pending = runClaimedRequest(relay, raw, undefined, { leaseWorker: false, ownerPorts: {
+      launch: async () => {
+        expect(state).not.toBe("continuation");
+        return { status: 202, body: { conversationId: "conversation_revoked", initialMessage: state === "queued" ? "queued" : "delivered" } };
+      },
+      continue: async (turn, _prompt, _target, authorize) => {
+        expect(state).toBe("continuation");
+        authorize();
+        return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId };
+      },
+      observe: async () => { entered(); await observation; return { state: "ended", finalText: "Suppressed" }; },
+      stop: async (_id, action) => { stops.push(action); },
+    } });
+    try {
+      await Promise.race([observing, pending.then(() => { throw new Error("elevated turn did not reach observation"); })]);
+      if (store) {
+        const session = mintSession(store, store.owner()!.id, "telegram", { surface: "desktop", browser: "chrome" });
+        expect((await unlinkTelegram(new NextRequest("http://127.0.0.1:1", { method: "DELETE",
+          headers: { host: "127.0.0.1:1", origin: "http://127.0.0.1:1", cookie: `${MEMBER_COOKIE}=${session.value}` } }))).status).toBe(200);
+      } else {
+        await addTrustedRequester(relay.id, target.id, 1, { key: "u2", label: "Other" }, entryWriter);
+        expect(ownerRelayAuthorized(relay.id, target.id, raw.request_id)).toBe(true);
+        expect(stops).toEqual([]);
+        await removeTrustedRequester(relay.id, target.id, 2, entry.id, entryWriter);
+      }
+      expect(ownerRelayAuthorized(relay.id, target.id, raw.request_id)).toBe(false);
+      expect(await ownerRelayAuthorizedAsync(relay.id, target.id, raw.request_id)).toBe(false);
+      release();
+      expect((await pending)?.outcome).not.toBe("answered");
+      expect(stops).toEqual([state === "queued" ? "kill" : "interrupt"]);
+    } finally {
+      release();
+      try { await pending; }
+      finally {
+        selected.mockRestore();
+        wire.mockRestore();
+        if (state === "continuation") setRelaySwitch("chain_conversations", false);
+      }
+    }
+  });
+}

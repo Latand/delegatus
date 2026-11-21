@@ -8,6 +8,7 @@ import type { OwnerBridgeContext } from "./ownerBridgeContext";
 import type { OwnerTurnDiagnostic } from "./diagnostic";
 import { ACTION_VERIFICATION_READS } from "./actionOutcome";
 import { ExternalRelayError } from "./errors";
+import type { RelayRunEntry, TrustedRequesterSettings } from "./trustedRequesters";
 
 export type RelayTargetSettings = {
   id: string;
@@ -27,6 +28,7 @@ export type RelayTargetSettings = {
   memberLimitPerHour?: number | null;
   /** Absent is off; only the operator can enable full owner agent runs. */
   ownerTier?: boolean;
+  requesters?: TrustedRequesterSettings;
 };
 /** The open «Створити клона» request (cloneCreate.ts), until it ends. */
 export type RelayCloneRequest = {
@@ -108,6 +110,8 @@ export type RunRecord = {
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
   ownerTurn?: { rawRequest?: unknown; context?: import("./profile").OwnerInstruction; restartRetries?: 1; restartPending?: true;
+    entry?: RelayRunEntry;
+    leaseDeadlineAt?: number;
     delivery?: import("./protocol").OwnerDelivery;
     /** Persisted before /complete; an absent ACK never authorizes /send. */
     completionAttempt?: { body: ExternalRelayCompletion; files: import("./attachments").StagedAttachment[] };
@@ -238,6 +242,14 @@ export function updateRelayStore(
     writeRelayFile(file, next);
     return next;
   });
+}
+export async function updateRelayStoreAsync(change: (store: RelayStore) => RelayStore | Promise<RelayStore>): Promise<RelayStore> {
+  const file = externalRelayFile("relays");
+  return withFileLockAsync(file, async () => {
+    const next = withoutExpired(await change(withoutExpired(readStoredRelays())));
+    writeRelayFile(file, next);
+    return next;
+  }, Date.now() + 5_000);
 }
 export function readRunLedger(): RunLedger {
   const ledger = read(externalRelayFile("runs"), () => ({
@@ -602,7 +614,7 @@ export function publicRelay(
   relay: PairedRelay,
 ): Omit<PairedRelay, "credential"> {
   const { credential: _credential, ...publicRecord } = relay;
-  return publicRecord;
+  return { ...publicRecord, targets: relay.targets.map(({ requesters: _requesters, ...target }) => target) };
 }
 export function publicPending(
   pending: PendingRelay,

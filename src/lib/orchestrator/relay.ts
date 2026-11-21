@@ -11,7 +11,7 @@ import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { messageOriginProject, sameMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lookupOriginalSend, type SendReceipt } from "@/lib/runtime/sendSettlement";
 import { admittedVoiceBinding } from "@/lib/voiceCompanion/admission";
-import { ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { liveOwnerRelayRequest, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 
 import { authorizedManagerSeats, type AuthorizedManagerSeat } from "./authority";
 import { deputyAskerOf } from "./deputyAsker";
@@ -139,7 +139,16 @@ export function admitOrchestratorRelay(
   // Recover the frozen recipient before comparing report custody. A retry may
   // settle the original source seat's receipt after its designation rotates.
   if (owner && !ownerRelayTargetMatches(conversationId!, project, resolved.ok ? resolved.recipient : recipient)) {
+    if (owner.requesterRequestId)
+      return refused("trusted_requester_project_refused", "the trusted requester's handoff must stay within its granted project", 403);
     return refused("owner_report_seat_unavailable", "the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", 409);
+  }
+  if (resolved.ok && owner?.requesterRequestId) {
+    return { ...resolved, admissionGuard: () => {
+      const live = liveOwnerRelayRequest(conversationId!);
+      if (live?.requestId !== owner.requesterRequestId || !ownerRelayTargetMatches(conversationId!, project, resolved.recipient))
+        throw new OrchestratorRelayRefusedError("sender_not_authorized");
+    } };
   }
   if (!resolved.ok || !seat) return resolved;
   const epoch = orchestratorSeatFor(seat.project!).active?.seatEpoch;

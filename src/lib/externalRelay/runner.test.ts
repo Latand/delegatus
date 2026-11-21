@@ -83,8 +83,8 @@ function relay(api_base: string): PairedRelay {
     description: "Test",
     credential: "x".repeat(43),
     owner: {
-      namespace: "test",
-      id: "owner",
+      namespace: "telegram",
+      id: "101",
       display_name: "Owner",
       handle: null,
     },
