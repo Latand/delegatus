@@ -27,10 +27,10 @@ becomes a passing receipt for the whole selection.
   reusable head receipts cold; a change during the run invalidates checkpoint
   sealing or refuses reuse after a prior hit.
   For head checkpoints only, an active sandbox journal entry binds the local
-  gate allocation to its device and inode. The comparator can then omit the
-  inherited `XDG_STATE_HOME` and `XDG_RUNTIME_DIR` paths that it replaces before
-  running every file. The selected temporary parent and caller-declared
-  inputs retain their identities. External paths keep their exact keys.
+  gate allocation to its device and inode. Both environment fingerprints omit
+  paths generated from that allocation, including declared inputs such as
+  `XDG_STATE_HOME` and `XDG_RUNTIME_DIR`. Every file receives its own directories.
+  The selected temporary parent and external inputs keep their identities.
   The Linux worker entry issues fresh process and supervisor IDs for each
   file, so the parent invocation's IDs do not key these checkpoints.
 - Dirty trees, index flags and unreadable input identities receive fresh runs.
@@ -71,10 +71,11 @@ incomplete file, source/environment/ignored-input invalidation, malformed
 receipts, and an aggregate deadline after eight of twelve files. The second
 invocation executes only the remaining four. The deadline is controlled in the
 parent; the child checks keep their real clocks and execution bounds.
-The ordinary `check-step "touched tests"` regression keeps one incomplete file
-alongside a green file and checks the receipt bytes, fresh directory lifetimes,
-declared input and runner replacement, manager identity loss or drift, and
-warm/cold retries after changing only the external `BASH_ENV` bytes.
+The native pre-push regression keeps one incomplete file alongside a green
+file and checks the receipt bytes, fresh declared directories, collection of
+the test services, input and runner replacement, and manager identity loss or
+drift. The `check-step "touched tests"` regression covers warm and cold retries
+after changing only the external `BASH_ENV` bytes.
 
 This repairs the Delegatus repository's publication integration. The generic
 cross-project execution contract remains tracked in #3622.

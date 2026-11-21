@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
-import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
+import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment } from "./local-gate";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
@@ -472,15 +472,14 @@ function isGreenHeadFile(value: unknown): value is TestRun {
 /** The comparator preserves caller variables beyond the publication wrapper's
  * allowlist. Bind those values with the baseline environment identity, plus
  * identity/privacy/network values that a direct comparator call still passes. */
-function headEnvironmentKey(env: NodeJS.ProcessEnv, inherited: NodeJS.ProcessEnv): string {
+function headEnvironmentKey(env: NodeJS.ProcessEnv): string {
   const consumed = /^(?:GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)|LLV_PRIVACY_[A-Z0-9_]+|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
-  return fingerprint([environmentFingerprint(env), checkInputEnvironment(inherited), env.XDG_RUNTIME_DIR ?? null, Object.entries(env)
+  return fingerprint([environmentFingerprint(env), checkInputEnvironment(env), env.XDG_RUNTIME_DIR ?? null, Object.entries(env)
     .filter(([name, value]) => value !== undefined && consumed.test(name)).sort(([a], [b]) => a.localeCompare(b))]);
 }
 
-/** Only the two inherited paths written by the local gate allocator can be
- * folded. Every file replaces them with its own directories. Keep the selected
- * temp parent and the original values of any explicitly declared inputs. */
+/** Every file gets its own roots. Fold inherited paths proven to come from
+ * the gate allocator, including when the caller declared one as an input. */
 function headCheckpointEnvironment(root: string, sandbox: string, inherited: NodeJS.ProcessEnv) {
   const temporary = path.dirname(sandbox);
   const outer = path.dirname(temporary);
@@ -509,8 +508,10 @@ function headCheckpointEnvironment(root: string, sandbox: string, inherited: Nod
   delete env.LLV_CHECK_ENTRY_PID;
   delete env.LLV_CHECK_ENTRY_SUPERVISOR;
   if (owned) {
-    delete env.XDG_STATE_HOME;
-    delete env.XDG_RUNTIME_DIR;
+    for (const name of ISOLATED_DIRECTORY_KEYS) {
+      if (env[name] === path.join(outer, name.toLowerCase())) delete env[name];
+    }
+    if (env.CLAUDE_CODE_TMPDIR === temporary) delete env.CLAUDE_CODE_TMPDIR;
   }
   const parent = owned ? path.dirname(outer) : temporary;
   try {
@@ -522,13 +523,13 @@ function headCheckpointEnvironment(root: string, sandbox: string, inherited: Nod
     // The checked-out directory is still an input to the test process.
     const source = statSync(root);
     const key = fingerprint([[root, realpathSync(root), source.dev, source.ino],
-      [owned, parent, physical, stat.dev, stat.ino], bashEnv, headEnvironmentKey(env, inherited)]);
+      [owned, parent, physical, stat.dev, stat.ino], bashEnv, headEnvironmentKey(env)]);
     return { env, key };
   } catch { return undefined; }
 }
 
-/** The fresh runtime directory has no private systemd socket. Identify the
- * actual local bus and its manager connection before using a service receipt. */
+/** Probe from the worker's fresh runtime directory and fingerprint the actual
+ * local bus, manager connection and cleanup tools. */
 function serviceCleanupIdentity(root: string, isolated: NodeJS.ProcessEnv): string | undefined {
   if (process.platform !== "linux") return;
   const PATH = fileRunnerPath(isolated);

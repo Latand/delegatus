@@ -60,8 +60,8 @@ test("fixture contract", () => { ${interrupted ? "process.exit(124);" : "expect(
   const base = git("rev-parse", "HEAD"); git("update-ref", "refs/remotes/origin/main", base);
   writeFileSync(path.join(repo, "b.test.ts"), source("b", true));
   git("add", "."); git("commit", "-m", "Add incomplete check fixture");
-  const run = (extra: Partial<NodeJS.ProcessEnv> = {}, cwd = repo) => {
-    const result = spawnSync(process.execPath, [path.join(import.meta.dir, "local-gate-tests.ts"), "--base", base, "./a.test.ts", "./b.test.ts"],
+  const run = (extra: Partial<NodeJS.ProcessEnv> = {}, cwd = repo, comparison = base) => {
+    const result = spawnSync(process.execPath, [path.join(import.meta.dir, "local-gate-tests.ts"), "--base", comparison, "./a.test.ts", "./b.test.ts"],
       { cwd, env: { ...env, ...extra }, encoding: "utf8", timeout: 30_000 });
     return { status: result.status, output: result.stdout + result.stderr };
   };
@@ -89,9 +89,9 @@ serviceTest("an incomplete head run retains only complete green files across fre
   expect(f.samples()).toEqual({ a: 2, b: 3 });
 }, 60_000);
 
-serviceTest("local check-step resumes only equivalent green files across fresh private roots", () => {
+serviceTest("native pre-push resumes only equivalent green files across fresh private roots", () => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-step-")); roots.push(scratch);
+  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-hook-")); roots.push(scratch);
   const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
   const origin = path.join(scratch, "origin.git");
   f.git("clone", "--bare", "--shared", ".", origin);
@@ -116,17 +116,26 @@ fi
 exec "${busctl}" "$@"
 `, { mode: 0o700 });
   env.PATH = bin + path.delimiter + env.PATH;
-  env.LLV_GATE_CHECK_ENV = "CHECKPOINT_STEP_INPUT";
-  writeFileSync(path.join(f.dir, "shims/bun"), '#!/bin/sh\nexec "$LLV_GATE_BUN" "$@"\n');
+  env.LLV_GATE_CHECK_ENV = "CHECKPOINT_STEP_INPUT,HOME,TMPDIR,XDG_STATE_HOME,XDG_RUNTIME_DIR,CLAUDE_CODE_TMPDIR";
+  writeFileSync(path.join(f.dir, "shims/bun"), `#!/bin/sh
+case "$1" in
+  scripts/privacy-publication-gate.ts|scripts/eslint-changes.ts) exit 0 ;;
+  scripts/local-gate-tests.ts) printf '%s\\n' "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR" >> "${marker}-hook" ;;
+esac
+exec "$LLV_GATE_BUN" "$@"
+`);
+  writeFileSync(path.join(f.dir, "shims/bunx"), "#!/bin/sh\nexit 0\n");
   symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
   for (const name of ["a", "b"]) writeFileSync(path.join(f.dir, `${name}.test.ts`), `
-import { appendFileSync, existsSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { expect, test } from "bun:test";
 test("fixture contract", () => {
   const { XDG_STATE_HOME: state, XDG_RUNTIME_DIR: runtime, CHECKPOINT_STEP_INPUT: input } = process.env;
   expect(readdirSync(state)).toEqual([]);
   expect(readdirSync(runtime)).toEqual([]);
-  appendFileSync(${JSON.stringify(marker)}, JSON.stringify({ file: "${name}", state, runtime, input }) + "\\n");
+  const unit = readFileSync("/proc/self/cgroup", "utf8").match(/delegatus-gate-[a-f0-9-]+\\.service/)?.[0];
+  expect(unit).toBeDefined();
+  appendFileSync(${JSON.stringify(marker)}, JSON.stringify({ file: "${name}", state, runtime, input, unit }) + "\\n");
   ${name === "b" ? `if (existsSync(${JSON.stringify(trigger)})) writeFileSync(${JSON.stringify(changedManager)}, "");
   process.exit(124);` : ""}
 });
@@ -134,7 +143,7 @@ test("fixture contract", () => {
   f.git("config", "core.hooksPath", "/dev/null");
   f.git("add", "."); f.git("commit", "-m", "Independent checkpoint fixtures");
   const run = (input = "first") => {
-    const result = spawnSync(process.execPath, ["scripts/local-gate.ts", "check-step", "touched tests"], {
+    const result = spawnSync("bash", [".githooks/pre-push"], {
       cwd: f.dir, env: { ...env, CHECKPOINT_STEP_INPUT: input }, encoding: "utf8", timeout: 30_000,
     });
     const output = result.stdout + result.stderr;
@@ -179,13 +188,22 @@ test("fixture contract", () => {
   expect(readdirSync(receiptDir).sort()).toEqual(certified);
 
   const rows = readFileSync(marker, "utf8").trim().split("\n").map(line => JSON.parse(line) as {
-    file: string; state: string; runtime: string; input: string;
+    file: string; state: string; runtime: string; input: string; unit: string;
   });
   expect(rows.filter(row => row.file === "a").map(row => row.input)).toEqual(["first", "second", "first", "first"]);
   expect(rows.filter(row => row.file === "b").map(row => row.input)).toEqual(["first", "first", "second", "first", "first", "first", "first"]);
   for (const field of ["state", "runtime"] as const) {
     expect(new Set(rows.map(row => row[field])).size).toBe(rows.length);
     expect(rows.some(row => existsSync(row[field]))).toBeFalse();
+  }
+  const hookRoots = readFileSync(marker + "-hook", "utf8").trim().split("\n");
+  expect(hookRoots).toHaveLength(14);
+  expect(new Set(hookRoots).size).toBe(hookRoots.length);
+  expect(hookRoots.some(root => existsSync(root))).toBeFalse();
+  expect(new Set(rows.map(row => row.unit)).size).toBe(rows.length);
+  for (const { unit } of rows) {
+    const state = spawnSync("systemctl", ["--user", "show", "--property=LoadState", "--value", unit], { env, encoding: "utf8" });
+    expect(state.stdout.trim(), state.stderr).toBe("not-found");
   }
 }, 120_000);
 
@@ -264,6 +282,21 @@ serviceTest("external roots with gate-shaped names retain their distinct checkpo
   expect(f.samples()).toEqual({ a: 2, b: 3 });
 }, 60_000);
 
+serviceTest.each(["XDG_STATE_HOME", "XDG_RUNTIME_DIR"])("changing only an external %s invalidates head checkpoints", name => {
+  const f = fixture();
+  const pathFor = (id: string) => {
+    const directory = path.join(f.root, id);
+    mkdirSync(directory);
+    return { [name]: directory, LLV_GATE_CHECK_ENV: name };
+  };
+  const first = pathFor("first"), second = pathFor("second");
+  const checkpoint = "reused complete green head file a.test.ts";
+  expect(f.run(first).output).not.toContain(checkpoint);
+  expect(f.run(second).output).not.toContain(checkpoint);
+  expect(f.run(first).output).toContain(checkpoint);
+  expect(f.samples()).toEqual({ a: 2, b: 3 });
+}, 60_000);
+
 serviceTest("identical detached worktrees in the shared cache require their own file observations", () => {
   const f = fixture();
   const peer = path.join(f.root, "peer");
@@ -315,6 +348,32 @@ serviceTest("head checkpoints invalidate environment and ignored inputs, and ref
   for (const name of readdirSync(cache)) writeFileSync(path.join(cache, name), "incomplete receipt");
   expect(f.run().status).toBe(0);
   expect(f.samples()).toEqual({ a: 5, b: 5 });
+}, 60_000);
+
+serviceTest("head checkpoints invalidate installed dependency bytes and the merge base", () => {
+  const f = fixture();
+  const dependency = path.join(f.repo, "node_modules", "fixture", "index.js");
+  mkdirSync(path.dirname(dependency), { recursive: true });
+  writeFileSync(path.join(f.repo, ".git/info/exclude"), "node_modules/\n");
+  writeFileSync(dependency, "export default 1;\n");
+  writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b"));
+  f.git("add", "."); f.git("commit", "-m", "Complete fixture check");
+  const base = f.git("rev-parse", "HEAD^"), head = f.git("rev-parse", "HEAD");
+  const run = (comparison = base) => {
+    f.git("update-ref", "refs/remotes/origin/main", comparison);
+    const result = f.run({}, f.repo, comparison);
+    expect(result.status, result.output).toBe(0);
+    return result.output;
+  };
+  const checkpoint = "reused complete green head file";
+  expect(run()).not.toContain(checkpoint);
+  expect(run().match(new RegExp(checkpoint, "g"))).toHaveLength(2);
+  writeFileSync(dependency, "export default 2;\n");
+  expect(run()).not.toContain(checkpoint);
+  expect(f.samples()).toEqual({ a: 2, b: 2 });
+  expect(run(head)).not.toContain(checkpoint);
+  expect(f.samples()).toEqual({ a: 3, b: 3 });
+  expect(run(head).match(new RegExp(checkpoint, "g"))).toHaveLength(2);
 }, 60_000);
 
 serviceTest("an aggregate deadline preserves completed files without certifying the interrupted run", () => {
