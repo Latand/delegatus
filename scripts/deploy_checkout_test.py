@@ -1440,6 +1440,144 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertIn(104, self.adapter.agents)
         self.assertEqual(self.service_commands(), [])
 
+    def test_relaunch_settles_standalone_mergers_with_current_release_evidence(self):
+        for index, scenario in enumerate(("completed", "recovered", "foreign-boundary", "foreign-owner")):
+            with self.subTest(scenario=scenario):
+                if index:
+                    self.adapter.close()
+                    self.doCleanups()
+                    self.setUp()
+                group = self.helper_groups()[0]
+                row = group["row"]
+                conversation = row["conversationId"] = "conversation_fixture_merger"
+                transcript = str(self.root / "merger.jsonl")
+                merger = {
+                    "conversationId": conversation, "engine": "claude", "sessionId": "fixture-merger",
+                    "path": transcript, "claimEpoch": 2, "process": row["host"]["process"],
+                    "writer": row["host"]["exitWriter"]["process"], "batch": None, "turnState": "busy",
+                }
+                row["merger"] = merger
+                original_alive = self.adapter.identity_alive
+                host_ended = False
+                def alive(entry):
+                    return not (host_ended and entry["pid"] == group["host"]) and original_alive(entry)
+                self.adapter.identity_alive = alive
+
+                def after_relaunch():
+                    nonlocal host_ended
+                    host_ended = True
+                    before, = self.adapter.relaunch_hosts.values()
+                    deploy.write_json(before["slots"]["exit"], {"code": 0, "signal": "EOF", "at": deploy.utc()})
+                    if scenario == "completed":
+                        self.recovery_overrides = {"conversations": [{**row,
+                            "transcriptPath": transcript, "lifecycle": "completed", "turnState": "idle",
+                            "host": {"kind": "structured", "state": "gone"},
+                        }]}
+                        return
+                    self.recovery_overrides = {"conversations": [{**row,
+                        "lifecycle": "running", "host": {"kind": "structured", "state": "alive", "pid": 204},
+                    }]}
+                    self.merger_delivery = {"conversationId": conversation, "transcriptPath": transcript,
+                                            "deliverable": True, "processRecorded": True}
+                    if scenario in ("recovered", "foreign-boundary"):
+                        target = self.state / "viewer-release.json"
+                        deploy.write_json(target, {"revision": TARGET, "endpoint": "http://127.0.0.1:1"})
+                        boundary = "viewer-release:" + hashlib.sha256(target.read_bytes()).hexdigest()[:16]
+                    else:
+                        boundary = "viewer-release:pid-102"
+                    if scenario == "foreign-boundary":
+                        boundary = "viewer-release:previous"
+                    owner = merger["process"] if scenario != "foreign-owner" else {
+                        **merger["process"], "startIdentity": "previous-start",
+                    }
+                    directory = self.state / "interruption-obligations"
+                    directory.mkdir()
+                    deploy.write_json(directory / "interruption-continuation-fixture.json", {
+                        "version": 1, "id": "fixture", "conversationId": conversation, "engine": "claude",
+                        "hostKey": "claude:fixture-merger", "path": transcript, "reason": "viewer-release",
+                        "owner": owner, "claimEpoch": merger["claimEpoch"], "state": "delivered",
+                        "boundary": boundary, "recordedAt": deploy.utc(), "checkpoint": {},
+                    })
+
+                self.answer_relaunch(after=after_relaunch)
+                result = deploy.run_switch(self.adapter, TARGET, samples=2, interval=1, timeout=5)
+                protected, = result["protected"]
+                expected = scenario if scenario in ("completed", "recovered") else "unknown"
+                self.assertEqual(protected["outcome"], expected, result)
+                self.assertEqual(result["verdict"], "needs_decision" if expected == "unknown" else "pass", result)
+                self.assertEqual(result["relaunch"]["result"], "done")
+                self.assertEqual(self.service_commands(), [])
+                self.assertFalse((self.state / deploy.CHECKOUT_MERGER_CAPTURE).exists())
+                if expected == "unknown":
+                    self.assertEqual(protected["reason"], "merger-continuation-receipt-missing")
+                elif expected == "recovered":
+                    self.assertEqual(result["interrupted"][0]["kind"], "standalone-merger")
+
+    def test_relocation_preserves_prior_capture_on_refusal_and_keeps_uncertain_submission(self):
+        for index, stop_may_have_run in enumerate((False, True)):
+            with self.subTest(stop_may_have_run=stop_may_have_run):
+                if index:
+                    self.adapter.close()
+                    self.doCleanups()
+                    self.setUp()
+                self.relocating()
+                process = {"pid": 104, "startIdentity": "104:104", "bootEpoch": self.adapter.boot_epoch}
+                writer = {"pid": 102, "startIdentity": "102:102", "bootEpoch": self.adapter.boot_epoch}
+                conversation = "conversation_fixture_merger"
+                merger = {"conversationId": conversation, "engine": "codex", "sessionId": "fixture-merger",
+                          "path": str(self.root / "merger.jsonl"), "claimEpoch": 2, "process": process,
+                          "writer": writer, "batch": None, "turnState": "busy"}
+                self.inventory_overrides = {"conversations": [{
+                    "conversationId": conversation, "host": {"kind": "structured", "state": "alive",
+                                                              "pid": 104, "process": process},
+                    "turnState": "busy", "lifecycle": "running", "evidenceSource": "transcript",
+                    "pipeline": None, "merger": merger,
+                }]}
+                capture = self.state / deploy.CHECKOUT_MERGER_CAPTURE
+                deploy.write_json(capture, [{**merger, "conversationId": "conversation_previous_merger",
+                    "capturedAt": deploy.utc(), "boundary": "checkout-merger:" + "a" * 32,
+                    "admissionProof": "fresh-cut-v1"}])
+                prior = capture.read_bytes()
+                if stop_may_have_run:
+                    execute = self.adapter.command
+                    def stop_then_timeout(command, cwd=None):
+                        answer = execute(command, cwd)
+                        if command[:4] == ["systemctl", "--user", "--no-block", "stop"]:
+                            raise TimeoutError("fixture stop reply lost")
+                        return answer
+                    self.adapter.command = stop_then_timeout
+                else:
+                    scope = "synthetic-dependent.scope"
+                    self.scopes[scope] = {"Id": scope, "ActiveState": "active"}
+                    publish = self.adapter.publish
+                    def bound_scope_arrives():
+                        publish()
+                        self.bound.add(scope)
+                    self.adapter.publish = bound_scope_arrives
+                result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=0, timeout=2)
+                self.assertEqual(result["relocation"]["stopSubmitted"], stop_may_have_run, result)
+                if stop_may_have_run:
+                    cuts = {row["conversationId"]: row for row in json.loads(capture.read_text())}
+                    self.assertEqual(cuts[conversation]["admissionProof"], "fresh-cut-v1")
+                    self.assertEqual(cuts["conversation_previous_merger"], json.loads(prior)[0])
+                    self.assertIn("stop", self.service_commands())
+                else:
+                    self.assertEqual(capture.read_bytes(), prior)
+                    self.assertIn("relocation would stop 1 bound units", result["relocation"]["diagnostics"])
+                    self.assertEqual(self.service_commands(), [])
+
+    def test_unverified_merger_and_failed_sample_reads_name_distinct_reasons(self):
+        host = {"conversationId": "conversation_fixture_merger", "pid": 104,
+                "startIdentity": "104", "merger": {"path": str(self.root / "merger.jsonl")}}
+        self.recovery_overrides = {"conversations": [{
+            "conversationId": host["conversationId"], "pipeline": None, "evidenceSource": "transcript",
+            "host": {"kind": "structured", "state": "gone"},
+        }]}
+        self.assertEqual(self.adapter.stage(host)["reason"], "merger-host-unverified")
+        with patch.object(self.adapter.mcp, "call", side_effect=RuntimeError("fixture read failed")):
+            frames = list(deploy.evidence_frames(self.adapter, "protected", [(0, host)], self.adapter.clock.now() + 1))
+        self.assertEqual(frames[-1][1][1]["reason"], "protected-read:RuntimeError")
+
     def test_standalone_merger_is_recorded_before_stop_and_needs_its_own_receipt(self):
         for case_index, (has_receipt, turn_state) in enumerate(((False, "busy"), (True, "busy"), (False, "idle"))):
             with self.subTest(has_receipt=has_receipt, turn_state=turn_state):
@@ -1502,8 +1640,11 @@ class CheckoutIntegration(unittest.TestCase):
                     check=True, capture_output=True, text=True, timeout=15)
                 self.assertEqual(json.loads(reader.stdout)[0]["boundary"], observations[0]["boundary"])
                 expected = "recovered" if has_receipt else "unknown"
-                self.assertEqual(result["protected"], [{"kind": "standalone-merger", "conversationId": conversation,
-                                                         "outcome": expected}])
+                protected, = result["protected"]
+                expected_row = {"kind": "standalone-merger", "conversationId": conversation, "outcome": expected}
+                if not has_receipt:
+                    expected_row["reason"] = "merger-continuation-receipt-missing"
+                self.assertEqual(protected, expected_row)
                 self.assertEqual(result["verdict"], "pass" if has_receipt else "needs_decision")
                 self.assertLessEqual(len((self.state / deploy.CHECKOUT_MERGER_CAPTURE).read_bytes()), deploy.CHECKOUT_MERGER_MAX_BYTES)
 
@@ -1541,7 +1682,8 @@ class CheckoutIntegration(unittest.TestCase):
             "pipeline": None, "evidenceSource": "transcript",
             "host": {"kind": "structured", "state": "dead", "pid": 104}}]}
         self.assertEqual(self.adapter.stage(host), {
-            "kind": "standalone-merger", "conversationId": conversation, "outcome": "unknown"})
+            "kind": "standalone-merger", "conversationId": conversation, "outcome": "unknown",
+            "reason": "merger-host-unverified"})
 
     def test_idle_deliverable_successor_is_recovered_when_checkout_receipt_is_present(self):
         conversation = "conversation_idle_recovered_merger"

@@ -357,17 +357,6 @@ def observe_switch(adapter, target, samples, interval, timeout, old, hosts):
                               "budgetMs": round(timeout * 1000), "diagnostics": sample.diagnostics})
             except Exception as error:
                 diagnostics.append("sample-log:" + type(error).__name__)
-    merger_cuts = {entry["conversationId"]: entry for entry in interrupted or []
-                   if entry.get("kind") == "standalone-merger" and entry.get("boundary") == getattr(adapter, "merger_boundary", None)}
-    for outcome in protected:
-        if outcome.get("kind") != "standalone-merger":
-            continue
-        cut = merger_cuts.get(outcome["conversationId"])
-        if cut and cut["state"] == "discharged" and cut["resolution"] in [
-                "the captured merger turn settled", "the merger was explicitly stopped"]:
-            outcome["outcome"] = "completed" if cut["resolution"] == "the captured merger turn settled" else "stopped"
-        elif outcome["outcome"] == "recovered" and not (cut and cut["state"] == "delivered"):
-            outcome["outcome"] = "unknown"
     healthy = ready(serving, target)
     relaunch = None
     if in_place:
@@ -380,6 +369,8 @@ def observe_switch(adapter, target, samples, interval, timeout, old, hosts):
         switch_failed = not (relocation is not None and relocation.get("released") is True
                              and relocation.get("placement") == "placed" and relocation.get("started") is True)
         switch_unknown = False
+    settle_merger_samples(protected, interrupted, unreadable, relaunch,
+                          getattr(adapter, "merger_boundary", None))
     outcomes = {entry["outcome"] for entry in protected}
     unknown = ("unknown" in outcomes or interrupted is None or bool(unreadable) or sample.incomplete
                or bool(relocation and relocation.get("mergerReconciliationUnknown"))
@@ -401,6 +392,30 @@ def observe_switch(adapter, target, samples, interval, timeout, old, hosts):
         result["recovery"] = {"state": "complete", "ownerPid": os.getpid(), "unit": adapter.unit}
     adapter.last_result = result
     return result
+
+
+def settle_merger_samples(protected, interrupted, unreadable, relaunch, relocation_boundary):
+    boundary = relaunch.get("mergerReleaseBoundary") if relaunch else relocation_boundary
+    cuts = {row["conversationId"]: row for row in interrupted or []
+            if boundary is not None and row.get("kind") == "standalone-merger" and row.get("boundary") == boundary}
+    for outcome in protected:
+        if outcome.get("kind") != "standalone-merger":
+            continue
+        cut = cuts.get(outcome["conversationId"])
+        if relaunch:
+            if outcome["outcome"] not in ("completed", "recovered"):
+                continue
+            if relaunch["result"] != "done" or not (outcome.get("custody") or {}).get("verifiedReleaseExit"):
+                outcome.update(outcome="unknown", reason="merger-release-exit-unverified")
+                continue
+        elif cut and cut["state"] == "discharged" and cut.get("resolution") in (
+                "the captured merger turn settled", "the merger was explicitly stopped"):
+            outcome["outcome"] = "completed" if cut["resolution"] == "the captured merger turn settled" else "stopped"
+            outcome.pop("reason", None)
+            continue
+        if outcome["outcome"] == "recovered" and not (cut and cut["state"] == "delivered"):
+            outcome.update(outcome="unknown", reason="merger-receipt-read-incomplete" if interrupted is None or unreadable
+                           else "merger-continuation-receipt-missing")
 
 
 class EvidenceSample:
@@ -429,7 +444,7 @@ class EvidenceSample:
                 for field in ("stageState", "observedConversationId", "hostState", "turnState", "lifecycle"):
                     row.pop(field, None)
             row.update(outcome)
-            if row["outcome"] != "unknown" or (outcome.get("kind") == "standalone-merger" and "reason" not in outcome):
+            if row["outcome"] != "unknown":
                 row.pop("reason", None)
         elif kind == "reading":
             if self.protected[value].get("reason") == "not-observed":
@@ -982,7 +997,7 @@ def read_obligations(directory, pending, claims):
     return records, unreadable
 
 
-def interrupted_conversations(state, since, hosts=()):
+def interrupted_conversations(state, since, hosts=(), *, merger_release_boundary=None):
     """The conversations whose turn this switch cut, as the Viewers recorded
     them: an incumbent at release, the booting successor at restart, and the
     records it could not read or that are too incomplete to name a
@@ -1032,7 +1047,18 @@ def interrupted_conversations(state, since, hosts=()):
         if not stage and host and host.get("pipelineId"):
             stage = {"pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"), "attempt": host.get("attempt")}
         cut_boundary = record.get("boundary")
-        kind = {"kind": "standalone-merger", "boundary": cut_boundary} if isinstance(cut_boundary, str) and cut_boundary.startswith("checkout-merger:") else {}
+        merger = (host or {}).get("merger")
+        relaunch_cut = (merger and merger_release_boundary is not None and cut_boundary == merger_release_boundary
+                        and record["reason"] == "viewer-release" and not stage and not record.get("seat")
+                        and record["path"] == merger["path"] and record["engine"] == merger["engine"]
+                        and record["hostKey"] == f'{merger["engine"]}:{merger["sessionId"]}'
+                        and record.get("claimEpoch") == merger["claimEpoch"]
+                        and census_identity(record.get("owner"))
+                        and record["owner"]["pid"] == merger["process"]["pid"]
+                        and record["owner"]["startIdentity"] == merger["process"]["startIdentity"]
+                        and record["owner"].get("bootEpoch") in (None, merger["process"].get("bootEpoch")))
+        relocation_cut = isinstance(cut_boundary, str) and cut_boundary.startswith("checkout-merger:")
+        kind = {"kind": "standalone-merger", "boundary": cut_boundary} if relocation_cut or relaunch_cut else {}
         listed.append({**kind, "conversationId": conversation, "recordedAt": record["recordedAt"],
                        "reason": record["reason"], "state": record["state"],
                        "resolution": record.get("resolution"), "stage": stage or None,
@@ -1580,7 +1606,9 @@ class Checkout:
         return read_process(entry, self.process_read)
 
     def interrupted(self, since, hosts):
-        return interrupted_conversations(self.state, since, hosts)
+        relaunch = getattr(self, "relaunch_evidence", {})
+        return interrupted_conversations(self.state, since, hosts,
+                                         merger_release_boundary=relaunch.get("mergerReleaseBoundary"))
 
     sample = collect_sample
 
@@ -1739,7 +1767,7 @@ class Checkout:
                 hosts.append({**identity, "conversationId": merger["conversationId"], "merger": merger})
         return hosts
 
-    def arm_merger_recovery(self):
+    def arm_merger_recovery(self, before_publish=None):
         hosts = self.merger_hosts(self.custody_rows)
         self.refreshed_mergers = hosts
         destination = self.state / CHECKOUT_MERGER_CAPTURE
@@ -1796,6 +1824,8 @@ class Checkout:
             raise RuntimeError("standalone merger inventory failed successor validation")
         # Publish the validated bytes even for an empty census so the successor
         # never inherits malformed or expired inventory.
+        if before_publish:
+            before_publish()
         write_json(destination, inventory)
 
     def placement(self):
@@ -2375,11 +2405,13 @@ class Checkout:
             except FileExistsError:
                 evidence["result"] = "request-refused"
                 return
+            evidence["requestedAt"] = request["requestedAt"]
         with contextlib.suppress(OSError):
             self.emit({"published": self.target, "relaunchRequestId": request["requestId"]})
         self.await_relaunch(request)
         if evidence["result"] != "done":
             return
+        evidence["mergerReleaseBoundary"] = self.merger_release_boundary()
         deadline = self.clock.now() + RELEASE_WAIT
         while True:
             evidence["generationSurvivors"] = [
@@ -2390,6 +2422,26 @@ class Checkout:
             if not evidence["generationSurvivors"] or self.clock.now() >= deadline:
                 break
             self.clock.sleep(min(1, deadline - self.clock.now()))
+
+    def merger_release_boundary(self):
+        # Match Viewer release receipts to the same authority digest the
+        # departing Viewer records, or its PID on a checkout without a target.
+        try:
+            with (self.state / "viewer-release.json").open("rb") as stream:
+                target = stream.read(64 * 1024 + 1)
+        except FileNotFoundError:
+            return f'viewer-release:pid-{self.relaunch_record["web"]["pid"]}'
+        except OSError:
+            return None
+        if len(target) > 64 * 1024:
+            return None
+        try:
+            release = json.loads(target)
+        except (ValueError, UnicodeError):
+            return None
+        if not isinstance(release, dict) or release.get("revision") != self.target:
+            return None
+        return "viewer-release:" + hashlib.sha256(target).hexdigest()[:16]
 
     def await_relaunch(self, request):
         evidence = self.relaunch_evidence
@@ -2555,6 +2607,13 @@ class Checkout:
                 exit_signal = detail["exit"]["signal"]
                 named_signal = isinstance(exit_signal, str) and exit_signal.upper() != "EOF"
                 signal_code = type(exit_record.get("code")) is int and 128 < exit_record["code"] < 128 + signal.NSIG
+                recorded_at = exit_record.get("at")
+                requested_at = evidence.get("requestedAt")
+                if (not stop and not named_signal and not signal_code
+                        and (exit_signal == "EOF" or exit_record.get("code") == 0)
+                        and text(recorded_at) and text(requested_at)
+                        and parse_time(recorded_at) >= parse_time(requested_at)):
+                    detail["verifiedReleaseExit"] = True
                 captured_turn = before["work"].get("turnState")
                 if named_signal or signal_code:
                     # Every signal-shaped host exit needs the durable product
@@ -2914,11 +2973,13 @@ class Checkout:
                 relocation["diagnostics"].append("generation:" + type(error).__name__)
             relocation["captured"] = len(captured)
             self.retirement_capture = captured
-            self.arm_merger_recovery()
-            if self.switch_mode == "relocation":
+            def final_relocation_fence():
+                if self.switch_mode != "relocation":
+                    return
                 if group == placement["expected"] or self.placement()["actual"] != group:
                     raise SwitchRefused("service placement changed before relocation")
                 self.require_relocation_safe()
+            self.arm_merger_recovery(before_publish=final_relocation_fence)
             # Marked before submission: a submission that times out may still stop.
             relocation["stopSubmitted"] = True
             self.command(["systemctl", "--user", "--no-block", "stop", self.unit])
@@ -3033,16 +3094,23 @@ class Checkout:
         rows = complete_activity(self.mcp.call("agent_activity", {"conversationId": identifier, "compact": False, "includeGone": True}))
         active = rows[0] if len(rows) == 1 and rows[0].get("conversationId") == identifier and not rows[0].get("pipeline") else {}
         process = active.get("host") or {}
-        outcome = "unknown"
-        if process.get("kind") == "structured" and process.get("state") == "alive" and active.get("lifecycle") not in ["failed", "interrupted", "stalled"]:
-            delivery = self.mcp.call("conversation_deliverability", {"conversationId": identifier})
-            if (delivery.get("conversationId") == identifier and delivery.get("transcriptPath") == host["merger"]["path"]
-                    and delivery.get("deliverable") is True and delivery.get("processRecorded") is True):
-                if process["pid"] == host["pid"] and self.process(host):
-                    outcome = "preserved"
-                elif self.process({"pid": process["pid"]}):
-                    outcome = "recovered"
-        return {"kind": "standalone-merger", "conversationId": identifier, "outcome": outcome}
+        observed = {"kind": "standalone-merger", "conversationId": identifier}
+        if (self.switch_mode == "relaunch" and active.get("lifecycle") == "completed"
+                and active.get("turnState") == "idle" and active.get("transcriptPath") == host["merger"]["path"]
+                and process.get("state") in ("gone", "dead")):
+            return {**observed, "outcome": "completed"}
+        if (process.get("kind") != "structured" or process.get("state") != "alive"
+                or active.get("lifecycle") in ("failed", "interrupted", "stalled") or type(process.get("pid")) is not int):
+            return {**observed, "outcome": "unknown", "reason": "merger-host-unverified"}
+        delivery = self.mcp.call("conversation_deliverability", {"conversationId": identifier})
+        if (delivery.get("conversationId") != identifier or delivery.get("transcriptPath") != host["merger"]["path"]
+                or delivery.get("deliverable") is not True or delivery.get("processRecorded") is not True):
+            return {**observed, "outcome": "unknown", "reason": "merger-deliverability-unverified"}
+        if process["pid"] == host["pid"] and self.process(host):
+            return {**observed, "outcome": "preserved"}
+        if self.process({"pid": process["pid"]}):
+            return {**observed, "outcome": "recovered"}
+        return {**observed, "outcome": "unknown", "reason": "merger-host-unverified"}
 
     def observed_stage(self, host, read_runs, read_hosts):
         outcome = {"outcome": "unknown"}
