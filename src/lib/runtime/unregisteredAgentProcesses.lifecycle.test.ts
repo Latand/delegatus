@@ -33,7 +33,8 @@ for (const engine of ["claude", "codex"] as const) {
   test.skipIf(process.platform !== "linux").each([
     "dead-row", "dead-session", "absent-row", "live-row", "other-live-row", "ambiguous-owner", "open-journal", "probe-limit",
     "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission",
-    "send-wins-runtime-admission", "missing-launch-proof", "drain-fails-kill-before-signal",
+    "send-wins-runtime-admission", "pending-direct-delivery-origin", "pending-direct-delivery-runtime",
+    "missing-launch-proof", "drain-fails-kill-before-signal",
     "ignores-sigterm", "survives-sigkill",
   ] as const)(`${engine} unregistered process reconciliation: %s`, async condition => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-orphan-"));
@@ -142,12 +143,30 @@ for (const engine of ["claude", "codex"] as const) {
       }
       const activeRegistry = registry;
       let writerAdmissions = 0;
-      if (condition === "writer-admission") {
+      const pendingDelivery = condition === "pending-direct-delivery-origin" || condition === "pending-direct-delivery-runtime";
+      let directOperation: string | null = null;
+      if (condition === "writer-admission" || pendingDelivery) {
         const admit = activeRegistry.deliveryWriteOrBusy.bind(activeRegistry);
         activeRegistry.deliveryWriteOrBusy = (correlation, write) => {
           if (correlation.label === "registry.unregistered-agent-stop") {
             writerAdmissions++;
-            activeRegistry.upsert({ ...entry, status: "live", claimOwner: `structured-host:${JSON.stringify(waiter)}` });
+            if (condition === "writer-admission") {
+              activeRegistry.upsert({ ...entry, status: "live", claimOwner: `structured-host:${JSON.stringify(waiter)}` });
+            } else if (directOperation === null) {
+              const owner = activeRegistry.recordDirectAdmission({ handOff: {
+                conversationId: FIXTURE_CONVERSATION, clientMessageId: "fixture-direct-delivery",
+                command: { kind: "send", policy: "queue" }, text: "fixture direct delivery",
+                contentDigest: null, evidenceText: "fixture direct delivery", evidenceImageCount: 0,
+              } })!;
+              const operation = owner.command.operationId;
+              directOperation = operation;
+              // Each identity must protect the orphan independently.
+              activeRegistry.agentStateWrite(snapshot => {
+                const persisted = snapshot.deliveryOperationOwners[operation]!;
+                if (condition === "pending-direct-delivery-origin") persisted.runtimeConversationId = "conversation_fixture_other";
+                else persisted.conversationId = "conversation_fixture_other";
+              });
+            }
           }
           return admit(correlation, write);
         };
@@ -241,6 +260,19 @@ for (const engine of ["claude", "codex"] as const) {
         expect(observeAgentProcess(identity)).toBe("dead");
         expect(readHostExit(identity)).toMatchObject({ stop: { operationId: launchId,
           path: "unregistered-agent-reconciliation", signal: "SIGKILL" }, exit: { signal: "SIGKILL" } });
+      } else if (pendingDelivery) {
+        expect(writerAdmissions).toBe(1);
+        expect(directOperation).not.toBeNull();
+        expect(outcomes).toEqual([]);
+        expect(observeAgentProcess(identity)).toBe("alive");
+        expect(readHostExit(identity)?.stop).toBeNull();
+        expect(journal.operationResult(directOperation!)?.receipt).toBeUndefined();
+        expect(activeRegistry.settleDirectAdmission(directOperation!, "failed", "fixture send settled", "lost"))
+          .toMatchObject({ terminalState: "failed" });
+        expect(await reconcileUnregisteredAgentProcesses(ports))
+          .toEqual([{ launchId, key: keyId, process: identity, outcome: "stopped" }]);
+        await nativeClosed;
+        expect(readHostExit(identity)).toMatchObject({ stop: { operationId: launchId, signal: "SIGTERM" } });
       } else if (condition === "dead-row" || condition === "dead-session" || condition === "absent-row") {
         expect(outcomes).toEqual([{ launchId, key: keyId, process: identity, outcome: "stopped" }]);
         expect(journal.snapshot().recentOperations.find(row => row.operationId.startsWith(`unregistered-retirement-${launchId}-`))?.status)
