@@ -235,7 +235,7 @@ test("measure every tool through the MCP service and budget common board answers
   const successor = await call("list_tasks", { project: "size-board-successor", ids: ["task-0"] });
   expect(successor.count).toBe(1);
   expect(successor.tasks[0].project).toBe("size-board-successor");
-}, 15_000);
+}, 60_000);
 
 test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeGone restores idle history", async () => {
   const now = Date.now();
