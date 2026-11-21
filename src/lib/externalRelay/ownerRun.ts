@@ -220,12 +220,7 @@ function ownerPromptToolIndex(request: ExternalRelayRequest) {
 }
 
 const ownerSeatHandoff = [
-  "When the owner asks you to pass on, process or fix a project issue, use the Viewer tool send_message_to_orchestrator before answering. After its result, reply with one short line naming the recipient on success, or one short question when the project is unclear. Do not include analysis or repeat the forwarded request.",
-  "Pass a clientRequestId and text with the quoted request, relevant reply context, and the attachments or a description of them.",
-  "Pass project when the owner identifies it. For a report reply, use the report's project. For a request about this chat's paired project, omit project to use the relay target's configured project.",
-  "If the project is unclear or the tool reports a missing or ambiguous project, ask one short question and wait for the next turn.",
-  "When the tool confirms acceptance, say in one short line which project's orchestrator took the request. Use the name if known, or say it went to the chat's paired project's orchestrator.",
-  "If the tool is unavailable or sending fails, briefly explain what happened and how the owner can reach the seat. Avoid broad claims about server access.",
+  "For a request to pass on, process or fix a project issue, call Viewer send_message_to_orchestrator before replying. Include the quoted request, relevant reply context and attachments or their description. Name the project when given; use the paired project when that is the target. On acceptance, reply in one short line naming the recipient. If project selection is unclear, ask one short question. If sending fails, explain that briefly; never claim unavailable access when a handoff exists.",
 ].join(" ");
 
 export function ownerClosingRules(request: ExternalRelayRequest, hardCapMinutes: number): string {
@@ -311,20 +306,21 @@ export function ownerAnswer(text: string | null, request: ExternalRelayRequest, 
   const parts = sealOwnerAnswer(request.request_id);
   const original = parts?.mentions?.length ? text ?? "" : text?.trim() ?? "";
   const scrubbed = scrubOwnerOutput(original, credentials);
-  // Owner relay replies must stay short even when the model ignores the prompt.
-  // Keep the answer's opening line as the outcome summary and discard appended
-  // analysis; this preserves a short recipient confirmation or project question.
+  const caps = answerCapabilities(request, "");
+  // Keep ordinary rich answers intact; their text can carry the report itself.
+  // Plain chat replies use the opening line as the outcome summary so a model
+  // that appends analysis cannot turn a handoff confirmation into a long post.
   const lines = scrubbed.split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
   const opening = lines[0] ?? "";
   const openingPoints = Array.from(opening);
-  const answer = openingPoints.length > 240 ? openingPoints.slice(0, 239).join("") + "…" : opening;
+  const structured = /(?:^|\n)\s*(?:```(?:json)?\s*)?\{/iu.test(scrubbed);
+  const answer = caps.rich || structured ? scrubbed : openingPoints.length > 240 ? openingPoints.slice(0, 239).join("") + "…" : opening;
   if (parts?.mentions?.length && answer !== original) throw new ExternalRelayError("malformed", 400);
   if (parts?.mentions?.length && ["[ignore]", "[handoff]"].includes(answer)) throw new ExternalRelayError("malformed", 400);
   if (!answer && !parts?.attachments.length) return null;
   if (answer === "[ignore]" && request.delivery === "guest") return null;
   if (answer === "[ignore]") return { action: "ignore", text: "", reply_to: null };
   if (answer === "[handoff]") return offersHandoff(request) ? { action: "handoff", text: "", reply_to: null } : null;
-  const caps = answerCapabilities(request, "");
   if (caps.rich) {
     const raw = { action: "reply", text: answer, reply_to: owner.messageId, format: parts?.format ?? "rich_markdown", ...(parts?.mentions ? { mentions: parts.mentions } : {}), buttons: parts?.buttons ?? [], attachments: parts?.attachments.map(f => ({attachment_id:f.id})) ?? [] };
     const rich = raw.format === "rich_markdown" ? checkedAnswerV2(raw, request, caps, {handoff:true,ignore:true,stagedAttachments:parts?.attachments.length ?? 0}, ownerAnswerDrops(request.request_id)) : null;
