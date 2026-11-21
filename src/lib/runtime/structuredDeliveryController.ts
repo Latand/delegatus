@@ -4,6 +4,7 @@ import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import { cancelSendFailureNotice, initializeSendFailureNotices, recordSendFailureNotice, sendFailureWarningSuppressed, sweepSendFailureNotices } from "./sendFailureNotice";
 import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "./agentScope";
 import { withHostStopOrigin } from "./hostExit";
+import { checkoutMergerCutForOperation, currentCheckoutMerger } from "./checkoutMergerRecovery";
 import { prepareSeatQuotaDispatch } from "@/lib/monitor/seatQuotaRecovery";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
@@ -1077,6 +1078,20 @@ export async function bindStructuredDeliveryQueue(
         return !!session && runtimeIdleKillMatches({ ...session, retirementBlocked: false }, session.sessionKey, fence);
       },
       seatQuotaDispatchGuard: prepareSeatQuotaDispatch,
+      checkoutMergerDispatchGuard: async (operationId, conversationId) => {
+        const cut = checkoutMergerCutForOperation(registry.filename, conversationId, operationId);
+        if (!cut) throw new StructuredSendRefusedError("checkout merger recovery window or inventory changed");
+        if (await hasRuntimeSwitchKill(client, conversationId, cut.capturedAt, [], true, true)) {
+          throw new StructuredSendRefusedError("the merger was explicitly stopped");
+        }
+        return () => {
+          const current = currentCheckoutMerger(registry.livenessConversationSnapshot(cut.conversationId), cut);
+          if (!checkoutMergerCutForOperation(registry.filename, conversationId, operationId)
+            || current?.claimEpoch !== cut.claimEpoch + 1) {
+            throw new StructuredSendRefusedError("checkout merger recovery authority changed");
+          }
+        };
+      },
       bindDeliveryGeneration: async (operationId, generationId) => {
         const bound = await registry.bindDeliveryOperationGenerationOffLoop(operationId, generationId);
         /* The queue defers the message and comes back; nothing was handed over. */

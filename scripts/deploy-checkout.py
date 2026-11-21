@@ -23,12 +23,34 @@ import uuid
 
 CPU_SLICE = "delegatus.slice"
 CPU_WEIGHT = "1000"
+CHECKOUT_MERGER_CAPTURE = "checkout-mergers.json"
+CHECKOUT_MERGER_LIMIT = 200
+CHECKOUT_MERGER_WINDOW_SECONDS = 15 * 60
+CHECKOUT_MERGER_MAX_BYTES = 512 * 1024
 
 
 def census_identity(value):
     return (isinstance(value, dict) and type(value.get("pid")) is int and value["pid"] > 0
             and isinstance(value.get("startIdentity"), str) and bool(value["startIdentity"])
             and (value.get("bootEpoch") is None or isinstance(value["bootEpoch"], str)))
+
+
+def validate_merger_census_row(row):
+    host, pipeline, merger = row.get("host") or {}, row.get("pipeline"), row.get("merger")
+    if merger is None:
+        return
+    process = host.get("process")
+    if (not isinstance(merger, dict) or pipeline is not None or host.get("kind") != "structured"
+            or host.get("state") not in ["alive", "gone"] or row.get("turnState") not in ["busy", "idle"]
+            or not isinstance(merger.get("conversationId"), str) or merger["conversationId"] != row.get("conversationId")
+            or merger.get("engine") not in ["claude", "codex"] or not text(merger.get("sessionId"))
+            or not text(merger.get("path")) or not os.path.isabs(merger["path"])
+            or type(merger.get("claimEpoch")) is not int or merger["claimEpoch"] < 1
+            or not census_identity(merger.get("process")) or merger["process"] != process
+            or (not census_identity(merger.get("writer"))
+                and not (host.get("state") == "gone" and merger.get("writer") is None))
+            or "batch" not in merger):
+        raise RuntimeError("standalone merger census row malformed")
 
 
 class BaselineReadinessError(RuntimeError):
@@ -59,13 +81,16 @@ def census_environment(state):
     return environment
 
 
-def protected_host_census(release, bun, state, target, timeout):
+def protected_host_census(release, bun, state, target, timeout, cut_boundary=None):
     """One owned child, bounded by the capture's remaining wall-clock allowance."""
     if not 0 < timeout <= 30:
         raise RuntimeError("census deadline")
     deadline = time.monotonic() + timeout
-    child = subprocess.Popen([bun, "--no-env-file", str(release / "scripts/protected-host-census.ts"), target,
-                              str(max(0, int(timeout * 1000)))], cwd=release,
+    command = [bun, "--no-env-file", str(release / "scripts/protected-host-census.ts"), target,
+               str(max(0, int(timeout * 1000)))]
+    if cut_boundary is not None:
+        command.append(cut_boundary)
+    child = subprocess.Popen(command, cwd=release,
                              env=census_environment(state), stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
     data = bytearray()
@@ -122,6 +147,9 @@ def protected_host_census(release, bun, state, target, timeout):
                         or not census_identity(writer.get("process"))
                         or not isinstance(writer.get("exitFile"), str) or not os.path.isabs(writer["exitFile"])))):
                 raise RuntimeError("census row malformed")
+            merger = row.get("merger")
+            if merger is not None:
+                validate_merger_census_row(row)
         return answer
     finally:
         # Kill the process group even when the leader exited with a pipe held by
@@ -236,6 +264,10 @@ def observe_switch(adapter, target, samples, interval, timeout):
     finally:
         # A restart that raised after stopping still recorded what it did.
         relocation = relocation or getattr(adapter, "relocation", None)
+        refreshed_mergers = getattr(adapter, "refreshed_mergers", [])
+        refreshed_ids = {host["conversationId"] for host in refreshed_mergers}
+        hosts = [host for host in hosts if not host.get("merger") or host["conversationId"] not in refreshed_ids]
+        hosts.extend(refreshed_mergers)
         for index in range(samples):
             if index:
                 adapter.clock.sleep(interval)
@@ -247,15 +279,18 @@ def observe_switch(adapter, target, samples, interval, timeout):
             protected = []
             for host in hosts:
                 try:
-                    if host.get("startIdentity") and process_or_gone(adapter, host) is not None:
+                    if host.get("merger"):
+                        outcome = adapter.stage(host)
+                    elif host.get("startIdentity") and process_or_gone(adapter, host) is not None:
                         outcome = {"outcome": "preserved", "pipelineId": host.get("pipelineId"),
                                    "stageId": host.get("stageId"), "attempt": host.get("attempt")}
                     else:
                         outcome = retry(lambda: adapter.stage(host), adapter.clock, timeout)
                     protected.append(outcome)
                 except Exception as error:
-                    protected.append({"outcome": "unknown", "pipelineId": host.get("pipelineId"),
-                                      "stageId": host.get("stageId"), "attempt": host.get("attempt")})
+                    identity = {"conversationId": host["conversationId"], "kind": "standalone-merger"} if host.get("merger") else {
+                        "pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"), "attempt": host.get("attempt")}
+                    protected.append({**identity, "outcome": "unknown"})
                     diagnostics.append(type(error).__name__)
             # Serving is sampled after potentially slow recovery reads, so the
             # final verdict cannot quote a serving observation from before them.
@@ -286,9 +321,21 @@ def observe_switch(adapter, target, samples, interval, timeout):
     except Exception as error:
         interrupted, unreadable = None, ["interrupted:" + type(error).__name__]
         diagnostics.append(unreadable[0])
+    merger_cuts = {entry["conversationId"]: entry for entry in interrupted or []
+                   if entry.get("kind") == "standalone-merger" and entry.get("boundary") == getattr(adapter, "merger_boundary", None)}
+    for outcome in protected:
+        if outcome.get("kind") != "standalone-merger":
+            continue
+        cut = merger_cuts.get(outcome["conversationId"])
+        if cut and cut["state"] == "discharged" and cut["resolution"] in [
+                "the captured merger turn settled", "the merger was explicitly stopped"]:
+            outcome["outcome"] = "completed" if cut["resolution"] == "the captured merger turn settled" else "stopped"
+        elif outcome["outcome"] == "recovered" and not (cut and cut["state"] == "delivered"):
+            outcome["outcome"] = "unknown"
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
-    unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
+    unknown = ("unknown" in outcomes or interrupted is None or bool(unreadable)
+               or bool(relocation and relocation.get("mergerReconciliationUnknown")))
     relocation_ready = (relocation is not None and relocation.get("released") is True
                         and relocation.get("placement") == "placed" and relocation.get("started") is True)
     verdict = "fail" if not healthy or "lost" in outcomes or not relocation_ready else "needs_decision" if unknown else "pass"
@@ -512,9 +559,11 @@ def interrupted_conversations(state, since, hosts=()):
         conversation = record["conversationId"]
         stage = record.get("stage")
         host = protected.get(conversation)
-        if not stage and host:
+        if not stage and host and host.get("pipelineId"):
             stage = {"pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"), "attempt": host.get("attempt")}
-        listed.append({"conversationId": conversation, "recordedAt": record["recordedAt"],
+        cut_boundary = record.get("boundary")
+        kind = {"kind": "standalone-merger", "boundary": cut_boundary} if isinstance(cut_boundary, str) and cut_boundary.startswith("checkout-merger:") else {}
+        listed.append({**kind, "conversationId": conversation, "recordedAt": record["recordedAt"],
                        "reason": record["reason"], "state": record["state"],
                        "resolution": record.get("resolution"), "stage": stage or None,
                        "backgroundTasks": record["checkpoint"].get("backgroundTasks", [])})
@@ -888,6 +937,7 @@ class Checkout:
         self.leftovers_found = []
         self.helper_custody = {}
         self.custody_rows = []
+        self.refreshed_mergers = []
         self.boot_epoch = epoch()
         self.process_read, self.http, self.runtime, self.command = process_read, http, runtime, execute
         self.config_file = pathlib.Path(config).resolve()
@@ -928,8 +978,9 @@ class Checkout:
     def close(self):
         self.mcp.close()
 
-    def census(self, timeout=30):
-        return self.census_adapter(self.release, self.plan["bun"], self.state, self.target, timeout)
+    def census(self, timeout=30, cut_boundary=None):
+        arguments = (self.release, self.plan["bun"], self.state, self.target, timeout)
+        return self.census_adapter(*arguments) if cut_boundary is None else self.census_adapter(*arguments, cut_boundary)
 
     def process(self, entry):
         return read_process(entry, self.process_read)
@@ -992,9 +1043,85 @@ class Checkout:
                 hosts.append({**entry, "startIdentity": proc["startIdentity"] if proc else None,
                               "conversationId": row["conversationId"], "pipelineId": pipeline["pipelineId"],
                               "stageId": pipeline["stageId"], "attempt": pipeline["attempt"]})
+        hosts.extend(self.merger_hosts(rows))
         # Last, so the inventory is read immediately before publication.
         self.fence()
         return [record[role] for role in ["launcher", "web", "runtimeHost"]], hosts
+
+    def merger_hosts(self, rows):
+        hosts = []
+        for row in rows:
+            merger = row.get("merger")
+            if merger:
+                process = merger["process"]
+                pid = process["pid"]
+                start = process["startIdentity"].removeprefix(str(pid) + ":")
+                identity = {"pid": pid, "startIdentity": start}
+                observed_epoch = process.get("bootEpoch")
+                if (not start.isdecimal() or observed_epoch not in [None, self.boot_epoch]
+                        or observed_epoch is None and not self.process(identity)):
+                    raise RuntimeError("standalone merger custody changed")
+                hosts.append({**identity, "conversationId": merger["conversationId"], "merger": merger})
+        return hosts
+
+    def arm_merger_recovery(self):
+        hosts = self.merger_hosts(self.custody_rows)
+        self.refreshed_mergers = hosts
+        destination = self.state / CHECKOUT_MERGER_CAPTURE
+        captured_at = getattr(self, "merger_observed_at", utc())
+        cutoff = parse_time(captured_at) - datetime.timedelta(seconds=CHECKOUT_MERGER_WINDOW_SECONDS)
+        previous_rows = []
+        try:
+            with destination.open() as stream:
+                previous = json.loads(stream.read(512 * 1024 + 1))
+            if not isinstance(previous, list) or len(previous) > CHECKOUT_MERGER_LIMIT:
+                raise RuntimeError("standalone merger inventory is malformed")
+            previous_rows = previous
+        except FileNotFoundError:
+            pass
+        boundary = getattr(self, "merger_boundary", None) or "checkout-merger:" + uuid.uuid4().hex
+        self.merger_boundary = boundary
+        def valid_identity(identity):
+            return (isinstance(identity, dict) and type(identity.get("pid")) is int and identity["pid"] > 0
+                    and isinstance(identity.get("startIdentity"), str) and bool(identity["startIdentity"])
+                    and (identity.get("bootEpoch") is None or isinstance(identity.get("bootEpoch"), str)))
+        def valid_row(row):
+            batch = row.get("batch")
+            return (isinstance(row, dict) and re.fullmatch(r"conversation_[\w-]+", row.get("conversationId", ""))
+                    and row.get("engine") in ["claude", "codex"] and isinstance(row.get("sessionId"), str)
+                    and bool(row["sessionId"]) and isinstance(row.get("path"), str) and os.path.isabs(row["path"])
+                    and (row.get("turnState") is None or row.get("turnState") in ["busy", "idle"])
+                    and type(row.get("claimEpoch")) is int and row["claimEpoch"] > 0
+                    and valid_identity(row.get("process"))
+                    and "writer" in row and (valid_identity(row.get("writer")) or row.get("writer") is None)
+                    and re.fullmatch(r"checkout-merger:[0-9a-f]{32}", row.get("boundary", ""))
+                    and isinstance(row.get("capturedAt"), str) and parse_time(row["capturedAt"])
+                    and parse_time(row["capturedAt"]) <= parse_time(captured_at)
+                    and row.get("admissionProof") in [None, "fresh-cut-v1"]
+                    and "batch" in row and (batch is None or isinstance(batch, dict) and isinstance(batch.get("directory"), str)
+                         and os.path.isabs(batch["directory"]) and isinstance(batch.get("identity"), str)
+                         and isinstance(batch.get("branch"), str)))
+        if not all(valid_row(row) for row in previous_rows):
+            raise RuntimeError("standalone merger inventory failed successor validation")
+        # Retain expired cuts as identity fences. Startup recognizes the exact
+        # predecessor and suppresses generic recovery, while the window check
+        # prevents delivery from an expired cut.
+        captures = {row["conversationId"]: row for row in previous_rows}
+        for host in hosts:
+            captures[host["conversationId"]] = {**host["merger"], "capturedAt": captured_at, "boundary": boundary,
+                                                 "admissionProof": "fresh-cut-v1"}
+        if len(captures) > CHECKOUT_MERGER_LIMIT:
+            raise RuntimeError("standalone merger inventory exceeds its bound")
+        inventory = list(captures.values())
+        serialized = json.dumps(inventory, indent=2) + "\n"
+        if len(serialized.encode("utf-8")) > CHECKOUT_MERGER_MAX_BYTES:
+            raise RuntimeError("standalone merger inventory exceeds reader byte limit")
+        decoded = json.loads(serialized)
+        if not isinstance(decoded, list) or len(decoded) != len(captures) or not all(valid_row(row) for row in decoded):
+            raise RuntimeError("standalone merger inventory failed successor validation")
+        # Publish the validated bytes even for an empty census so the successor
+        # never inherits malformed or expired inventory.
+        write_json(destination, inventory)
 
     def placement(self):
         """Observed configuration and cgroup, against the required CPU slice.
@@ -1474,7 +1601,7 @@ class Checkout:
     def active_state(self):
         return systemd_properties(self.command(["systemctl", "--user", "show", self.unit, "-p", "ActiveState"])).get("ActiveState")
 
-    def generation(self, group):
+    def generation(self, group, rows=None):
         """The serving generation's members of the service cgroup, read
         immediately before the stop: the recorded launcher, Viewer and runtime
         host, the launcher's verified ancestors up to MainPID, and helpers
@@ -1483,7 +1610,7 @@ class Checkout:
         Each is held as PID and start identity; only these, and processes
         whose parents still reach them, can later be proven leftovers."""
         record = json.loads(self.record_file.read_text())
-        rows = complete_activity(self.census())
+        rows = complete_activity(self.census()) if rows is None else rows
         self.custody_rows = rows
         for row in rows:
             host = row.get("host") or {}
@@ -1717,21 +1844,57 @@ class Checkout:
                       "outcome": None, "placement": None, "diagnostics": []}
         self.relocation = relocation
         try:
+            # An incomplete final census cannot authorize stopping the service.
+            # This conservative boundary precedes census observation. A matching
+            # stop admitted while the census/inventory is being written stays visible.
+            self.merger_observed_at = utc()
+            self.merger_cut_boundary = self.merger_observed_at
+            self.custody_rows = complete_activity(self.census(cut_boundary=self.merger_cut_boundary))
             try:
-                captured = self.generation(group)
+                captured = self.generation(group, self.custody_rows)
             except Exception as error:
                 # Without the capture no survivor can be proven, so none is signalled.
                 captured = {}
                 relocation["diagnostics"].append("generation:" + type(error).__name__)
             relocation["captured"] = len(captured)
             self.retirement_capture = captured
+            self.arm_merger_recovery()
             # Marked before submission: a submission that times out may still stop.
             relocation["stopSubmitted"] = True
             self.command(["systemctl", "--user", "--no-block", "stop", self.unit])
+            # The Viewer can admit a standalone merger between the final
+            # census and systemd receiving the stop. Reconcile the durable
+            # registry once more while the named stop is pending; keep the
+            # same boundary so already recorded owners retain their key.
             def stopped():
                 if self.jobs() or self.active_state() not in ["inactive", "failed"]:
                     raise RuntimeError("named stop pending")
             retry(stopped, self.clock, STOP_SETTLE)
+            # Admission is closed only after stop settlement. Reconcile once
+            # more before starting the successor so a receipt written after
+            # the first census is durably captured.
+            try:
+                late_rows = complete_activity(self.census(cut_boundary=self.merger_cut_boundary))
+                known = {row.get("conversationId"): row for row in self.custody_rows}
+                for row in late_rows:
+                    conversation = row.get("conversationId")
+                    previous = known.get(conversation)
+                    old_merger, new_merger = (previous or {}).get("merger"), row.get("merger")
+                    same_cut = (old_merger and new_merger
+                                and old_merger.get("claimEpoch") == new_merger.get("claimEpoch")
+                                and old_merger.get("process") == new_merger.get("process"))
+                    if same_cut:
+                        for field in ("writer", "batch"):
+                            if new_merger.get(field) is None and old_merger.get(field) is not None:
+                                new_merger[field] = old_merger[field]
+                    elif old_merger and not new_merger:
+                        continue
+                    known[conversation] = row
+                self.custody_rows = list(known.values())
+                self.arm_merger_recovery()
+            except Exception as error:
+                relocation["diagnostics"].append("late-merger-census:" + type(error).__name__)
+                relocation["mergerReconciliationUnknown"] = True
             if self.await_release(group, RELEASE_WAIT):
                 relocation["released"], relocation["outcome"] = True, "released"
             else:
@@ -1767,6 +1930,21 @@ class Checkout:
         return relocation
 
     def stage(self, host):
+        if host.get("merger"):
+            identifier = host["conversationId"]
+            rows = complete_activity(self.mcp.call("agent_activity", {"conversationId": identifier, "compact": False, "includeGone": True}))
+            active = rows[0] if len(rows) == 1 and rows[0].get("conversationId") == identifier and not rows[0].get("pipeline") else {}
+            process = active.get("host") or {}
+            outcome = "unknown"
+            if process.get("kind") == "structured" and process.get("state") == "alive" and active.get("lifecycle") not in ["failed", "interrupted", "stalled"]:
+                delivery = self.mcp.call("conversation_deliverability", {"conversationId": identifier})
+                if (delivery.get("conversationId") == identifier and delivery.get("transcriptPath") == host["merger"]["path"]
+                        and delivery.get("deliverable") is True and delivery.get("processRecorded") is True):
+                    if process["pid"] == host["pid"] and self.process(host):
+                        outcome = "preserved"
+                    elif self.process({"pid": process["pid"]}):
+                        outcome = "recovered"
+            return {"kind": "standalone-merger", "conversationId": identifier, "outcome": outcome}
         answer = self.mcp.call("get_pipeline", {"pipelineId": host["pipelineId"], "full": True})
         pipeline = answer["pipeline"]
         run = next((r for r in pipeline["runs"] if r["stageId"] == host["stageId"]), None)

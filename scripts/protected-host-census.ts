@@ -7,8 +7,8 @@ import { agentLivenessSnapshot, canonicalConversationId, productionLivenessSourc
 import { describeTranscriptPath, type LivenessTranscript } from "../src/lib/lifecycle/transcript";
 import { registryOwners, ownerProcessAlive, type RecordedOwner } from "../src/lib/lifecycle/owners";
 import { receiptProcessEvidence } from "../src/lib/agent/accountLiveness";
-import { normalizeRegistry, type RegistryFile, type SpawnReceipt } from "../src/lib/agent/registry";
-import { SqliteAgentRegistryStore, registryLivenessRows, registryHasPathIndex, registryConversationsForPath } from "../src/lib/agent/sqliteRegistryStore";
+import { normalizeRegistry, structuredClaimIdentity, type RegistryFile, type SpawnReceipt } from "../src/lib/agent/registry";
+import { SqliteAgentRegistryStore, registryLivenessRows, registryRetiredHostRows, registryHasPathIndex, registryConversationsForEntryKey, registryConversationsForPath, registryRowsMatching } from "../src/lib/agent/sqliteRegistryStore";
 import { defaultRegistrySqliteFilename, resolveRegistryBackend } from "../src/lib/agent/registryBackendIdentity";
 import { historyInputSql, historyPipelineRef, historyProjectionReady } from "../src/lib/state/historyProjection";
 import { isStoredPipeline, pipelineStateCollectionSeeds } from "../src/lib/pipelines/store";
@@ -16,8 +16,10 @@ import { isStoredFlow, flowStateCollectionSeed } from "../src/lib/flows/store";
 import type { Flow } from "../src/lib/flows/types";
 import type { RootKey } from "../src/lib/types";
 import { catalogEntryToFileEntry } from "../src/lib/scanner/conversationCatalog";
-import { readHostExitWriterBinding } from "../src/lib/runtime/hostExit";
-import type { ProcessIdentity } from "../src/lib/processIdentity";
+import { readHostExit, readHostExitWriterBinding } from "../src/lib/runtime/hostExit";
+import { readTranscriptCutEvidence } from "../src/lib/runtime/liveness";
+import { sameRecordedProcessIdentity, type ProcessIdentity } from "../src/lib/processIdentity";
+import { checkoutBatchState, standaloneMerger, type CheckoutMerger } from "../src/lib/runtime/checkoutMergerRecovery";
 
 const MAX_OUTPUT = 4 * 1024 * 1024;
 
@@ -171,7 +173,9 @@ async function describeOwner(owner: CaptureOwner, registry: RegistryFile, flows:
   return row ? { row, selection: answer.selection } : null;
 }
 
-export async function censusSnapshot(sources: AgentLivenessSources, registryRevision: number, targetRevision: string, remainingMs: number) {
+export async function censusSnapshot(sources: AgentLivenessSources, registryRevision: number, targetRevision: string, remainingMs: number,
+  batchFor: (registry: RegistryFile, id: CheckoutMerger["conversationId"]) => CheckoutMerger["batch"] = () => null,
+  cutBoundary?: string) {
   const deadline = performance.now() + remainingMs;
   const registry = sources.registrySnapshot() as RegistryFile;
   const flows = sources.flows?.() ?? [];
@@ -235,6 +239,49 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
     snapshot.selection.recoveryPending += described.selection.recoveryPending;
     snapshot.selection.recoveryTruncated ||= described.selection.recoveryTruncated;
   }
+  // A merger admitted after the first census may already have exited by the
+  // post-stop census. Its durable deploy-cut exit receipt still identifies
+  // the exact predecessor that the successor must reconcile.
+  const representedConversations = new Set(snapshot.conversations.map(row => row.conversationId).filter(Boolean));
+  const retiredMergers = [];
+  let retiredCandidates: ReturnType<typeof registryRetiredHostRows>;
+  try { retiredCandidates = cutBoundary
+    ? registryRetiredHostRows(registry, 200, cutBoundary)
+    : { entries: [], overflow: false }; }
+  catch {
+    snapshot.selection.unreadable++;
+    retiredCandidates = { entries: [], overflow: true };
+  }
+  for (const entry of retiredCandidates.entries) {
+    if (retiredMergers.length >= 200) break;
+    const process = entry.structuredHost?.process ?? entry.hostExitProcess;
+    const conversation = registryConversationsForEntryKey(registry, `${entry.key.engine}:${entry.key.sessionId}`)[0];
+    const id = conversation?.id;
+    const generation = conversation?.generations.at(-1);
+    if (!process || !id || !generation || generation.path !== entry.artifactPath || representedConversations.has(id)
+      || !standaloneMerger(registry, id)) continue;
+    const exit = readHostExit(process);
+    const boundary = cutBoundary && Number.isFinite(Date.parse(cutBoundary)) ? Date.parse(cutBoundary) : Date.parse(snapshot.observedAt);
+    if ((conversation.engine !== "claude" && conversation.engine !== "codex")
+      || !exit?.stop || exit.stop.path !== "deploy-cut" || Date.parse(exit.stop.at) < boundary
+      || Date.parse(exit.stop.at) > Date.parse(snapshot.observedAt)
+      || exit.unavailable) continue;
+    const writer = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
+    if (entry.claimOwner && !writer) continue;
+    const turn = await readTranscriptCutEvidence(conversation.engine, generation.path);
+    if (!turn.verified || turn.turn !== "busy" && turn.turn !== "terminal") continue;
+    const merger = { conversationId: id, engine: conversation.engine, sessionId: generation.id, path: generation.path,
+    claimEpoch: entry.claimEpoch, process, writer, batch: batchFor(registry, id), turnState: turn.turn === "terminal" ? "idle" : turn.turn };
+    retiredMergers.push({ conversationId: id, host: { kind: "structured", state: "gone", pid: process.pid,
+      process, exitWriter: readHostExitWriterBinding(process) }, turnState: merger.turnState, pipeline: null,
+      evidenceSource: "transcript", merger });
+    representedConversations.add(id);
+  }
+  // The key query may include ordinary exits. Only a full window of verified
+  // deploy-cut merger candidates can make its bounded overflow incomplete.
+  if (retiredCandidates.overflow && retiredMergers.length >= 200) {
+    snapshot.selection.unreadable++;
+  }
   const unrepresented = owners.filter(owner => !represented.has(owner.pid));
   // Count physical capture targets. Raw transcript paths can be several
   // generations of one owner, while one conversation can have several owners.
@@ -262,21 +309,68 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
   }
   return {
     observedAt: snapshot.observedAt, targetRevision, registryRevision,
-    conversations: snapshot.conversations.map(row => ({ conversationId: row.conversationId,
-      host: { ...row.host, ...hostCustody(row.host) }, turnState: row.turnState, pipeline: row.pipeline ? {
+    conversations: [...snapshot.conversations.map(row => {
+      const host = { ...row.host, ...hostCustody(row.host) };
+      const id = row.conversationId as CheckoutMerger["conversationId"] | null;
+      const conversation = id && registry.conversations[id];
+      const generation = conversation && conversation.generations.at(-1);
+      let merger: CheckoutMerger | null = null;
+      if (id && conversation && generation && generation.path === row.transcriptPath && !conversation.supersededBy
+        && !row.pipeline && host.state === "alive" && host.kind === "structured"
+        && (row.turnState === "idle" || row.turnState === "busy") && standaloneMerger(registry, id)) {
+        const engine = conversation.engine;
+        const entry = registry.entries[`${engine}:${generation.id}`];
+        const writer = entry?.claimOwner && structuredClaimIdentity(entry.claimOwner);
+        if ((engine !== "codex" && engine !== "claude")
+          || !entry?.structuredHost?.process || !host.process || !sameRecordedProcessIdentity(entry.structuredHost.process, host.process)
+          || !writer || !writer.startIdentity || entry.claimEpoch < 1 || entry.structuredHost.writerClaimEpoch !== entry.claimEpoch) {
+          throw new Error("standalone merger custody is incomplete");
+        }
+        merger = { conversationId: id, engine, sessionId: generation.id, path: generation.path,
+          claimEpoch: entry.claimEpoch, process: host.process, writer, batch: batchFor(registry, id), turnState: row.turnState };
+      }
+      return { conversationId: row.conversationId, host, turnState: row.turnState, pipeline: row.pipeline ? {
         pipelineId: row.pipeline.pipelineId, stageId: row.pipeline.stageId, attempt: row.pipeline.attempt,
-      } : null, evidenceSource: row.evidenceSource })),
-    selection: snapshot.selection,
-    unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
+      } : null, merger, evidenceSource: row.evidenceSource };
+    }), ...retiredMergers],
+    selection: { ...snapshot.selection, selected: snapshot.selection.selected + retiredMergers.length,
+      matched: Math.max(snapshot.selection.matched, snapshot.selection.selected + retiredMergers.length)
+        + (retiredCandidates.overflow ? 1 : 0),
+      ...(retiredCandidates.overflow ? { unreadable: snapshot.selection.unreadable + 1 } : {}) },
+    unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected) + (retiredCandidates.overflow ? 1 : 0),
     undescribedHostCount: unrepresented.length,
     measurements: { owners: owners.length, foldedConversations: [...folded.values()].filter(pids => pids.size > 1).length },
   };
 }
 
-export async function runCensus(targetRevision: string, remainingMs: number, options: { registryDirectory?: string } = {}) {
+export function capturedBatch(directory: string, registry: RegistryFile, id: CheckoutMerger["conversationId"]): CheckoutMerger["batch"] {
+  const filename = path.join(directory, "attempt-temp.sqlite");
+  if (!fs.existsSync(filename)) return null;
+  const receipts = registryRowsMatching(registry, "receipts", "conversationId", [id]);
+  if (receipts.length > 64) throw new Error("standalone merger launch history exceeds capture limit");
+  const db = new Database(filename, { readonly: true, strict: true });
+  try {
+    const matches = new Map<string, NonNullable<CheckoutMerger["batch"]>>();
+    for (const receipt of receipts) {
+      const roots = db.query<{ directory: string; identity: string }, [string]>(
+        "SELECT directory,identity FROM roots WHERE launchId=? AND pipelineId IS NULL LIMIT 17").all(receipt.launchId);
+      if (roots.length > 16) throw new Error("standalone merger launch roots exceed capture limit");
+      for (const root of roots) {
+        if (path.dirname(root.directory) !== path.join(directory, "scratch")) continue;
+        const batch = checkoutBatchState(root.directory, root.identity);
+        if (batch?.active) matches.set(root.directory, { ...root, branch: batch.branch });
+      }
+    }
+    if (matches.size > 1) throw new Error("standalone merger owns multiple locked batches");
+    return matches.values().next().value ?? null;
+  } finally { db.close(); }
+}
+
+export async function runCensus(targetRevision: string, remainingMs: number, options: { registryDirectory?: string; cutBoundary?: string } = {}) {
   const started = performance.now();
   if (!process.env.LLV_STATE_DIR || !path.isAbsolute(process.env.LLV_STATE_DIR) || process.env.LLV_STATE_OWNER) throw new Error("explicit state without an owner required");
   if (!/^[a-f0-9]{40}$/.test(targetRevision) || !Number.isFinite(remainingMs) || remainingMs <= 0 || remainingMs > 30000) throw new Error("capture bound unavailable");
+  if (options.cutBoundary !== undefined && !Number.isFinite(Date.parse(options.cutBoundary))) throw new Error("capture boundary unavailable");
   const directory = process.env.LLV_STATE_DIR;
   if (!fs.statSync(directory).isDirectory()) throw new Error("state directory unavailable");
   const filename = path.join(options.registryDirectory ?? directory, "agent-registry.json");
@@ -298,7 +392,7 @@ export async function runCensus(targetRevision: string, remainingMs: number, opt
       describeTranscript: censusDescriber(registry.file),
       pipelines: Object.assign(() => [], { forLiveness: async (targets: { conversationId: string | null; path: string }[]) => targets.map(target => historyPipelineRef(memory, target.conversationId, target.path)) }),
       flows: () => references!.flows as Flow[],
-    }, registry.revision, targetRevision, remainingMs);
+    }, registry.revision, targetRevision, remainingMs, (file, id) => capturedBatch(directory, file, id), options.cutBoundary);
     const io = fs.readFileSync("/proc/self/io", "utf8");
     const status = fs.readFileSync("/proc/self/status", "utf8");
     return { ...answer, measurements: { ...answer.measurements, wallMs: performance.now() - started,
@@ -309,7 +403,7 @@ export async function runCensus(targetRevision: string, remainingMs: number, opt
 
 if (import.meta.main) {
   try {
-    const answer = await runCensus(process.argv[2] ?? "", Number(process.argv[3]));
+    const answer = await runCensus(process.argv[2] ?? "", Number(process.argv[3]), { cutBoundary: process.argv[4] });
     const output = JSON.stringify(answer);
     if (Buffer.byteLength(output) > MAX_OUTPUT) throw new Error("census output oversized");
     process.stdout.write(output + "\n");

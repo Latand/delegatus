@@ -16,6 +16,7 @@ import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selectio
 
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import { SEAT_QUOTA_RECOVERY_ROLE } from "./recoveryNotices";
+import { CHECKOUT_MERGER_OPERATION_PREFIX } from "./checkoutMergerRecovery";
 import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readEvidenceWithin, readOptionalEvidence, type Evidence } from "./evidence";
@@ -69,6 +70,7 @@ export interface StructuredDeliveryQueuePort {
   /** Re-read the idle revision after claiming an automatic continuation. */
   idleContinuationCurrent?(conversationId: string, fence: import("./contracts").RuntimeIdleKillFence): Promise<boolean>;
   seatQuotaDispatchGuard?(operationId: string, conversationId: string, project: string): Promise<() => void>;
+  checkoutMergerDispatchGuard?(operationId: string, conversationId: string): Promise<() => void>;
   /** Pause durable effects while an automatic release handoff owns admission. */
   handoffHeld?(): boolean;
   /** Hold a fresh autonomous turn while original accepted work settles. */
@@ -1882,7 +1884,7 @@ export class StructuredDeliveryQueue {
     const canCoalesce = (effect: DeliveryEffect): boolean => {
       if (effect.kind !== "send") return false;
       const host = this.resolveHost(effect.conversationId);
-      return !effect.onlyIfIdle && (effect.turnId === undefined || effect.turnId === null)
+      return !effect.operationId.startsWith(CHECKOUT_MERGER_OPERATION_PREFIX) && !effect.onlyIfIdle && (effect.turnId === undefined || effect.turnId === null)
         && ["queue", "steer-or-queue", "interrupt-active"].includes(effect.policy ?? "")
         && host?.coalescesQueuedInput === true && host.sendWaitsForRunningTurn === true
         && host.supportsSteer === false
@@ -2655,14 +2657,20 @@ export class StructuredDeliveryQueue {
           ?? (recordsRoute && durable?.delivery === "interrupt-then-turn-started" ? durable.interruptedTurnId ?? null : null),
       };
       let sent: { receipt: DeliveryReceipt } | { error: unknown };
-      let quotaGuard: (() => void) | undefined;
-      if (effect.origin?.role === SEAT_QUOTA_RECOVERY_ROLE) {
+      let recoveryGuard: (() => void) | undefined;
+      const checkoutMerger = effect.operationId.startsWith(CHECKOUT_MERGER_OPERATION_PREFIX);
+      if (checkoutMerger || effect.origin?.role === SEAT_QUOTA_RECOVERY_ROLE) {
         try {
-          if (!effect.onlyIfIdle || !effect.origin.project || !this.port.seatQuotaDispatchGuard) {
-            throw new StructuredSendRefusedError("seat quota dispatch authority unavailable");
-          }
-          quotaGuard = await this.checking(lane, effect, "revalidating seat quota recovery",
-            () => this.port.seatQuotaDispatchGuard!(effect.operationId, effect.conversationId, effect.origin!.project!));
+          recoveryGuard = await this.checking(lane, effect, checkoutMerger ? "revalidating checkout merger recovery" : "revalidating seat quota recovery", () => {
+            if (checkoutMerger) {
+              if (!this.port.checkoutMergerDispatchGuard) throw new StructuredSendRefusedError("checkout merger dispatch authority unavailable");
+              return this.port.checkoutMergerDispatchGuard(effect.operationId, effect.conversationId);
+            }
+            if (!effect.onlyIfIdle || !effect.origin?.project || !this.port.seatQuotaDispatchGuard) {
+              throw new StructuredSendRefusedError("seat quota dispatch authority unavailable");
+            }
+            return this.port.seatQuotaDispatchGuard(effect.operationId, effect.conversationId, effect.origin.project);
+          });
         } catch (error) {
           // Preparation has not called the host. Unreadable authority is a
           // deferred check, with the same key and no uncertain native effect.
@@ -2673,7 +2681,7 @@ export class StructuredDeliveryQueue {
         }
       }
       const authorize = () => {
-        quotaGuard?.();
+        recoveryGuard?.();
         if (host.coalescesQueuedInput === true && (lane?.released || this.retirementExecutor.retired
           || this.port.handoffHeld?.() || this.resolveHost(effect.conversationId) !== host)) {
           throw new StructuredDispatchDeferredError("native hand-over deferred");
