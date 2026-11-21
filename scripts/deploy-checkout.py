@@ -690,7 +690,8 @@ def collect_sample(adapter, old, hosts, target, since, index, timeout, *, collec
                 before = recoveries
                 collect(adapter, [("serving", serving_inputs)], sample, deadline, owner_check=check_owner)
                 check_owner(deadline)
-                if not ready(sample.serving, target):
+                # An unsettled relaunch still owes the interruption inventory.
+                if wait_for_target and not ready(sample.serving, target):
                     sample.incomplete = True
                     sample.unavailable(("interrupted", [since, hosts]), "serving-witness-unavailable")
                     break

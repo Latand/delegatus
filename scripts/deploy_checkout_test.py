@@ -1220,6 +1220,8 @@ class CheckoutIntegration(unittest.TestCase):
                 verdict = deploy.run_switch(self.adapter, TARGET, samples=2, interval=1, timeout=5)
                 self.assertEqual(verdict["relaunch"]["result"], state)
                 self.assertEqual(verdict["verdict"], "needs_decision" if state == "unsettled" else "fail")
+                self.assertEqual(verdict["interrupted"], [])
+                self.assertEqual(verdict["interruptedUnreadable"], [])
                 self.assertEqual(verdict["relaunch"]["signalled"], [])
                 self.assertEqual(self.service_commands(), [])
                 self.assertEqual(self.request_file.exists(), state in {"request-refused", "unsettled"})
