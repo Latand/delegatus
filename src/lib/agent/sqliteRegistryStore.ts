@@ -1,3 +1,4 @@
+import { measureRegistryRead } from "./registryReadPerformance";
 import { compareDeliveryAdmission, seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { beginRegistryTransaction } from "./registryTransaction";
@@ -2149,7 +2150,7 @@ export class SqliteAgentRegistryStore {
       the caller's page, and a quiet pass reads no receipt payloads. */
   failedLaunchRepairKeys(limit: number, legacy: boolean): string[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new RangeError("invalid failure repair page size");
-    return performanceSpans.sync("registry.keyed", () => this.db.query<{ row_key: string }, [number]>(
+    return measureRegistryRead("registry.keyed", () => this.db.query<{ row_key: string }, [number]>(
       failedLaunchRepairQuery(legacy)).all(limit).map(row => row.row_key));
   }
 
@@ -2345,7 +2346,7 @@ export class SqliteAgentRegistryStore {
 
   readOnlySnapshot(): SqliteRegistrySnapshot {
     if (this.preparedReader && !this.writerHeld) return this.preparedReader.readOnlySnapshot();
-    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => this.readOnlySnapshotMeasured()));
+    return measureRegistryRead("registry.snapshot", () => this.readOnlySnapshotMeasured(), true);
   }
 
   /** Filesystem retention needs current owner evidence, never historical
@@ -2453,7 +2454,7 @@ export class SqliteAgentRegistryStore {
     if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const replayed = this.journalIsBounded(cold.coldIds)
-        ? withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => finishSteps(this.refreshSnapshotSteps(true))))
+        ? measureRegistryRead("registry.snapshot", () => finishSteps(this.refreshSnapshotSteps(true)), true)
         : null;
       if (ownsTransaction) this.db.exec("COMMIT");
       return replayed;

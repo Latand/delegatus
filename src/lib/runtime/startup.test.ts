@@ -8,11 +8,12 @@ import { spawn } from "node:child_process";
 import { ownFixtureTree, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { Database } from "bun:sqlite";
 import { readHostExit, recordHostStop } from "./hostExit";
-import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, setSystemTime, spyOn, test } from "bun:test";
 
 // Durable startup fixtures yield between phases. Supervise their whole pass
 // without leaving a five-second caller running into the next test's controller.
 setDefaultTimeout(60_000);
+afterEach(() => setSystemTime());
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
@@ -7396,4 +7397,108 @@ test.each(["cancel", "retire", "runtime"] as const)("startup %s during generatio
     journal.close(); registry.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+
+test.each([false, true])("fresh work from a proven live engine closes its restart-cut hold only within the observed runtime generation (replaced=%s)", async replaced => {
+  const cutAt = Date.parse("2026-11-17T12:00:00Z");
+  setSystemTime(cutAt);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-continuing-engine-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const sessionId = ["f4000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const hostKey = `claude:${sessionId}`;
+  const records = recentClaudeRecords("tool-call");
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "continuing-turn",
+    transcriptRecords: records, transcriptSuffix: "\n{\"type\":\"assist",
+  });
+  const entry = registry.readOnlySnapshot().entries[hostKey]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  let runtimeGeneration = "first-runtime";
+  const journal = new RuntimeJournal(path.join(directory, "generation-runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  client.startupGeneration = async () => runtimeGeneration;
+  const viewer = restartCutStartup(registry, directory, { client });
+  const { restartCutEvidenceUnresolved } = await import("./restartCutHold");
+  try {
+    await viewer.boot();
+    expect(restartCutEvidenceUnresolved(hostKey)).toBe(true);
+    const working = registry.readOnlySnapshot().entries[hostKey]!;
+    registry.upsert({ ...working, structuredHost: { ...working.structuredHost!, eventCursor: working.structuredHost!.eventCursor + 1 } });
+    setSystemTime(cutAt + 1000);
+    const afterCut = { type: "assistant", timestamp: new Date(cutAt + 1000).toISOString(),
+      message: { role: "assistant", content: [{ type: "text", text: "Still working on the same turn." }] } };
+    fs.writeFileSync(artifactPath, [...records, afterCut].map(record => JSON.stringify(record)).join("\n") + "\n");
+    if (replaced) {
+      runtimeGeneration = "successor-runtime";
+      await viewer.boot();
+      expect(viewer.cuts()).toContainEqual(expect.objectContaining({ hostKey, reason: "viewer-restart", state: "owed" }));
+      return;
+    }
+    await (viewer.scheduled.shift()!() as unknown as Promise<void>);
+    expect(restartCutEvidenceUnresolved(hostKey)).toBe(false);
+    expect(viewer.cuts()).toEqual([]);
+    expect(viewer.attempts).toEqual([]);
+    expect(registry.readOnlySnapshot().entries[hostKey]?.structuredHost?.process).toEqual(captureProcessIdentity(process.pid));
+  } finally { journal.close(); await viewer.close(); }
+});
+
+test("work published before restart cannot disprove its cut", async () => {
+  const checkpoint = Date.parse("2026-11-17T12:00:00Z");
+  setSystemTime(checkpoint);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-precut-work-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const sessionId = ["f5000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const hostKey = `claude:${sessionId}`;
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "precut-turn",
+    transcriptRecords: [],
+  });
+  const entry = registry.readOnlySnapshot().entries[hostKey]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  const workAt = checkpoint + 1000;
+  fs.writeFileSync(artifactPath, [
+    { type: "user", uuid: "precut-user", timestamp: new Date(workAt).toISOString(), message: { role: "user", content: "work" } },
+    { type: "assistant", uuid: "precut-tool", timestamp: new Date(workAt).toISOString(), message: { role: "assistant", content: [{ type: "tool_use", id: "tool", name: "Bash", input: {} }] } },
+  ].map(record => JSON.stringify(record)).join("\n") + "\n");
+  setSystemTime(checkpoint + 60_000);
+  const viewer = restartCutStartup(registry, directory, {
+    readHostTurnRecord: () => ({ state: "absent" }),
+  });
+  try {
+    await viewer.boot();
+    expect(viewer.cuts()).toContainEqual(expect.objectContaining({ hostKey, reason: "viewer-restart", state: "owed" }));
+  } finally { await viewer.close(); }
+});
+
+
+test("a replaced transcript cannot prove that its predecessor turn survived startup", async () => {
+  const cutAt = Date.parse("2026-11-17T13:00:00Z");
+  setSystemTime(cutAt);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-replaced-transcript-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"));
+  const sessionId = ["f6000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const hostKey = `claude:${sessionId}`;
+  const records = recentClaudeRecords("tool-call");
+  const { artifactPath } = addStructuredRestartConversation(registry, directory, {
+    engine: "claude", sessionId, status: "live", turn: "busy", activeTurnRef: "predecessor-turn",
+    transcriptRecords: records, transcriptSuffix: "\n{\"type\":\"assist",
+  });
+  const entry = registry.readOnlySnapshot().entries[hostKey]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) } });
+  const viewer = restartCutStartup(registry, directory);
+  const { restartCutEvidenceUnresolved } = await import("./restartCutHold");
+  try {
+    await viewer.boot();
+    expect(restartCutEvidenceUnresolved(hostKey)).toBe(true);
+    setSystemTime(cutAt + 1000);
+    const replacement = `${artifactPath}.replacement`;
+    fs.writeFileSync(replacement, [...records, { type: "assistant", timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: [{ type: "text", text: "Work from a replacement file." }] } }]
+      .map(record => JSON.stringify(record)).join("\n") + "\n");
+    fs.renameSync(replacement, artifactPath);
+    await (viewer.scheduled.shift()!() as unknown as Promise<void>);
+    expect(restartCutEvidenceUnresolved(hostKey)).toBe(true);
+    expect(viewer.attempts).toEqual([]);
+  } finally { await viewer.close(); }
 });

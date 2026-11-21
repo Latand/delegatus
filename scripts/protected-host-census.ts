@@ -273,7 +273,7 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
     const merger = { conversationId: id, engine: conversation.engine, sessionId: generation.id, path: generation.path,
     claimEpoch: entry.claimEpoch, process, writer, batch: batchFor(registry, id), turnState: turn.turn === "terminal" ? "idle" : turn.turn };
     retiredMergers.push({ conversationId: id, host: { kind: "structured", state: "gone", pid: process.pid,
-      process, exitWriter: readHostExitWriterBinding(process) }, turnState: merger.turnState, pipeline: null,
+      process, exitWriter: readHostExitWriterBinding(process) }, turnState: merger.turnState, lifecycle: "gone", pipeline: null,
       evidenceSource: "transcript", merger });
     representedConversations.add(id);
   }
@@ -329,7 +329,7 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
         merger = { conversationId: id, engine, sessionId: generation.id, path: generation.path,
           claimEpoch: entry.claimEpoch, process: host.process, writer, batch: batchFor(registry, id), turnState: row.turnState };
       }
-      return { conversationId: row.conversationId, host, turnState: row.turnState, pipeline: row.pipeline ? {
+      return { conversationId: row.conversationId, host, turnState: row.turnState, lifecycle: row.lifecycle, pipeline: row.pipeline ? {
         pipelineId: row.pipeline.pipelineId, stageId: row.pipeline.stageId, attempt: row.pipeline.attempt,
       } : null, merger, evidenceSource: row.evidenceSource };
     }), ...retiredMergers],

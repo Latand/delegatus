@@ -76,8 +76,8 @@ const options = () => ({ signal: new AbortController().signal, deadlineAt: Date.
 
 function historyRequest(trigger: number, parent: number | null, mediaIndexes: readonly number[], size = 5) {
   const r = request([]);
-  r.input.requester = requestSchema.parse(contextRequest).input.requester;
   const template = r.input.conversation[0]!;
+  r.input.requester = { ...requestSchema.parse(contextRequest).input.requester!, key: template.author.key };
   r.input.conversation = Array.from({ length: 40 }, (_, index) => ({
     ...template, id: `message_${index}`, text: `History entry ${index}`,
     reply_to: index === trigger && parent !== null ? `message_${parent}` : null,

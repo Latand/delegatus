@@ -97,6 +97,9 @@ export interface DeliverySuccess {
   structured?: true;
   operationId?: string;
   receipt?: RuntimeOperationReceipt;
+  waitReason?: string;
+  detail?: string;
+  deadlineAt?: string;
   /** Set when an account switch named an account outside the project's pool:
       the switch was carried out and attributed, and the answer says so. */
   accountOverride?: AccountOverrideNotice;
@@ -369,6 +372,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
             ok: true,
             target: recovered.spawned ? null : structured.target,
             outcome: "held",
+            ...(structured.waitReason ? { waitReason: structured.waitReason, detail: structured.detail, deadlineAt: structured.deadlineAt } : {}),
             spawned: recovered.spawned,
             structured: true,
             operationId: structured.operationId,

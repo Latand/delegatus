@@ -5,7 +5,13 @@ import { readStateCollectionRevisions, readStateProjectKeys } from "@/lib/state/
 
 const store = globalThis as typeof globalThis & {
   __llvProjectKeySources?: Map<string, ReadonlySet<string>>;
-  __llvProjectKeyDatabase?: { signature: string; projects: ReadonlySet<string> };
+  __llvProjectKeyDatabase?: {
+    identity: string;
+    hotSignature: string;
+    hotProjects: ReadonlySet<string>;
+    archiveSignature: string | null;
+    archiveProjects: ReadonlySet<string>;
+  };
 };
 
 function sources(): Map<string, ReadonlySet<string>> {
@@ -20,18 +26,36 @@ export function projectKeyIndexSnapshot(): ReadonlySet<string> {
   const keys = new Set<string>();
   for (const projects of sources().values()) for (const project of projects) keys.add(project);
   const filename = statePath("state.sqlite");
-  const revisions = readStateCollectionRevisions(filename, ["tasks", "pipelines", "flows"]);
+  const hotCollections = ["tasks", "pipelines", "flows"] as const;
+  const revisions = readStateCollectionRevisions(filename, [...hotCollections, "pipelines_archive"]);
   let identity = "absent";
   try {
     const stat = fs.statSync(filename);
     identity = `${stat.dev}:${stat.ino}`;
   } catch { /* an uninitialized installation has no durable project rows */ }
-  const signature = `${identity}:${["tasks", "pipelines", "flows"].map(key => revisions.get(key) ?? "-").join(":")}`;
-  if (store.__llvProjectKeyDatabase?.signature !== signature) {
-    store.__llvProjectKeyDatabase = { signature, projects: new Set(readStateProjectKeys(filename)) };
+  let cached = store.__llvProjectKeyDatabase;
+  if (cached?.identity !== identity) {
+    cached = store.__llvProjectKeyDatabase = {
+      identity,
+      hotSignature: "",
+      hotProjects: new Set(),
+      archiveSignature: null,
+      archiveProjects: new Set(),
+    };
+  }
+  const hotSignature = hotCollections.map(key => revisions.get(key) ?? "-").join(":");
+  if (cached.hotSignature !== hotSignature) {
+    cached.hotProjects = new Set(readStateProjectKeys(filename, hotCollections));
+    cached.hotSignature = hotSignature;
+  }
+  const archiveSignature = String(revisions.get("pipelines_archive") ?? "-");
+  if (cached.archiveSignature !== archiveSignature) {
+    cached.archiveProjects = new Set(readStateProjectKeys(filename, ["pipelines_archive"]));
+    cached.archiveSignature = archiveSignature;
   }
   const canonical = projectAliasResolver();
-  for (const project of store.__llvProjectKeyDatabase.projects) keys.add(canonical(project));
+  for (const project of cached.hotProjects) keys.add(canonical(project));
+  for (const project of cached.archiveProjects) keys.add(canonical(project));
   return keys;
 }
 

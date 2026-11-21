@@ -1,3 +1,4 @@
+import { DELIVERY_ATTEMPT_LIMIT } from "@/lib/accounts/migration/contracts";
 import type { ConfirmedSendEvidence } from "./confirmedSend";
 import { SEND_SETTLEMENT_WINDOW_MS } from "./sendSettlement";
 import { DELIVERY_UNVERIFIED_AFTER_ACTUATION, INJECTION_UNVERIFIED_AFTER_ACTUATION } from "./unverifiedDeliveryReasons";
@@ -60,6 +61,8 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** Restore the immutable admission cohort before a recovered kill can end. */
+  fencePendingSends?(operationIds: readonly string[]): Promise<void>;
   /** Only affirmative current-seat authority opts a conversation in. */
   coalescesConversation?(conversationId: string): boolean | undefined;
   bindDeliveryBatch?(batchId: string, operationIds: readonly string[], generationId: string): boolean | Promise<boolean>;
@@ -266,7 +269,7 @@ const UNPROJECTED_TERMINAL_LIMIT = 128;
     (#1716). Attempts are spaced 1s, 2s, 4s, 8s and then 15s apart, about two
     minutes in all, after which the operation settles failed with the busy
     reason. */
-const CONTENDED_RECOVERY_ATTEMPTS = 12;
+const CONTENDED_RECOVERY_ATTEMPTS = DELIVERY_ATTEMPT_LIMIT;
 const CONTENDED_RECOVERY_FIRST_SPACING_MS = 1_000;
 const CONTENDED_RECOVERY_MAX_SPACING_MS = 15_000;
 const TERMINAL_DELIVERY_STATUSES = new Set([
@@ -345,6 +348,7 @@ interface ControlEffect {
   resolution?: unknown;
   turnId?: string | null;
   sessionKey?: { engine: "codex" | "claude"; sessionId: string };
+  pendingSendIds?: string[];
   eventSeq: number;
 }
 
@@ -572,11 +576,15 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
     if (!key || typeof key !== "object" || Array.isArray(key)) return null;
     const candidate = key as Record<string, unknown>;
     if ((candidate.engine !== "codex" && candidate.engine !== "claude") || typeof candidate.sessionId !== "string") return null;
+    const pendingSendIds = effect.payload.pendingSendIds;
+    if (pendingSendIds !== undefined && (!Array.isArray(pendingSendIds)
+      || pendingSendIds.some(id => typeof id !== "string" || !id || id.length > 200))) return null;
     return {
       operationId,
       conversationId,
       kind: "kill",
       sessionKey: { engine: candidate.engine, sessionId: candidate.sessionId },
+      ...(pendingSendIds !== undefined ? { pendingSendIds: [...new Set(pendingSendIds as string[])] } : {}),
       ...(effect.payload.onlyIfIdle !== undefined
         ? { onlyIfIdle: parseRuntimeIdleKillFence(effect.payload.onlyIfIdle) } : {}),
       ...(effect.payload.providerRecovery !== undefined
@@ -1832,6 +1840,17 @@ export class StructuredDeliveryQueue {
         this.firstDispatches.delete(effect.operationId);
         this.contendedRecoveries.delete(effect.operationId);
         continue;
+      }
+      // The acknowledgement may have vanished after journal admission. Recover
+      // an unconditional kill's saved cohort before expiry or any actuation.
+      // A refused fence leaves the kill owed, including across another restart.
+      if (effect.kind === "kill" && !effect.onlyIfIdle && effect.pendingSendIds?.length) {
+        const fenced = await readEvidence(async () => {
+          if (!this.port.fencePendingSends) throw new Error("pending delivery fence is unavailable");
+          await this.port.fencePendingSends(effect.pendingSendIds!);
+        }, "pending delivery fence is unavailable");
+        if (!fenced.readable) return this.fenceUnavailable();
+        if (lane?.released || this.retirementExecutor.retired || this.port.handoffHeld?.()) return true;
       }
       if (effect.kind === "kill" && effect.onlyIfIdle && durable.value?.status === "delivering") {
         const owner = durable.value.retirementClaim;
@@ -3656,6 +3675,25 @@ export class StructuredDeliveryQueue {
    */
   private async recoverUnavailableHost(effect: DeliveryEffect & { origin?: MessageOrigin }, status?: StructuredOperationStatus | null): Promise<void> {
     if (!this.recoverHost) return;
+    // The progress ledger survives executor replacement. The local map below
+    // controls spacing; it cannot grant a fresh budget after a Viewer restart.
+    const recordedAttempts = this.port.progress?.get(effect.operationId)?.attempt ?? 0;
+    if (recordedAttempts >= CONTENDED_RECOVERY_ATTEMPTS) {
+      // A working engine may still own this turn without a registered
+      // transport. Stop attempting recovery; its durable settlement deadline
+      // decides expiry and can be renewed by verified native work.
+      this.noteWait(effect, "awaiting-host", { wake: "retry",
+        detail: `host recovery reached its ${CONTENDED_RECOVERY_ATTEMPTS} attempt limit; awaiting host publication or settlement` });
+      this.retrySoon();
+      return;
+    }
+    this.noteWait(effect, "recovering-host", { attempted: true, wake: "retry" });
+    if (this.port.progress?.flush && ((this.port.progress.get(effect.operationId)?.attempt ?? 0) <= recordedAttempts
+      || !this.port.progress.flush())) { this.retrySoon(); return; }
+    const reserved = this.port.progress?.get(effect.operationId);
+    const releaseAdmissionWait = () => {
+      if (reserved) this.port.progress?.releaseRecoveryAttempt?.(effect.operationId, reserved.attempt, reserved.executorId);
+    };
     try {
       const recovered = await this.recoverHost(effect.conversationId, {
         operationId: effect.operationId,
@@ -3668,6 +3706,7 @@ export class StructuredDeliveryQueue {
         return;
       }
       if (this.port.deferTarget?.(effect.conversationId)) {
+        releaseAdmissionWait();
         // A live predecessor may still be on its way to registration. A
         // refused competing recovery must not fail its original message.
         this.noteWait(effect, "startup", { wake: "retry" });
@@ -3693,17 +3732,20 @@ export class StructuredDeliveryQueue {
         return;
       }
       if (error instanceof StructuredRecoverySynchronizingError && this.port.deferTarget?.(effect.conversationId)) {
+        releaseAdmissionWait();
         this.noteWait(effect, "startup", { wake: "retry" });
         this.retrySoon();
         return;
       }
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
+        releaseAdmissionWait();
         this.retrySoon();
         return;
       }
       /* An orphan with work in flight is stopped once its grace ends; the
          operation stays queued and names the wait. */
       if (error instanceof StructuredOrphanGraceError) {
+        releaseAdmissionWait();
         this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
         this.retrySoon();
         return;
@@ -3712,13 +3754,15 @@ export class StructuredDeliveryQueue {
          in case the refusal clears (a pending action ends, survivors exit);
          past it the send fails with that refusal as its reason. */
       if (error instanceof StructuredOrphanStopRefusedError && error.holding) {
+        releaseAdmissionWait();
         this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
         this.retrySoon();
         return;
       }
       let reason = `structured host recovery failed: ${failureReason(error)}`;
       if (error instanceof StructuredRecoveryContendedError) {
-        const attempts = (this.contendedRecoveries.get(effect.operationId)?.attempts ?? 0) + 1;
+        const attempts = this.port.progress?.get(effect.operationId)?.attempt
+          ?? (this.contendedRecoveries.get(effect.operationId)?.attempts ?? 0) + 1;
         if (attempts < CONTENDED_RECOVERY_ATTEMPTS) {
           this.deferContendedRecovery(effect, attempts);
           return;
@@ -3793,6 +3837,14 @@ export class StructuredDeliveryQueue {
         return settled;
       };
       const authority = effect.onlyIfIdle ? { operationId: effect.operationId, claim: this.retirementClaim } : undefined;
+      // An idle-only retirement can still be refused at the signal boundary.
+      // Its cohort may be cancelled only after termination is confirmed.
+      const fenceRetiredSends = async () => {
+        if (effect.onlyIfIdle && effect.pendingSendIds?.length) {
+          if (!this.port.fencePendingSends) throw new Error("pending delivery fence is unavailable");
+          await this.port.fencePendingSends(effect.pendingSendIds);
+        }
+      };
       const refusal = await this.killRefusal(effect.conversationId);
       if (refusal) {
         await transition("failed", { reason: refusal });
@@ -3823,6 +3875,7 @@ export class StructuredDeliveryQueue {
           if (!effect.onlyIfIdle && !await transition("delivering")) {
             return { blocked: false, terminated: true };
           }
+          await fenceRetiredSends();
           await transition("delivered");
           return { blocked: false, terminated: true };
         } catch (error) {
@@ -3838,6 +3891,7 @@ export class StructuredDeliveryQueue {
           await transition("failed", { reason: "structured host termination is unavailable" });
           return { blocked: false, terminated: false };
         }
+        await fenceRetiredSends();
         await transition("delivered");
         return { blocked: false, terminated: true };
       } catch (error) {

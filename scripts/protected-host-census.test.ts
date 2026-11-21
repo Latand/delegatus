@@ -36,8 +36,8 @@ function retainedLivenessFixture(count = 12) {
 }
 const sha = (file: string) => fs.existsSync(file) ? crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") : null;
 const fields = (rows: readonly { conversationId: string | null; host: { state: string; kind: string; pid: number | null };
-  turnState: string; pipeline: { pipelineId: string; stageId: string; attempt: number } | null }[]) => rows.filter(row => row.host.state === "alive")
-  .map(row => [row.conversationId, row.host.state, row.host.kind, row.host.pid, row.turnState, row.pipeline && [row.pipeline.pipelineId, row.pipeline.stageId, row.pipeline.attempt]])
+  turnState: string; lifecycle: string; pipeline: { pipelineId: string; stageId: string; attempt: number } | null }[]) => rows.filter(row => row.host.state === "alive")
+  .map(row => [row.conversationId, row.host.state, row.host.kind, row.host.pid, row.turnState, row.lifecycle, row.pipeline && [row.pipeline.pipelineId, row.pipeline.stageId, row.pipeline.attempt]])
   .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 
 function fixture() {
@@ -749,7 +749,7 @@ test("live census: a missing recorded transcript counts one undescribed host and
     const answer = await censusSnapshot(f.sources, 1, TARGET, 30000);
     expect(answer.undescribedHostCount).toBe(2);
     expect(answer.conversations.some(row => [4001, 4002].includes(row.host.pid ?? 0))).toBe(false);
-    const check = spawnSync("python3", ["-c", "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('deploy',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.complete_activity(json.load(sys.stdin))", path.join(ROOT, "scripts/deploy-checkout.py")],
+    const check = spawnSync("python3", ["-c", "import importlib.util,json,sys; s=importlib.util.spec_from_file_location('deploy',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.complete_census(json.load(sys.stdin))", path.join(ROOT, "scripts/deploy-checkout.py")],
       { env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" }, input: JSON.stringify(answer), encoding: "utf8", timeout: 10000 });
     expect(check.status).not.toBe(0);
     expect(check.stderr).toContain("protected activity capture incomplete");
