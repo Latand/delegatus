@@ -3460,7 +3460,7 @@ test("foreign flipping retirement reports never wake an idle project or make its
     conversation: () => foreign,
     readOnlySnapshot: () => ({ ...registry.readOnlySnapshot(), conversations: { fixtureForeign: foreign } }),
   }) as never;
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
   const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
   state = { ...state, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
@@ -3481,7 +3481,7 @@ test("foreign flipping retirement reports never wake an idle project or make its
 test("non-actionable signal churn and machine-wide retirement stalls leave idle checks quiet", async () => {
   for (const status of [null, "inbox", "blocked"]) {
     const ports = sources({ pipelines: [], tasks: status ? [boardCard({ status })] : [] });
-    ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+    ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
     let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString(), lastProposalAt: new Date(NOW).toISOString() };
     const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
     if (status === "blocked") {
@@ -3508,7 +3508,7 @@ test("an own-project lane change wakes and makes a digest due while signal churn
   let pipelines: Record<string, unknown>[] = [];
   const ports = sources({ pipelines: [], tasks: [boardCard({ status: "inbox" })] });
   ports.pipelines = () => pipelines as never;
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const initial = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
   const baseline = await gatherSeatTickInput(PROJECT, initial, DEFAULT_SEAT_TICK_POLICY, ports);
   let state: SeatTickProjectState = { ...initial, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
@@ -3542,7 +3542,7 @@ test.each(["task note edits", "maintenance timestamps", "details appends", "repo
   const ports = sources({ laneRows: [livenessRow({ lifecycle: "running" })] });
   ports.tasks = () => [task] as never;
   let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
-  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: reports as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
   let state = baseline.state;
@@ -3579,7 +3579,7 @@ test.each(["task status", "stage transition", "stage state", "attempt state", "m
     revision: "c".repeat(40), requestedAt: new Date(NOW).toISOString() }] : [];
   ports.deployment = () => ({ state: "ok", value: { deploymentId: "deploy-material", phase: "succeeded", terminal: true,
     revision: "c".repeat(40), error: null, updatedAt: new Date(NOW).toISOString() } }) as never;
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
   ports.now = () => NOW + 2 * 60 * 60_000;
@@ -3601,7 +3601,7 @@ test.each(["task status", "stage transition", "stage state", "attempt state", "m
 
 test("a legacy digest baseline upgrades without owing a digest for task timestamps", async () => {
   const ports = sources({ tasks: [boardCard({ status: "inbox", updatedAt: new Date(NOW).toISOString() })] });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const state = { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE,
     reportFingerprint: "legacy-board", checkFingerprint: "legacy-board" };
   const decision = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
@@ -3619,7 +3619,7 @@ test("a legacy digest baseline upgrades without owing a digest for task timestam
 test("a flapping pull-request source owes no digest, but a verified merge does", async () => {
   const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()],
     laneRows: [livenessRow({ lifecycle: "running" })] });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   for (let check = 1; check <= 4; check++) {
@@ -3645,7 +3645,7 @@ test("gated PR reads and report writes cannot invent digest movement", async () 
   const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()], pullRequestCalls,
     laneRows: [livenessRow({ lifecycle: "running" })] });
   let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
-  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: reports as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
@@ -3672,7 +3672,7 @@ test("gated PR reads and report writes cannot invent digest movement", async () 
 test("recovered PR evidence establishes a baseline before a later verified merge", async () => {
   const ports = sources({ pipelines: [lane(), finishedLane()], laneRows: [livenessRow({ lifecycle: "running" })] });
   ports.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
@@ -3697,7 +3697,7 @@ test("first recovered PR evidence preserves unreported board movement", async ()
   let task = boardCard({ status: "inbox" });
   const ports = sources({ pipelines: [lane(), finishedLane()], tasks: [task], laneRows: [livenessRow({ lifecycle: "running" })] });
   ports.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
@@ -3715,7 +3715,7 @@ test("first recovered PR evidence preserves unreported board movement", async ()
 test("observing an old report without a board baseline cannot invent digest movement", async () => {
   const ports = sources({});
   const reportedAt = new Date(NOW - 2 * 60 * 60_000).toISOString();
-  ports.reports = { log: () => [{ id: "fixture-report", project: PROJECT, at: reportedAt, origin: { kind: "manager" } }] as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [{ id: "fixture-report", project: PROJECT, at: reportedAt, origin: { kind: "manager" } }] as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const first = seatTickDecision(await gatherSeatTickInput(PROJECT, { ...emptySeatTickState(), seatEpoch: 7 }, DEFAULT_SEAT_TICK_POLICY, ports));
   expect(first.verdict.kind).toBe("wake");
   if (first.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
