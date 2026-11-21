@@ -95,7 +95,8 @@ test("only the bound key on its target launches a local elevated run", async () 
     launches.push(body);
     expect(readRunLedger().runs.find(run => run.requestId === "trusted")?.ownerTurn?.entry).toEqual(snapshot);
     const home = process.env.HOME!;
-    const account = { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home, transcriptRoot: home, env: {} };
+    const account = { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home, transcriptRoot: home,
+      env: { NODE_ENV: "test" as const } };
     const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1:1/api/spawn", {
       method: "POST", headers: reportSpawnHeaders(ensureOperatorSpawnCapability(), VIEWER_SPAWN_CAPABILITY_HEADER),
       body: JSON.stringify(body),
