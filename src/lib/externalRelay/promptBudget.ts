@@ -90,45 +90,58 @@ export function boundedRelayPrompt<T extends Rendered>(request: ExternalRelayReq
     .filter(({ message }) => !requiredIds.has(message.id))
     .sort((a, b) => Date.parse(a.message.sent_at) - Date.parse(b.message.sent_at) || a.index - b.index);
   let smallestBytes = Buffer.byteLength(original.prompt);
-  const fitHistory = (candidate: ExternalRelayRequest["input"], cuts: RelayPromptCuts) => {
+  const fitHistory = (candidate: ExternalRelayRequest["input"], cuts: RelayPromptCuts): { result: T; omitted: number } | null => {
     const withOldestRemoved = (count: number) => {
       if (!count) return render({ ...request, input: candidate }, cuts);
       const removed = new Set(optional.slice(0, count).map(({ message }) => message.id));
       return render({ ...request, input: { ...candidate, conversation: input.conversation.filter(message => !removed.has(message.id)) } },
         { ...cuts, older_message_texts_omitted: count });
     };
-    let best = withOldestRemoved(optional.length);
+    let bestCount = optional.length;
+    let best = withOldestRemoved(bestCount);
     smallestBytes = Math.min(smallestBytes, Buffer.byteLength(best.prompt));
     if (!fits(best)) return null;
     let low = 0, high = optional.length - 1;
     while (low <= high) {
       const count = Math.floor((low + high) / 2);
       const result = withOldestRemoved(count);
-      if (fits(result)) { best = result; high = count - 1; }
+      if (fits(result)) { best = result; bestCount = count; high = count - 1; }
       else low = count + 1;
     }
-    return best;
+    return { result: best, omitted: bestCount };
   };
 
   const compact = { ...input, tools: compactTools };
-  // A continuation can already have the original tool catalogue in its
-  // transcript. Its unchanged static sections may cost less than a refresh.
-  let result = fitHistory(compact, compactCuts);
-  if (!result && compactTools !== input.tools) result = fitHistory(input, {});
-  if (result) return result;
+  // Compare the best fitting history under both projections. Removing the
+  // discoverable table can retain more recent rows than compacting summaries.
+  const candidates: Array<{ result: T; omitted: number }> = [];
+  const compactResult = fitHistory(compact, compactCuts);
+  if (compactResult) candidates.push(compactResult);
+  if (compactTools !== input.tools) {
+    const originalToolsResult = fitHistory(input, {});
+    if (originalToolsResult) candidates.push(originalToolsResult);
+  }
+  if (mayOmitToolTable && tools.length) {
+    const toolCuts = { tool_entries_omitted: tools.length };
+    for (const toolInput of [compact, input]) {
+      if (toolInput === input && compactTools === input.tools) continue;
+      const omittedTableResult = fitHistory(toolInput, toolCuts);
+      if (omittedTableResult) candidates.push(omittedTableResult);
+    }
+  }
+  if (candidates.length) return candidates.reduce((best, candidate) => candidate.omitted < best.omitted ? candidate : best).result;
+  let result: { result: T; omitted: number } | null;
   const documentsOmitted = input.documents.length - protectedDocuments.length;
   const documentCuts = documentsOmitted ? { documents_omitted: documentsOmitted } : {};
   if (documentsOmitted) {
     result = fitHistory({ ...compact, documents: protectedDocuments }, { ...compactCuts, ...documentCuts });
-    if (result) return result;
+    if (result) return result.result;
   }
   if (mayOmitToolTable && tools.length) {
-    // Hide only the display table. The request retains its authorized tools
-    // and the closing rules still explain how to discover and call them.
     const toolCuts = { tool_entries_omitted: tools.length };
-    result = fitHistory(input, toolCuts);
-    if (!result && documentsOmitted) result = fitHistory({ ...input, documents: protectedDocuments }, { ...toolCuts, ...documentCuts });
-    if (result) return result;
+    result = fitHistory({ ...compact, documents: protectedDocuments }, { ...compactCuts, ...documentCuts, ...toolCuts });
+    if (!result) result = fitHistory({ ...input, documents: protectedDocuments }, { ...documentCuts, ...toolCuts });
+    if (result) return result.result;
   }
   throw new RelayMandatoryPromptTooLargeError(smallestBytes);
 }

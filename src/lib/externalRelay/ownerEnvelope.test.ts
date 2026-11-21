@@ -144,6 +144,25 @@ test("owner context keeps all 40 rows when shortening tool summaries suffices", 
   expect(section(prepared.prompt, "relay_context_budget")).toEqual({ tool_summaries_shortened: 80 });
 });
 
+test("tool-table reduction is compared against history trimming", () => {
+  const r = incidentClaim(false, true, true);
+  for (const row of r.input.conversation.slice(0, -1)) row.text = "The group agreed Friday.";
+  r.input.instructions = "s".repeat(8000);
+  r.input.owner_instructions = "o".repeat(11640);
+  const owner = ownerTierFor(target, r)!;
+  const prepared = prepareOwnerPrompt(r, owner, 1);
+  const rows = section(prepared.prompt, "conversation") as typeof r.input.conversation;
+  console.info("Tool table history comparison", { bytes: Buffer.byteLength(prepared.prompt), rows: rows.length,
+    cuts: section(prepared.prompt, "relay_context_budget") });
+  assertStructuredTextEnvelope(prepared.prompt);
+  expect(rows.map(row => row.id)).toEqual(r.input.conversation.slice(-32).map(row => row.id));
+  expect(rows.at(-1)!.id).toBe(r.input.conversation.at(-1)!.id);
+  expect(section(prepared.prompt, "short_term_memory")).toBe(r.input.short_term_memory!);
+  expect(section(prepared.prompt, "relay_context_budget")).toMatchObject({
+    older_message_texts_omitted: 8, tool_entries_omitted: 80,
+  });
+});
+
 test("owner context discloses omitted documents and retains the explicit reply's attachment", () => {
   const r = request();
   r.input.owner_instructions = "o".repeat(15000);
@@ -480,6 +499,44 @@ test(`${mode} instruction alone over the byte bound refuses before dispatch`, as
   expect(result.diagnostic?.promptBudget?.kind).toBe("mandatory_core_too_large");
   expect(ownerFailureAnswer(r, owner, result.diagnostic!)?.text).toContain("Скоротіть");
   expect(dispatches).toBe(0);
+});
+
+for (const mode of ["fresh", "resumed"] as const)
+test(`${mode} context fallback budgets the actual escaped run-directory path`, async () => {
+  const r = incidentClaim(false);
+  r.input.conversation.at(-1)!.text = "x".repeat(30000);
+  r.input.instructions = "s".repeat(6200);
+  r.input.owner_instructions = "o".repeat(15000);
+  for (const row of r.input.conversation.slice(-11, -1)) row.text = "Required context. ".repeat(900);
+  const owner = ownerTierFor(target, r)!;
+  const prepared = prepareOwnerPrompt(r, owner, 1);
+  expect(prepared.context).toBeDefined();
+  const directory = path.join(root, ...Array.from({ length: 4 }, () => '"'.repeat(180)), `relay-\\-context-${mode}`);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const placeholder = "<relay_context_file>\n\"\"\n</relay_context_file>";
+  const renderedPath = path.join(directory, `owner-context-${"0".repeat(36)}.txt`);
+  const substituted = prepared.prompt.replace(placeholder, `<relay_context_file>\n${json(renderedPath)}\n</relay_context_file>`);
+  expect(Buffer.byteLength(substituted)).toBeGreaterThan(MAX_STRUCTURED_TEXT_BYTES);
+  let deliveredFile = "";
+  let dispatchedPrompt = "";
+  const done = await runOwnerAgent({ request: r, owner, target: { ...target }, accountId: null, hardCapMs: 2000,
+    preparedPrompt: prepared, contextDirectory: directory,
+    ...(mode === "resumed" ? { continuation: { conversationId: `context_path_${mode}`, prompt: prepared.prompt } } : {}),
+    onConversation: () => {}, ports: {
+      launch: async body => { const prompt = String(body.prompt); dispatchedPrompt = prompt; assertStructuredTextEnvelope(prompt);
+        deliveredFile = section(prompt, "relay_context_file") as string; return { status: 202,
+          body: { conversationId: `conversation_context_path_${mode}`, initialMessage: "delivered" } }; },
+      continue: async (turn, prompt, _target, authorize) => { authorize(); dispatchedPrompt = prompt; assertStructuredTextEnvelope(prompt);
+        deliveredFile = section(prompt, "relay_context_file") as string;
+        return { ok: true, structured: true, target: turn.conversationId!, outcome: "delivered", operationId: turn.clientAttemptId,
+          receipt: { operationId: turn.clientAttemptId, idempotencyKey: turn.clientAttemptId, conversationId: turn.conversationId!,
+            kind: "send", status: "delivered", at, revision: 1 } }; },
+      observe: async () => ({ state: "ended", finalText: "done" }), stop: async () => {}, pollMs: 1,
+    } }).done;
+  expect(done.status).toBe("done");
+  expect(dispatchedPrompt).toContain("Read the context file for the full framing");
+  expect(section(dispatchedPrompt, "owner_request")).toMatchObject({ text: owner.text });
+  expect(fs.readFileSync(deliveredFile, "utf8")).toBe(prepared.context);
 });
 
 for (const mode of ["fresh", "resumed"] as const)
