@@ -22,7 +22,7 @@ import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayOperationAut
 import { openOwnerServiceTools, relayServiceToolsOp } from "./ownerServiceTools";
 import { selectOwnerDestination } from "./ownerDestination";
 import { conversationAuthority, releaseConversation, reserveChainConversation } from "./conversations";
-import { requestSchema, type ExternalRelayRequest } from "./protocol";
+import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
 import { richRequest } from "./rich.fixture";
 import { runClaimedRequest } from "./runner";
@@ -43,10 +43,13 @@ const paired = (targets: RelayTargetSettings[], id = "relay_a", ownerId = "101")
 });
 const granted = { ...target, requesters: { revision: 1, entries: [entry] } };
 const setRelays = (...relays: PairedRelay[]) => updateRelayStore(store => ({ ...store, relays }));
-const request = (id: string, targetId = target.id) => structuredClone({
-  ...contextRequest, request_id: id, target_id: targetId, deadline_at: new Date(Date.now() + 20_000).toISOString(),
-  input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_admin: false } },
-}) as ExternalRelayRequest & { input: { requester: NonNullable<ExternalRelayRequest["input"]["requester"]> } };
+const request = (id: string, targetId = target.id) => {
+  const parsed = requestSchema.parse({ ...contextRequest, request_id: id, target_id: targetId,
+    input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_admin: false } },
+  });
+  return { ...parsed, deadline_at: new Date(Date.now() + 20_000).toISOString(),
+    input: { ...parsed.input, requester: parsed.input.requester! } };
+};
 const snapshot = { id: entry.id, kind: entry.kind, tier: "requester" as const, project, label: entry.label };
 const link = { userId: "101", username: null, firstName: null, linkedAt: addedAt };
 const ownerMember = () => {
@@ -71,7 +74,7 @@ test("only the bound key on its target launches a local elevated run", async () 
     { ...target, id: "target_2" }]);
   setRelays(relay);
   const picked = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
-    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: {} } });
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" } } });
   const wire = spyOn(client, "relayCall").mockResolvedValue({ status: 200, body: { status: "ok" } } as never);
   const environment = spyOn(cloud, "cloudEnvironment").mockReturnValue("configured");
   const cloudRun = spyOn(cloud, "runCloudRelay").mockImplementation(() => { throw new Error("unexpected Cloud launch"); });
@@ -423,7 +426,7 @@ for (const state of ["queued", "running", "continuation", "unlink"] as const) {
       setRelaySwitch("chain_conversations", true);
     }
     const selected = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
-      engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: {} } });
+      engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" } } });
     const wire = spyOn(client, "relayCall").mockResolvedValue({ status: 200, body: { status: "ok" } } as never);
     let entered!: () => void, release!: () => void;
     const observing = new Promise<void>(resolve => { entered = resolve; });
