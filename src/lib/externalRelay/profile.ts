@@ -17,6 +17,15 @@ export function requesterIsVerifiedOwner(request: ExternalRelayRequest): boolean
   const message = request.input.respond_to ? request.input.conversation.find(m => m.id === request.input.respond_to) : undefined;
   return !!message && !message.author.self && message.author.key === requester.key;
 }
+/** Keep prompt and chain identity tied to the author of the message being answered. */
+export function effectiveRequester(request: ExternalRelayRequest): ExternalRelayRequest["input"]["requester"] {
+  const requester = request.input.requester;
+  const trigger = request.input.respond_to && request.input.conversation.find(message => message.id === request.input.respond_to);
+  if (!requester || !trigger || trigger.author.self) return requester;
+  if (requester.key === trigger.author.key || requester.is_owner !== true) return requester;
+  return { ...requester, key: trigger.author.key, is_admin: false, can_restrict_members: false,
+    can_delete_messages: false, is_owner: false, is_anonymous_admin: false };
+}
 /** Only the triggering message authored by the service-identified owner grants host access. */
 export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, request: ExternalRelayRequest): OwnerInstruction | null {
   if (target.ownerTier !== true) return null;

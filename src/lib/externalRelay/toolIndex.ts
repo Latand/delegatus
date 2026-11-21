@@ -44,7 +44,8 @@ export async function hydrateToolIndex(relay: PairedRelay, request: ExternalRela
     const until = now() + budget;
     const tools = new Map<string, ExternalRelayTool>();
     const guidance = new Map<string, ToolGuidance>();
-    const pending = new Set((request.input.tools ?? []).filter(tool => tool.mode === "direct").map(tool => tool.name).sort());
+    const visibleClaims = (request.input.tools ?? []).filter(tool => mayQuote(tool.audience, request));
+    const pending = new Set(visibleClaims.filter(tool => tool.mode === "direct").map(tool => tool.name).sort());
     try {
       for (let page = 0; pending.size && page < 4; page++) {
         const describe = [...pending];
@@ -66,7 +67,8 @@ export async function hydrateToolIndex(relay: PairedRelay, request: ExternalRela
           if (result.status !== "ok" || !result.tools) throw new Error("lookup refused");
           let progress = 0;
           for (const tool of result.tools) if (pending.has(tool.name)) {
-            const filled = { ...tool }; delete filled.spec;
+            const claim = visibleClaims.find(candidate => candidate.name === tool.name)!;
+            const filled = { ...tool, ...(claim.audience ? { audience: claim.audience } : {}) }; delete filled.spec;
             if (filled.mode === "handoff" || filled.parameters) { tools.set(tool.name, filled); pending.delete(tool.name); progress++; }
           }
           for (const block of result.guidance ?? []) {
@@ -79,7 +81,7 @@ export async function hydrateToolIndex(relay: PairedRelay, request: ExternalRela
         }
       }
       return { request: { ...request, input: { ...request.input,
-        tools: request.input.tools!.flatMap(tool => tool.mode === "direct" ? tools.has(tool.name) ? [tools.get(tool.name)!] : [] : [tool]),
+        tools: request.input.tools!.flatMap(tool => tool.mode === "direct" && mayQuote(tool.audience, request) ? tools.has(tool.name) ? [tools.get(tool.name)!] : [] : [tool]),
         tool_guidance: [...guidance.keys()].join("\n\n") || null } }, guidance: [...guidance.values()] };
     } catch (error) {
       if (error instanceof ExternalRelayError && (error.status === 404 || error.code === "lease_lost")) lease.lose();

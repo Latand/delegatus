@@ -11,6 +11,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import type { ExternalRelayRequester, ExternalRelayRequest } from "./protocol";
 import { externalRelayFile, runHoldsConversation, withFileLock, withFileLockAsync, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
 import { relayRequestInFlight } from "./activity";
+import { effectiveRequester } from "./profile";
 export type ConversationAuthority = "member" | "admin" | "owner" | "owner-tier";
 export type RelayConversation = {
   id: string; relayId: string; targetId: string; chatKey: string; requesterKey: string; authority: ConversationAuthority; anchors: string[]; conversationId: string | null;
@@ -276,7 +277,7 @@ function resolveChain(rows: RelayConversation[], relay: PairedRelay, target: Rel
   const visited = new Set<string>();
   while (id && !visited.has(id) && visited.size <= messages.size) {
     visited.add(id);
-    const found = pins.get(id)?.find(row => row.requesterKey === request.input.requester?.key && row.authority === authority && row.engine === target.engine);
+    const found = pins.get(id)?.find(row => row.requesterKey === effectiveRequester(request)?.key && row.authority === authority && row.engine === target.engine);
     if (found) return found;
     id = messages.get(id)?.reply_to ?? null;
   }
