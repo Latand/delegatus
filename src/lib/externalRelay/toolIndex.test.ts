@@ -104,3 +104,30 @@ test("on-demand hydration keeps the claimed audience when lookup omits it", asyn
     expect(index.describeToolIndex(hydrated.request, [ownerClaim.name]).tools).toEqual([]);
   } finally { await server.close(); }
 });
+
+test("on-demand hydration keeps the stricter owner audience when claims say admin", async () => {
+  const request = requestSchema.parse(fixture("claimed_tools_on_demand_owner").request);
+  const claim = request.input.tools!.find(tool => tool.audience === "owner" && tool.mode === "direct" && tool.spec && !tool.parameters)!;
+  claim.audience = "admin";
+  request.input.requester = { ...request.input.requester!, is_owner: false, is_admin: true };
+  const resultFixture = fixture("lookup_results");
+  const abort = new AbortController();
+  const server = await startTestRelay((_req, body) => {
+    const call = body as { call_id: string };
+    const described = resultFixture.truncated.tools[0];
+    return { body: { ...resultFixture.truncated, call_id: call.call_id,
+      tools: [{ ...described, name: claim.name, audience: "owner" }], truncated: false } };
+  });
+  try {
+    const hydrated = await index.hydrateToolIndex({ ...destinationRelay(), api_base: `${server.origin}/v1` }, request,
+      { signal: abort.signal, ack: async () => true, lose: () => abort.abort() }, {});
+    const tool = hydrated.request.input.tools!.find(item => item.name === claim.name)!;
+    expect(tool.audience).toBe("owner");
+    expect(index.describeToolIndex(hydrated.request, [claim.name]).tools).toEqual([]);
+    const authorized = structuredClone(hydrated.request);
+    authorized.input.requester = { ...authorized.input.requester!, is_owner: true, is_admin: false };
+    const trigger = authorized.input.conversation.find(message => message.id === authorized.input.respond_to)!;
+    trigger.author.key = authorized.input.requester.key;
+    expect(index.describeToolIndex(authorized, [claim.name]).tools).toHaveLength(1);
+  } finally { await server.close(); }
+});

@@ -1585,9 +1585,11 @@ test("the member limit declines a member past it, per chat, and never counts the
   const ask = (n: number, requester: Record<string, unknown> | null, chat = "chat_key_aaaaaaaaaaaa", target?: Partial<PairedRelay["targets"][number]>) => {
     const paired = relay(`${server.origin}/v1`);
     paired.targets[0] = { ...paired.targets[0]!, id: "target_limit", memberLimitPerHour: 2, ...target };
+    const conversation = sampleRequest.input.conversation.map(message => requester
+      ? { ...message, author: { ...message.author, key: requester.key as string } } : message);
     return runClaimedRequest(paired, {
       ...sampleRequest, request_id: `rq_limit_${n}`, target_id: paired.targets[0]!.id, chat: { key: chat },
-      input: { ...sampleRequest.input, requester },
+      input: { ...sampleRequest.input, conversation, requester },
     }, undefined, { command: script });
   };
   const member = { key: "u_m", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false };
@@ -1623,6 +1625,26 @@ test("the member limit declines a member past it, per chat, and never counts the
     await server.close();
   }
 }, 60_000);
+
+test("conflicting owner and admin claims use trigger identity for member admission", async () => {
+  const server = await startTestRelay((req) => ({ body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } }));
+  const script = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    paired.targets[0]!.id = "target_claimed_member";
+    paired.targets[0]!.memberLimitPerHour = 1;
+    const conflicting = { key: "claimed-owner", is_admin: true, can_restrict_members: true, can_delete_messages: true,
+      is_owner: true, is_anonymous_admin: false };
+    const request = (id: string, requester: typeof conflicting) => ({
+      ...sampleRequest, request_id: id, target_id: paired.targets[0]!.id, chat: { key: "chat_key_claimed_member" },
+      input: { ...sampleRequest.input, requester },
+    });
+    expect(await runClaimedRequest(paired, request("rq_claimed_member_1", conflicting), undefined, { command: script })).toMatchObject({ outcome: "answered" });
+    expect(readAnswerRecord(paired.id, paired.targets[0]!.id, "rq_claimed_member_1")?.requester).toMatchObject({ key: "u1", is_owner: false, is_admin: false });
+    const next = await runClaimedRequest(paired, request("rq_claimed_member_2", { ...conflicting, key: "u1", is_owner: false, is_admin: false }), undefined, { command: script });
+    expect(next).toMatchObject({ outcome: "declined", reason: "member_limit" });
+  } finally { await server.close(); }
+}, 30_000);
 
 test("pre-launch capacity and drain declines leave the member's allowance available", async () => {
   const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
@@ -1664,7 +1686,10 @@ test("launched hand-offs, failed agents and running agents each consume the memb
   paired.id = "relay_count_launched";
   paired.targets[0] = { ...paired.targets[0]!, concurrency: 2, memberLimitPerHour: 1 };
   const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
-  const request = (id: string, chatKey: string) => ({ ...contextRequest, request_id: id, chat: { key: chatKey }, input: { ...contextRequest.input, requester } });
+  const request = (id: string, chatKey: string) => ({ ...contextRequest, request_id: id, chat: { key: chatKey }, input: {
+    ...contextRequest.input, conversation: contextRequest.input.conversation.map(message => ({ ...message,
+      author: { ...message.author, key: requester.key } })), requester,
+  } });
   const handoff = handoffStub(path.join(root, "admission-handoff"));
   const failure = stub("process.exit(1)");
   const release = path.join(root, "admission-release");

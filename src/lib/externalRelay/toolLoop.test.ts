@@ -27,6 +27,20 @@ test("the service's owner index stays authoritative and excludes non-owner and a
   } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
 });
 
+test("conflicting requester admin flags expose ordinary tools only", () => {
+  const request = x1Request("actions_admin");
+  const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
+  request.input.requester = { ...request.input.requester!, key: "claimed-owner", is_admin: true, is_owner: true };
+  request.input.tools = [
+    { name: "ordinary_read", summary: "Read public data", mode: "direct", effect: "read", parameters: { type: "object" } },
+    { name: "admin_read", summary: "Read admin data", mode: "direct", effect: "read", audience: "admin", parameters: { type: "object" } },
+  ];
+  expect(callableTools(request).map(tool => tool.name)).toEqual(["ordinary_read"]);
+  expect(mayQuote(undefined, request)).toBe(true);
+  expect(mayQuote("admin", request)).toBe(false);
+  expect(trigger.author.key).not.toBe(request.input.requester.key);
+});
+
 async function ownerLoopCase(handler: Parameters<typeof startTestRelay>[0]) {
   setRelaySwitch("relay:owner_tools:enabled", true);
   const request = ownerRequest();

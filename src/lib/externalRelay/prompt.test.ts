@@ -160,6 +160,25 @@ test("requester, memory and tool index arrive as escaped data with the hand-off 
   expect(prompt).toContain(`"name":"restrict_member","summary":"Mute a participant","mode":"handoff"`);
 });
 
+test("plain guest prompts use the trigger identity and audience-filtered handoff index", () => {
+  const request = requestSchema.parse(x1Request("owner"));
+  request.delivery = "guest";
+  const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
+  trigger.author.key = "guest-key";
+  trigger.author.key = "guest-key";
+  request.input.tools = [
+    { name: "guest_handoff", summary: "Ask the service assistant", mode: "handoff" },
+    { name: "owner_handoff", summary: "Owner-only handoff", mode: "handoff", audience: "owner" },
+  ];
+  const prompt = answerPrompt(request);
+  const requester = JSON.parse(prompt.match(/<requester>\n([\s\S]*?)\n<\/requester>/)![1]!);
+  const tools = JSON.parse(prompt.match(/<tools>\n([\s\S]*?)\n<\/tools>/)![1]!);
+  expect(requester).toMatchObject({ key: "guest-key", is_owner: false, is_admin: false });
+  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(["guest_handoff"]);
+  expect(prompt).toContain("handoff");
+  expect(prompt).toContain(trigger.text);
+});
+
 test("no tool index, no hand-off: requester alone adds only its own section", () => {
   const prompt = answerPrompt(
     requestSchema.parse({

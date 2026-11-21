@@ -7,14 +7,14 @@ import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
 import { ACTION_VERIFICATION_MS, ACTION_VERIFICATION_READS, actionOutcomeReads, establishActionOutcome, verificationFailed, type ActionOutcome, type ActionResolution } from "./actionOutcome";
-import { requesterIsVerifiedOwner } from "./profile";
+import { effectiveRequester, requesterIsVerifiedOwner } from "./profile";
 
 export const RELAY_TOOL_ROUNDS = 8;
 // Receipt reads do not admit actions. This bound is also saved by the runner.
 export const UNKNOWN_OUTCOME_READS = 3;
 
 export function mayQuote(audience: string | undefined, request: ExternalRelayRequest): boolean {
-  const requester = request.input.requester;
+  const requester = effectiveRequester(request);
   return audience === undefined || (audience === "admin" && requester?.is_admin === true) ||
     (audience === "owner" && requesterIsVerifiedOwner(request));
 }

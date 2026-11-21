@@ -352,7 +352,7 @@ function reservation(relay: PairedRelay, target: RelayTargetSettings, request: E
       }
       const id = randomUUID(); const now = new Date().toISOString();
       const temporary = path.resolve(os.tmpdir()); const home = path.resolve(os.homedir());
-      record = { id, relayId: relay.id, targetId: target.id, chatKey: request.chat!.key, requesterKey: request.input.requester!.key,
+      record = { id, relayId: relay.id, targetId: target.id, chatKey: request.chat!.key, requesterKey: effectiveRequester(request)!.key,
         authority, anchors: [], conversationId: null, engine: target.engine === "codex-cloud" ? "codex" : target.engine!, sessionId: null, accountId: null,
         cwd: authority === "owner-tier" ? null : path.join(temporary === home || temporary.startsWith(home + path.sep) ? "/tmp" : temporary, `llv-relay-conv-${id}`),
         turns: 0, turnsSinceCompaction: 0, createdAt: now, lastTurnAt: now, seen: [], staticDigest: null, lastPromptTokens: null, compactions: 0, state: "idle", runningRequestId: null };
@@ -381,7 +381,7 @@ function reservationAsync(relay: PairedRelay, target: RelayTargetSettings, reque
       }
       const id = randomUUID(); const now = new Date().toISOString();
       const temporary = path.resolve(os.tmpdir()); const home = path.resolve(os.homedir());
-      record = { id, relayId: relay.id, targetId: target.id, chatKey: request.chat!.key, requesterKey: request.input.requester!.key,
+      record = { id, relayId: relay.id, targetId: target.id, chatKey: request.chat!.key, requesterKey: effectiveRequester(request)!.key,
         authority, anchors: [], conversationId: null, engine: target.engine === "codex-cloud" ? "codex" : target.engine!, sessionId: null, accountId: null,
         cwd: authority === "owner-tier" ? null : path.join(temporary === home || temporary.startsWith(home + path.sep) ? "/tmp" : temporary, `llv-relay-conv-${id}`),
         turns: 0, turnsSinceCompaction: 0, createdAt: now, lastTurnAt: now, seen: [], staticDigest: null, lastPromptTokens: null, compactions: 0, state: "idle", runningRequestId: null };

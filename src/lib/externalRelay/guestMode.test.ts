@@ -9,10 +9,12 @@ import { requestSchema, checkedAnswer, guestAnswerSchema, offersHandoff, type Ex
 import { relayClaimBody } from "./poller";
 import { relayCall } from "./client";
 import { ownerTierFor } from "./profile";
+import { effectiveRequester } from "./profile";
 import { ownerAnswer } from "./ownerRun";
 import { answerCapabilities } from "./answerV2";
 import { runClaimedRequest } from "./runner";
 import { callableTools, createToolLoop } from "./toolLoop";
+import { answerPrompt } from "./prompt";
 import { validateMediaInput } from "./mediaInputValidation";
 import { prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
 import { newTargetSettings, updateRelayStore, readRunLedger, type PairedRelay } from "./store";
@@ -54,6 +56,42 @@ test("service guest bytes, additive delivery and existing authority selector", (
     expect(ownerTierFor({ ownerTier: true }, hostile)).toBeNull();
   }
   expect(relayClaimBody(paired("http://127.0.0.1:1")).features).toContain("relay_guest_answers");
+});
+
+test("owner requester projection requires an authored, non-anonymous trigger", () => {
+  const valid = guest();
+  expect(effectiveRequester(valid)?.is_owner).toBe(true);
+  expect(ownerTierFor({ ownerTier: true }, valid)).not.toBeNull();
+  for (const change of [
+    { input: { ...valid.input, respond_to: null } },
+    { input: { ...valid.input, conversation: valid.input.conversation.map(message => message.id === valid.input.respond_to
+      ? { ...message, author: { ...message.author, self: true } } : message) } },
+    { input: { ...valid.input, requester: { ...valid.input.requester!, is_anonymous_admin: true } } },
+  ]) {
+    const hostile = { ...valid, ...change } as ExternalRelayRequest;
+    expect(ownerTierFor({ ownerTier: true }, hostile)).toBeNull();
+    expect(effectiveRequester(hostile)?.is_owner).toBe(false);
+  }
+});
+
+test("guest prompt hides conflicting owner identity and owner audience metadata", () => {
+  const request = guest();
+  request.features = ["relay_media_in"];
+  const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
+  trigger.author.key = "guest-key";
+  trigger.media = [{ ref: "media_00000000000000000000000000000001", kind: "photo", availability: "ready",
+    mime_type: "image/jpeg", byte_size: 1, expires_at: "2099-01-01T00:00:00Z" }];
+  request.input.tools = [
+    { name: "guest_handoff", summary: "Return to the service assistant", mode: "handoff" },
+    { name: "owner_handoff", summary: "Owner capability", mode: "handoff", audience: "owner" },
+  ];
+  const prompt = answerPrompt(request);
+  const requester = JSON.parse(prompt.match(/<requester>\n([\s\S]*?)\n<\/requester>/)![1]!);
+  const tools = JSON.parse(prompt.match(/<tools>\n([\s\S]*?)\n<\/tools>/)![1]!);
+  expect(requester).toMatchObject({ key: "guest-key", is_owner: false, is_admin: false });
+  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(["guest_handoff"]);
+  expect(prompt).toContain("handoff");
+  expect(prompt).toContain("media_00000000000000000000000000000001");
 });
 
 test("guest contract refuses direct service tools, progress, destinations and rich output", () => {

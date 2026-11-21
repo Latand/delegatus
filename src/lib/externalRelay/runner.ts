@@ -256,7 +256,7 @@ export async function runClaimedRequest(
     targetName: relay.targets.find((item) => item.id === targetId)?.name ?? null,
     claimedAt: rawRequest.claimed_at,
     chatKey: request?.chat?.key ?? null,
-    requester: request?.input.requester ?? null,
+    requester: request ? effectiveRequester(request) ?? null : null,
     input: rawRequest.input,
     ...(request?.features ? { features: request.features } : {}),
   });
@@ -707,7 +707,7 @@ export async function runClaimedRequest(
     if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
     // The member limit (§B.8): a member past it is declined, and the service's
     // fallback setting decides whether its own agent answers instead.
-    const requester = request.input.requester;
+    const requester = effectiveRequester(request);
     const limit = memberLimitFor(target);
     const memberDecline = (): ExternalRelayCompletion | null => {
       if (!requester || limit === null || exemptFromMemberLimit(requester)) return null;

@@ -68,7 +68,9 @@ export async function hydrateToolIndex(relay: PairedRelay, request: ExternalRela
           let progress = 0;
           for (const tool of result.tools) if (pending.has(tool.name)) {
             const claim = visibleClaims.find(candidate => candidate.name === tool.name)!;
-            const filled = { ...tool, ...(claim.audience ? { audience: claim.audience } : {}) }; delete filled.spec;
+            const audience = claim.audience === "owner" || tool.audience === "owner" ? "owner"
+              : claim.audience === "admin" || tool.audience === "admin" ? "admin" : undefined;
+            const filled = { ...tool, ...(audience ? { audience } : {}) }; delete filled.spec;
             if (filled.mode === "handoff" || filled.parameters) { tools.set(tool.name, filled); pending.delete(tool.name); progress++; }
           }
           for (const block of result.guidance ?? []) {

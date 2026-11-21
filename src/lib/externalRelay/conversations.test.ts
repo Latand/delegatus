@@ -107,10 +107,16 @@ test("a requester and their authority scope every chain", () => {
   const first = reserveChainConversation(relay, target, request(), "owner-tier")!;
   releaseConversation(first.id);
   const reply = request("reply", "root");
-  expect(reserveChainConversation(relay, target, reply, "member")!.id).not.toBe(first.id);
-  expect(reserveChainConversation(relay, target, { ...reply, chat: { key: "other-chat" } }, "owner-tier")!.id).not.toBe(first.id);
-  expect(reserveChainConversation(relay, target, { ...reply, input: { ...reply.input, requester: { ...reply.input.requester!, key: "another-requester" } } }, "owner-tier")!.id).not.toBe(first.id);
-  expect(reserveChainConversation(relay, target, reply, "owner-tier")!.id).toBe(first.id);
+  const member = reserveChainConversation(relay, target, reply, "member")!;
+  expect(member.id).not.toBe(first.id); releaseConversation(member.id);
+  const otherChat = reserveChainConversation(relay, target, { ...reply, chat: { key: "other-chat" } }, "owner-tier")!;
+  expect(otherChat.id).not.toBe(first.id); releaseConversation(otherChat.id);
+  const continuation = reserveChainConversation(relay, target, reply, "owner-tier")!;
+  expect(continuation.id).toBe(first.id); releaseConversation(continuation.id);
+  const anotherRequester = { ...reply, input: { ...reply.input, requester: { ...reply.input.requester!, key: "another-requester" } } };
+  anotherRequester.input.conversation[0]!.author.key = "another-requester";
+  const otherMember = reserveChainConversation(relay, target, anotherRequester, "owner-tier")!;
+  expect(otherMember.id).not.toBe(first.id); releaseConversation(otherMember.id);
 });
 test("conflicting owner metadata cannot select an owner chain, while the verified owner can continue", () => {
   const ownerRequest = request();
@@ -127,11 +133,31 @@ test("conflicting owner metadata cannot select an owner chain, while the verifie
   conflict.input.conversation.unshift({ ...ownerRequest.input.conversation[0]!, id: "root", reply_to: null });
   conflict.input.conversation[1]!.author.key = "guest-key";
   conflict.input.requester = { ...ownerRequest.input.requester! };
-  expect(reserveChainConversation(relay, target, conflict, "member")!.id).not.toBe(record.id);
+  const downgraded = reserveChainConversation(relay, target, conflict, "member")!;
+  expect(downgraded.id).not.toBe(record.id);
+  expect(downgraded.requesterKey).toBe("guest-key");
   const prompt = conversationTurnPrompt(conflict, record, "[round]").prompt;
   expect(prompt).toContain('"key":"guest-key"');
   expect(prompt).toContain('"is_admin":false');
   expect(prompt).toContain('"is_owner":false');
+});
+
+test("async downgraded photo reservation pins the verified member for the next reply", async () => {
+  const photo = request("photo", "root");
+  photo.input.conversation.unshift({ ...request().input.conversation[0]!, id: "root", reply_to: null });
+  photo.input.conversation[1]!.author.key = "member-key";
+  photo.input.requester = { ...photo.input.requester!, is_owner: true, is_admin: true };
+  const first = await reserveChainConversationAsync(relay, target, photo, "member", Date.now() + 5000);
+  expect(first?.requesterKey).toBe("member-key");
+  await releaseConversationAsync(first!.id, {}, Date.now() + 5000, "photo");
+
+  const reply = request("reply", "photo");
+  reply.input.conversation.unshift(...photo.input.conversation);
+  reply.input.conversation.at(-1)!.author.key = "member-key";
+  reply.input.requester = { ...photo.input.requester!, key: "member-key", is_owner: false, is_admin: false };
+  const next = await reserveChainConversationAsync(relay, target, reply, "member", Date.now() + 5000);
+  expect(next?.id).toBe(first?.id);
+  expect(next?.requesterKey).toBe("member-key");
 });
 test("an owner skips a member pin; learned bot anchors survive a truncated window", () => {
   const owner = reserveChainConversation(relay, target, request(), "owner-tier")!; releaseConversation(owner.id);
