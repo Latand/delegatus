@@ -586,30 +586,209 @@ test("two fresh processes share one completed installation", async () => {
   } finally { f.close(); }
 }, 30_000);
 
-test.each([2, 3])("warm validation rechecks a CLI link removed after graph read %i", async removeAfterRead => {
+// The timeout covers fixture migration under the gate's I/O limits. Each
+// warm caller independently refuses an in-process walk of the payload.
+test("a real-sized sealed inventory stays out of fresh linked and provisioning callers", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    // Populate read-only payload separately from the cold installer, which
+    // chmods each entry serially. The changed root makes the real writer
+    // validate the complete inventory and refresh the fingerprint.
+    const payload = path.join(modules, "large-payload");
+    // Model a legacy installation before its first payload inventory.
+    fs.unlinkSync(path.join(path.dirname(modules), "payload.sha256"));
+    fs.unlinkSync(path.join(path.dirname(modules), "validated.sha256"));
+    fs.chmodSync(modules, 0o755);
+    fs.mkdirSync(payload);
+    for (let directory = 0; directory < 407; directory++) {
+      const fixture = path.join(payload, `group-${directory}`);
+      fs.mkdirSync(fixture);
+      for (let entry = 0; entry < 100; entry++) {
+        fs.writeFileSync(path.join(fixture, `file-${entry}.js`), "", { mode: 0o444 });
+      }
+      fs.chmodSync(fixture, 0o555);
+    }
+    fs.chmodSync(payload, 0o555);
+    fs.chmodSync(modules, 0o555);
+    await expect(prepareLockedDependencies(f.worktreeDir)).resolves.toBe(true);
+    const newcomer = await f.addWorktree("large-graph-new-link");
+    const check = `
+      import fs from "node:fs";
+      const lstat = fs.promises.lstat, readdir = fs.promises.readdir;
+      fs.promises.lstat = (file, ...args) => {
+        if (String(file).startsWith(${JSON.stringify(payload)}))
+          throw new Error("warm validation statted a payload entry");
+        return lstat(file, ...args);
+      };
+      fs.promises.readdir = (file, ...args) => {
+        if (String(file).startsWith(${JSON.stringify(modules)})) throw new Error("warm validation walked the sealed graph");
+        return readdir(file, ...args);
+      };
+      await import(${JSON.stringify(path.resolve("scripts/prepare-stage-dependencies.ts"))});`;
+    for (const cwd of [f.worktreeDir, newcomer]) {
+      await f.run([process.execPath, "-e", check], cwd);
+      expect(fs.realpathSync(path.join(cwd, "node_modules"))).toBe(modules);
+    }
+  } finally { f.close(); }
+}, 150_000);
+
+test.each(["missing", "truncated", "directory", "nonempty directory", "stale"] as const)("a %s validation receipt rechecks the fenced inventory", async shape => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const receipt = path.join(path.dirname(modules), "validated.sha256");
+    const original = fs.readFileSync(receipt, "ascii");
+    if (shape === "missing" || shape.includes("directory")) fs.unlinkSync(receipt);
+    if (shape === "truncated") fs.writeFileSync(receipt, "{");
+    if (shape.includes("directory")) fs.mkdirSync(receipt);
+    if (shape === "nonempty directory") fs.writeFileSync(path.join(receipt, "preserve"), "unowned");
+    if (shape === "stale") fs.chmodSync(modules, 0o755);
+    const release = f.holdWriter();
+    try {
+      const controller = new AbortController();
+      await expect(prepareLockedDependencies(f.worktreeDir, { signal: controller.signal, onWriterWait: () => controller.abort() }))
+        .rejects.toThrow(/\[wait: repository writer fence/);
+    } finally { release(); }
+    const newcomer = await f.addWorktree("receipt-recovery");
+    for (const cwd of [f.worktreeDir, newcomer]) {
+      await f.run([process.execPath, path.resolve("scripts/prepare-stage-dependencies.ts")], cwd);
+      expect(fs.realpathSync(path.join(cwd, "node_modules"))).toBe(modules);
+    }
+    if (shape === "nonempty directory") expect(fs.readFileSync(path.join(receipt, "preserve"), "utf8")).toBe("unowned");
+    else {
+      const refreshed = fs.readFileSync(receipt, "ascii");
+      expect(refreshed).toMatch(/^[a-f0-9]{64}$/);
+      if (shape !== "stale") expect(refreshed).toBe(original);
+    }
+    expect(fs.statSync(modules).mode & 0o222).toBe(0);
+  } finally { f.close(); }
+}, 30_000);
+
+test.each((["linked", "new"] as const).flatMap(link =>
+  (["executable", "writable", "deleted", "replaced"] as const).map(change => [link, change] as const),
+))("a fresh %s admission checks %s nested payload", async (link, change) => {
+  const f = await lockedFixture();
+  try {
+    const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+    await f.run([process.execPath, hook], f.worktreeDir);
+    const cwd = link === "linked" ? f.worktreeDir : await f.addWorktree("payload-admission");
+    const local = path.join(cwd, "node_modules");
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const parent = path.join(modules, "fixture-tool", "lib");
+    const file = path.join(parent, "index.js");
+    if (change === "executable") fs.chmodSync(file, 0o555);
+    if (change === "writable") fs.chmodSync(file, 0o644);
+    if (change === "deleted" || change === "replaced") {
+      fs.chmodSync(parent, 0o755);
+      if (change === "deleted") fs.unlinkSync(file);
+      else {
+        const replacement = path.join(parent, "replacement");
+        fs.copyFileSync(file, replacement);
+        fs.renameSync(replacement, file);
+      }
+      fs.chmodSync(parent, 0o555);
+    }
+    if (change === "writable") {
+      await f.run([process.execPath, hook], cwd);
+      expect(fs.statSync(file).mode & 0o777).toBe(0o444);
+      expect(fs.realpathSync(local)).toBe(modules);
+    } else {
+      await expect(f.run([process.execPath, hook], cwd)).rejects.toThrow(change === "executable"
+        ? "dependency receipt inventory does not match the installed graph"
+        : "dependency payload changed since the installation was validated");
+      expect(fs.existsSync(local)).toBe(link === "linked");
+      if (change === "executable") expect(fs.statSync(file).mode & 0o777).toBe(0o555);
+    }
+  } finally { f.close(); }
+}, 30_000);
+
+test("a partly written installation stays unpublished while the writer is active and after validation refuses it", async () => {
+  const f = await lockedFixture();
+  const partial = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
+  let writing: Promise<boolean> | undefined;
+  try {
+    const peer = await f.addWorktree("partial-graph-peer");
+    writing = prepareLockedDependencies(f.worktreeDir, { exec: async (...args) => {
+      const result = await realExec(...args);
+      if (args[0] === "bun" && result.code === 0) {
+        fs.unlinkSync(path.join(args[2]!, "node_modules", "fixture-tool", "package.json"));
+        partial.resolve();
+        await finish.promise;
+      }
+      return result;
+    } });
+    void writing.catch(partial.reject);
+    await partial.promise;
+    const controller = new AbortController();
+    await expect(prepareLockedDependencies(peer, {
+      signal: controller.signal, onWriterWait: () => controller.abort(),
+    })).rejects.toThrow(/\[wait: repository writer fence/);
+    expect(fs.existsSync(path.join(peer, "node_modules"))).toBe(false);
+    expect(fs.readdirSync(f.cache).filter(name => /^[a-f0-9]{64}$/.test(name))).toEqual([]);
+    finish.resolve();
+    await expect(writing).rejects.toThrow("required dependency unavailable (ENOENT)");
+    expect(fs.readdirSync(f.cache)).toEqual(["owner.lock"]);
+    expect(fs.existsSync(path.join(f.worktreeDir, "node_modules"))).toBe(false);
+    await expect(prepareLockedDependencies(peer)).resolves.toBe(true);
+  } finally { finish.resolve(); await writing?.catch(() => {}); f.close(); }
+}, 30_000);
+
+test("full validation notices a CLI link removed after the asynchronous stat", async () => {
   const f = await lockedFixture({ registry: true });
   let restore: (() => void) | undefined;
   try {
     await prepareLockedDependencies(f.worktreeDir);
     const local = path.join(f.worktreeDir, "node_modules"), modules = fs.realpathSync(local);
+    fs.unlinkSync(path.join(path.dirname(modules), "validated.sha256"));
     const cli = path.join(modules, ".bin/fixture-tool"), lstat = fs.promises.lstat;
-    let reads = 0;
+    let removed = false;
     function intercept(filename: fs.PathLike, options: StatOptions & { bigint: true }): Promise<BigIntStats>;
     function intercept(filename: fs.PathLike, options?: StatOptions): Promise<Stats>;
     function intercept(filename: fs.PathLike, options?: StatOptions): Promise<Stats | BigIntStats> {
       const value = options?.bigint ? lstat(filename, { bigint: true }) : lstat(filename);
       return value.then(result => {
-        if (filename === cli && ++reads === removeAfterRead) fs.unlinkSync(cli);
+        if (filename === cli && !removed) { fs.unlinkSync(cli); removed = true; }
         return result;
       });
     }
     const hook = spyOn(fs.promises, "lstat").mockImplementation(intercept);
     restore = () => hook.mockRestore();
-    await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow(/changed during (validation|preparation)/);
-    expect(reads).toBeGreaterThanOrEqual(removeAfterRead);
+    await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow(/ENOENT|changed during (validation|preparation)/);
+    expect(removed).toBe(true);
     expect(fs.realpathSync(local)).toBe(modules);
     expect(fs.existsSync(cli)).toBe(false);
   } finally { restore?.(); f.close(); }
+}, 30_000);
+
+test("a stale receipt deadline during the final synchronous stat retries validation in a fresh process", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const target = path.dirname(fs.realpathSync(path.join(f.worktreeDir, "node_modules")));
+    const receipt = path.join(target, "installed.json");
+    fs.writeFileSync(path.join(target, "validated.sha256"), "0".repeat(64));
+    const source = `
+      import fs from "node:fs";
+      import { prepareLockedDependencies } from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+      let now = 1800000000000, checks = 0;
+      Date.now = () => now;
+      const lstat = fs.lstatSync;
+      fs.lstatSync = (file, ...args) => {
+        const entry = lstat(file, ...args);
+        if (file === ${JSON.stringify(receipt)} && ++checks === 1) now += 180001;
+        return entry;
+      };
+      await prepareLockedDependencies(process.cwd());
+      process.stdout.write(String(checks));`;
+    const result = await realExec(process.execPath, ["-e", source], f.worktreeDir, undefined, { timeoutMs: 10_000 });
+    expect(result.code, result.stderr).toBe(0);
+    expect(Number(result.stdout)).toBeGreaterThan(1);
+    expect(result.stderr.match(/retrying validation in 100 ms/g)).toHaveLength(1);
+    expect(result.stderr).toContain("[validation: existing link and seal");
+  } finally { f.close(); }
 }, 30_000);
 
 test("receipt inventory omissions refuse, and permission drift is repaired under the writer fence", async () => {
@@ -858,7 +1037,7 @@ test("a matching replacement symlink cannot acknowledge a lost commit for anothe
 test.each(["validation", "before commit", "after commit"] as const)("a deadline at %s identifies the failing phase or retains the committed link", async phase => {
   const f = await lockedFixture();
   let restore: (() => void) | undefined;
-  let now = Date.now();
+  let now = 1_800_000_000_000;
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   try {
     const local = path.join(f.worktreeDir, "node_modules");
@@ -895,6 +1074,47 @@ test.each(["validation", "before commit", "after commit"] as const)("a deadline 
       expect(fs.lstatSync(local).ino).toBe(inode);
     }
   } finally { restore?.(); clock.mockRestore(); f.close(); }
+}, 30_000);
+
+test.each([1, 2])("a fenced validation timing out %i time(s) gets one retry in a fresh process", async failures => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const newcomer = await f.addWorktree("validation-retry");
+    const local = path.join(newcomer, "node_modules");
+    const cli = path.join(modules, ".bin", "fixture-tool");
+    const source = `
+      import fs from "node:fs";
+      import { prepareLockedDependencies } from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+      let now = 1800000000000, attempts = 0;
+      Date.now = () => now;
+      const realpath = fs.promises.realpath;
+      fs.promises.realpath = async (file, ...args) => {
+        const resolved = await realpath(file, ...args);
+        if (file === ${JSON.stringify(cli)}) {
+          if (fs.existsSync(${JSON.stringify(local)})) throw new Error("an unvalidated link was published");
+          if (++attempts <= ${failures}) now += 180001;
+        }
+        return resolved;
+      };
+      let error = null;
+      try { await prepareLockedDependencies(process.cwd()); } catch (failure) { error = failure.message; }
+      process.stdout.write(JSON.stringify({ attempts, error }));`;
+    const result = await realExec(process.execPath, ["-e", source], newcomer, undefined, { timeoutMs: 10_000 });
+    expect(result.code, result.stderr).toBe(0);
+    const { attempts, error } = JSON.parse(result.stdout);
+    expect(attempts).toBe(2);
+    expect(result.stderr.match(/retrying validation in 100 ms/g)).toHaveLength(1);
+    if (failures === 1) {
+      expect(error).toBeNull();
+      expect(fs.realpathSync(local)).toBe(modules);
+    } else {
+      expect(error).toMatch(/deadline exceeded \[validation: fenced graph/);
+      expect(fs.existsSync(local)).toBe(false);
+    }
+    f.holdWriter()();
+  } finally { f.close(); }
 }, 30_000);
 
 test.skipIf(process.platform === "win32").each(["realExec", "worktreeDependencyExec"])("%s keeps the cache fence with an installer after its controller dies", async executor => {
