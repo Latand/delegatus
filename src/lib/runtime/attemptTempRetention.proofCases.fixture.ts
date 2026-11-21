@@ -8,7 +8,7 @@ import { finishedLane } from "./attemptTempRetention.testSupport";
 import { statePath } from "../configDir";
 import { plantKeepMarker } from "./keepMarker.testSupport";
 import { allocatedAttemptBytes } from "./attemptTempFilesystem";
-import { NOW, roots, realParentPass, restoreEnvironment, nativeFenceDeferrals } from "./attemptTempPressure.testSupport";
+import { NOW, roots, realParentPass, restoreEnvironment, nativeFenceDeferrals, ledgerRoots } from "./attemptTempPressure.testSupport";
 
 export function protectedTailTests(timeoutPrefix: 4 | 8) {
 for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false] : [false, true]) {
@@ -17,7 +17,7 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
     { phase: "protection" as const, requiredCost: 1500, costlyTail: false },
     { phase: "allocation" as const, requiredCost: 3000, costlyTail: true },
   ])(
-    `real parent reuses a protected tail's proof window (timeouts=${timeoutPrefix}, low-space=${lowSpace}, clears-cap=${clearsCap}, phase=$phase, costly-tail=$costlyTail)`, async ({ phase, requiredCost, costlyTail }) => {
+    `real parent advances a bounded pass past protected and slow roots (timeouts=${timeoutPrefix}, low-space=${lowSpace}, clears-cap=${clearsCap}, phase=$phase, costly-tail=$costlyTail)`, async ({ phase, requiredCost, costlyTail }) => {
     const originalEnv = { ...process.env };
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "proof-windows-")); roots.push(root);
     const state = path.join(root, "state"), scratch = path.join(state, "scratch"); fs.mkdirSync(scratch, { recursive: true });
@@ -26,7 +26,7 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
     const directories: { directory: string; identity: string }[] = [];
     const count = timeoutPrefix + 32;
     try {
-      savePipelines([finishedLane(root, new Date(NOW - 3600_000).toISOString())]);
+      savePipelines([finishedLane(root, new Date(NOW - 2 * 86400_000).toISOString())]);
       for (let n = 0; n <= count; n++) {
         const directory = path.join(scratch, `llv-stage-${String(n).padStart(6, "0")}`);
         fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "data"), Buffer.alloc(4096));
@@ -41,7 +41,14 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
       process.env.LLV_PRESSURE_FIXTURE = config;
       fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
         slowProof: { phase, prefix: count + Number(costlyTail), timeoutPrefix, requiredCost } }));
-      const before = store.bytes(), report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
+      const before = store.bytes();
+      let report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
+      for (let tick = 1; !clearsCap && report.removed === 0 && tick < Math.ceil(timeoutPrefix / 7) + 2; tick++) {
+        expect(report.errors).toBe(0); expect(clock.elapsed).toBeLessThanOrEqual(40_001);
+        fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+          slowProof: { phase, prefix: count + Number(costlyTail), timeoutPrefix, requiredCost } }));
+        report = await realParentPass(); clock = JSON.parse(fs.readFileSync(config, "utf8"));
+      }
       if (clearsCap) {
         expect(report).toMatchObject({ removed: 0, removedBytes: 0, errors: 0, overCapBytes: 0, checked: 1 });
         expect(report.deferred).toBe(0);
@@ -52,14 +59,14 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
           const stat = fs.statSync(directory); expect(`${stat.dev}:${stat.ino}`).toBe(identity);
           expect(fs.readFileSync(path.join(directory, "data")).length).toBe(4096);
         }
-        expect(fs.existsSync(statePath("attempt-temp-report.json"))).toBeFalse();
+        expect(JSON.parse(fs.readFileSync(statePath("attempt-temp-report.json"), "utf8")).pass.ended).toBe("pressure-cleared");
         return;
       }
       expect(report.removed).toBeGreaterThan(0); expect(report.errors).toBe(0);
       expect(report.checked).toBeLessThanOrEqual(count + 1 + 32);
-      expect(report.outcomes).toHaveLength(count + 1);
-      expect(new Set(report.outcomes.map(row => row.directory)).size).toBe(count + 1);
-      expect(report.deferred).toBe(count - report.removed);
+      expect(report.outcomes.length).toBeLessThanOrEqual(count + 1);
+      expect(new Set(report.outcomes.map(row => row.directory)).size).toBe(report.outcomes.length);
+      expect(report.deferred).toBe(report.checked - report.removed - report.held);
       expect(clock.elapsed).toBeLessThanOrEqual(40_001);
       expect(Math.max(...clock.windows)).toBeLessThanOrEqual(5000);
       expect(report.removedBytes).toBe(before - report.bytes);
@@ -68,9 +75,10 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
         expect(fs.readFileSync(path.join(directory, "data")).length).toBe(4096);
       }
       expect(fs.existsSync(path.join(held.directory, ".delegatus-keep"))).toBeTrue();
-      // The tail retry never checkpoints past the first fractional probe.
-      const next = store.pressurePage(1)[0]!.directory;
-      expect(next < directories[timeoutPrefix]!.directory || next === directories[timeoutPrefix]!.directory).toBeTrue();
+      // The durable pass position names the next root; no visited root precedes it again.
+      const next = store.pressurePassRoot(store.activePressurePass()!.position)!.directory;
+      const cut = report.outcomes.at(-1)!;
+      expect(!report.outcomes.some(row => row.directory === next) || cut.directory === next && cut.disposition === "deferred").toBeTrue();
       console.error(JSON.stringify({ fixture: "protected-proof-tail", phase, timeoutPrefix, lowSpace, costlyTail,
         checked: report.checked, removed: report.removed, removedBytes: report.removedBytes, deferred: report.deferred,
         bytes: report.bytes, elapsed: clock.elapsed }));
@@ -90,7 +98,7 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
       // starts. A pressure-budget or cursor failure retains the three-pass
       // assertion rather than receiving an unconditional retry.
       for (let retry = 0; retry < 3 && store.bytes() > heldBytes; retry++) {
-        for (const owner of store.pressurePage(count + 1).filter(row => row.directory !== held.directory)) {
+        for (const owner of ledgerRoots(store, scratch).filter(row => row.directory !== held.directory)) {
           expect(nativeRefused.has(owner.directory)).toBeTrue();
           const stat = fs.statSync(owner.directory); expect(`${stat.dev}:${stat.ino}`).toBe(owner.identity);
           expect(fs.readFileSync(path.join(owner.directory, "data")).length).toBe(4096);

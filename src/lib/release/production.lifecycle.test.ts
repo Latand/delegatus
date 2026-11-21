@@ -114,7 +114,7 @@ async function observe(rows: Pipeline[], archived: Pipeline[] = []) {
   const priorPath = process.env.PATH, priorFetch = globalThis.fetch;
   let archiveReads = 0;
   const script = `#!${process.execPath}\nconst tool=process.argv[1].split('/').at(-1),a=process.argv.slice(2);let out='';
-if(tool==='git'){if(a[0]==='for-each-ref')out='v1.0.0 1793318400';else if(a[0]==='rev-parse')out='${head}';else if(a[0]==='show')out=JSON.stringify({name:'package-example',version:'1.0.0'});}
+if(tool==='git'){if(a[0]==='for-each-ref')out='v1.0.0 1793318400';else if(a[0]==='rev-parse')out='${head}';else if(a[0]==='ls-tree')out='package.json';else if(a[0]==='show')out=JSON.stringify({name:'package-example',version:'1.0.0'});}
 if(tool==='gh'){if(a[0]==='repo')out='example/release';else if(a[1]?.includes('/branches/'))out=JSON.stringify({protection:{required_status_checks:{contexts:[]}}});else if(a[1]?.includes('/check-runs'))out=JSON.stringify({check_runs:[]});else out=JSON.stringify({statuses:[]});}
 if(tool==='bun')out=JSON.stringify({missing:[],chrome:'/fixture/chrome'});console.log(out);`;
   try {
@@ -125,7 +125,9 @@ if(tool==='bun')out=JSON.stringify({missing:[],chrome:'/fixture/chrome'});consol
       settings: () => defaultSeatTickSettings(project), seatFor: () => ({ active: { conversationId: "seat" } }),
       registry: () => ({ conversation: () => ({ generations: [{ path: "fixture-seat" }] }) }),
     } as unknown as Partial<SeatTickSources>);
-    return { ...await ports.observe(project), archiveReads };
+    const observed = await ports.observe(project);
+    if (!observed) throw new Error("fixture release is inapplicable");
+    return { ...observed, archiveReads };
   } finally { process.env.PATH = priorPath; globalThis.fetch = priorFetch; }
 }
 test("a successful publish lane ceases to block future releases", async () => {

@@ -165,6 +165,7 @@ files report `fail` and carry `recovery.state=pending`, the worker's `ownerPid`
 and the named `unit`; the latest record carries `observedAt` until recovery
 completes, then `finishedAt`. The worker stays running and holds the installation
 lock throughout recovery. Logs and JSON files have private permissions. Sample JSON
+records `elapsedMs`, `budgetMs`, and the read diagnostics. The serving evidence
 records `observedAt`; each process's `since` is its recorded start time (the
 launcher's kernel start time). SHA observations come from identity-checked live
 processes and their actual release HEADs; HTTP and the runtime socket must agree
@@ -179,24 +180,48 @@ detached-worker health samples, and the serving-health preflight that also
 checks `/api/self-update` for automatic-update conflicts and serving identity.
 
 Every read of an old PID tolerates its disappearance, including exit between
-reading its stat, command line and cwd. A reused PID counts as gone. HTTP, MCP,
-registry and serving readiness reads retry within a 180 second bound per
-sample, with individual I/O calls capped at 10 seconds. Named stop and start
-jobs each get a 300 second observation bound. After publication is attempted, all 21 health
-samples run, spaced by at least 15 seconds; failed samples and stage reads
-remain diagnostic evidence while later samples continue. Read retries extend
-the observation period beyond the minimum five minutes.
+reading its stat, command line and cwd. A reused PID counts as gone. After a
+publication attempt, 21 samples run with a 15 second wait between samples.
+Each sample has one 180 second monotonic budget for read-only evidence.
+It includes worker startup, queued host reads, transport, retries, and teardown.
+Up to four workers reconcile protected hosts, each with its own MCP connection.
+Each lane tries its assigned hosts before retrying unresolved reads, with 10
+seconds between retry rounds. At least the final third of the budget is
+reserved for fresh serving evidence and, on the last sample, the cut inventory.
+Time saved by earlier stage reads is available to the serving checks. Replies
+that miss their cutoff expire and the worker's process group is stopped.
+The evidence budget for the whole observation is at most 68 minutes including
+the 20 waits. Preflight, stop and start jobs, verdict writes, and owner recovery
+have their own scope. Worker launch is supervised from before exec, and each
+lane must send an explicit completion frame. A premature EOF records its exit
+code or signal on unresolved host rows. Teardown signals the worker group and
+reaps only until the sample cutoff; an overdue reap is recorded as
+`worker-cleanup-pending` and forces `needs_decision`, even when serving is
+healthy. Evidence children never inherit the installation lock. The sample
+owner keeps their process-group identities through the bounded cleanup attempt,
+then exits without an unlimited wait.
 
 A vanished protected host is reconciled with the stage's current attempt.
 Attempts come from the matching `stageId` entry in `pipeline.runs`; stage
 definitions in `pipeline.stages` carry no attempt history. Recovery requires
-complete targeted activity evidence and a live process. Terminal attempts are
-classified directly from their recorded state and error even when activity
-reads are unavailable.
+complete read-only census evidence for the matching conversation and a live
+process. It does not call `agent_activity`, which would write a durable tool
+receipt and refresh the lifecycle journal. The `get_pipeline` request omits
+`clientRequestId`, so the MCP server handles each call as a fresh, receipt-free
+read. Terminal attempts are classified
+directly from their recorded state and error even when census reads are
+unavailable. The sample owner also checks the named unit before its first
+sample and whenever service evidence is missing; this recovers an inactive
+unit even if the launcher record cannot be read. `recover_start` verifies the
+unit's active state and pending jobs before issuing a start, and only the
+installation-lock owner may call it.
 The outcome names preserved work, recovery, a fresh attempt that started,
-completed work, confirmed loss, or an unknown outcome. A queued replacement
-alone cannot prove recovery. An unknown outcome requests a decision after the
-bounded recovery reads. A terminal host-loss error without a live replacement
+completed work, confirmed loss, or an unknown outcome. Each row retains its
+captured host, conversation and attempt. Unknown rows give the reason, such as
+a pending successor, incomplete census evidence, a refused transport, or an
+expired read. A queued replacement alone cannot prove recovery. An unknown
+outcome requests a decision after the bounded reads if serving is healthy.
+A terminal host-loss error without a live replacement
 records lost work. A stage's ordinary completed verdict also counts as completed
 work when its host exits.
 
@@ -287,9 +312,10 @@ preflight and immediately before stop. An admitted relocation runs in this order
    process is signalled: signalling the proven ones could not release the path.
 5. It always submits `systemctl --user --no-block start` once a stop was
    submitted, whatever steps 2 to 4 found. A refused or failed start is retried
-   up to three times initially. If those attempts fail, each bounded health
-   retry checks the unit and resubmits start while it remains inactive or
-   failed, or still has a pending job. Exit cleanup checks again, even when
+   up to three times initially. The lock owner alone checks and recovers before
+   a sample when start is outstanding or the previous sample found the service
+   unhealthy. It finishes that operation before dispatching read-only workers.
+   Exit cleanup checks again, even when
    observation raises, and retains the start obligation until the same named
    unit is confirmed active with no pending job. It retries in batches of up
    to three attempts, with five seconds between attempts and batches; each
@@ -325,6 +351,16 @@ The launcher owns any in-place rollback. Relocation owns start recovery
 after a submitted stop. The verdict supplies evidence for the next approved
 action.
 
+An already-running worker keeps its installation lock and recovery obligation
+until it completes. Its run status, log and verdict can be read while the next
+release is prepared in a separate checkout and rehearsed with private state.
+For the next switch, verify the prior worker has finished and require the new
+worker's nonblocking acquisition of the same lock. A verdict file or terminal
+status can appear before lock release. A contending worker records
+`install-lock-held` in its own status, refuses before publication, and leaves
+the incumbent's latest verdict intact. Recovery stays with the original worker
+through completion. Any rollback requires its own approved action.
+
 Regression checks run only the named files against private state:
 
 ```sh
@@ -334,7 +370,7 @@ export HOME="$test_root/home" XDG_CONFIG_HOME="$test_root/config"
 export TMPDIR="$test_root/tmp" LLV_STATE_DIR="$test_root/state"
 export LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1
 bash scripts/gate-slot.sh bun test ./scripts/deploy-checkout.test.ts
-bash scripts/gate-slot.sh bun test ./src/lib/roles/defaults.test.ts
+bash scripts/gate-slot.sh bun test ./scripts/protected-host-census.test.ts
 ```
 
 The tests inject processes, clock, commands and transports. Their registry and

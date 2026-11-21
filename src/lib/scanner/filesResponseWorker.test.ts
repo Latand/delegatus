@@ -708,9 +708,10 @@ test("seat report worker persists outcomes once, filters foreign projects, and r
     await expect(runSeatSourceInWorker({ type: "seat-rule-reports", project: "fixture", at: "invalid" }, runtime)).rejects.toThrow("invalid request");
     await produce();
     const first = await read("fixture");
-    expect(first).toHaveLength(2);
-    expect(first.map((row: { origin: { conversationId: string } }) => row.origin.conversationId)).toEqual(["conversation_fixture", "conversation_fixture"]);
-    expect(await read("elsewhere")).toEqual([]);
+    expect(first.reports).toHaveLength(2);
+    expect(first.reports.map((row: { origin: { conversationId: string } }) => row.origin.conversationId)).toEqual(["conversation_fixture", "conversation_fixture"]);
+    expect(first.reservedIds).toEqual([]);
+    expect(await read("elsewhere")).toEqual({ reports: [], reservedIds: [], occupiedIds: [] });
     await produce();
     expect(await read("fixture")).toEqual(first);
     await drainFilesResponseWorker("restart report reader");
