@@ -30,7 +30,7 @@ test("preload isolates publication context while fixture hooks still enforce the
           const accepted = run({}, input);
           expect(accepted.status, accepted.stderr).toBe(0);
           expect(fixture.calls().map(call => call.args[0])).toEqual(["scripts/privacy-publication-gate.ts"]);
-          const wrongHead = { LLV_GATE_PUSH_HEAD: "b".repeat(40) };
+          const wrongHead = { LLV_GATE_PUSH_HEAD: fixture.git("commit-tree", "HEAD^{tree}", "-m", "unpublished head").toString().trim() };
           const refused = run(wrongHead);
           expect(refused.status).toBe(1);
           expect(refused.stderr).toContain("pushed head differs from checkout");
@@ -66,6 +66,9 @@ test.each(["node", "node-no-home", "bun", "bun-object", "bun-sync", "bun-sync-ob
     const commandGuard = path.join(root, "delegatus", "agent-git-hooks", "guard-fixture", "digest");
     fs.mkdirSync(commandGuard, { recursive: true });
     fs.writeFileSync(path.join(commandGuard, "git"), "#!/bin/sh\nexit 91\n", { mode: 0o700 });
+    const forge = path.join(root, "delegatus", "agent-forge", "digest");
+    fs.mkdirSync(forge, { recursive: true });
+    fs.writeFileSync(path.join(forge, "git"), "#!/bin/sh\nexit 92\n", { mode: 0o700 });
     fs.writeFileSync(path.join(home, ".gitconfig"), `[core]\n hooksPath = ${inherited.replaceAll("\\", "/")}\n`);
     fs.writeFileSync(path.join(root, "bunfig.toml"), `[test]\npreload = [${JSON.stringify(path.resolve("test-preload.ts"))}]\n`);
     fs.writeFileSync(path.join(root, "fixture.test.ts"), `
@@ -100,11 +103,15 @@ test.each(["node", "node-no-home", "bun", "bun-object", "bun-sync", "bun-sync-ob
         expect(process.env.LLV_STAGE_GIT_RECEIPT).toBeUndefined();
         expect(process.env.LLV_AGENT_GIT_GUARD_DIR).toBeUndefined();
         expect(process.env.LLV_AGENT_GIT_ORIGINAL_HOOKS).toBeUndefined();
+        expect(process.env.LLV_AGENT_FORGE_DIR).toBeUndefined();
+        expect(process.env.LLV_AGENT_FORGE_REPOSITORIES).toBeUndefined();
+        expect(process.env.LLV_AGENT_FORGE_AUDIT_FILE).toBeUndefined();
       });
     `);
     const result = spawnSync(process.execPath, ["test", "./fixture.test.ts"], { cwd: root, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PATH: [commandGuard, process.env.PATH].join(path.delimiter), LLV_STATE_DIR: undefined, HOME: runner === "node-no-home" ? undefined : home, XDG_CONFIG_HOME: home, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath",
+      env: { ...process.env, PATH: [commandGuard, forge, process.env.PATH].join(path.delimiter), LLV_STATE_DIR: undefined, HOME: runner === "node-no-home" ? undefined : home, XDG_CONFIG_HOME: home, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath",
         GIT_CONFIG_VALUE_0: inherited, GIT_TEMPLATE_DIR: template, LLV_AGENT_GIT_GUARD_DIR: inherited, LLV_AGENT_GIT_ORIGINAL_HOOKS: inherited,
+        LLV_AGENT_FORGE_DIR: forge, LLV_AGENT_FORGE_REPOSITORIES: "example/widgets", LLV_AGENT_FORGE_AUDIT_FILE: path.join(root, "foreign-audit.ndjson"),
         LLV_STAGE_GIT_RECEIPT: path.join(root, "foreign-receipt") } });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(fs.readFileSync(hook, "utf8")).toBe("inherited guard body\n");
