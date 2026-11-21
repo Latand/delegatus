@@ -228,8 +228,9 @@ for (const role of ["owner", "group"] as const) for (const engine of ["claude", 
       next.input.respond_to = "message_5";
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads).toEqual(["photo_3", "photo_0", "photo_2", "photo_1", "photo_5", "photo_4"]);
-      expect(f.prompts[1]).not.toContain('"id":"message_1"');
-      expect(f.prompts[1]).not.toContain('"ref":"photo_1"');
+      expect(f.prompts[1]!.includes('"id":"message_1"')).toBe(role === "owner");
+      const inbound = f.prompts[1]!.split("<inbound_media>")[1]!.split("</inbound_media>")[0]!;
+      expect(inbound).not.toContain('"ref":"photo_1"');
       const record = readConversations()[0]!; expect(record.seen).toContain("message_5"); resetConversation(record);
       next.request_id = "history_after_reset";
       expect((await f.run(next))?.outcome).toBe("answered");
@@ -248,6 +249,11 @@ for (const engine of ["claude", "codex"] as const) for (const contextFile of [fa
     if (contextFile) {
       f.raw.input.instructions = "C".repeat(16000);
       f.raw.input.owner_instructions = "D".repeat(16000);
+    } else {
+      const older = f.raw.input.conversation[2]!;
+      f.raw.input.conversation.splice(3, 0, ...Array.from({ length: 10 }, (_, i) => ({
+        ...older, id: `recent_${i}`, sent_at: `2026-10-06T12:00:02.${i + 1}Z`, text: "Recent context", media: undefined,
+      })));
     }
     const rows = (prompt: string) => JSON.parse(prompt.split("<conversation>\n")[1]!.split("\n</conversation>")[0]!) as ExternalRelayRequest["input"]["conversation"];
     const assertLinks = (prompt: string) => {
@@ -271,13 +277,13 @@ for (const engine of ["claude", "codex"] as const) for (const contextFile of [fa
       expect(first).toEqual(["photo_3", "photo_0", "photo_2", "photo_1"]);
       const firstSeen = readConversations()[0]!.seen;
       const next = structuredClone(f.raw); next.request_id = "history_trim_next";
-      next.input.conversation.push({ ...next.input.conversation[3]!, id: "message_4", reply_to: "message_3", media: undefined, text: "Continue." });
+      next.input.conversation.push({ ...next.input.conversation.at(-1)!, id: "message_4", reply_to: "message_3", media: undefined, text: "Continue." });
       next.input.respond_to = "message_4";
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads.slice(first.length).filter(ref => first.includes(ref))).toEqual([]);
       expect(f.downloads).toEqual(first);
       assertLinks(f.prompts[0]!);
-      expect(firstSeen).toEqual(expect.arrayContaining(f.raw.input.conversation.map(message => message.id)));
+      expect(firstSeen).toEqual(expect.arrayContaining(f.raw.input.conversation.filter(message => !contextFile || message.media?.length).map(message => message.id)));
       next.request_id = "history_trim_third";
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads).toEqual(first);
