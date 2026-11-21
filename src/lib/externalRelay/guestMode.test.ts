@@ -109,7 +109,7 @@ for (const populated of [true, false]) for (const handoff of [false, true] as co
     const relay = paired(server.origin, false);
     relay.targets[0]!.project = "project-b";
     updateRelayStore(s => ({ ...s, relays: [relay] }));
-    let launches = 0, stopped = false;
+    let launches = 0;
     const stub = path.join(root, "restricted-agent");
     const schemaFile = path.join(root, "schema.json");
     fs.writeFileSync(stub, `#!/usr/bin/env bun
@@ -117,13 +117,13 @@ const a=process.argv.slice(2);await Bun.stdin.text();require('fs').writeFileSync
     fs.chmodSync(stub, 0o700);
     try {
       const claim = await relayCall<{ request: unknown }>(relay.api_base, "/requests/claim", "POST", relayClaimBody(relay), relay.credential);
-      let now = Date.parse("2026-10-06T12:00:01Z");
+      const now = Date.parse("2026-10-06T12:00:01Z");
       const clock = spyOn(Date, "now").mockImplementation(() => now);
       let result;
       let record: ReturnType<typeof readAnswerRecord> = null;
       try { result = await runClaimedRequest(relay, claim.body!.request, undefined, { leaseWorker: false, command: stub,
         ownerPorts: { launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_guest_fixture" } }; },
-          observe: async () => { if (handoff === "timeout" && !stopped) return { state: "running" }; if (handoff === "late") now += 601_000; return { state: "ended", finalText: "Unexpected owner launch" }; }, stop: async () => { stopped = true; }, pollMs: 1 } });
+          observe: async () => ({ state: "ended", finalText: "Unexpected owner launch" }), stop: async () => {}, pollMs: 1 } });
         record = readAnswerRecord(relay.id, request.target_id, request.request_id);
       }
       finally { clock.mockRestore(); }
@@ -157,13 +157,13 @@ test("service-verified owner on guest delivery enters owner tier with the quoted
   updateRelayStore(state => ({ ...state, relays: [relay] }));
   let launches = 0;
   let launchPrompt = "";
-  let sentRequest: { text: string; requestText: string | null } | null = null;
+  const sentRequest: { current: { text: string; requestText: string | null } | null } = { current: null };
   try {
     const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts: {
       launch: async input => {
         launches++;
         launchPrompt = String(input.prompt);
-        sentRequest = readRunLedger().runs.find(run => run.requestId === request.request_id)?.ownerTurn?.request ?? null;
+        sentRequest.current = readRunLedger().runs.find(run => run.requestId === request.request_id)?.ownerTurn?.request ?? null;
         expect(input.mcpServers).toContain("viewer");
         return { status: 202, body: { conversationId: "conversation_verified_guest_owner" } };
       },
@@ -172,7 +172,7 @@ test("service-verified owner on guest delivery enters owner tier with the quoted
     } });
     expect(launches).toBe(1);
     expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner).toBe(true);
-    expect(sentRequest).toEqual({ text: quotedText, requestText: request.input.request_text });
+    expect(sentRequest.current).toEqual({ text: quotedText, requestText: request.input.request_text });
     expect(launchPrompt).toContain(quotedText);
     expect(launchPrompt).toContain(request.input.request_text!);
     expect(result).toMatchObject({ outcome: "answered", answer: {
