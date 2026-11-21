@@ -1701,17 +1701,23 @@ export function readStateCollectionRows(filename: string, collection: string): u
 }
 
 /** Return project membership without decoding or materializing persisted rows. */
-export function readStateProjectKeys(filename: string): string[] {
+export function readStateProjectKeys(
+  filename: string,
+  collections: readonly string[] = ["tasks", "pipelines", "pipelines_archive", "flows"],
+): string[] {
   if (!fs.existsSync(filename)) return [];
+  if (collections.length === 0) return [];
   const db = connectReadonlyDatabase(filename);
   try {
-    return db.query<{ project: string | null }, []>(`
+    const placeholders = collections.map(() => "?").join(", ");
+    const bindings = [...collections] as [string, ...string[]];
+    return db.query<{ project: string | null }, [string, ...string[]]>(`
       SELECT DISTINCT json_extract(value_json, '$.project') AS project
       FROM state_rows
-      WHERE collection IN ('tasks', 'pipelines', 'flows')
+      WHERE collection IN (${placeholders})
         AND json_valid(value_json)
         AND json_type(value_json, '$.project') = 'text'
-    `).all().flatMap(row => row.project ? [row.project] : []);
+    `).all(...bindings).flatMap(row => row.project ? [row.project] : []);
   } catch (error) {
     if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return [];
     throw error;
