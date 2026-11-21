@@ -84,7 +84,7 @@ for (const populated of [false, true]) test(`guest handoff and final text valida
   const max = "😀".repeat(request.answer.max_chars);
   expect(checkedAnswer({ action: "reply", text: max, reply_to: null }, request)?.text).toBe(max);
   expect(checkedAnswer({ action: "reply", text: max + "x", reply_to: null }, request)).toBeNull();
-  expect([...ownerAnswer(max + "x", request, owner)!.text]).toHaveLength(request.answer.max_chars);
+  expect([...ownerAnswer(max + "x", request, owner)!.text]).toHaveLength(240);
   expect(ownerAnswer("Done.", request, owner)?.reply_to).toBeNull();
   const server = await startTestRelay(() => { throw Error("handoff tools must stay local"); });
   try {
@@ -144,6 +144,41 @@ const a=process.argv.slice(2);await Bun.stdin.text();require('fs').writeFileSync
       }
     } finally { await server.close(); }
   }, 30_000);
+
+test("service-verified owner on guest delivery enters owner tier with the quoted group request", async () => {
+  const request = guest();
+  const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
+  request.input.request_text = "Please pass this issue to the project seat.";
+  request.input.conversation = [{ ...trigger, text: "The blacklist phrase still leaves matching messages visible." }];
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const relay = paired(server.origin, true);
+  relay.targets[0]!.project = "project-b";
+  updateRelayStore(state => ({ ...state, relays: [relay] }));
+  let launches = 0;
+  let launchPrompt = "";
+  let sentRequest: { text: string; requestText: string | null } | null = null;
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts: {
+      launch: async input => {
+        launches++;
+        launchPrompt = String(input.prompt);
+        sentRequest = readRunLedger().runs.find(run => run.requestId === request.request_id)?.ownerTurn?.request ?? null;
+        expect(input.mcpServers).toContain("viewer");
+        return { status: 202, body: { conversationId: "conversation_verified_guest_owner" } };
+      },
+      observe: async () => ({ state: "ended", finalText: "Sent to the project-b orchestrator." }),
+      stop: async () => {}, pollMs: 1,
+    } });
+    expect(launches).toBe(1);
+    expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner).toBe(true);
+    expect(sentRequest).toEqual({ text: trigger.text, requestText: request.input.request_text });
+    expect(launchPrompt).toContain(trigger.text);
+    expect(launchPrompt).toContain(request.input.request_text!);
+    expect(result).toMatchObject({ outcome: "answered", answer: {
+      action: "reply", text: "Sent to the project-b orchestrator.", reply_to: null,
+    } });
+  } finally { await server.close(); }
+}, 30_000);
 
 // Reuses the verifier's real-runner follow-up probe with synthetic canaries.
 for (const engine of ["claude", "codex"] as const) for (const fails of [false, true])
