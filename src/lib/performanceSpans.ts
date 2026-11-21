@@ -1,3 +1,4 @@
+import { requestWorkload } from "./requestWorkload";
 import { readAttribution } from "./readAttribution";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
@@ -35,7 +36,7 @@ export const performanceSites = [
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";
-  start: number; end: number; count: number; totalMs: number; maxMs: number; rows: number; bytes: number; failed: boolean; correlation?: string };
+  start: number; end: number; count: number; totalMs: number; maxMs: number; rows: number; bytes: number; failed: boolean; correlation?: string; requestClass?: string };
 const siteIds = new Map(performanceSites.map((site, index) => [site, index]));
 const capacity = 1024;
 const requestCapacity = 256;
@@ -59,7 +60,7 @@ export function createPerformanceSpans(now = monotonicNow) {
     // Aggregate only adjacent tiny slices. Preserve their occupied duration
     // separately from the enclosing interval, which can include a suspension.
     if (previous && record.kind === "sync" && previous.kind === "sync" && record.maxMs < 1 && previous.maxMs < 1
-      && previous.site === record.site && previous.parent === record.parent && previous.correlation === record.correlation
+      && previous.site === record.site && previous.parent === record.parent && previous.correlation === record.correlation && previous.requestClass === record.requestClass
       && record.start - previous.end < 0.1) {
       previous.end = record.end; previous.count++; previous.totalMs += record.totalMs;
       previous.maxMs = Math.max(previous.maxMs, record.maxMs); previous.rows += record.rows; previous.bytes += record.bytes;
@@ -82,6 +83,7 @@ export function createPerformanceSpans(now = monotonicNow) {
   const begin = (site: PerformanceSite, kind: Slice["kind"], rows = 0, bytes = 0): Slice => ({
     sequence: ++sequence, span: ++spans, parent: currentSpan || context.getStore() || 0, site: siteIds.get(site)!, kind,
     start: now(), end: 0, count: 1, totalMs: 0, maxMs: 0, rows, bytes, failed: false,
+    requestClass: requestWorkload.label(),
     ...(correlations.getStore() ? { correlation: correlations.getStore() } : {}),
   });
   const finish = (record: Slice) => { record.end = now(); record.totalMs = record.maxMs = record.end - record.start; add(record); };
