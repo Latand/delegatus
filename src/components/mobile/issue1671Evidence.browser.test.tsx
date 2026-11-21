@@ -10131,10 +10131,15 @@ describe("account-switch message receipts", () => {
    routes. Over the built frames the operator asked for three separate kinds of
    rule a new agent gets together, small rows a tap removes with an undo, and
    no switch; this block drives each. */
+/* The role-memory route answers a write only to the operator: these two blocks present the operator token the route reads from its environment. */
+const FIXTURE_OPERATOR_TOKEN = "fixture-operator-token";
+const asOperator = (request: Request) => new Request(request, { headers: { ...Object.fromEntries(request.headers), "x-llv-operator-token": FIXTURE_OPERATOR_TOKEN } });
+
 describe("role memory curation: reversible window", () => {
   browserTest("candidates, versions, archive reasons and pass undo at desktop and 390 px in both languages", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-curation-browser-"));
-    const previous = process.env.LLV_STATE_DIR;
+    const previous = process.env.LLV_STATE_DIR, previousToken = process.env.LLV_OPERATOR_TOKEN;
+    process.env.LLV_OPERATOR_TOKEN = FIXTURE_OPERATOR_TOKEN;
     const store = await import("@/lib/memory/roleStore");
     const curation = await import("@/lib/memory/curation/store");
     const { applyCuration } = await import("@/lib/memory/curation/apply");
@@ -10145,7 +10150,7 @@ describe("role memory curation: reversible window", () => {
       "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
       "/api/team": { mode: "solo", me: null, members: [], methods: {} },
       "/api/asks-you/key": { present: true, source: "file" },
-      "/api/role-memory": (request: Request) => request.method === "POST" ? route.POST(new NextRequest(request)) : route.GET(new NextRequest(request)),
+      "/api/role-memory": (request: Request) => request.method === "POST" ? route.POST(new NextRequest(asOperator(request))) : route.GET(new NextRequest(request)),
       "/api/role-memory/lessons": { lessons: [] },
     });
     let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -10180,8 +10185,13 @@ describe("role memory curation: reversible window", () => {
         try {
           await page.evaluate(() => globalThis.dispatchEvent(new CustomEvent("delegatus:open-learned-rules", { detail: { project: "atlas" } })));
           const window = page.locator("[data-rules-window]"); await window.waitFor();
-          /* The window opens on the memory profile; the rules this block drives sit one tab away. */
-          await window.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          /* A level opens beside the list, or on its own screen on a phone; the rules this block drives sit in the builder's two role levels. */
+          const openLevel = async (scope: string) => {
+            if (width === 390 && await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
+            await page.locator(`[data-rules-window] [data-profile-level="${scope}"]`).click();
+            await page.locator(`[data-level-pane="${scope}"]`).waitFor();
+          };
+          await openLevel(role);
           await page.locator(`[data-learned-rule="${candidate}"]`).waitFor();
           await page.locator(`[data-learned-rule="${candidate}"] button`).first().click();
           await page.getByText(translate(lang, "roleMemory.unreviewed"), { exact: false }).waitFor();
@@ -10206,9 +10216,6 @@ describe("role memory curation: reversible window", () => {
             expect(rect.top).toBeGreaterThanOrEqual(provenance.body.top - 1);
             expect(rect.bottom).toBeLessThanOrEqual(provenance.body.bottom + 1);
           }
-          await page.locator(`[data-learned-rule="${ids[0]}"] button`).first().click();
-          await page.locator(`[data-rule-versions="${ids[0]}"] summary`).click();
-          const version = page.locator("[data-rule-revert]").first(); await version.waitFor();
           await page.locator('[data-rules-history="role"]').click();
           await page.getByText(translate(lang, "roleMemory.left.task-specific"), { exact: true }).waitFor();
           await page.locator("[data-curation-history] summary").click();
@@ -10216,11 +10223,17 @@ describe("role memory curation: reversible window", () => {
           const geometry = await window.evaluate(node => ({ width: node.getBoundingClientRect().width, overflow: node.scrollWidth - node.clientWidth, sections: [...node.querySelectorAll('[data-rules-section]')].map(section => ({ kind: section.getAttribute('data-rules-section'), overflow: section.scrollWidth - section.clientWidth })) }));
           expect(geometry.overflow).toBeLessThanOrEqual(1); for (const section of geometry.sections) expect(section.overflow).toBeLessThanOrEqual(1);
           const frame = `variant-1-${width}-${lang}-${scheme}-history.png`; await page.screenshot({ path: path.join(out, frame) });
-          await page.locator(`[data-rule-versions="${ids[0]}"] summary`).click();
           await page.locator(`[data-left-rule-restore="${ids[1]}"]`).scrollIntoViewIfNeeded();
           const archiveFrame = `variant-1-${width}-${lang}-${scheme}-archive.png`; await page.screenshot({ path: path.join(out, archiveFrame) });
+          /* The rule the curator moved sits in the every-project level, with its earlier text and its return. */
+          await openLevel(every);
+          await page.locator(`[data-learned-rule="${ids[0]}"] button`).first().click();
           await page.locator(`[data-rule-versions="${ids[0]}"] summary`).click();
+          const version = page.locator("[data-rule-revert]").first(); await version.waitFor();
           await version.click(); await page.waitForFunction(({ id, text }) => document.querySelector(`[data-learned-rule="${id}"]`)?.textContent?.includes(text), { id: ids[0], text: texts[0] });
+          await openLevel(role);
+          /* A level draws its history closed when it is chosen again. */
+          if (!await page.locator(`[data-left-rule-restore="${ids[1]}"]`).count()) await page.locator('[data-rules-history="role"]').click();
           await page.locator(`[data-left-rule-restore="${ids[1]}"]`).click(); await page.locator(`[data-learned-rule="${ids[1]}"]`).waitFor();
           await page.locator(`[data-curation-undo="${pass.id}"]`).click();
           await page.locator("[data-curation-skipped]").waitFor();
@@ -10230,17 +10243,16 @@ describe("role memory curation: reversible window", () => {
           const skipped = await page.locator("[data-curation-skipped]").first().innerText();
           expect(skipped).toBe(translate(lang, "roleMemory.pass.skipped", { count: 2 }));
           expect(await page.locator("[data-curation-pass]").first().innerText()).not.toMatch(/\br_[0-9a-f]{8,}/);
+          /* The undo skipped the later writes, so the rule sits in whichever level the pass left it: open that one. */
+          await openLevel(await page.evaluate(async (id) => ((await (await fetch("/api/role-memory?project=atlas")).json()).scopes as { scope: string; active: { id: string }[] }[]).find(entry => entry.active.some(rule => rule.id === id))!.scope, ids[0]!));
           const returned = page.locator(`[data-learned-rule="${ids[0]}"]`);
           if (!await returned.locator(`[data-rule-versions="${ids[0]}"]`).count()) await returned.locator("button").first().click();
           const earlier = returned.locator(`[data-rule-versions="${ids[0]}"] li`);
           expect(await earlier.count()).toBe(1);
           expect(await earlier.first().innerText()).not.toContain(texts[0]);
-          /* Every card shows all of its content: on the phone the window scrolls as one and no card scrolls inside itself. */
-          const cards = await window.evaluate(node => [...node.querySelectorAll<HTMLElement>("[data-rules-section]")].map(section => {
-            const body = section.lastElementChild as HTMLElement;
-            return { kind: section.getAttribute("data-rules-section"), cardScrolls: section.scrollHeight - section.clientHeight, bodyScrolls: body.scrollHeight - body.clientHeight };
-          }));
-          if (width === 390) for (const card of cards) { expect(card.cardScrolls).toBeLessThanOrEqual(1); expect(card.bodyScrolls).toBeLessThanOrEqual(1); }
+          /* The pane is the one scroller: nothing inside it scrolls on its own. */
+          const cards = await window.evaluate(node => [...node.querySelectorAll<HTMLElement>("[data-level-pane] *")].filter(element => /auto|scroll/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight + 1).map(element => element.tagName));
+          expect(cards).toEqual([]);
           const undoneFrame = `variant-1-${width}-${lang}-${scheme}-undone.png`; await page.screenshot({ path: path.join(out, undoneFrame) });
           expect(pageErrors).toEqual([]);
           cases.push({ lang, width, scheme, frame, archiveFrame, undoneFrame, geometry, provenance, cards, recurringTasks: 3, revertedVersion: true, returnedRule: true, undoSkippedLaterWrites: true });
@@ -10250,7 +10262,10 @@ describe("role memory curation: reversible window", () => {
       fs.writeFileSync("evidence/role-memory-curation/geometry.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", cases }, null, 2) + "\n");
     } finally {
       await browser?.close(); server.stop();
+      /* The undo of a pass runs in the privacy worker, which this block started. */
+      await (await import("@/lib/links/taskPageWorker")).shutdownTaskPageWorker();
       if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+      if (previousToken === undefined) delete process.env.LLV_OPERATOR_TOKEN; else process.env.LLV_OPERATOR_TOKEN = previousToken;
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 240_000);
@@ -10263,6 +10278,7 @@ describe("role memory: rules window and the rule line", () => {
     const previous = { ...process.env };
     process.env.LLV_STATE_DIR = path.join(root, "state");
     process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    process.env.LLV_OPERATOR_TOKEN = FIXTURE_OPERATOR_TOKEN;
     const memory = await import("@/app/api/memory/settings/route");
     const rolesRoute = await import("@/app/api/role-memory/route");
     const lessonsRoute = await import("@/app/api/role-memory/lessons/route");
@@ -10298,7 +10314,7 @@ describe("role memory: rules window and the rule line", () => {
       { scope: "role", role, rule: `Inspect settled evidence before the ${role} reports progress.`, why: "A report missed a completion proof." },
     ]);
     /* A second project whose one role holds more rules than the desktop window is tall, opened only to measure the window. */
-    const LONG_RULES = 14;
+    const LONG_RULES = 30;
     for (let n = 1; n <= LONG_RULES; n++) seed(`p-long-${n}`, "build", (n + 3) * 24 * 60, "builder", [
       { scope: "role", rule: `Long list, rule ${n}: name the check that proves a change before writing the change itself.`, why: "A column this long has to scroll inside the window." },
     ], "long-rules");
@@ -10307,7 +10323,7 @@ describe("role memory: rules window and the rule line", () => {
       "/api/team": { mode: "solo", me: null, members: [], methods: {} },
       "/api/asks-you/key": { present: true, source: "file" },
       "/api/memory/settings": (request: Request) => request.method === "PUT" ? memory.PUT(new NextRequest(request)) : memory.GET(new NextRequest(request)),
-      "/api/role-memory": (request: Request) => request.method === "POST" ? rolesRoute.POST(new NextRequest(request)) : rolesRoute.GET(new NextRequest(request)),
+      "/api/role-memory": (request: Request) => request.method === "POST" ? rolesRoute.POST(new NextRequest(asOperator(request))) : rolesRoute.GET(new NextRequest(request)),
       "/api/role-memory/lessons": (request: Request) => lessonsRoute.GET(new NextRequest(request)),
       /* The project's other switches on the same page answer as a quiet install would. */
       "/api/links/shared": { known: [{ key: "atlas" }], shared: { all: false, projects: [] } },
@@ -10340,6 +10356,8 @@ describe("role memory: rules window and the rule line", () => {
           const line = page.locator("[data-stage-lesson='1']").locator("visible=true").first();
           await line.waitFor({ timeout: 30_000 });
           await line.scrollIntoViewIfNeeded();
+          /* The card skips its off-screen content until the browser has laid it out; the text is read once it has. */
+          await page.waitForFunction((text) => [...document.querySelectorAll<HTMLElement>("[data-stage-lesson='1']")].some(node => node.innerText.includes(text)), translate(lang, "roleMemory.line.left", { count: 1, targets: lang === "en" ? "Builder" : "Білдер" }));
           expect(await line.innerText()).toContain(translate(lang, "roleMemory.line.left", { count: 1, targets: lang === "en" ? "Builder" : "Білдер" }));
           const lineBox = await line.evaluate((node) => {
             const box = node.getBoundingClientRect(); const host = node.closest(".pblock")!.getBoundingClientRect();
@@ -10356,62 +10374,70 @@ describe("role memory: rules window and the rule line", () => {
           expect(fromCard.left).toBeGreaterThanOrEqual(0); expect(fromCard.right).toBeLessThanOrEqual(width);
           expect(fromCard.top).toBeGreaterThanOrEqual(0); expect(fromCard.bottom).toBeLessThanOrEqual(height);
           expect(fromCard.overflow).toBeLessThanOrEqual(1);
-          /* Three kinds, each its own section; the head is the title and one line under it, with no count and no role name of its own. */
-          for (const kind of ["role", "project", "machine"]) await page.locator(`[data-rules-window] [data-rules-section="${kind}"]`).waitFor();
+          /* The window opens on the focused rule's level: the builder's rules of this project, in the pane (the first screen on a phone). The list holds the role, project and machine levels. */
+          expect(await page.locator("[data-level-pane]").getAttribute("data-level-pane")).toBe("role:atlas:builder");
+          await page.locator('[data-level-pane] [data-rules-section="role"]').waitFor();
+          const openLevel = async (scope: string) => {
+            if (phone && await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
+            await page.locator(`[data-rules-window] [data-profile-level="${scope}"]`).click();
+            await page.locator(`[data-level-pane="${scope}"]`).waitFor();
+          };
+          if (phone) await page.locator("[data-level-back]").click();
+          expect(await page.locator("[data-rules-window] [data-profile-level]").evaluateAll(rows => rows.map(row => row.getAttribute("data-profile-level")?.split(":")[0]))).toEqual(expect.arrayContaining(["role", "project", "machine"]));
+          if (phone) await openLevel("role:atlas:builder");
           const starts = page.locator("[data-rules-starts]");
           expect(await starts.innerText()).toBe(translate(lang, "roleMemory.startsWith"));
           expect(await starts.evaluate((node) => ({ lines: Math.round(node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight)), cut: node.scrollWidth - node.clientWidth }))).toEqual({ lines: 1, cut: 0 });
-          /* Each number once: the chips count the roles, the headings count the project and the machine, and scopes far from their bound show no size. */
-          expect(await page.locator('[data-rules-section="role"] [data-rules-count]').count()).toBe(0);
-          expect(await page.locator("[data-rules-window] [data-rules-count]").allInnerTexts()).toEqual(["1", "1"]);
+          /* The pane's heading counts its level once, and scopes far from their bound show no size. */
+          expect(await page.locator("[data-rules-window] [data-rules-count]").allInnerTexts()).toEqual(["3"]);
           expect(await page.locator("[data-rules-window] [data-rules-size]").count()).toBe(0);
           const roleLabel = lang === "en" ? "Builder" : "Білдер";
           expect((await page.locator("[data-rules-window] header").allInnerTexts()).join("\n").split(roleLabel).length - 1).toBe(1);
           if (!phone) {
-            /* The desktop window is as tall as its longest column needs, and no taller. */
-            const fit = await page.locator("[data-rules-window]").evaluate((node) => {
-              const lowest = Math.max(...[...node.querySelectorAll("[data-learned-rule], [data-rules-history]")].map((row) => row.getBoundingClientRect().bottom));
-              return Math.round(node.getBoundingClientRect().bottom - lowest);
-            });
-            expect(fit).toBeGreaterThanOrEqual(0); expect(fit).toBeLessThanOrEqual(40);
+            /* The desktop window keeps one height, whatever its level holds. */
+            const height = await page.locator("[data-rules-window]").evaluate((node) => Math.round(node.getBoundingClientRect().height));
+            expect(Math.abs(height - Math.min(820, 0.9 * 900))).toBeLessThanOrEqual(1);
           }
           expect(await page.locator('[data-rules-section="role"] [data-learned-rule]').count()).toBe(3);
           cases.push({ lang, width, surface: "window-from-card", ...fromCard, file: await shot("window-from-card") });
           for (const role of ["orchestrator", "maintainer"] as const) {
-            const tab = page.locator(`[data-rules-role="${role}"]`);
-            await tab.click();
-            await tab.scrollIntoViewIfNeeded();
-            await page.waitForFunction((role) => document.querySelector('[data-rules-section="role"] [data-learned-rule]')?.textContent?.includes(`the ${role} reports progress`), role);
-            const geometry = await tab.evaluate((node) => {
-              const box = node.getBoundingClientRect(), row = node.parentElement!.getBoundingClientRect();
-              return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, rowLeft: row.left, rowRight: row.right, rowTop: row.top, rowBottom: row.bottom, clipped: node.scrollWidth - node.clientWidth, selected: node.getAttribute("aria-selected") };
+            const scope = `role:atlas:${role}`;
+            if (phone && await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
+            const row = page.locator(`[data-rules-window] [data-profile-level="${scope}"]`);
+            await row.scrollIntoViewIfNeeded();
+            const geometry = await row.evaluate((node) => {
+              const box = node.getBoundingClientRect(), list = node.closest("[data-memory-profile]")!.getBoundingClientRect();
+              return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height, listLeft: list.left, listRight: list.right, listTop: list.top, listBottom: list.bottom, clipped: node.scrollWidth - node.clientWidth };
             });
-            expect(geometry.left).toBeGreaterThanOrEqual(geometry.rowLeft - 1);
-            expect(geometry.right).toBeLessThanOrEqual(geometry.rowRight + 1);
-            expect(geometry.top).toBeGreaterThanOrEqual(geometry.rowTop - 1);
-            expect(geometry.bottom).toBeLessThanOrEqual(geometry.rowBottom + 1);
+            expect(geometry.left).toBeGreaterThanOrEqual(geometry.listLeft - 1);
+            expect(geometry.right).toBeLessThanOrEqual(geometry.listRight + 1);
+            expect(geometry.top).toBeGreaterThanOrEqual(geometry.listTop - 1);
+            expect(geometry.bottom).toBeLessThanOrEqual(geometry.listBottom + 1);
             expect(geometry.clipped).toBeLessThanOrEqual(1);
-            expect(geometry.selected).toBe("true");
-            cases.push({ lang, width, surface: `${role}-tab`, ...geometry, file: await shot(`${role}-tab`) });
+            if (phone) expect(geometry.height).toBeGreaterThanOrEqual(44);
+            await row.click();
+            await page.waitForFunction((role) => document.querySelector('[data-level-pane] [data-learned-rule]')?.textContent?.includes(`the ${role} reports progress`), role);
+            if (!phone) expect(await row.getAttribute("aria-current")).toBe("true");
+            cases.push({ lang, width, surface: `${role}-level`, ...geometry, file: await shot(`${role}-level`) });
           }
-          await page.locator('[data-rules-role="builder"]').click();
-          await page.waitForFunction(() => document.querySelectorAll('[data-rules-section="role"] [data-learned-rule]').length === 3);
+          await openLevel("role:atlas:builder");
+          await page.waitForFunction(() => document.querySelectorAll('[data-level-pane] [data-learned-rule]').length === 3);
           /* One tap removes a rule; it is archived, not gone, and Undo brings it back. */
           const target = page.locator('[data-rules-section="role"] [data-learned-rule]').first();
           const ruleId = (await target.getAttribute("data-learned-rule"))!;
           await target.locator("[data-learned-rule-delete]").click();
           await page.locator("[data-rules-undo]").waitFor();
-          /* The notice is one line, inside the window's margins, in the removed row's place: inside the column × was pressed in, over no rule. */
+          /* The notice is one line, its text on the same margin as the rules' text, in the removed row's place: inside the level × was pressed in, over no rule. */
           const notice = await page.locator("[data-rules-undo]").evaluate((node) => {
             const box = node.getBoundingClientRect(); const label = node.firstElementChild!;
             const covered = [...document.querySelectorAll("[data-rules-window] [data-learned-rule]")].filter((row) => {
               const other = row.getBoundingClientRect();
               return other.top < box.bottom - 0.5 && other.bottom > box.top + 0.5 && other.left < box.right - 0.5 && other.right > box.left + 0.5;
             }).length;
-            return { left: box.left, right: box.right, column: node.closest("[data-rules-section]")?.getAttribute("data-rules-section"), covered,
+            return { left: label.getBoundingClientRect().left, right: box.right, column: node.closest("[data-rules-section]")?.getAttribute("data-rules-section"), covered,
               lines: Math.round(label.getBoundingClientRect().height / parseFloat(getComputedStyle(label).lineHeight)) };
           });
-          expect(notice.lines).toBe(1); expect(notice.left).toBeGreaterThanOrEqual(12); expect(notice.right).toBeLessThanOrEqual(width - 12);
+          expect(notice.lines).toBe(1); expect(notice.left).toBeGreaterThanOrEqual(12); expect(notice.right).toBeLessThanOrEqual(width - 4);
           expect(notice.column).toBe("role"); expect(notice.covered).toBe(0);
           await page.waitForFunction((id) => !document.querySelector(`[data-rules-section="role"] [data-learned-rule="${id}"]`), ruleId);
           const removed = store.projectView("atlas").scopes.find((scope) => scope.roleId === "builder")!.left.find((rule) => rule.id === ruleId);
@@ -10446,19 +10472,19 @@ describe("role memory: rules window and the rule line", () => {
           await reveal(brief);
           cases.push({ lang, width, surface: "stage-start", file: await shot("stage-start") });
           /* stage_report opened: the request for a lesson in its answer. */
-          await page.getByText(/MCP tool: stage_report/).locator("visible=true").last().click();
+          await page.getByText(/stage_report/).locator("visible=true").last().click();
           const request = page.getByText("lessonRequest").locator("visible=true").first();
           await request.waitFor();
           await reveal(request);
           expect(await revealText('"lessonRequest"')).toBe(true);
           await page.waitForTimeout(200);
           cases.push({ lang, width, surface: "stage-request", file: await shot("stage-request") });
-          await page.getByText(/MCP tool: stage_report/).locator("visible=true").last().click();
+          await page.getByText(/stage_report/).locator("visible=true").last().click();
           /* leave_lesson opened: the lessons the agent left. */
-          await page.getByText(/MCP tool: leave_lesson/).locator("visible=true").last().click();
+          await page.getByText(/leave_lesson/).locator("visible=true").last().click();
           const lessonsArg = page.getByText(/"lesson": \{/).locator("visible=true").first();
           await lessonsArg.waitFor();
-          await reveal(page.getByText(/MCP tool: leave_lesson/).locator("visible=true").last());
+          await reveal(page.getByText(/leave_lesson/).locator("visible=true").last());
           expect(await revealText('"lesson": {')).toBe(true);
           await page.waitForTimeout(200);
           cases.push({ lang, width, surface: "stage-lesson", file: await shot("stage-lesson") });
@@ -10504,18 +10530,21 @@ describe("role memory: rules window and the rule line", () => {
           cases.push({ lang, width, surface: "project-menu", ...menu, file: await shot("project-menu") });
           await row.click();
           /* The window from the row outlives the menu that opened it, and a press inside it keeps it open. */
-          await page.locator("[data-rules-window] [data-learned-rule]").first().waitFor();
-          /* The row's figure is what the window adds up to: its role chips plus its project and machine headings. */
-          const shown = await page.locator("[data-rules-window] [data-rules-role] span, [data-rules-window] [data-rules-count]").allInnerTexts();
+          /* On a phone the window opens on the list; the desktop shows the first level's rules beside it. The rows are held until the rules arrive. */
+          await page.locator("[data-rules-window] [data-profile-level]:not(:disabled)").first().waitFor();
+          if (!phone) await page.locator("[data-rules-window] [data-learned-rule]").first().waitFor();
+          /* The row's figure is what the window adds up to: the level rows' counts. */
+          const shown = await page.locator("[data-rules-window] [data-profile-level] span.tabular-nums").allInnerTexts();
           expect(shown.reduce((sum, text) => sum + Number(text), 0)).toBe(8);
-          /* A chip switch changes the columns' contents and leaves the window's top where it was. */
-          const topOf = () => page.locator("[data-rules-window]").evaluate((node) => Math.round(node.getBoundingClientRect().top));
-          const topBefore = await topOf();
-          await page.locator('[data-rules-window] [data-rules-role="visual-critic"]').click();
-          await page.locator('[data-rules-window] [data-rules-role="visual-critic"][aria-selected="true"]').waitFor();
-          expect(await page.locator('[data-rules-section="role"] [data-learned-rule]').count()).toBe(1);
-          expect(await topOf()).toBe(topBefore);
-          await page.locator('[data-rules-window] [data-rules-role="builder"]').click();
+          /* Choosing another level changes the pane and leaves the window's edges where they were. */
+          const edgesOf = () => page.locator("[data-rules-window]").evaluate((node) => { const box = node.getBoundingClientRect(); return [Math.round(box.top), Math.round(box.height)]; });
+          const edgesBefore = await edgesOf();
+          await page.locator('[data-rules-window] [data-profile-level="role:atlas:visual-critic"]').click();
+          await page.locator('[data-level-pane="role:atlas:visual-critic"]').waitFor();
+          expect(await page.locator('[data-level-pane] [data-rules-section="role"] [data-learned-rule]').count()).toBe(1);
+          if (!phone) expect(await edgesOf()).toEqual(edgesBefore);
+          if (phone) await page.locator("[data-level-back]").click();
+          await page.locator('[data-rules-window] [data-profile-level="role:atlas:builder"]').click();
           await page.locator('[data-rules-window] [data-rules-history="role"]').click();
           /* History holds the repeat, merged; the rule removed and put back is active again. */
           expect(await page.locator("[data-rules-window] [data-left-rule]").count()).toBe(1);
@@ -10524,17 +10553,18 @@ describe("role memory: rules window and the rule line", () => {
           expect(window.overflow).toBeLessThanOrEqual(1);
           cases.push({ lang, width, surface: "window", ...window, file: await shot("window") });
           if (!phone) {
-            /* A column longer than the window allows scrolls inside it; the window keeps its maximum and stays within the screen. */
+            /* A level longer than the window allows scrolls in its pane; the window keeps its one height and stays within the screen. */
             await page.evaluate(() => { globalThis.dispatchEvent(new CustomEvent("delegatus:open-learned-rules", { detail: { project: "long-rules" } })); });
-            await page.locator('[data-rules-section="role"] [data-learned-rule]').nth(LONG_RULES - 1).waitFor();
+            await page.locator('[data-level-pane] [data-rules-section="role"] [data-learned-rule]').nth(LONG_RULES - 1).waitFor();
             const long = await page.locator("[data-rules-window]").evaluate((node) => {
-              const box = node.getBoundingClientRect(); const scroller = node.querySelector('[data-rules-section="role"] > div')!;
+              const box = node.getBoundingClientRect(); const scroller = node.querySelector('[data-level-pane]')!;
               return { top: box.top, bottom: box.bottom, height: Math.round(box.height), scrolls: scroller.scrollHeight > scroller.clientHeight + 1 };
             });
             expect(long.top).toBeGreaterThanOrEqual(0); expect(long.bottom).toBeLessThanOrEqual(height);
-            expect(long.height).toBe(640); expect(long.scrolls).toBe(true);
-            /* This project has no project rules: its column says so once, in its body, with no count beside the title. */
-            const emptyProject = page.locator('[data-rules-section="project"]');
+            expect(Math.abs(long.height - Math.min(820, 0.9 * height))).toBeLessThanOrEqual(1); expect(long.scrolls).toBe(true);
+            /* This project has no project rules: its level says so once, in its pane, with no count beside the title. */
+            await page.locator('[data-rules-window] [data-profile-level="project:long-rules"]').click();
+            const emptyProject = page.locator('[data-level-pane] [data-rules-section="project"]');
             expect(await emptyProject.locator("[data-rules-count]").count()).toBe(0);
             expect(await emptyProject.getByText(translate(lang, "roleMemory.empty"), { exact: true }).count()).toBe(1);
             cases.push({ lang, width, surface: "window-long-empty-project", file: await shot("window-long") });
@@ -10547,7 +10577,7 @@ describe("role memory: rules window and the rule line", () => {
     } finally {
       await browser?.close(); await launched?.close(); server.stop();
       fs.writeFileSync(path.join(root, "browser-process.json"), JSON.stringify({ pid: launched?.process().pid, closed: true }));
-      for (const name of ["LLV_STATE_DIR", "XDG_CONFIG_HOME"]) {
+      for (const name of ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "LLV_OPERATOR_TOKEN"]) {
         if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
       }
       fs.rmSync(root, { recursive: true, force: true });
