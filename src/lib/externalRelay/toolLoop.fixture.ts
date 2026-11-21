@@ -14,6 +14,8 @@ export function ownerRequest(name = "owner_x4") {
   const request = x1Request("actions_admin");
   request.request_id = name;
   request.input.requester = x1Request("owner").input.requester;
+  const trigger = request.input.conversation.find(message => message.id === request.input.respond_to);
+  if (trigger && request.input.requester) trigger.author.key = request.input.requester.key;
   request.input.tools = [...request.input.tools!, ...ownerIndex].sort((a, b) => a.name.localeCompare(b.name));
   request.input.request_text = "List my grids, create two requested grids, attach their chats, and deactivate the named clone when I confirm.";
   return request;

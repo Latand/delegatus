@@ -2,28 +2,30 @@ import { pageReader, type PageReader, type PageReadResult } from "./pageReader";
 import { admittedSeedMedia } from "./mediaInputValidation";
 import { createHash } from "node:crypto";
 import { ExternalRelayError, isUnknownFeatureRefusal, relayCall } from "./client";
-import { isOwnerTool, ownerRateLimitSchema, RELAY_OWNER_TOOLS, toolCallResultSchema, type ExternalRelayRequest, type ExternalRelayRequester, type RoundCall, type ToolCallResult } from "./protocol";
+import { isOwnerTool, ownerRateLimitSchema, RELAY_OWNER_TOOLS, toolCallResultSchema, type ExternalRelayRequest, type RoundCall, type ToolCallResult } from "./protocol";
 import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
 import { ACTION_VERIFICATION_MS, ACTION_VERIFICATION_READS, actionOutcomeReads, establishActionOutcome, verificationFailed, type ActionOutcome, type ActionResolution } from "./actionOutcome";
+import { requesterIsVerifiedOwner } from "./profile";
 
 export const RELAY_TOOL_ROUNDS = 8;
 // Receipt reads do not admit actions. This bound is also saved by the runner.
 export const UNKNOWN_OUTCOME_READS = 3;
 
-export function mayQuote(audience: string | undefined, requester: ExternalRelayRequester | null | undefined): boolean {
+export function mayQuote(audience: string | undefined, request: ExternalRelayRequest): boolean {
+  const requester = request.input.requester;
   return audience === undefined || (audience === "admin" && requester?.is_admin === true) ||
-    (audience === "owner" && requester?.is_owner === true);
+    (audience === "owner" && requesterIsVerifiedOwner(request));
 }
 export const callableReads = (request: ExternalRelayRequest) =>
   (request.input.tools ?? []).filter((tool) => tool.mode === "direct" && tool.effect === "read" &&
-    tool.parameters && mayQuote(tool.audience, request.input.requester));
+    tool.parameters && mayQuote(tool.audience, request));
 
 export const callableTools = (request: ExternalRelayRequest) =>
   (request.input.tools ?? []).filter((tool) => tool.name !== "read_page" && tool.mode === "direct" && tool.parameters &&
     (tool.effect === "read" || tool.effect === "action" && !!request.input.requester) &&
-    mayQuote(tool.audience, request.input.requester));
+    mayQuote(tool.audience, request));
 
 export const PAGE_READ_TOOL: import("./protocol").ExternalRelayTool = {
   name: "read_page", summary: "Read one public internet page through the relay URL policy.",
@@ -257,13 +259,13 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         if (action && result.status === "outcome_unknown") {
           ambiguous = true;
           lastUnknown = result;
-          if (!mayQuote(result.audience, request.input.requester) || receiptReads >= UNKNOWN_OUTCOME_READS)
+          if (!mayQuote(result.audience, request) || receiptReads >= UNKNOWN_OUTCOME_READS)
             return unknown(result);
           reconciling = true;
           await wait(1000);
           continue;
         }
-        if (!action && !mayQuote(result.audience, request.input.requester)) return { result };
+        if (!action && !mayQuote(result.audience, request)) return { result };
         if (result.status === "pending") {
           pending = true;
           if (action) ambiguous = true;
@@ -398,7 +400,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       const action = effectOf(call.tool) === "action";
       const raw = value.result;
       const page = "page" in value ? value.page as PageReadResult | undefined : undefined;
-      const withheld = !!raw && !mayQuote(raw.audience, request.input.requester);
+      const withheld = !!raw && !mayQuote(raw.audience, request);
       let output = withheld ? "" : value.outcome === "verification_failed" ? value.output ?? "" : raw?.output ?? page?.output ?? value.output ?? "";
       let code = withheld && !action ? "not_permitted" : raw?.code ?? page?.code ?? value.code;
       let status = withheld && !action ? "denied" : raw?.status ?? page?.status ?? ("unknown" in value && value.unknown ? "outcome_unknown" : local ? "denied" : "error");

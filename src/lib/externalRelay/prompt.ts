@@ -49,7 +49,7 @@ ${context.map((section) => `${section}\n`).join("")}[Answer with one JSON object
 export function toolRoundPrompt(request: ExternalRelayRequest, round: number, state: {
   results: import("./toolLoop").ToolProjection[]; callsLeft: number; final: boolean; actionSent?: boolean; pageRead?: boolean;
 }, engine = ""): string {
-  const visible = { ...request, input: { ...request.input, tools: [...(request.input.tools ?? []).filter(tool => tool.name !== "read_page" && mayQuote(tool.audience, request.input.requester)),
+  const visible = { ...request, input: { ...request.input, tools: [...(request.input.tools ?? []).filter(tool => tool.name !== "read_page" && mayQuote(tool.audience, request)),
     ...(state.pageRead && request.delivery !== "guest" ? [PAGE_READ_TOOL] : [])] } };
   const sections = [
     ...(request.input.tool_guidance != null ? [`<tool_guidance>\n${json(request.input.tool_guidance)}\n</tool_guidance>`] : []),
@@ -85,7 +85,7 @@ export function toolRoundPrompt(request: ExternalRelayRequest, round: number, st
 
 export function conversationTurnPrompt(request: ExternalRelayRequest, record: RelayConversation, round: string) {
   const input = request.input;
-  const sections = `${formatSection(request)}<service_instructions>\n${input.instructions}\n</service_instructions>\n<owner_instructions>\n${input.owner_instructions ?? ""}\n</owner_instructions>\n<documents>\n${json(input.documents)}\n</documents>\n<short_term_memory>\n${json(input.short_term_memory ?? null)}\n</short_term_memory>\n<tools>\n${json(input.tools?.filter((t) => mayQuote(t.audience, input.requester)) ?? [])}\n</tools>\n<tool_guidance>\n${json(input.tool_guidance ?? null)}\n</tool_guidance>\n`;
+  const sections = `${formatSection(request)}<service_instructions>\n${input.instructions}\n</service_instructions>\n<owner_instructions>\n${input.owner_instructions ?? ""}\n</owner_instructions>\n<documents>\n${json(input.documents)}\n</documents>\n<short_term_memory>\n${json(input.short_term_memory ?? null)}\n</short_term_memory>\n<tools>\n${json(input.tools?.filter((t) => mayQuote(t.audience, request)) ?? [])}\n</tools>\n<tool_guidance>\n${json(input.tool_guidance ?? null)}\n</tool_guidance>\n`;
   const digest = createHash("sha256").update(sections).digest("hex");
   const seen = new Set(record.seen);
   const messages = input.conversation.filter((message) => {

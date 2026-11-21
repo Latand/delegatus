@@ -7,14 +7,14 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 /** Only the service's advertised, audience-visible metadata enters the owner prompt. */
 export function compactToolIndex(request: ExternalRelayRequest) {
-  return (request.input.tools ?? []).filter(tool => mayQuote(tool.audience, request.input.requester))
+  return (request.input.tools ?? []).filter(tool => mayQuote(tool.audience, request))
     .map(({ name, summary, mode, effect, audience }) => ({ name, summary, mode,
       ...(effect ? { effect } : {}), ...(audience ? { audience } : {}) }));
 }
 
 export type ToolGuidance = { tools: string[]; text: string };
 export function describeToolIndex(request: ExternalRelayRequest, names: string[], blocks: ToolGuidance[] = []) {
-  const visible = (request.input.tools ?? []).filter(tool => mayQuote(tool.audience, request.input.requester));
+  const visible = (request.input.tools ?? []).filter(tool => mayQuote(tool.audience, request));
   const tools = visible.filter(tool => names.includes(tool.name));
   const missing = names.filter(name => !visible.some(tool => tool.name === name));
   const reply = () => {

@@ -203,6 +203,28 @@ for (const role of ["group", "owner"] as const) for (const invocation of ["menti
     } finally { await f.close(); }
   }, 30_000);
 
+test("conflicting owner requester metadata keeps photo delivery and removes owner tools", async () => {
+  const f = await runnerCase("owner", "claude");
+  const request = f.raw;
+  request.features = ["requester_context", "relay_media_in", "relay_owner_tools"];
+  request.input.request_text = "@fixturebot";
+  const trigger = request.input.conversation[3]!;
+  trigger.text = "@fixturebot";
+  trigger.author.key = "different_sender";
+  request.input.conversation = [trigger];
+  request.input.tools = [{ name: "owner_history_lookup", summary: "Read owner history", audience: "owner", mode: "direct",
+    effect: "read", parameters: { type: "object" } }];
+  try {
+    expect(callableTools(request)).toEqual([]);
+    const result = await f.run(request);
+    expect(result).toMatchObject({ outcome: "answered" });
+    expect(f.downloads).toEqual(["photo_3"]);
+    expect(f.paths).toHaveLength(1);
+    expect(f.ownerLaunches()).toBe(0);
+    expect(f.prompts.join()).not.toContain("owner_history_lookup");
+  } finally { await f.close(); }
+}, 30_000);
+
 for (const role of ["owner", "group", "guest"] as const) for (const engine of ["claude", "codex", "codex-cloud"] as const)
   test(`${role}/${engine}: real runner preserves item refs, markers and download authority`, async () => {
     const f = await runnerCase(role, engine);
