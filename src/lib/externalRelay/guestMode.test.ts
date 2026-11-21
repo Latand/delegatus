@@ -165,7 +165,9 @@ for (const ownerTier of [true, false]) for (const populated of [true, false]) fo
       else unexpected.push(req.url!);
       return { body: { status: "ok" } };
     });
-    const relay = paired(server.origin, ownerTier); updateRelayStore(s => ({ ...s, relays: [relay] }));
+    const relay = paired(server.origin, ownerTier);
+    relay.targets[0]!.project = "project-b";
+    updateRelayStore(s => ({ ...s, relays: [relay] }));
     let launches = 0, stopped = false;
     const stub = path.join(root, "restricted-agent");
     const schemaFile = path.join(root, "schema.json");
