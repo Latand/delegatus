@@ -33,8 +33,8 @@ import { changeRun, dropRun, externalRelayFile, readRunLedger, readRelayStore, r
 import { startTestRelay } from "./testRelay";
 
 const addedAt = "2026-09-28T12:00:00Z";
-const project = "dir-example";
-const otherProject = "dir-other";
+const project = `dir-${"1".repeat(32)}`;
+const otherProject = `dir-${"2".repeat(32)}`;
 const entry = { id: "grant-one", kind: "requester" as const, key: "u1", project, source: "board" as const, label: "Trusted person", addedAt };
 const target: RelayTargetSettings = { id: "target_1", name: "Target", answered_by: "install", fallback: "none",
   enabled: true, engine: "codex", model: "auto", effort: null, project, concurrency: 1, hardCapMinutes: 1 };
