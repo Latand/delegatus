@@ -17,8 +17,9 @@ test(`owner chat replies preserve negotiated Markdown without selecting answer p
       stop: async () => { throw new Error("a settled reply needs no cancellation"); }, pollMs: 1,
     },
   }).done;
-  const points = Array.from(text);
-  const concise = points.length > 240 ? points.slice(0, 239).join("") + "…" : text;
+  const opening = text.split(/\r?\n/u).map(line => line.trim()).find(Boolean) ?? "";
+  const points = Array.from(opening);
+  const concise = points.length > 240 ? points.slice(0, 239).join("") + "…" : opening;
   expect(result).toMatchObject({ status: "done", answer: { action: "reply", text: concise, format: "rich_markdown", reply_to: owner.messageId } });
 });
 

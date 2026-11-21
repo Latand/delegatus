@@ -70,7 +70,7 @@ test("guest contract refuses direct service tools, progress, destinations and ri
 });
 
 for (const populated of [false, true]) test(`guest handoff and final text validation with tools=${populated}`, async () => {
-  const request = guest(); request.input.requester = { ...request.input.requester!, is_owner: false }; if (!populated) request.input.tools = [];
+  const request = guest(); if (!populated) request.input.tools = [];
   expect(offersHandoff(request)).toBe(true);
   expect(callableTools(request)).toEqual([]);
   const owner = ownerTierFor({ ownerTier: true }, request)!;
@@ -94,9 +94,9 @@ for (const populated of [false, true]) test(`guest handoff and final text valida
   } finally { await server.close(); }
 }, 30_000);
 
-for (const ownerTier of [true, false]) for (const populated of [true, false]) for (const handoff of (ownerTier ? [false, true, "late", "timeout"] as const : [false, true] as const))
-  test(`real guest runner ownerTier=${ownerTier} tools=${populated} handoff=${handoff}`, async () => {
-    const request = guest(); request.input.requester = { ...request.input.requester!, is_owner: false }; if (!populated) request.input.tools = [];
+for (const populated of [true, false]) for (const handoff of [false, true] as const)
+  test(`real guest runner ownerTier=false tools=${populated} handoff=${handoff}`, async () => {
+    const request = guest(); if (!populated) request.input.tools = [];
     const beats: unknown[] = [], completions: unknown[] = [], unexpected: string[] = [];
     const wire: Record<string, unknown> = {};
     const server = await startTestRelay((req, body) => {
@@ -106,7 +106,7 @@ for (const ownerTier of [true, false]) for (const populated of [true, false]) fo
       else unexpected.push(req.url!);
       return { body: { status: "ok" } };
     });
-    const relay = paired(server.origin, ownerTier);
+    const relay = paired(server.origin, false);
     relay.targets[0]!.project = "project-b";
     updateRelayStore(s => ({ ...s, relays: [relay] }));
     let launches = 0, stopped = false;
@@ -134,7 +134,7 @@ const a=process.argv.slice(2);await Bun.stdin.text();require('fs').writeFileSync
       expect(beats.length).toBeGreaterThan(0); expect(beats.every(body => !(body as { progress?: unknown }).progress)).toBe(true);
       expect(JSON.parse(fs.readFileSync(schemaFile, "utf8"))).toEqual(guestAnswerSchema);
       expect(record?.profile?.owner ?? false).toBe(false);
-      if (ownerTier && populated && handoff === false) {
+      if (populated && handoff === false) {
         wire.source = { revision: "f27ca4e08746f685f54ea19084c82b5f64403848", file: "claimed_guest_owner.json", bytes: source.length,
           sha256: createHash("sha256").update(source).digest("hex") };
         wire.runner = "ephemeral"; wire.profile = record!.profile; wire.completion = completions[0];
@@ -149,7 +149,8 @@ test("service-verified owner on guest delivery enters owner tier with the quoted
   const request = guest();
   const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
   request.input.request_text = "Please pass this issue to the project seat.";
-  request.input.conversation = [{ ...trigger, text: "The blacklist phrase still leaves matching messages visible." }];
+  const quotedText = "The blacklist phrase still leaves matching messages visible.";
+  request.input.conversation = [{ ...trigger, text: quotedText }];
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const relay = paired(server.origin, true);
   relay.targets[0]!.project = "project-b";
@@ -171,8 +172,8 @@ test("service-verified owner on guest delivery enters owner tier with the quoted
     } });
     expect(launches).toBe(1);
     expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner).toBe(true);
-    expect(sentRequest).toEqual({ text: trigger.text, requestText: request.input.request_text });
-    expect(launchPrompt).toContain(trigger.text);
+    expect(sentRequest).toEqual({ text: quotedText, requestText: request.input.request_text });
+    expect(launchPrompt).toContain(quotedText);
     expect(launchPrompt).toContain(request.input.request_text!);
     expect(result).toMatchObject({ outcome: "answered", answer: {
       action: "reply", text: "Sent to the project-b orchestrator.", reply_to: null,
@@ -237,6 +238,8 @@ ${fails ? "process.exit(1);" : engine === "claude" ? `console.log(JSON.stringify
       // Prime an ordinary owner pin through the production runner, then interleave guest work.
       expect((await runClaimedRequest(relay, clean("owner_prime"), undefined, { leaseWorker: false, ownerPorts }))?.outcome).toBe("answered");
       const pins = readConversations();
+      relay.targets[0] = { ...relay.targets[0]!, ownerTier: false };
+      updateRelayStore(s => ({ ...s, relays: [relay] }));
       const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, command: stub, ownerPorts });
       expect(launches).toBe(1);
       expect(result?.outcome).toBe(fails ? "failed" : "answered");
@@ -252,9 +255,13 @@ ${fails ? "process.exit(1);" : engine === "claude" ? `console.log(JSON.stringify
       expect(record.conversationId).toBeUndefined();
       expect(readRunLedger().runs).toEqual([]);
       // The owner pin still resumes; the guest never entered its model context.
+      relay.targets[0] = { ...relay.targets[0]!, ownerTier: true };
+      updateRelayStore(s => ({ ...s, relays: [relay] }));
       expect((await runClaimedRequest(relay, clean("owner_follow"), undefined, { leaseWorker: false, ownerPorts }))?.outcome).toBe("answered");
       expect(continuations).toBe(1);
       expect(launches).toBe(1);
+      relay.targets[0] = { ...relay.targets[0]!, ownerTier: false };
+      updateRelayStore(s => ({ ...s, relays: [relay] }));
       for (const chat of [request.chat, { key: "other_chat_key_000000" }]) {
         await runClaimedRequest(relay, { ...clean(chat === request.chat ? "guest_follow" : "guest_other", "guest"), chat }, undefined,
           { leaseWorker: false, command: stub, ownerPorts });
@@ -318,6 +325,7 @@ for (const failure of ["invalid-answer", "fallback-error"] as const)
       expect((await runClaimedRequest(relay, clean("error_owner_prime"), undefined, { leaseWorker: false, ownerPorts }))?.outcome).toBe("answered");
       const pins = readConversations();
       relay.targets[0]!.engine = "codex-cloud";
+      relay.targets[0]!.ownerTier = false;
       updateRelayStore(s => ({ ...s, relays: [relay] }));
       const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts,
         cloudTransport: async input => {
@@ -336,10 +344,12 @@ for (const failure of ["invalid-answer", "fallback-error"] as const)
       for (const marker of markers) expect(JSON.stringify(record.input)).toContain(marker);
       if (failure === "fallback-error") expect(JSON.stringify(record.diagnostic)).toContain(markers[1]!);
       relay.targets[0]!.engine = "claude";
+      relay.targets[0]!.ownerTier = true;
       updateRelayStore(s => ({ ...s, relays: [relay] }));
       expect((await runClaimedRequest(relay, clean("error_owner_follow"), undefined, { leaseWorker: false, ownerPorts }))?.outcome).toBe("answered");
       expect(launches).toBe(1); expect(continuations).toBe(1);
       relay.targets[0]!.engine = "codex-cloud";
+      relay.targets[0]!.ownerTier = false;
       updateRelayStore(s => ({ ...s, relays: [relay] }));
       for (const sameChat of [true, false]) {
         const next = clean(sameChat ? "error_guest_follow" : "error_guest_other", "guest");
@@ -367,7 +377,7 @@ for (const failure of ["invalid-answer", "fallback-error"] as const)
 
 for (const fallback of [false, true]) test(`guest Cloud uses private threads and isolated fallback=${fallback}`, async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
-  const relay = paired(server.origin);
+  const relay = paired(server.origin, false);
   relay.targets[0] = { ...relay.targets[0]!, engine: "codex-cloud", model: "fixture", cloudEnvironmentId: "fixture-environment" };
   updateRelayStore(s => ({ ...s, relays: [relay] }));
   fs.writeFileSync(path.join(home, "auth.json"), "{}");
