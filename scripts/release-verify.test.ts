@@ -338,7 +338,7 @@ test.each(["open PR", "wrong base", "branch head", "checkout moved", "squash", "
     };
     const run = () => verifyRelease("v1.2.0", cut, ports, "7");
     const result = await run();
-    if (["squash", "main advanced before preparation", "main advanced before squash"].includes(scenario)) {
+    if (scenario === "squash" || scenario === "main advanced before preparation" || scenario === "main advanced before squash") {
       expect(result).toEqual({ errors: [], nextStep: "create-and-push", tagCommit: merged });
       if (scenario === "squash") expect(merged).not.toBe(reviewed);
       if (scenario !== "squash") expect(git("show", `${merged}:src-feature.ts`)).toBe("export const newer = true;");
