@@ -252,6 +252,10 @@ function systemMemory(): SystemMemory | null {
   return { ramTotal, ramAvailable: Math.min(os.freemem(), ramTotal), swapTotal: 0, swapUsed: 0 };
 }
 
+async function resourceSystemMemory(): Promise<SystemMemory | null> {
+  return systemMemory();
+}
+
 function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
   const rows = snapshot().data.rows;
   const map = new Map<number, ProcessMemory>();
@@ -324,6 +328,7 @@ export const windowsBackend: ProcBackend = {
   readEnvVar,
   listProcesses,
   systemMemory,
+  resourceSystemMemory,
   resourcePpidMap,
   resourceProcessMemory,
   processMemory,
