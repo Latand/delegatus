@@ -72,12 +72,14 @@ export function withWorkspaceMcpFence(
       }
       return runWithNativeCallProof(nativeCallerProof, tool, args, () => this.callTool(tool, args, context));
     }
-    const refuse = (check: string) => ({ ok: false as const, toolName: tool, clientRequestId: typeof input.clientRequestId === "string" ? input.clientRequestId : null,
-      replayed: false, code: "workspace_forbidden", error: `workspace access denied (${check})`, retryable: false, details: { check } });
+    const refuse = (check: string, retryable = false) => ({ ok: false as const, toolName: tool, clientRequestId: typeof input.clientRequestId === "string" ? input.clientRequestId : null,
+      replayed: false, code: "workspace_forbidden", error: `workspace access denied (${check})`, retryable, details: { check, retryable } });
     const boardRead = tool === "list_tasks" || tool === "list_pipelines";
     try {
-      const replay = await service.replayTool?.(tool, input);
-      if (replay) return replay;
+      if (ROUTE_FENCED_TOOLS.has(tool)) {
+        const replay = await service.replayTool?.(tool, input);
+        if (replay) return replay;
+      }
       const store = existingTeamStore();
       const authority = dependencies.attentionAuthority();
       if (authority.kind === "unidentified" && ["capability-unresolved", "capability-conflict"].includes(authority.admission?.reason ?? "")) denied("caller");
@@ -322,7 +324,7 @@ export function withWorkspaceMcpFence(
         return { ...refuse("board-caller"), code, retryable, error: "board caller authority refused the read", details: { code, retryable } };
       }
       // A broken authority store cannot silently restore installation reach.
-      return { ...refuse("authority-store"), code: "workspace_unavailable", error: "workspace authority is unavailable", retryable: true };
+      return { ...refuse("authority-store", true), code: "workspace_unavailable", error: "workspace authority is unavailable" };
     }
   } };
 }
