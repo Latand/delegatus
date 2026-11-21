@@ -9,6 +9,7 @@ import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { executeSpawnRequest, productionSpawnCommandDependencies } from "@/lib/agent/spawnCommand";
 import { reportSpawnHeaders } from "@/lib/telegram/reportSpawn";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { runAsMcpHttpCaller } from "@/lib/mcp/callerContext";
 import { McpTaskExecutor } from "@/lib/mcp/taskExecutor";
@@ -94,11 +95,14 @@ test("only the bound key on its target launches a local elevated run", async () 
     launches.push(body);
     expect(readRunLedger().runs.find(run => run.requestId === "trusted")?.ownerTurn?.entry).toEqual(snapshot);
     const home = process.env.HOME!;
+    const account = { engine: "codex" as const, accountId: "fixture", kind: "managed" as const, home, transcriptRoot: home, env: {} };
     const response = await executeSpawnRequest(new NextRequest("http://127.0.0.1:1/api/spawn", {
       method: "POST", headers: reportSpawnHeaders(ensureOperatorSpawnCapability(), VIEWER_SPAWN_CAPABILITY_HEADER),
       body: JSON.stringify(body),
     }), { ...productionSpawnCommandDependencies, autonomousStructured: true, assertStructuredRuntime() {},
-      resolveHealthySpawnAccount: async () => ({ engine: "codex", accountId: "fixture", kind: "managed", home, transcriptRoot: home, env: {} }),
+      resolveHealthySpawnAccount: async () => account,
+      resolveSpawnAccount: () => account,
+      runtimeHostClient: () => ({} as RuntimeHostClient),
       preflightProtocol: async () => {},
       resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
       defer() {},

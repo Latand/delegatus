@@ -4595,7 +4595,7 @@ test("negotiated tool rounds reject plain over the cap and preserve their rich a
   expect(refused.completion).toMatchObject({outcome:"failed",reason:"invalid_answer"});
 });
 test.each([false, true])("owner reply chains reuse one conversation, learn bot answers and bind only the current authority (rich %s)", async rich => {
-  const { liveOwnerRelayConversation, ownerRelayPayload } = await import("./ownerAuthority");
+  const { liveOwnerRelayConversation, ownerRelayHandoff } = await import("./ownerAuthority");
   const { relayServiceToolsOp } = await import("./ownerServiceTools");
   const { relayAnswerOp } = await import("./ownerAnswer");
   const { formatGuide } = await import("./rich.fixture");
@@ -4626,7 +4626,7 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
       const held = registry.holdDelivery("conversation_chain_fixture", prompt, turn.clientAttemptId, "text", [], null, { operationId: turn.clientAttemptId });
       registry.recordDeliveryOutcome(held.id, "delivered");
       expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(true);
-      expect(ownerRelayPayload("context", "conversation_chain_fixture")?.text).toContain(current.endsWith("2") ? "Fixture turn turn-2" : "Fixture turn turn-3");
+      expect(ownerRelayHandoff("context", "conversation_chain_fixture").payload?.text).toContain(current.endsWith("2") ? "Fixture turn turn-2" : "Fixture turn turn-3");
       return { ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId };
     },
     observe: async () => {
@@ -4648,7 +4648,7 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
       }
       expect(liveOwnerRelayConversation("conversation_chain_fixture")).toBe(false);
       expect(await relayServiceToolsOp("conversation_chain_fixture", { op: "list" })).toBeNull();
-      expect(ownerRelayPayload("context", "conversation_chain_fixture")).toBeNull();
+      expect(ownerRelayHandoff("context", "conversation_chain_fixture").payload).toBeNull();
       expect(await relayAnswerOp("conversation_chain_fixture", { format: "plain" })).toBeNull();
     }
     expect(launches).toBe(1); expect(readConversations()).toHaveLength(1);
