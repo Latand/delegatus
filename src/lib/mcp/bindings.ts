@@ -1,3 +1,5 @@
+import { existingTeamStore } from "@/lib/team/store";
+import { workspaceDirectory } from "@/lib/team/workspaces";
 import { protectNativeMediaContext } from "@/lib/externalRelay/nativeMediaContext";
 import { publicationLanguageHints } from "@/lib/forge/publicationLanguage";
 import { briefWarningAnswer, briefWarnings } from "@/lib/pipelines/briefWarnings";
@@ -41,7 +43,7 @@ import { turboChangeContext } from "@/lib/monitor/turboRuntime";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
 import { recordSeatProjectSuccessions, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
-import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
+import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal, type NamedProjectDirectory } from "@/lib/projects/nameResolution";
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
@@ -94,7 +96,7 @@ import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/age
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { nativeCallerSources } from "@/lib/attention/nativeCallerSources";
-import { nativeCallerRefusal, resolveNativeCaller } from "@/lib/attention/nativeCaller";
+import { nativeCallerRefusal, resolveNativeCaller, type NativeCallerReason } from "@/lib/attention/nativeCaller";
 import { processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
@@ -309,6 +311,8 @@ import {
   type McpToolBindings,
   type McpToolBinding,
   type McpToolCallContext,
+  type McpBoardRead,
+  retainResponseAuthority,
   type McpToolName,
   type McpToolPayload,
 } from "./server";
@@ -6514,21 +6518,190 @@ function mutationReceipt(operationId: string): { operationId: string; receipt: {
   return { operationId, receipt: { operationId, status: "delivered" } };
 }
 
-/** A seat's list scope comes from its authenticated designation. */
-function boardReadProject(
-  args: McpToolArgs,
-  dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "authorizedSeats"> & Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority">>,
-): string {
-  const requested = text(args.project);
-  const caller = dependencies.attentionAuthority ? attributionOf(dependencies as ViewerMcpDomainDependencies) : dependencies.callerAttribution?.() ?? null;
-  if (!caller || (caller.kind !== "manager" && caller.kind !== "gateway")) return requested ? canonicalProject(requested) : "";
+function boardProjectDirectory(dependencies: ViewerMcpDomainDependencies): NamedProjectDirectory {
+  const store = existingTeamStore();
+  const projects = store ? workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects) : [];
+  return namedProjectDirectory(dependencies, projects);
+}
+
+/** Resolve explicit board names without performing seat succession writes.
+ * The directory that accepted the spelling is returned with the selection so
+ * the alias proof reads the same accepted sources. */
+export function resolveBoardSelection(named: string, dependencies: ViewerMcpDomainDependencies): { project: string; directory: NamedProjectDirectory } {
+  try {
+    const directory = boardProjectDirectory(dependencies);
+    return { project: resolveNamedProject(named, directory, false), directory };
+  }
+  catch (error) {
+    if (error instanceof ProjectNameRefusal) throw new McpToolRefusal(error.message, error.details);
+    throw error;
+  }
+}
+
+/** A domain that supplies no catalog source has no project directory of its
+ * own. A project the shared resolver cannot name is then read as an exact key,
+ * as on main, and the seat fence still compares it before any row is read. A
+ * domain with a catalog source (production) keeps the unknown-name refusal. */
+function boardSelectionOrKey(named: string, dependencies: ViewerMcpDomainDependencies): { project: string; directory?: NamedProjectDirectory } {
+  try { return resolveBoardSelection(named, dependencies); }
+  catch (error) {
+    if (typeof dependencies.lastCompletedCatalog === "function"
+      || !(error instanceof McpToolRefusal) || error.details.code !== "unknown_project") throw error;
+    return { project: canonicalProject(named) };
+  }
+}
+
+export function resolveBoardProject(named: string, dependencies: ViewerMcpDomainDependencies): string {
+  return resolveBoardSelection(named, dependencies).project;
+}
+
+/** Board reads keep main's tolerance for a domain without an authority source:
+ * its explicit attribution, or none, names the caller. */
+function boardAttribution(dependencies: ViewerMcpDomainDependencies): CallerAttribution {
+  return typeof dependencies.attentionAuthority === "function" ? attributionOf(dependencies)
+    : dependencies.callerAttribution?.() ?? { kind: "unidentified", conversationId: null, role: null };
+}
+
+/** The authenticated designation remains the policy after name resolution. */
+function boardReadProject(requested: string, dependencies: ViewerMcpDomainDependencies): string {
+  const caller = boardAttribution(dependencies);
+  if (caller.kind !== "manager" && caller.kind !== "gateway") return requested;
   const seat = caller.conversationId && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find(candidate => candidate.conversationId === caller.conversationId);
-  if (!seat && caller.kind === "gateway") return requested ? canonicalProject(requested) : "";
-  if (!seat || !seat.project) throw new McpToolRefusal("the caller's project designation is unavailable; nothing was read", { code: "project_scope_refused", status: 403 });
+  if (!seat && caller.kind === "gateway") return requested;
+  if (!seat || !seat.project) throw new McpToolRefusal("the caller's project designation is unavailable; nothing was read", { code: "project_scope_refused", status: 403, retryable: false });
   const own = canonicalProject(seat.project);
-  if (requested && canonicalProject(requested) !== own) throw new McpToolRefusal("an orchestrator seat reads only its own project's board; use send_message_to_orchestrator for another project", { code: "cross_project_refused", status: 403, retryable: false });
+  if (requested && requested !== own) throw new McpToolRefusal("an orchestrator seat reads only its own project's board; use send_message_to_orchestrator for another project", { code: "cross_project_refused", status: 403, retryable: false });
   return own;
+}
+
+/** Native admission reasons that mean no identity evidence was presented at
+ * all: an authenticated compatibility adapter or a process with no Claude
+ * parent reads as unidentified, exactly as on main. Every other reason is a
+ * presented credential or session that failed and refuses the board read. */
+const NO_IDENTITY_PRESENTED: ReadonlySet<NativeCallerReason> = new Set(["no-claude-ancestor", "platform-unverified"]);
+
+/** Pin caller authority before resolution, including refusals with suggestions. */
+export function captureBoardCaller(dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext): { fingerprint: string; assert(): void } {
+  const refuse = (): never => { throw new McpToolRefusal("board caller authority changed; nothing was read", { code: "project_scope_refused", status: 403, retryable: false }); };
+  const snapshot = () => runWithMcpCallerResolution(() => {
+    context.assertCaller?.();
+    const caller = boardAttribution(dependencies);
+    const operator = context.operatorBoardProject !== undefined;
+    if (operator && (caller.kind !== "gateway" || caller.conversationId !== null)) refuse();
+    const authority = operator ? undefined : dependencies.attentionAuthority?.();
+    if (authority?.kind === "unidentified" && authority.admission && !NO_IDENTITY_PRESENTED.has(authority.admission.reason)) {
+      throw new McpToolRefusal("board caller identity is unavailable", { code: "caller_unidentified", retryable: false });
+    }
+    const id = authority && authority.kind !== "unidentified" ? authority.conversationId : caller.via?.deputy ?? caller.conversationId;
+    const registry = dependencies.registrySnapshot?.();
+    const lookup = registry ? readOnlyConversationLookupFromSnapshot(registry) : null;
+    for (const owner of new Set([id, caller.conversationId])) {
+      try {
+        if (revokedSeatPipelineRefusal(owner, value => lookup?.canonicalConversationId(value as `conversation_${string}`) ?? value)) {
+          throw new McpToolRefusal("the caller's orchestrator designation was revoked", { code: "orchestrator_seat_revoked", retryable: false });
+        }
+      } catch (error) {
+        if (error instanceof SeatRevocationStoreUnavailableError) throw new McpToolRefusal(error.message, { code: "orchestrator_seat_authority_unavailable", retryable: true });
+        throw error;
+      }
+    }
+    const record = id ? lookup?.conversation(id as `conversation_${string}`) : null;
+    const generation = record?.generations.at(-1);
+    if (record?.supersededBy || generation?.archivedAt) refuse();
+    const seat = caller.conversationId ? orchestratorSeatIdentityForConversation(caller.conversationId) : null;
+    const principal = conversationWorkspacePrincipal(dependencies.workspaceConversation ?? registry ?? (() => null), id);
+    return JSON.stringify([caller, authority, principal, record ? [record.id, record.projectOwnership,
+      generation?.id, generation?.path, generation?.launchProfile.project, generation?.launchProfile.cwd, generation?.launchProfile.workspace] : null, seat]);
+  });
+  const pinned = snapshot();
+  const assert = () => { if (snapshot() !== pinned) refuse(); };
+  retainResponseAuthority(context, assert);
+  return { fingerprint: pinned, assert };
+}
+
+/** Pin alias edges without resolving the selected board again after an await. */
+export function captureBoardAliasProof(
+  named: string,
+  project: string,
+  aliases: Readonly<Record<string, string>>,
+  displayNames: Readonly<Record<string, string>> = {},
+  dependencies?: ViewerMcpDomainDependencies,
+  directory?: NamedProjectDirectory,
+): () => boolean {
+  // Match the spelling vocabulary accepted by the shared named-project resolver.
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[._/\\-]+/gu, "-").replace(/^-|-$/gu, "");
+  const spelling = normalize(named);
+  const matchingKeys = (current: Readonly<Record<string, string>>, currentNames: Readonly<Record<string, string>>) => {
+    const resolvesToProject = (start: string) => {
+      let key = start;
+      const seen = new Set<string>();
+      while (Object.hasOwn(current, key) && current[key] && !seen.has(key)) { seen.add(key); key = current[key]!; }
+      return !seen.has(key) && key === project;
+    };
+    const prefix = /^(repo|dir)-[a-f0-9]{7,31}$/i.test(named.trim()) ? named.trim().toLowerCase() : "";
+    return Object.keys(current).filter(key => spelling && (normalize(key) === spelling
+      || prefix && key.toLowerCase().startsWith(prefix) && resolvesToProject(key)
+      || normalize(currentNames[key] ?? "") === spelling && resolvesToProject(key))).sort();
+  };
+  const keys = matchingKeys(aliases, displayNames);
+  // Any source the resolver accepted for this spelling (a catalog row, a
+  // retained file, a manual project, an alias, a remote, ...) can be several
+  // alias edges away from the selected canonical project. Take those source
+  // keys from the resolver's own index, never from a separate list here.
+  const accepted = spelling ? directory ?? (dependencies ? boardProjectDirectory(dependencies) : undefined) : undefined;
+  const retainedSourceKeys = accepted ? accepted.sources(named).filter(key => accepted.canonical(key) === project) : [];
+  const displayProof = new Map(keys.filter(key => normalize(displayNames[key] ?? "") === spelling)
+    .map(key => [key, displayNames[key]]));
+  const proof = new Map<string, string | undefined>();
+  for (const start of [project, named, ...keys, ...retainedSourceKeys]) {
+    let key = start;
+    while (key && !proof.has(key)) {
+      const target = Object.hasOwn(aliases, key) ? aliases[key] : undefined;
+      // Retain terminal absence too: introducing an alias changes the proof.
+      proof.set(key, target);
+      if (!target) break;
+      key = target;
+    }
+  }
+  return () => {
+    const current = projectAliasSnapshot({ strict: true });
+    return JSON.stringify(matchingKeys(current.aliases, current.displayNames)) === JSON.stringify(keys)
+      && [...displayProof].every(([key, name]) => current.displayNames[key] === name)
+      && [...proof].every(([key, target]) => (Object.hasOwn(current.aliases, key) ? current.aliases[key] : undefined) === target);
+  };
+}
+
+/** One selection per call; fresh authority at every read/disclosure boundary. */
+function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext): McpBoardRead {
+  assertWorkspaceMcpCall();
+  const caller = captureBoardCaller(dependencies, context);
+  const named = text(args.project);
+  const operatorProject = context.operatorBoardProject;
+  // The voice adapter passes the canonical selection already proved by its reader.
+  // Only an in-process context can carry this; serialized tool arguments cannot.
+  if (operatorProject !== undefined && named !== operatorProject) {
+    throw new McpToolRefusal("board selection changed", { code: "project_scope_refused", retryable: false });
+  }
+  const resolved = context.resolvedBoardProject;
+  if (resolved !== undefined && named !== resolved) {
+    throw new McpToolRefusal("board selection changed", { code: "project_scope_refused", retryable: false });
+  }
+  const aliasSnapshot = projectAliasSnapshot({ strict: true });
+  const aliases = aliasSnapshot.aliases;
+  const selection = operatorProject === undefined && resolved === undefined && named ? boardSelectionOrKey(named, dependencies) : undefined;
+  const requested = operatorProject !== undefined ? canonicalProject(operatorProject)
+    : resolved !== undefined ? resolved : selection?.project ?? "";
+  const project = boardReadProject(requested, dependencies);
+  const aliasesUnchanged = captureBoardAliasProof(named, project, aliases, aliasSnapshot.displayNames, dependencies, selection?.directory);
+  return { project, scope: `board-read:${crypto.createHash("sha256").update(JSON.stringify([project, caller.fingerprint])).digest("hex")}`, assert() {
+    assertWorkspaceMcpCall();
+    caller.assert();
+    if (canonicalProject(project) !== project || !aliasesUnchanged()
+      || boardReadProject(requested, dependencies) !== project) {
+      throw new McpToolRefusal("board caller authority changed; nothing was read", { code: "project_scope_refused", status: 403, retryable: false });
+    }
+  } };
 }
 
 function pipelineReferenceRows(dependencies: ViewerMcpDomainDependencies, project: string): Pipeline[] {
@@ -6568,9 +6741,11 @@ async function listPipelines(
   dependencies: ViewerMcpDomainDependencies,
   context: McpToolCallContext = {},
 ): Promise<McpToolPayload> {
+  const board = context.boardRead ?? captureBoardRead(args, dependencies, context);
+  board.assert();
   throwIfCallEnded(context);
   const states = stringSet(args.state, ["open", "draft", "provisioning", "running", "paused", "needs_decision", "needs_review", "completed", "closed"]);
-  const scope = { project: boardReadProject(args, dependencies), states, includeClosed: args.includeClosed === true,
+  const scope = { project: board.project, states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)), updatedSince: sinceTime(args.updatedSince),
     queryIds: undefined as string[] | undefined };
   // Resolve explicit ids once so PR matching and paging share the same
@@ -6613,8 +6788,9 @@ async function listPipelines(
       && (scope.queryIds !== undefined ? scope.queryIds.includes(pipeline.id) : !scope.query || pipeline.task.toLowerCase().includes(scope.query))
       && (!scope.updatedSince || pipeline.createdAt >= scope.updatedSince),
     project,
-  }, () => throwIfCallEnded(context));
+  }, () => { throwIfCallEnded(context); board.assert(); });
   throwIfCallEnded(context);
+  board.assert();
   const { rows: pipelines, ...pagination } = page;
   return redactPayload({ ...pagination, pipelines, compact: !fullAnswer(args),
     omittedRecordCount: args.full === true ? 0 : pipelines.length,
@@ -6664,8 +6840,11 @@ function listTaskRow(task: TaskPipelineReadModel) {
 }
 
 function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): McpToolPayload {
+  const board = context.boardRead ?? captureBoardRead(args, dependencies, context);
+  board.assert();
+  throwIfCallEnded(context);
   const statuses = stringSet(args.statuses ?? args.status, ["inbox", "assigned", "blocked", "done"]);
-  const scope = { project: boardReadProject(args, dependencies), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
+  const scope = { project: board.project, statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
     openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)),
     queryIds: undefined as string[] | undefined,
     priorities: stringSet(args.priority, [...TASK_PRIORITIES]) };
@@ -6692,6 +6871,8 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies,
       && (scope.queryIds !== undefined ? scope.queryIds.includes(task.id) : !scope.query || task.text.toLowerCase().includes(scope.query)),
     project,
   });
+  board.assert();
+  throwIfCallEnded(context);
   const { rows: tasks, ...pagination } = page;
   return redactPayload({ ...pagination, tasks, compact: !fullAnswer(args),
     omittedRecordCount: args.full === true ? 0 : tasks.length,
@@ -9125,8 +9306,8 @@ export function viewerMcpBindings(
     },
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
-    list_pipelines: reads.list_pipelines,
-    list_tasks: reads.list_tasks,
+    list_pipelines: Object.assign(reads.list_pipelines, { captureBoardRead: (args: McpToolArgs, context: McpToolCallContext) => captureBoardRead(args, domainDependencies, context) }),
+    list_tasks: Object.assign(reads.list_tasks, { captureBoardRead: (args: McpToolArgs, context: McpToolCallContext) => captureBoardRead(args, domainDependencies, context) }),
     get_task: reads.get_task,
     operator_snapshot: (args) => operatorSnapshot(args, domainDependencies),
     deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context), domainDependencies),
