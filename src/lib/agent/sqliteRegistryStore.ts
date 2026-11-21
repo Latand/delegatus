@@ -4638,6 +4638,20 @@ export class SqliteAgentRegistryStore {
     return rows.sort((a, b) => a.row_order - b.row_order).map(row => row.row_key);
   }
 
+  /** Read inside the caller's keyed transaction. The targeted liveness verdict
+      asks whether any delivery still differs from delivered, including legacy
+      rows whose missing state normalizes to held. One actual row witnesses it. */
+  firstUndeliveredKey(conversationIds: readonly string[]): string | undefined {
+    const statement = this.db.query<{ row_key: string }, [string]>(`SELECT row_key FROM ${this.recordsSource}
+      WHERE collection='heldDeliveries' AND json_extract(value_json,'$.conversationId')=?
+        AND json_extract(value_json,'$.state') IS NOT 'delivered' LIMIT 1`);
+    for (const id of conversationIds) {
+      const hit = statement.get(id);
+      if (hit) return hit.row_key;
+    }
+    return undefined;
+  }
+
   /** A bounded indexed selection used where even counting retained rows must
    * stop at the caller's refusal threshold. It reads row keys only. */
   private matchingRowKeysBounded(collection: RowCollection, filters: readonly RegistryKeyFilter[], limit: number): string[] {
