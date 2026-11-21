@@ -30,8 +30,9 @@ export async function lockedFixture(options: { registry?: boolean; cli?: boolean
   fs.mkdirSync(repoDir); fs.mkdirSync(worktreeDir);
   const cli = options.cli !== false;
   const archive = async (version: string) => await new Bun.Archive({
-    "package/package.json": JSON.stringify({ name: "fixture-tool", version, ...(cli ? { bin: { "fixture-tool": "cli.js" } } : {}) }),
+    "package/package.json": JSON.stringify({ name: "fixture-tool", version, main: "lib/index.js", ...(cli ? { bin: { "fixture-tool": "cli.js" } } : {}) }),
     "package/index.js": `module.exports = ${JSON.stringify(version)};\n`,
+    "package/lib/index.js": `module.exports = ${JSON.stringify(version)};\n`,
     "package/cli.js": "#!/usr/bin/env node\nprocess.exit(0);\n",
   }, { compress: "gzip" }).bytes();
   const payloads = { previous: await archive("1.0.0"), current: await archive("2.0.0"), next: await archive("3.0.0") };

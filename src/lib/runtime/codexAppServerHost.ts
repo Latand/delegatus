@@ -4867,7 +4867,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       try {
         this.openingAuthority?.();
         decodeCodexServerRequest(this.protocol, id, attention.method, params);
-        if (!current() || this.gateCheckRequests.size > 1) throw new Error("gate wait does not belong to the current native turn or another wait is active");
+        if (!current()) throw new Error("gate wait does not belong to the current native turn");
         result = replayResult ?? await runGateCheckTool(params.arguments, this.gateCheckRoot,
           AbortSignal.any([this.gateCheckAbort.signal, waitAbort.signal]), attention.receipt?.gateWait?.runId);
       } catch (error) {
