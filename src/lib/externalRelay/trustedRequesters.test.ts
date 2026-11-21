@@ -7,6 +7,7 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { runAsMcpHttpCaller } from "@/lib/mcp/callerContext";
 import { McpTaskExecutor } from "@/lib/mcp/taskExecutor";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { procBackend } from "@/lib/proc";
 import { MEMBER_COOKIE, mintSession } from "@/lib/team/sessions";
 import { DELETE as unlinkTelegram } from "@/app/api/team/telegram/route";
@@ -369,9 +370,10 @@ test("separate pairing owners and an unreadable team store cannot use the instal
 
 test("the same MCP executor loses owner relay treatment after an independent team write", async () => {
   const store = ownerMember();
-  fs.writeFileSync(`${process.env.LLV_STATE_DIR}/project-aliases.json`, JSON.stringify({
-    schemaVersion: 1, aliases: {}, displayNames: { [project]: "Example project" },
-  }));
+  const seatKey = "executor-fixture-seat";
+  beginOrchestratorSeatIntent({ project, mandate: "Own this board", clientRequestId: seatKey, mode: "spawn", promptVersion: null });
+  expect(completeOrchestratorSeatIntent({ project, clientRequestId: seatKey,
+    conversationId: "conversation_executor_fixture_seat", path: null }).kind).toBe("activated");
   const relay = paired([{ ...target, ownerTier: true }]);
   setRelays(relay);
   const registry = agentRegistry();
