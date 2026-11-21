@@ -159,6 +159,7 @@ for (const [index, scenario] of reconnectPolicies.entries()) test.skipIf(process
       enabled: () => true, registry: () => registry, client: () => client, recover, requestMigrationTick: () => {},
     });
     const outcome = await send();
+    if (!outcome) throw new Error("the structured path did not answer the queued send");
     await kickStructuredDeliveryQueue();
     const resumes = fs.readFileSync(writeLog, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
     if (scenario.refusal) {
