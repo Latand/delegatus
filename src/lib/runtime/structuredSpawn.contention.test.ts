@@ -45,7 +45,7 @@ interface CustodyControl {
   sleep: (ms: number, now: number) => Promise<number>;
 }
 
-async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" | "native-retained" | "native-retained-expired" | "native-retained-concurrent" | "socket-retained" | "socket-retained-expired" | "native-retained-fence" | "native-retained-fence-expired" | "socket-retained-fence" | "socket-retained-fence-expired" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
+async function fixture(held: "released" | "expired" | "revoked" | "owner-released" | "pipeline-released" | "pipeline-expired" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" | "native-retained" | "native-retained-expired" | "native-retained-concurrent" | "socket-retained" | "socket-retained-expired" | "native-retained-fence" | "native-retained-fence-expired" | "socket-retained-fence" | "socket-retained-fence-expired" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl) {
   const retainingFence = held.includes("-fence");
   const retainingSocket = held.startsWith("socket-retained");
   const retainingNative = held.startsWith("native-retained") || retainingSocket;
@@ -139,7 +139,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
       preflightProtocol: async () => {}, runtimeHostClient: () => runtime,
       storeImages: () => [], defer: callback => { pending.push(callback); },
       spawnStructuredConversation: async input => {
-        if (held === "pipeline") registry.rememberMembership(input.receipt.conversationId, {
+        if (held.startsWith("pipeline-")) registry.rememberMembership(input.receipt.conversationId, {
           kind: "pipeline", containerId: "fixture-lane", stageId: "build", slot: "build:1", role: "builder",
           round: 1, stageOrder: 0, parentConversationId: null,
         });
@@ -184,7 +184,7 @@ async function fixture(held: "released" | "expired" | "revoked" | "owner-release
             if (held === "revoked" || held === "retained-revoked") authorized = false;
             if (retainingNative) {
               if (!held.endsWith("expired") || clock >= Date.parse("2026-11-13T12:00:02Z")) releaseNativeWriter();
-            } else if ((held !== "expired" && held !== "retained-expired")
+            } else if (!held.endsWith("expired")
               || (retaining && clock >= Date.parse("2026-11-13T12:00:02Z"))) await holder.release();
             if (held === "retained-concurrent") custodyResolved.resolve();
             if (held === "retained-owner-released") {
@@ -538,12 +538,22 @@ for (const expired of [false, true]) test.skipIf(adapter === "socket" && process
   expect(sdk.dispatches()).toBe(1);
 }, 30_000);
 
-test("a pipeline launch leaves contention to its existing durable recovery without another wait", async () => {
-  const f = await fixture("pipeline");
+test.each(["released", "expired"] as const)("a pipeline launch retains its reservation while the custody writer is %s", async outcome => {
+  const f = await fixture(`pipeline-${outcome}`);
   const sdk = await connect(f);
-  await sdk.call(); await f.drain();
-  expect(f.counts()).toEqual({ attempts: 1, starts: 0, sends: 0, waits: 0 });
-  expect(Object.values(f.registry.readOnlySnapshot().receipts)).toMatchObject([{ state: "failed", error: FAILURE }]);
+  expect((await sdk.call()).isError).not.toBe(true);
+  const original = Object.values(f.registry.readOnlySnapshot().receipts)[0]!;
+  await f.drain();
+  const released = outcome === "released";
+  expect(f.counts()).toMatchObject({ attempts: 1, starts: released ? 1 : 0, sends: released ? 1 : 0 });
+  expect(f.delays.reduce((sum, ms) => sum + ms, 0)).toBe(released ? 25 : 2_000);
+  expect(Object.values(f.registry.readOnlySnapshot().receipts)).toMatchObject([{ launchId: original.launchId,
+    conversationId: original.conversationId, state: released ? "completed" : "failed", error: released ? null : FAILURE }]);
+  if (!released) expect(f.journal.operationResult(`spawn_message_${original.launchId}`)).toBeNull();
+  expect((await sdk.call()).isError).not.toBe(true);
+  expect(sdk.dispatches()).toBe(1);
+  expect(await replayInNewProcess(f.submitted())).toMatchObject({ starts: 0, deferred: 0,
+    body: { launchId: original.launchId, conversationId: original.conversationId, state: released ? "settled" : "failed" } });
 });
 
 test("custody retry keeps a shorter caller budget", async () => {
