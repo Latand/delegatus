@@ -171,7 +171,7 @@ import { laneMovedSince } from "./laneMovement";
 import { pipelineRepoPreflightError, pipelineRepoPreflightStatus } from "./preflight";
 import { creationIssueLinks } from "@/lib/forge/issueDelivery";
 import { preparePipelineRepository, readRepositoryInitialization } from "./initializeRepository";
-import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
+import { classifyProviderCondition, CODEX_WORKSPACE_REQUIREMENTS_FAILURE, type ProviderCondition } from "./providerConditions";
 import { isStagePromptContext, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
 import { composeStageInput } from "./stageInput";
 import { composeCloudStageInput } from "./cloudStageInput";
@@ -3846,6 +3846,16 @@ function modelCapacity(condition: ProviderCondition): boolean {
   return condition.kind === "transient" && condition.label === "model at capacity";
 }
 
+function workspaceRequirementsFailure(condition: ProviderCondition): boolean {
+  return condition.kind === "transient" && condition.label === CODEX_WORKSPACE_REQUIREMENTS_FAILURE;
+}
+
+function shouldOpenProviderWait(wait: PipelineStageAttempt["providerWait"], notice: { ts: number; condition: ProviderCondition }): boolean {
+  return !wait || notice.ts > wait.turnTs
+    // A previous Viewer can have saved the cut before parking it as unknown.
+    || notice.ts === wait.turnTs && wait.condition.kind === "other" && workspaceRequirementsFailure(notice.condition);
+}
+
 function providerBackoffMs(tries: number, condition: ProviderCondition, ports: PipelinePorts): number {
   if (!modelCapacity(condition)) return 60_000 * 2 ** tries;
   const exponential = 60_000 * 2 ** Math.min(tries, 4);
@@ -3904,7 +3914,8 @@ async function parkProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt
   const wait = attempt.providerWait!, condition = wait.condition;
   recordProviderRecovery(attempt, "park", condition, reason, ports.now());
   attempt.completedAt = ports.now();
-  const sourceReset = (condition.kind === "auth_required" || condition.kind === "transient" && !modelCapacity(condition))
+  const sourceReset = (condition.kind === "auth_required"
+    || condition.kind === "transient" && !modelCapacity(condition) && !workspaceRequirementsFailure(condition))
     && providerRetryReset(pipeline, attempt, ports) !== null;
   if (sourceReset && wait.accountId) wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.accountId])];
   if (condition.kind === "usage_limit" || sourceReset) await parkProviderUsageLimit(pipeline, attempt, reason, ports, retryAt);
@@ -3926,7 +3937,7 @@ async function recoverProviderCut(
     await persist();
     return true;
   }
-  if (notice && (!wait || notice.ts > wait.turnTs)) {
+  if (notice && shouldOpenProviderWait(wait, notice)) {
     wait = openProviderWait(stage, attempt, notice, ports);
     await persist();
   }
@@ -3941,6 +3952,7 @@ async function recoverProviderCut(
     if (await operatorStopHoldsStageRecovery(pipeline, attempt, ports, persist)) return true;
   }
   const condition = wait.condition;
+  const sameConversationOnly = workspaceRequirementsFailure(condition);
   if (stage.effectiveRole.engine !== attempt.effectiveRole.engine) {
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, null);
   }
@@ -3962,7 +3974,7 @@ async function recoverProviderCut(
   }
   const triedAccounts = providerSpentAccountsOn(pipeline, attempt, engine, ports);
   // A failed migration is evidence against this target for the current cut chain.
-  const migration = attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
+  const migration = !sameConversationOnly && attempt.conversationId ? ports.conversationMigration?.(attempt.conversationId) : null;
   let target: string | null = null;
   let exhaustedReset: number | null = null;
   if (!modelCapacity(condition) && migration?.retry && !wait.actionAt) {
@@ -4082,6 +4094,10 @@ async function recoverProviderCut(
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, target);
   }
   if (condition.kind === "host_death" || !attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn || attempt.paneId) {
+    if (sameConversationOnly) {
+      await waitForProviderTransport(pipeline, attempt, condition, "same-conversation continuation is unavailable", ports, persist);
+      return true;
+    }
     return await relaunchCutStage(pipeline, stage, attempt, condition, ports, persist, target);
   }
   if (!target && wait.accountId) {
@@ -4141,7 +4157,8 @@ async function recoverProviderCut(
     wait.actionAt = now;
     wait.tries += 1;
     attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: wait.tries, startedAt };
-    recordProviderRecovery(attempt, "continue", condition, `continuing after ${condition.label} (${wait.tries} of 3)`, now);
+    const detail = `continuing after ${condition.label} (${wait.tries} of 3)`;
+    recordProviderRecovery(attempt, "continue", condition, sameConversationOnly ? `${detail}; last: ${wait.text}` : detail, now);
     pipeline.stateDetail = `continuing the same conversation after ${condition.label}`;
     await persist();
   } else if (!wait.retryCancelled) await waitForProviderTransport(pipeline, attempt, condition, continuationRefusal ?? "continuation port returned false without a delivery diagnostic", ports, persist);
@@ -12319,8 +12336,8 @@ async function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage,
   delete attempt.providerWait;
   delete attempt.providerRecoveryBudget;
   const wait = openProviderWait(stage, attempt, notice, ports);
-  if (modelCapacity(notice.condition)) {
-    await reopenCapacityRetry(pipeline, stage, attempt, ports);
+  if (modelCapacity(notice.condition) || workspaceRequirementsFailure(notice.condition)) {
+    await reopenSameConversationRetry(pipeline, stage, attempt, ports);
     return true;
   }
   const detail = `stage cut by ${notice.condition.label}; last: ${wait.text}`;
@@ -12330,8 +12347,8 @@ async function moveParkedProviderRetry(pipeline: Pipeline, stage: PipelineStage,
   return true;
 }
 
-/** Older quota timers cannot replenish or reselect a capacity retry. */
-async function reopenCapacityRetry(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<void> {
+/** Continue the existing attempt with its saved backoff and budget. */
+async function reopenSameConversationRetry(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<void> {
   const wait = attempt.providerWait!;
   delete wait.stageRetry;
   if (wait.tries >= 3) {
@@ -12680,7 +12697,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
       return true;
     }
     if (!await confirmUnchangedCut()) return true;
-    await reopenCapacityRetry(pipeline, stage, attempt, ports);
+    await reopenSameConversationRetry(pipeline, stage, attempt, ports);
     await persist();
     return true;
   }
@@ -14360,13 +14377,13 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
         delete attempt.controllerWait;
         if (durable.firstProviderCutAt) delete attempt.providerWait;
       }
+      const opensWait = notice && shouldOpenProviderWait(attempt.providerWait, notice);
       if (notice?.condition.kind === "transient" && !attempt.report && !attempt.providerWait?.retryCancelled
         && stage.effectiveRole.engine === attempt.effectiveRole.engine
-        && (!attempt.providerWait || notice.ts > attempt.providerWait.turnTs
-          || notice.ts === attempt.providerWait.turnTs && attempt.providerWait.condition.kind === "transient")
+        && (opensWait || notice.ts === attempt.providerWait?.turnTs && attempt.providerWait.condition.kind === "transient")
         && durable?.promptHistoryComplete !== false && !newerExternalProviderPrompt(attempt, durable)
         && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) <= (durable?.firstProviderCutAt ?? notice.ts)) {
-        if (!attempt.providerWait || notice.ts > attempt.providerWait.turnTs) openProviderWait(stage, attempt, notice, lanePorts);
+        if (opensWait) openProviderWait(stage, attempt, notice, lanePorts);
         const wait = attempt.providerWait!;
         if (!wait.actionAt) {
           pipeline.stateDetail = providerWaitDetail(attempt, lanePorts);

@@ -269,6 +269,14 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       startedAt: selected.startedAt ?? null,
       completedAt: selected.completedAt ?? null,
       error: clampChars(selected.error, ERROR_CHARS),
+      providerWait: selected.providerWait ? {
+        tries: selected.providerWait.tries,
+        resumeAt: selected.providerWait.resumeAt,
+        lastError: clampChars(selected.providerWait.text, ERROR_CHARS),
+      } : undefined,
+      providerRecoveries: selected.providerRecoveries?.map(({ at, action, condition, summary }) => ({
+        at, action, condition: condition.label, summary: clampChars(summary, ERROR_CHARS + 100),
+      })),
     } : null,
   };
 }

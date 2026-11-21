@@ -16,6 +16,9 @@ for (const [engine, code, text, kind] of [
   ["codex", "unauthorized", "expired", "auth_required"],
   ["codex", "stream_disconnected", "stream ended", "transient"],
   ["codex", "other", "Selected model is at capacity. Please try a different model.", "transient"],
+  ["codex", "other", "failed to load the session: invalid data", "other"],
+  ["claude", "other", "failed to load workspace requirements: invalid data", "other"],
+  ["codex", "unauthorized", "failed to load workspace requirements: invalid data", "auth_required"],
   ["codex", "turn_aborted", "interrupted", "turn_cut"],
   ["claude", "interrupted", "interrupted", "turn_cut"],
   ["claude", "invalid_request", "bad request", "other"],
@@ -26,4 +29,9 @@ for (const [engine, code, text, kind] of [
 
 test("native Codex overload code retains capacity backoff even without English wording", () => {
   expect(classifyProviderCondition("codex", "server_overloaded", "Capacity is temporarily unavailable")).toMatchObject({ kind: "transient", label: "model at capacity" });
+});
+
+test("matches the Codex workspace requirements provider failure", () => {
+  expect(classifyProviderCondition("codex", "other", "failed to load workspace requirements: invalid data"))
+    .toMatchObject({ kind: "transient", label: "workspace requirements failure" });
 });
