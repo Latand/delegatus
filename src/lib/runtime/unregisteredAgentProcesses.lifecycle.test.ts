@@ -34,7 +34,7 @@ for (const engine of ["claude", "codex"] as const) {
     "dead-row", "dead-session", "absent-row", "live-row", "other-live-row", "ambiguous-owner", "open-journal", "probe-limit",
     "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission",
     "send-wins-runtime-admission", "pending-direct-delivery-origin", "pending-direct-delivery-runtime",
-    "missing-launch-proof", "drain-fails-kill-before-signal",
+    "owner-census-32", "owner-census-512", "missing-launch-proof", "drain-fails-kill-before-signal",
     "ignores-sigterm", "survives-sigkill",
   ] as const)(`${engine} unregistered process reconciliation: %s`, async condition => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-orphan-"));
@@ -117,9 +117,13 @@ for (const engine of ["claude", "codex"] as const) {
       }
       const filename = path.join(root, "registry.json");
       let entryReads = 0;
+      let ownerReads = 0;
+      let ownerReadsWhileWriting = 0;
+      const censusSize = condition === "owner-census-32" ? 32 : condition === "owner-census-512" ? 512 : 0;
       const options = { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite"),
         onSqliteRowPayloadRead: (collection: string, count: number) => {
           if (collection === "entries") entryReads += count;
+          if (collection === "deliveryOperationOwners") ownerReads += count;
         },
       } as const;
       fs.writeFileSync(filename, JSON.stringify(file));
@@ -142,17 +146,36 @@ for (const engine of ["claude", "codex"] as const) {
         expect(journal.readSession({ conversationId: FIXTURE_CONVERSATION })?.retirementBlocked).toBe(true);
       }
       const activeRegistry = registry;
+      if (censusSize) {
+        const template = activeRegistry.recordDirectAdmission({ handOff: {
+          conversationId: FIXTURE_CONVERSATION, clientMessageId: "fixture-owner-template",
+          command: { kind: "send", policy: "queue" }, text: "fixture input", contentDigest: null,
+          evidenceText: "fixture input", evidenceImageCount: 0,
+        } })!;
+        activeRegistry.agentStateWrite(snapshot => {
+          delete snapshot.deliveryOperationOwners[template.command.operationId];
+          for (let index = 0; index < censusSize; index++) {
+            const operationId = `fixture-unrelated-delivery-${index}`;
+            const unrelated = `conversation_unrelated_${index}` as const;
+            snapshot.deliveryOperationOwners[operationId] = {
+              ...template, command: { ...template.command, operationId }, deliveryId: operationId,
+              clientMessageId: operationId, conversationId: unrelated, runtimeConversationId: unrelated,
+            };
+          }
+        });
+        ownerReads = 0;
+      }
       let writerAdmissions = 0;
       const pendingDelivery = condition === "pending-direct-delivery-origin" || condition === "pending-direct-delivery-runtime";
       let directOperation: string | null = null;
-      if (condition === "writer-admission" || pendingDelivery) {
+      if (condition === "writer-admission" || pendingDelivery || censusSize) {
         const admit = activeRegistry.deliveryWriteOrBusy.bind(activeRegistry);
         activeRegistry.deliveryWriteOrBusy = (correlation, write) => {
           if (correlation.label === "registry.unregistered-agent-stop") {
             writerAdmissions++;
             if (condition === "writer-admission") {
               activeRegistry.upsert({ ...entry, status: "live", claimOwner: `structured-host:${JSON.stringify(waiter)}` });
-            } else if (directOperation === null) {
+            } else if (pendingDelivery && directOperation === null) {
               const owner = activeRegistry.recordDirectAdmission({ handOff: {
                 conversationId: FIXTURE_CONVERSATION, clientMessageId: "fixture-direct-delivery",
                 command: { kind: "send", policy: "queue" }, text: "fixture direct delivery",
@@ -168,7 +191,13 @@ for (const engine of ["claude", "codex"] as const) {
               });
             }
           }
-          return admit(correlation, write);
+          return admit(correlation, () => {
+            const before = ownerReads;
+            try { return write(); }
+            finally {
+              if (correlation.label === "registry.unregistered-agent-stop") ownerReadsWhileWriting += ownerReads - before;
+            }
+          });
         };
       }
       let ready = true;
@@ -242,7 +271,11 @@ for (const engine of ["claude", "codex"] as const) {
       if (["dead-row", "absent-row", "other-runtime-work", "replacement-owner", "resumed-turn", "release-changed", "writer-admission", "send-wins-runtime-admission"].includes(condition)) {
         expect(sessionReads).toBeGreaterThan(0);
       }
-      if (condition === "writer-admission") expect(writerAdmissions).toBe(1);
+      if (condition === "writer-admission" || censusSize) expect(writerAdmissions).toBe(1);
+      if (censusSize) {
+        expect(ownerReadsWhileWriting).toBe(0);
+        expect(ownerReads).toBe(0);
+      }
       expect(observeAgentProcess(peerIdentity)).toBe("alive");
       expect(readHostExit(peerIdentity)?.stop).toBeNull();
       if (ignoresSigterm) {
@@ -273,7 +306,7 @@ for (const engine of ["claude", "codex"] as const) {
           .toEqual([{ launchId, key: keyId, process: identity, outcome: "stopped" }]);
         await nativeClosed;
         expect(readHostExit(identity)).toMatchObject({ stop: { operationId: launchId, signal: "SIGTERM" } });
-      } else if (condition === "dead-row" || condition === "dead-session" || condition === "absent-row") {
+      } else if (censusSize || condition === "dead-row" || condition === "dead-session" || condition === "absent-row") {
         expect(outcomes).toEqual([{ launchId, key: keyId, process: identity, outcome: "stopped" }]);
         expect(journal.snapshot().recentOperations.find(row => row.operationId.startsWith(`unregistered-retirement-${launchId}-`))?.status)
           .toBe("delivered");

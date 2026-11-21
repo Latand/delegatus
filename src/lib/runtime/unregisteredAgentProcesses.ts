@@ -3,7 +3,7 @@ import { constants } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { structuredClaimIdentity, type AgentRegistry } from "@/lib/agent/registry";
-import { registryHasStructuredProcess, registryKeysMatchingBounded, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryHasStructuredProcess, registryKeysMatchingBounded } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { observeAgentProcess } from "@/lib/agentState/process";
 import { AgentTranscriptCache, fileSignature } from "@/lib/agentState/transcript";
@@ -205,8 +205,10 @@ function readLaunch(ports: OrphanSweepPorts, native: ProcessIdentity, digest: st
         { field: "state", value: OPEN_RETIREMENT_DELIVERIES }], 1).length) return null;
     // The registry can reserve a direct send before the runtime sees it.
     // This read runs again under the writer immediately before signaling.
-    if (registryRowsMatching(file, "deliveryOperationOwners", "custodyState", "pending").some(owner =>
-      !owner.terminalState && (owner.conversationId === conversationId || owner.runtimeConversationId === conversationId))) return null;
+    if ((["conversationId", "runtimeConversationId"] as const).some(field =>
+      registryKeysMatchingBounded(file, "deliveryOperationOwners", [
+        { field, value: conversationId }, { field: "custodyState", value: "pending" },
+      ], 1).length > 0)) return null;
     const deliveryOwner = file.deliveryOperationOwners[`spawn_message_${receipt.launchId}`];
     if (deliveryOwner && (deliveryOwner.conversationId !== conversationId || !deliveryOwner.terminalState)) return null;
     // Re-read the authority fields under the same registry transaction.
