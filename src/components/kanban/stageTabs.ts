@@ -183,7 +183,10 @@ export interface WaitsOn {
   stageId: string | null;
 }
 
-const WAIT_ROLES: ReadonlySet<string> = new Set(["builder", "reviewer", "architect", "verifier", "visual-critic", "merger", "prod-auditor", "cleaner", "deployer"]);
+const WAIT_ROLE_IDS = ["builder", "reviewer", "architect", "verifier", "visual-critic", "merger", "prod-auditor", "cleaner", "deployer"] as const;
+type WaitRole = (typeof WAIT_ROLE_IDS)[number];
+const WAIT_ROLES: ReadonlySet<string> = new Set<string>(WAIT_ROLE_IDS);
+const waitRole = (roleId: string): WaitRole | "stage" => (WAIT_ROLES.has(roleId) ? (roleId as WaitRole) : "stage");
 
 /** The tab a stage reads as: its own number for a step, its source's for a conditional stage. */
 function stageNumber(model: StageTabModel, stageId: string | null): number | null {
@@ -248,11 +251,12 @@ export function laneWaitsOn(t: TFunction, summary: KanbanPipeline, model: StageT
   if (stage && view?.state === "committing") return said(lead(t("kanban.stages.waits.publishing", { stage: nameOf(stage) })));
   if (stage) {
     const roleId = stage.role?.roleId ?? (stage.kind === "review-loop" ? "reviewer" : "builder");
-    const who = WAIT_ROLES.has(roleId) ? t(`kanban.stages.waits.role.${roleId}`) : t("kanban.stages.waits.role.stage");
+    const wait = waitRole(roleId);
+    const who = t(`kanban.stages.waits.role.${wait}`);
     const ahead = stage.next ? pipeline.stages.find((candidate) => candidate.id === stage.next) ?? null : null;
     const words = t("kanban.stages.waits.on", { who, stage: nameOf(stage) });
     const detail = t(ahead ? "kanban.stages.waits.popWorking" : "kanban.stages.waits.popWorkingLast", {
-      who: t(`kanban.stages.waits.roleNominative.${WAIT_ROLES.has(roleId) ? roleId : "stage"}`),
+      who: t(`kanban.stages.waits.roleNominative.${wait}`),
       stage: nameOf(stage),
       age: since ? t("kanban.stages.waits.age", { age: since }) : "",
       next: ahead ? nameOf(ahead) : "",

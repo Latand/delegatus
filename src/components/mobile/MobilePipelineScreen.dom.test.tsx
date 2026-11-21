@@ -100,7 +100,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const q = (host: HTMLElement, selector: string) => host.querySelector(selector) as unknown as HTMLElement | null;
 const qa = (host: HTMLElement, selector: string) => Array.from(host.querySelectorAll(selector)) as unknown as HTMLElement[];
-const click = (el: Element | null) => {
+const click = (el: { dispatchEvent(event: never): unknown } | null) => {
   if (!el) throw new Error("nothing to click");
   flushSync(() => el.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
 };
