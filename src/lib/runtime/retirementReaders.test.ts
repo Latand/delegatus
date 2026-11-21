@@ -231,6 +231,49 @@ test.each(["off", "sqlite"] as const)("Viewer startup checkpoints transcript bat
   }
 });
 
+test("Viewer startup resumes predecessor transcript reads before refreshing host state", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-predecessor-checkpoint-"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  let clock = 0;
+  const time = spyOn(performance, "now").mockImplementation(() => clock);
+  setSystemTime(NOW);
+  const read = activity.readStableTailRecords;
+  const visits = new Map<string, number>();
+  const tail = spyOn(activity, "readStableTailRecords").mockImplementation(async (file, ...args) => {
+    if (structuredStartupStatus()?.phase === "recognizing interrupted hosts") {
+      clock += 12_000;
+      visits.set(file, (visits.get(file) ?? 0) + 1);
+    }
+    return read(file, ...args);
+  });
+  const terminal = { type: "event_msg", timestamp: CREATED, payload: { type: "task_complete", turn_id: "test-turn" } };
+  try {
+    for (let index = 0; index < 33; index++) {
+      addStructuredRestartConversation(registry, root, {
+        sessionId: retirementSession(index), status: "live", turn: "busy", transcriptRecords: [terminal],
+      });
+    }
+    const options = {
+      registry, client: null, orchestratorSeats: () => [],
+      pipelineEvidence: () => ({ settled: new Set<string>(), deferred: new Set<string>() }),
+      adopt: async () => [], adoptClaude: async () => [], schedule: () => ({}),
+    };
+    await expect(adoptStructuredHostsAtStartup(options)).rejects.toMatchObject({
+      deadline: "structured startup read deadline exceeded", hostKey: expect.any(String),
+    });
+    expect(structuredStartupStatus()).toMatchObject({ phase: "recognizing interrupted hosts", completedHosts: 24 });
+    const changed = visits.keys().next().value!;
+    fs.appendFileSync(changed, JSON.stringify({ ...terminal, timestamp: new Date(NOW + 1).toISOString() }) + "\n");
+    await adoptStructuredHostsAtStartup(options);
+    expect(visits.size).toBe(33);
+    expect(visits.get(changed)).toBe(2);
+    expect([...visits.values()].filter(count => count === 1)).toHaveLength(31);
+  } finally {
+    tail.mockRestore(); time.mockRestore(); setSystemTime(); registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a scheduled row retry cannot supply the result of full Viewer startup", async () => {
   const { RuntimeJournal } = await import("@/runtime-host/journal");
   const { bindStructuredDeliveryQueue } = await import("./structuredDeliveryController");

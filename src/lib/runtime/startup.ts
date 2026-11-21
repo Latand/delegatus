@@ -82,7 +82,7 @@ import { structuredContentDigest } from "./structuredContent";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
 import { claudeHostLaunchPaths, materializeOwnedStructuredHostAccess, tempOwnerForConversation, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell, prepareDiskCleanerHost } from "./structuredSpawn";
-import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptEvidence, restartCutDecision, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
+import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptEvidence, restartCutDecision, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type EngineRecordState, type TranscriptCutEvidence, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { hostTurnRecordIdentity, hostTurnRecordModifiedAt, readHostTurnRecord } from "./eventStore";
 import { holdRestartCutRow, releaseRestartCutRow, setRestartCutHeldRows } from "./restartCutHold";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
@@ -132,6 +132,7 @@ type StartupPassState = {
 interface StartupPassCheckpoint extends StartupMembershipCheckpoint {
   generation: string | null;
   signal?: AbortSignal;
+  restartCuts: Map<string, RestartCutTranscriptRead>;
   transcripts: Map<string, TranscriptRefreshCheckpoint>;
 }
 // Instrumentation and routes can load separate module instances in standalone.
@@ -666,6 +667,13 @@ interface RestartCutStamp {
   value: string;
 }
 
+interface RestartCutTranscriptRead {
+  path: string;
+  files: string;
+  evidence: TranscriptCutEvidence;
+  record: EngineRecordState;
+}
+
 function transcriptIdentity(transcriptPath: string): string {
   try {
     const stats = fs.statSync(transcriptPath, { bigint: true });
@@ -782,9 +790,14 @@ async function restartCutTargets(
   scope: ReadonlySet<string> | null,
   readLedger: typeof readHostTurnRecord,
   prepared: RegistryFile | undefined = undefined,
-  now = Date.now(),
+  checkpoint?: Map<string, RestartCutTranscriptRead>,
+  onProgress?: (completed: number) => void,
 ): Promise<RestartCutRecognition> {
+  const now = Date.now();
   const snapshot = prepared ?? await preparedStartupSnapshot(registry);
+  if (checkpoint?.size) await forEachStartupBatch(checkpoint.keys(), async key => {
+    if (!snapshot.entries[key]?.structuredHost) checkpoint.delete(key);
+  }, assertStartupReadActive);
   const seated = new Set(seats.flatMap((seat) => seat.conversationId?.startsWith("conversation_")
     ? [registry.canonicalConversationId(seat.conversationId as ViewerConversationId)]
     : []));
@@ -801,7 +814,13 @@ async function restartCutTargets(
   }
   const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), settled: new Set(), stamps: new Map(), disproved: [] };
   const self = captureProcessIdentity(process.pid);
+  let inSlice = 0;
   for await (const conversation of startupHostedConversationRows(snapshot)) {
+    if (checkpoint && inSlice++ === 16) {
+      await yieldToRuntime();
+      assertStartupReadActive();
+      inSlice = 1;
+    }
     const generation = conversation.generations.at(-1);
     if ((conversation.engine !== "claude" && conversation.engine !== "codex") || !generation || conversation.supersededBy) continue;
     const conversationId = registry.canonicalConversationId(conversation.id);
@@ -833,16 +852,31 @@ async function restartCutTargets(
     assertStartupReadActive(hostKey);
     const transcript = transcriptIdentity(generation.path);
     const ledger = readLedger(generation.id, { frames: conversation.engine === "claude" });
-    const tail: StableTailRead = transcript === "absent"
-      ? { integrity: "complete", prefixTruncated: false, records: [] }
-      : await readStableTailRecords(generation.path).catch((): StableTailRead => ({ integrity: "uncertain", records: [] }));
-    assertStartupReadActive(hostKey);
-    const evidence = tail.integrity === "complete" ? transcriptCutEvidenceFromRecords(tail.records, conversation.engine) : null;
-    const at = evidence?.lastWork?.at ?? null;
     const files = restartCutStampFiles(
       ledger.state === "read" ? ledger.identity : ledger.state === "absent" ? "absent" : hostTurnRecordIdentity(generation.id),
       transcript,
     );
+    const saved = checkpoint?.get(hostKey);
+    let evidence: TranscriptCutEvidence | null;
+    let record: EngineRecordState;
+    if (saved?.files === files && saved.path === generation.path && ledger.state !== "unreadable") {
+      ({ evidence, record } = saved);
+    } else {
+      checkpoint?.delete(hostKey);
+      const tail: StableTailRead = transcript === "absent"
+        ? { integrity: "complete", prefixTruncated: false, records: [] }
+        : await readStableTailRecords(generation.path).catch((): StableTailRead => ({ integrity: "uncertain", records: [] }));
+      assertStartupReadActive(hostKey);
+      evidence = tail.integrity === "complete" ? transcriptCutEvidenceFromRecords(tail.records, conversation.engine) : null;
+      record = engineRecordSince(conversation.engine, ledger, tail);
+      // Keep compact transcript evidence. The current row, obligations,
+      // ledger and background work still decide whether a turn was cut.
+      if (checkpoint && evidence && ledger.state !== "unreadable" && transcript !== "unreadable"
+        && transcriptIdentity(generation.path) === transcript) {
+        checkpoint.set(hostKey, { path: generation.path, files, evidence, record });
+      }
+    }
+    const at = evidence?.lastWork?.at ?? null;
     const stamp: RestartCutStamp = {
       sessionId: generation.id,
       path: generation.path,
@@ -860,11 +894,12 @@ async function restartCutTargets(
     const ledgerWrite = ledger.state === "read" ? ledger.mtimeMs
       : ledger.state === "absent" ? "absent" : hostTurnRecordModifiedAt(generation.id);
     const transcriptWork = transcript === "absent" ? "absent"
-      : tail.integrity === "complete" ? at ?? "absent" : fileModifiedAt(generation.path);
+      : evidence ? at ?? "absent" : fileModifiedAt(generation.path);
     if (ledgerWrite !== "unknown" && transcriptWork !== "unknown") {
       const activity = Math.max(...[ledgerWrite, transcriptWork].map((date) => date === "absent" ? -Infinity : date));
       if (now - (Number.isFinite(activity) ? activity : Date.parse(entry.updatedAt)) > startupTurnMaxAgeMs()) {
         recognition.stamps.set(hostKey, stamp);
+        onProgress?.(recognition.stamps.size);
         continue;
       }
     }
@@ -878,7 +913,7 @@ async function restartCutTargets(
     const turnWord = live ? entry.structuredHost.activeTurnRef ?? null : null;
     const decided = restartCutDecision({
       host,
-      record: engineRecordSince(conversation.engine, ledger, tail),
+      record,
       row: { status: live ? "live" : "idle", turnRef: turnWord, neverObserved: conversation.turn.source === "empty" },
       stage: stage !== null,
       backgroundWork: background.state === "read" ? backgroundTasks.length > 0 : "unreadable",
@@ -886,6 +921,7 @@ async function restartCutTargets(
     /* Every row decided here is stamped, a cut one included: what is written
        for it is a proposal until the row is taken. */
     recognition.stamps.set(hostKey, stamp);
+    onProgress?.(recognition.stamps.size);
     /* An undecided row is held whatever stands for it. A proposal read from
        evidence that was whole is kept, and its continuation waits with the
        row: the evidence that cannot be read now may show the turn ended. */
@@ -2648,7 +2684,7 @@ function startStructuredHostPass(
     const checkpoint = resumeDeferred || isolatedRowRetry ? undefined
       : current.checkpoint?.generation === generation && current.checkpoint.signal === dependencies.signal
         ? current.checkpoint
-        : current.checkpoint = { generation, signal: dependencies.signal, transcripts: new Map() };
+        : current.checkpoint = { generation, signal: dependencies.signal, restartCuts: new Map(), transcripts: new Map() };
     startupDiagnostic("error", isolatedRowRetry ? "[structured hosts] row retry admitted" : "[structured hosts] startup pass admitted", {
       trigger: replaced ? "runtime-host-replaced" : resumeDeferred ? "deferred-evidence-changed" : "startup-retry",
       completed: Boolean(current.ready), generationChanged: replaced,
@@ -2845,6 +2881,10 @@ async function adoptStructuredHostsPass(
     resumeDeferred,
     dependencies.readHostTurnRecord ?? readHostTurnRecord,
     recoveryBoundarySnapshot,
+    checkpoint?.restartCuts,
+    checkpoint && (completedHosts => markStructuredHostStartupProgress({
+      phase: "recognizing interrupted hosts", completedHosts, totalHosts: null,
+    })),
   );
   assertActive();
   const passState = startupPasses.get(registry);

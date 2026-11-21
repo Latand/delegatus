@@ -19,6 +19,7 @@ const originalRuntimeEvents = process.env.LLV_RUNTIME_EVENTS;
 const originalRuntimeSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
 const sandboxes: string[] = [];
 const servers: net.Server[] = [];
+let restoreMode: () => void;
 
 function runtimeHostRequestHealth() {
   return {
@@ -32,9 +33,12 @@ function runtimeHostRequestHealth() {
 
 beforeEach(() => {
   resetRuntimeHostRequestHealthForTests();
+  const mode = spyOn(selfUpdateService(), "decide").mockResolvedValue({ mode: "managed", record: null, reason: null });
+  restoreMode = () => mode.mockRestore();
 });
 
 afterEach(async () => {
+  restoreMode();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
   if (originalRuntimeEvents === undefined) delete process.env.LLV_RUNTIME_EVENTS;
@@ -78,20 +82,17 @@ async function serveRuntime(
 
 test("GET /api/runtime/deployments returns an empty live ledger with runtime-host latency health", async () => {
   const methods = await serveRuntime({ deployments: [], nextCursor: null, hasMore: false });
-  const mode = spyOn(selfUpdateService(), "decide").mockResolvedValue({ mode: "managed", record: null, reason: null });
 
-  try {
-    const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      count: 0,
-      deployments: [],
-      nextCursor: null,
-      hasMore: false,
-      runtimeHostRequests: runtimeHostRequestHealth(),
-    });
-    expect(methods).toEqual(["viewer-deployment-list"]);
-  } finally { mode.mockRestore(); }
+  const response = await GET(new NextRequest("http://127.0.0.1/api/runtime/deployments"));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    count: 0,
+    deployments: [],
+    nextCursor: null,
+    hasMore: false,
+    runtimeHostRequests: runtimeHostRequestHealth(),
+  });
+  expect(methods).toEqual(["viewer-deployment-list"]);
 });
 
 /* #1845 defect C: the snapshot orders deployments by id, a random UUID, so the
@@ -274,7 +275,6 @@ test("runtime read routes keep a configured but unreachable plane distinct from 
 
 test("deployment list sends the Viewer's current adoption progress beside the runtime-host page", async () => {
   const methods = await serveRuntime({ deployments: [], nextCursor: null, hasMore: false });
-  const mode = spyOn(selfUpdateService(), "decide").mockResolvedValue({ mode: "managed", record: null, reason: null });
   markStructuredHostStartupProgress({ phase: "refreshing transcripts", completedHosts: 16, totalHosts: 33 });
   markStructuredHostStartupFailed("timeout", {
     deadline: "structured startup read deadline exceeded",
@@ -290,5 +290,5 @@ test("deployment list sends the Viewer's current adoption progress beside the ru
       nextRetryAt: "2026-10-16T00:00:05.000Z",
     } });
     expect(methods).toEqual(["viewer-deployment-list"]);
-  } finally { mode.mockRestore(); markStructuredHostStartupReady(); }
+  } finally { markStructuredHostStartupReady(); }
 });
