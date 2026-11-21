@@ -202,9 +202,16 @@ function withoutExpired(store: RelayStore): RelayStore {
 }
 export function readRelayStore(): RelayStore {
   const store = readStoredRelays();
-  return store.pending.some((item) => expired(item, Date.now()))
-    ? updateRelayStore((current) => current)
-    : store;
+  const current = withoutExpired(store);
+  if (current === store) return store;
+  try {
+    return updateRelayStore(value => value, 0);
+  } catch (error) {
+    // A concurrent writer prunes expired pairings before it writes. Hide
+    // them from readers immediately without waiting on that writer.
+    if (error instanceof RelayStoreBusy) return current;
+    throw error;
+  }
 }
 /** Authority reads never create settings or prune pending pairings. */
 export function pairedTelegramOwner(userId: string): boolean {
@@ -235,13 +242,14 @@ function readStoredRelays(): RelayStore {
 }
 export function updateRelayStore(
   change: (store: RelayStore) => RelayStore,
+  waitMs?: number,
 ): RelayStore {
   const file = externalRelayFile("relays");
   return withFileLock(file, () => {
     const next = withoutExpired(change(withoutExpired(readStoredRelays())));
     writeRelayFile(file, next);
     return next;
-  });
+  }, waitMs);
 }
 export async function updateRelayStoreAsync(change: (store: RelayStore) => RelayStore | Promise<RelayStore>): Promise<RelayStore> {
   const file = externalRelayFile("relays");
@@ -300,7 +308,7 @@ export function withFileLock<T>(file: string, action: () => T, waitMs = 5_000): 
           fs.rmSync(lock, { force: true });
         }
       }
-      if (Date.now() >= deadline) throw new Error("relay store is busy");
+      if (Date.now() >= deadline) throw new RelayStoreBusy();
       // eslint-disable-next-line no-restricted-syntax -- Legacy relay-store write lock during serving relay mutations.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }

@@ -29,7 +29,7 @@ import { richRequest } from "./rich.fixture";
 import { runClaimedRequest } from "./runner";
 import { setRelaySwitch } from "./switches";
 import { addPairedOwnerRequester, addTrustedRequester, removeTrustedRequester, trustedRequesterAuditFile } from "./trustedRequesterStore";
-import { changeRun, dropRun, externalRelayFile, readRunLedger, readRelayStore, reserveRun, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
+import { changeRun, dropRun, externalRelayFile, readRunLedger, readRelayStore, reserveRun, updateRelayStore, updateRelayStoreAsync, type PairedRelay, type RelayTargetSettings } from "./store";
 import { startTestRelay } from "./testRelay";
 
 const addedAt = "2026-09-28T12:00:00Z";
@@ -272,6 +272,43 @@ test("poller refresh persists entries only on retained targets", async () => {
     expect(refreshed[1]).not.toHaveProperty("requesters");
   } finally { await service.close(); }
 });
+
+test("a target refresh waits for an in-progress entry write without blocking the Viewer", async () => {
+  const readingTargets = Promise.withResolvers<void>();
+  const locked = Promise.withResolvers<void>();
+  const commit = Promise.withResolvers<void>();
+  const relay = paired([granted], "concurrent_refresh");
+  const fetch = spyOn(client, "fetchRelayTargets").mockImplementation(async () => {
+    readingTargets.resolve();
+    return [{ target_id: target.id, name: "Refreshed", answered_by: "install", fallback: "none" }];
+  });
+  setRelays(relay);
+  const writing = updateRelayStoreAsync(async store => {
+    locked.resolve();
+    await commit.promise;
+    return { ...store, relays: [{ ...relay, targets: [{ ...granted, requesters: { revision: 2, entries: [] } }] }] };
+  });
+  let refreshing: ReturnType<typeof refreshRelayTargets> | undefined;
+  try {
+    await locked.promise;
+    refreshing = refreshRelayTargets(relay.id, 0);
+    await readingTargets.promise;
+    const first = await Promise.race([
+      refreshing,
+      new Promise<"timer">(resolve => setTimeout(() => resolve("timer"), 0)),
+    ]);
+    expect(first).toBe("timer");
+    commit.resolve();
+    expect(await refreshing).toBe("changed");
+    expect(readRelayStore().relays[0]!.targets[0]).toMatchObject({
+      name: "Refreshed", requesters: { revision: 2, entries: [] },
+    });
+  } finally {
+    commit.resolve();
+    await Promise.allSettled([writing, refreshing]);
+    fetch.mockRestore();
+  }
+}, 15_000);
 
 test("an async MCP call rechecks its grant after awaiting acknowledgement", async () => {
   const relay = paired([granted]);

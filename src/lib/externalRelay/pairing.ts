@@ -14,7 +14,7 @@ import {
   publicPending,
   publicRelay,
   readRelayStore,
-  updateRelayStore,
+  updateRelayStoreAsync,
   type PairedRelay,
   type PendingRelay,
 } from "./store";
@@ -37,7 +37,7 @@ export async function startRelayPairing(url: string, label?: string) {
     limits: descriptor.limits,
     ...started,
   };
-  updateRelayStore((current) => ({
+  await updateRelayStoreAsync((current) => ({
     ...current,
     pending: [
       ...current.pending.filter((item) => item.origin !== origin),
@@ -62,7 +62,7 @@ export async function checkRelayPairing(id: string) {
   );
   const status = pairingStatusSchema.parse(result.body);
   if (status.status === "awaiting_install")
-    updateRelayStore((store) => ({
+    await updateRelayStoreAsync((store) => ({
       ...store,
       pending: store.pending.map((item) =>
         item.id === id
@@ -73,7 +73,7 @@ export async function checkRelayPairing(id: string) {
   // A pairing the service ended cannot be resumed, so its entry and poll
   // secret go now; the returned status still tells the UI why it ended.
   else if (status.status !== "pending")
-    updateRelayStore((store) => ({
+    await updateRelayStoreAsync((store) => ({
       ...store,
       pending: store.pending.filter((item) => item.id !== id),
     }));
@@ -114,7 +114,7 @@ export async function confirmRelayPairing(
     limits: pending.limits,
     targets: confirmed.targets.map(newTargetSettings),
   };
-  updateRelayStore((store) => ({
+  await updateRelayStoreAsync((store) => ({
     ...store,
     relays: [...store.relays.filter((item) => item.id !== id), relay],
     pending: store.pending.filter((item) => item.id !== id),
@@ -139,7 +139,7 @@ export async function cancelRelayPairing(id: string): Promise<void> {
     undefined,
     pending.poll_secret,
   );
-  updateRelayStore((store) => ({
+  await updateRelayStoreAsync((store) => ({
     ...store,
     pending: store.pending.filter((item) => item.id !== id),
   }));
@@ -159,7 +159,7 @@ export async function unpairRelay(id: string): Promise<{ warned: boolean }> {
   } catch {
     warned = true;
   }
-  updateRelayStore((store) => ({
+  await updateRelayStoreAsync((store) => ({
     ...store,
     relays: store.relays.filter((item) => item.id !== id),
   }));

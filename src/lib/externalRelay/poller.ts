@@ -36,7 +36,7 @@ import {
   mergeRelayTargets,
   readRelayStore,
   readRunLedger,
-  updateRelayStore,
+  updateRelayStoreAsync,
   type PairedRelay,
   type RunRecord,
 } from "./store";
@@ -423,7 +423,7 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
       return "failed";
     }
     let changed = false;
-    updateRelayStore((store) => ({
+    await updateRelayStoreAsync((store) => ({
       ...store,
       relays: store.relays.map((item) => {
         if (item.id !== id) return item;
@@ -510,7 +510,7 @@ async function refreshRelayDescriptorFeaturesNow(id: string, options: { quiet?: 
     const { descriptor } = await discoverRelay(relay.origin);
     const features = descriptor.features ?? [];
     let changed = false;
-    updateRelayStore((store) => ({ ...store, relays: store.relays.map((item) => {
+    await updateRelayStoreAsync((store) => ({ ...store, relays: store.relays.map((item) => {
       if (item.id !== id || JSON.stringify(item.features ?? []) === JSON.stringify(features)) return item;
       changed = true;
       return { ...item, features };
