@@ -165,14 +165,15 @@ test("a grant-bearing write is decided once and serialized without assembling th
 });
 
 test("retired-host selection refuses a peer revision newer than its held census snapshot", () => {
-  const { dataset, open } = history();
+  const { open } = history();
   const reader = open();
   const writer = open();
   const key = Object.keys(reader.snapshot().file.entries)[0]!;
+  const exited = { pid: 7654, startIdentity: "7654:1", stop: {
+    path: "deploy-cut", at: "2026-11-10T12:00:00.000Z",
+  } };
   writer.mutate(file => {
-    file.entries[key]!.hostExitProcess = { pid: 7654, startIdentity: "7654:1", stop: {
-      path: "deploy-cut", at: "2026-11-10T12:00:00.000Z",
-    } };
+    file.entries[key]!.hostExitProcess = exited;
   }, false);
   const held = reader.readOnlySnapshot().file;
   writer.mutate(file => { delete file.entries[key]!.hostExitProcess; }, false);

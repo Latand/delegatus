@@ -281,7 +281,6 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
   // deploy-cut merger candidates can make its bounded overflow incomplete.
   if (retiredCandidates.overflow && retiredMergers.length >= 200) {
     snapshot.selection.unreadable++;
-    snapshot.unselectedCount++;
   }
   const unrepresented = owners.filter(owner => !represented.has(owner.pid));
   // Count physical capture targets. Raw transcript paths can be several

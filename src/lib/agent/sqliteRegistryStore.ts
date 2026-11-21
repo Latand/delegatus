@@ -467,6 +467,8 @@ function lookupSql(field: LookupField): string {
 type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
 type BoundedKeyReader = (collection: RowCollection, filters: readonly { field: LookupField; value: LookupValue }[], limit: number) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
+type RetiredHostSelection = { keys: string[]; overflow: boolean; assertCurrent?: () => void };
+
 interface RegistryFileReaders {
   keyed: WeakMap<object, KeyedReader>;
   bounded: WeakMap<object, BoundedKeyReader>;
@@ -480,9 +482,7 @@ interface RegistryFileReaders {
   startupSelection: WeakMap<RegistryFile, () => boolean>;
   projection: WeakMap<object, ProjectionReader>;
   liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
-  retiredHosts?: WeakMap<object, (limit: number, cutBoundary?: string) => {
-    keys: string[]; overflow: boolean; assertCurrent?: () => void;
-  }>;
+  retiredHosts?: WeakMap<object, (limit: number, cutBoundary?: string) => RetiredHostSelection>;
 }
 /* Next standalone evaluates instrumentation and route handlers in separate
    bundle realms, each with its own copy of this module, while the process
@@ -739,7 +739,7 @@ export function registryLivenessRows(file: RegistryFile): { entries: AgentRegist
 export function registryRetiredHostRows(file: RegistryFile, limit: number, cutBoundary?: string): { entries: AgentRegistryEntry[]; overflow: boolean } {
   if (!Number.isInteger(limit) || limit < 1) throw new Error("retired host limit must be positive");
   const reader = retiredHostReaders.get(file);
-  const selected = reader ? reader(limit, cutBoundary) : (() => {
+  const selected: RetiredHostSelection = reader ? reader(limit, cutBoundary) : (() => {
     const cutoff = cutBoundary && Number.isFinite(Date.parse(cutBoundary)) ? cutBoundary : "";
     const entries = Object.entries(file.entries).filter(([, entry]) => entry.hostExitProcess != null
       && typeof entry.updatedAt === "string" && entry.updatedAt >= cutoff)

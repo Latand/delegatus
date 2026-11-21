@@ -341,7 +341,7 @@ test("a true deploy-cut retirement overflow remains incomplete", () => {
         entry.hostExitProcess = { pid: 30000 + index, startIdentity: `current-cut-${index}` };
         entry.claimOwner = null;
         file.entries[`codex:${entry.key.sessionId}`] = entry;
-        const conversationId = `conversation_current_cut_merger_${index}`;
+        const conversationId = `conversation_current_cut_merger_${index}` as const;
         file.conversations[conversationId] = { ...baseConversation, id: conversationId, agentRole: "merger",
           generations: [{ ...baseConversation.generations.at(-1)!, id: entry.key.sessionId, path: entry.artifactPath }] };
       }
