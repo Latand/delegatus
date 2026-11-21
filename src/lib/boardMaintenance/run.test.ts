@@ -232,10 +232,10 @@ test("needs_decision remains blocked and visible with its operator reason", asyn
 
 test("a long operator result settles maintenance and leaves the next schedule available", async () => {
   const h = harness(); await h.controller.launchIfDue(input()); const run = h.run();
-  const result = `${"operator result ".repeat(18)}\nVerdict: needs_decision`;
+  const result = `${"operator result ".repeat(17)}\nVerdict: needs_decision`;
   h.observe({ state: "ended", finalText: result });
   await h.controller.reconcile(PROJECT);
-  expect(readMaintenanceRun(run.runId)).toMatchObject({ state: "failed", failure: { kind: "needs-decision" } });
+  expect(readMaintenanceRun(run.runId)).toMatchObject({ state: "failed", failure: { kind: "needs-decision", detail: result } });
   const held = tasks().find(task => task.id === run.taskId)!;
   expect(held).toMatchObject({ status: "blocked", hold: { kind: "operator", note: "Review the maintenance failure and choose the next action." } });
   expect(held.hold!.note.length).toBeLessThanOrEqual(200);
