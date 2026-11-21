@@ -446,17 +446,21 @@ function ps(columns: string[], cleanup: Cleanup, environment = false): string[] 
 /** Every process that inherited this step's token, wherever it was reparented;
     null when no process table could be read. */
 function holders(token: string, cleanup: Cleanup): number[] | null {
+  const holds = (environment: string, separator: string) => {
+    const binding = `${separator}${STEP_TOKEN}=`;
+    const at = environment.indexOf(binding);
+    if (at < 0) return false;
+    const start = at + binding.length;
+    const end = environment.indexOf(separator, start);
+    return environment.slice(start, end < 0 ? undefined : end).split(",").includes(token);
+  };
   const entries = procEntries();
   if (!entries) {
-    const mark = ` ${STEP_TOKEN}=${token}`;
-    return ps(["pid", "command"], cleanup, true)?.flatMap(line => {
-      const at = line.indexOf(mark), end = line.charAt(at + mark.length);
-      return at >= 0 && (end === "" || end === " ") ? [Number(line.trim().split(/\s+/)[0])] : [];
-    }) ?? null;
+    return ps(["pid", "command"], cleanup, true)?.flatMap(line =>
+      holds(line, " ") ? [Number(line.trim().split(/\s+/)[0])] : []) ?? null;
   }
-  const mark = `\0${STEP_TOKEN}=${token}\0`;
   return entries.filter(pid => {
-    try { return `\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`.includes(mark); } catch { return false; }
+    try { return holds(`\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`, "\0"); } catch { return false; }
   });
 }
 function scopeMembers(scope: string): number[] {
@@ -499,7 +503,7 @@ function descendants(root: number, cleanup: Cleanup): number[] | null {
   for (let queue = [root]; queue.length;) for (const child of children.get(queue.shift()!) ?? []) { found.push(child); queue.push(child); }
   return found;
 }
-/** Each started step carries a token of its own in its environment. */
+/** Each started step carries its own token and those of its enclosing checks. */
 const STEP_TOKEN = "LLV_GATE_STEP";
 /** Stops the step this hook started: its process tree, every process that
     inherited its token, and every owned service or transient scope those run
@@ -581,11 +585,12 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   const started = Date.now();
   const fd = log ? openSync(log, "w") : undefined;
   const token = `${process.pid}-${started}-${Math.random().toString(36).slice(2)}`;
+  const ancestry = env[STEP_TOKEN] ? `${env[STEP_TOKEN]},${token}` : token;
   let stopping = false, cancelled = false, stopTimer: (() => void) | undefined, onCancel: (() => void) | undefined;
   const budget = cpuWaitBudget(env);
   try {
     const output = fd ?? (log === null ? "ignore" : "inherit");
-    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: token,
+    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: ancestry,
       ...(Number.isFinite(until) ? { LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(until, env)) } : {}),
     }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
     let stopped!: (leaked: string | null) => void;
