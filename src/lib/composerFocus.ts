@@ -12,6 +12,9 @@
  */
 export const COMPOSER_FOCUS_ATTRIBUTE = "data-composer-focused";
 
+/** Layout consumers follow changes to the field box, including native text wrapping. */
+export const COMPOSER_FIELD_RESIZE_EVENT = "llv:composer-field-resize";
+
 function isComposerField(target: EventTarget | null): boolean {
   /* Not `instanceof Element`: the field can live in another document (the PiP window) and its realm's Element is not this one. */
   return typeof (target as Element | null)?.hasAttribute === "function" && (target as Element).hasAttribute("data-composer-field");

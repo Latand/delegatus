@@ -80,3 +80,17 @@ test("a production-mode child inheriting test ownership refuses the real runner"
   expect(error).toContain("refused the real Docker runner");
   expect(fs.existsSync(file)).toBeFalse();
 });
+
+test("a managed Viewer leaves Docker retention to the successful release", async () => {
+  const previous = process.env.LLV_VIEWER_DEPLOY_TARGET;
+  const file = fixture();
+  process.env.LLV_VIEWER_DEPLOY_TARGET = file;
+  try {
+    expect(await pruneDockerCache({ file, run: async () => { throw new Error("unexpected global Docker call"); } }))
+      .toMatchObject({ state: "managed-release", commands: 0 });
+    expect(fs.existsSync(file)).toBeFalse();
+  } finally {
+    if (previous === undefined) delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+    else process.env.LLV_VIEWER_DEPLOY_TARGET = previous;
+  }
+});

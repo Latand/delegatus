@@ -313,6 +313,7 @@ import {
   type McpToolPayload,
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
+import { noWriterAdmitted } from "@/lib/state/admissionWitness";
 import { stateLockDeferral } from "@/lib/state/lockWait";
 import { RETRYABLE_TELEGRAM_BOT_CODES, readTelegramBotRefusals, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
@@ -3002,6 +3003,14 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
   }
 }
 
+function rethrowStoreWriteError(error: unknown): never {
+  const deferred = stateLockDeferral(error);
+  if (deferred && noWriterAdmitted()) {
+    throw new McpUnadmittedRefusal(deferred.message, { code: "store_busy", retryable: true });
+  }
+  throw error;
+}
+
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   try {
     const caller = attributionOf(dependencies);
@@ -3041,7 +3050,8 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     if (error instanceof RoleMemoryRefusal) {
       throw new McpToolRefusal(error.message, { code: error.code, status: error.code === "LESSON_INVALID" ? 400 : 409, retryable: false });
     }
-    throw error;
+    // Scope joins can write before the lesson transaction takes its lease.
+    rethrowStoreWriteError(error);
   }
 }
 
@@ -4372,22 +4382,28 @@ async function bridgeReport(
     storedBody = `[${origin.kind === "gateway" ? "voice gateway" : origin.role ?? "agent"}${origin.conversationId ? ` ${origin.conversationId}` : ""} — not the manager] ${own}`;
   }
 
-  const appended = recordManagerReport({
-    key,
-    class: reportClass,
-    at: new Date().toISOString(),
-    origin,
-    project,
-    targetSeatConversationId: targetSeat?.conversationId ?? null,
-    body: storedBody,
-    complete,
-    correlatesDirective: text(args.correlatesDirective) || null,
-    ...(typeof args.answersDirective === "boolean" ? { answersDirective: args.answersDirective } : {}),
-    covers,
-    coversOwed,
-    telegram: telegramCopy,
-    outcome,
-  });
+  let appended: ReturnType<typeof recordManagerReport>;
+  try {
+    appended = recordManagerReport({
+      key,
+      class: reportClass,
+      at: new Date().toISOString(),
+      origin,
+      project,
+      targetSeatConversationId: targetSeat?.conversationId ?? null,
+      body: storedBody,
+      complete,
+      correlatesDirective: text(args.correlatesDirective) || null,
+      ...(typeof args.answersDirective === "boolean" ? { answersDirective: args.answersDirective } : {}),
+      covers,
+      coversOwed,
+      telegram: telegramCopy,
+      outcome,
+    });
+  } catch (error) {
+    // This path has yet to acknowledge an episode or send a Telegram copy.
+    rethrowStoreWriteError(error);
+  }
 
   /* A replay under the same key appends nothing, and says so rather than pretending
      to have delivered a second report. */

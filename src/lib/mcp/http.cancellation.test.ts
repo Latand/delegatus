@@ -6,11 +6,12 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { NextRequest } from "next/server";
 
 import { POST } from "@/app/api/mcp/route";
+import { requestWorkload } from "@/lib/requestWorkload";
 import { mcpHttpMethodNotAllowed, setMcpHttpDependenciesForTests } from "./http";
 import type { McpToolCallContext, McpToolService } from "./server";
 
 const capability = crypto.randomBytes(32).toString("base64url");
-const active = new Map<string, { signal: AbortSignal; finish: () => void }>();
+const active = new Map<string, { signal: AbortSignal; finish: () => void; workload?: string }>();
 const messages: Array<{ session: string | null; body: Record<string, unknown> }> = [];
 let listener: ReturnType<typeof Bun.serve>;
 let origin: string;
@@ -21,7 +22,7 @@ const service: McpToolService = {
     if (toolName !== "list_tasks") throw new Error("unexpected fixture tool");
     const key = String(args.clientRequestId);
     await new Promise<void>((resolve) => {
-      active.set(key, { signal: context!.signal!, finish: resolve });
+      active.set(key, { signal: context!.signal!, finish: resolve, workload: requestWorkload.label() });
       if (finishing) { resolve(); return; }
       context!.signal!.addEventListener("abort", () => resolve(), { once: true });
     });
@@ -65,6 +66,9 @@ async function waitFor(predicate: () => boolean) {
 
 test("Codex sibling connections with colliding ids cancel only their own call without cancel metadata", async () => {
   const [first, second] = await Promise.all([connect(), connect()]);
+  const minute = Math.floor(process.uptime() / 60);
+  const listCalls = () => requestWorkload.snapshot(minute, minute + 1).minutes.reduce((n, row) => n + (row.tools.list_tasks ?? 0), 0);
+  const before = listCalls();
   const cancel = new AbortController();
   const calls: Promise<unknown>[] = [];
   try {
@@ -79,6 +83,8 @@ test("Codex sibling connections with colliding ids cancel only their own call wi
     expect(wireCalls[0]!.body.id).toBe(wireCalls[1]!.body.id);
     cancel.abort();
     await waitFor(() => active.get("thread-first")!.signal.aborted || active.get("thread-second")!.signal.aborted);
+    expect(active.get("thread-first")!.workload).toBe("mcp:list_tasks");
+    expect(listCalls() - before).toBe(2);
     expect(active.get("thread-first")!.signal.aborted).toBe(true);
     expect(active.get("thread-second")!.signal.aborted).toBe(false);
     const notification = messages.find(row => row.body.method === "notifications/cancelled")!;
