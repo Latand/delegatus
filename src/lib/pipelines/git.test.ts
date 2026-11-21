@@ -120,7 +120,7 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
     } : env, options);
     if (command === "git" && args[0] === (phase === "probe" ? "ls-remote" : "push")) {
       let finished = false;
-      void resultPromise.finally(() => { finished = true; });
+      void Promise.resolve(resultPromise).then(() => { finished = true; }, () => { finished = true; });
       while (!fs.existsSync(enteredPath) && !finished) await Bun.sleep(5);
       if (fs.existsSync(enteredPath)) entered.resolve();
     }
