@@ -705,6 +705,74 @@ test.each((["linked", "new"] as const).flatMap(link =>
   } finally { f.close(); }
 }, 30_000);
 
+test.each(["deadline", "revoked"] as const)("a fresh provisioning process handles %s after a permission repair write", async stop => {
+  const f = await lockedFixture();
+  try {
+    const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+    await f.run([process.execPath, hook], f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const nested = path.join(modules, "fixture-tool/lib/index.js");
+    fs.chmodSync(modules, 0o755);
+    fs.chmodSync(nested, 0o644);
+    const newcomer = await f.addWorktree("permission-retry");
+    const local = path.join(newcomer, "node_modules");
+    const source = `
+      import fs from "node:fs";
+      import { prepareLockedDependencies } from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+      const files = ${JSON.stringify([modules, nested])};
+      const local = ${JSON.stringify(local)};
+      const budget = 500;
+      let now = 1800000000000, interrupted = false;
+      const writes = [];
+      Date.now = () => now;
+      const wrote = file => {
+        if (!files.includes(file)) return;
+        if (fs.existsSync(local)) throw new Error("permission repair published an unvalidated link");
+        writes.push(files.indexOf(file));
+      };
+      const open = fs.promises.open;
+      fs.promises.open = async (file, ...args) => {
+        const handle = await open(file, ...args);
+        const change = handle.chmod.bind(handle);
+        handle.chmod = async mode => { await change(mode); wrote(file); };
+        return handle;
+      };
+      let error = null;
+      try {
+        await prepareLockedDependencies(process.cwd(), { budgetMs: budget, assertCurrent() {
+          if (interrupted) return;
+          const dirty = files.filter(file => fs.statSync(file).mode & 0o200).length;
+          if (dirty === files.length) return;
+          if (dirty === 0 || fs.existsSync(local)) throw new Error("repair did not stop with pending writes");
+          interrupted = true;
+          if (${stop === "revoked"}) throw new Error("fixture repair authority revoked");
+          now += budget + 1;
+        } });
+      } catch (failure) { error = failure.message; }
+      process.stdout.write(JSON.stringify({ writes, error }));`;
+    const result = await realExec(process.execPath, ["-e", source], newcomer, undefined, { timeoutMs: 10_000 });
+    expect(result.code, result.stderr).toBe(0);
+    const { writes, error } = JSON.parse(result.stdout);
+    if (stop === "deadline") {
+      expect(error).toBeNull();
+      expect(result.stderr.match(/deadline exceeded \[commit: permission repair,[^\n]+retrying permission repair in 100 ms/g)).toHaveLength(1);
+      expect(writes).toEqual([0, 1]);
+    } else {
+      expect(error).toContain("fixture repair authority revoked [commit: permission repair");
+      expect(fs.existsSync(local)).toBe(false);
+      expect(writes).toEqual([0]);
+      expect(fs.statSync(nested).mode & 0o777).toBe(0o644);
+      await f.run([process.execPath, hook], newcomer);
+    }
+    expect(fs.realpathSync(local)).toBe(modules);
+    expect(fs.statSync(modules).mode & 0o777).toBe(0o555);
+    expect(fs.statSync(nested).mode & 0o777).toBe(0o444);
+    const release = f.holdWriter();
+    try { await f.run([process.execPath, hook], newcomer); }
+    finally { release(); }
+  } finally { f.close(); }
+}, 30_000);
+
 test("a partly written installation stays unpublished while the writer is active and after validation refuses it", async () => {
   const f = await lockedFixture();
   const partial = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
