@@ -263,7 +263,7 @@ export async function censusSnapshot(sources: AgentLivenessSources, registryRevi
   return {
     observedAt: snapshot.observedAt, targetRevision, registryRevision,
     conversations: snapshot.conversations.map(row => ({ conversationId: row.conversationId,
-      host: { ...row.host, ...hostCustody(row.host) }, turnState: row.turnState, pipeline: row.pipeline ? {
+      host: { ...row.host, ...hostCustody(row.host) }, turnState: row.turnState, lifecycle: row.lifecycle, pipeline: row.pipeline ? {
         pipelineId: row.pipeline.pipelineId, stageId: row.pipeline.stageId, attempt: row.pipeline.attempt,
       } : null, evidenceSource: row.evidenceSource })),
     selection: snapshot.selection,

@@ -186,7 +186,7 @@ test("member still loses execution when the service deadline closes", async () =
     if (route.endsWith("/heartbeat") && now >= epoch + 120000) throw new client.ExternalRelayError("lease_lost", 409);
     return { status: 200, body: { status: "ok" } } as never;
   });
-  const pending = runClaimedRequest(relay, { ...contextRequest, request_id: "member_deadline", owner_delivery: delivery, deadline_at: new Date(epoch + 120000).toISOString(),
+  const pending = runClaimedRequest(relay, { ...contextRequest, request_id: "member_deadline", deadline_at: new Date(epoch + 120000).toISOString(),
     input: { ...contextRequest.input, tools: [] } }, undefined, { leaseWorker: false });
   try {
     for (let i = 0; i < 2000 && !launched; i++) await flush();
