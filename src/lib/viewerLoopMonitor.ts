@@ -261,7 +261,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       lastSummary = at;
     }
     readAttribution.clear();
-    spans.clear();
+    spans.clearSpans();
     activeDropped = completedDropped = 0;
     last = at;
   };

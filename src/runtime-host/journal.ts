@@ -2253,11 +2253,11 @@ export class RuntimeJournal {
     return cursor;
   }
 
-  /** Settle only old spawn/kill work whose two liveness authorities agree it
-      has no owner: the journal has no hosted/recovering session and the durable
-      agent registry is absent, marks the host dead, or marks the conversation
-      superseded. Pending sends and interrupts retain their existing unknown-
-      fate rules. */
+  /** Settle pending spawn/kill work after a continuous absence horizon. A
+      current registry record always fences settlement. A dead or superseded
+      registry record allows settlement even with a hosted or recovering journal
+      session. With no registry record, either of those journal states fences
+      settlement. Sends and interrupts retain their unknown-fate rules. */
   settleStalePendingEffects(
     registryConversations: Pick<ReadonlyMap<string, RuntimeRegistryConversationRetentionState>, "get">,
     horizonMs = RUNTIME_PENDING_EFFECT_STALE_MS,
@@ -2286,7 +2286,8 @@ export class RuntimeJournal {
         const receipt = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
         const session = this.entity<RuntimeSession>("session", row.conversation_id);
         const registryState = registryConversations.get(row.conversation_id);
-        if (session?.host === "hosted" || session?.host === "recovering" || registryState === "current") {
+        if (registryState === "current" || (registryState !== "dead" && registryState !== "superseded"
+          && (session?.host === "hosted" || session?.host === "recovering"))) {
           if (row.orphaned_since !== null) {
             this.db.query("UPDATE operations SET orphaned_since = NULL WHERE operation_id = ?")
               .run(row.operation_id);
@@ -2302,9 +2303,9 @@ export class RuntimeJournal {
         const ageMinutes = Math.ceil(horizon / 60_000);
         let reason = `stale: ${receipt.kind} target has no runtime host and no agent registry record after ${ageMinutes} minutes`;
         if (registryState === "superseded") {
-          reason = `stale: ${receipt.kind} target has no runtime host and its registry conversation is superseded after ${ageMinutes} minutes`;
+          reason = `stale: ${receipt.kind} target's registry conversation is superseded after ${ageMinutes} minutes`;
         } else if (registryState === "dead") {
-          reason = `stale: ${receipt.kind} target has no runtime host and its registry host is dead after ${ageMinutes} minutes`;
+          reason = `stale: ${receipt.kind} target's registry host is dead after ${ageMinutes} minutes`;
         }
         this.transitionOperation(row.operation_id, "failed", { reason });
         settled += 1;

@@ -11,7 +11,6 @@ import { fixtureRecords, fixtureRegistry, FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_
 import { captureProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { fixtureReport, ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { procBackend } from "@/lib/proc";
-import { descendantPids } from "@/lib/proc/memory";
 import { determined, undetermined } from "./determinable";
 import type { EngineHost } from "./engineHost";
 import * as control from "./structuredHostControl";
@@ -26,6 +25,9 @@ const children: ChildProcess[] = [];
 const roots: string[] = [];
 const originalTerminate = control.terminateStructuredHostTree;
 const originalStateDirectory = process.env.LLV_STATE_DIR;
+const hostWithChild = `import { spawn } from "node:child_process";
+  const child = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+  child.unref(); console.log(JSON.stringify({ pid: child.pid })); setInterval(() => {}, 1000);`;
 afterEach(async () => {
   if (originalStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = originalStateDirectory;
@@ -146,18 +148,17 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-close-"));
       roots.push(root);
       const script = path.join(root, "host.mjs");
-      fs.writeFileSync(script, 'import { spawn } from "node:child_process"; spawn("sleep", ["60"], { detached: true, stdio: "ignore" }).unref(); setInterval(() => {}, 1000);');
-      const child = spawn(process.execPath, [script], { stdio: "ignore" });
+      fs.writeFileSync(script, hostWithChild);
+      const child = ownFixtureTree(spawn(process.execPath, [script], { stdio: ["ignore", "pipe", "ignore"] }));
       children.push(child);
       const identity = captureProcessIdentity(child.pid!);
       identities.push(identity);
-      let tree: ProcessIdentity[] = [];
-      for (let attempt = 0; attempt < 200 && tree.length < 2; attempt++) {
-        await Bun.sleep(10);
-        tree = descendantPids(identity.pid, procBackend.ppidMap()).map(pid => captureProcessIdentity(pid));
-      }
-      identities.push(...tree.filter(value => value.pid !== identity.pid));
-      expect(tree.length).toBeGreaterThanOrEqual(2);
+      const { pid } = await fixtureReport<{ pid: number }>(child, "retirement host", [], 4_000);
+      const descendant = captureProcessIdentity(pid);
+      identities.push(descendant);
+      expect(descendant.startIdentity).not.toBeNull();
+      const tree = [identity, descendant];
+      const ppidMap = () => new Map([[identity.pid, process.pid], [descendant.pid, identity.pid]]);
       const file = fixtureRegistry(root, engine, identity,
         { pid: 2_147_483_647, startIdentity: "fixture-owner", bootEpoch: identity.bootEpoch });
       const entry = file.entries[`${engine}:${FIXTURE_SESSION}`]!;
@@ -220,7 +221,7 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
       });
       const outcomes: control.StructuredHostTerminationOutcome[] = [];
       const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation(async (ref, dependencies) => {
-        const outcome = await originalTerminate(ref, { ...dependencies,
+        const outcome = await originalTerminate(ref, { ...dependencies, ppidMap,
           persistCapturedTree: async captured => {
             const persistence = dependencies!.persistCapturedTree!(captured);
             const started = captureAdmissionStarted;
@@ -289,7 +290,7 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
           bootEpoch: change === "admission-boot" ? () => admitted ? determined("replacement-boot") : determined(systemBootEpoch()!) : undefined,
           ownerProcess: change === "unverified-owner" ? () => closed ? "unverified" : "dead" : undefined,
           owned: change === "locally-owned" ? () => closed : undefined,
-          treePss: () => ({ bytes: null, measuredProcesses: 0 }),
+          treePss: () => ({ bytes: null, measuredProcesses: 0 }), ppidMap,
           readCursor: () => null, writeCursor: () => {},
         };
         const report = await runStructuredHostRetirementSweep(options);
@@ -347,7 +348,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-lifecycle-"));
         roots.push(root);
         const script = path.join(root, "host.mjs");
-        fs.writeFileSync(script, 'import { spawn } from "node:child_process"; const child = spawn("sleep", ["60"], { detached: true, stdio: "ignore" }); child.unref(); console.log(JSON.stringify({pid:child.pid})); setInterval(() => {}, 1000);');
+        fs.writeFileSync(script, hostWithChild);
         const child = ownFixtureTree(spawn(process.execPath, [script], { detached: true, stdio: ["ignore", "pipe", "ignore"] }));
         children.push(child);
         child.unref();
@@ -357,6 +358,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
         const descendant = captureProcessIdentity(report.pid);
         expect(descendant.startIdentity).not.toBeNull();
         const tree = [identity.pid, descendant.pid];
+        const ppidMap = () => new Map([[identity.pid, process.pid], [descendant.pid, identity.pid]]);
         identities.push(descendant);
         const owner = change === "held" ? captureProcessIdentity(process.pid) : change === "dead-owner"
           ? { pid: 2_147_483_647, startIdentity: "fixture-dead-owner", bootEpoch: identity.bootEpoch } : null;
@@ -451,7 +453,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
         const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
         let snapshotReads = 0;
         const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation(async (ref, dependencies) => {
-          const outcome = await originalTerminate(ref, { ...dependencies,
+          const outcome = await originalTerminate(ref, { ...dependencies, ppidMap,
             // Isolate the two revision changes. The capture case uses the real durable capture.
             persistCapturedTree: async identities => {
               const accepted = await dependencies!.persistCapturedTree!(identities);
@@ -488,7 +490,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
             realtimeBound: () => determined(false),
             orchestratorSeatConversations: () => determined(new Set<string>(changed && ["seat", "seat-restored"].includes(change) ? Object.keys(file.conversations) : [])),
             revokedSeatConversations: () => determined(new Set<string>()),
-            readCursor: () => null, writeCursor: () => {}, record: () => {},
+            readCursor: () => null, writeCursor: () => {}, record: () => {}, ppidMap,
             treePss: async () => {
               await Promise.resolve();
               if (boundary === "measurement") mutate();
