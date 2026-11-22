@@ -105,7 +105,7 @@ test("guest owner relay spawn is request-bound and materializes restricted read-
   expect(accepted.receipt?.launchProfile).toMatchObject({ ownerRelayHandoffOnly: true, readOnly: true, sandbox: "restricted", permissionMode: "never", allowSubagents: false, mcpServers: ["viewer"], plugins: [] });
   const accessPolicy = structuredHostAccessPolicy(accepted.receipt?.launchProfile);
   expect(accessPolicy).toEqual({ readOnly: true, sandbox: "restricted", ownerRelayHandoffOnly: true });
-  const access = materializeStructuredHostAccess(accessPolicy, { HOME: env.HOME, GH_CONFIG_DIR: path.join(root, "github-config"), GH_TOKEN: "fixture-token" }, null, root);
+  const access = materializeStructuredHostAccess(accessPolicy, { HOME: env.HOME, GH_CONFIG_DIR: path.join(root, "github-config"), GH_TOKEN: "fixture-token", NODE_ENV: "test" }, null, root);
   try {
     expect(access.codex).toMatchObject({ permissionProfile: "llv-read-only-stage" });
     expect(access.codex.permissionProfileConfig).toContain('extends=":read-only"');

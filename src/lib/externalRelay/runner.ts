@@ -28,7 +28,7 @@ import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
 import { runOwnerAgent, ownerContinuationPrompt, prepareOwnerPrompt, ownerAnswer, ownerFailureAnswer, ownerFailureCustody, type OwnerRunPorts } from "./ownerRun";
 import { ownerTurnDiagnostic, type OwnerTurnDiagnostic } from "./diagnostic";
 import { readRelaySwitches } from "./switches";
-import { compactRequestSchema } from "./protocol";
+import { compactRequestSchema, type ExternalRelayRequest } from "./protocol";
 import { runCompactRequest } from "./compact";
 import { conversationAuthority, lookupChainConversationAsync, resolveChainConversationAsync, reserveChainConversationAsync, releaseConversationAsync, prepareConversationAccount, conversationCodexHome, sweepConversationsAsync, type RelayConversation } from "./conversations";
 import { activeDrain } from "@/lib/selfUpdate/drain";
