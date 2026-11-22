@@ -57,9 +57,10 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-function actor(project?: string, role = "builder", engine: "claude" | "codex" = "codex") {
+function actor(project?: string, role = "builder", engine: "claude" | "codex" = "codex", handoffOnly = false) {
   const spawn = registry.beginSpawnRequest({ engine, cwd: root, explicitProject: project,
-    launchProfile: { cwd: root, title: "Relay fixture conversation", role: role === "root" ? "root" : "worker" } });
+    launchProfile: { cwd: root, title: "Relay fixture conversation", role: role === "root" ? "root" : "worker",
+      ...(handoffOnly ? { ownerRelayHandoffOnly: true } : {}) } });
   if (spawn.kind !== "created") throw new Error("fixture spawn was not created");
   const receipt = spawn.receipt;
   registry.completeSpawn(receipt.launchId, {
@@ -117,10 +118,10 @@ function toolsFor(sender: ReturnType<typeof actor> | null, control?: ViewerContr
 
 const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessageDelivery");
 const { procBackend } = await import("@/lib/proc");
-const { reserveRun, changeRun, readRunLedger, updateRelayStore } = await import("@/lib/externalRelay/store");
+const { reserveRun, changeRun, dropRun, readRunLedger, updateRelayStore } = await import("@/lib/externalRelay/store");
 const { liveOwnerRelayConversation } = await import("@/lib/externalRelay/ownerAuthority");
 const { ownerTierFor } = await import("@/lib/externalRelay/profile");
-const { runOwnerAgent } = await import("@/lib/externalRelay/ownerRun");
+const { ownerRunPrompt, runOwnerAgent } = await import("@/lib/externalRelay/ownerRun");
 const { structuredHostAccessPolicy } = await import("@/lib/runtime/structuredSpawn");
 const { requestSchema } = await import("@/lib/externalRelay/protocol");
 const { contextRequest } = await import("@/lib/externalRelay/request.fixture");
@@ -153,6 +154,65 @@ function ownerRun(sender: ReturnType<typeof actor>, isOwner = true, switchOn = t
 function relayArgs(key = "owner-seat-send") {
   return { clientRequestId: key, project: "project-b", text: "Please implement this work.", origin: { kind: "operator" } };
 }
+
+test("guest owner Viewer restrictions survive pause and settled run custody", async () => {
+  const sender = actor(undefined, "builder", "codex", true);
+  actor("project-b");
+  ownerRun(sender);
+  const service = toolsFor(sender).service;
+  const handoff = (key: string) => service.callTool("send_message_to_orchestrator", {
+    clientRequestId: key, project: "project-b", text: "Please send the quoted owner request to this seat.",
+  });
+  const assertOrdinaryDenied = async () => {
+    expect(await service.callTool("list_tasks", { project: "project-b" })).toMatchObject({
+      ok: false, code: "tool_not_permitted",
+    });
+  };
+  expect(await handoff("live-owner-handoff")).toMatchObject({ ok: true, project: "project-b" });
+  await assertOrdinaryDenied();
+  updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, paused: true })) }));
+  await assertOrdinaryDenied();
+  expect(await handoff("paused-owner-handoff")).toMatchObject({ ok: false });
+  dropRun("owner-request");
+  await assertOrdinaryDenied();
+  expect(await handoff("settled-owner-handoff")).toMatchObject({ ok: false });
+});
+
+test("a ready guest attachment description reaches the designated project seat", async () => {
+  const sender = actor(undefined, "builder", "codex", true);
+  actor("project-b");
+  ownerRun(sender);
+  const source = contextRequest.input.conversation[0]!;
+  const ref = "ready_project_attachment";
+  const request = requestSchema.parse({ ...contextRequest, request_id: "ready_attachment_handoff", delivery: "guest",
+    features: ["requester_context", "relay_media_in"], answer: { ...contextRequest.answer, progress: "none" },
+    input: { ...contextRequest.input, respond_to: "owner-message", request_text: "Please pass this project issue to its seat.",
+      requester: { ...contextRequest.input.requester, is_owner: true },
+      tools: contextRequest.input.tools.filter(tool => tool.mode === "handoff"),
+      conversation: [
+        { ...source, id: "linked-issue", text: "The issue has a ready screenshot attachment.", reply_to: null,
+          media: [{ ref, kind: "document", availability: "ready", mime_type: "application/pdf", filename: "screenshot.pdf",
+            byte_size: 77, expires_at: "2099-01-01T00:00:00Z" }] },
+        { ...source, id: "owner-message", text: "Please pass this project issue to its seat.", reply_to: "linked-issue" },
+      ],
+      documents: [{ title: "Screenshot", text: "The moderation panel still shows the matching post.",
+        message_id: "linked-issue", media_ref: ref, extraction: "complete" }],
+    },
+  });
+  const owner = ownerTierFor({ ownerTier: true }, request, { guestHandoff: true })!;
+  const prompt = ownerRunPrompt(request, owner, 1);
+  expect(prompt).toContain(ref);
+  expect(prompt).toContain("The moderation panel still shows the matching post.");
+  const quoted = promptSection<{ text: string }>(prompt, "owner_request");
+  const documents = promptSection<Array<{ title: string; text: string }>>(prompt, "documents");
+  const service = toolsFor(sender).service;
+  const deliveredResult = await service.callTool("send_message_to_orchestrator", {
+    clientRequestId: "ready-attachment-seat-handoff", project: "project-b",
+    text: `${quoted.text}\n${documents.map(document => `${document.title}: ${document.text}`).join("\n")}`,
+  });
+  expect(deliveredResult).toMatchObject({ ok: true, project: "project-b" });
+  expect(delivered[0]?.text).toContain("The moderation panel still shows the matching post.");
+});
 
 function promptSection<T>(prompt: string, name: string): T {
   const match = prompt.match(new RegExp(`<${name}>\\n([\\s\\S]*?)\\n</${name}>`));
@@ -218,7 +278,7 @@ for (const cloudTarget of [false, true]) for (const pairedProject of ["project-b
     const { startTestRelay } = await import("@/lib/externalRelay/testRelay");
     const { readRelayStore, readRunLedger, dropRun } = await import("@/lib/externalRelay/store");
     const { accountManager } = await import("@/lib/accounts/manager");
-    const sender = actor();
+    const sender = actor(undefined, "builder", "codex", delivery === "guest");
     const recipient = actor("project-b");
     actor("project-a");
     ownerRun(sender);

@@ -73,7 +73,7 @@ import { answerRecorder, countMemberAnswers, readAnswerRecord, type RelayAnswerD
 import {
   answerProfileFor,
   ownerTierFor,
-  ownerRelayHandoffRequested,
+  ownerRelayGuestHandoffRequested,
   ownerBindingRefusal,
   exemptFromMemberLimit,
   memberLimitFor,
@@ -751,7 +751,9 @@ export async function runClaimedRequest(
     const trigger = request.input.conversation.find(message => message.id === ownerMessage?.messageId);
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
-    owner = request.delivery === "guest" ? ownerTierFor(target, request, { guestHandoff: true })
+    const guestOwner = request.delivery === "guest" ? ownerTierFor(target, request, { guestHandoff: true }) : null;
+    owner = request.delivery === "guest"
+      ? guestOwner && ownerRelayGuestHandoffRequested(guestOwner) ? guestOwner : null
       : prototype || target.ownerTier === true ? ownerMessage : null;
     if (owner || request.delivery === "guest") delete profile.pageRead;
     boundedOwnerTurn = !!owner && !prototype;
@@ -771,10 +773,10 @@ export async function runClaimedRequest(
     if (owner) allowOwnerReply = () => ownerStatusReply
       ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
       : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
-    const handoffOnly = !!owner && (request.delivery === "guest" || ownerRelayHandoffRequested(owner));
+    const handoffOnly = !!owner && ownerRelayGuestHandoffRequested(owner);
     // The local runner binds Viewer calls for owner chat turns and handoffs.
     // Legacy claims without chat scope can still use a bound Cloud repository.
-    const repositoryBoundOwner = cloud && !!owner && !handoffOnly && !request.chat;
+    const repositoryBoundOwner = cloud && !!owner && !handoffOnly;
     const usingCloud = cloud && (!owner || repositoryBoundOwner && !!cloudEnvironment(configuredTarget!, true));
     if (repositoryBoundOwner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
     const authority = conversationAuthority(request.input.requester, !!owner);

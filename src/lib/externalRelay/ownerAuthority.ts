@@ -3,6 +3,7 @@ import { procBackend } from "@/lib/proc";
 import { bridgeDirectiveBody } from "@/lib/bridge/directive";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { agentRegistry } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { changeRunAsync, externalRelayFile, ownerRelayStoreDeadline, type RunLedger, type RelayStore, type RunRecord } from "./store";
@@ -50,8 +51,8 @@ export async function recordOwnerRelayHandoffOutcome(conversationId: string, out
 
 /** Guest-origin owner turns receive only the request-bound seat handoff. */
 export function liveOwnerRelayHandoffOnly(conversationId: string): boolean {
-  const raw = liveOwnerRelayRun(conversationId)?.run.ownerTurn?.rawRequest;
-  return !!raw && typeof raw === "object" && (raw as { delivery?: unknown }).delivery === "guest";
+  const conversation = agentRegistry().conversation(conversationId as ViewerConversationId);
+  return conversation?.generations.some(generation => generation.launchProfile.ownerRelayHandoffOnly === true) ?? false;
 }
 
 function liveOwnerRelayRun(conversationId: string): { run: RunRecord; project: string | null } | null {

@@ -301,7 +301,7 @@ for (const failCloud of [false, true]) test(`owner relay routes through repo Clo
   const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
     engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { ...process.env },
   } });
-  const raw = { ...contextRequest, request_id: `owner_cloud_${failCloud}`, input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const raw = { ...contextRequest, request_id: `owner_cloud_${failCloud}`, chat: { key: "owner_cloud_chat_fixture" }, input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } } };
   try {
     const result = await runClaimedRequest(relay, raw, undefined, { leaseWorker: false,
       cloudTransport: async input => {

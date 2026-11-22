@@ -8,7 +8,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { requestSchema, checkedAnswer, guestAnswerSchema, INVALID_REQUESTER_DETAIL, offersHandoff, type ExternalRelayRequest } from "./protocol";
 import { relayClaimBody } from "./poller";
 import { relayCall } from "./client";
-import { ownerTierFor } from "./profile";
+import { ownerRelayGuestHandoffRequested, ownerTierFor } from "./profile";
 import { ownerAnswer } from "./ownerRun";
 import { answerCapabilities } from "./answerV2";
 import { runClaimedRequest } from "./runner";
@@ -153,9 +153,10 @@ for (const populated of [false, true]) test(`guest handoff and final text valida
   } finally { await server.close(); }
 }, 30_000);
 
-for (const populated of [true, false]) for (const handoff of [false, true] as const)
-  test(`real guest runner ownerTier=false tools=${populated} handoff=${handoff}`, async () => {
+for (const ownerTier of [false, true]) for (const populated of [true, false]) for (const handoff of ownerTier ? [false] as const : [false, true] as const)
+  test(`real guest runner ownerTier=${ownerTier} tools=${populated} handoff=${handoff}`, async () => {
     const request = guest(); if (!populated) request.input.tools = [];
+    if (ownerTier) request.input.conversation.find(message => message.id === request.input.respond_to)!.text = "Summarize the chat plans.";
     const beats: unknown[] = [], completions: unknown[] = [], unexpected: string[] = [];
     const wire: Record<string, unknown> = {};
     const server = await startTestRelay((req, body) => {
@@ -165,7 +166,7 @@ for (const populated of [true, false]) for (const handoff of [false, true] as co
       else unexpected.push(req.url!);
       return { body: { status: "ok" } };
     });
-    const relay = paired(server.origin, false);
+    const relay = paired(server.origin, ownerTier);
     relay.targets[0]!.project = "project-b";
     updateRelayStore(s => ({ ...s, relays: [relay] }));
     let launches = 0;
@@ -253,6 +254,34 @@ test("service-verified owner on guest delivery gets a request-local seat handoff
     expect(result).toMatchObject({ outcome: "answered", answer: {
       action: "reply", text: "Sent to the project-b orchestrator.", reply_to: null,
     } });
+  } finally { await server.close(); }
+}, 30_000);
+
+test("owner-tier enabled guest chat still gets its ordinary Cloud answer", async () => {
+  const request = guest();
+  request.input.conversation.find(message => message.id === request.input.respond_to)!.text = "Summarize the chat plans.";
+  const relay = paired("http://127.0.0.1:1", true);
+  relay.targets[0] = { ...relay.targets[0]!, engine: "codex-cloud", project: "fixture-project", cloudEnvironmentId: "fixture-environment" };
+  const server = await startTestRelay((req, body) => req.url?.endsWith("/claim")
+    ? { body: { request } } : { body: { status: "ok" } });
+  relay.origin = server.origin; relay.api_base = `${server.origin}/v1`;
+  updateRelayStore(state => ({ ...state, relays: [relay] }));
+  let cloudCalls = 0, localLaunches = 0;
+  try {
+    const claimed = await relayCall<{ request: unknown }>(relay.api_base, "/requests/claim", "POST", relayClaimBody(relay), relay.credential);
+    const result = await runClaimedRequest(relay, claimed.body!.request, undefined, { leaseWorker: false,
+      cloudTransport: async input => {
+        cloudCalls++;
+        expect(input.prompt).toContain("Summarize the chat plans.");
+        expect(input.prompt).toContain(request.input.instructions!);
+        return JSON.stringify({ action: "reply", text: "Here is the summary.", reply_to: null });
+      },
+      ownerPorts: { launch: async () => { localLaunches++; throw new Error("ordinary guest chat must use its guest route"); },
+        observe: async () => ({ state: "ended", finalText: "Unexpected owner handoff" }), stop: async () => {}, pollMs: 1 },
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Here is the summary.", reply_to: null } });
+    expect(cloudCalls).toBe(1);
+    expect(localLaunches).toBe(0);
   } finally { await server.close(); }
 }, 30_000);
 

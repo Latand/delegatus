@@ -31,6 +31,13 @@ export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, req
 export function ownerRelayHandoffRequested(owner: OwnerInstruction): boolean {
   return /\b(?:pass|forward|send|hand\s+off|process|fix|delegate)\b|переда|оброб|виправ|делег/u.test(`${owner.text}\n${owner.requestText ?? ""}`);
 }
+
+/** Guest owner authority is reserved for requests that name project work or
+ * explicitly ask to pass work on. Ordinary guest chat stays with the service. */
+export function ownerRelayGuestHandoffRequested(owner: OwnerInstruction): boolean {
+  return ownerRelayHandoffRequested(owner)
+    || /\b(?:project|repository|repo)\b|проєкт|проект/iu.test(`${owner.text}\n${owner.requestText ?? ""}`);
+}
 export function answerProfileFor(
   _requester: ExternalRelayRequester | null | undefined,
 ): RelayAnswerProfile {
