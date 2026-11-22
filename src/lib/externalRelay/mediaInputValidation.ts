@@ -2,7 +2,7 @@ import { ExternalRelayError } from "./errors";
 
 export type InputMedia = { ref: string; kind: "photo" | "document"; availability: "ready" | "too_large" | "unsupported_type" | "missing" | "protected";
   mime_type?: string; filename?: string; byte_size?: number; expires_at?: string };
-export type MediaRequest = { request_id: string; lease_id: string; delivery?: "guest" | "business"; features?: string[]; input: {
+export type MediaRequest = { request_id: string; lease_id: string; delivery?: "guest" | "private" | "business"; features?: string[]; input: {
   respond_to: string | null; conversation: { id: string; reply_to: string | null; sent_at?: string; media?: InputMedia[] }[];
   documents: { text: string; message_id?: string; media_ref?: string; extraction?: "complete" | "truncated" | "unavailable" }[] } };
 const MiB = 1024 * 1024;
@@ -16,12 +16,12 @@ export const RELAY_MEDIA_ANY_DOCUMENT = "relay_media_any_document";
 export const inputMediaExtensions: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md", "text/csv": ".csv", "application/json": ".json" };
 export const isInboundImage = (mime: string | undefined) => mime === "image/jpeg" || mime === "image/png";
 export const isolatedDelivery = (request: { delivery?: unknown } | null | undefined) =>
-  request?.delivery === "guest" || request?.delivery === "business";
+  request?.delivery === "guest" || request?.delivery === "private" || request?.delivery === "business";
 const fail = (code: string, status: number): never => { throw new ExternalRelayError(code, status); };
 const validId = (id: unknown): id is string => typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id);
 export const hasInboundMedia = (request: Pick<MediaRequest, "features">) => request.features?.includes("relay_media_in") === true;
 export const hasHistoryMedia = (request: Pick<MediaRequest, "features" | "delivery">) =>
-  hasInboundMedia(request) && (isolatedDelivery(request) || request.features?.includes(RELAY_HISTORY_MEDIA) === true);
+  hasInboundMedia(request) && (request.delivery === "guest" || request.features?.includes(RELAY_HISTORY_MEDIA) === true);
 /** Descriptor checks shared by history normalization and final admission. */
 export function validateInputMediaDescriptor(media: InputMedia, features?: string[]): void {
   if (!validId(media.ref) || !["photo", "document"].includes(media.kind)
@@ -59,15 +59,16 @@ export function normalizeInputMediaDescriptor(media: InputMedia, features?: stri
   return media;
 }
 /** Validate the final claimed projection, never an earlier history/tool map. */
-export function validateMediaInput(request: MediaRequest): InputMedia[] {
+export function validateMediaInput(request: MediaRequest, requesterContextNegotiated?: boolean, historyMediaNegotiated?: boolean): InputMedia[] {
   if (!hasInboundMedia(request)) return [];
-  if (!request.features?.includes("requester_context")) fail("malformed", 400);
+  if (!(requesterContextNegotiated ?? request.features?.includes("requester_context"))) fail("malformed", 400);
+  const allowHistory = historyMediaNegotiated ?? hasHistoryMedia(request);
   const trigger = request.input.conversation.find(message => message.id === request.input.respond_to);
   const allowed = new Set([trigger?.id, trigger?.reply_to].filter((id): id is string => !!id));
   const refs = new Map<string, InputMedia>(); let count = 0, bytes = 0;
   for (const message of request.input.conversation) for (const media of message.media ?? []) {
     if (++count > MAX_INPUT_MEDIA_REFS) fail("too_large", 413);
-    if (!allowed.has(message.id) && !(hasHistoryMedia(request) && media.kind === "photo")) fail("malformed", 400);
+    if (!allowed.has(message.id) && !(allowHistory && media.kind === "photo")) fail("malformed", 400);
     validateInputMediaDescriptor(media, request.features);
     const previous = refs.get(media.ref);
     if (previous && JSON.stringify(previous) !== JSON.stringify(media)) fail("malformed", 400);
@@ -89,7 +90,7 @@ export function validateMediaInput(request: MediaRequest): InputMedia[] {
   if (extracted > 32000) fail("too_large", 413);
   const ordered: InputMedia[] = [], seen = new Set<string>();
   for (const message of [trigger, request.input.conversation.find(message => message.id === trigger?.reply_to),
-    ...(hasHistoryMedia(request) ? [...request.input.conversation].sort((a, b) =>
+    ...(allowHistory ? [...request.input.conversation].sort((a, b) =>
       (Date.parse(b.sent_at ?? "") || 0) - (Date.parse(a.sent_at ?? "") || 0)) : [])])
     for (const media of message?.media ?? []) if (!seen.has(media.ref)) { seen.add(media.ref); ordered.push(refs.get(media.ref)!); }
   return ordered;

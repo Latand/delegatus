@@ -220,12 +220,12 @@ export async function writeInboundAgentInput(files: readonly InboundFile[], prom
   });
 }
 export async function prepareInboundMedia(relay: Pick<PairedRelay, "api_base" | "credential">, request: MediaRequest, runDir: string,
-  options: { signal: AbortSignal; deadlineAt: number; authorize: () => void; seenMessageIds?: ReadonlySet<string>; now?: () => number; pdfValidation?: { workerEntry?: string; memoryLimitMb?: number }; skipRejected?: boolean }) {
+  options: { signal: AbortSignal; deadlineAt: number; authorize: () => void; seenMessageIds?: ReadonlySet<string>; now?: () => number; pdfValidation?: { workerEntry?: string; memoryLimitMb?: number }; skipRejected?: boolean; requesterContextNegotiated?: boolean; historyMediaNegotiated?: boolean }) {
   return withViewerOperation("relay.media-input", async () => {
     const now = options.now ?? Date.now;
     const check = () => { options.signal.throwIfAborted(); options.authorize(); if (now() >= options.deadlineAt) fail("lease_lost", 409); };
     check();
-    const admitted = validateMediaInput(request), files: InboundFile[] = [];
+    const admitted = validateMediaInput(request, options.requesterContextNegotiated, options.historyMediaNegotiated), files: InboundFile[] = [];
     const skipped: { ref: string; reason: string }[] = [];
     const seenRefs = new Set(request.input.conversation.filter(message => options.seenMessageIds?.has(message.id))
       .flatMap(message => message.media?.map(media => media.ref) ?? []));

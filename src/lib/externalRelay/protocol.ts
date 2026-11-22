@@ -225,7 +225,7 @@ export const ownerDeliverySchema = z.object({
 });
 export type OwnerDelivery = z.infer<typeof ownerDeliverySchema>;
 const answerRequestSchema = z.object({
-  delivery: z.enum(["guest", "business"]).optional(),
+  delivery: z.enum(["guest", "private", "business"]).optional(),
   owner_delivery: ownerDeliverySchema.optional().catch(undefined),
   features: z.array(boundedString(64)).max(32).refine(v => new Set(v).size === v.length).optional().catch(undefined),
   request_id: id,
@@ -323,6 +323,8 @@ export function claimedRequestSchema(advertised: readonly string[]) {
   const businessAnswers = advertised.includes(RELAY_BUSINESS_ANSWERS);
   const isolatedRequesters = advertised.includes(RELAY_ISOLATED_REQUESTERS);
   const inboundMedia = advertised.includes("relay_media_in");
+  const historyMedia = advertised.includes(RELAY_HISTORY_MEDIA);
+  const anyDocument = advertised.includes("relay_media_any_document");
   return z.preprocess(normalizeClaim, answerRequestSchema.superRefine((request, context) => {
     const { input } = request;
     const { requester } = input;
@@ -337,16 +339,32 @@ export function claimedRequestSchema(advertised: readonly string[]) {
         || request.owner_delivery && !requester.is_owner);
     if (invalidRequester)
       context.addIssue({ code: "custom", path: ["input", "requester"], message: INVALID_REQUESTER_DETAIL });
-    if (request.delivery === "business" && (!businessAnswers || !request.features?.includes(RELAY_BUSINESS_ANSWERS)
-      || !request.features.includes("requester_context") || hasInboundMedia(request) && !inboundMedia))
+    if (request.delivery === "business" && (!businessAnswers
+      || !advertised.includes("requester_context") || hasInboundMedia(request) && !inboundMedia))
       context.addIssue({ code: "custom", message: "invalid business capability negotiation" });
+    if (request.delivery === "private" && (!isolatedRequesters || !advertised.includes("requester_context")))
+      context.addIssue({ code: "custom", message: "invalid private capability negotiation" });
+    if (request.delivery === "guest" && requester && !requester.is_owner
+      && (!isolatedRequesters || !advertised.includes("relay_guest_answers")))
+      context.addIssue({ code: "custom", message: "invalid guest capability negotiation" });
+    const negotiatedIsolation = request.delivery === "business" && businessAnswers || isolatedRequesters && isolated;
+    if (hasInboundMedia(request) && (negotiatedIsolation
+      ? !advertised.includes("requester_context")
+      : !request.features?.includes("requester_context")))
+      context.addIssue({ code: "custom", message: "media requires requester context" });
+    if (negotiatedIsolation && request.features?.some(feature =>
+      feature === "relay_media_in" && !inboundMedia
+      || feature === RELAY_HISTORY_MEDIA && !historyMedia
+      || feature === "relay_media_any_document" && !anyDocument))
+      context.addIssue({ code: "custom", message: "unadvertised isolated media capability" });
     if (isolated && (request.answer.progress !== "none" || request.owner_delivery || input.format || request.answer.attachments
       || input.tools?.some(tool => tool.mode !== "handoff")
       || !hasInboundMedia(request) && (input.conversation.some(message => message.media?.length)
         || input.documents.some(document => document.media_ref !== undefined))))
       context.addIssue({ code: "custom", message: "invalid isolated delivery contract" });
     if (!hasInboundMedia(request)) return;
-    try { validateMediaInput(request); }
+    try { validateMediaInput(request, negotiatedIsolation ? advertised.includes("requester_context") : undefined,
+      negotiatedIsolation ? historyMedia : undefined); }
     catch { context.addIssue({ code: "custom", message: "invalid negotiated media input" }); }
   }));
 }

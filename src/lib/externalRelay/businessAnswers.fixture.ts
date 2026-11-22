@@ -18,11 +18,15 @@ export const cases = [
   "private_non_owner", "group_non_owner", "legacy_no_business",
 ] as const;
 
-/** Each case maps to answer_pair_<case>.json by basename. All wire data is synthetic. */
+/** Partner basename map: answer_pair_business_contact.json, answer_pair_business_owner.json,
+ * answer_pair_guest_non_owner.json, answer_pair_private_non_owner.json,
+ * answer_pair_group_non_owner.json, answer_pair_legacy_no_business.json.
+ * All wire data is synthetic; private includes the pinned contract's discriminator. */
 export function answerPair(kind: typeof cases[number], imageBytes = 1, historyFeature = true) {
   const isBusiness = kind === "business_contact" || kind === "business_owner";
   const isGuest = kind === "guest_non_owner";
-  const isolated = isBusiness || isGuest;
+  const isPrivate = kind === "private_non_owner";
+  const isolated = isBusiness || isGuest || isPrivate;
   const isLegacy = kind === "legacy_no_business";
   const isOwner = kind === "business_owner";
   const hasPhoto = kind === "business_contact";
@@ -31,7 +35,7 @@ export function answerPair(kind: typeof cases[number], imageBytes = 1, historyFe
     ...(isBusiness ? [businessFeature] : []),
     ...(hasPhoto ? [inbound, ...(historyFeature ? [history] : [])] : []),
     ...(isGuest ? ["relay_guest_answers"] : []),
-    ...(isGuest || kind === "private_non_owner" ? [isolatedRequesterFeature] : [])];
+    ...(!isBusiness && (isGuest || isPrivate) ? [isolatedRequesterFeature] : [])];
   const earlier: ExternalRelayRequest["input"]["conversation"][number] = {
     id: photo, author: contact, sent_at: "2026-01-01T12:00:00Z", text: "A view from the garden.", reply_to: null,
     ...(hasPhoto ? { media: [{ ref: photoRef, kind: "photo", availability: "ready",
@@ -39,7 +43,8 @@ export function answerPair(kind: typeof cases[number], imageBytes = 1, historyFe
   };
   const request: ExternalRelayRequest = {
     ...sampleRequest, request_id: `request_${kind}`, claimed_at: "2026-01-01T12:00:02Z",
-    ...(isBusiness ? { delivery: "business", features: advertised } : isGuest ? { delivery: "guest" } : {}),
+    ...(isBusiness ? { delivery: "business", ...(hasPhoto ? { features: [inbound, ...(historyFeature ? [history] : [])] } : {}) }
+      : isGuest ? { delivery: "guest" } : isPrivate ? { delivery: "private" } : {}),
     chat: { key: "chat_fixture_garden" },
     input: {
       instructions: "Answer about the garden.",

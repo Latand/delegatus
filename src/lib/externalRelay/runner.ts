@@ -764,7 +764,7 @@ export async function runClaimedRequest(
     // Cloud transport is text-only. Honor the lease's capability snapshot
     // for the local image path even if a later poll withdraws the feature.
     const localImages = cloud && !owner && businessAnswersAdvertised
-      && validateMediaInput(request).some(media => media.availability === "ready" && isInboundImage(media.mime_type));
+      && validateMediaInput(request, advertised?.includes("requester_context"), advertised?.includes(RELAY_HISTORY_MEDIA)).some(media => media.availability === "ready" && isInboundImage(media.mime_type));
     const usingCloud = cloud && !localImages && (!owner || !!cloudEnvironment(configuredTarget!, true));
     if (cloud && owner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
     const authority = conversationAuthority(request.input.requester, !!owner);
@@ -919,7 +919,7 @@ export async function runClaimedRequest(
     // history photos belong to the hosted assistant in that case; handing the
     // request back keeps the client from claiming an answer without seeing them.
     if (usingCloud && hasInboundMedia(request)) {
-      const ready = validateMediaInput(request).filter(media => media.availability === "ready");
+      const ready = validateMediaInput(request, advertised?.includes("requester_context"), advertised?.includes(RELAY_HISTORY_MEDIA)).filter(media => media.availability === "ready");
       if (isolated && ready.length) return await finish(declined(leaseId, "handoff", null, GUEST_CLOUD_MEDIA_HANDOFF_DETAIL));
       if (request.features?.includes(RELAY_HISTORY_MEDIA) && ready.some(media => isInboundImage(media.mime_type)))
         return await finish(declined(leaseId, "handoff", null, "This install cannot inspect history photos; the service's own assistant will answer."));
@@ -952,6 +952,8 @@ export async function runClaimedRequest(
         if (!await lease.ack()) return null;
         await inbound?.dispose();
         inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at), skipRejected: true,
+          requesterContextNegotiated: advertised?.includes("requester_context"),
+          historyMediaNegotiated: advertised?.includes(RELAY_HISTORY_MEDIA),
           ...(conversation && !isolated ? { seenMessageIds: new Set(conversation.seen) } : {}),
           authorize: () => { if (leaseUnavailable || releaseRequested || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new ExternalRelayError("lease_lost", 409); } });
         callAbort.signal.throwIfAborted();
@@ -979,6 +981,8 @@ export async function runClaimedRequest(
       }
       if (rounds === 1 && !toolMedia) {
         toolMedia = createToolResultMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at),
+          requesterContextNegotiated: advertised?.includes("requester_context"),
+          historyMediaNegotiated: advertised?.includes(RELAY_HISTORY_MEDIA),
           authorize: () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); } }, inbound ?? undefined);
         if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
           async () => {

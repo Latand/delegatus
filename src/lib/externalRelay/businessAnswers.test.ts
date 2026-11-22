@@ -7,6 +7,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { readAnswerRecord } from "./answers";
 import { answerPair, answerText, businessFeature, cases, isolatedRequesterFeature, photoRef } from "./businessAnswers.fixture";
 import { readConversations } from "./conversations";
+import { completeRelayRequest } from "./relayCompletion";
 import { MAX_INPUT_MEDIA_FILE_BYTES, validateMediaInput } from "./mediaInputValidation";
 import * as bridge from "./ownerBridgeContext";
 import * as outbound from "./ownerOutboundContext";
@@ -45,7 +46,7 @@ afterAll(() => {
 function paired(origin: string, engine: "claude" | "codex" | "codex-cloud" = "claude"): PairedRelay {
   return { id: "business_fixture", origin, api_base: `${origin}/v1`, name: "Fixture relay", description: "",
     credential: "fixture".repeat(6), owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
-    pairedAt: "2026-01-01T12:00:00Z", paused: false, features: [businessFeature, "relay_media_in", "progress_steps"],
+    pairedAt: "2026-01-01T12:00:00Z", paused: false, features: [businessFeature, "relay_media_in", "relay_history_media", "progress_steps"],
     limits: { max_wait_s: 25, max_response_bytes: 1048576, max_answer_chars: 240 },
     targets: [{ ...newTargetSettings({ target_id: "target_1", name: "Garden", answered_by: "install", fallback: "service" }),
       engine, model: "fixture", ownerTier: true, memberLimitPerHour: null,
@@ -62,17 +63,33 @@ for (const kind of cases) test(`${kind} claim and completion match the paired co
 });
 
 test("Business history photos are retained with the production media advertisement", () => {
-  const pair = answerPair("business_contact", 1, false);
+  const pair = answerPair("business_contact");
   const parsed = claimedRequestSchema(pair.advertised).parse(pair.request);
-  expect(validateMediaInput(parsed)).toEqual(pair.request.input.conversation[0]!.media!);
+  expect(validateMediaInput(parsed, true)).toEqual(pair.request.input.conversation[0]!.media!);
   expect(claimedRequestSchema(pair.advertised.filter(feature => feature !== "relay_media_in"))
     .safeParse(pair.request).success).toBe(false);
 });
 
+test("withdrawing history media refuses the claim before any media download", async () => {
+  const pair = answerPair("business_contact", 1, false);
+  const endpoints: string[] = [];
+  const server = await startTestRelay(req => {
+    endpoints.push(req.url!.split("/").at(-1)!);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const relay = paired(server.origin);
+  try {
+    expect(claimedRequestSchema(pair.advertised).safeParse(pair.request).success).toBe(false);
+    expect(await runClaimedRequest(relay, pair.request, undefined, { advertisedFeatures: pair.advertised, leaseWorker: false }))
+      .toMatchObject({ outcome: "declined", reason: "invalid_request" });
+    expect(endpoints).toEqual(["complete"]);
+  } finally { await server.close(); }
+});
+
 test("an oversized Business history photo remains visible as unavailable context", () => {
-  const pair = answerPair("business_contact", MAX_INPUT_MEDIA_FILE_BYTES + 1, false);
+  const pair = answerPair("business_contact", MAX_INPUT_MEDIA_FILE_BYTES + 1);
   const parsed = claimedRequestSchema(pair.advertised).parse(pair.request);
-  expect(validateMediaInput(parsed)).toEqual([{
+  expect(validateMediaInput(parsed, true)).toEqual([{
     ref: photoRef, kind: "photo", availability: "too_large", mime_type: "image/png", expires_at: "2099-01-01T00:00:00Z",
   }]);
 });
@@ -87,8 +104,6 @@ const requesterAttacks: HostileCase[] = [
   ["self trigger", req => { req.input.conversation.at(-1)!.author = { ...req.input.conversation.at(-1)!.author, self: true }; return req; }],
 ];
 const businessAttacks: HostileCase[] = [
-  ["missing claim feature", req => { req.features = ["requester_context", "relay_media_in"]; return req; }],
-  ["missing requester context feature", req => { req.features = [businessFeature, "relay_media_in"]; return req; }],
   ["missing requester", req => { delete req.input.requester; return req; }],
   ["owner destination", req => ({ ...req, owner_delivery: { chat_id: 51, reply_to_message_id: 17, message_thread_id: null } })],
   ["malformed owner destination", req => ({ ...req, owner_delivery: { chat_id: "opaque" } })],
@@ -97,6 +112,7 @@ const businessAttacks: HostileCase[] = [
   ["rich format", req => { req.input.format = richRequest(true).input.format; return req; }],
   ["output attachments", req => { req.answer.attachments = { max_items: 1, max_total_bytes: 1024, kinds: ["photo"] }; return req; }],
   ["unnegotiated media", req => { req.features = ["requester_context", businessFeature]; return req; }],
+  ["unadvertised arbitrary document", req => { req.features = ["relay_media_any_document"]; return req; }],
   ["history document", req => { req.input.conversation[0]!.media![0]!.kind = "document"; return req; }],
   ["conflicting ref", req => {
     req.input.conversation.at(-1)!.media = [{ ...req.input.conversation[0]!.media![0]!, byte_size: 2 }];
@@ -116,13 +132,14 @@ test("new isolated claims refuse hostile input before account selection or any l
   const server = await startTestRelay((req, body) => {
     endpoints.push(req.url!.split("/").at(-1)!);
     completions.push(body);
-    return { body: { status: "accepted" } };
+      return { body: { status: "accepted", duplicate: false } };
   });
+
   const selection = spyOn(accountManager, "resolveHeadlessSpawn");
   const relay = paired(server.origin);
   const clock = spyOn(Date, "now").mockReturnValue(now);
   try {
-    const probes = (["business_contact", "guest_non_owner"] as const).flatMap(kind => {
+    const probes = (["business_contact", "guest_non_owner", "private_non_owner"] as const).flatMap(kind => {
       const attacks = kind === "business_contact" ? [...requesterAttacks, ...businessAttacks] : requesterAttacks;
       return [...attacks.map(([name, attack]) => {
         const pair = answerPair(kind);
@@ -130,6 +147,13 @@ test("new isolated claims refuse hostile input before account selection or any l
         return { raw: attack(pair.request), request: pair.request, advertised: pair.advertised };
       }), { raw: answerPair(kind).request, request: answerPair(kind).request, advertised: [] }];
     });
+    const noBusinessCapability = answerPair("business_owner");
+    probes.push({ raw: noBusinessCapability.request, request: noBusinessCapability.request,
+      advertised: noBusinessCapability.advertised.filter(feature => feature !== businessFeature) });
+    const noInboundCapability = answerPair("business_contact");
+    noInboundCapability.request.request_id += "_poll_without_media";
+    probes.push({ raw: noInboundCapability.request, request: noInboundCapability.request,
+      advertised: noInboundCapability.advertised.filter(feature => feature !== "relay_media_in") });
     for (const { raw, request, advertised } of probes) {
       expect(claimedRequestSchema(advertised).safeParse(raw).success).toBe(false);
       const result = await runClaimedRequest(relay, raw, undefined, { advertisedFeatures: advertised, leaseWorker: false });
@@ -198,7 +222,7 @@ for (const [kind, engine] of [
     }
     if (endpoint === "heartbeat" && body && typeof body === "object" && "progress" in body) progress.push(body.progress);
     if (endpoint === "complete") completions.push(body);
-    return { body: { status: "accepted" } };
+    return { body: { status: "accepted", duplicate: false } };
   });
   const relay = paired(server.origin, engine);
   updateRelayStore(store => ({ ...store, relays: [relay] }));
@@ -305,7 +329,7 @@ test("the real poller keeps the lease's advertisement after the switch is withdr
       return { status: 204 };
     }
     if (endpoint === "complete") completions.set(req.url!.split("/").at(-2)!, body);
-    return { body: { status: "accepted" } };
+    return { body: { status: "accepted", duplicate: false } };
   });
   const relay = paired(server.origin);
   updateRelayStore(store => ({ ...store, relays: [relay] }));
@@ -330,14 +354,14 @@ test("the real poller keeps the lease's advertisement after the switch is withdr
 
 test("an advertised Business history photo uses the local Codex path for a Cloud target", async () => {
   const photo = await sharp({ create: { width: 2, height: 2, channels: 3, background: "green" } }).png().toBuffer();
-  const pair = answerPair("business_contact", photo.length, false);
+  const pair = answerPair("business_contact", photo.length);
   const mediaPaths: string[] = [];
   const server = await startTestRelay(req => {
     if (req.url?.endsWith(`/media/${photoRef}`)) {
       mediaPaths.push(req.url);
       return { raw: photo, headers: { "content-type": "image/png", "content-length": String(photo.length) } };
     }
-    return { body: { status: "accepted" } };
+    return { body: { status: "accepted", duplicate: false } };
   });
   const relay = paired(server.origin, "codex-cloud");
   updateRelayStore(store => ({ ...store, relays: [relay] }));
@@ -370,7 +394,7 @@ test("an advertised Business history photo uses the local Codex path for a Cloud
 });
 
 test("a revoked pairing cannot start a Business run or download its history photo", async () => {
-  const pair = answerPair("business_contact", 1, false);
+  const pair = answerPair("business_contact");
   const endpoints: string[] = [];
   const server = await startTestRelay(req => {
     endpoints.push(req.url!.split("/").at(-1)!);
@@ -439,3 +463,44 @@ for (const disposition of ["lost_ack", "lost_ack_then_revoked", "unknown", "late
       await server.close();
     }
   });
+
+test("isolated completion requires a valid HTTP 200 CompletionAck and retries the identical answer", async () => {
+  let clockNow = now;
+  const clock = spyOn(Date, "now").mockImplementation(() => clockNow);
+  const sent: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (!req.url?.endsWith("/complete")) return { body: { status: "ok" } };
+    sent.push(body);
+    if (sent.length === 1) { clockNow = now + 1000; return { status: 204 }; }
+    if (sent.length === 2) { clockNow = now + 1500; return { status: 200, body: { status: "accepted" } }; }
+    return { status: 200, body: { status: "accepted", duplicate: true } };
+  });
+  const pair = answerPair("private_non_owner");
+  const completion: ExternalRelayCompletion = { lease_id: pair.request.lease_id, outcome: "answered",
+    answer: pair.expectedAnswer, duration_ms: 0 };
+  try {
+    expect(await completeRelayRequest(paired(server.origin), pair.request.request_id, completion, () => now + 2000,
+      undefined, undefined, 4000, undefined, undefined, true)).toEqual({ body: completion, delivery: "accepted" });
+    expect(sent).toEqual([completion, completion, completion]);
+  } finally { clock.mockRestore(); await server.close(); }
+});
+
+test("isolated completion without a valid receipt remains unconfirmed", async () => {
+  let clockNow = now;
+  const clock = spyOn(Date, "now").mockImplementation(() => clockNow);
+  const sent: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (!req.url?.endsWith("/complete")) return { body: { status: "ok" } };
+    sent.push(body);
+    clockNow = sent.length === 1 ? now + 1000 : now + 2000;
+    return sent.length === 1 ? { status: 204 } : { status: 200, body: { status: "accepted" } };
+  });
+  const pair = answerPair("private_non_owner");
+  const completion: ExternalRelayCompletion = { lease_id: pair.request.lease_id, outcome: "answered",
+    answer: pair.expectedAnswer, duration_ms: 0 };
+  try {
+    expect(await completeRelayRequest(paired(server.origin), pair.request.request_id, completion, () => now + 2000,
+      undefined, undefined, 4000, undefined, undefined, true)).toEqual({ body: completion, delivery: "unconfirmed" });
+    expect(sent).toEqual([completion, completion]);
+  } finally { clock.mockRestore(); await server.close(); }
+});

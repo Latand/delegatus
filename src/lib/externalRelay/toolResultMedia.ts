@@ -21,7 +21,7 @@ export function createToolResultMedia(relay: Pick<PairedRelay, "api_base" | "cre
   const initialFiles = inbound?.files ?? [];
   const lifetime = new AbortController();
   options = { ...options, signal: AbortSignal.any([options.signal, lifetime.signal]) };
-  const initial = validateMediaInput(request);
+  const initial = validateMediaInput(request, options.requesterContextNegotiated, options.historyMediaNegotiated);
   const identityOf = (media: unknown) => {
     const parsed = descriptor.safeParse(media);
     return canonical(parsed.success ? parsed.data : media);
@@ -105,7 +105,7 @@ export function createToolResultMedia(relay: Pick<PairedRelay, "api_base" | "cre
             // message only scopes descriptors; request, lease and credential are unchanged.
             const projection: MediaRequest = { request_id: request.request_id, lease_id: request.lease_id, features: request.features,
               input: { respond_to: "tool_result", conversation: [{ id: "tool_result", reply_to: null, media: [{ ...media, kind: "photo", ref: media.ref }] }], documents: [] } };
-            validateMediaInput(projection);
+            validateMediaInput(projection, options.requesterContextNegotiated, options.historyMediaNegotiated);
             const identity = identityOf(media);
             if (Date.parse(media.expires_at!) <= now()) throw new ExternalRelayError("media_unavailable", 422);
             if (seen.has(media.ref)) {

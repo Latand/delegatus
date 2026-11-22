@@ -42,12 +42,26 @@ export async function completeRelayRequest(
     if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null };
     let responseStatus = 0;
     try {
-      await relayCall(relay.api_base, `/requests/${encodeURIComponent(requestId)}/complete`, "POST", body, relay.credential,
+      const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(requestId)}/complete`, "POST", body, relay.credential,
         { timeoutMs: 5000, onResponseStatus: status => { responseStatus = status; }, maxBytes: relay.limits.max_response_bytes, onHttpRefusal,
           ...(allowOwnerReply ? { prepareBody: () => {
             if (body.outcome === "answered" && !allowOwnerReply()) body = { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null };
             return body;
           } } : {}) });
+      if (plainOnly && body.outcome === "answered") {
+        const receipt = response.body;
+        if (response.status !== 200 || !receipt || typeof receipt !== "object"
+          || (receipt as { status?: unknown }).status !== "accepted"
+          || typeof (receipt as { duplicate?: unknown }).duplicate !== "boolean") {
+          // A success status without the protocol receipt leaves delivery
+          // unknown. Retry the identical completion until its lease deadline.
+          unresolved = true;
+          if (Date.now() >= until()) return result("unconfirmed");
+          await new Promise(resolve => setTimeout(resolve, Math.min(wait, Math.max(0, until() - Date.now()))));
+          wait = Math.min(wait * 2, 5000);
+          continue;
+        }
+      }
       return result("accepted");
     } catch (error) {
       if (responseStatus >= 300) {
