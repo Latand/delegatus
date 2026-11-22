@@ -59,6 +59,7 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string, 
       choice[1]!.split(",").forEach(n => chosen.add(Number(n)));
       continue;
     }
+    const explicitAnswerList = /^відповіді(?:\s+|$)/i.test(segment);
     let words = segment.replace(/^відповіді(?:\s+|$)/i, "");
     const recommendation = /^(?:рекомендовані|рекомендованные|рекомендованное|recommended)(?=$|[^\p{L}\p{N}_])/iu.exec(words);
     if (recommendation && questions.length) {
@@ -69,10 +70,12 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string, 
       if (words.trim()) notes.push(words);
       continue;
     }
-    words = words.replace(/(?<![\p{L}\p{N}_])([1-9]\d*)(\s*(?::\s*)?)([a-z]+\+?|\+)(?![\p{L}\p{N}_])/giu, (token, number: string, gap: string, letters: string) => {
-      // Spaced words such as "2 days" and numbered custom prose stay notes.
-      // Compact choices and single option letters must name a declared option.
-      if (gap && letters.replace("+", "").length > 1 && /[m-z]/i.test(letters)) return token;
+    const completeShorthand = /^(?:[1-9]\d*\s*(?::\s*)?[a-z]+\+?)(?:[\s,;]+[1-9]\d*\s*(?::\s*)?[a-z]+\+?)*$/iu.test(words.trim());
+    const canParseBundle = explicitAnswerList || completeShorthand;
+    words = words.replace(/(?<![\p{L}\p{N}_])([1-9]\d*)(\s*(?::\s*)?)([a-z]+\+?|\+)(?![\p{L}\p{N}_])/giu, (token, number: string, gap: string, letters: string, offset: number) => {
+      // A number followed by prose is a custom answer. Spaced bundles such as
+      // "2: ab" are shorthand only in an Answers list or a complete shorthand expression.
+      if ((!canParseBundle && offset !== 0) || (gap && !canParseBundle)) return token;
       const q = questions[Number(number) - 1];
       const options = [...letters.replace("+", "").toLowerCase()].map(c => c.charCodeAt(0) - 97);
       const prior = q && selected.get(q.id);

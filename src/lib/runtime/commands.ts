@@ -61,10 +61,13 @@ function optionalNullableId(value: unknown, name: string): string | null | undef
 export function parseRuntimeIdleKillFence(value: unknown): import("./contracts").RuntimeIdleKillFence {
   const fence = object(value);
   if (!Number.isSafeInteger(fence.revision) || (fence.revision as number) < 1
-    || typeof fence.writerClaim !== "string" || !fence.writerClaim.trim()) {
+    || typeof fence.writerClaim !== "string" || !fence.writerClaim.trim()
+    || fence.releasedSession !== undefined && fence.releasedSession !== true
+    || fence.releasedSession === true && fence.writerClaim !== "released-session") {
     throw new Error("idle kill fence is invalid");
   }
-  return { revision: fence.revision as number, writerClaim: fence.writerClaim };
+  return { revision: fence.revision as number, writerClaim: fence.writerClaim,
+    ...(fence.releasedSession === true ? { releasedSession: true as const } : {}) };
 }
 
 export function parseRuntimeProviderRecoveryRef(value: unknown): import("./contracts").RuntimeProviderRecoveryRef {
@@ -262,6 +265,10 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
   }
 
   if (kind === "kill") {
+    if (body.pendingSendIds !== undefined && (!Array.isArray(body.pendingSendIds)
+      || body.pendingSendIds.some(id => typeof id !== "string" || !id || id.length > 200))) {
+      throw new Error("pending send cohort is invalid");
+    }
     if (body.providerRecovery !== undefined && body.onlyIfIdle === undefined) {
       throw new Error("provider recovery requires an idle-only kill");
     }
@@ -272,6 +279,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
       idempotencyKey,
       sessionKey: runtimeSessionKey(body.sessionKey),
       ...(parseMessageOrigin(body.origin) ? { origin: parseMessageOrigin(body.origin)! } : {}),
+      ...(body.pendingSendIds !== undefined ? { pendingSendIds: [...new Set(body.pendingSendIds as string[])] } : {}),
       ...(body.onlyIfIdle !== undefined ? { onlyIfIdle: parseRuntimeIdleKillFence(body.onlyIfIdle) } : {}),
       ...(body.providerRecovery !== undefined ? { providerRecovery: parseRuntimeProviderRecoveryRef(body.providerRecovery) } : {}),
     };
