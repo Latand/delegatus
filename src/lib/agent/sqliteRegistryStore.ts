@@ -1533,6 +1533,7 @@ export class SqliteAgentRegistryStore {
       sixty such rows cost startup half a minute of blocked event loop. */
   private grantDecisions: GrantDecisions | null = null;
   private grantJournalReady = false;
+  private pendingDeliveryOwnerOriginIndexReady = false;
   /* What each hot row's grant decision read: the rows and the identity
      lookups that attested to it, absent ones included. A refresh after another
      writer's commit decides again only the rows a journalled change can reach
@@ -1609,6 +1610,7 @@ export class SqliteAgentRegistryStore {
         this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
         this.endingQueueReady = undefined;
         this.grantJournalReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'").get());
+        this.pendingDeliveryOwnerOriginIndexReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'registry_pending_delivery_owner_origin'").get());
         this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
         return;
       } catch (error) { this.db.close(); throw error; }
@@ -1693,6 +1695,9 @@ export class SqliteAgentRegistryStore {
       ]);
     }
     registryRowIndexes.install(this.db, path.dirname(filename));
+    this.pendingDeliveryOwnerOriginIndexReady = Boolean(this.db.query(
+      "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'registry_pending_delivery_owner_origin'",
+    ).get());
     // Recovery indexes are prepared separately with a yield between each
     // build; the remaining constructor indexes share the startup fence.
     registryLookupIndexes().install(this.db, path.dirname(filename));
@@ -2241,6 +2246,9 @@ export class SqliteAgentRegistryStore {
     this.endingQueueReady = undefined;
     this.grantJournalReady = Boolean(db.query(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'",
+    ).get());
+    this.pendingDeliveryOwnerOriginIndexReady = Boolean(db.query(
+      "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'registry_pending_delivery_owner_origin'",
     ).get());
     this.generationIdentitiesReady = this.generationIdentitiesInstalled(db);
   }
@@ -4325,7 +4333,7 @@ export class SqliteAgentRegistryStore {
         const holds = (delivery: RegistryFile["heldDeliveries"][string]) => values.includes(lookupValue(delivery, field) as string);
         return pinnedDeliveries ? pinnedDeliveries(indexed, holds) : Object.keys(file.heldDeliveries).filter(key => holds(file.heldDeliveries[key]!));
       }
-      if (collection === "deliveryOperationOwners" && (field === "conversationId" || field === "clientMessageId")) {
+      if (collection === "deliveryOperationOwners" && (field === "conversationId" || field === "clientMessageId" || field === "custodyState")) {
         const holds = (owner: RegistryFile["deliveryOperationOwners"][string]) => values.includes(lookupValue(owner, field) as string);
         return pinnedOwners ? pinnedOwners(indexed, holds) : Object.keys(file.deliveryOperationOwners).filter(key => holds(file.deliveryOperationOwners[key]!));
       }
@@ -4602,16 +4610,23 @@ export class SqliteAgentRegistryStore {
     if (filters.length !== clauses.length) return [];
     // The partial indexes cover pending custody and return keys only.
     // Express the null predicate directly so SQLite can use the partial index.
-    if (collection === "deliveryOperationOwners" && clauses.length === 2
+    if (collection === "deliveryOperationOwners"
       && clauses.some(({ field, values }) => field === "custodyState" && values.length === 1 && values[0] === "pending")) {
-      const identity = clauses.find(({ field }) => field === "conversationId" || field === "runtimeConversationId");
-      if (identity) {
-        const index = identity.field === "conversationId" ? "registry_pending_delivery_owner_origin" : "registry_pending_delivery_owner_runtime";
-        const placeholders = identity.values.map(() => "?").join(",");
-        return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key FROM registry_rows INDEXED BY ${index}
+      if (clauses.length === 1 && this.pendingDeliveryOwnerOriginIndexReady) {
+        return this.db.query<{ row_key: string }, [number]>(`SELECT row_key FROM registry_rows INDEXED BY registry_pending_delivery_owner_origin
           WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IS NULL
-            AND ${lookupSql(identity.field)} IN (${placeholders})
-          ORDER BY row_order LIMIT ?`).all(...identity.values, limit).map(row => row.row_key);
+          ORDER BY row_order LIMIT ?`).all(limit).map(row => row.row_key);
+      }
+      if (clauses.length === 2) {
+        const identity = clauses.find(({ field }) => field === "conversationId" || field === "runtimeConversationId");
+        if (identity) {
+          const index = identity.field === "conversationId" ? "registry_pending_delivery_owner_origin" : "registry_pending_delivery_owner_runtime";
+          const placeholders = identity.values.map(() => "?").join(",");
+          return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key FROM registry_rows INDEXED BY ${index}
+            WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IS NULL
+              AND ${lookupSql(identity.field)} IN (${placeholders})
+            ORDER BY row_order LIMIT ?`).all(...identity.values, limit).map(row => row.row_key);
+        }
       }
     }
     const messageAndRecipient = clauses.some(filter => filter.field === "clientMessageId")
