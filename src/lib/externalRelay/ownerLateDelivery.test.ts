@@ -97,7 +97,7 @@ test.each(["owner", "unverifiable", "expired", "valid"] as const)("legacy handof
         endRequesterLease(run);
         return allowed;
       });
-      const cancelled = { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null };
+      const cancelled = { lease_id: body.lease_id, outcome: "failed" as const, reason: "cancelled", detail: null };
       expect(handedOff).toEqual({ body: cancelled, delivery: "accepted" });
       expect(completions).toEqual([body, cancelled]);
     }
