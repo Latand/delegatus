@@ -27,7 +27,6 @@ CPU_SLICE = "delegatus.slice"
 CPU_WEIGHT = "1000"
 CHECKOUT_MERGER_CAPTURE = "checkout-mergers.json"
 CHECKOUT_MERGER_LIMIT = 200
-CHECKOUT_MERGER_WINDOW_SECONDS = 15 * 60
 CHECKOUT_MERGER_MAX_BYTES = 512 * 1024
 SAMPLE_TIMEOUT = 180
 PROTECTED_READERS = 4
@@ -1066,25 +1065,32 @@ def interrupted_conversations(state, since, hosts=(), *, merger_release_boundary
     return sorted(listed, key=lambda entry: (entry["recordedAt"], entry["conversationId"])), unreadable
 
 
+def sync_directory(path):
+    directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def write_json(destination, body, *, exclusive=False):
+    write_atomic(destination, (json.dumps(body, indent=2) + "\n").encode("utf-8"), exclusive=exclusive)
+
+
+def write_atomic(destination, contents, *, exclusive=False):
     """Private atomic results remain readable if the launching turn disappears."""
     destination = pathlib.Path(destination)
     fd, name = tempfile.mkstemp(prefix=".deploy-", dir=destination.parent)
     try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(body, stream, indent=2)
-            stream.write("\n")
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(contents)
             stream.flush()
             os.fsync(stream.fileno())
         if exclusive:
             os.link(name, destination)
         else:
             os.replace(name, destination)
-        directory = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        sync_directory(destination.parent)
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -1767,16 +1773,19 @@ class Checkout:
                 hosts.append({**identity, "conversationId": merger["conversationId"], "merger": merger})
         return hosts
 
-    def arm_merger_recovery(self, before_publish=None):
+    def arm_merger_recovery(self, before_stop=None):
         hosts = self.merger_hosts(self.custody_rows)
         self.refreshed_mergers = hosts
         destination = self.state / CHECKOUT_MERGER_CAPTURE
         captured_at = getattr(self, "merger_observed_at", utc())
-        cutoff = parse_time(captured_at) - datetime.timedelta(seconds=CHECKOUT_MERGER_WINDOW_SECONDS)
+        previous_bytes = None
         previous_rows = []
         try:
-            with destination.open() as stream:
-                previous = json.loads(stream.read(512 * 1024 + 1))
+            with destination.open("rb") as stream:
+                previous_bytes = stream.read(CHECKOUT_MERGER_MAX_BYTES + 1)
+            if len(previous_bytes) > CHECKOUT_MERGER_MAX_BYTES:
+                raise RuntimeError("standalone merger inventory exceeds reader byte limit")
+            previous = json.loads(previous_bytes.decode("utf-8"))
             if not isinstance(previous, list) or len(previous) > CHECKOUT_MERGER_LIMIT:
                 raise RuntimeError("standalone merger inventory is malformed")
             previous_rows = previous
@@ -1816,17 +1825,34 @@ class Checkout:
         if len(captures) > CHECKOUT_MERGER_LIMIT:
             raise RuntimeError("standalone merger inventory exceeds its bound")
         inventory = list(captures.values())
-        serialized = json.dumps(inventory, indent=2) + "\n"
-        if len(serialized.encode("utf-8")) > CHECKOUT_MERGER_MAX_BYTES:
+        serialized = (json.dumps(inventory, indent=2) + "\n").encode("utf-8")
+        if len(serialized) > CHECKOUT_MERGER_MAX_BYTES:
             raise RuntimeError("standalone merger inventory exceeds reader byte limit")
         decoded = json.loads(serialized)
         if not isinstance(decoded, list) or len(decoded) != len(captures) or not all(valid_row(row) for row in decoded):
             raise RuntimeError("standalone merger inventory failed successor validation")
-        # Publish the validated bytes even for an empty census so the successor
-        # never inherits malformed or expired inventory.
-        if before_publish:
-            before_publish()
-        write_json(destination, inventory)
+        try:
+            write_atomic(destination, serialized)
+            if before_stop:
+                before_stop()
+        except Exception:
+            # A directory sync may fail after the rename. Restore the exact
+            # prior inventory whenever the stop has yet to be submitted.
+            # After submission, late census failures must retain custody.
+            if before_stop:
+                try:
+                    if previous_bytes is not None:
+                        write_atomic(destination, previous_bytes)
+                    else:
+                        try:
+                            destination.unlink()
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            sync_directory(destination.parent)
+                except OSError as error:
+                    raise SwitchRefused("could not restore prior merger inventory: " + type(error).__name__) from error
+            raise
 
     def placement(self):
         """Observed configuration and cgroup, against the required CPU slice.
@@ -2597,6 +2623,8 @@ class Checkout:
                 stop = optional_json(slots["stop"]) if slots else None
                 if stop and stop.get("active") == 0:
                     stop = stop.get("prior")
+                if stop is not None and not isinstance(stop, dict):
+                    raise ValueError("invalid host stop receipt")
                 if (exit_record is None or not (type(exit_record.get("code")) is int
                                                or isinstance(exit_record.get("signal"), str))):
                     evidence["custodyUnknown"] = True
@@ -2609,25 +2637,35 @@ class Checkout:
                 signal_code = type(exit_record.get("code")) is int and 128 < exit_record["code"] < 128 + signal.NSIG
                 recorded_at = exit_record.get("at")
                 requested_at = evidence.get("requestedAt")
-                if (not stop and not named_signal and not signal_code
-                        and (exit_signal == "EOF" or exit_record.get("code") == 0)
-                        and text(recorded_at) and text(requested_at)
-                        and parse_time(recorded_at) >= parse_time(requested_at)):
-                    detail["verifiedReleaseExit"] = True
+                signalled = named_signal or signal_code
+                clean_exit = not signalled and (exit_signal == "EOF" or exit_record.get("code") == 0)
+                sample = sampled.get(key)
+                receipt_signal = (stop or {}).get("signal")
+                recorded_signal = signal.Signals.__members__.get(receipt_signal) if text(receipt_signal) else None
+                matching_signal = (recorded_signal
+                                   and (not named_signal or recorded_signal.name == exit_signal.upper())
+                                   and (not signal_code or 128 + recorded_signal == exit_record["code"]))
+                release_boundary = evidence.get("mergerReleaseBoundary")
+                release_stop = (sample and sample[0].get("merger")
+                                and stop and stop.get("path") == "deploy-cut" and release_boundary
+                                and stop.get("operationId") == release_boundary
+                                and receipt_signal in ("EOF", "SIGTERM", "SIGKILL"))
+                if ((clean_exit and not stop or release_stop and (clean_exit or matching_signal))
+                        and text(recorded_at) and text(requested_at)):
+                    requested, exited = parse_time(requested_at), parse_time(recorded_at)
+                    if (exited >= requested and (not release_stop or text(stop.get("at"))
+                            and requested <= parse_time(stop["at"]) <= exited)):
+                        detail["verifiedReleaseExit"] = True
                 captured_turn = before["work"].get("turnState")
-                if named_signal or signal_code:
+                if signalled and not detail.get("verifiedReleaseExit"):
                     # Every signal-shaped host exit needs the durable product
                     # stop receipt. The exit code alone is not evidence that
                     # an idle host was intentionally cleaned up.
                     if not detail["exit"]["stopPath"]:
                         evidence["custodyChanged"] = True
                     elif captured_turn == "busy":
-                        receipt_signal = stop.get("signal")
-                        recorded_signal = signal.Signals.__members__.get(receipt_signal) if text(receipt_signal) else None
-                        if (stop.get("path") != "pipeline-stage-stop" or not recorded_signal
-                                or named_signal and recorded_signal.name != exit_signal.upper()
-                                or signal_code and 128 + recorded_signal != exit_record["code"]
-                                or not self.settled_relaunch_stop(before["work"], sampled.get(key), stop)):
+                        if (stop.get("path") != "pipeline-stage-stop" or not matching_signal
+                                or not self.settled_relaunch_stop(before["work"], sample, stop)):
                             evidence["custodyChanged"] = True
                     elif captured_turn != "idle":
                         # The cleanup is receipted, but its effect on work we
@@ -2976,10 +3014,12 @@ class Checkout:
             def final_relocation_fence():
                 if self.switch_mode != "relocation":
                     return
-                if group == placement["expected"] or self.placement()["actual"] != group:
+                current = self.placement()
+                if (current["actual"] != group or current["expected"] != placement["expected"]
+                        or group == current["expected"]):
                     raise SwitchRefused("service placement changed before relocation")
                 self.require_relocation_safe()
-            self.arm_merger_recovery(before_publish=final_relocation_fence)
+            self.arm_merger_recovery(before_stop=final_relocation_fence)
             # Marked before submission: a submission that times out may still stop.
             relocation["stopSubmitted"] = True
             self.command(["systemctl", "--user", "--no-block", "stop", self.unit])

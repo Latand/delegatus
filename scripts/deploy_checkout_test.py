@@ -8,6 +8,7 @@ import subprocess
 import json
 import shutil
 import sqlite3
+import stat
 import os
 import sys
 import subprocess
@@ -1441,7 +1442,8 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertEqual(self.service_commands(), [])
 
     def test_relaunch_settles_standalone_mergers_with_current_release_evidence(self):
-        for index, scenario in enumerate(("completed", "recovered", "foreign-boundary", "foreign-owner")):
+        for index, scenario in enumerate(("completed", "recovered", "foreign-boundary", "foreign-owner",
+                                          "foreign-stop", "foreign-stop-host", "mismatched-signal")):
             with self.subTest(scenario=scenario):
                 if index:
                     self.adapter.close()
@@ -1465,9 +1467,39 @@ class CheckoutIntegration(unittest.TestCase):
 
                 def after_relaunch():
                     nonlocal host_ended
-                    host_ended = True
                     before, = self.adapter.relaunch_hosts.values()
-                    deploy.write_json(before["slots"]["exit"], {"code": 0, "signal": "EOF", "at": deploy.utc()})
+                    if scenario == "completed":
+                        boundary = "viewer-release:pid-102"
+                    else:
+                        target = self.state / "viewer-release.json"
+                        deploy.write_json(target, {"revision": TARGET, "endpoint": "http://127.0.0.1:1"})
+                        boundary = "viewer-release:" + hashlib.sha256(target.read_bytes()).hexdigest()[:16]
+                    stop_boundary = "viewer-release:previous" if scenario == "foreign-stop" else boundary
+                    stop_process = merger["process"] if scenario != "foreign-stop-host" else {
+                        **merger["process"], "startIdentity": f'{group["host"]}:1',
+                    }
+                    stop_signal = "SIGTERM" if scenario == "recovered" else "EOF"
+                    subprocess.run([CENSUS_BUN, "-e",
+                        "import { recordHostStop, withHostStopOrigin } from './src/lib/runtime/hostExit.ts'; "
+                        "const [identity, boundary, signal] = process.argv.slice(1); "
+                        "globalThis.Date = class extends Date { constructor() { super('2026-11-21T19:00:01Z'); } }; "
+                        "withHostStopOrigin({path: 'deploy-cut', operationId: boundary}, "
+                        "() => recordHostStop(JSON.parse(identity), signal, 'claude-host-release'));",
+                        json.dumps(stop_process), stop_boundary, stop_signal],
+                        cwd=pathlib.Path(__file__).resolve().parents[1],
+                        env={**os.environ, "LLV_STATE_DIR": str(self.state)}, check=True, timeout=15)
+                    # A foreign process's production receipt must stay in its
+                    # own slot even if the release and signal match.
+                    if scenario != "foreign-stop-host":
+                        stop = json.loads(before["slots"]["stop"].read_text())
+                        self.assertEqual((stop["path"], stop["operationId"], stop["signal"]),
+                                         ("deploy-cut", stop_boundary, stop_signal))
+                    exit_signal = "SIGTERM" if scenario in ("recovered", "foreign-stop-host", "mismatched-signal") else "EOF"
+                    deploy.write_json(before["slots"]["exit"], {
+                        "code": 0 if exit_signal == "EOF" else None, "signal": exit_signal,
+                        "at": "2026-11-21T19:00:02Z",
+                    })
+                    host_ended = True
                     if scenario == "completed":
                         self.recovery_overrides = {"conversations": [{**row,
                             "transcriptPath": transcript, "lifecycle": "completed", "turnState": "idle",
@@ -1479,12 +1511,6 @@ class CheckoutIntegration(unittest.TestCase):
                     }]}
                     self.merger_delivery = {"conversationId": conversation, "transcriptPath": transcript,
                                             "deliverable": True, "processRecorded": True}
-                    if scenario in ("recovered", "foreign-boundary"):
-                        target = self.state / "viewer-release.json"
-                        deploy.write_json(target, {"revision": TARGET, "endpoint": "http://127.0.0.1:1"})
-                        boundary = "viewer-release:" + hashlib.sha256(target.read_bytes()).hexdigest()[:16]
-                    else:
-                        boundary = "viewer-release:pid-102"
                     if scenario == "foreign-boundary":
                         boundary = "viewer-release:previous"
                     owner = merger["process"] if scenario != "foreign-owner" else {
@@ -1496,22 +1522,128 @@ class CheckoutIntegration(unittest.TestCase):
                         "version": 1, "id": "fixture", "conversationId": conversation, "engine": "claude",
                         "hostKey": "claude:fixture-merger", "path": transcript, "reason": "viewer-release",
                         "owner": owner, "claimEpoch": merger["claimEpoch"], "state": "delivered",
-                        "boundary": boundary, "recordedAt": deploy.utc(), "checkpoint": {},
+                        "boundary": boundary, "recordedAt": "2026-11-21T19:00:02Z", "checkpoint": {},
                     })
 
                 self.answer_relaunch(after=after_relaunch)
-                result = deploy.run_switch(self.adapter, TARGET, samples=2, interval=1, timeout=5)
+                with patch.object(deploy, "utc", return_value="2026-11-21T19:00:00Z"):
+                    result = deploy.run_switch(self.adapter, TARGET, samples=2, interval=1, timeout=5)
                 protected, = result["protected"]
                 expected = scenario if scenario in ("completed", "recovered") else "unknown"
                 self.assertEqual(protected["outcome"], expected, result)
-                self.assertEqual(result["verdict"], "needs_decision" if expected == "unknown" else "pass", result)
+                expected_verdict = ("fail" if scenario in ("foreign-stop-host", "mismatched-signal")
+                                    else "needs_decision" if expected == "unknown" else "pass")
+                self.assertEqual(result["verdict"], expected_verdict, result)
                 self.assertEqual(result["relaunch"]["result"], "done")
                 self.assertEqual(self.service_commands(), [])
                 self.assertFalse((self.state / deploy.CHECKOUT_MERGER_CAPTURE).exists())
                 if expected == "unknown":
-                    self.assertEqual(protected["reason"], "merger-continuation-receipt-missing")
+                    reason = ("merger-continuation-receipt-missing" if scenario in ("foreign-boundary", "foreign-owner")
+                              else "merger-release-exit-unverified")
+                    self.assertEqual(protected["reason"], reason)
                 elif expected == "recovered":
                     self.assertEqual(result["interrupted"][0]["kind"], "standalone-merger")
+
+    merger_capture_time = "2026-01-02T00:00:00Z"
+
+    def relocation_merger_capture(self):
+        self.relocating()
+        self.adapter.merger_boundary = "checkout-merger:" + "b" * 32
+        process = {"pid": 104, "startIdentity": "104:104", "bootEpoch": self.adapter.boot_epoch}
+        writer = {"pid": 102, "startIdentity": "102:102", "bootEpoch": self.adapter.boot_epoch}
+        conversation = "conversation_fixture_merger"
+        merger = {"conversationId": conversation, "engine": "codex", "sessionId": "fixture-merger",
+                  "path": str(self.root / "merger.jsonl"), "claimEpoch": 2, "process": process,
+                  "writer": writer, "batch": None, "turnState": "busy"}
+        self.inventory_overrides = {"conversations": [{
+            "conversationId": conversation, "host": {"kind": "structured", "state": "alive",
+                                                      "pid": 104, "process": process},
+            "turnState": "busy", "lifecycle": "running", "evidenceSource": "transcript",
+            "pipeline": None, "merger": merger,
+        }]}
+        previous = {**merger, "conversationId": "conversation_previous_merger",
+                    "capturedAt": "2026-01-01T23:59:00Z", "boundary": "checkout-merger:" + "a" * 32,
+                    "admissionProof": "fresh-cut-v1"}
+        return self.state / deploy.CHECKOUT_MERGER_CAPTURE, merger, previous
+
+    def read_merger_cuts(self):
+        reader = subprocess.run([CENSUS_BUN, "-e",
+            "import { readCheckoutMergerCuts } from './src/lib/runtime/checkoutMergerRecovery.ts'; "
+            "console.log(JSON.stringify(readCheckoutMergerCuts(process.argv[1], Date.parse(process.argv[2]))))",
+            str(self.state), self.merger_capture_time], cwd=pathlib.Path(__file__).resolve().parents[1],
+            check=True, capture_output=True, text=True, timeout=15)
+        return json.loads(reader.stdout)
+
+    def test_relocation_rechecks_placement_and_bound_scopes_after_inventory_sync(self):
+        for index, change in enumerate(("bound scope", "placement")):
+            with self.subTest(change=change):
+                if index:
+                    self.adapter.close()
+                    self.doCleanups()
+                    self.setUp()
+                capture, merger, previous = self.relocation_merger_capture()
+                deploy.write_json(capture, [previous])
+                prior = capture.read_bytes()
+                scope = "synthetic-dependent.scope"
+                self.scopes[scope] = {"Id": scope, "ActiveState": "active"}
+                fsync = os.fsync
+                changed = False
+
+                def sync_then_change(fd):
+                    nonlocal changed
+                    fsync(fd)
+                    if not changed and stat.S_ISDIR(os.fstat(fd).st_mode) and capture.read_bytes() != prior:
+                        changed = True
+                        self.assertIn(merger["conversationId"], {row["conversationId"] for row in self.read_merger_cuts()})
+                        if change == "bound scope":
+                            self.bound.add(scope)
+                        else:
+                            self.service_group = self.expected_group
+
+                with (patch.object(deploy.os, "fsync", side_effect=sync_then_change),
+                      patch.object(deploy, "utc", return_value=self.merger_capture_time)):
+                    result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=0, timeout=2)
+                self.assertTrue(changed)
+                self.assertEqual(self.service_commands(), [])
+                self.assertFalse(result["relocation"]["stopSubmitted"], result)
+                diagnostic = ("relocation would stop 1 bound units" if change == "bound scope"
+                              else "service placement changed before relocation")
+                self.assertIn(diagnostic, result["relocation"]["diagnostics"])
+                self.assertEqual(capture.read_bytes(), prior)
+                self.assertEqual(self.read_merger_cuts(), [previous])
+
+    def test_relocation_restores_inventory_when_sync_fails_after_rename(self):
+        for index, has_prior in enumerate((False, True)):
+            with self.subTest(has_prior=has_prior):
+                if index:
+                    self.adapter.close()
+                    self.doCleanups()
+                    self.setUp()
+                capture, merger, previous = self.relocation_merger_capture()
+                if has_prior:
+                    capture.write_text(json.dumps([previous]) + "\n")
+                prior = capture.read_bytes() if has_prior else None
+                fsync = os.fsync
+                injected = False
+
+                def fail_after_rename(fd):
+                    nonlocal injected
+                    if (not injected and stat.S_ISDIR(os.fstat(fd).st_mode)
+                            and capture.exists() and capture.read_bytes() != prior):
+                        injected = True
+                        self.assertIn(merger["conversationId"], {row["conversationId"] for row in self.read_merger_cuts()})
+                        raise OSError("fixture inventory directory sync failed")
+                    return fsync(fd)
+
+                with (patch.object(deploy.os, "fsync", side_effect=fail_after_rename),
+                      patch.object(deploy, "utc", return_value=self.merger_capture_time)):
+                    result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=0, timeout=2)
+                self.assertTrue(injected)
+                self.assertEqual(self.service_commands(), [])
+                self.assertFalse(result["relocation"]["stopSubmitted"], result)
+                self.assertIn("relocation:OSError", result["relocation"]["diagnostics"])
+                self.assertEqual(self.read_merger_cuts(), [previous] if has_prior else [])
+                self.assertEqual(capture.read_bytes() if capture.exists() else None, prior)
 
     def test_relocation_preserves_prior_capture_on_refusal_and_keeps_uncertain_submission(self):
         for index, stop_may_have_run in enumerate((False, True)):
@@ -1520,23 +1652,9 @@ class CheckoutIntegration(unittest.TestCase):
                     self.adapter.close()
                     self.doCleanups()
                     self.setUp()
-                self.relocating()
-                process = {"pid": 104, "startIdentity": "104:104", "bootEpoch": self.adapter.boot_epoch}
-                writer = {"pid": 102, "startIdentity": "102:102", "bootEpoch": self.adapter.boot_epoch}
-                conversation = "conversation_fixture_merger"
-                merger = {"conversationId": conversation, "engine": "codex", "sessionId": "fixture-merger",
-                          "path": str(self.root / "merger.jsonl"), "claimEpoch": 2, "process": process,
-                          "writer": writer, "batch": None, "turnState": "busy"}
-                self.inventory_overrides = {"conversations": [{
-                    "conversationId": conversation, "host": {"kind": "structured", "state": "alive",
-                                                              "pid": 104, "process": process},
-                    "turnState": "busy", "lifecycle": "running", "evidenceSource": "transcript",
-                    "pipeline": None, "merger": merger,
-                }]}
-                capture = self.state / deploy.CHECKOUT_MERGER_CAPTURE
-                deploy.write_json(capture, [{**merger, "conversationId": "conversation_previous_merger",
-                    "capturedAt": deploy.utc(), "boundary": "checkout-merger:" + "a" * 32,
-                    "admissionProof": "fresh-cut-v1"}])
+                capture, merger, previous = self.relocation_merger_capture()
+                conversation = merger["conversationId"]
+                deploy.write_json(capture, [previous])
                 prior = capture.read_bytes()
                 if stop_may_have_run:
                     execute = self.adapter.command
@@ -1554,10 +1672,11 @@ class CheckoutIntegration(unittest.TestCase):
                         publish()
                         self.bound.add(scope)
                     self.adapter.publish = bound_scope_arrives
-                result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=0, timeout=2)
+                with patch.object(deploy, "utc", return_value=self.merger_capture_time):
+                    result = deploy.run_switch(self.adapter, TARGET, samples=1, interval=0, timeout=2)
                 self.assertEqual(result["relocation"]["stopSubmitted"], stop_may_have_run, result)
                 if stop_may_have_run:
-                    cuts = {row["conversationId"]: row for row in json.loads(capture.read_text())}
+                    cuts = {row["conversationId"]: row for row in self.read_merger_cuts()}
                     self.assertEqual(cuts[conversation]["admissionProof"], "fresh-cut-v1")
                     self.assertEqual(cuts["conversation_previous_merger"], json.loads(prior)[0])
                     self.assertIn("stop", self.service_commands())
