@@ -19,7 +19,7 @@ import { StringDecoder } from "node:string_decoder";
 
 import { statePath } from "@/lib/configDir";
 import { claudeQueuedPromptUser, isClaudeTurnWindowMeta, isClaudePrompt } from "@/lib/claudeProtocolUser";
-import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
+import { claudeStandaloneReadOnlyArgs, effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
@@ -484,6 +484,7 @@ export interface ClaudeStreamBrokerHostOptions {
   validateTelegramGrant?: () => void;
   mcpStatePath?: string;
   readOnly?: boolean;
+  standaloneReadOnly?: boolean;
   /** Confine tools and network to Claude's engine-owned restricted boundary. */
   restricted?: boolean;
   binary?: string;
@@ -1266,8 +1267,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
       "--include-partial-messages", "--replay-user-messages",
       "--permission-prompt-tool", "stdio",
-      "--permission-mode", effectiveClaudePermissionMode(options),
-      ...(options.restricted ? ["--restricted"] : []),
+      "--permission-mode", options.standaloneReadOnly ? "default" : effectiveClaudePermissionMode(options),
+      ...(options.standaloneReadOnly ? claudeStandaloneReadOnlyArgs(telegram.mcpServers ?? ["viewer"]) : options.restricted ? ["--restricted"] : []),
     ];
     const disallowedTools = [
       ...(!options.allowSubagents ? NATIVE_MULTI_AGENT_TOOLS : []),
@@ -1309,7 +1310,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     if (options.systemPrompt) args.push("--system-prompt", options.systemPrompt);
     const appended = [options.cleanMemory ? "" : options.appendSystemPrompt, telegram.unavailable ? TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE : ""].filter(Boolean).join("\n\n");
     if (appended) args.push("--append-system-prompt", appended);
-    if (options.tools) args.push("--tools", options.tools.join(","));
+    if (options.tools && !options.standaloneReadOnly) args.push("--tools", options.tools.join(","));
     let child: ChildProcessWithoutNullStreams;
     let initialDeliveries: ClaudeDeliveryState[];
     options = { ...options, deliveryLedger: options.deliveryLedger ?? new FileClaudeDeliveryLedger() };
@@ -1333,7 +1334,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       ...options, releaseCleanup: () => { relay?.close(); options.releaseCleanup?.(); },
     });
     try {
-      if (options.claudeConfigDir) await host.verifyViewerMcp();
+      if (options.claudeConfigDir || options.standaloneReadOnly) await host.verifyViewerMcp();
       host.restore(initialDeliveries);
       host.reconcileTranscript(options.readTranscript
         ? options.readTranscript(options.cwd, sessionId)

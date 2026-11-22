@@ -1,3 +1,4 @@
+import { assertCodexSandboxAvailable } from "./cleanerSandboxProbe";
 import { TurnSilence, TURN_SILENCE_REASON, type TurnSilenceOptions } from "./turnSilence";
 import { clearEngineHostText, createEngineHostLedgerProjection } from "./engineHostEvents";
 import { releaseIdleHostEventWindow } from "./idleHostEventWindow";
@@ -259,6 +260,7 @@ export interface CodexAppServerHostOptions {
   sandbox?: string;
   permissionProfile?: string;
   permissionProfileConfig?: string;
+  requireReadOnlySandbox?: boolean;
   forwardGitHubConfig?: boolean;
   releaseCleanup?: () => void;
   approvalPolicy?: string;
@@ -1628,9 +1630,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     try { if (!options.socketOwner && options.codexHome && !options.cleanMemory) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
     catch { /* optional memory must never stop a launch */ }
     const binary = options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex";
+    const method = threadId ? "thread/resume" : "thread/start";
     let protocol: CodexPinnedProtocol;
-    try { protocol = await resolveCodexProtocol((options.readProtocolVersion ?? installedCodexVersion)(binary, options.env ?? process.env), binary, options.env ?? process.env, options.generateProtocolSchemas); }
-    catch (error) { options.releaseCleanup?.(); throw error; }
+    let capabilities: ReturnType<CodexPinnedProtocol["initializeCapabilities"]>;
+    try {
+      protocol = await resolveCodexProtocol((options.readProtocolVersion ?? installedCodexVersion)(binary, options.env ?? process.env), binary, options.env ?? process.env, options.generateProtocolSchemas);
+      capabilities = protocol.initializeCapabilities(["thread/queue/list", "thread/realtime/start"],
+        options.requireReadOnlySandbox ? [{ method, field: "permissions" }] : []);
+    } catch (error) { options.releaseCleanup?.(); throw error; }
     let features: ReturnType<typeof readCodexFeatures>;
     let cleanupArgs: string[];
     let questionPolicy: ReturnType<typeof codexOperatorQuestionPolicy> | undefined;
@@ -1699,6 +1706,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     let child: CodexTransport;
     try {
       options.assertCurrent?.();
+      if (options.requireReadOnlySandbox && !options.socketOwner) {
+        await assertCodexSandboxAvailable({ ...options, binary, env: childEnv }, "read-only role sandbox");
+        options.assertCurrent?.();
+      }
       const spawnOptions = { cwd: options.cwd, env: childEnv, detached: true };
       child = options.socketOwner
         ? await CodexSocketTransport.reconnect(options.socketOwner)
@@ -1722,9 +1733,6 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     provisional.protocolVersion = protocol.version;
     try {
       options.assertCurrent?.();
-      // Native queue and realtime need the single experimental opt-in. Account
-      // probes use stable APIs; no unrelated extension is requested here.
-      const capabilities = protocol.initializeCapabilities(["thread/queue/list", "thread/realtime/start"]);
       provisional.experimentalApi = capabilities.experimentalApi;
       await provisional.rpc("initialize", {
         clientInfo: { name: "llv-structured-host", title: "Delegatus", version: "0.11.7" },
@@ -1794,7 +1802,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         ...(options.permissionProfile
           ? { permissions: options.permissionProfile }
           : { sandbox: options.sandbox ?? "read-only" }),
-        approvalPolicy: options.approvalPolicy ?? "never",
+        approvalPolicy: options.requireReadOnlySandbox ? "never" : options.approvalPolicy ?? "never",
         ...(options.allowSubagents === true ? {} : { approvalsReviewer: "user" }),
       };
       /* A new thread reads its developer instructions as it builds its first
@@ -1842,7 +1850,15 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
           ...runInstructions,
           config,
         });
-      const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");
+      if (options.requireReadOnlySandbox) {
+        const active = record(record(result)?.activePermissionProfile);
+        const id = stringField(active, "id");
+        if (!id?.startsWith("llv-role-") || (!options.socketOwner && id !== options.permissionProfile)
+          || stringField(active, "extends") !== ":read-only" || stringField(result, "approvalPolicy") !== "never") {
+          throw new Error("Codex did not confirm the read-only role sandbox");
+        }
+      }
+      const identity = threadFromResult(result, method);
       if (threadId && options.cleanerDiskWorkspace) {
         const returnedCwd = stringField(record(record(result)?.thread), "cwd");
         if (returnedCwd !== options.cwd) throw new Error("thread/resume did not adopt the cleaner workspace cwd");

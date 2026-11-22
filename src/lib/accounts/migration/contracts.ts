@@ -80,9 +80,9 @@ export interface LaunchProfile {
   /** Legacy launches use this as their engine restriction. Pipeline launches
       with an explicit sandbox use it as durable repository-policy metadata. */
   readOnly: boolean | null;
-  /** Explicit tool/network boundary. Null/absent preserves legacy readOnly
-      interpretation for durable generations created before the axis split. */
-  sandbox?: "full" | "restricted" | null;
+  /** Tool/network boundary. Standalone read-only roles use "read-only".
+      Null/absent preserves legacy readOnly interpretation. */
+  sandbox?: "full" | "restricted" | "read-only" | null;
   allowSubagents: boolean;
   /** No automatic memory reaches this conversation: no learned rules, no
       shared-memory hook, and its engine's own memory off. Set at spawn for a
@@ -110,20 +110,22 @@ export interface LaunchProfile {
 
 type DurableLaunchAccess = Partial<Pick<LaunchProfile, "readOnly" | "sandbox">> | null | undefined;
 
-export function explicitLaunchProfileSandbox(profile: DurableLaunchAccess): "full" | "restricted" | null {
-  return profile?.sandbox === "full" || profile?.sandbox === "restricted"
+export function explicitLaunchProfileSandbox(profile: DurableLaunchAccess): NonNullable<LaunchProfile["sandbox"]> | null {
+  return profile?.sandbox === "full" || profile?.sandbox === "restricted" || profile?.sandbox === "read-only"
     ? profile.sandbox
     : null;
 }
 
 export function launchProfileEngineReadOnly(profile: DurableLaunchAccess): boolean {
-  return explicitLaunchProfileSandbox(profile) === null && profile?.readOnly === true;
+  const sandbox = explicitLaunchProfileSandbox(profile);
+  return sandbox === "read-only" || (sandbox === null && profile?.readOnly === true);
 }
 
 export function launchProfileCodexSandbox(profile: DurableLaunchAccess): string | null {
   const sandbox = explicitLaunchProfileSandbox(profile);
   if (sandbox === "full") return "danger-full-access";
   if (sandbox === "restricted") return "workspace-write";
+  if (sandbox === "read-only") return "read-only";
   return profile?.readOnly === true ? "read-only" : null;
 }
 

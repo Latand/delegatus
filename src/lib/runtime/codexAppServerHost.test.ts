@@ -1,3 +1,4 @@
+import * as sandboxProbe from "./cleanerSandboxProbe";
 import { wakeResponseEvidenceFromEvents } from "../monitor/seatWakeResponse";
 import { TurnSilence, TURN_SILENCE_MS } from "./turnSilence";
 import { idleWindowFixture } from "./fixtures/idleEventWindow";
@@ -1142,6 +1143,52 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
     return server as unknown as ChildProcessWithoutNullStreams;
   };
 }
+
+test.each(["start", "resume", "missing proof", "unavailable"] as const)("Codex standalone read-only sandbox %s", async scenario => {
+  const probe = spyOn(sandboxProbe, "assertCodexSandboxAvailable").mockImplementation(async () => {
+    if (scenario === "unavailable") throw new Error("read-only role sandbox unavailable: fixture dependency missing");
+  });
+  const access = materializeStructuredHostAccess({ readOnly: true, sandbox: "read-only" }, process.env, null, metadataState);
+  const threadId = "fixture-read-only-thread";
+  const server = new FakeAppServer(threadId);
+  const captured: { args?: string[] } = {};
+  if (scenario !== "missing proof") {
+    server.threadResponseExtra = {
+      activePermissionProfile: { id: access.codex.permissionProfile, extends: ":read-only" },
+      approvalPolicy: "never",
+    };
+  }
+  const options = {
+    ...access.codex, ...access.host, env: access.env, cwd: metadataState, mcpServers: ["viewer"],
+    approvalPolicy: "on-request", readProtocolVersion: () => "0.166.0",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured),
+  };
+  let host: CodexAppServerHost | undefined;
+  try {
+    if (scenario === "unavailable") {
+      await expect(CodexAppServerHost.start(options)).rejects.toThrow("read-only role sandbox unavailable");
+      expect(captured.args).toBeUndefined();
+      expect(server.requests).toEqual([]);
+    } else if (scenario === "missing proof") {
+      await expect(CodexAppServerHost.start(options)).rejects.toThrow("Codex did not confirm the read-only role sandbox");
+      expect(server.requests.filter(frame => frame.method === "thread/start")).toHaveLength(1);
+      expect(server.requests.some(frame => frame.method === "turn/start")).toBeFalse();
+    } else {
+      host = scenario === "resume" ? await CodexAppServerHost.adopt(threadId, options) : await CodexAppServerHost.start(options);
+      expect(captured.args).toContain(`default_permissions=${JSON.stringify(access.codex.permissionProfile)}`);
+      expect(captured.args).toContain(access.codex.permissionProfileConfig!);
+      const params = server.requests.find(frame => frame.method === `thread/${scenario}`)?.params;
+      expect(params).toMatchObject({ permissions: access.codex.permissionProfile, approvalPolicy: "never",
+        config: { mcp_servers: { viewer: { enabled: true } } } });
+      expect(params).not.toHaveProperty("sandbox");
+    }
+    expect(probe).toHaveBeenCalledTimes(1);
+  } finally {
+    await host?.release();
+    access.cleanup();
+    probe.mockRestore();
+  }
+});
 
 test("Codex host persists a media-free copy while its live event retains the response", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-private-media-ledger-"));

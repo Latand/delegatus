@@ -1431,6 +1431,7 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
      clears it back to the project and role defaults. */
   const memoryMax = requested.agentMemoryMaxBytes !== undefined ? requested.agentMemoryMaxBytes : current.agentMemoryMaxBytes;
   const memoryRoleParams = requested.agentMemoryRoleParams ?? current.agentMemoryRoleParams;
+  const readOnlyRole = current.sandbox === "read-only";
   return {
     ...(memoryMax !== undefined ? { agentMemoryMaxBytes: memoryMax } : {}),
     ...(memoryRoleParams ? { agentMemoryRoleParams: memoryRoleParams } : {}),
@@ -1440,10 +1441,10 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
     effort: requested.effort ?? current.effort,
     fast: requested.fast ?? current.fast,
     serviceTier: requested.fast == null ? tier : serviceTierForSpeed(tier, requested.fast),
-    permissionMode: requested.permissionMode ?? current.permissionMode,
-    readOnly: requested.readOnly ?? current.readOnly,
-    sandbox: requested.sandbox ?? current.sandbox ?? null,
-    allowSubagents: current.allowSubagents || requested.allowSubagents,
+    permissionMode: readOnlyRole ? current.permissionMode : requested.permissionMode ?? current.permissionMode,
+    readOnly: readOnlyRole ? true : requested.readOnly ?? current.readOnly,
+    sandbox: readOnlyRole ? current.sandbox : requested.sandbox ?? current.sandbox ?? null,
+    allowSubagents: !readOnlyRole && (current.allowSubagents || requested.allowSubagents),
     /* Clean once, clean for good: a resume never brings memory back. */
     ...(current.cleanMemory || requested.cleanMemory ? { cleanMemory: true } : {}),
     ...(current.omitSkillsInstructions || requested.omitSkillsInstructions ? { omitSkillsInstructions: true } : {}),

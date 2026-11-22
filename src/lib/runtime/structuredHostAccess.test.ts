@@ -112,6 +112,35 @@ test("resume successors preserve both explicit pipeline access axes", () => {
   }
 });
 
+test("a standalone read-only role retains its access policy across a successor request", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-resume-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  try {
+    const snapshot = registry.reconcileConversations([{
+      engine: "codex", path: path.join(directory, "source.jsonl"), accountId: "account-a",
+      launchProfile: emptyLaunchProfile({
+        cwd: directory, title: "Inspect a fixture repository", readOnly: true,
+        sandbox: "read-only", permissionMode: "never", mcpServers: ["viewer"],
+      }),
+      turn: { state: "idle", source: "empty", terminalAt: null },
+      observedAt: "2026-11-19T12:34:00.000Z",
+    }]);
+    const [conversation] = Object.values(snapshot.conversations);
+    const resumed = registry.beginSpawnRequest({
+      engine: "codex", cwd: directory, conversationId: conversation!.id,
+      purpose: "resume-successor", origin: { kind: "successor" },
+      launchProfile: { readOnly: false, sandbox: "full", permissionMode: "on-request", allowSubagents: true },
+    });
+    expect(resumed.kind).toBe("created");
+    expect(resumed.receipt.launchProfile).toMatchObject({
+      readOnly: true, sandbox: "read-only", permissionMode: "never", allowSubagents: false, mcpServers: ["viewer"],
+    });
+  } finally {
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("inventory preserves both access axes from a pending structured launch receipt", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-access-inventory-"));
   try {

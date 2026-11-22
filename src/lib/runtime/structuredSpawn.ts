@@ -143,9 +143,11 @@ export interface StructuredHostAccessMaterialization {
     sandbox?: string;
     permissionProfile?: string;
     permissionProfileConfig?: string;
+    requireReadOnlySandbox?: boolean;
   };
   host: {
     forwardGitHubConfig?: boolean;
+    standaloneReadOnly?: boolean;
     releaseCleanup?: () => void;
   };
   scratchDirectory: string | null;
@@ -156,7 +158,7 @@ export type StructuredHostAccessPolicy = boolean | {
   /** Carried with the sandbox so pipeline callers must name both axes. The
       repository policy is enforced by pipeline settlement. */
   readOnly: boolean;
-  sandbox: "full" | "restricted";
+  sandbox: NonNullable<LaunchProfile["sandbox"]>;
 };
 
 type DurableStructuredHostAccess = Pick<LaunchProfile, "readOnly" | "sandbox"> | null | undefined;
@@ -179,7 +181,9 @@ function githubConfigDirectory(sourceEnv: NodeJS.ProcessEnv): string {
 /** Materialize the tool/network boundary. An explicit restricted pipeline
     profile uses workspace-write for either repository policy; settlement owns
     the read-only declared-output fence. A legacy boolean preserves the old
-    read-only host profile for non-pipeline callers and stored sessions.
+    read-only host profile for older callers and stored sessions. Standalone
+    read-only roles require engine enforcement and retain their private scratch
+    and evidence locations.
 
     Every pipeline stage (an explicit profile, either sandbox) runs with
     `TMPDIR` in its own scratch directory under `statePath("scratch")`, on the
@@ -202,7 +206,8 @@ export function materializeStructuredHostAccess(
     ...(capability ? { LLV_SPAWN_CAPABILITY: capability } : {}),
   };
   const explicitAxes = typeof policy !== "boolean";
-  const restricted = explicitAxes ? policy.sandbox === "restricted" : policy;
+  const standaloneReadOnly = explicitAxes && policy.sandbox === "read-only";
+  const restricted = explicitAxes ? policy.sandbox !== "full" : policy;
 
   const resolvedScratchParent = scratchParent ?? statePath("scratch");
   fs.mkdirSync(resolvedScratchParent, { recursive: true, mode: 0o700 });
@@ -255,12 +260,15 @@ export function materializeStructuredHostAccess(
         cleanup,
       };
     }
-    const codex = explicitAxes
+    // Codex merges account and CLI TOML. A fresh key has no account entries to merge.
+    const readOnlyProfile = standaloneReadOnly ? `llv-role-${randomUUID()}` : READ_ONLY_STAGE_PERMISSION_PROFILE;
+    const codex = explicitAxes && !standaloneReadOnly
       ? { sandbox: "workspace-write", permissionProfile: "llv-stage",
           permissionProfileConfig: `permissions.llv-stage={extends=":workspace",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
       : {
-          permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
-          permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}`,
+          permissionProfile: readOnlyProfile,
+          ...(standaloneReadOnly ? { requireReadOnlySandbox: true } : {}),
+          permissionProfileConfig: `permissions.${readOnlyProfile}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}`,
         };
     return {
       env: {
@@ -270,6 +278,7 @@ export function materializeStructuredHostAccess(
       },
       codex,
       host: {
+        ...(standaloneReadOnly ? { standaloneReadOnly: true } : {}),
         forwardGitHubConfig: true,
         releaseCleanup: cleanup,
       },

@@ -46,7 +46,10 @@ function verifyContent(value: unknown): { blocks: unknown[]; digest: string } {
 }
 
 const sessionId = process.env.LLV_FIXTURE_SESSION_ID ?? "";
+const holdFirstResult = process.argv.includes("--hold-first-result");
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const finishTurn = () => process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", session_id: sessionId })}\n`);
+let frames = 0;
 
 for await (const line of input) {
   if (!line) continue;
@@ -56,6 +59,9 @@ for await (const line of input) {
     throw new Error("user frame is invalid");
   }
   const verified = verifyContent(message.content);
+  frames += 1;
+  // The queued follow-up's arrival releases the first result, before its own echo.
+  if (holdFirstResult && frames === 2) finishTurn();
   process.stdout.write(`${JSON.stringify({
     type: "user",
     isReplay: true,
@@ -68,6 +74,5 @@ for await (const line of input) {
     session_id: sessionId,
     message: { role: "assistant", content: [{ type: "text", text: `digest:${verified.digest}` }] },
   })}\n`);
-  await Bun.sleep(20);
-  process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", session_id: sessionId })}\n`);
+  if (!holdFirstResult || frames !== 1) finishTurn();
 }

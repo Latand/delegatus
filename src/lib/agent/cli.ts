@@ -239,6 +239,7 @@ export interface FreshSpecOptions {
   fast?: boolean | null;
   serviceTier?: string | null;
   readOnly?: boolean;
+  sandbox?: "read-only";
   /** Claude only: override the CLI permission mode for a fresh launch. */
   permissionMode?: string | null;
   /** Codex only: explicit account home scoped into the typed host command. */
@@ -433,6 +434,12 @@ export function effectiveClaudePermissionMode(
     ?? (launchProfileEngineReadOnly(options) ? "plan" : "default");
 }
 
+/** Restrict native tools while the Viewer server continues to authorize each role operation. */
+export function claudeStandaloneReadOnlyArgs(mcpServers: readonly string[]): string[] {
+  return ["--restricted", "--tools", "Read,Glob,Grep,WebSearch",
+    ...(mcpServers.includes("viewer") ? ["--allowedTools", "mcp__viewer__*"] : [])];
+}
+
 /** Boot spec for a brand-new agent (no prior conversation) in a chosen directory. */
 export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpecOptions = {}): ResumeSpec {
   const mcpServers = normalizedMcpServers(options.mcpServers);
@@ -448,7 +455,8 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     const permissionMode = effectiveClaudePermissionMode({
       ...options, permissionMode: options.permissionMode ?? (options.readOnly ? "plan" : "bypassPermissions"),
     });
-    if (options.readOnly) args.push("--permission-mode", permissionMode, "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
+    if (options.sandbox === "read-only") args.push("--permission-mode", "default", ...claudeStandaloneReadOnlyArgs(mcpServers));
+    else if (options.readOnly) args.push("--permission-mode", permissionMode, "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
     else if (permissionMode === "bypassPermissions") args.push("--dangerously-skip-permissions");
     else args.push("--permission-mode", permissionMode);
     if (options.operatorDecisionForms && !options.readOnly) args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
@@ -497,6 +505,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
         fast: null,
         permissionMode,
         readOnly: options.readOnly ?? false,
+        ...(options.sandbox ? { sandbox: options.sandbox } : {}),
         allowSubagents: options.allowSubagents ?? false,
         mcpServers,
         /* Plugin grants are a Codex thread capability decided by the spawn
@@ -536,6 +545,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
         fast: null,
         permissionMode,
         readOnly: options.readOnly ?? false,
+        ...(options.sandbox ? { sandbox: options.sandbox } : {}),
         allowSubagents: options.allowSubagents ?? false,
         mcpServers,
         plugins: [],
@@ -561,6 +571,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   if (options.serviceTier) args.push("-c", `service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`);
   else if (options.fast != null) args.push("-c", `service_tier=${options.fast ? "priority" : "standard"}`);
   if (options.readOnly) args.push("--sandbox", "read-only");
+  if (options.sandbox === "read-only") args.push("--ask-for-approval", "never");
   args.push(...codexSubagentArgs(args[0], options.allowSubagents, process.env, true));
   args.push(...codexProcessCleanupArgs(home));
   if (options.operatorDecisionForms) args.push(...codexOperatorQuestionPolicy(home).args);
@@ -581,6 +592,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       serviceTier: options.serviceTier ?? null,
       permissionMode: options.readOnly ? "never" : null,
       readOnly: options.readOnly ?? false,
+      ...(options.sandbox ? { sandbox: options.sandbox } : {}),
       allowSubagents: options.allowSubagents ?? false,
       mcpServers,
       plugins: [],
@@ -684,7 +696,9 @@ export function resumeSpecForSession(
     const args = [(options.hostTerminal ? resolveHostBinary : resolveBinary)("claude")];
     const permissionMode = effectiveClaudePermissionMode(options);
     const engineReadOnly = launchProfileEngineReadOnly(options);
-    if (engineReadOnly || permissionMode === "plan") {
+    if (options.sandbox === "read-only") {
+      args.push("--permission-mode", "default", ...claudeStandaloneReadOnlyArgs(mcpServers));
+    } else if (engineReadOnly || permissionMode === "plan") {
       args.push("--permission-mode", "plan", "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
     } else if (permissionMode === "bypassPermissions") {
       args.push("--dangerously-skip-permissions");
@@ -727,7 +741,9 @@ export function resumeSpecForSession(
   else if (options.fast != null) command += ` -c ${shellQuote(`service_tier=${options.fast ? "priority" : "standard"}`)}`;
   const codexSandbox = launchProfileCodexSandbox(options);
   if (codexSandbox) command += ` --sandbox ${codexSandbox}`;
-  if (options.permissionMode && ["untrusted", "on-request", "never"].includes(options.permissionMode)) {
+  if (options.sandbox === "read-only") {
+    command += " --ask-for-approval never";
+  } else if (options.permissionMode && ["untrusted", "on-request", "never"].includes(options.permissionMode)) {
     command += ` --ask-for-approval ${shellQuote(options.permissionMode)}`;
   }
   command += ` ${codexSubagentArgs(codexBinary, options.allowSubagents, process.env, true).join(" ")}`;

@@ -5,21 +5,28 @@ export const CLEANER_SANDBOX_READY = "cleaner-sandbox-ready";
 
 /** Run a command through the exact filesystem profile before starting a model.
  * No cached verdict: a recovered host must prove its new workspace too. */
-export async function assertCleanerSandboxAvailable(options: {
+export function assertCleanerSandboxAvailable(options: Parameters<typeof assertCodexSandboxAvailable>[0]): Promise<void> {
+  return assertCodexSandboxAvailable(options, "disk cleaner sandbox");
+}
+
+export async function assertCodexSandboxAvailable(options: {
+  binary?: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   permissionProfile?: string;
   permissionProfileConfig?: string;
-}): Promise<void> {
+}, label: string): Promise<void> {
   const { permissionProfile, permissionProfileConfig } = options;
   if (!permissionProfile || !permissionProfileConfig) {
-    throw new Error("disk cleaner sandbox unavailable: missing permission profile");
+    throw new Error(`${label} unavailable: missing permission profile`);
   }
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.env.LLV_CODEX_BINARY ?? "codex", [
+    const command = process.platform === "win32"
+      ? ["cmd.exe", "/d", "/c", `echo ${CLEANER_SANDBOX_READY}`]
+      : ["/bin/sh", "-c", `printf ${CLEANER_SANDBOX_READY}`];
+    const child = spawn(options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex", [
       "sandbox", "-C", options.cwd, "-P", permissionProfile,
-      "-c", permissionProfileConfig, "--", "/bin/sh", "-c",
-      `printf ${CLEANER_SANDBOX_READY}`,
+      "-c", permissionProfileConfig, "--", ...command,
     ], { cwd: options.cwd, env: options.env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "", timedOut = false;
     child.stdout.on("data", chunk => { stdout = (stdout + chunk.toString()).slice(-4096); });
@@ -30,12 +37,12 @@ export async function assertCleanerSandboxAvailable(options: {
     }, 10_000);
     child.once("error", error => {
       clearTimeout(deadline);
-      reject(new Error(`disk cleaner sandbox unavailable: ${error.message}`));
+      reject(new Error(`${label} unavailable: ${error.message}`));
     });
     child.once("close", (code, signal) => {
       clearTimeout(deadline);
-      if (!timedOut && code === 0 && stdout === CLEANER_SANDBOX_READY) resolve();
-      else reject(new Error(`disk cleaner sandbox unavailable: ${timedOut ? "probe timed out" : stderr.trim() || `probe exited ${code ?? signal} without completion`}`));
+      if (!timedOut && code === 0 && stdout.trim() === CLEANER_SANDBOX_READY) resolve();
+      else reject(new Error(`${label} unavailable: ${timedOut ? "probe timed out" : stderr.trim() || `probe exited ${code ?? signal} without completion`}`));
     });
   });
 }

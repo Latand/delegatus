@@ -478,6 +478,8 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     ? (body.engine as AgentEngine)
     : (role.value?.config.engine ?? null);
   if (!engine) return NextResponse.json({ error: "engine must be claude, codex or copilot" }, { status: 400 });
+  const roleReadOnly = role.value?.readOnly === true;
+  if (roleReadOnly && body.allowSubagents === true) return refuse("read-only roles cannot enable subagents");
   const diskCleaner = role.value?.role === "cleaner" && role.value.params.mode === "disk";
   if (diskCleaner && engine !== "codex") return refuse("disk cleaner requires the Codex read-only sandbox");
   if (diskCleaner && body.allowSubagents === true) return refuse("disk cleaner cannot enable subagents");
@@ -727,6 +729,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         : conversationWorkspacePrincipal((id: string) => registry.conversation(id as `conversation_${string}`), authenticatedCaller?.kind === "agent"
           ? authenticatedCaller.conversationId : launcher.value?.conversationId ?? pipelineSourceConversationId ?? parentConversationId));
     authorizeLaunch();
+    if (roleReadOnly && existingAttempt && existingAttempt.launchProfile.sandbox !== "read-only") {
+      return NextResponse.json({ error: "read-only role cannot reuse an unrestricted launch" }, { status: 409 });
+    }
     // A replay must retain the guarded workspace and its disk-mode identity.
     if (diskCleaner && existingAttempt && (existingAttempt.agentRole !== "cleaner" || !guardedDiskCleanerProfile(existingAttempt.launchProfile))) {
       return NextResponse.json({ error: "disk cleaner cannot reuse a writable launch" }, { status: 409 });
@@ -926,7 +931,11 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         },
       }] : [],
     });
+    const roleAccess = roleReadOnly
+      ? { readOnly: true, sandbox: "read-only" as const, permissionMode: engine === "claude" ? "default" : "never" }
+      : {};
     const preflightLaunchProfile = emptyLaunchProfile({
+      ...roleAccess,
       cwd,
       model: selectedModel.model,
       effort: reasoning.effort,
@@ -1080,7 +1089,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       title: string | null,
     ) => {
       const specBase = freshSpecFor(engine, cwd, {
-        ...(diskCleaner ? { readOnly: true } : {}),
+        readOnly: diskCleaner || roleReadOnly,
+        permissionMode: roleAccess.permissionMode,
+        sandbox: roleAccess.sandbox,
         ...(engine === "codex" ? { omitSkillsInstructions: sessionOrigin === "delegated" } : {}),
         model: selectedModel.model,
         effort: reasoning.effort,
@@ -1112,6 +1123,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
           mcpServers: grantedServers,
           plugins,
           permissionMode,
+          ...roleAccess,
           title: title ?? requestProfileTitle,
           ...(role.value ? { agentMemoryRoleParams: role.value.params } : {}),
           ...(explicitProject ? { project: explicitProject } : {}),
