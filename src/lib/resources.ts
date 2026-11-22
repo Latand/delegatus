@@ -352,7 +352,7 @@ function isoFromUnix(seconds: number): string {
 
 export interface ResourceSnapshotDependencies {
   readFiles(fresh: boolean): Promise<ResourceFileObservation[]>;
-  proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory">;
+  proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory" | "resourceSystemMemory" | "resourcePpidMap" | "resourceProcessMemory">;
   bootEpoch?(): string | null;
   /** Structured-host records the registry holds. The viewer reads them and
       hands them to the collector; nothing here ever opens the registry. */
@@ -542,9 +542,14 @@ export async function buildResourceSnapshot(
   const startedAt = performance.now();
   const phases = emptyResourceBuildPhases();
   try {
-    const system = measureResourcePhase(phases, "systemMemory", () => captureSystemMemory(dependencies.proc));
+    const system = await measureResourcePhaseAsync(phases, "systemMemory", async () => {
+      const captured = dependencies.proc.resourceSystemMemory
+        ? await dependencies.proc.resourceSystemMemory()
+        : dependencies.proc.systemMemory();
+      return captured ? { ...captured, capturedAt: new Date().toISOString() } : null;
+    });
     const files = await measureResourcePhaseAsync(phases, "readFiles", () => dependencies.readFiles(fresh));
-    const ppids = measureResourcePhase(phases, "ppidMap", () => dependencies.proc.ppidMap());
+    const ppids = await measureResourcePhaseAsync(phases, "ppidMap", () => dependencies.proc.resourcePpidMap?.() ?? Promise.resolve(dependencies.proc.ppidMap()));
     const structured = await measureResourcePhaseAsync(phases, "readHosts", () => structuredHostTrees(fresh, ppids, dependencies));
     const sessions: ResourceSession[] = [];
     const byPath = new Map(files.map((entry) => [entry.path, entry]));
@@ -562,7 +567,7 @@ export async function buildResourceSnapshot(
       structuredTrees.push(item);
       for (const pid of item.tree) treePids.add(pid);
     }
-    const memory = measureResourcePhase(phases, "processMemory", () => dependencies.proc.processMemory(treePids));
+    const memory = await measureResourcePhaseAsync(phases, "processMemory", () => dependencies.proc.resourceProcessMemory?.(treePids) ?? Promise.resolve(dependencies.proc.processMemory(treePids)));
     const treeMemory = (tree: number[]) => {
       let rssBytes = 0;
       let swapBytes = 0;
@@ -2436,7 +2441,8 @@ export function createResourcesReader(
     workerProcessRuntime?: ResourceWorkerProcessRuntime;
   } = {},
 ): ResourcesReader {
-  const inProcess = options.inProcess ?? process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS === "1";
+  // The worker requires Linux kernel containment. Other platforms collect in the Viewer.
+  const inProcess = options.inProcess ?? (process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS === "1" || process.platform !== "linux");
   const collectorId = options.collectorId ?? (inProcess
     ? `in-process:${process.pid}:${crypto.randomUUID()}`
     : `worker:${process.pid}:${crypto.randomUUID()}`);
