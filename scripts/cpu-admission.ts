@@ -143,9 +143,12 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
       ? command.slice(3) : command;
     // This identifies the hook command. Older wrappers could admit it directly.
     const name = path.basename(argv[0] ?? "");
-    const entry = name === "bun" && argv.length === 3 && argv[2] === "pre-push" && path.basename(argv[1] ?? "") === "local-gate.ts"
-      ? argv[1] : (name === "bash" || name === "sh") && path.basename(argv[1] ?? "") === "pre-push" ? argv[1] : name === "pre-push" ? argv[0] : undefined;
-    return entry !== undefined && checkoutEntry(entry, name === "bun" ? "scripts" : ".githooks", cwd) !== undefined;
+    const bunHook = argv.length === 3 && argv[2] === "pre-push" && path.basename(argv[1] ?? "") === "local-gate.ts";
+    const shellHook = (name === "bash" || name === "sh") && path.basename(argv[1] ?? "") === "pre-push";
+    const directHook = name === "pre-push";
+    const entry = bunHook ? argv[1] : shellHook ? argv[1] : directHook ? argv[0] : undefined;
+    const directory = bunHook ? "scripts" : ".githooks";
+    return entry !== undefined && checkoutEntry(entry, directory, cwd) !== undefined;
   };
   const hookBootstrap = (argv: string[], cwd: () => string) => {
     if (path.basename(argv[1] ?? "") !== "local-gate.ts") return;
@@ -173,7 +176,17 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const prior = history ??= queue.legacyGateHistory(epoch);
     if (typeof proof.parent.startIdentity !== "string" || prior.retirements.has(proof.parent.startIdentity)) return false;
     const original = parent && hookBootstrap(readArgv(parent), readCwd(parent));
-    return !!original && original.mode === hook.mode && original.entry === hook.entry;
+    if (!original || original.mode !== hook.mode || original.entry !== hook.entry) return false;
+    // A same-command process launched under an older gate has already crossed
+    // admission even when its ticket predates the retirement journal. Require
+    // the original hook to have a non-gate parent before treating its re-entry
+    // as cleanup bootstrap evidence.
+    const originalParent = readStat(parent!)[1];
+    if (!/^[1-9]\d*$/.test(originalParent)) return false;
+    const parentArgv = readArgv(path.join(proc, originalParent));
+    const parentScript = path.basename(parentArgv[1] ?? "");
+    if (parentScript === "gate-slot.sh" || parentScript === "owned-runner.ts" || parentScript === "test-child-guardian.ts") return false;
+    return true;
   };
   const recordedParent = (identity: ProcessIdentity | undefined) => identity && identity.bootEpoch === epoch &&
     cpuOwnerStatus(identity) === "alive" ? path.join(proc, String(identity.pid)) : undefined;

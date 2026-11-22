@@ -394,7 +394,7 @@ export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.Proces
     const nativeBun = source.LLV_GATE_BUN || process.execPath;
     const body = Buffer.from(`#!/bin/bash
 set -eu
-if [[ $# -ge 4 && \${1##*/} == cpu-admission.ts && $3 == command:bounded:drained:* ]]; then
+if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
   case $2 in
     --wait|--claim) shift; set -- ${quote(helper)} "$@" ;;
   esac

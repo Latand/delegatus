@@ -74,12 +74,10 @@ test.skipIf(!hasUserManager).each(["bun", "bun-1.4.0"])("a pre-commit service an
     const children = (pid: string) => fs.readdirSync(`/proc/${pid}/task`).flatMap(thread =>
       fs.readFileSync(`/proc/${pid}/task/${thread}/children`, "utf8").trim().split(/\s+/).filter(Boolean));
     const original = fs.readFileSync(env.FIXTURE_HOOK_PID!, "utf8").trim();
-    if (name === "bun") {
-      const clients = children(original).filter(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("owned-runner.ts"));
-      expect(clients).toHaveLength(1);
-      expect(children(clients[0]!).map(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8"))
-        .some(command => command.includes("systemd-run\0") && command.includes(`--unit=${unit}\0`) && command.includes(argv[3]!))).toBe(true);
-    }
+    const clients = children(original).filter(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("owned-runner.ts"));
+    expect(clients).toHaveLength(1);
+    expect(children(clients[0]!).map(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8"))
+      .some(command => command.includes("systemd-run\0") && command.includes(`--unit=${unit}\0`) && command.includes(argv[3]!))).toBe(true);
     expect(fs.readFileSync(`/proc/${waiter}/cmdline`, "utf8")).toContain("scripts/eslint-changes.ts");
     expect(f.db.query("SELECT 1 FROM sqlite_master WHERE name = 'gate_slots'").get()).toBeNull();
     expect(f.db.query("SELECT last FROM admission").get()).toEqual({ last: previous });

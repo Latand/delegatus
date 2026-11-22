@@ -24,7 +24,12 @@ export function createHookFixture(root: string, roots: string[], realLint = fals
   for (const leaf of [".githooks", "scripts", "shims", ".github/workflows"]) mkdirSync(path.join(dir, leaf), { recursive: true });
   for (const hook of ["pre-commit", "pre-push"]) copyFileSync(path.join(root, ".githooks", hook), path.join(dir, ".githooks", hook));
   symlinkSync(path.join(root, "scripts/local-gate.ts"), path.join(dir, "scripts/local-gate.ts"));
+  writeFileSync(path.join(dir, "scripts/privacy-publication-gate.ts"), "// fixture command target\n");
   copyFileSync(path.join(root, "scripts/local-gate-capabilities.json"), path.join(dir, "scripts/local-gate-capabilities.json"));
+  writeFileSync(path.join(dir, "scripts/local-gate-tests.ts"), "// fixture command target\n");
+  writeFileSync(path.join(dir, "scripts/eslint-changes.ts"), "// fixture command target\n");
+  writeFileSync(path.join(dir, "scripts/verify-platform-backend.ts"), "// fixture command target\n");
+  writeFileSync(path.join(dir, "scripts/supply-chain-check.ts"), "// fixture command target\n");
   if (realLint) {
     symlinkSync(path.join(root, "scripts/eslint-changes.ts"), path.join(dir, "scripts/eslint-changes.ts"));
     symlinkSync(path.join(root, "eslint.config.mjs"), path.join(dir, "eslint.config.mjs"));
@@ -54,7 +59,9 @@ export function createHookFixture(root: string, roots: string[], realLint = fals
   delete env.LLV_GATE_PUSH_DEADLINE;
   const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, env, stdio: "pipe" });
   git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null");
-  writeFileSync(path.join(dir, "package.json"), "{}"); writeFileSync(path.join(dir, "example.ts"), "export const value = 1;\n");
+  writeFileSync(path.join(dir, "package.json"), "{}");
+  writeFileSync(path.join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { noEmit: true }, files: ["example.ts"] }));
+  writeFileSync(path.join(dir, "example.ts"), "export const value = 1;\n");
   writeFileSync(path.join(dir, "example.test.ts"), "// hook fixture\n"); git("add", "."); git("commit", "-m", "base");
   git("update-ref", "refs/remotes/origin/main", "HEAD"); git("config", "core.hooksPath", ".githooks");
   const calls = () => readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; now?: number; state?: string; home?: string; config?: string; tmp?: string; known?: string; gitDir?: string; index?: string; workTree?: string; commonDir?: string; configCount?: string; configKey?: string; deadline?: string; ownedBudget?: string; names: string[]; path?: string });
