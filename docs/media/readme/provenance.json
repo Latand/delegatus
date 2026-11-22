@@ -28,7 +28,7 @@
         "meanDifference": 0.23,
         "ringsClipped": 0
       },
-      "sha256": "de9ef2323b155b8eb23ec690fca417863dba10787de51434acf4f3fb60076f63"
+      "sha256": "9a259f3e02efc402ecfceca94d863bfbf59ebe16ee1cd1ca3b05a3481499680c"
     },
     {
       "path": "orchestrator.svg",
@@ -51,7 +51,7 @@
         "meanDifference": 0.613,
         "ringsClipped": 1
       },
-      "sha256": "5c7d3db5151c608887337509a435ffd4ee19676e4e874aa4a386428ac36b44aa"
+      "sha256": "d661c175665129eb2789d9b8916671f517b438c6d8d21e496f5a13cd54b3623e"
     },
     {
       "path": "conversation.svg",
@@ -74,7 +74,7 @@
         "meanDifference": 0.368,
         "ringsClipped": 2
       },
-      "sha256": "b4207557087f3bf60ea930d54a4f9b6acd8e733bc0e4244ebc71657d88d1c5d8"
+      "sha256": "4ed9bc6dc853721f0b4c8cb5f31329b0e5b86d81431ea79a9142e32b7e0ff31f"
     },
     {
       "path": "pipeline.svg",
@@ -97,7 +97,7 @@
         "meanDifference": 0.369,
         "ringsClipped": 0
       },
-      "sha256": "d6ff6e2d2c51044f43d453f3094c1f51d53f7f0ba84c57e07bc364025ef5ff8b"
+      "sha256": "d91fe00548ab97ca834bd7af383c493f31d41c789137ae829eb1d368483999f0"
     },
     {
       "path": "card-menu.svg",
@@ -120,7 +120,7 @@
         "meanDifference": 0.387,
         "ringsClipped": 0
       },
-      "sha256": "2394667fd7f5dee5f5e5c4df762653a16c0ffcbd9bf8d92086b45a2cb615d2f0"
+      "sha256": "e646e7bdfcfb6f97994250a3f835c619357993ea8c25774023cd67fba7efbc1f"
     },
     {
       "path": "accounts.svg",
@@ -140,10 +140,10 @@
       "renderBack": {
         "worstTileMean": 2.765,
         "changedTileShare": 0,
-        "meanDifference": 0.226,
+        "meanDifference": 0.227,
         "ringsClipped": 0
       },
-      "sha256": "a8dd846c39a1a52491b0cb04f8afd24e375742986935677f5896b5e8ac61ecdd"
+      "sha256": "50ad5b7594f036072f78e038395cf7a837f7751ba814a51fafd125ad63af3662"
     },
     {
       "path": "phone-conversation.svg",
@@ -160,7 +160,7 @@
         "meanDifference": 0.753,
         "ringsClipped": 0
       },
-      "sha256": "a483164b1b0d9f44e93ce485c5a492c2a589571db6e53cb023e8fa146b467964"
+      "sha256": "4b2e8c91346e451b6db1ec5b5144eaaee6c373e2683066cad988cf857eb6b4e0"
     },
     {
       "path": "phone-board.svg",
@@ -177,7 +177,7 @@
         "meanDifference": 0.421,
         "ringsClipped": 0
       },
-      "sha256": "e48cf751f001b2ba349b61ccb6daa8fee8d30b0c376cee624f18f6936290ac59"
+      "sha256": "0e262986402e05d76ab78b5949eda7d517c3107501e2aab39cbdf510c5b5fa74"
     }
   ]
 }
