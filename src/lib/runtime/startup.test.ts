@@ -1582,6 +1582,7 @@ test.each([
   ["between passes", "endpoint"],
   ["during registration", "writer"],
   ["during registration", "process"],
+  ["after final custody read", "endpoint"],
 ] as const)(
   "Viewer releases the old adapter when the same session changes custody %s (%s)", async (boundary, movement) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-changed-custody-"));
@@ -1593,11 +1594,14 @@ test.each([
     const inspected = new Error("replacement eligibility was inspected");
     let clock = 0, releases = 0, cursorReads = 0;
     const eligibility: boolean[] = [];
+    const attachedEndpoints: string[] = [];
+    let projectedHost = false;
     const time = spyOn(performance, "now").mockImplementation(() => clock);
     setSystemTime(new Date("2026-10-16T00:00:00Z"));
     try {
       addStructuredRestartConversation(registry, root, { sessionId: key.sessionId, status: "idle", turn: "idle" });
       const row = () => registry.readOnlySnapshot().entries[id]!;
+      const retainedEndpoint = row().structuredHost!.endpoint;
       registry.upsert({ ...row(), pendingAction: "handoff", claimOwner: `structured-host:${JSON.stringify(self)}` });
       const replace = () => {
         const before = row();
@@ -1613,22 +1617,47 @@ test.each([
           },
         });
       };
-      const host = {
-        health: async () => { replace(); return { status: "idle", endpoint: "stdio:retained" }; },
+      const fake = new FakeEngineHost();
+      const health = fake.health.bind(fake);
+      const host = Object.assign(fake, {
+        health: async () => {
+          if (boundary === "during registration") replace();
+          return health();
+        },
         release: async () => { releases++; },
-      };
+        onStateChange: () => {
+          attachedEndpoints.push(row().structuredHost!.endpoint);
+          return () => {};
+        },
+      });
+      const baseClient = runtimeJournalClient(journal);
       const client = {
-        ...runtimeJournalClient(journal),
+        ...baseClient,
+        append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => {
+          const result = await baseClient.append(event);
+          if (boundary === "after final custody read" && event.producer?.eventKey?.startsWith("structured-host:")) {
+            projectedHost = true;
+          }
+          return result;
+        },
         producerCursor: async () => { cursorReads++; return 0; },
       };
       const options: NonNullable<Parameters<typeof adoptStructuredHostsAtStartup>[0]> = {
-        registry, client, orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+        registry, client, refreshTranscriptState: async () => {},
+        orchestratorSeats: () => {
+          if (projectedHost) {
+            projectedHost = false;
+            // Change custody on the next microtask after publication reads it.
+            queueMicrotask(replace);
+          }
+          return [];
+        },
         pipelineEvidence: () => ({ settled: new Set<string>(), deferred: new Set<string>() }),
         adopt: async (_registry, _options, _env, eligible, _progress, hooks) => {
           eligibility.push(eligible!(row()));
           if (eligibility.length > 1) throw inspected;
           const item = { key, host: host as never };
-          if (boundary === "during registration") return [item];
+          if (boundary !== "between passes") return [item];
           hooks!.onAdopted!(item);
           clock += STRUCTURED_STARTUP_PASS_DEADLINE_MS;
           return [];
@@ -1644,7 +1673,8 @@ test.each([
       await expect(adoptStructuredHostsAtStartup(options)).rejects.toBe(inspected);
       expect(eligibility).toEqual([true, true]);
       expect(releases).toBe(1);
-      expect(cursorReads).toBe(0);
+      expect(cursorReads).toBe(boundary === "after final custody read" ? 1 : 0);
+      expect(attachedEndpoints).toEqual(boundary === "after final custody read" ? [retainedEndpoint] : []);
       expect(hasStructuredDeliveryHost(key)).toBe(false);
       if (movement === "replacement" || movement === "endpoint") expect(row().structuredHost?.endpoint).toBe("stdio:replacement");
     } finally {

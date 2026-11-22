@@ -3522,7 +3522,7 @@ async function adoptStructuredHostsPass(
       if (!controllerBoundEarly || rowRetry) return;
       const key = sessionKeyId(item.key);
       if (!startupHostCustody.get(item.host)?.claimOwner) return;
-      const owns = async (): Promise<boolean> => {
+      const owns = (): boolean => {
         try { assertActive(); } catch { return false; }
         if (heldHostKeys.has(key) || deferredHostKeys.has(key) || skippedHostKeys.has(key)) return false;
         return ownsStartupPublication(item);
@@ -3531,7 +3531,7 @@ async function adoptStructuredHostsPass(
       // for its health or journal reads. A failed publish retains the adopted
       // handle for the normal completion retry.
       const publication = (publicationTails.get(key) ?? Promise.resolve()).then(async () => {
-        if (await owns()) await publishStructuredDeliveryHost(publicationItem(item), owns);
+        await publishStructuredDeliveryHost(publicationItem(item), undefined, owns);
       }).catch(error => {
         console.warn("[structured hosts] early host publication deferred", {
           key, error: error instanceof Error ? error.message : String(error),
@@ -3880,7 +3880,7 @@ async function adoptStructuredHostsPass(
         for (const item of nextAdoptedHosts) {
           if (!startupHostInScope(registry, sessionKeyId(item.key))) continue;
           assertActive();
-          await publishStructuredDeliveryHost(publicationItem(item), async () => ownsStartupPublication(item));
+          await publishStructuredDeliveryHost(publicationItem(item), undefined, () => ownsStartupPublication(item));
         }
       } else {
         await completeStructuredDeliveryQueueStartup(nextAdoptedHosts.map(publicationItem), reportProgress, assertActive, contestedConversations,
