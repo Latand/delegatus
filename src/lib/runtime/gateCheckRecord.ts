@@ -21,16 +21,17 @@ function gateRunLog(log: string, root: string): string {
   };
   if (!withinRoot(resolvedLog))
     throw new Error(`gate log is outside the recorder's temporary root (resolvedRoot=${JSON.stringify(root)})`);
-  // The log is created with an exclusive open after its ticket directory. A
-  // pre-existing symlink would redirect that open outside the checked parent.
+  // A missing filename is available for the exclusive open. An existing
+  // symlink must have a resolvable target within the root.
+  let target: string;
   try {
-    if (fs.lstatSync(resolvedLog).isSymbolicLink() && !withinRoot(fs.realpathSync(resolvedLog)))
-      throw new Error(`gate log is outside the recorder's temporary root (resolvedRoot=${JSON.stringify(root)})`);
+    if (!fs.lstatSync(resolvedLog, { throwIfNoEntry: false })?.isSymbolicLink()) return resolvedLog;
+    target = fs.realpathSync(resolvedLog);
   } catch (error) {
-    if (error instanceof Error && error.message.includes("resolvedRoot=")) throw error;
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-      throw new Error(`gate log target cannot be resolved (resolvedRoot=${JSON.stringify(root)}): ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`gate log target cannot be resolved (resolvedRoot=${JSON.stringify(root)}): ${error instanceof Error ? error.message : String(error)}`);
   }
+  if (!withinRoot(target))
+    throw new Error(`gate log is outside the recorder's temporary root (resolvedRoot=${JSON.stringify(root)})`);
   return resolvedLog;
 }
 

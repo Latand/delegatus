@@ -51,3 +51,17 @@ test("registry reads retain the request or the outer background operation that i
     "registry.keyed|agents.reconcile": 1, "registry.snapshot|mcp:get_pipeline": 1, "registry.snapshot|unscoped": 1,
   });
 });
+
+test("times successful and failed route requests once in their completion minute", async () => {
+  let at = 59;
+  const meter = createRequestWorkload(() => at);
+  await meter.withRoute("/api/files?private=value", async () => {
+    await meter.withTool("agent_activity", async () => { at = 60; });
+    at = 61;
+  });
+  const before = meter.snapshot(1, 1).minutes[0]!;
+  expect(() => meter.withRoute("/api/files", () => { at = 61.5; throw Error("handler failed"); })).toThrow();
+  expect(before.routeTimings).toEqual({ "/api/files": { count: 1, totalMs: 2000 } });
+  expect(meter.snapshot(1, 1).minutes[0]!.routeTimings).toEqual({ "/api/files": { count: 2, totalMs: 2500 } });
+  expect(meter.snapshot(0, 0).minutes[0]!.routeTimings).toEqual({});
+});

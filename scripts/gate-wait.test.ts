@@ -9,7 +9,7 @@ import path from "node:path";
 import { once } from "node:events";
 import { waitForGateCompletion, gateSnapshot, logTail, waitForGate, closedQueueSpans } from "./gate-wait";
 import { bindGateCheckRoot, runGateCheckTool } from "../src/lib/runtime/gateCheckTool";
-import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../src/lib/runtime/gateCheckRecord";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, recorderGatePaths } from "../src/lib/runtime/gateCheckRecord";
 import { cpuOwnerIdentity } from "../src/lib/runtime/signalSandboxContext";
 import { checkEnvironment } from "./gate-cache";
 import { isolatedEnvironment } from "./local-gate";
@@ -290,20 +290,20 @@ test.skipIf(process.platform !== "linux")("nested check TMPDIR publishes its run
   expect((await runGateCheckTool({ runId, reason: "foreign nested run" }, bindGateCheckRoot(foreign.root), new AbortController().signal)).success).toBe(false);
 }, 30_000);
 
-test.each(["outside", "indirect", "linked-file", "missing-parent", "standalone", "index-link"])("a recorder refuses %s before starting the command", async fault => {
+test.each(["outside", "indirect", "linked-file", "dangling-link", "missing-parent", "standalone", "index-link"])("a recorder refuses %s before starting the command", async fault => {
   const f = fixture(), other = fixture(), env = portableEnvironment(f);
   const marker = path.join(f.root, "command-started");
   let log = f.log;
   if (fault === "outside" || fault === "standalone") log = other.log;
   if (fault === "missing-parent") log = path.join(other.root, "absent/check.log");
   if (fault === "indirect") { fs.symlinkSync(other.root, path.join(f.root, "indirect"), "dir"); log = path.join(f.root, "indirect/check.log"); }
-  if (fault === "linked-file") {
+  if (fault === "linked-file" || fault === "dangling-link") {
     const nested = path.join(f.root, "nested"); fs.mkdirSync(nested);
-    fs.writeFileSync(other.log, "existing external target\n");
+    if (fault === "linked-file") fs.writeFileSync(other.log, "existing external target\n");
     log = path.join(nested, "check.log"); fs.symlinkSync(other.log, log);
   }
   if (fault === "index-link") fs.symlinkSync(other.root, path.join(f.root, ".gate-runs"), "dir");
-  if (fault === "standalone") {
+  if (fault === "standalone" || fault === "dangling-link") {
     const alias = path.join(other.root, "allowed");
     fs.symlinkSync(f.root, alias, "dir");
     env.TMPDIR = alias;
@@ -318,8 +318,17 @@ test.each(["outside", "indirect", "linked-file", "missing-parent", "standalone",
     for (const entry of [`${log}.gate`, path.join(f.root, ".gate-runs"), path.join(other.root, ".gate-runs")]) {
       expect(fs.existsSync(entry)).toBe(false);
     }
-    if (fault === "linked-file") expect(fs.readlinkSync(log)).toBe(other.log);
+    if (fault === "linked-file" || fault === "dangling-link") expect(fs.readlinkSync(log)).toBe(other.log);
+    if (fault === "dangling-link") expect(fs.existsSync(other.log)).toBe(false);
   }
+});
+
+test("recorder path validation accepts a log symlink to a file within its root", () => {
+  const f = fixture(), log = path.join(f.root, "linked.log");
+  fs.writeFileSync(f.log, "existing in-root target\n");
+  fs.symlinkSync(f.log, log);
+  const root = fs.realpathSync(f.root);
+  expect(recorderGatePaths(log, f.root, {})).toEqual({ root, log: path.join(root, "linked.log") });
 });
 
 test.skipIf(process.platform !== "linux")("a moved launch root replaced by its old-path symlink refuses before dispatch", () => {

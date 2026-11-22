@@ -48,6 +48,7 @@ import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
 import { readHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
+import { activeDrain } from "@/lib/selfUpdate/drain";
 import { rememberHandoffChild, persistHandoffLineage } from "@/lib/handoffLineage";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
@@ -82,6 +83,7 @@ import { roleMemoryDeferralReason, RoleMemoryChanged, RoleMemoryPreparationDefer
 import { AttemptTempStore, type AttemptTempOwner } from "./attemptTempRetention";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE } from "@/lib/memory/roleStore";
+import { cleanerAttemptMayStart } from "@/lib/cleaner/store";
 
 export type SpawnedStructuredHost = EngineHost & {
   /** Effective MCP transport when account config constrained the preference. */
@@ -1072,16 +1074,29 @@ async function actuateQueuedPinnedSpawn(
   options: StructuredSpawnRecoveryOptions,
 ): Promise<SpawnReceipt> {
   const queued = queuedPinnedSpawnForReceipt(receipt);
+  const diskCleaner = receipt.agentRole === "cleaner" && receipt.launchProfile.agentMemoryRoleParams?.mode === "disk";
+  const scheduledCleaner = diskCleaner && typeof receipt.scheduledCleanerRunId === "string";
+  const cleanerAttemptActive = () => scheduledCleaner && typeof receipt.clientAttemptId === "string"
+    && receipt.scheduledCleanerRunId === receipt.clientAttemptId
+    && cleanerAttemptMayStart(receipt.clientAttemptId, (options.now ?? Date.now)());
   const admittedAuthority = readHotStateAuthority(path.dirname(registry.filename));
   const assertActive = () => {
     options.signal?.throwIfAborted();
     options.assertActive?.();
+    if (scheduledCleaner && activeDrain()) throw new Error("disk cleaner launch held by update drain");
+    if (scheduledCleaner && !cleanerAttemptActive()) {
+      throw new Error("disk cleaner run expired before queued host actuation");
+    }
     const authority = readHotStateAuthority(path.dirname(registry.filename));
     if (!viewerReleaseOwnsTraffic() || authority?.mode === "fencing"
       || authority?.epoch !== admittedAuthority?.epoch || authority?.releaseRevision !== admittedAuthority?.releaseRevision) {
       throw new Error("queued launch lost Viewer release authority");
     }
   };
+  if (scheduledCleaner && !cleanerAttemptActive()) {
+    return failQueuedPinnedSpawn(registry, receipt, "disk cleaner run expired before queued host actuation");
+  }
+  if (scheduledCleaner && activeDrain()) return receipt;
   assertActive();
   const currentTime = (options.now ?? Date.now)();
   if (!queued || Date.parse(queued.retryAt) > currentTime) return receipt;
@@ -3404,6 +3419,7 @@ export async function spawnStructuredConversation(
     };
   } catch (error) {
     caughtFailure = error;
+    if (error instanceof Error && error.name === "CleanerDrainHold" && !host && !hostStartRequested) throw error;
     try { return await withoutOperationLease(async () => {
         clearDurableSetupTimeout();
         const pending = input.registry.spawnReceipt(operationId) ?? undefined;
