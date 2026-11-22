@@ -605,7 +605,7 @@ test("an interrupted archive move rolls back and outstanding work stays hot", ()
       ["deliveryOperationOwners","archive-operation-0"],["conversations",conversationId(0)],["receipts","archive-launch-2"]]) {
       expect(db.query("SELECT 1 AS found FROM registry_hot_rows WHERE collection=? AND row_key=?").get(collection!,key!)).toEqual({ found: 1 });
     }
-    expect(() => db.run("DELETE FROM registry_archive")).toThrow("no expiry");
+    expect(() => db.run("DELETE FROM registry_archive")).toThrow("retained");
   } finally { db.close(); }
 });
 

@@ -7449,6 +7449,25 @@ export class AgentRegistry {
     }, { skipColdKeyInitialization: true });
   }
 
+  /** Approval is checked before preparation and again after every writer wait.
+   * Each batch releases its transaction before yielding to other work. */
+  async retireSupersededArchive(): Promise<number> {
+    if (this.sqliteMode !== "sqlite") return 0;
+    assertStateStartupMutation(path.dirname(this.filename),"agent registry archive retirement");
+    const observation = this.sqliteStore!.prepareArchiveRetirement();
+    if (!observation) return 0;
+    let retired = 0;
+    for (let batch = 0; batch < 4; batch++) {
+      const result = await this.deliveryWrite({ label: "registry.retire" }, () =>
+        this.sqliteStore!.retireSupersededArchive(batch === 0 ? observation : undefined,Date.now(),batch));
+      if (!result.acquired) break;
+      retired += result.value;
+      if (!result.value) break;
+      if (batch < 3) await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    return retired;
+  }
+
   /** Existing reaper hygiene owns these bounded storage-only moves. */
   archiveInactiveRows(limit?: number): number {
     assertStateStartupMutation(path.dirname(this.filename),"agent registry archive");

@@ -1,0 +1,378 @@
+{
+  "fixture": "Synthetic production distribution; no production input",
+  "before": {
+    "category": "A",
+    "graceMs": 3600000,
+    "batchSize": 250,
+    "cycleBatches": 4,
+    "collections": [
+      {
+        "collection": "agentStates",
+        "logicalRows": 18348,
+        "coldRows": 0,
+        "hotBytes": 23265264,
+        "compatibilityBytes": 0,
+        "liveArchiveBytes": 0,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "conversations",
+        "logicalRows": 22842,
+        "coldRows": 10855,
+        "hotBytes": 18978673,
+        "compatibilityBytes": 17194320,
+        "liveArchiveBytes": 17194320,
+        "eligibleRows": 308420,
+        "eligibleBytes": 487303600,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "deliveryOperationOwners",
+        "logicalRows": 40330,
+        "coldRows": 39889,
+        "hotBytes": 4889390,
+        "compatibilityBytes": 448990584,
+        "liveArchiveBytes": 448990584,
+        "eligibleRows": 248,
+        "eligibleBytes": 2780080,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "entries",
+        "logicalRows": 21267,
+        "coldRows": 20929,
+        "hotBytes": 466102,
+        "compatibilityBytes": 28861091,
+        "liveArchiveBytes": 28861091,
+        "eligibleRows": 2010,
+        "eligibleBytes": 2711490,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "heldDeliveries",
+        "logicalRows": 34653,
+        "coldRows": 34273,
+        "hotBytes": 441618,
+        "compatibilityBytes": 40065137,
+        "liveArchiveBytes": 40065137,
+        "eligibleRows": 3867,
+        "eligibleBytes": 4485720,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "lineageEdges",
+        "logicalRows": 19103,
+        "coldRows": 17677,
+        "hotBytes": 1253454,
+        "compatibilityBytes": 15538083,
+        "liveArchiveBytes": 15538083,
+        "eligibleRows": 24,
+        "eligibleBytes": 20256,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "memberships",
+        "logicalRows": 17510,
+        "coldRows": 16115,
+        "hotBytes": 387810,
+        "compatibilityBytes": 4479970,
+        "liveArchiveBytes": 4479970,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "migrationIntents",
+        "logicalRows": 281,
+        "coldRows": 207,
+        "hotBytes": 31995,
+        "compatibilityBytes": 90045,
+        "liveArchiveBytes": 90045,
+        "eligibleRows": 2,
+        "eligibleBytes": 840,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "receipts",
+        "logicalRows": 23564,
+        "coldRows": 23173,
+        "hotBytes": 3230782,
+        "compatibilityBytes": 194212913,
+        "liveArchiveBytes": 194212913,
+        "eligibleRows": 6669,
+        "eligibleBytes": 55686150,
+        "highWaterRows": 0
+      }
+    ],
+    "observed": {
+      "rows": 0,
+      "bytes": 0
+    },
+    "retired": [],
+    "B1": {
+      "rows": 34651,
+      "bytes": 40505189
+    },
+    "B2": {
+      "rows": 40327,
+      "bytes": 49037632
+    },
+    "pages": {
+      "pageSize": 4096,
+      "allocated": 703751,
+      "free": 0
+    },
+    "backup": "Hourly backup is a full VACUUM INTO; no incremental backup is implemented. Payload bytes are not backup write bytes.",
+    "digest": "575d7fcde6447adb39f201a93e7e588a43e7a38e118aefc92d6215795191567f"
+  },
+  "after": {
+    "category": "A",
+    "graceMs": 3600000,
+    "batchSize": 250,
+    "cycleBatches": 4,
+    "collections": [
+      {
+        "collection": "agentStates",
+        "logicalRows": 18348,
+        "coldRows": 0,
+        "hotBytes": 23265264,
+        "compatibilityBytes": 0,
+        "liveArchiveBytes": 0,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "conversations",
+        "logicalRows": 22842,
+        "coldRows": 10855,
+        "hotBytes": 18978673,
+        "compatibilityBytes": 17194320,
+        "liveArchiveBytes": 17194320,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "deliveryOperationOwners",
+        "logicalRows": 40330,
+        "coldRows": 39889,
+        "hotBytes": 4889390,
+        "compatibilityBytes": 448990584,
+        "liveArchiveBytes": 448990584,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "entries",
+        "logicalRows": 21267,
+        "coldRows": 20929,
+        "hotBytes": 466102,
+        "compatibilityBytes": 28861091,
+        "liveArchiveBytes": 28861091,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "heldDeliveries",
+        "logicalRows": 34653,
+        "coldRows": 34273,
+        "hotBytes": 441618,
+        "compatibilityBytes": 40065137,
+        "liveArchiveBytes": 40065137,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "lineageEdges",
+        "logicalRows": 19103,
+        "coldRows": 17677,
+        "hotBytes": 1253454,
+        "compatibilityBytes": 15538083,
+        "liveArchiveBytes": 15538083,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "memberships",
+        "logicalRows": 17510,
+        "coldRows": 16115,
+        "hotBytes": 387810,
+        "compatibilityBytes": 4479970,
+        "liveArchiveBytes": 4479970,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "migrationIntents",
+        "logicalRows": 281,
+        "coldRows": 207,
+        "hotBytes": 31995,
+        "compatibilityBytes": 90045,
+        "liveArchiveBytes": 90045,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      },
+      {
+        "collection": "receipts",
+        "logicalRows": 23564,
+        "coldRows": 23173,
+        "hotBytes": 3230782,
+        "compatibilityBytes": 194212913,
+        "liveArchiveBytes": 194212913,
+        "eligibleRows": 0,
+        "eligibleBytes": 0,
+        "highWaterRows": 0
+      }
+    ],
+    "observed": {
+      "rows": 0,
+      "bytes": 0
+    },
+    "retired": [
+      {
+        "collection": "conversations",
+        "retired": 308420,
+        "bytes": 487303600
+      },
+      {
+        "collection": "deliveryOperationOwners",
+        "retired": 248,
+        "bytes": 2780080
+      },
+      {
+        "collection": "entries",
+        "retired": 2010,
+        "bytes": 2711490
+      },
+      {
+        "collection": "heldDeliveries",
+        "retired": 3867,
+        "bytes": 4485720
+      },
+      {
+        "collection": "lineageEdges",
+        "retired": 24,
+        "bytes": 20256
+      },
+      {
+        "collection": "migrationIntents",
+        "retired": 2,
+        "bytes": 840
+      },
+      {
+        "collection": "receipts",
+        "retired": 6669,
+        "bytes": 55686150
+      }
+    ],
+    "B1": {
+      "rows": 34651,
+      "bytes": 40505189
+    },
+    "B2": {
+      "rows": 40327,
+      "bytes": 49037632
+    },
+    "pages": {
+      "pageSize": 4096,
+      "allocated": 707979,
+      "free": 202898
+    },
+    "backup": "Hourly backup is a full VACUUM INTO; no incremental backup is implemented. Payload bytes are not backup write bytes.",
+    "digest": "1790ffd61555f1276fb4693af79c5805f7490305eaae5e965426e07ae92eacc1"
+  },
+  "backupBefore": [
+    {
+      "fileBytes": 2837069824,
+      "processWriteBytes": 2837204992
+    },
+    {
+      "fileBytes": 2837069824,
+      "processWriteBytes": 2837204992
+    }
+  ],
+  "backupAfter": [
+    {
+      "fileBytes": 2028945408,
+      "processWriteBytes": 2029215744
+    },
+    {
+      "fileBytes": 2028945408,
+      "processWriteBytes": 2028957696
+    }
+  ],
+  "preservation": {
+    "records": {
+      "count": 197898,
+      "digest": "7f213d49f153d652d4939fee65052e7eda98d6fb98a0899efcb2f132e6e63ee1"
+    },
+    "compatibility": {
+      "count": 197898,
+      "digest": "7f213d49f153d652d4939fee65052e7eda98d6fb98a0899efcb2f132e6e63ee1"
+    },
+    "mappings": {
+      "count": 163118,
+      "digest": "dc360bc764536a9ce06e1b6809ecd8ddad692cd73c073bbea3da49d86036e409"
+    },
+    "pending": {
+      "count": 2,
+      "digest": "8300c96b38d9e1cc01051ff0540df0d5879f7553446a7af7818ea5172922bd6a"
+    },
+    "openOwners": {
+      "count": 2,
+      "digest": "924bf85b4970adb67bf1f2cd3a01d040c6100e1ebf7509370a0116ccf23e4bea"
+    },
+    "uncertainOwners": {
+      "count": 1,
+      "digest": "f0f25bfb9a3e5b2857485f0ce684a14ded2763f1992deefd1f72fa9e5f64778e"
+    },
+    "owners": {
+      "count": 40330,
+      "digest": "b36392621f397bfb2cbaac231d93c9b2447d13126c8c4f491baa073be0f047de"
+    },
+    "receipts": {
+      "count": 23564,
+      "digest": "6e0528e19dcd74329731bce784ccff244772165a76760f64f2c7c78b5ef80da9"
+    },
+    "openReceipts": {
+      "count": 1,
+      "digest": "5b35ae10ef1e09757dbe08237d4ac246ffb3c7e0f2d86a427fe6ccb98830352f"
+    },
+    "switches": {
+      "count": 1,
+      "digest": "06477ff38980c6bc0a8f746af6767a4608743deaf7bbad11745231c7f032de66"
+    },
+    "intents": {
+      "count": 281,
+      "digest": "61b5a6ed4e12f37febff1dad9b801ea141b2abc62ae5b50a3e84d18e7bccc501"
+    },
+    "compactions": {
+      "count": 0,
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "malformedMappings": {
+      "count": 0
+    },
+    "foreignKeys": [],
+    "integrity": [
+      {
+        "integrity_check": "ok"
+      }
+    ]
+  },
+  "batchMs": {
+    "count": 1286,
+    "p50": 17.16866999999911,
+    "p99": 34.00758799999312,
+    "max": 50.99228700000094
+  }
+}

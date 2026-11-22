@@ -30,6 +30,7 @@ import { sessionKeyId } from "./sessionKey";
 import { NativeCallerArtifacts } from "./nativeCallerArtifacts";
 import { drainRegistryEndingChanges, endingInstant, OWNER_ENDINGS_CURSOR, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared, RETIRED_ENDING_TRIGGERS } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
+import { observeSupersededArchive, retirementApproval, retireSupersededArchiveBatch, type RetirementObservation } from "./registryArchiveRetirement";
 import { protectionConversation, protectionDelivery, protectionEntry, type WorktreeProtection } from "./worktreeProtection";
 
 /** Whether every named table, view, index and trigger exists; a plain read. */
@@ -3509,6 +3510,28 @@ export class SqliteAgentRegistryStore {
     }
   }
 
+  prepareArchiveRetirement(): RetirementObservation | undefined {
+    if (!this.changesReady || !retirementApproval(this.filename)) return;
+    return observeSupersededArchive(this.db);
+  }
+
+  retireSupersededArchive(observation?: RetirementObservation, now = Date.now(), batchIndex = 0): number {
+    assertStateStartupMutation(path.dirname(this.filename), "agent registry archive retirement");
+    const approval = retirementApproval(this.filename);
+    if (!this.changesReady || !approval || batchIndex >= approval.cycleBatches) return 0;
+    const held = this.writerHeld;
+    this.writerHeld = false;
+    if (!held) this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const retired = retireSupersededArchiveBatch(this.db,approval,now,observation);
+      this.db.exec("COMMIT");
+      return retired;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* retain original failure */ }
+      throw error;
+    }
+  }
+
   /** Project only grant lists for newly seen immutable versions. Refreshing
       their attestors then reuses these small claims without rereading every
       archived payload. Retired versions leave the store's projection cache. */
@@ -3823,7 +3846,7 @@ export class SqliteAgentRegistryStore {
     if (!this.snapshotReadDatabase && reopens !== this.databaseReopens) {
       throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
     }
-    if (!raw) throw new Error("registry archive version is missing");
+    if (!raw) throw new DatabaseReplacedError("registry archive version was retired; request a fresh snapshot");
     this.onRowPayloadRead?.(collection,1);
     this.onRowPayloadParse?.(collection,1);
     const value = parseSqliteJson(raw.value_json, this.db) as { deliveryId?: string };
@@ -4193,7 +4216,8 @@ export class SqliteAgentRegistryStore {
         // Only the effective lists escape; the row payload remains evictable.
         let decision = this.coldGrantDecisions.get(id);
         if (!decision) {
-          const raw = this.db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id)!;
+          const raw = this.db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(id);
+          if (!raw) throw new DatabaseReplacedError("registry archive version was retired; request a fresh snapshot");
           this.onRowPayloadRead?.(collection,1);
           this.onRowPayloadParse?.(collection,1);
           const dependencies = new Set<string>();
@@ -4513,7 +4537,13 @@ export class SqliteAgentRegistryStore {
     let results = this.coldRowProjectionResults.get(projector.id);
     if (!results) this.coldRowProjectionResults.set(projector.id,results = new Map());
     const missing: Array<[string, number]> = [];
-    for (const [key,id] of cold) if (!results.has(id)) missing.push([key,id]);
+    const requested = new Set<number>();
+    for (const [key,id] of cold) {
+      if (!results.has(id) && !requested.has(id)) {
+        missing.push([key,id]);
+        requested.add(id);
+      }
+    }
     if (missing.length) {
       if (databaseFileIdentity(this.filename) !== identity) throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
       const keyOf = new Map(missing.map(([key,id]) => [id,key]));
@@ -4523,6 +4553,10 @@ export class SqliteAgentRegistryStore {
         const batch = missing.slice(offset,offset+500).map(([,id]) => id);
         const reopens = this.databaseReopens;
         const stored = select(batch.length).all(...batch);
+        const storedIds = new Set(stored.map(({ id }) => id));
+        if (storedIds.size !== batch.length || batch.some(id => !storedIds.has(id))) {
+          throw new DatabaseReplacedError("registry archive version was retired; request a fresh snapshot");
+        }
         // The statement moved this connection to a file that replaced the view's.
         if (reopens !== this.databaseReopens) throw new DatabaseReplacedError("registry view was replaced; request a fresh snapshot");
         this.onRowPayloadRead?.(collection,stored.length);

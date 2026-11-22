@@ -642,6 +642,11 @@ export async function runReaperCycle(options: {
   } catch (error) {
     console.error("[reaper] registry archive convergence failed",error);
   }
+  try {
+    await registry.retireSupersededArchive();
+  } catch (error) {
+    console.error("[reaper] registry archive retirement failed",error);
+  }
   const cycle: CycleEvidence = { authored: new Set(), scanned: new Map() };
   const report = evaluateReaper(await makeInput(registry, options.files, cycle, now, options.actuation));
   const completed = await runEvaluatedReaper(report, {
