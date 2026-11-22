@@ -8,10 +8,10 @@ import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { claudeProjectRoots } from "@/lib/accounts/claude";
 import type { AccountContext } from "@/lib/accounts/contracts";
-import type { ExternalRelayRequester, ExternalRelayRequest } from "./protocol";
+import type { ExternalRelayRequest } from "./protocol";
 import { externalRelayFile, runHoldsConversation, withFileLock, withFileLockAsync, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
 import { relayRequestInFlight } from "./activity";
-import { effectiveRequester } from "./profile";
+import { effectiveRequester, requesterIsVerifiedOwner } from "./profile";
 export type ConversationAuthority = "member" | "admin" | "owner" | "owner-tier";
 export type RelayConversation = {
   id: string; relayId: string; targetId: string; chatKey: string; requesterKey: string; authority: ConversationAuthority; anchors: string[]; conversationId: string | null;
@@ -218,8 +218,11 @@ export function readConversations(): RelayConversation[] { return withViewerOper
 function change<T>(action: (rows: RelayConversation[]) => T): T {
   return withViewerOperation("external-relay.chains", () => withFileLock(file(), () => { const rows = readConversationRows(true); const result = action(rows); writeRelayFile(file(), { v: 2, conversations: rows }); rememberConversationRows(rows); return result; }));
 }
-export function conversationAuthority(requester?: ExternalRelayRequester | null, ownerTier = false): ConversationAuthority | null {
-  return !requester ? null : ownerTier ? "owner-tier" : requester.is_owner ? "owner" : requester.is_admin ? "admin" : "member";
+export function conversationAuthority(request: ExternalRelayRequest, ownerTier = false): ConversationAuthority | null {
+  const requester = effectiveRequester(request);
+  if (!requester) return null;
+  if (ownerTier && requesterIsVerifiedOwner(request)) return "owner-tier";
+  return requester.is_owner && requesterIsVerifiedOwner(request) ? "owner" : requester.is_admin ? "admin" : "member";
 }
 const encodedCwd = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
 export { isRelayConversationDir } from "./conversationPrivacy";

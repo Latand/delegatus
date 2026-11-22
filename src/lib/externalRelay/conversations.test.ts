@@ -102,8 +102,12 @@ test("late cleanup and attribution cannot overwrite a successor's chain reservat
   }
 });
 test("a requester and their authority scope every chain", () => {
-  expect(conversationAuthority()).toBeNull();
-  expect(conversationAuthority(contextRequest.input.requester)).toBe("admin");
+  const absent = request();
+  absent.input.requester = null;
+  expect(conversationAuthority(absent)).toBeNull();
+  const administrator = request();
+  administrator.input.requester = { ...administrator.input.requester!, is_admin: true };
+  expect(conversationAuthority(administrator)).toBe("admin");
   const first = reserveChainConversation(relay, target, request(), "owner-tier")!;
   releaseConversation(first.id);
   const reply = request("reply", "root");
@@ -140,6 +144,27 @@ test("conflicting owner metadata cannot select an owner chain, while the verifie
   expect(prompt).toContain('"key":"guest-key"');
   expect(prompt).toContain('"is_admin":false');
   expect(prompt).toContain('"is_owner":false');
+});
+
+test("conversation authority requires verified trigger authorship for owner tiers", () => {
+  const verified = request("owner");
+  verified.input.requester = { ...verified.input.requester!, is_owner: true, is_admin: false, is_anonymous_admin: false };
+  verified.input.conversation[0]!.author.key = verified.input.requester.key;
+  expect(conversationAuthority(verified)).toBe("owner");
+  expect(conversationAuthority(verified, true)).toBe("owner-tier");
+
+  const mismatched = structuredClone(verified);
+  mismatched.input.conversation[0]!.author.key = "member-key";
+  expect(conversationAuthority(mismatched)).toBe("member");
+  expect(conversationAuthority(mismatched, true)).toBe("member");
+
+  const selfAuthored = structuredClone(verified);
+  selfAuthored.input.conversation[0]!.author.self = true;
+  expect(conversationAuthority(selfAuthored, true)).toBe("member");
+
+  const anonymous = structuredClone(verified);
+  anonymous.input.requester!.is_anonymous_admin = true;
+  expect(conversationAuthority(anonymous, true)).toBe("member");
 });
 
 for (const asyncReservation of [false, true]) test(`${asyncReservation ? "async" : "sync"} downgraded photo reservation pins the verified member for the next reply`, async () => {

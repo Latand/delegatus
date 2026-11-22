@@ -68,9 +68,13 @@ export async function hydrateToolIndex(relay: PairedRelay, request: ExternalRela
           let progress = 0;
           for (const tool of result.tools) if (pending.has(tool.name)) {
             const claim = visibleClaims.find(candidate => candidate.name === tool.name)!;
-            const audience = claim.audience === "owner" || tool.audience === "owner" ? "owner"
+            if (tool.audience !== undefined && tool.audience !== "admin" && tool.audience !== "owner")
+              throw new Error("lookup audience is invalid");
+            const audience: ExternalRelayTool["audience"] = claim.audience === "owner" || tool.audience === "owner" ? "owner"
               : claim.audience === "admin" || tool.audience === "admin" ? "admin" : undefined;
-            const filled = { ...tool, ...(audience ? { audience } : {}) }; delete filled.spec;
+            const filled: ExternalRelayTool = { name: tool.name, summary: tool.summary, mode: tool.mode,
+              ...(tool.effect ? { effect: tool.effect } : {}), ...(audience ? { audience } : {}),
+              ...(tool.parameters ? { parameters: tool.parameters } : {}) };
             if (filled.mode === "handoff" || filled.parameters) { tools.set(tool.name, filled); pending.delete(tool.name); progress++; }
           }
           for (const block of result.guidance ?? []) {

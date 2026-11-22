@@ -746,7 +746,7 @@ export async function runClaimedRequest(
       : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
     const usingCloud = cloud && (!owner || !!cloudEnvironment(configuredTarget!, true));
     if (cloud && owner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
-    const authority = conversationAuthority(effectiveRequester(request), !!owner);
+    const authority = conversationAuthority(request, !!owner);
     const usesConversation = request.delivery !== "guest" && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
     let preResolutionPending = false;
