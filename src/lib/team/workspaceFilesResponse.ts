@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 
-import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import type { workspaceScope } from "./workspaceAccess";
 import { workspaceFiles } from "./workspaceProjection";
 import { workspaceDenied } from "./workspaceRoute";
@@ -75,10 +74,10 @@ export function createWorkspaceFilesResponder(
       if (value) responseHeaders.set(name, value);
     }
     if (request.headers.get("if-none-match") === entry.etag) return new Response(null, { status: 304, headers: responseHeaders });
-    const compressed = acceptsGzip(request) && entry.bytes.byteLength >= 1024;
-    const bytes = compressed ? await gzipBody(entry.bytes) : entry.bytes;
+    /* Unencoded: Next drops a route's own `content-encoding` and encodes the
+       answer itself for a caller that accepts it. */
+    const bytes = entry.bytes;
     if (signature(refresh(request)) !== authority) return workspaceDenied();
-    if (compressed) responseHeaders.set("content-encoding", "gzip");
     let offset = 0;
     return new Response(new ReadableStream<Uint8Array>({
       async pull(controller) {
