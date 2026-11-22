@@ -184,7 +184,7 @@ test("a stage row with no recorded conversation is no control, and the earlier-w
       loadWork={async () => null} />));
     return host;
   };
-  const keyOn = (host: HTMLElement, key: string) => flushSync(() => host.querySelector(".bt-stage .bt-label")!.dispatchEvent(new dom.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })));
+  const keyOn = (host: HTMLElement, key: string) => flushSync(() => host.querySelector(".bt-stage .bt-label")!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }) as unknown as Event));
   const bare = render({ conversationId: null, agentPath: null }, 24);
   const row = bare.querySelector<HTMLElement>(".bt-stage")!;
   expect(row.dataset.openable).toBeUndefined();
@@ -362,7 +362,7 @@ test("a column names its cards' status, so a card draws no status pill; S opens 
   expect(card.getAttribute("aria-label")).toContain("In progress");
 
   card.focus();
-  flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event));
+  flushSync(() => card.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event));
   const menu = host.querySelector<HTMLElement>(".menu");
   expect(menu?.getAttribute("aria-label")).toBe("Status of «Repair old links»");
   expect([...menu!.querySelectorAll('[role="menuitemradio"]')].map((item) => item.getAttribute("aria-checked"))).toEqual(["false", "true", "false", "false"]);
@@ -382,7 +382,7 @@ test("a refused write returns the card to its column with an error receipt and R
   const { host } = mount([task("a", "assigned", "Repair old links")], ports);
   const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
   card.focus();
-  flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
+  flushSync(() => card.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
   expect(columnOf(host, "a")).toBe("blocked");
   await tick();
   await tick();
@@ -419,7 +419,7 @@ test("find narrows each column and says how many of how many it shows", () => {
   flushSync(() => {
     setter.call(input, "links");
     input.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event);
-    input.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "s", bubbles: true }) as unknown as Event);
   });
   expect(host.querySelector(".column[data-status=inbox] .col-head .n")?.textContent).toBe("1 of 2");
   expect(columnOf(host, "a")).toBeNull();
@@ -434,11 +434,11 @@ test("/ inside the board finds a task and never reaches the Viewer's global sear
   try {
     const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
     card.focus();
-    flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "/", bubbles: true }) as unknown as Event));
+    flushSync(() => card.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }) as unknown as Event));
     expect(document.activeElement?.hasAttribute("data-kanban-search")).toBe(true);
     expect(globalSearch).toBe(0);
     (document.activeElement as HTMLElement).blur();
-    const outside = new dom.KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true });
+    const outside = new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true });
     document.body.dispatchEvent(outside as unknown as Event);
     expect(globalSearch).toBe(1);
     expect(outside.defaultPrevented).toBe(false);
@@ -460,13 +460,13 @@ test("U undoes the last edit after its receipt has closed (#1856)", async () => 
   const { host } = mount([task("a", "inbox", "Write the release notes")], ports);
   const card = host.querySelector<HTMLElement>('.card[data-id="task:a"]')!;
   card.focus();
-  flushSync(() => card.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
+  flushSync(() => card.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true }) as unknown as Event));
   await tick();
   expect(columnOf(host, "a")).toBe("assigned");
   /* The receipt is closed by hand: the edit stays in the board's history. */
   click([...host.querySelectorAll("[data-kanban-receipt] .close")].at(-1));
   expect(host.querySelector("[data-kanban-receipt]")).toBeNull();
-  flushSync(() => document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "u", bubbles: true }) as unknown as Event));
+  flushSync(() => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "u", bubbles: true }) as unknown as Event));
   await tick();
   expect(patches).toEqual([
     { id: "a", body: { status: "assigned", expectedProject: "fixture", expectedRevision: REV(1) } },
@@ -580,7 +580,7 @@ test("the mouse resting in a narrow column widens it after the dwell, with the c
     rest("blocked", 900);
     wait(DWELL_MS * 2);
     expect(wideColumns(host)).toEqual(["done"]);
-    flushSync(() => document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
+    flushSync(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
     expect(host.querySelector(".menu")).toBeNull();
 
     /* A reader composer's menu (model, mic, account) portals to the body, outside
@@ -764,7 +764,7 @@ test("O folds and unfolds the orchestrator seat while no field holds the keys", 
     />,
   ));
   const folded = () => JSON.parse(localStorage.getItem("llv:kanban-seat:v2") ?? "{}").collapsed?.fixture;
-  const press = (target: EventTarget) => flushSync(() => target.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "o", bubbles: true }) as unknown as Event));
+  const press = (target: EventTarget) => flushSync(() => target.dispatchEvent(new KeyboardEvent("keydown", { key: "o", bubbles: true }) as unknown as Event));
   /* A short test window starts the seat folded; each press flips it. */
   press(document.body);
   const first = folded();
