@@ -3471,9 +3471,6 @@ test("an owner failure notice keeps its wire outcome, is recorded under its own 
     expect(completions).toHaveLength(1);
     expect(completions[0]).toMatchObject({ outcome: "answered" });
     expect(relayOutcomeLabel(completion)).toBe("failure_notice");
-    expect(relayOutcomeLabel(completion, "accepted")).toBe("failure_notice");
-    expect(relayOutcomeLabel({ outcome: "answered", reason: undefined }, "unconfirmed")).toBe("failed:delivery_unconfirmed");
-    expect(relayOutcomeLabel({ outcome: "answered", reason: undefined }, "refused")).toBe("failed:delivery_refused");
     const record = readAnswerRecord(paired.id, "target_1", requestId);
     expect(record).toMatchObject({ outcome: "failure_notice", delivery: "accepted", state: "finished" });
     expect(record?.diagnostic?.source).toBeTruthy();

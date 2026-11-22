@@ -7,7 +7,7 @@ import type { ExternalRelayCompletion, ExternalRelayProgress } from "./protocol"
 
 type Start = { type: "start"; relay: PairedRelay; requestId: string; targetId: string; leaseId: string; intervalMs: number; progress: ExternalRelayProgress | null };
 type Command = { type: "progress"; progress: ExternalRelayProgress | null }
-  | { type: "complete"; body: ExternalRelayCompletion; until: number; plainMax: number; ownerAuthorization: boolean | "status" | "failure"; plainOnly?: boolean }
+  | { type: "complete"; body: ExternalRelayCompletion; until: number; plainMax: number; ownerAuthorization: boolean | "status" | "failure" }
   | { type: "stop" };
 let start: Start | undefined;
 let progress: ExternalRelayProgress | null = null;
@@ -78,7 +78,7 @@ input.on("line", line => {
         ? ownerRelayStatusReplyAuthorized(start!.relay.id, start!.targetId, start!.requestId, body, command.plainMax)
         : (command.ownerAuthorization === "failure" ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(start!.relay.id, start!.targetId, start!.requestId) : undefined,
       async () => { send({ type: "refresh_features" }); }, command.plainMax,
-      refusal => send({ type: "refusal", refusal }), record => send({ type: "http_refusal", record }), command.plainOnly)
+      refusal => send({ type: "refusal", refusal }), record => send({ type: "http_refusal", record }))
       .then(async result => {
         completionInFlight = false;
         if (result.delivery === "accepted") completionAccepted = true;

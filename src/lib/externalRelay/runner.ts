@@ -51,17 +51,13 @@ import { InlineRelayLeaseTransport, RelayLeaseTransport } from "./relayLeaseTran
 import {
   answerSchema,
   checkedAnswer,
-  claimedRequestSchema,
   guestAnswerSchema,
   replyAnswerSchema,
   roundSchema,
   type ExternalRelayDecision,
   handoffAnswerSchema,
   INVALID_REQUESTER_DETAIL,
-  isolatedDelivery,
   offersHandoff,
-  RELAY_BUSINESS_ANSWERS,
-  RELAY_ISOLATED_REQUESTERS,
   requestSchema,
   type ExternalRelayCompletion,
   type ExternalRelayProgress,
@@ -185,7 +181,7 @@ export async function runClaimedRequest(
   relay: PairedRelay,
   raw: unknown,
   onFreed?: () => void,
-  runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts; cloudTransport?: CloudTransport; onUnknownFeature?: () => Promise<unknown>; onLeaseReady?: () => void; leaseWorker?: boolean; ownerRecovery?: RunRecord; advertisedFeatures?: readonly string[] },
+  runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts; cloudTransport?: CloudTransport; onUnknownFeature?: () => Promise<unknown>; onLeaseReady?: () => void; leaseWorker?: boolean; ownerRecovery?: RunRecord },
 ): Promise<ExternalRelayCompletion | null> {
   const serviceDeadline = relayRequestDeadline(raw);
   const recovery = runtime?.ownerRecovery;
@@ -208,15 +204,11 @@ export async function runClaimedRequest(
     recorder?.recordDelivery({ outcome: "declined:invalid_request", delivery: sent.delivery });
     return sent.body;
   }
-  const advertised = runtime?.advertisedFeatures;
-  const businessAnswersAdvertised = advertised?.includes(RELAY_BUSINESS_ANSWERS) === true;
-  const parsed = (advertised ? claimedRequestSchema(advertised) : requestSchema).safeParse(raw);
+  const parsed = requestSchema.safeParse(raw);
   const refusalDetail = parsed.success
     ? ownerBindingRefusal(relay, parsed.data)
     : parsed.error.issues.find(issue => issue.message === INVALID_REQUESTER_DETAIL)?.message ?? null;
   const request = parsed.success && !refusalDetail ? parsed.data : null;
-  const isolated = isolatedDelivery(request);
-  const plainOnly = isolated && (request?.delivery === "business" || advertised?.includes(RELAY_ISOLATED_REQUESTERS) === true);
   const caps = request ? answerCapabilities(request, relay.targets.find(t => t.id === request.target_id)?.engine ?? "") : null;
   const rawId =
     raw && typeof raw === "object"
@@ -268,9 +260,8 @@ export async function runClaimedRequest(
     targetName: relay.targets.find((item) => item.id === targetId)?.name ?? null,
     claimedAt: rawRequest.claimed_at,
     chatKey: request?.chat?.key ?? null,
-    requestDelivery: request?.delivery,
     requester: request?.input.requester ?? null,
-    input: isolatedDelivery({ delivery: rawRequest.delivery }) ? request?.input ?? null : refusalDetail ? null : rawRequest.input,
+    input: refusalDetail ? null : rawRequest.input,
     ...(request?.features ? { features: request.features } : {}),
   });
   inflight.add(requestId);
@@ -288,9 +279,9 @@ export async function runClaimedRequest(
     diagnostic ??= value;
     recorder?.diagnose(diagnostic);
   };
-  // Isolated failure details belong only to the request record, even after masking.
+  // Guest failure details belong only to the request record, even after masking.
   const logDiagnostic = (label: string, value: OwnerTurnDiagnostic) => {
-    console.error(label, JSON.stringify({ requestId, diagnostic: isolated
+    console.error(label, JSON.stringify({ requestId, diagnostic: request?.delivery === "guest"
       ? { source: value.source } : value }));
   };
   let releaseRequested = false;
@@ -386,7 +377,7 @@ export async function runClaimedRequest(
         const answer = ownerFailureAnswer(request!, owner, cause, ownerCredentials);
         if (answer) { body = { lease_id: leaseId, outcome: "answered", answer, duration_ms: Date.now() - deadline.receivedAt }; failureNotice = true; }
       }
-      if (request && isolated && body.outcome === "answered") {
+      if (request?.delivery === "guest" && body.outcome === "answered") {
         const answer = checkedAnswer(body.answer, request, { handoff: false, ignore: false });
         body = answer && answer.action !== "handoff" ? { ...body, answer } : failed(leaseId, "invalid_answer");
       }
@@ -456,17 +447,15 @@ export async function runClaimedRequest(
         sent = initiallyLate && body.outcome === "answered"
           ? await deliverOwnerLateAnswer(relay, requestId, body, stagedAttachments, allowOwnerReply!)
           : transport
-          ? await transport.complete(body, until, caps?.plainMax ?? 4000, ownerStatusReply ? "status" : failureReply ? "failure" : !!allowOwnerReply, plainOnly)
-          : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature,
-            caps?.plainMax, recorder?.recordCompletionRefusal, undefined, plainOnly);
+          ? await transport.complete(body, until, caps?.plainMax ?? 4000, ownerStatusReply ? "status" : failureReply ? "failure" : !!allowOwnerReply)
+          : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax, recorder?.recordCompletionRefusal);
       } catch {
-        if ((allowOwnerReply || plainOnly) && body.outcome === "answered") {
-          console.error("External relay completion acknowledgement unavailable; delivery retained");
+        if (allowOwnerReply && body.outcome === "answered") {
+          console.error("Owner relay completion acknowledgement unavailable; delivery retained");
           sent = { body, delivery: "unconfirmed" };
         } else {
           console.error("External relay helper completion unavailable; using Viewer transport");
-          sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature,
-            caps?.plainMax, recorder?.recordCompletionRefusal, undefined, plainOnly);
+          sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax, recorder?.recordCompletionRefusal);
         }
       } finally { completionInFlight = false; }
       if (sent.delivery === "refused" && body.outcome === "declined" && body.reason === "handoff") {
@@ -646,7 +635,7 @@ export async function runClaimedRequest(
   };
   try {
     let newestProgress: ExternalRelayProgress | null = null;
-    const steps = isolated ? null : createRelaySteps(relay.features);
+    const steps = request.delivery === "guest" ? null : createRelaySteps(relay.features);
     let progressSeq = 0;
     let stepLog: string | null = null;
     let pendingServiceTools = 0;
@@ -677,8 +666,7 @@ export async function runClaimedRequest(
         phase: frame.phase, status: frame.status, ...(frame.code ? { code: safeRelayHttpReason(frame.code) } : {}) });
       if (frame.phase === "acknowledged") { acked = true; heartbeatAt = Date.now(); firstAcknowledged(); }
       else if (frame.phase === "failed") {
-        if (!ownerPastWindow() && !completionAccepted && (frame.status === 404
-          || frame.status === 409 && frame.code === "lease_lost" || isolated && frame.status === 401)) {
+        if (!ownerPastWindow() && (frame.status === 404 || frame.status === 409 && frame.code === "lease_lost") && !completionAccepted) {
           leaseUnavailable = true; if (!ownerExecution) { run?.cancel(); callAbort.abort(); }
         }
         firstAcknowledged();
@@ -728,7 +716,7 @@ export async function runClaimedRequest(
     const requester = request.input.requester;
     const limit = memberLimitFor(target);
     const memberDecline = (): ExternalRelayCompletion | null => {
-      if (!requester || limit === null || exemptFromMemberLimit(requester, request.input, request.delivery)) return null;
+      if (!requester || limit === null || exemptFromMemberLimit(requester)) return null;
       const now = Date.now();
       const used = countMemberAnswers({ relayId: relay.id, targetId: target.id, chatKey: request.chat?.key ?? null,
         requesterKey: requester.key, sinceMs: now - RELAY_MEMBER_LIMIT_WINDOW_MS });
@@ -739,7 +727,7 @@ export async function runClaimedRequest(
     if (earlyMemberDecline) return await finish(earlyMemberDecline);
     const profile = answerProfileFor(requester);
     // Third-party context stays in the closed, request-local answer profile.
-    // Isolated delivery cannot launch an owner session.
+    // Owner authority must never launch a general session for guest delivery.
     const ownerMessage = ownerTierFor({ ownerTier: true }, request);
     const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
     const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
@@ -748,7 +736,7 @@ export async function runClaimedRequest(
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
     owner = prototype || target.ownerTier === true ? ownerMessage : null;
-    if (owner || isolated) delete profile.pageRead;
+    if (owner || request.delivery === "guest") delete profile.pageRead;
     boundedOwnerTurn = !!owner && !prototype;
     ownerExecution = boundedOwnerTurn;
     if (owner && recovery?.ownerTurn?.context) owner = recovery.ownerTurn.context;
@@ -762,14 +750,10 @@ export async function runClaimedRequest(
     if (owner) allowOwnerReply = () => ownerStatusReply
       ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
       : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
-    // Cloud transport is text-only. Honor the lease's capability snapshot
-    // for the local image path even if a later poll withdraws the feature.
-    const localImages = cloud && !owner && businessAnswersAdvertised
-      && validateMediaInput(request, advertised?.includes("requester_context"), advertised?.includes(RELAY_HISTORY_MEDIA)).some(media => media.availability === "ready" && isInboundImage(media.mime_type));
-    const usingCloud = cloud && !localImages && (!owner || !!cloudEnvironment(configuredTarget!, true));
+    const usingCloud = cloud && (!owner || !!cloudEnvironment(configuredTarget!, true));
     if (cloud && owner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
     const authority = conversationAuthority(request.input.requester, !!owner);
-    const usesConversation = !isolated && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
+    const usesConversation = request.delivery !== "guest" && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
     let preResolutionPending = false;
     if (usesConversation) {
@@ -920,8 +904,8 @@ export async function runClaimedRequest(
     // history photos belong to the hosted assistant in that case; handing the
     // request back keeps the client from claiming an answer without seeing them.
     if (usingCloud && hasInboundMedia(request)) {
-      const ready = validateMediaInput(request, advertised?.includes("requester_context"), advertised?.includes(RELAY_HISTORY_MEDIA)).filter(media => media.availability === "ready");
-      if (isolated && ready.length) return await finish(declined(leaseId, "handoff", null, GUEST_CLOUD_MEDIA_HANDOFF_DETAIL));
+      const ready = validateMediaInput(request).filter(media => media.availability === "ready");
+      if (request.delivery === "guest" && ready.length) return await finish(declined(leaseId, "handoff", null, GUEST_CLOUD_MEDIA_HANDOFF_DETAIL));
       if (request.features?.includes(RELAY_HISTORY_MEDIA) && ready.some(media => isInboundImage(media.mime_type)))
         return await finish(declined(leaseId, "handoff", null, "This install cannot inspect history photos; the service's own assistant will answer."));
     }
@@ -953,9 +937,7 @@ export async function runClaimedRequest(
         if (!await lease.ack()) return null;
         await inbound?.dispose();
         inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at), skipRejected: true,
-          requesterContextNegotiated: advertised?.includes("requester_context"),
-          historyMediaNegotiated: advertised?.includes(RELAY_HISTORY_MEDIA),
-          ...(conversation && !isolated ? { seenMessageIds: new Set(conversation.seen) } : {}),
+          ...(conversation && request.delivery !== "guest" ? { seenMessageIds: new Set(conversation.seen) } : {}),
           authorize: () => { if (leaseUnavailable || releaseRequested || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new ExternalRelayError("lease_lost", 409); } });
         callAbort.signal.throwIfAborted();
         if (toolMedia) toolMedia.replaceInbound(inbound);
@@ -982,8 +964,6 @@ export async function runClaimedRequest(
       }
       if (rounds === 1 && !toolMedia) {
         toolMedia = createToolResultMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: Math.min(deadline.at, serviceDeadline.at),
-          requesterContextNegotiated: advertised?.includes("requester_context"),
-          historyMediaNegotiated: advertised?.includes(RELAY_HISTORY_MEDIA),
           authorize: () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); } }, inbound ?? undefined);
         if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
           async () => {
@@ -1000,7 +980,7 @@ export async function runClaimedRequest(
             return true;
           }, toolMedia);
         if (ownerTools && usingCloud) loop = ownerTools.loop;
-        else if (!owner && !isolated && (callableTools(request).length || profile.pageRead)) loop = createToolLoop(relay, request, lease, { ...runtime, pageRead: profile.pageRead, seedMediaRefs: toolMedia?.seedRefs, seedRefusal: toolMedia?.seedRefusal }, (tool, done, failed) => {
+        else if (!owner && request.delivery !== "guest" && (callableTools(request).length || profile.pageRead)) loop = createToolLoop(relay, request, lease, { ...runtime, pageRead: profile.pageRead, seedMediaRefs: toolMedia?.seedRefs, seedRefusal: toolMedia?.seedRefusal }, (tool, done, failed) => {
           if (!steps && request.answer.progress === "notes") {
             newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
               status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
@@ -1065,7 +1045,7 @@ export async function runClaimedRequest(
         }
         steps?.observe({});
         stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
-        const schema = withAnswerParts(isolated ? guestAnswerSchema : loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent || !offersHandoff(request) ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent && offersHandoff(request) }))
+        const schema = withAnswerParts(request.delivery === "guest" ? guestAnswerSchema : loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent || !offersHandoff(request) ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent && offersHandoff(request) }))
             : ownerTools ? (ownerTools.sawUnknown ? replyAnswerSchema : ownerTools.actionSent ? answerSchema : offersHandoff(request) ? handoffAnswerSchema : answerSchema)
               : offersHandoff(request) ? handoffAnswerSchema : answerSchema, caps!);
         const localEngine = target.engine, localModel = target.model, localRunDir = runDir;
@@ -1112,7 +1092,7 @@ export async function runClaimedRequest(
             ...(steps ? { onProgress: steps.observe } : {}),
           }) : runEphemeralAgent({
             ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (localEngine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd!, codexHome: conversationCodexHome(conversation) } } : {}),
-            privateContext: isolated,
+            privateContext: request.delivery === "guest",
             key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
             engine: localEngine,
             model: localModel,
@@ -1144,7 +1124,7 @@ export async function runClaimedRequest(
           ["prompt"]: agentPrompt,
           environmentId: cloudEnvironment(configuredTarget!, !!owner) ?? "",
           model: target.model,
-          privateContext: isolated,
+          privateContext: request.delivery === "guest",
           schema, effort: target.effort, fullAccess: !!owner, timeoutMs: Math.min(owner ? Math.max(0, executionDeadline - Date.now()) : remainingMs(deadline), target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity),
           transport: async input => {
             // A restart after this write cannot prove the remote turn stopped.
@@ -1281,7 +1261,7 @@ export async function runClaimedRequest(
       if (pendingBeat) await pendingBeat;
       cancelStalledRun();
       if (leaseUnavailable && !ownerExecution) return null;
-      if (isolated && result.status === "done")
+      if (request.delivery === "guest" && result.status === "done")
         result = { ...result, answer: scrubOwnerReply(result.answer, ownerCredentials) };
       const decision = result?.status === "done"
         ? loop && !final ? checkedRoundV2(result.answer, request, caps!, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }, answerDrops) : checkedAnswerV2(result.answer, request, caps!, { handoff: !loop?.actionSent && !ownerTools?.actionSent, ignore: !loop?.sawUnknown && !ownerTools?.sawUnknown, stagedAttachments: owner ? stagedAttachments.length : 0 }, answerDrops)

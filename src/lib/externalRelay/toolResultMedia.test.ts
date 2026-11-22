@@ -92,31 +92,25 @@ test.each(["not_found", "protected", "too_large", "unsupported_media_type"])("do
   } finally { await f.close(); }
 });
 
-test("inbound ref count constrains tool images and cannot reset between rounds", async () => {
-  const input = request(); input.input.conversation[0]!.media = Array.from({ length: 10 }, (_, i) => photo(`inbound_${i}`, 1));
-  const f = await harness(input);
+test("count and total byte limits include inbound media and cannot reset between rounds", async () => {
+  for (const sizes of [Array(10).fill(1), Array(5).fill(MAX_INPUT_MEDIA_TOTAL_BYTES / 5)]) {
+    const input = request(); input.input.conversation[0]!.media = sizes.map((size, i) => photo(`inbound_${i}`, size));
+    const f = await harness(input);
+    try {
+      const result = projection([photo()]);
+      await f.media.collect([result]);
+      expect(result.media_notes!.join(" ")).toContain("too_large"); expect(f.downloads).toEqual([]);
+    } finally { await f.close(); }
+  }
+  const f = await harness();
   try {
-    const result = projection([photo()]);
-    await f.media.collect([result]);
-    expect(result.media_notes!.join(" ")).toContain("too_large"); expect(f.downloads).toEqual([]);
-  } finally { await f.close(); }
-  const returned = await harness();
-  try {
-    const first = projection(Array.from({ length: 10 }, (_, i) => photo(`returned_${i}`, returned.png.length)));
-    await returned.media.collect([first]);
-    const next = projection([photo("eleventh", returned.png.length)]);
-    await returned.media.collect([next]);
-    expect(returned.downloads).toHaveLength(10); expect(returned.media.files).toHaveLength(10);
+    const first = projection(Array.from({ length: 10 }, (_, i) => photo(`returned_${i}`, f.png.length)));
+    await f.media.collect([first]);
+    const next = projection([photo("eleventh", f.png.length)]);
+    await f.media.collect([next]);
+    expect(f.downloads).toHaveLength(10); expect(f.media.files).toHaveLength(10);
     expect(next.media_notes!.join(" ")).toContain("too_large");
-  } finally { await returned.close(); }
-});
-
-test("oversized inbound descriptors are refused before tool result media processing", () => {
-  const input = request();
-  input.input.conversation[0]!.media = Array.from({ length: 5 }, (_, i) => photo(`oversized_${i}`, MAX_INPUT_MEDIA_TOTAL_BYTES / 5));
-  const controller = new AbortController();
-  expect(() => createToolResultMedia({ api_base: "http://127.0.0.1:1/v1", credential: "fixture-credential" }, input,
-    os.tmpdir(), { signal: controller.signal, deadlineAt: now + 60_000, authorize: () => {} })).toThrow();
+  } finally { await f.close(); }
 });
 
 test("feature, status and effect fences prevent media fetches", async () => {

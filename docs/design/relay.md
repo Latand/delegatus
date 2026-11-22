@@ -1567,9 +1567,19 @@ A request without the additions is answered exactly as above.
 
 | Field | Written by | Meaning |
 |---|---|---|
-| `requester` | the relay service | Exactly six fields: `key` is the triggering message's `author.key` in the same opaque domain; `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin` and `is_owner` are required booleans derived by the service. `is_owner` is false when the owner posts as an anonymous admin or a channel. The install declines `invalid_request`, with the detail "Requester does not match the triggering author or the owner delivery context.", before it builds any tool list or chooses a session, when a requester is present and `respond_to` does not name exactly one non-`self` message whose `author.key` is `key`; when `is_owner` and `is_anonymous_admin` are both true; when `owner_delivery` arrives with `is_owner` false; and, for guest delivery, unless the requester is that trigger's non-anonymous owner. |
+| `requester` | the relay service | Exactly six fields: `key` is the triggering message's `author.key` in the same opaque domain; `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin` and `is_owner` are required booleans derived by the service. `is_owner` is false when the owner posts as an anonymous admin or a channel. The install declines `invalid_request`, with the detail "Requester does not match the triggering author or the owner delivery context.", before it builds any tool list or chooses a session, when a requester is present and `respond_to` does not name exactly one non-`self` message whose `author.key` is `key`; when `is_owner` and `is_anonymous_admin` are both true; or when `owner_delivery` arrives with `is_owner` false. Guest delivery requires a matching, non-anonymous requester and forbids `owner_delivery`. A non-owner guest also has `is_admin`, `can_restrict_members` and `can_delete_messages` set to false. |
 | `short_term_memory` | the relay service | The chat's short-term memory, as the service's own agent would see it. At most 16 000 Unicode code points. |
 | `tools` | the relay service | The service's tools that the requester's role may use: a unique `name` of at most 64 characters, a one-line `summary` of at most 200, and a `mode`. At most 100 items. String bounds count Unicode code points. |
+
+For guest delivery, the service supplies the chat's context in
+`input.conversation`, including applicable Business history. `answerPrompt`
+adds that conversation and any supplied `input.short_term_memory` to the
+guest turn for either requester. An absent or null memory field adds no
+memory section. The same guest media policy applies to each requester.
+If the service descriptor offers `relay_guest_non_owner`, the install returns
+it on the claim alongside `relay_guest_answers` and `requester_context`. This
+capability covers guest delivery. Services use their existing private-chat
+routing for requests outside guest mode.
 
 - `mode: "direct"` names a tool the install could call itself once a later
   feature negotiates reads (`relay_tool_calls`, slice 2); `"handoff"` names

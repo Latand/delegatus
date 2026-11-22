@@ -7,7 +7,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-switches-"));
 process.env.LLV_STATE_DIR = root;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 test("chain pinning defaults on and compact requires conversations on the next read", () => {
-  const off = { chain_conversations: true, compact: false, owner_tools: false, rich_media: true, business_answers: false };
+  const off = { chain_conversations: true, compact: false, owner_tools: false, rich_media: true };
   expect(readRelaySwitches()).toEqual(off);
   setRelaySwitch("chain_conversations", false);
   setRelaySwitch("compact", true);
@@ -24,9 +24,7 @@ test("chain pinning defaults on and compact requires conversations on the next r
 });
 test("relay:owner_tools:enabled is independent, explicit and default OFF", () => {
   fs.rmSync(path.join(root, "external-relay/switches.json"), { recursive: true, force: true });
-  expect(setRelaySwitch("relay:owner_tools:enabled", true)).toEqual({
-    chain_conversations: true, compact: false, owner_tools: true, rich_media: true, business_answers: false,
-  });
+  expect(setRelaySwitch("relay:owner_tools:enabled", true)).toEqual({ chain_conversations: true, compact: false, owner_tools: true, rich_media: true });
   expect(setRelaySwitch("relay:owner_tools:enabled", false).owner_tools).toBe(false);
   for (const value of ["true", 1, null]) {
     fs.writeFileSync(path.join(root, "external-relay/switches.json"), JSON.stringify({ v: 1, "relay:owner_tools:enabled": value }));

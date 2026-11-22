@@ -6,7 +6,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import type { AnswerDrop } from "./answerV2";
-import type { RelayMediaKind, ExternalRelayAnswer, ExternalRelayRequest, ExternalRelayRequester } from "./protocol";
+import type { RelayMediaKind, ExternalRelayAnswer, ExternalRelayRequester } from "./protocol";
 import { exemptFromMemberLimit, type RelayAnswerProfile } from "./profile";
 import type { OwnerTurnDiagnostic } from "./diagnostic";
 import { RELAY_FAILURE_NOTICE_OUTCOME } from "./activity";
@@ -57,7 +57,6 @@ export type RelayAnswerRecord = {
   claimedAt: string | null;
   /** The request's chat key (§A.8), when it carried one. */
   chatKey: string | null;
-  requestDelivery?: ExternalRelayRequest["delivery"];
   requester: RelayAnswerRequester | null;
   /** True once the run was reserved: the answers the member limit counts. */
   admitted: boolean;
@@ -73,7 +72,7 @@ export type RelayAnswerRecord = {
   answer: (Omit<ExternalRelayAnswer, "action"> & { action: string }) | null;
   /** Whether the service acknowledged the completion; null when none was sent. */
   delivery: RelayAnswerDelivery | null;
-  /** Wire input for ordinary claims and the validated input for isolated delivery. */
+  /** `Request.input` exactly as received, unknown fields included. */
   input: unknown;
 };
 export type RelayAnswerSummary = Pick<
@@ -139,7 +138,6 @@ export function answerRecorder(base: {
   targetName: string | null;
   claimedAt: unknown;
   chatKey?: string | null;
-  requestDelivery?: ExternalRelayRequest["delivery"];
   requester?: ExternalRelayRequester | null;
   input: unknown;
   features?: string[];
@@ -160,7 +158,6 @@ export function answerRecorder(base: {
     model: null,
     claimedAt: typeof base.claimedAt === "string" ? base.claimedAt : null,
     chatKey: base.chatKey ?? null,
-    ...(base.requestDelivery ? { requestDelivery: base.requestDelivery } : {}),
     requester: base.requester
       ? { ...base.requester }
       : null,
@@ -429,7 +426,7 @@ export function countMemberAnswers(scope: {
       !record?.admitted ||
       !record.requester ||
       record.requester.key !== scope.requesterKey ||
-      exemptFromMemberLimit(record.requester, record.input as ExternalRelayRequest["input"], record.requestDelivery) ||
+      exemptFromMemberLimit(record.requester) ||
       (record.chatKey ?? null) !== scope.chatKey
     ) continue;
     if (!counted.has(record.requestId)) {

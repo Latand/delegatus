@@ -66,12 +66,8 @@ export function markRelayFailureNotice<T extends object>(completion: T): T {
   return completion;
 }
 /** The locally recorded outcome of a completion the runner returned. */
-export function relayOutcomeLabel(
-  completion: { outcome: string; reason?: string } | null,
-  delivery?: "accepted" | "refused" | "unconfirmed" | null,
-): string {
+export function relayOutcomeLabel(completion: { outcome: string; reason?: string } | null): string {
   if (!completion) return "lease_lost";
   if (completion.outcome !== "answered") return `${completion.outcome}:${completion.reason}`;
-  if (delivery && delivery !== "accepted") return `failed:delivery_${delivery}`;
   return failureNotices.has(completion) ? RELAY_FAILURE_NOTICE_OUTCOME : "answered";
 }

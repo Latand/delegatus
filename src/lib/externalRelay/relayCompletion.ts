@@ -15,7 +15,6 @@ export async function completeRelayRequest(
   plainMax = 4000,
   onRefusal?: (refusal: CompletionRefusal) => void,
   onHttpRefusal?: (record: RelayHttpRefusal) => void,
-  plainOnly = false,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery; refusalCode?: string; tooLong?: true }> {
   let wait = 1000;
   let attempted = false;
@@ -42,26 +41,12 @@ export async function completeRelayRequest(
     if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null };
     let responseStatus = 0;
     try {
-      const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(requestId)}/complete`, "POST", body, relay.credential,
+      await relayCall(relay.api_base, `/requests/${encodeURIComponent(requestId)}/complete`, "POST", body, relay.credential,
         { timeoutMs: 5000, onResponseStatus: status => { responseStatus = status; }, maxBytes: relay.limits.max_response_bytes, onHttpRefusal,
           ...(allowOwnerReply ? { prepareBody: () => {
             if (body.outcome === "answered" && !allowOwnerReply()) body = { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null };
             return body;
           } } : {}) });
-      if (plainOnly && body.outcome === "answered") {
-        const receipt = response.body;
-        if (response.status !== 200 || !receipt || typeof receipt !== "object"
-          || (receipt as { status?: unknown }).status !== "accepted"
-          || typeof (receipt as { duplicate?: unknown }).duplicate !== "boolean") {
-          // A success status without the protocol receipt leaves delivery
-          // unknown. Retry the identical completion until its lease deadline.
-          unresolved = true;
-          if (Date.now() >= until()) return result("unconfirmed");
-          await new Promise(resolve => setTimeout(resolve, Math.min(wait, Math.max(0, until() - Date.now()))));
-          wait = Math.min(wait * 2, 5000);
-          continue;
-        }
-      }
       return result("accepted");
     } catch (error) {
       if (responseStatus >= 300) {
@@ -103,8 +88,6 @@ export async function completeRelayRequest(
         }
         if (v2 && [415, 422].includes(error.status)) return refused();
         if (error.status === 413 && body.outcome === "answered") {
-          // Isolated leases carry one text answer with no format downgrade.
-          if (plainOnly) return refused();
           const answer = body.answer;
           if ([...answer.text].length <= plainMax && (answer.format !== "plain"
             || answer.buttons?.length || answer.mentions?.length || answer.attachments?.length)) {
@@ -120,7 +103,7 @@ export async function completeRelayRequest(
         }
         if ([400, 401, 404, 409, 413, 426].includes(error.status)) return refused();
       }
-      unresolved = !!allowOwnerReply || plainOnly;
+      unresolved = !!allowOwnerReply;
       if (Date.now() >= until()) return result("unconfirmed");
       if (body.outcome === "answered" && (body.answer.format !== undefined || tooLong) && error instanceof ExternalRelayError && error.status === 429 && error.retryAfterSeconds !== null) wait = Math.max(1, error.retryAfterSeconds * 1000);
       await new Promise(resolve => setTimeout(resolve, Math.min(wait, Math.max(0, until() - Date.now()))));

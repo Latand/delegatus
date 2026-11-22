@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ExternalRelayError, relayCall } from "./client";
-import { isolatedDelivery, lookupResultSchema, relayToolAudience, visibleRelayTools, type ExternalRelayRequest, type ExternalRelayTool } from "./protocol";
+import { lookupResultSchema, relayToolAudience, visibleRelayTools, type ExternalRelayRequest, type ExternalRelayTool } from "./protocol";
 import type { PairedRelay } from "./store";
 import { canonical, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -32,7 +32,7 @@ export function describeToolIndex(request: ExternalRelayRequest, names: string[]
 export async function hydrateToolIndex(relay: PairedRelay, request: ExternalRelayRequest,
   lease: { signal: AbortSignal; ack: () => Promise<boolean>; lose: () => void },
   runtime: ToolLoopRuntime = {}, deadlineAt = Infinity): Promise<{ request: ExternalRelayRequest; guidance: ToolGuidance[] }> {
-  if (isolatedDelivery(request)) return { request, guidance: [] };
+  if (request.delivery === "guest") return { request, guidance: [] };
   const visible = visibleRelayTools(request);
   if (!visible.some(tool => tool.mode === "direct" && tool.spec && !tool.parameters)) return { request, guidance: [] };
   return withViewerOperation("relay.tool-index", async () => {

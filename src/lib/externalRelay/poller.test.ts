@@ -1124,6 +1124,17 @@ test("claim advertises on-demand tools only when the stored descriptor offers th
   expect(relayClaimCapabilities().features).not.toContain("relay_tools_on_demand");
 });
 
+test("claim opts into non-owner guests only with a guest-specific service offer", () => {
+  const guestFeature = "relay_guest_non_owner";
+  const widerFeature = "relay_isolated_requesters";
+  const legacy = relayClaimCapabilities({ features: [widerFeature] }).features;
+  expect(legacy).toContain("relay_guest_answers");
+  expect(legacy).not.toContain(guestFeature);
+  expect(legacy).not.toContain(widerFeature);
+  const guest = relayClaimCapabilities({ features: [guestFeature, widerFeature] }).features;
+  expect(guest).toEqual([...legacy, guestFeature]);
+});
+
 test("inbound media is advertised only when the descriptor offers it and includes requester context", () => {
   expect(relayClaimCapabilities({ features: ["relay_media_in"] }).features).toEqual(expect.arrayContaining(["relay_media_in", "requester_context"]));
   expect(relayClaimCapabilities({ features: [] }).features).not.toContain("relay_media_in");
@@ -1276,16 +1287,10 @@ test("a terminal late answer inside its window is retained without another ledge
 });
 
 
-test("history media claims follow the descriptor, with Business negotiation enabling the lease feature", () => {
+test("history media claims require both history and inbound capabilities in the descriptor", () => {
   expect(relayClaimCapabilities({ features: ["relay_media_in", "relay_history_media"] }).features)
     .toEqual(expect.arrayContaining(["relay_media_in", "requester_context", "relay_history_media"]));
   for (const features of [[], ["relay_media_in"], ["relay_history_media"]]) {
     expect(relayClaimCapabilities({ features }).features).not.toContain("relay_history_media");
   }
-  setRelaySwitch("relay:business_answers:enabled", true);
-  try {
-    expect(relayClaimCapabilities({ features: ["relay_media_in"] }).features)
-      .toEqual(expect.arrayContaining(["relay_media_in", "relay_history_media", "relay_business_answers"]));
-    expect(relayClaimCapabilities({ features: [] }).features).not.toContain("relay_history_media");
-  } finally { setRelaySwitch("relay:business_answers:enabled", false); }
 });

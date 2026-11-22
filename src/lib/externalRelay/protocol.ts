@@ -1,9 +1,5 @@
-import { hasInboundMedia, isolatedDelivery, MAX_INPUT_MEDIA_REFS, normalizeInputMediaDescriptor, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
+import { hasHistoryMedia, hasInboundMedia, MAX_INPUT_MEDIA_REFS, normalizeInputMediaDescriptor, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
 import { z } from "zod";
-
-export { isolatedDelivery };
-export const RELAY_BUSINESS_ANSWERS = "relay_business_answers";
-export const RELAY_ISOLATED_REQUESTERS = "relay_isolated_requesters";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
 const boundedString = (max: number) =>
@@ -225,7 +221,7 @@ export const ownerDeliverySchema = z.object({
 });
 export type OwnerDelivery = z.infer<typeof ownerDeliverySchema>;
 const answerRequestSchema = z.object({
-  delivery: z.enum(["guest", "private", "business"]).optional(),
+  delivery: z.literal("guest").optional(),
   owner_delivery: ownerDeliverySchema.optional().catch(undefined),
   features: z.array(boundedString(64)).max(32).refine(v => new Set(v).size === v.length).optional().catch(undefined),
   request_id: id,
@@ -245,38 +241,36 @@ const answerRequestSchema = z.object({
   }),
 });
 /** Normalize item policy refusals on anchors; malformed anchors stay fail-closed. */
-function normalizeClaim(raw: unknown, context: z.core.$RefinementCtx) {
+export const requestSchema = z.preprocess((raw, context) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   let value = raw as Record<string, unknown>;
-  const inbound = Array.isArray(value.features) && value.features.includes("relay_media_in");
+  const mediaPolicy = {
+    delivery: value.delivery === "guest" ? "guest" as const : undefined,
+    features: Array.isArray(value.features) ? value.features : undefined,
+  };
+  // The ordinary schema tolerates a malformed destination extension. Guest
+  // delivery cannot carry an owner destination, including a malformed one.
+  if (mediaPolicy.delivery === "guest" && value.owner_delivery !== undefined)
+    context.addIssue({ code: "custom", path: ["owner_delivery"], message: INVALID_REQUESTER_DETAIL });
+  const inbound = hasInboundMedia(mediaPolicy);
   if (!value.input || typeof value.input !== "object" || Array.isArray(value.input)) return raw;
   let input = value.input as Record<string, unknown>;
-  const isolated = isolatedDelivery({ delivery: value.delivery });
-  const business = value.delivery === "business";
-  if (business && (value.owner_delivery !== undefined || input.format !== undefined
-    || value.answer && typeof value.answer === "object" && "attachments" in value.answer)) {
-    // The ordinary schema tolerates malformed optional extensions.
-    context.addIssue({ code: "custom", message: "invalid business delivery contract" });
-  }
   const trigger = Array.isArray(input.conversation) ? input.conversation.find(message =>
     message && typeof message === "object" && message.id === input.respond_to) : undefined;
   const allowed = new Set([trigger?.id, trigger?.reply_to].filter(candidate => typeof candidate === "string"));
   if (inbound && Array.isArray(input.conversation)) {
     input = { ...input, conversation: input.conversation.map(message => {
-      if (!message || !Array.isArray(message.media) || !business && !allowed.has(message.id)) return message;
+      if (!message || !allowed.has(message.id) || !Array.isArray(message.media)) return message;
       return { ...message, media: message.media.map((rawMedia: unknown) => {
         const parsed = claimMediaSchema.safeParse(rawMedia);
         if (!parsed.success) return rawMedia;
-        try { return normalizeInputMediaDescriptor(parsed.data, value.features as string[]); }
+        try { return normalizeInputMediaDescriptor(parsed.data, mediaPolicy.features); }
         catch { return rawMedia; }
       }) };
     }) };
     value = { ...value, input };
   }
-  // Business claims must satisfy the full media validator, including scope
-  // and duplicate references, before the runner can open any media route.
-  if (business) return value;
-  const history = inbound && (isolated || (value.features as string[]).includes(RELAY_HISTORY_MEDIA));
+  const history = hasHistoryMedia(mediaPolicy);
   // Anchor descriptors take precedence over conflicting historical copies.
   const refs = new Map<string, InputMedia>();
   if (Array.isArray(input.conversation)) for (const message of input.conversation) {
@@ -290,14 +284,14 @@ function normalizeClaim(raw: unknown, context: z.core.$RefinementCtx) {
   return { ...value, input: { ...input,
     ...(Array.isArray(input.conversation) ? { conversation: input.conversation.map((message, entryIndex) => {
       if (!message || typeof message !== "object") return message;
-      if (inbound && allowed.has(message.id) || !inbound && isolated) return message;
+      if (inbound && allowed.has(message.id) || !inbound && value.delivery === "guest") return message;
       const kept: InputMedia[] = [];
       if (Object.hasOwn(message, "media")) {
         for (const rawMedia of Array.isArray(message.media) ? message.media : [message.media]) {
           const parsed = history ? inputMediaSchema.safeParse(rawMedia) : null;
           let media = parsed?.success && parsed.data.kind === "photo" ? parsed.data : null;
           if (media) {
-            try { validateInputMediaDescriptor(media, value.features as string[]); }
+            try { validateInputMediaDescriptor(media, mediaPolicy.features); }
             catch { media = null; }
           }
           const previous = media && refs.get(media.ref);
@@ -312,73 +306,39 @@ function normalizeClaim(raw: unknown, context: z.core.$RefinementCtx) {
       if (kept.length) return { ...message, media: kept };
       const copy = { ...message }; delete copy.media; return copy;
     }) } : {}),
-    ...(!inbound && !isolated && Array.isArray(input.documents) ? { documents: input.documents.map(document => {
+    ...(!inbound && value.delivery !== "guest" && Array.isArray(input.documents) ? { documents: input.documents.map(document => {
       if (!document || typeof document !== "object") return document;
       const copy = { ...document }; delete copy.message_id; delete copy.media_ref; delete copy.extraction; return copy;
     }) } : {}),
   } };
-}
-
-export function claimedRequestSchema(advertised: readonly string[]) {
-  const businessAnswers = advertised.includes(RELAY_BUSINESS_ANSWERS);
-  const isolatedRequesters = advertised.includes(RELAY_ISOLATED_REQUESTERS);
-  const inboundMedia = advertised.includes("relay_media_in");
-  const historyMedia = advertised.includes(RELAY_HISTORY_MEDIA);
-  const anyDocument = advertised.includes("relay_media_any_document");
-  return z.preprocess(normalizeClaim, answerRequestSchema.superRefine((request, context) => {
-    const { input } = request;
-    const { requester } = input;
-    const isolated = isolatedDelivery(request);
-    // Legacy owner-guest claims predate the isolated requester contract.
-    const rejectRoleFlags = request.delivery === "business" || isolatedRequesters;
-    const invalidRequester = isolated
-      ? !requester || !requesterTrigger(input) || requester.is_anonymous_admin
-        || rejectRoleFlags && (requester.is_admin || requester.can_restrict_members || requester.can_delete_messages)
-        || request.delivery === "private" && requester.is_owner
-        || request.delivery === "guest" && !requester.is_owner && !isolatedRequesters
-      : requester && (!requesterTrigger(input) || requester.is_owner && requester.is_anonymous_admin
+}, answerRequestSchema.superRefine((request, context) => {
+  const { input } = request;
+  const { requester } = input;
+  const invalidRequester = request.delivery === "guest"
+    ? !requester || !requesterTrigger(input) || requester.is_anonymous_admin
+      || !requester.is_owner && (requester.is_admin || requester.can_restrict_members || requester.can_delete_messages)
+    : requester && (!requesterTrigger(input) || requester.is_owner && requester.is_anonymous_admin
         || request.owner_delivery && !requester.is_owner);
-    if (invalidRequester)
-      context.addIssue({ code: "custom", path: ["input", "requester"], message: INVALID_REQUESTER_DETAIL });
-    if (request.delivery === "business" && (!businessAnswers
-      || !advertised.includes("requester_context") || hasInboundMedia(request) && !inboundMedia))
-      context.addIssue({ code: "custom", message: "invalid business capability negotiation" });
-    if (request.delivery === "private" && (!isolatedRequesters || !advertised.includes("requester_context")))
-      context.addIssue({ code: "custom", message: "invalid private capability negotiation" });
-    if (request.delivery === "guest" && requester && !requester.is_owner
-      && (!isolatedRequesters || !advertised.includes("relay_guest_answers")))
-      context.addIssue({ code: "custom", message: "invalid guest capability negotiation" });
-    const negotiatedIsolation = request.delivery === "business" && businessAnswers || isolatedRequesters && isolated;
-    if (hasInboundMedia(request) && (negotiatedIsolation
-      ? !advertised.includes("requester_context")
-      : !request.features?.includes("requester_context")))
-      context.addIssue({ code: "custom", message: "media requires requester context" });
-    if (negotiatedIsolation && request.features?.some(feature =>
-      feature === "relay_media_in" && !inboundMedia
-      || feature === RELAY_HISTORY_MEDIA && !historyMedia
-      || feature === "relay_media_any_document" && !anyDocument))
-      context.addIssue({ code: "custom", message: "unadvertised isolated media capability" });
-    if (isolated && (request.answer.progress !== "none" || request.owner_delivery || input.format || request.answer.attachments
-      || input.tools?.some(tool => tool.mode !== "handoff")
-      || !hasInboundMedia(request) && (input.conversation.some(message => message.media?.length)
-        || input.documents.some(document => document.media_ref !== undefined))))
-      context.addIssue({ code: "custom", message: "invalid isolated delivery contract" });
-    if (!hasInboundMedia(request)) return;
-    try { validateMediaInput(request, negotiatedIsolation ? advertised.includes("requester_context") : undefined,
-      negotiatedIsolation ? historyMedia : undefined); }
-    catch { context.addIssue({ code: "custom", message: "invalid negotiated media input" }); }
-  }));
-}
-
-export const requestSchema = claimedRequestSchema([]);
+  if (invalidRequester)
+    context.addIssue({ code: "custom", path: ["input", "requester"], message: INVALID_REQUESTER_DETAIL });
+  if (request.delivery === "guest") {
+    if (request.answer.progress !== "none" || request.owner_delivery || request.input.format || request.answer.attachments
+      || request.input.tools?.some(tool => tool.mode !== "handoff")
+      || !hasInboundMedia(request) && (request.input.conversation.some(message => message.media?.length)
+        || request.input.documents.some(document => document.media_ref !== undefined)))
+      context.addIssue({ code: "custom", message: "invalid guest delivery contract" });
+  }
+  if (!hasInboundMedia(request)) return;
+  try { validateMediaInput(request); }
+  catch { context.addIssue({ code: "custom", message: "invalid negotiated media input" }); }
+}));
 export type ExternalRelayRequest = z.infer<typeof requestSchema>;
 export type ExternalRelayTool = z.infer<typeof toolSchema>;
 export function relayToolAudience(request: ExternalRelayRequest) {
   const requester = request.input.requester;
   const matched = requesterTrigger(request.input) !== null;
-  const isolated = isolatedDelivery(request);
-  const owner = !isolated && matched && requester?.is_owner === true && !requester.is_anonymous_admin;
-  const admin = !isolated && matched && requester?.is_admin === true;
+  const owner = matched && requester?.is_owner === true && !requester.is_anonymous_admin && request.delivery !== "guest";
+  const admin = matched && requester?.is_admin === true;
   return (audience?: string) => audience === undefined || (audience === "admin" && admin) || (audience === "owner" && owner);
 }
 export function visibleRelayTools(request: ExternalRelayRequest) {
@@ -480,9 +440,9 @@ export const replyAnswerSchema = {
   ...answerSchema,
   properties: { ...answerSchema.properties, action: { type: "string", enum: ["reply"] } },
 } as const;
-/** Isolated delivery can return to the hosted assistant even without a tool index. */
+/** Guest delivery can return to the hosted assistant even without a tool index. */
 export const offersHandoff = (request: ExternalRelayRequest) =>
-  isolatedDelivery(request) || visibleRelayTools(request).length > 0;
+  request.delivery === "guest" || visibleRelayTools(request).length > 0;
 export type RelayMention = { author_key: string; offset: number; length: number };
 export type RelayUrlButton = { text: string; url: string };
 export type RelayAttachment = { attachment_id: string; kind: RelayMediaKind; caption?: string };
@@ -509,7 +469,7 @@ export function checkedAnswer(
     return options.handoff && offersHandoff(request)
       ? { action: "handoff", text: "", reply_to: null }
       : null;
-  if (answer.action === "ignore" && (!options.ignore || isolatedDelivery(request))) return null;
+  if (answer.action === "ignore" && (!options.ignore || request.delivery === "guest")) return null;
   if (
     (answer.action !== "reply" && answer.action !== "ignore") ||
     typeof answer.text !== "string" ||
@@ -526,7 +486,7 @@ export function checkedAnswer(
     action: answer.action,
     text: answer.action === "ignore" ? "" : answer.text,
     reply_to:
-      !isolatedDelivery(request) && reply &&
+      request.delivery !== "guest" && reply &&
       request.input.conversation.some((message) => message.id === reply)
         ? reply
         : null,

@@ -20,9 +20,8 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity, relayOutcomeLabel } from "./activity";
 import { pruneAnswerRecords, recordAnswerCompletionRefusal, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { recordCompletionRefusal } from "./completionRefusal";
-import { readAnswerRecord } from "./answers";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
-import { requestSchema, RELAY_BUSINESS_ANSWERS, RELAY_ISOLATED_REQUESTERS, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
+import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
 import { RELAY_HISTORY_MEDIA, RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
 import {
   advertisedSlots,
@@ -449,17 +448,17 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
 }
 /** What this install implements of the optional parts of v1 (§A.2 rule 11). */
 export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers"];
+const RELAY_GUEST_NON_OWNER = "relay_guest_non_owner";
 export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
   const switches = readRelaySwitches();
   const rich = switches.rich_media && relay?.features?.includes("relay_rich_messages");
   const features = [...CLAIM_FEATURES,
+    ...(relay?.features?.includes(RELAY_GUEST_NON_OWNER) ? [RELAY_GUEST_NON_OWNER] : []),
     ...(relay?.features?.includes(RELAY_TOOLS_ON_DEMAND) ? [RELAY_TOOLS_ON_DEMAND] : []),
     ...(relay?.features?.includes("relay_media_in") ? ["relay_media_in"] : []),
-    ...(relay?.features?.includes("relay_media_in") && (relay.features.includes(RELAY_HISTORY_MEDIA) || switches.business_answers)
-      ? [RELAY_HISTORY_MEDIA] : []),
+    ...(relay?.features?.includes("relay_media_in") && relay.features.includes(RELAY_HISTORY_MEDIA) ? [RELAY_HISTORY_MEDIA] : []),
     ...(relay?.features?.includes("relay_media_in") && relay.features.includes(RELAY_MEDIA_ANY_DOCUMENT) ? [RELAY_MEDIA_ANY_DOCUMENT] : []),
-    ...(rich ? ["relay_rich_messages", ...(relay?.features?.includes("relay_media_out") ? ["relay_media_out"] : [])] : []),
-    ...(switches.business_answers ? [RELAY_ISOLATED_REQUESTERS, RELAY_BUSINESS_ANSWERS] : [])];
+    ...(rich ? ["relay_rich_messages", ...(relay?.features?.includes("relay_media_out") ? ["relay_media_out"] : [])] : [])];
   return { kinds: switches.compact ? ["answer", "compact"] : ["answer"],
     features: switches.owner_tools && relay?.features?.includes(RELAY_OWNER_TOOLS)
       ? [...features, RELAY_OWNER_TOOLS] : features };
@@ -539,12 +538,11 @@ async function poll(
     let observed = false;
     const timeoutMs = (Math.min(25, relay.limits.max_wait_s) + 15) * 1000;
     try {
-      const claimBody = relayClaimBody(relay);
       const result = await withViewerOperation("telegram.review-polls", () => relayCall<{ request?: unknown }>(
         relay.api_base,
         "/requests/claim",
         "POST",
-        claimBody,
+        relayClaimBody(relay),
         relay.credential,
         {
           timeoutMs,
@@ -565,17 +563,12 @@ async function poll(
         const firstHeartbeat = new Promise<void>(resolve => { leaseReady = resolve; });
         const run = runClaimedRequest(current && controller.armed ? current : { ...relay, paused: true }, result.body.request, () =>
           wakeExternalRelayPoller(relay.id),
-          { onUnknownFeature: () => refreshRelayDescriptorFeatures(relay.id, 0, { force: true }),
-            onLeaseReady: leaseReady, advertisedFeatures: claimBody.features },
+          { onUnknownFeature: () => refreshRelayDescriptorFeatures(relay.id, 0, { force: true }), onLeaseReady: leaseReady },
         );
         void run.then(leaseReady, leaseReady);
         const trackedRun = run
           .then((outcome) => {
-            const request = result.body?.request as { request_id?: unknown; target_id?: unknown } | undefined;
-            const delivery = typeof request?.request_id === "string" && typeof request.target_id === "string"
-              ? readAnswerRecord(relay.id, request.target_id, request.request_id)?.delivery
-              : null;
-            noteRelayOutcome(relay.id, relayOutcomeLabel(outcome, delivery ?? "unconfirmed"));
+            noteRelayOutcome(relay.id, relayOutcomeLabel(outcome));
           })
           .catch(() => {
             noteRelayOutcome(relay.id, "local_error");
