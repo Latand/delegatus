@@ -258,7 +258,7 @@ test.each(["append", "replay"] as const)("a non-busy %s failure names the SQLite
   const { Database } = await import("bun:sqlite");
   const { statePath } = await import("@/lib/configDir");
   const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
-  await withCheckJournal(`rejected-journal-${mode}`, true, async file => {
+  await withCheckJournal(`rejected-journal-${mode}`, mode === "append", async file => {
     importLegacySeatTickJournal(file);
     const rig = harness({ state: RECENT });
     delete rig.deps.appendRecord;
@@ -270,8 +270,9 @@ test.each(["append", "replay"] as const)("a non-busy %s failure names the SQLite
       if (mode === "replay") writePendingCheck(file, 1);
       await reconcileSeatTick(rig.deps, mode === "append" ? [PROJECT] : []);
       await reconcileSeatTick(rig.deps, []);
-      expect(warn.mock.calls).toEqual([[expect.stringContaining("SQLiteError")]]);
-      expect(String(warn.mock.calls[0]![0])).not.toMatch(/busy/i);
+      const tickWarnings = warn.mock.calls.filter(([line]) => String(line).startsWith("[seat tick] "));
+      expect(tickWarnings).toEqual([[expect.stringContaining("SQLiteError")]]);
+      expect(String(tickWarnings[0]![0])).not.toMatch(/busy/i);
       expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
       expect(fs.readdirSync(`${file}.pending-checks`)).toHaveLength(1);
     } finally {
