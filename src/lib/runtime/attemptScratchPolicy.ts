@@ -20,7 +20,10 @@ export function attemptScratchExpiry(pipeline: Pipeline, owner: { launchId: stri
   if (current && (current.activation || current.unresolvedTermination || current.state === "running" || current.state === "spawning")) return null;
   // A comparison takeover can reactivate the publication cursor on an
   // already passed attempt. The cursor retains it until it advances again.
-  if (!terminalLane && current && run?.stageId === pipeline.cursor?.stageId && run?.attempts.at(-1) === current) return null;
+  // A passed attempt can be reopened while its stage cursor is active. A
+  // parked failure keeps the cursor pending after the attempt is terminal;
+  // that state must still receive its deadline.
+  if (!terminalLane && current?.state === "passed" && run?.stageId === pipeline.cursor?.stageId && run?.attempts.at(-1) === current) return null;
   if (!owner.retainUntilClose && !pipeline.activationCloseRequested && !pipeline.unconfirmedHosts?.length
     && pipeline.remoteAction?.state !== "pending") {
     const end = current

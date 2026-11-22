@@ -507,35 +507,37 @@ export async function removeTreeViaTrash(directory: string, options: {
 export async function finishTreeTrash(journal: string, held: (trash: string) => boolean | Promise<boolean>,
   remove?: (trash: string, mutationStarted: () => void) => Promise<void>, validate?: (trash: string) => boolean, allowDisposable = false, dispatch?: (trash: string) => boolean, keepRefusedTrash = false): Promise<boolean> {
   const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { directory: string; trash: string; uid: number; identity: string; snapshot?: TreeSnapshot; disposable?: boolean };
-  const matches = () => row.snapshot ? matchesSnapshot(row.trash, row.snapshot) : allowDisposable && row.disposable === true;
+  const recovered = readAttemptTempTrash(journal, path.dirname(row.directory));
+  const trashPath = recovered?.trash ?? row.trash;
+  const matches = () => row.snapshot ? matchesSnapshot(trashPath, row.snapshot) : allowDisposable && row.disposable === true;
   if (path.dirname(row.directory) !== path.dirname(row.trash)
     || !path.basename(row.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) return false;
-  if (!fs.existsSync(row.trash)) { fs.unlinkSync(journal); return false; }
-  const stat = fs.lstatSync(row.trash);
-  if (!stat.isDirectory() || stat.dev !== fs.statSync(path.dirname(row.trash)).dev || `${stat.dev}:${stat.ino}` !== row.identity || stat.uid !== row.uid || (process.getuid && stat.uid !== process.getuid())
-    || !matches() || mountPointsUnder(row.trash).length) return false;
+  if (!fs.existsSync(trashPath)) { fs.unlinkSync(journal); return false; }
+  const stat = fs.lstatSync(trashPath);
+  if (!stat.isDirectory() || stat.dev !== fs.statSync(path.dirname(trashPath)).dev || `${stat.dev}:${stat.ino}` !== row.identity || stat.uid !== row.uid || (process.getuid && stat.uid !== process.getuid())
+    || !matches() || mountPointsUnder(trashPath).length) return false;
   // held/validate are caller supplied and may scan or mutate the tree. Run
   // them first, then prove the exact journaled tree again at the delete edge.
-  const observation = held(row.trash);
-  if ((typeof observation === "boolean" ? observation : await observation) || validate && !validate(row.trash)) return false;
-  const final = fs.lstatSync(row.trash);
-  if (!final.isDirectory() || final.dev !== fs.statSync(path.dirname(row.trash)).dev
+  const observation = held(trashPath);
+  if ((typeof observation === "boolean" ? observation : await observation) || validate && !validate(trashPath)) return false;
+  const final = fs.lstatSync(trashPath);
+  if (!final.isDirectory() || final.dev !== fs.statSync(path.dirname(trashPath)).dev
     || `${final.dev}:${final.ino}` !== row.identity || final.uid !== row.uid
     || (process.getuid && final.uid !== process.getuid()) || !matches()
-    || mountPointsUnder(row.trash).length || dispatch && !dispatch(row.trash)) return false;
+    || mountPointsUnder(trashPath).length || dispatch && !dispatch(trashPath)) return false;
   let mutationStarted = false;
   try {
     await (remove ?? removeTreeWithinAttemptBudget)(
-      row.trash, () => { mutationStarted = true; });
+      trashPath, () => { mutationStarted = true; }, undefined, row.identity);
   } catch (error) {
     // Permission repair is reversible. Its final fence may refuse after the
     // modes have rolled back but before native removal acquires custody.
     if (!mutationStarted && !keepRefusedTrash) {
-      const current = fs.lstatSync(row.trash);
+      const current = fs.lstatSync(trashPath);
       if (current.isDirectory() && !current.isSymbolicLink() && `${current.dev}:${current.ino}` === row.identity && current.uid === row.uid) {
         try { fs.lstatSync(row.directory); throw new Error(`original path was acquired while removal was refused (${attemptTempFailureDetail(error)}); preserved both paths`, { cause: error }); }
         catch (restoreError) { if ((restoreError as NodeJS.ErrnoException).code !== "ENOENT") throw restoreError; }
-        fs.renameSync(row.trash, row.directory);
+        fs.renameSync(trashPath, row.directory);
         fs.unlinkSync(journal);
       }
     }
@@ -666,10 +668,20 @@ export function readAttemptTempTrash(journal: string, scratch: string): { direct
       || !path.basename(row.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)
       || typeof row.identity !== "string" || !/^\d+:\d+$/.test(row.identity)
       || fs.lstatSync(row.directory, { throwIfNoEntry: false })) return null;
-    const trash = fs.lstatSync(row.trash);
+    let trashPath = row.trash;
+    let trash = fs.lstatSync(trashPath, { throwIfNoEntry: false });
+    if (!trash) {
+      const prefix = `.delegatus-trash-claim-${row.identity.replace(":", "-")}-`;
+      const claims = fs.readdirSync(scratch).filter(name => name.startsWith(prefix)).filter(name => {
+        const candidate = fs.lstatSync(path.join(scratch, name), { throwIfNoEntry: false });
+        return candidate?.isDirectory() && !candidate.isSymbolicLink() && `${candidate.dev}:${candidate.ino}` === row.identity;
+      });
+      if (claims.length !== 1) return null;
+      trashPath = path.join(scratch, claims[0]!); trash = fs.lstatSync(trashPath);
+    }
     if (!trash.isDirectory() || trash.isSymbolicLink() || trash.dev !== parent.dev
       || trash.uid !== parent.uid || row.uid !== trash.uid || `${trash.dev}:${trash.ino}` !== row.identity) return null;
-    return { directory: row.directory, trash: row.trash, identity: row.identity, uid: row.uid };
+    return { directory: row.directory, trash: trashPath, identity: row.identity, uid: row.uid };
   } catch { return null; }
 }
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { AttemptTempStore } from "./attemptTempRetention";
+import { measureAttemptAllocation } from "./attemptTempFilesystem";
 import { attemptScratchAuthority as attemptTempAuthority, backfillAttemptTempRetention } from "./attemptTempProduction";
 import { finishedLane } from "./attemptTempRetention.testSupport";
 import { savePipelines } from "../pipelines/store";
@@ -201,4 +202,19 @@ test("cleanup metrics persist across ledger reopen and expire old minute buckets
     reopened.requireRootExpiry(directory, NOW + 7200_000);
     expect(reopened.cleanupMetrics(NOW + 3600_000, 0, 0.25)).toMatchObject({ reclaimedBytesLastHour: 4096, sweepCpuSecondsLastHour: 1, oldestEligibleRootAgeSeconds: 0 });
   } finally { reopened.close(); }
+});
+
+test("bounded allocation refresh counts live registered growth without expiry selection", async () => {
+  const f = fixture(), directory = f.make("live-growth");
+  fs.writeFileSync(path.join(directory, "payload"), Buffer.alloc(2 * 1024 ** 2, 1));
+  try {
+    expect(f.store.retentionExpiry(directory)).toBeNull();
+    expect(f.store.due(NOW, 4, true)).toEqual([]);
+    const [owner] = f.store.allocationDue(NOW, 4);
+    expect(owner?.directory).toBe(directory);
+    const measured = await measureAttemptAllocation(directory, { budgetMs: 5000 });
+    f.store.measure(directory, measured.bytes, NOW);
+    expect(f.store.bytes()).toBeGreaterThanOrEqual(2 * 1024 ** 2);
+    expect(f.store.allocationDue(NOW + 30_000, 4)).toEqual([]);
+  } finally { f.store.close(); }
 });

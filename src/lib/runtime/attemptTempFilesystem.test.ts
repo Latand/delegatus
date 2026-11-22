@@ -24,6 +24,8 @@ afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.spli
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
 
 test("native recursive removal is awaited, killed at the shared cutoff, and reported as a deferral", async () => {
+  const directory = root(); fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "owned");
+  const stat = fs.lstatSync(directory);
   let now = 3000, started!: () => void, release!: () => void;
   const running = new Promise<void>(resolve => { started = resolve; });
   const barrier = new Promise<void>(resolve => { release = resolve; });
@@ -35,7 +37,8 @@ test("native recursive removal is awaited, killed at the shared cutoff, and repo
     throw Object.assign(new Error("owned removal child was killed"), { killed: true });
   };
   try {
-    const removal = withAttemptTempDeadline(6000, () => removeTreeWithinAttemptBudget("fixture-root", () => { mutation = true; }, runner as never));
+    const removal = withAttemptTempDeadline(6000, () => removeTreeWithinAttemptBudget(directory, () => { mutation = true; }, runner as never,
+      `${stat.dev}:${stat.ino}`));
     await running;
     expect(mutation).toBeTrue();
     now = 5000;
@@ -43,6 +46,15 @@ test("native recursive removal is awaited, killed at the shared cutoff, and repo
     await expect(removal).rejects.toBeInstanceOf(AttemptTempBudgetDeferred);
     expect(signaled).toBeTrue();
   } finally { clock.mockRestore(); }
+});
+
+test("native cleanup reports CPU measured by its owned subprocess", async () => {
+  const directory = root(); fs.mkdirSync(directory);
+  for (let index = 0; index < 512; index++) fs.writeFileSync(path.join(directory, `entry-${index}`), "payload");
+  const stat = fs.lstatSync(directory); let childCpu = 0;
+  await removeTreeWithinAttemptBudget(directory, () => {}, undefined, `${stat.dev}:${stat.ino}`, seconds => { childCpu += seconds; });
+  expect(childCpu).toBeGreaterThan(0);
+  expect(fs.existsSync(directory)).toBeFalse();
 });
 
 /** A directory left by a container that ran as another user: this user can
@@ -265,6 +277,7 @@ case "$1" in
     test -n "$source" || exit 2
     printf started > "$DOCKER_DISPATCH_MARKER"
     find "$source" -depth -mindepth 1 -delete
+    printf 'DELEGATUS_RM_CPU:0.25\\n'
     ;;
   *) exit 2 ;;
 esac
@@ -279,6 +292,7 @@ esac
     if (removalPath === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
     started();
   };
+  let childCpu = 0;
   let producerState = "closed", checkoutReadable = true;
   const guard = async () => {
     await Promise.resolve();
@@ -291,12 +305,13 @@ esac
   try {
     let error: unknown;
     try { await removeAttemptTree(directory, directory, guard, removalPath === "namespace-only", dispatchGuard,
-      dispatchGuard, false, undefined, { nativeRemove }); }
+      dispatchGuard, false, undefined, { nativeRemove, accountCpuSeconds: seconds => { childCpu += seconds; } }); }
     catch (caught) { error = caught; }
     if (change === "control") {
       expect(error).toBeUndefined();
       expect(fs.existsSync(dispatched)).toBeTrue();
       expect(fs.existsSync(directory)).toBeFalse();
+      if (removalPath === "namespace-only") expect(childCpu).toBe(0.25);
     } else {
       expect(String(error)).toContain("authority changed before namespace removal");
       expect(fs.existsSync(dispatched)).toBeFalse();

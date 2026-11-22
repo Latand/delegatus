@@ -49,6 +49,9 @@ export class AttemptTrashRecovery {
     })();
   }
   restored(directory: string) { return !!this.db.query("SELECT 1 FROM trash_recovery WHERE directory=?").get(directory); }
+  queueIntent(directory: string, identity: string) {
+    this.db.query("INSERT OR IGNORE INTO trash_recovery(directory,identity) VALUES(?,?)").run(directory, identity);
+  }
   refresh(directory: string) {
     this.db.transaction(() => {
       const reset = this.db.query("UPDATE trash_recovery SET restored=0,cursor='',binding=NULL,conflict=0,matches='[]',checkedAt=0 WHERE directory=? AND restored=1").run(directory);
@@ -131,7 +134,10 @@ export class AttemptTrashRecovery {
         }
         const journal = readAttemptTempTrash(path.join(this.scratch, name), this.scratch);
         if (!journal) { result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason: "owner-unknown" }); continue; }
-        if (this.db.query("SELECT 1 FROM roots WHERE directory=?").get(journal.directory)) continue;
+        const existing = this.db.query<{ identity: string }, [string]>("SELECT identity FROM roots WHERE directory=?").get(journal.directory);
+        if (existing && existing.identity !== journal.identity) {
+          result.outcomes.push({ directory: journal.directory, disposition: "held", bytes: 0, reason: "owner-unknown" }); continue;
+        }
         const reset = this.db.query(`INSERT INTO trash_recovery(directory,identity) VALUES(?,?) ON CONFLICT(directory) DO UPDATE SET
           identity=excluded.identity,cursor='',binding=NULL,conflict=0,matches='[]',restored=0,checkedAt=0
           WHERE identity<>excluded.identity`).run(journal.directory, journal.identity);
@@ -160,6 +166,14 @@ export class AttemptTrashRecovery {
       return result;
     };
     const journal = readAttemptTempTrash(attemptTempJournalPath(candidate.directory), this.scratch);
+    if (!journal && !fs.existsSync(attemptTempJournalPath(candidate.directory))) {
+      const original = fs.lstatSync(candidate.directory, { throwIfNoEntry: false });
+      if (original?.isDirectory() && !original.isSymbolicLink() && `${original.dev}:${original.ino}` === candidate.identity) {
+        this.db.query("DELETE FROM trash_recovery WHERE directory=? AND identity=?").run(candidate.directory, candidate.identity);
+        this.clearObservations(candidate.directory);
+        return result;
+      }
+    }
     if (!journal || journal.identity !== candidate.identity) return hold();
     let binding: Binding | null = candidate.binding ? JSON.parse(candidate.binding) : null;
     let conflict = !!candidate.conflict, matches: string[] = JSON.parse(candidate.matches);

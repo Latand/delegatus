@@ -92,6 +92,7 @@ const attemptTempIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS roots_pipeline ON roots(pipelineId,directory)",
   "CREATE INDEX IF NOT EXISTS roots_due ON roots(checkedAt,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS roots_age ON roots(createdAt,directory)",
+  "CREATE INDEX IF NOT EXISTS roots_allocation_due ON roots(measuredAt,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS roots_size ON roots(bytes DESC,createdAt,directory)",
   "CREATE INDEX IF NOT EXISTS copies_due ON copies(checkedAt,destination) WHERE kind<>'unattributed'",
   "CREATE INDEX IF NOT EXISTS copies_inspection ON copies(destination) WHERE kind<>'unattributed'",
@@ -121,6 +122,8 @@ export class AttemptTempStore {
         retainUntilClose INTEGER NOT NULL, createdAt REAL NOT NULL,
         identity TEXT NOT NULL, released INTEGER NOT NULL DEFAULT 0,
         checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0)`);
+      if (!this.db.query("PRAGMA table_info(roots)").all().some((column: { name: string }) => column.name === "measuredAt"))
+        this.db.exec("ALTER TABLE roots ADD COLUMN measuredAt REAL NOT NULL DEFAULT 0");
       this.db.exec(`CREATE TABLE IF NOT EXISTS copies (
         destination TEXT PRIMARY KEY, pipelineId TEXT, launchId TEXT NOT NULL, kind TEXT NOT NULL,
         createdAt REAL NOT NULL, expiresAt REAL, checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0)`);
@@ -221,6 +224,7 @@ export class AttemptTempStore {
     };
     return this.recovery.page(now, deadline, budgetNow, discovery);
   }
+  queueTrashIntent(directory: string, identity: string) { this.recovery.queueIntent(directory, identity); }
   refreshTrashRecovery(directory: string) { this.recovery.refresh(directory); }
   trashRecoveryWatches(directory: string) { return this.recovery.watches(directory); }
   recoveredTrashCurrent(directory: string) { return this.recovery.current(directory); }
@@ -349,6 +353,10 @@ export class AttemptTempStore {
       .all(now, count + selected.size).filter(row => !selected.has(row.directory)).slice(0, count);
     return [...expired, ...rest("SELECT * FROM roots WHERE checkedAt<=? ORDER BY bytes DESC,checkedAt,createdAt,directory LIMIT ?", limit - expired.length)]
       .sort((a, b) => b.bytes - a.bytes);
+  }
+  allocationDue(now: number, limit = 4): Row[] {
+    return this.db.query<Row, [number, number]>("SELECT * FROM roots WHERE measuredAt<=? ORDER BY measuredAt,createdAt,directory LIMIT ?")
+      .all(now - 60_000, limit);
   }
   /** Subtrees of a root that this user cannot remove, as last observed. */
   recordBlocked(directory: string, blocked: { count: number; entries: BlockedSubtree[] } | null, at: number) {
@@ -481,7 +489,7 @@ export class AttemptTempStore {
   copyEligible(destination: string, eligible: boolean) {
     this.db.query("INSERT INTO copy_eligibility VALUES(?,?) ON CONFLICT(destination) DO UPDATE SET eligible=excluded.eligible").run(destination, Number(eligible));
   }
-  measure(directory: string, bytes: number) { this.db.query("UPDATE roots SET bytes=? WHERE directory=?").run(bytes, directory); }
+  measure(directory: string, bytes: number, at = Date.now()) { this.db.query("UPDATE roots SET bytes=?,measuredAt=? WHERE directory=?").run(bytes, at, directory); }
   bytes() { return this.db.query<{ bytes: number }, []>("SELECT bytes FROM totals WHERE id=1").get()!.bytes; }
   close() { this.db.close(); this.releaseMemoryTracking?.(); this.releaseMemoryTracking = undefined; }
 }
@@ -498,6 +506,8 @@ export type AttemptTempSweepOptions = {
   scheduledOnly?: true;
   /** Schedule and repair deadlines under the same admission as selection. */
   prepare?: () => Promise<void>;
+  /** Owned recursive cleanup subprocess usage, measured by the child itself. */
+  accountCpuSeconds?: (seconds: number) => void;
   scan: (directories: readonly string[]) => ProcessScan;
   references?: (original: string, current: string, scan: ProcessScan) => Promise<boolean>;
   maxRoots?: number;
@@ -601,11 +611,12 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     ?? ((original: string, current: string, scan: ProcessScan) => attemptReferencesClear(original, current, scan, undefined, inventory));
   const recovery = options.selection ? { entries: 0, manifestEntries: 0, checks: 0, restored: 0, adopted: 0, recoveredDirectory: null, outcomes: [] }
     : store.recoverTrash(now, deadline, budgetNow, options.scheduledOnly);
+  let recoveredIntent: Row | null = null;
   report.adopted += recovery.adopted;
   for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
   if (options.scheduledOnly && recovery.recoveredDirectory && remaining() > 0) {
-    const recovered = store.owner(recovery.recoveredDirectory);
-    if (recovered) await options.state(recovered, inventory);
+    recoveredIntent = store.owner(recovery.recoveredDirectory);
+    if (recoveredIntent) await options.state(recoveredIntent, inventory);
   }
   const visit = async (owner: Row) => {
     report.checked++;
@@ -686,6 +697,15 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const authority = await observeOwner(owner);
         checkBudget();
         if (state !== "expired" || authority.state !== "expired" || !authority.isCurrent()) {
+          // A crashed quarantine has no removal authority. Restore it while
+          // the current owner is live or the retention clock has not elapsed,
+          // then clear only its recovery proof so reopening can proceed.
+          if (authority.isCurrent() && authority.state !== "expired" && !stat) {
+            restoreRefusedAttemptTrash(owner.directory, owner.identity);
+            store.forget(owner.directory);
+            outcome(owner.directory, authorityDisposition(authority.state), bytes, "interrupted quarantine restored before expiry");
+            return;
+          }
           disposition = authorityDisposition(authority.state);
           outcome(owner.directory, disposition, bytes, `ownership ${authority.state}; recovered trash requires current expired lane`);
           return;
@@ -994,8 +1014,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         return true;
       };
       if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); return; }
-      if (options.mode !== "dry-run") await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory),
-        stat ? "admitted" : "missing-unexplained", stat ? "acknowledged owned-root retirement admitted" : "missing-unexplained; no removal outcome observed", remaining);
+      if (options.mode !== "dry-run") {
+        if (options.scheduledOnly && stat) store.queueTrashIntent(owner.directory, owner.identity);
+        await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory),
+          stat ? "admitted" : "missing-unexplained", stat ? "acknowledged owned-root retirement admitted" : "missing-unexplained; no removal outcome observed", remaining);
+      }
       const free = () => {
         if (!options.scheduledOnly || options.mode === "dry-run") return null;
         try {
@@ -1030,6 +1053,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
                 () => retirementAuthorityCurrent(directory, false) && permissionProof?.current() === true && (binding?.() ?? true),
                 remaining(), ownerAuthorityCurrent) : undefined,
               mutationStarted: startRemoval,
+              expectedIdentity: owner.identity,
+              accountCpuSeconds: options.accountCpuSeconds,
               permissionChange: (file, mode, apply) => {
                 const proof = closedRoot ? permissionProof : dispatchEvidence;
                 if (!proof?.permissionChange) throw new AttemptTempBudgetDeferred("permission protection unavailable");
@@ -1131,6 +1156,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       }
     }
   };
+  if (recoveredIntent && remaining() > 0) await visit(recoveredIntent);
   let pass: PressurePass | null = null, passEnded: CompletedPressurePass["ended"] | null = null;
   if (options.selection) {
     // Exact input order, bounded to one page. Neither a missing row nor a

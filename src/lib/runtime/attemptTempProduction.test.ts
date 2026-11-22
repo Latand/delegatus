@@ -11,11 +11,57 @@ import { runTempSweep, scanProcesses, sweepStaleTempDirs, type ProcessScan } fro
 import { statePath } from "@/lib/configDir";
 import { attemptReferencesClear, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { holdFinishedRoot, finishedLane, nameInReport } from "./attemptTempRetention.testSupport";
-import { ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS } from "./attemptScratchPolicy";
+import { ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, attemptScratchExpiry } from "./attemptScratchPolicy";
 import { attemptScratchAuthority } from "./attemptTempProduction";
 import { RecordedCheckStore, recordedRootHeld } from "@/lib/recordedChecks/store";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
+
+test("parked terminal failures schedule from completedAt while a passed reopened cursor stays retained", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-parked-failure-")); roots.push(root);
+  const p = finishedLane(root, "2026-10-01T00:00:00Z"); p.state = "running";
+  p.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
+  const completedAt = "2026-10-20T12:00:00.000Z";
+  const attempt = { n: 1, state: "failed", launchId: "parked-launch", completedAt } as PipelineStageAttempt;
+  p.runs = [{ stageId: "build", attempts: [attempt] }];
+  const owner = { launchId: attempt.launchId!, retainUntilClose: false, createdAt: Date.parse("2026-10-20T11:00:00Z") };
+  expect(attemptScratchExpiry(p, owner)).toBe(Date.parse(completedAt) + ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS);
+  p.runs[0]!.attempts[0] = { ...attempt, state: "passed" };
+  expect(attemptScratchExpiry(p, owner)).toBeNull();
+});
+
+test("a restarted scheduled sweep restores a quarantined root before expiry and permits reopening", async () => {
+  const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
+  const { attemptTempAuthority } = await import("./attemptTempProduction");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-crash-before-expiry-")); roots.push(root); isolateState(root);
+  const now = Date.parse("2035-01-15T00:00:00Z"), clock = spyOn(Date, "now").mockReturnValue(now);
+  const pipeline = finishedLane(root, new Date(now - 60 * 60_000).toISOString()); savePipelines([pipeline]);
+  const directory = statePath("scratch", "llv-stage-crash"); fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "payload"), "retained payload");
+  const store = new AttemptTempStore(); let storeClosed = false;
+  try {
+    await holdFinishedRoot(directory, pipeline.id, "", [], "crash-launch");
+    store.register({ directory, pipelineId: pipeline.id, launchId: "crash-launch", retainUntilClose: false, createdAt: now - 2 * 60 * 60_000 });
+    const stat = fs.lstatSync(directory), trash = path.join(path.dirname(directory), `.delegatus-trash-${path.basename(directory)}-crash`);
+    fs.renameSync(directory, trash);
+    fs.writeFileSync(attemptTempJournalPath(directory), JSON.stringify({ directory, trash, uid: stat.uid,
+      identity: `${stat.dev}:${stat.ino}`, disposable: true }));
+    store.queueTrashIntent(directory, `${stat.dev}:${stat.ino}`);
+    store.close(); storeClosed = true; // The next tick opens a fresh ledger after the owner process died.
+    const restarted = new AttemptTempStore();
+    try {
+      const authority: NonNullable<Parameters<typeof sweepAttemptTemps>[1]["authority"]> = (owner, inventory) => attemptTempAuthority(owner, inventory, () => now);
+      const report = await sweepAttemptTemps(restarted, { now: () => now, authority,
+        state: async (owner, inventory) => (await authority(owner, inventory)).state,
+        scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true, scheduledOnly: true });
+      expect(report.removed).toBe(0);
+      expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("retained payload");
+      expect(fs.existsSync(trash)).toBeFalse();
+      const reopened = structuredClone(pipeline); reopened.state = "running"; reopened.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
+      expect(() => savePipelines([reopened])).not.toThrow();
+    } finally { restarted.close(); }
+  } finally { if (!storeClosed) store.close(); clock.mockRestore(); }
+});
 
 test.each([false, true])("all roots of an acknowledged check await expiry after clock rollback (restart=%s)", async restart => {
   const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
@@ -843,7 +889,7 @@ test("production schedules scratch on attempt completion, cancels on reopen and 
   } finally { store.close(); clock.mockRestore(); }
 });
 
-test.skipIf(process.platform !== "linux").each(["live child", "mount", "linked evidence", "unknown checkout", "swap"] as const)(
+test.skipIf(process.platform !== "linux").each(["live child", "mount", "linked evidence", "broken git pointer", "unknown checkout", "swap", "last handoff swap"] as const)(
   "an expired production root keeps its data when protected by %s", async protection => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "scheduled-protection-")); roots.push(root);
     isolateState(root);
@@ -882,8 +928,28 @@ test.skipIf(process.platform !== "linux").each(["live child", "mount", "linked e
         }) as typeof fs.readFileSync);
         restore.push(() => mounted.mockRestore());
       } else if (protection === "linked evidence") nameInReport(payload);
-      else if (protection === "unknown checkout") fs.writeFileSync(path.join(directory, "checkout", ".git"), "gitdir: missing\n");
-      else {
+      else if (protection === "broken git pointer") fs.writeFileSync(path.join(directory, "checkout", ".git"), "gitdir: missing\n");
+      else if (protection === "unknown checkout") {
+        fs.mkdirSync(path.join(directory, "checkout", ".git"));
+        fs.writeFileSync(path.join(directory, "checkout", ".git", "config"), "local-only repository data");
+      }
+      else if (protection === "last handoff swap") {
+        const statfs = fs.statfsSync.bind(fs);
+        const replace = spyOn(fs, "statfsSync").mockImplementation(((...args: Parameters<typeof fs.statfsSync>) => {
+          const value = statfs(...args);
+          if (!swapped) {
+            const claim = fs.readdirSync(path.dirname(directory)).map(name => path.join(path.dirname(directory), name))
+              .find(name => path.basename(name).startsWith(`.delegatus-trash-${path.basename(directory)}-claim-`));
+            if (claim) {
+              const saved = path.join(root, "claimed-original"); fs.renameSync(claim, saved);
+              fs.mkdirSync(claim); fs.writeFileSync(path.join(claim, "replacement"), "new owner");
+              preserved = path.join(saved, "frame.png"); swapped = true;
+            }
+          }
+          return value;
+        }) as typeof fs.statfsSync);
+        restore.push(() => replace.mockRestore());
+      } else {
         const rename = fs.renameSync.bind(fs);
         const replace = spyOn(fs, "renameSync").mockImplementation((from, to) => {
           rename(from, to);
@@ -897,7 +963,7 @@ test.skipIf(process.platform !== "linux").each(["live child", "mount", "linked e
       const report = await runAttemptTempSweep({ scan, references }, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" });
       expect(report).toMatchObject({ checked: 1, removed: 0, reclaimedBytes: 0 });
       expect(fs.readFileSync(preserved, "utf8")).toBe("protected data");
-      if (protection === "swap") {
+      if (protection === "swap" || protection === "last handoff swap") {
         expect(swapped).toBeTrue();
         const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8"));
         expect(fs.readFileSync(path.join(journal.trash, "replacement"), "utf8")).toBe("new owner");
@@ -974,7 +1040,7 @@ test.each(["due", "upcoming"] as const)("the persisted %s forecast clears after 
   } finally { clock.mockRestore(); process.env.LLV_STATE_DIR = priorState; }
 });
 
-test("an idle minute tick writes no journal line or report, and a changed condition is reported once across restarts", async () => {
+test("quiet minute ticks refresh CPU metrics without repeating journal lines", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-idle-tick-")); roots.push(root);
   const { runAttemptTempSweep } = await import("./attemptTempProduction");
   const { AttemptTempStore } = await import("./attemptTempRetention");
@@ -987,7 +1053,9 @@ test("an idle minute tick writes no journal line or report, and a changed condit
   const tick = async (env: Record<string, string> = {}) => { lines.length = 0; await runAttemptTempSweep({ scan }, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on", ...env }); return [...lines]; };
   try {
     expect(await tick()).toEqual([]);
-    expect(fs.existsSync(report)).toBeFalse();
+    expect(JSON.parse(fs.readFileSync(report, "utf8")).cleanup).toMatchObject({
+      sweepCpuSeconds: expect.any(Number), sweepCpuSecondsLastHour: expect.any(Number),
+    });
     const held = path.join(root, "llv-stage-held"); fs.mkdirSync(held); fs.writeFileSync(path.join(held, "data"), Buffer.alloc(8192));
     const store = new AttemptTempStore();
     try {
@@ -1005,7 +1073,8 @@ test("an idle minute tick writes no journal line or report, and a changed condit
     const written = fs.readFileSync(report, "utf8");
     expect(await tick()).toEqual([]);
     expect(await tick()).toEqual([]);
-    expect(fs.readFileSync(report, "utf8")).toBe(written);
+    expect(JSON.parse(fs.readFileSync(report, "utf8")).cleanup.sweepCpuSeconds).toBeGreaterThanOrEqual(0);
+    expect(written).toContain("sweepCpuSecondsLastHour");
   } finally { log.mockRestore(); }
 });
 

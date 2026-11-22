@@ -27,8 +27,12 @@ import {
   tempSweepMaxAgeMs,
   tempSweepStatus,
   writableRoots,
+  attemptTempJournalPath,
+  finishTreeTrash,
+  readAttemptTempTrash,
   type ProcessScan,
 } from "./tempSweep";
+import { removeTreeWithinAttemptBudget } from "./runtime/attemptTempRemoval";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -53,6 +57,25 @@ function tempRoot(): string {
   made.push(directory);
   return directory;
 }
+
+test("a process restart resolves an inode-claimed quarantine and completes its journaled removal", async () => {
+  const scratch = tempRoot(), directory = path.join(scratch, "llv-stage-recovery"), trash = path.join(scratch, ".delegatus-trash-llv-stage-recovery-first");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "retained payload");
+  const stat = fs.lstatSync(directory), identity = `${stat.dev}:${stat.ino}`;
+  fs.renameSync(directory, trash);
+  const journal = attemptTempJournalPath(directory);
+  fs.writeFileSync(journal, JSON.stringify({ directory, trash, uid: stat.uid, identity, disposable: true }));
+  const failAfterClaim = async (target: string, started: () => void) => removeTreeWithinAttemptBudget(target, started,
+    (async () => { throw new Error("simulated process loss after inode claim"); }) as never, identity);
+  await expect(finishTreeTrash(journal, () => false, failAfterClaim, () => true, true, () => true, true)).rejects.toThrow("simulated process loss");
+  const recovered = readAttemptTempTrash(journal, scratch);
+  expect(recovered?.identity).toBe(identity);
+  expect(recovered?.trash).not.toBe(trash);
+  expect(fs.readFileSync(path.join(recovered!.trash, "payload"), "utf8")).toBe("retained payload");
+  expect(await finishTreeTrash(journal, () => false, undefined, () => true, true, () => true, true)).toBeTrue();
+  expect(fs.existsSync(journal)).toBeFalse();
+  expect(fs.readdirSync(scratch).filter(name => name.startsWith(".delegatus-trash-claim-"))).toEqual([]);
+});
 
 /** A directory with a few entries, every modification time `ageMs` in the past. */
 function aged(root: string, name: string, ageMs: number): string {

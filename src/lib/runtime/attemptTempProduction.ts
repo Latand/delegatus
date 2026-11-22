@@ -11,6 +11,7 @@ import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
+import { measureAttemptAllocation } from "./attemptTempFilesystem";
 import { agentRegistry } from "@/lib/agent/registry";
 import { finishedAgent } from "./temporaryDataProduction";
 import { stateDatabaseBusy } from "@/lib/state/lockWait";
@@ -168,19 +169,17 @@ function setting(raw: string | undefined, fallback: number) {
 }
 type TickCondition = { mode: "on" | "dry-run"; overCap: boolean; failing: boolean; lowSpace?: boolean };
 const quiet = (mode: TickCondition["mode"]): TickCondition => ({ mode, overCap: false, failing: false });
-function recordedReport(file: string, mode: TickCondition["mode"]): { condition: TickCondition; retention?: unknown; cleanupActive?: boolean } {
+function recordedReport(file: string, mode: TickCondition["mode"]): { condition: TickCondition; retention?: unknown } {
   try {
     const report = JSON.parse(fs.readFileSync(file, "utf8")), condition = report?.condition;
     return { condition: condition && typeof condition.overCap === "boolean" && typeof condition.failing === "boolean"
-      ? condition : quiet(mode), retention: report?.retention,
-      cleanupActive: Boolean(report?.cleanup?.oldestEligibleRootAgeSeconds || report?.cleanup?.reclaimedBytesLastHour) };
+      ? condition : quiet(mode), retention: report?.retention };
   } catch { /* A missing or unreadable report counts as the quiet condition. */ }
   return { condition: quiet(mode) };
 }
 
-/** A minute tick reports only when it removed, held over the cap or failed,
- * or when its condition or recorded forecast changed. The recorded
- * condition is on disk, so a restarted helper does not repeat itself. */
+/** Every minute tick writes fresh cleanup counters; console output remains
+ * limited to removals, holds, failures and changed forecasts. */
 export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "scan" | "references">, env: NodeJS.ProcessEnv = process.env) {
   const mode = tempSweepMode(env);
   if (!mode || attemptTempRemaining() <= 0) return null;
@@ -193,15 +192,28 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
   }
   try {
     let backfill: Awaited<ReturnType<typeof backfillAttemptTempRetention>> = { checked: 0, updated: 0 };
+    let cleanupChildCpuSeconds = 0;
     const options: AttemptTempSweepOptions = {
       runBudgetMs: attemptTempRemaining(40_000),
       state: recordingAttemptTempState(store), authority: attemptScratchAuthority, evidenceAuthority: attemptTempAuthority,
       requireExpired: true, scheduledOnly: true, mode, ...ports, checkoutReads,
+      accountCpuSeconds: seconds => { if (Number.isFinite(seconds) && seconds > 0) cleanupChildCpuSeconds += seconds; },
       prepare: async () => {
         store.upgradeScratchRetention();
         const end = sweepMonotonicNow() + attemptTempRemaining(1_000);
         const remaining = () => end - sweepMonotonicNow();
         scheduleAttemptTempChanges(store, remaining);
+        for (const owner of store.allocationDue(Date.now(), 4)) {
+          if (remaining() <= 0) break;
+          try {
+            const before = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
+            if (!before?.isDirectory() || before.isSymbolicLink() || `${before.dev}:${before.ino}` !== owner.identity) continue;
+            const measured = await measureAttemptAllocation(owner.directory, { budgetMs: Math.max(1, remaining()) });
+            const after = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
+            if (after?.isDirectory() && !after.isSymbolicLink() && `${after.dev}:${after.ino}` === owner.identity)
+              store.measure(owner.directory, measured.bytes, Date.now());
+          } catch { /* Keep the last allocation until this bounded visit retries. */ }
+        }
         if (attemptScratchAuditDue(store.schedulePosition().auditAfter, Date.now()))
           backfill = await backfillAttemptTempRetention(store, { audit: true, remaining });
       },
@@ -213,7 +225,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     const roots = await sweepAttemptTemps(store, options);
     const copies = await sweepEvidenceCopies(store, { ...options, authority: attemptTempAuthority }, { agentCopiesManagedSeparately: true });
     const cpu = process.cpuUsage(cpuStarted);
-    const cleanup = store.cleanupMetrics(Date.now(), roots.reclaimedBytes, (cpu.user + cpu.system) / 1e6);
+    const cleanup = store.cleanupMetrics(Date.now(), roots.reclaimedBytes, (cpu.user + cpu.system) / 1e6 + cleanupChildCpuSeconds);
     const report = { ...roots, errors: roots.errors + (backfill.errors ?? 0), copies, backfill,
       cleanup,
       retention: { ...store.retention(Date.now(), options.retentionMs), scratchPeriodDays: ATTEMPT_SCRATCH_RETENTION_MS / 86400000,
@@ -227,7 +239,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     const noteworthy = report.pass || report.adopted || report.operatorHeld || report.removed || copies.removed || report.errors || copies.errors
       || report.spaceError || report.lowSpace || report.deferred || report.overCapBytes || changed || forecastChanged
       || report.retention.dueBytes || report.retention.upcomingBytes;
-    if (noteworthy || cleanup.oldestEligibleRootAgeSeconds || cleanup.reclaimedBytesLastHour || previous.cleanupActive) {
+    {
       const gb = (bytes: number) => `${(bytes / 1e9).toFixed(2)} GB`;
       const minutes = (ms: number) => `${(ms / 60000).toFixed(1)} min`;
       const pass = report.pass, last = report.lastPass, full = report.lastFullPass;
