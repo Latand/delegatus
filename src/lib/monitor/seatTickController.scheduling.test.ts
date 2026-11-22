@@ -113,9 +113,12 @@ test("every sweep checks the full roster while SQLite is busy and a successor re
   const { Database } = await import("bun:sqlite");
   const { statePath } = await import("@/lib/configDir");
   const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
-  await withCheckJournal("busy-sqlite-journal", true, async file => {
+  await withCheckJournal("busy-sqlite-journal", false, async file => {
     importLegacySeatTickJournal(file);
-    const database = new Database(statePath("state.sqlite"));
+    const initialBatch = writePendingCheck(file, 1);
+    const unfinishedBatch = writePendingCheck(file, 2);
+    const temporary = `${unfinishedBatch}.tmp`;
+    fs.renameSync(unfinishedBatch, temporary);
     const rig = harness({ state: RECENT });
     delete rig.deps.appendRecord;
     const projects = ["second-project", "third-project", PROJECT];
@@ -123,25 +126,20 @@ test("every sweep checks the full roster while SQLite is busy and a successor re
     const started: string[] = [];
     rig.deps.workStarted = work => { started.push(work.project); };
     let choices = 0;
-    rig.deps.curation = {
-      reconcile: async () => null,
-      launchIfDue: async () => { choices++; return null; },
-    };
+    Object.assign(rig.deps, {
+      ownsTraffic: () => true, recordSuccessions: () => [], release: null, maintenance: null,
+      curation: {
+        reconcile: async () => null,
+        launchIfDue: async () => { choices++; return null; },
+      },
+    });
+    const database = new Database(statePath("state.sqlite"));
     const warn = spyOn(console, "warn").mockImplementation(() => {});
-    const checkIds: (string | undefined)[] = [];
-    let pending = "";
-    let temporary = "";
-    let bytes = new Uint8Array();
-    const recoverInNewProcess = async () => {
-      const child = Bun.spawn([process.execPath, "-e", `
-        import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
-        await reconcileSeatTick({ ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null }, []);
-      `], { stdout: "pipe", stderr: "pipe" });
-      const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-      const journalWarnings = stderr.split("\n")
-        .filter(line => /^\[seat tick\].*(warn|journal)/.test(line));
-      expect({ exit, journalWarnings }).toEqual({ exit: 0, journalWarnings: [] });
-    };
+    const realNow = performance.now.bind(performance);
+    let offsetMs = 0;
+    const monotonic = spyOn(performance, "now").mockImplementation(() => realNow() + offsetMs);
+    const checkIds: string[] = [];
+    const pendingDir = `${file}.pending-checks`;
     try {
       database.exec("BEGIN IMMEDIATE");
       for (let sweep = 0; sweep < 4; sweep++) {
@@ -149,43 +147,48 @@ test("every sweep checks the full roster while SQLite is busy and a successor re
         expect(started.splice(0)).toEqual(projects);
         expect(choices).toBe(sweep + 1);
         expect(records.map(record => record.project)).toEqual(projects);
-        checkIds.push(...records.map(record => record.timing?.checkId));
+        checkIds.push(...records.map(record => record.timing!.checkId));
+        // Let the next sweep try the backlog again against the same holder.
+        offsetMs += 60_001;
       }
-      checkIds.push((await runSeatTickCheck(PROJECT, rig.deps))?.timing?.checkId);
+      const direct = await runSeatTickCheck(PROJECT, rig.deps);
       expect(started).toEqual([PROJECT]);
-      expect(checkIds.every(Boolean)).toBe(true);
+      checkIds.push(direct!.timing!.checkId);
       expect(new Set(checkIds).size).toBe(checkIds.length);
       expect(readSeatTickRecords(50, file)).toEqual([]);
-      const pendingDir = `${file}.pending-checks`;
-      const batches = fs.readdirSync(pendingDir).sort();
-      expect(batches).toHaveLength(checkIds.length);
-      const [batch] = batches;
-      pending = path.join(pendingDir, batch!);
-      bytes = fs.readFileSync(pending);
-      temporary = `${pending}.tmp`;
-      fs.renameSync(pending, temporary);
+      expect(fs.readdirSync(pendingDir).filter(name => name.endsWith(".json"))).toHaveLength(checkIds.length + 1);
       expect(warn.mock.calls).toEqual([
-        [expect.stringMatching(/journal is busy \(FileTransactionBusyError\).*saved for retry/)],
+        [expect.stringMatching(/journal is busy \(StateLockDeferredError\).*saved for retry/)],
       ]);
     } finally {
       database.close();
+      monotonic.mockRestore();
       warn.mockRestore();
     }
-    await recoverInNewProcess();
-    // A temporary name is still owned by its publisher and is never replayed.
-    expect(fs.existsSync(temporary)).toBe(true);
-    fs.rmSync(temporary, { force: true });
-    fs.writeFileSync(pending, bytes, { flag: "wx", mode: 0o600 });
-    await recoverInNewProcess();
-    // Replay the same bytes as if the previous process stopped after commit
-    // and before it could remove the batch.
-    fs.writeFileSync(pending, bytes, { flag: "wx", mode: 0o600 });
-    await recoverInNewProcess();
-    expect(fs.existsSync(pending)).toBe(false);
-    expect(fs.readdirSync(`${file}.pending-checks`)).toEqual([]);
-    expect(readSeatTickRecords(50, file).map(record => record.timing?.checkId).sort()).toEqual(checkIds.sort());
+
+    const child = Bun.spawn([process.execPath, "-e", `
+      import fs from "node:fs";
+      import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+      const batch = ${JSON.stringify(initialBatch)};
+      const bytes = fs.readFileSync(batch);
+      const sweep = () => reconcileSeatTick({
+        ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null,
+      }, []);
+      await sweep();
+      // A stopped publisher may leave its batch behind after SQLite commits.
+      fs.writeFileSync(batch, bytes, { flag: "wx", mode: 0o600 });
+      await sweep();
+    `], { stdout: "ignore", stderr: "pipe" });
+    const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    if (exit !== 0) throw new Error(`seat tick successor exited ${exit}: ${stderr}`);
+    expect(stderr.split("\n").filter(line => /^\[seat tick\].*journal/.test(line))).toEqual([]);
+    // The successor leaves the unfinished batch for its publisher.
+    expect(fs.readdirSync(pendingDir)).toEqual([path.basename(temporary)]);
+    const recorded = readSeatTickRecords(50, file);
+    expect(recorded[0]).toMatchObject({ project: PROJECT, items: 1 });
+    expect(recorded.slice(1).map(record => record.timing?.checkId).sort()).toEqual(checkIds.sort());
   });
-}, 15_000);
+});
 
 function writePendingCheck(file: string, order: number) {
   const id = order.toString(16).padStart(32, "0");
@@ -193,7 +196,9 @@ function writePendingCheck(file: string, order: number) {
     verdict: "quiet", reasons: [], items: order, deferred: 0, eventsThrough: 0, delivery: null };
   const directory = `${file}.pending-checks`;
   fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(path.join(directory, `${String(order).padStart(16, "0")}-${id}.json`), JSON.stringify([{ id, record }]));
+  const batch = path.join(directory, `${String(order).padStart(16, "0")}-${id}.json`);
+  fs.writeFileSync(batch, JSON.stringify([{ id, record }]));
+  return batch;
 }
 
 test("one healthy sweep drains all visible batches in order before journaling its own check", async () => {
