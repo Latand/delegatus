@@ -6,13 +6,14 @@ import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { procBackend } from "../src/lib/proc";
+import { captureProcessIdentity, processIdentityMayOwn, processIdentityMayRun, type ProcessIdentity } from "../src/lib/processIdentity";
 import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
-import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, shellStartupFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
@@ -228,6 +229,9 @@ export function createGateSandbox(
   }
 }
 
+export const ISOLATED_DIRECTORY_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
+  "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"] as const;
+
 /** Everything that might resolve state, including build imports, is sandboxed. */
 export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...inherited };
@@ -244,7 +248,7 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   // Preserve explicit slot/queue overrides through isolation. Leave the
   // default unset: gate-slot keeps its shared /var/tmp locks, while the CPU
   // queue remains in the same writable machine cache as the Viewer.
-  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
+  for (const key of ISOLATED_DIRECTORY_KEYS) {
     env[key] = path.join(root, key.toLowerCase());
     mkdirSync(env[key]!, { recursive: true });
   }
@@ -417,12 +421,9 @@ function cgroupOf(pid: number | "self"): string | null {
   try { return readFileSync(`/proc/${pid}/cgroup`, "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3) ?? null; }
   catch { return null; }
 }
-/** Only ESRCH proves a process gone. /proc, where there is one, also tells a
-    zombie (exited, waiting to be reaped) from a running process; unreadable
-    metadata proves nothing, so the process counts as running. */
 function live(pid: number): boolean {
   try { process.kill(pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
-  try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
+  return process.platform !== "linux" || !procBackend.processExited(pid);
 }
 function procEntries(): number[] | null {
   try { return readdirSync("/proc").filter(name => /^\d+$/.test(name)).map(Number); } catch { return null; }
@@ -445,17 +446,21 @@ function ps(columns: string[], cleanup: Cleanup, environment = false): string[] 
 /** Every process that inherited this step's token, wherever it was reparented;
     null when no process table could be read. */
 function holders(token: string, cleanup: Cleanup): number[] | null {
+  const holds = (environment: string, separator: string) => {
+    const binding = `${separator}${STEP_TOKEN}=`;
+    const at = environment.indexOf(binding);
+    if (at < 0) return false;
+    const start = at + binding.length;
+    const end = environment.indexOf(separator, start);
+    return environment.slice(start, end < 0 ? undefined : end).split(",").includes(token);
+  };
   const entries = procEntries();
   if (!entries) {
-    const mark = ` ${STEP_TOKEN}=${token}`;
-    return ps(["pid", "command"], cleanup, true)?.flatMap(line => {
-      const at = line.indexOf(mark), end = line.charAt(at + mark.length);
-      return at >= 0 && (end === "" || end === " ") ? [Number(line.trim().split(/\s+/)[0])] : [];
-    }) ?? null;
+    return ps(["pid", "command"], cleanup, true)?.flatMap(line =>
+      holds(line, " ") ? [Number(line.trim().split(/\s+/)[0])] : []) ?? null;
   }
-  const mark = `\0${STEP_TOKEN}=${token}\0`;
   return entries.filter(pid => {
-    try { return `\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`.includes(mark); } catch { return false; }
+    try { return holds(`\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`, "\0"); } catch { return false; }
   });
 }
 function scopeMembers(scope: string): number[] {
@@ -498,7 +503,7 @@ function descendants(root: number, cleanup: Cleanup): number[] | null {
   for (let queue = [root]; queue.length;) for (const child of children.get(queue.shift()!) ?? []) { found.push(child); queue.push(child); }
   return found;
 }
-/** Each started step carries a token of its own in its environment. */
+/** Each started step carries its own token and those of its enclosing checks. */
 const STEP_TOKEN = "LLV_GATE_STEP";
 /** Stops the step this hook started: its process tree, every process that
     inherited its token, and every owned service or transient scope those run
@@ -516,6 +521,9 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
   const remember = (member: number) => {
     if (!signalled.has(member)) signalled.set(member, captureProcessIdentity(member));
   };
+  // Linux can prove that every thread has exited even before the parent reaps
+  // the PID. Keep the identity check elsewhere to avoid a per-PID ps probe.
+  const stillRunning = process.platform === "linux" ? processIdentityMayRun : processIdentityMayOwn;
   remember(pid);
   const cleanup: Cleanup = { ends: Date.now() + CLEANUP_MS, late: false };
   let blind = false;
@@ -542,7 +550,7 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
     const inherited = holders(token, cleanup);
     if (!inherited) blind = true;
     for (const member of [...inherited ?? [], ...[...scopes].flatMap(scopeMembers)]) remember(member);
-    return [...signalled.values()].filter(identity => processIdentityStatus(identity) !== "dead").map(identity => identity.pid);
+    return [...signalled.values()].filter(identity => stillRunning(identity)).map(identity => identity.pid);
   };
   let survivors = left();
   for (let attempt = 1; survivors.length && Date.now() < cleanup.ends; attempt++) {
@@ -577,11 +585,12 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   const started = Date.now();
   const fd = log ? openSync(log, "w") : undefined;
   const token = `${process.pid}-${started}-${Math.random().toString(36).slice(2)}`;
+  const ancestry = env[STEP_TOKEN] ? `${env[STEP_TOKEN]},${token}` : token;
   let stopping = false, cancelled = false, stopTimer: (() => void) | undefined, onCancel: (() => void) | undefined;
   const budget = cpuWaitBudget(env);
   try {
     const output = fd ?? (log === null ? "ignore" : "inherit");
-    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: token,
+    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: ancestry,
       ...(Number.isFinite(until) ? { LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(until, env)) } : {}),
     }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
     let stopped!: (leaked: string | null) => void;
@@ -646,6 +655,9 @@ export interface StepPasses { reused(step: Step, until?: number): boolean; passe
 /** The bytes and configuration every local check actually consumes. */
 export function gateInputSnapshot(root: string, base: string, steps: readonly Step[], env: NodeJS.ProcessEnv = process.env) {
   const checkEnv = checkEnvironment(env);
+  // The caller's paths never reach a local step. Its executor allocates them.
+  for (const key of ISOLATED_DIRECTORY_KEYS) delete checkEnv[key];
+  delete checkEnv.LLV_GATE_RUNNER;
   const toolRoot = path.resolve(import.meta.dir, "..");
   const toolFiles = gateToolFiles(toolRoot);
   let unavailableReason = "dirty worktree";
@@ -668,7 +680,7 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
         ...["node_modules/.bun/lock", "node_modules/typescript/package.json", "node_modules/eslint/package.json"].map(file => path.join(root, file))];
       // Hash what the checks receive, never store its values. Execution roots,
       // deadlines and CPU tickets belong to a run, rather than its result.
-      const environment = environmentFingerprint(checkEnv);
+      const environment = fingerprint([environmentFingerprint(checkEnv), shellStartupFingerprint(root, env.BASH_ENV)]);
       const toolchain = [...tools.map(file => file ? fileFingerprint(file) : "missing"), ...toolFiles.map(file => fileFingerprint(path.join(toolRoot, file)))];
       const components = {
         head: fingerprint(head), tree: fingerprint(tree), base: fingerprint(base),
