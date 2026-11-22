@@ -3453,10 +3453,13 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   if (deployThrough > 0) {
     const waitingTasks = projectRows(sources.tasks(), project).filter(task => task.status !== "done");
     const waitingIndex = waitingRouteIndex(waitingTasks, paused);
-    const eligible = new Set(paused.filter(lane => pausedBy(lane, seat) === "seat"
-      && Date.parse(lane.pausedAt ?? "") <= deployThrough
-      && (!lane.pause.resumeCondition || pauseReminderDue(lane.pause, lane.pausedAt, now,
-        pauses.get(lane.id)?.pauseConditionMet ?? false))).map(lane => lane.id));
+    const eligible = new Set(paused.filter(lane => {
+      const pause = lane.pause;
+      return pausedBy(lane, seat) === "seat"
+        && Date.parse(lane.pausedAt ?? "") <= deployThrough
+        && (pause === undefined || !pause.resumeCondition || pauseReminderDue(pause, lane.pausedAt, now,
+          pauses.get(lane.id)?.pauseConditionMet ?? false));
+    }).map(lane => lane.id));
     for (const task of waitingTasks) {
       if (task.status === "done" || (task.status !== "blocked" && !task.hold)) continue;
       if (waitingRoute(task, waitingIndex, now)?.owner === "operator") continue;
