@@ -264,7 +264,7 @@ running rows with `verified: true`, and the compact row carries it.
 
 The board's card and phone row read `FileEntry` from the Viewer's scan, so the
 scanner computes the same facts during enrichment
-(`src/lib/scanner/observe.ts`), from the tail it already reads for
+(`src/lib/scanner/index.ts`), from the tail it already reads for
 `transcriptTurnResult` and the process table it already holds, below the pid it
 assigns to the entry (`FileEntry.pid`), for entries with `proc === "running"`
 and an open turn. `FileEntry` gains

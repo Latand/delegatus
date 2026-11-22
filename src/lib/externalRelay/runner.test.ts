@@ -68,6 +68,12 @@ accountManager.resolveHeadlessSpawn = (() => ({
 afterAll(() => {
   accountManager.resolveHeadlessSpawn = original;
 });
+/** The service's requester is the trigger's author: a substituted requester also writes the trigger. */
+function askedBy<I extends { respond_to: string | null; conversation: readonly { id: string; author: { key: string } }[] }>(
+  input: I, requester: Record<string, unknown> | null) {
+  return { ...input, requester, conversation: !requester ? input.conversation : input.conversation.map(message =>
+    message.id === input.respond_to ? { ...message, author: { ...message.author, key: String(requester.key) } } : message) };
+}
 function relay(api_base: string): PairedRelay {
   return {
     id: "relay_1",
@@ -250,7 +256,7 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
-test.each(["enabled", "disabled", "long-reservation"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
+test.each(["enabled", "disabled", "long-reservation", "numbered-prose"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
   const ownerTier = kind === "enabled";
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const completions: unknown[] = [];
@@ -264,7 +270,9 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
   const previous = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
   const copy = prototypeCopyLine(round);
-  const text = kind === "long-reservation" ? `${copy}, ${"я".repeat(20_000 - copy.length - 2)}` : `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
+  const prose = "Show 2  GIF previews.\nKeep  the captions.";
+  const text = kind === "long-reservation" ? `${copy}, ${"я".repeat(20_000 - copy.length - 2)}`
+    : kind === "numbered-prose" ? `${prototypeReference(round)} · ${prose}` : `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
   const request = { ...contextRequest, request_id: `prototype-owner-${kind}`, answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
     ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
     conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
@@ -277,13 +285,14 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
     if (duplicate !== null) expect(duplicate).toMatchObject({ outcome: "answered" });
     expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
     const task = loadTasks()[0]!, decision = task.prototypeReviews![0]!.decision!;
-    expect(decision).toMatchObject({ chosen: kind === "long-reservation" ? [] : [2], originalReply: text,
-      answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })) });
+    expect(decision).toMatchObject({ chosen: kind === "long-reservation" || kind === "numbered-prose" ? [] : [2], originalReply: text,
+      answers: round.questions!.map(q => kind === "numbered-prose"
+        ? { questionId: q.id, options: [], other: true } : { questionId: q.id, options: [0] }) });
     if (kind === "long-reservation") {
       expect(decision.recommendedWithReservation).toBe(true);
       expect(decision.comment).toBe(text.slice(copy.length));
       if (result?.outcome === "answered") expect(result.answer.text).toContain("рекомендовані з застереженням");
-    } else expect(decision.comment).toBe("Keep these controls.");
+    } else expect(decision.comment).toBe(kind === "numbered-prose" ? prose : "Keep these controls.");
     expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${round.id}`);
     if (kind === "long-reservation") {
       expect(Buffer.byteLength(decision.delivery.text)).toBeLessThanOrEqual(32_000);
@@ -1587,7 +1596,7 @@ test("the member limit declines a member past it, per chat, and never counts the
     paired.targets[0] = { ...paired.targets[0]!, id: "target_limit", memberLimitPerHour: 2, ...target };
     return runClaimedRequest(paired, {
       ...sampleRequest, request_id: `rq_limit_${n}`, target_id: paired.targets[0]!.id, chat: { key: chat },
-      input: { ...sampleRequest.input, requester },
+      input: askedBy(sampleRequest.input, requester),
     }, undefined, { command: script });
   };
   const member = { key: "u_m", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false };
@@ -1631,7 +1640,7 @@ test("pre-launch capacity and drain declines leave the member's allowance availa
   paired.id = "relay_admission";
   paired.targets[0]!.memberLimitPerHour = 2;
   const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
-  const request = (id: string) => ({ ...sampleRequest, request_id: id, chat: { key: "chat_key_admissionaa" }, input: { ...sampleRequest.input, requester } });
+  const request = (id: string) => ({ ...sampleRequest, request_id: id, chat: { key: "chat_key_admissionaa" }, input: askedBy(sampleRequest.input, requester) });
   const command = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
   const previous = accountManager.resolveHeadlessSpawn;
   try {
@@ -1664,7 +1673,7 @@ test("launched hand-offs, failed agents and running agents each consume the memb
   paired.id = "relay_count_launched";
   paired.targets[0] = { ...paired.targets[0]!, concurrency: 2, memberLimitPerHour: 1 };
   const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
-  const request = (id: string, chatKey: string) => ({ ...contextRequest, request_id: id, chat: { key: chatKey }, input: { ...contextRequest.input, requester } });
+  const request = (id: string, chatKey: string) => ({ ...contextRequest, request_id: id, chat: { key: chatKey }, input: askedBy(contextRequest.input, requester) });
   const handoff = handoffStub(path.join(root, "admission-handoff"));
   const failure = stub("process.exit(1)");
   const release = path.join(root, "admission-release");
@@ -1734,7 +1743,7 @@ test("service-built roles answer and the real runner and poller emit cross-check
     expect(limited?.outcome === "declined" && [...limited.detail!].length).toBeLessThanOrEqual(200);
     // These fixtures use the same key as the counted member; the role flags exempt them.
     for (const role of ["admin", "owner"])
-      expect(await runClaimedRequest(paired, { ...fixture(role), request_id: `rq_wire_exempt_${role}`, input: { ...fixture(role).input, requester: { ...fixture(role).input.requester, key: member.input.requester.key } } }, undefined, { command })).toMatchObject({ outcome: "answered" });
+      expect(await runClaimedRequest(paired, { ...fixture(role), request_id: `rq_wire_exempt_${role}`, input: askedBy(fixture(role).input, { ...fixture(role).input.requester, key: member.input.requester.key }) }, undefined, { command })).toMatchObject({ outcome: "answered" });
 
     updateRelayStore((store) => ({ ...store, relays: [paired] }));
     ensureExternalRelayPollers();
@@ -3019,7 +3028,7 @@ for (const engine of ["codex", "claude"] as const)
       request.input.request_text = task === "react" ? "React with 👍 to message m_b40b71a0a9d43622ee0e2e6a." : "When is the meetup?";
       request.input.short_term_memory = null;
       request.input.documents = [];
-      request.input.conversation = [];
+      request.input.conversation = request.input.conversation.filter(message => message.id === request.input.respond_to);
       const run = await runLoopCase({ request, live: { engine, home: accountHome }, response: (body) => {
         if ("tool" in body && body.tool === "react_to_message") return actionResponse("action_ok", body);
         return { body: { ...x1Results.ok, call_id: body.call_id, output: "The meetup is Friday." } };
@@ -4639,8 +4648,10 @@ test.each([false, true])("owner reply chains reuse one conversation, learn bot a
     }
     expect(launches).toBe(1); expect(readConversations()).toHaveLength(1);
     expect(prompts[1]).not.toContain("<service_instructions>");
-    expect(prompts[1]).not.toContain('"id":"turn-1"');
-    expect(Buffer.byteLength(prompts[1]!)).toBeLessThan(Buffer.byteLength(prompts[0]!) / 10);
+    const rows = JSON.parse(prompts[1]!.match(/<conversation>\n([^]*?)\n<\/conversation>/)![1]!) as { id: string }[];
+    expect(rows.map(row => row.id)).toEqual(["turn-1", "bot-1", "turn-2"]);
+    expect(prompts[1]).toContain("<short_term_memory>");
+    expect(Buffer.byteLength(prompts[1]!)).toBeLessThan(Buffer.byteLength(prompts[0]!) / 4);
     expect(readAnswerRecord(paired.id, "target_1", current)?.chain).toMatchObject({ continued: true, promptBytes: Buffer.byteLength(prompts[2]!) });
   } finally { await server.close(); }
 });
@@ -4689,7 +4700,9 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
   const trigger = fixture.input.conversation.find(m => m.id === fixture.input.respond_to)!;
   const samples: { mode: string; promptBytes: number; deliveredMs: number; answerMs: number }[] = [];
   let promptBytes = 0, deliveredAt = 0, launches = 0, sends = 0;
+  let deliveredPrompt = "";
   const engine = (prompt: string) => {
+    deliveredPrompt = prompt;
     promptBytes = Buffer.byteLength(prompt);
     // Same CPU work per prompt byte on both paths; no network/model or sleep.
     for (let i = 0; i < passes; i++) createHash("sha256").update(prompt).digest();
@@ -4714,6 +4727,12 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
         const completion = await runClaimedRequest(paired, { ...first, request_id: `latency-${pair}-${mode}`, input }, undefined, { ownerPorts: ports });
         const answerMs = performance.now() - started;
         expect(completion?.outcome).toBe("answered");
+        if (mode === "continued") {
+          const rows = JSON.parse(deliveredPrompt.match(/<conversation>\n([^]*?)\n<\/conversation>/)![1]!) as { id: string }[];
+          expect(rows.slice(-11).map(row => row.id)).toEqual(input.conversation.slice(-11).map(row => row.id));
+          expect(deliveredPrompt).toContain("<short_term_memory>");
+          expect(deliveredPrompt).not.toContain("<service_instructions>");
+        }
         samples.push({ mode, promptBytes, deliveredMs: deliveredAt - started, answerMs });
       }
     }
@@ -4722,7 +4741,7 @@ test.each([0, 10000])("continued owner latency: five identical-input pairs (%s h
     const variability = (values: number[]) => ({ rangeMs: Math.max(...values) - Math.min(...values),
       medianAbsoluteDeviationMs: median(values.map(value => Math.abs(value - median(values)))) });
     const fresh = samples.filter(s => s.mode === "fresh"), continued = samples.filter(s => s.mode === "continued");
-    expect(median(continued.map(s => s.promptBytes))).toBeLessThan(median(fresh.map(s => s.promptBytes)) / 10);
+    expect(median(continued.map(s => s.promptBytes))).toBeLessThan(median(fresh.map(s => s.promptBytes)));
     const measurement = { engine: `SHA256 ${passes} passes per prompt; alternating pair order`, load: os.loadavg(), samples,
       medians: { freshMs: median(fresh.map(s => s.answerMs)), continuedMs: median(continued.map(s => s.answerMs)) },
       variability: { fresh: variability(fresh.map(s => s.answerMs)), continued: variability(continued.map(s => s.answerMs)) } };

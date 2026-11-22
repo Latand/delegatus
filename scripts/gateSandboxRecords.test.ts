@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { hasActiveGateSandbox } from "./gateSandboxRecords";
 import { createHookFixture } from "./local-gate.fixture";
 import { isolatedEnvironment } from "./local-gate";
 
@@ -103,3 +104,51 @@ test("an explicitly retained sandbox survives outer owned-runner cleanup", async
   roots.push(sandbox);
   expect(fs.readFileSync(path.join(sandbox, "input.txt"), "utf8")).toBe("held for an unconfirmed consumer");
 }, 30_000);
+
+function activeJournalFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-journal-"));
+  roots.push(root);
+  const directory = path.join(root, "delegatus-local-gate-private");
+  fs.mkdirSync(directory, { mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
+  const journal = path.join(root, "sandboxes.ndjson");
+  fs.writeFileSync(journal, "", { mode: 0o600 });
+  const stat = fs.lstatSync(directory);
+  const row = { directory: fs.realpathSync(directory), dev: stat.dev, ino: stat.ino, generation: "generation-a" };
+  return { directory, journal, row };
+}
+
+test("an active journal entry recognizes its exact private directory allocation", () => {
+  const fixture = activeJournalFixture();
+  fs.writeFileSync(fixture.journal, JSON.stringify(fixture.row) + "\n");
+  expect(hasActiveGateSandbox(fixture.directory, fixture.journal)).toBe(true);
+});
+
+test.each([
+  ["missing journal", "missing"],
+  ["journal without an allocation", "empty"],
+  ["released allocation", "released"],
+  ["retained allocation", "retained"],
+] as const)("does not recognize a private gate-shaped directory with %s", (_name, state) => {
+  const fixture = activeJournalFixture();
+  if (state !== "missing" && state !== "empty") {
+    fs.writeFileSync(fixture.journal, [
+      JSON.stringify(fixture.row),
+      JSON.stringify({ ...fixture.row, [state]: true }),
+    ].join("\n") + "\n");
+  }
+  const journal = state === "missing" ? path.join(path.dirname(fixture.journal), "absent.ndjson") : fixture.journal;
+  expect(hasActiveGateSandbox(fixture.directory, journal)).toBe(false);
+});
+
+test("does not recognize a journal entry for an earlier inode at the same path", () => {
+  const fixture = activeJournalFixture();
+  const old = fixture.directory + ".old";
+  fs.renameSync(fixture.directory, old);
+  fs.mkdirSync(fixture.directory, { mode: 0o700 });
+  fs.chmodSync(fixture.directory, 0o700);
+  const replacement = fs.lstatSync(fixture.directory);
+  expect(replacement.ino).not.toBe(fixture.row.ino);
+  fs.writeFileSync(fixture.journal, JSON.stringify(fixture.row) + "\n");
+  expect(hasActiveGateSandbox(fixture.directory, fixture.journal)).toBe(false);
+});

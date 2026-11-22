@@ -121,7 +121,8 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
 // v70 aligns the seat with scheduled maintainer writes and independent seating reports.
 // v71 aligns the merge bar with branch protection's required checks.
 // v72 routes bounded operations directly and gives urgent work a supported speed.
-export const ORCHESTRATOR_PROMPT_VERSION = 72;
+// v73 also records that the release switch pauses queued requests.
+export const ORCHESTRATOR_PROMPT_VERSION = 73;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -602,6 +603,7 @@ const ORCHESTRATOR_TASK_CURRENT_BULLET = "- Keep each task current: on change, a
     upgrades. A terminal advance gate owes the last fixed head one check. */
 const ORCHESTRATOR_REVIEW_POLICY = `Review: read-only reviewer, onFail:{to:"<fix stage id>",maxRounds}; fix next: review. advance (default): up to N reviews and fixes. Terminal (next:null): re-check last fix once; pass completes, fail parks with budget-spent findings. Nonterminal: pass edge with findings after fixing. No follow-up task. continue-review adds no rounds; traversed budgets cannot grow. Another gate's fail loop allows fresh handoff; rounds stay cumulative. stop-after-fix: needs_review after fix; use only when asked to look before merge. park stops before fix.`;
 const ORCHESTRATOR_REVIEW_READY_BAR = "A PR is ready when its final head passed review (terminal re-check included) or a nonterminal gate's last budget fix passed, required checks are green and its body is read.";
+const ORCHESTRATOR_RELEASE_POLICY = "- Release checks require seat_tick_settings.release.enabled, including requestNow. Hold releases during production incidents.";
 const ORCHESTRATOR_AUTOMATIC_MERGE_BAR = "Setting on: merge completed lanes with passed reviews or passed nonterminal budget fixes; required checks must settle green";
 const SHIPPED_AUTOMATIC_MERGE_BAR = "Setting on: Delegatus merges a completed lane when reviews passed or only nonterminal gates spent their budget with the last fix passed, once checks settle green";
 const SHIPPED_RED_CHECK_STOP = "Red checks hold merging; unverified, assumed or synthetic premises go to the operator.";
@@ -665,7 +667,7 @@ ${ORCHESTRATOR_OUTPUTS_BULLET}
 ${ORCHESTRATOR_MAINTENANCE_PRACTICE}
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
 - Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. ${ORCHESTRATOR_REVIEW_READY_BAR} Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. ${ORCHESTRATOR_AUTOMATIC_MERGE_BAR}; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. ${ORCHESTRATOR_RED_CHECK_STOP} Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
-- Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.
+${ORCHESTRATOR_RELEASE_POLICY}
 ${ORCHESTRATOR_TASK_CURRENT_BULLET}
 
 ${ORCHESTRATOR_LANE_SIZING_DIRECTIVE}
@@ -829,6 +831,7 @@ const SHIPPED_REVIEW_WORKING_RULES = [
 ];
 
 const BRIEF_PREPARATION_UPGRADES: readonly (readonly [string, string])[] = [
+  ["- Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.", ORCHESTRATOR_RELEASE_POLICY],
   ["- The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.", "- Brief: outcome, acceptance, stage deliverables. Extra fences name authority, reason, protected resource and continuation owner; cite policy once. Before launch, trace required actions, dependencies and checks against role/controller limits. Flag conflicts and missing owners; resolve your own fence within authority or assign a permitted dependency. Unproved acceptance stays open. Delegatus supplies reporting."],
   ["- A spec asserts no unobserved external fact: observing it is step 1; the stage stops to ask if it cannot. After deploy, check the operator-visible production result before closing the task. Send each status with the next action.", "- Verify external premises. Name missing observations blocking this stage. Bounded reports may finish with explicit gaps; dependent acceptance stays open with an authorized next owner. Ask only for operator access or decisions. Verify production after deploy before task closure; report next actions."],
   ["- The project's own instruction files and playbooks govern how its code is built, checked and released; this mandate governs how you run agents and wins on that.", "- Project playbooks govern builds, checks and releases; this mandate wins on agent coordination."],
