@@ -1039,9 +1039,7 @@ test("the default worker-ask source preserves archived merged-task acceptance ac
   const recentHidden = { ...merged, id: "recent-hidden-merge", task: activeTask.text, taskIds: [activeTask.id],
     closedAt: new Date(NOW - 60 * 60_000).toISOString(), hiddenAt: new Date(NOW - 30 * 60_000).toISOString(),
     merge: { ...merged.merge, mergedAt: new Date(NOW - 60 * 60_000).toISOString(), updatedAt: new Date(NOW - 60 * 60_000).toISOString() } };
-  const active = { ...buildPipeline({ id: "active-build-lane", task: activeTask.text, project: PROJECT, repoDir: "/srv/repo",
-    stages: [], srcPath: null, srcConversationId: null, now: new Date(NOW - 10 * 60_000).toISOString(), state: "running" }),
-    state: "running" as const, taskIds: [activeTask.id] };
+  const active = lane({ id: "active-build-lane", task: activeTask.text, taskIds: [activeTask.id], project: PROJECT, state: "running" });
   expect(isPipeline(merged)).toBe(true);
   saveTasks([task, activeTask, unrelatedTask]);
   savePipelines([merged, recentHidden, active] as never);

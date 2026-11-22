@@ -208,7 +208,7 @@ test("task Waiting writes follow the stored decision form before and after its a
   const afterAnswer = patchTask([stored], stored.id, { status: "blocked", hold: { kind: "operator", note: "" } }, "2026-10-01T02:00:00Z", { actor: "operator" });
   expect(afterAnswer).toMatchObject({ ok: true, task: { status: "inbox" } });
   if (!afterAnswer.ok) throw new Error(afterAnswer.error);
-  expect(waitingRoute(afterAnswer.task, waitingRouteIndex([afterAnswer.task], []), Date.parse("2026-10-01T02:00:00Z"))).toMatchObject({ owner: "seat", rule: "unowned" });
+  expect(waitingRoute(afterAnswer.task, waitingRouteIndex([afterAnswer.task], []), Date.parse("2026-10-01T02:00:00Z"))).toMatchObject({ owner: "seat", rule: "form-answered" });
 });
 
 test("a decision on the newer of two rounds retires the older undecided one: nothing waits, history keeps it as superseded", async () => {

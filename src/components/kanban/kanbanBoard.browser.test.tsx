@@ -33497,12 +33497,14 @@ describe("Waiting status hint", () => {
   }, 180_000);
 
   browserTest("opening the Waiting editor brings its reason and both actions into view at desktop widths", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "waiting-editor-"));
+    const sockets = ownedBrowserSocketEnvironment();
     let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
     let browser: Browser | undefined;
     try {
       server = await serveEvidenceFixture(scratch);
-      browser = await chromium.launch(LAUNCH);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
       for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [915, 1440]) {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
           { width, height: 844 }, theme, locale, "reduce");
@@ -33524,6 +33526,7 @@ describe("Waiting status hint", () => {
     } finally {
       await browser?.close();
       server?.stop();
+      sockets.close();
       fs.rmSync(scratch, { recursive: true, force: true });
     }
   }, 180_000);
