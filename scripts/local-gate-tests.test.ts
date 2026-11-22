@@ -1,7 +1,12 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding, comparisonFileWorkers } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, comparisonPhaseBudgetMs } from "./local-gate-tests";
+
+test("comparison phase allowance scales from 15 minutes up to 40", () => {
+  expect([1, 30, 31, 51, 102, 130, 1_000].map(comparisonPhaseBudgetMs))
+    .toEqual([15, 15, 16, 21, 33, 40, 40].map(minutes => minutes * 60_000));
+});
 
 test("only an exhausted comparator budget returns no verdict", () => {
   const message = "head: test run exceeded its 15 minute budget; 8 of 12 files completed";

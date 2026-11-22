@@ -18,7 +18,7 @@ import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeover
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { shortId } from "@/lib/shortIds";
-import { publicationPushBudgetMs } from "./gateBudget";
+import { PUBLICATION_PACK_MARGIN_MS, publicationPushBudgetMs } from "./gateBudget";
 import { recoverablePublication } from "./publicationHistory";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
 
@@ -2279,7 +2279,11 @@ for (const scenario of [
   { name: "runtime gate change", adapter: true, file: "Dockerfile", refused: false, unreadable: null, ms: 1_800_000 },
   { name: "truncated gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: "truncated", ms: 1_800_000 },
   { name: "unreadable gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: 'refused', ms: 1_800_000 },
-]) test("publication hands matching budgets to Git and the real hook: " + scenario.name, async () => {
+  { name: "two deadlines on the accepted head", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 2_700_000, previous: "deadline" },
+  { name: "a deadline on another head", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000, previous: "older head" },
+  { name: "an assertion refusal on the accepted head", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000, previous: "refusal" },
+  { name: "a deadline in a repository without the comparator", adapter: false, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000, previous: "deadline" },
+] as const) test("publication hands matching budgets to Git and the real hook: " + scenario.name, async () => {
   const box = await publishSandbox();
   try {
     if (scenario.adapter) {
@@ -2288,6 +2292,18 @@ for (const scenario of [
     }
     fs.mkdirSync(path.dirname(path.join(box.subject.worktreeDir, scenario.file)), { recursive: true });
     const head = await box.commit(scenario.file, "accepted work\n");
+    const previous = "previous" in scenario ? scenario.previous : undefined;
+    if (previous) {
+      const sha = previous === "older head" ? await git(box.subject.worktreeDir, "rev-parse", "HEAD^") : head;
+      box.subject.publicationRecovery = { [sha]: { sha, failures: 2, totalAttempts: 2,
+        history: [1, 2].map(epoch => ({
+          operationId: `prior-${epoch}`, epoch, at: "2026-01-01T00:00:00.000Z", retryAt: "2026-01-01T00:01:00.000Z",
+          cause: previous === "refusal" ? "check-failure" : "infrastructure-deadline",
+          detail: previous === "refusal" ? "a named assertion failed" : "a check reached its execution deadline without a verdict",
+        })),
+      } };
+      savePipelines([box.subject]);
+    }
     const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
     fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf "# hook deadline %s\\n" "$LLV_GATE_PUSH_DEADLINE"\nprintf "# check context %s %s %s\\n" "$LLV_GATE_LANE_ID" "$LLV_GATE_STAGE_ID" "$LLV_GATE_PUSH_HEAD"\n'
       + (scenario.refused ? 'echo "fixture gate refusal" >&2\nexit 1\n' : 'exit 0\n'), { mode: 0o700 });
@@ -2306,16 +2322,19 @@ for (const scenario of [
       };
       return result;
     };
+    const started = Date.now();
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
     expect(observed?.ms).toBe(scenario.ms);
     expect(observed?.deadline).toMatch(/^\d+$/);
+    expect(Number(observed?.deadline)).toBeGreaterThanOrEqual(started + scenario.ms - PUBLICATION_PACK_MARGIN_MS);
+    expect(Number(observed?.deadline)).toBeLessThanOrEqual(Date.now() + scenario.ms - PUBLICATION_PACK_MARGIN_MS);
     expect(observed?.state).toBe(process.env.LLV_STATE_DIR!);
     expect(observed?.output).toContain("# hook deadline " + observed?.deadline);
     expect(observed?.output).toContain(`# check context ${box.subject.id} ${box.subject.cursor?.stageId ?? ""} ${head}`);
     expect(result.ok).toBe(!scenario.refused);
     expect(await box.originHead()).toBe(scenario.refused ? "" : head);
     if (scenario.refused) expect(JSON.stringify(result)).toContain("fixture gate refusal");
-    if (!scenario.unreadable && scenario.adapter) expect(observed?.ms).toBe(publicationPushBudgetMs([scenario.file]));
+    if (!scenario.unreadable && scenario.adapter) expect(observed?.ms).toBe(publicationPushBudgetMs([scenario.file], previous === "deadline"));
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
 

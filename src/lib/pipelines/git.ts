@@ -1755,7 +1755,9 @@ async function publicationBudget(pipeline: Pipeline, acceptedSha: string, exec: 
       return { ms: PIPELINE_PUBLICATION_PUSH_MS, recheck: true };
     }
     const changed = await publicationChangedPaths(pipeline, acceptedSha, exec, DEFAULT_PIPELINE_BASE_BRANCH);
-    return { ms: publicationPushBudgetMs(changed), recheck: true };
+    const retryAfterDeadline = pipeline.publicationRecovery?.[acceptedSha]?.history
+      .some(entry => entry.cause === "infrastructure-deadline") ?? false;
+    return { ms: publicationPushBudgetMs(changed, retryAfterDeadline), recheck: true };
   }));
 }
 

@@ -503,7 +503,7 @@ serviceTest("head checkpoints invalidate installed dependency bytes and the merg
   expect(run(head).match(new RegExp(checkpoint, "g"))).toHaveLength(2);
 }, 60_000);
 
-serviceTest("an aggregate deadline preserves completed files without certifying the interrupted run", () => {
+serviceTest.each(["phase", "comparison"])("an expanded retry retains green files after a %s deadline", limit => {
   const f = fixture();
   rmSync(path.join(f.repo, "a.test.ts")); rmSync(path.join(f.repo, "b.test.ts"));
   const files = Array.from({ length: 12 }, (_, index) => `sample-${String(index).padStart(2, "0")}.test.ts`);
@@ -514,28 +514,82 @@ serviceTest("an aggregate deadline preserves completed files without certifying 
   const driver = path.join(f.root, "deadline-driver.ts");
   writeFileSync(driver, `import * as comparator from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
 import { existsSync, readFileSync } from "node:fs";
-const expires = process.argv.at(-1) === "expire";
+const mode = process.argv.at(-1);
+const expires = mode !== "continue";
 // A deterministic parent clock expires only after the first eight owned
 // children have started. Child checks retain their real clocks and budgets.
 Object.defineProperty(performance, "now", { value: () => expires && existsSync(${JSON.stringify(marker)})
-  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? 1000000 : 0 });
+  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? (mode === "phase" ? 20_000 : 41 * 60_000) : 0 });
 try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
-  { budgets: { fileMs: 300000, runMs: 15000 } }); } catch (error) {
+  { budgets: { fileMs: 300000, runMs: mode === "phase" ? 15_000 : mode === "comparison" ? 45 * 60_000 : 30_000 } }); } catch (error) {
   const ending = comparator.comparatorEnding?.(error);
   console.error(ending?.line ?? String(error)); process.exitCode = ending?.code ?? 1;
 }
 `);
   const run = (mode: string) => spawnSync(process.execPath, [driver, mode],
     { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
-  const stopped = run("expire");
+  const stopped = run(limit);
   expect(stopped.status, stopped.stdout + stopped.stderr).toBe(75);
   expect(stopped.stderr).toContain("touched-tests: no verdict: head: test run exceeded");
-  expect(stopped.stderr).toContain("test run exceeded");
   expect(Object.keys(f.samples())).toHaveLength(8);
   const resumed = run("continue");
   expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
   expect(resumed.stdout.match(/reused complete green head file/g)).toHaveLength(8);
   expect(f.samples()).toEqual(Object.fromEntries(files.map(file => [file, 1])));
+}, 60_000);
+
+serviceTest("a hung file still hits its individual limit on a retry with a warm checkpoint", () => {
+  const f = fixture();
+  writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b").replace("expect(1).toBe(1);",
+    "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 90_000);"));
+  f.git("add", "."); f.git("commit", "-m", "Hung file fixture");
+  const base = f.git("rev-parse", "origin/main");
+  const driver = path.join(f.root, "hung-driver.ts");
+  writeFileSync(driver, `import { touchedTests } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+const result = await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ["a.test.ts", "b.test.ts"],
+  { budgets: { fileMs: 5000, runMs: 60_000 } });
+process.exitCode = result.introduced.length ? 1 : 0;
+`);
+  const run = () => spawnSync(process.execPath, [driver], { cwd: f.repo, encoding: "utf8", timeout: 25_000 });
+  for (const attempt of [1, 2]) {
+    const result = run();
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("NEW b.test.ts: <runner error> runner did not finish (124)");
+    expect(f.samples()).toEqual({ a: 1, b: attempt });
+    if (attempt === 2) expect(result.stdout).toContain("reused complete green head file a.test.ts");
+  }
+}, 60_000);
+
+serviceTest.each([false, true])("a phase cutoff leaves the file incomplete (observed refusal: %s)", refused => {
+  const f = fixture();
+  const file = "a.test.ts";
+  const hung = f.source("a").replace("expect(1).toBe(1);",
+    "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 90_000);");
+  writeFileSync(path.join(f.repo, file), refused
+    ? hung.replace('test("fixture contract"', 'test("recorded refusal", () => expect(1).toBe(2));\ntest("fixture contract"')
+    : hung);
+  f.git("add", "."); f.git("commit", "-m", "Hung baseline fixture");
+  const base = f.git("rev-parse", "HEAD");
+  f.git("update-ref", "refs/remotes/origin/main", base);
+  f.git("commit", "--allow-empty", "-m", "Same hung file on head");
+  const driver = path.join(f.root, "phase-cutoff.ts");
+  writeFileSync(driver, `import { touchedTests, comparatorEnding } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+try {
+  const result = await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, [${JSON.stringify(file)}],
+    { budgets: { fileMs: 8000, runMs: 4000 } });
+  process.exitCode = result.introduced.length ? 1 : 0;
+} catch (error) {
+  const ending = comparatorEnding(error);
+  console.error(ending.line);
+  process.exitCode = ending.code;
+}
+`);
+  const result = spawnSync(process.execPath, [driver], { cwd: f.repo, encoding: "utf8", timeout: 25_000 });
+  expect(result.status, result.stdout + result.stderr).toBe(refused ? 1 : 75);
+  const detail = refused ? "(fail) recorded refusal" : "phase budget exhausted";
+  expect(result.stderr).toContain(`head: a.test.ts: runner did not finish (124); ${detail}`);
+  expect(result.stdout).not.toContain("touched-tests: baseline selected");
+  expect(f.samples()).toEqual({ a: 1 });
 }, 60_000);
 
 serviceTest("an observed cleanup refusal stays decisive when the next file exhausts the aggregate", () => {
