@@ -1,6 +1,7 @@
 import { expect, spyOn, test, crypto, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
 import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
-import { spawnSync } from "node:child_process";
+import { spawn as spawnChild, spawnSync } from "node:child_process";
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 async function continuationCloseFixture(marker: "actionAt" | "continuationRequestedAt" = "continuationRequestedAt") {
   const h = harness();
@@ -1969,9 +1970,10 @@ test("a descendant that outlives the runtime's release is still signalled, and t
   const { captureProcessIdentity, processIdentityMayRun } = await import("@/lib/processIdentity");
   const h = harness();
   const f = await idleStageHostFixture(h);
-  const child = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
-  const identity = captureProcessIdentity(child.pid!);
+  let child: ReturnType<typeof spawnChild> | undefined;
   try {
+    const descendant = child = spawnChild("sleep", ["300"], { detached: true, stdio: "ignore" });
+    const identity = captureProcessIdentity(descendant.pid!);
     await f.bind(30_000);
     h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
     h.advanceWallClock(IDLE_TURN_QUIET_MS);
@@ -1986,7 +1988,7 @@ test("a descendant that outlives the runtime's release is still signalled, and t
       signal: (pid: number, signal: NodeJS.Signals) => {
         expect(pid).toBe(identity.pid);
         signals.push(`${signal}:${pid}`);
-        expect(child.kill(signal)).toBe(true);
+        expect(descendant.kill(signal)).toBe(true);
       },
       sleep: async () => { await Bun.sleep(10); },
       terminateOwnedHost: async () => {
@@ -2015,7 +2017,7 @@ test("a descendant that outlives the runtime's release is still signalled, and t
     expect(lane.state).toBe("running");
     expect(lane.runs[0]!.attempts.map((item) => item.state)).toEqual(["failed", "pending"]);
   } finally {
-    try { await stopFixtureProcess(child); } finally { await f.end(); }
+    try { if (child) await stopFixtureProcess(child); } finally { await f.end(); }
   }
 });
 
