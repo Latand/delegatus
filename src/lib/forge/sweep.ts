@@ -140,7 +140,7 @@ function due(entry: ForgeRepositoryEntry | undefined, demand: Demand, nudgedAt: 
 }
 
 type RepositoryOutcome =
-  | { ok: true; rows: SweptRow[]; complete: boolean; full: boolean; canonical: string | null; filled: SweptRow[]; issues: number[] }
+  | { ok: true; rows: SweptRow[]; complete: boolean; full: boolean; canonical: string | null; filled: SweptRow[]; issues: number[]; fillFailure?: RepositoryReadFailure }
   | RepositoryReadFailure;
 
 type RepositoryReadFailure = { ok: false; error: ForgeSweepError; diagnostic: string };
@@ -156,22 +156,26 @@ const malformedRead: RepositoryReadFailure = {
 /** Debian's gh cannot name closingIssuesReferences in --json. Keep that
  * linkage by asking GraphQL for each returned page in one bounded batch. */
 async function legacyPullRequestRows(raw: string, run: GithubRunner): Promise<string> {
-  const rows: unknown = JSON.parse(raw);
-  if (!Array.isArray(rows)) throw new Error("legacy pull request list is malformed");
+  let rows: unknown;
+  try { rows = JSON.parse(raw); } catch { throw new InvalidLegacyResponse(); }
+  if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw new InvalidLegacyResponse();
   for (let start = 0; start < rows.length; start += FORGE_PAGE_LIMIT) {
     const batch = rows.slice(start, start + FORGE_PAGE_LIMIT) as Record<string, unknown>[];
     const repository = batch.map((row) => typeof row.url === "string" ? repositoryOfUrl(row.url) : null).find(Boolean);
-    if (!repository) throw new Error("legacy pull request list has no repository");
+    if (!repository) throw new InvalidLegacyResponse();
     const [owner, name] = repository.split("/");
     const aliases = batch.map((row, index) => {
-      if (!Number.isSafeInteger(row.number)) throw new Error("legacy pull request number is malformed");
+      if (!Number.isSafeInteger(row.number)) throw new InvalidLegacyResponse();
       return `p${index}: pullRequest(number: ${row.number}) { closingIssuesReferences(first: 100) { nodes { number url } pageInfo { hasNextPage } } }`;
     });
     const query = `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { ${aliases.join(" ")} } }`;
-    const answer = JSON.parse(await run(["api", "graphql", "-f", `query=${query}`])) as { data?: { repository?: Record<string, unknown> }; errors?: unknown[] };
-    if (answer.errors?.length || !answer.data?.repository) throw new Error("closing issue references could not be read");
+    let answer: unknown;
+    try { answer = JSON.parse(await run(["api", "graphql", "-f", `query=${query}`])); } catch { throw new InvalidLegacyResponse(); }
+    if (!answer || typeof answer !== "object" || Array.isArray(answer)) throw new InvalidLegacyResponse();
+    const response = answer as { data?: { repository?: Record<string, unknown> }; errors?: unknown[] };
+    if (response.errors?.length || !response.data?.repository) throw new InvalidLegacyResponse();
     for (const [index, row] of batch.entries()) {
-      const pr = answer.data.repository[`p${index}`] as { closingIssuesReferences?: { nodes?: unknown[]; pageInfo?: { hasNextPage?: boolean } } } | null;
+      const pr = response.data.repository[`p${index}`] as { closingIssuesReferences?: { nodes?: unknown[]; pageInfo?: { hasNextPage?: boolean } } } | null;
       const refs = pr?.closingIssuesReferences;
       if (!Array.isArray(refs?.nodes) || refs.pageInfo?.hasNextPage !== false
         || refs.nodes.some((ref) => !ref || typeof ref !== "object"
@@ -182,6 +186,8 @@ async function legacyPullRequestRows(raw: string, run: GithubRunner): Promise<st
   }
   return JSON.stringify(rows);
 }
+
+class InvalidLegacyResponse extends Error {}
 
 async function readRepository(repository: string, entry: ForgeRepositoryEntry | undefined, demand: Demand, ports: ForgeSweepPorts, startedAt: string): Promise<RepositoryOutcome> {
   const name = entry?.canonical ?? repository;
@@ -194,7 +200,7 @@ async function readRepository(repository: string, entry: ForgeRepositoryEntry | 
         const raw = await ports.run(["pr", "list", "--repo", name, "--state", "all", ...args, "--json", LEGACY_PR_FIELDS]);
         return parseRows(await legacyPullRequestRows(raw, ports.run), startedAt) ?? malformedRead;
       } catch (fallbackError) {
-        return failedRead(fallbackError);
+        return fallbackError instanceof InvalidLegacyResponse ? malformedRead : failedRead(fallbackError);
       }
     }
   };
@@ -229,6 +235,7 @@ async function readRepository(repository: string, entry: ForgeRepositoryEntry | 
   const missing = [...demand.numbers].filter((number) => !known.has(number)).slice(0, FORGE_FILL_LIMIT);
   const filled: SweptRow[] = [];
   const issues: number[] = [];
+  let fillFailure: RepositoryReadFailure | undefined;
   for (const number of missing) {
     try {
       let raw: string;
@@ -246,9 +253,10 @@ async function readRepository(repository: string, entry: ForgeRepositoryEntry | 
          is an outage, and the number is asked again next time. */
       const detail = `${(error as { stderr?: unknown })?.stderr ?? ""} ${(error as Error)?.message ?? ""}`;
       if (/Could not resolve to a PullRequest/i.test(detail)) issues.push(number);
+      else fillFailure ??= failedRead(error);
     }
   }
-  return { ok: true, rows, complete, full, canonical, filled, issues };
+  return { ok: true, rows, complete, full, canonical, filled, issues, fillFailure };
 }
 
 function applyOutcome(entry: ForgeRepositoryEntry, outcome: RepositoryOutcome, startedAt: string): void {
@@ -259,7 +267,7 @@ function applyOutcome(entry: ForgeRepositoryEntry, outcome: RepositoryOutcome, s
     entry.lastError = outcome.error;
     return;
   }
-  entry.lastError = null;
+  entry.lastError = outcome.fillFailure?.error ?? null;
   for (const row of [...outcome.rows, ...outcome.filled]) {
     const { number, updatedAt: _updatedAt, ...stored } = row;
     entry.prs[String(number)] = stored;
@@ -322,6 +330,7 @@ export async function sweepForgeLinks(ports: ForgeSweepPorts): Promise<string[]>
     }
     clearForgeNudges([name, data.repositories[name]?.canonical ?? name]);
     if (!outcome.ok) ports.log?.(`[forge links] ${name}: ${outcome.error}`, outcome.diagnostic);
+    else if (outcome.fillFailure) ports.log?.(`[forge links] ${name}: ${outcome.fillFailure.error}`, outcome.fillFailure.diagnostic);
     read.push(name);
   }
   return read;

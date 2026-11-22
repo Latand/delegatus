@@ -24,35 +24,54 @@ function classifyGithubReadFailure(error: unknown) {
   const raw = diagnostics.join("\n").replace(/https?:\/\/[^\s)]+/gi, "");
   const line = diagnostics[0] ?? "no diagnostic returned";
   const status = /\bHTTP(?:\/\d+(?:\.\d+)?)?[ :]+(\d{3})\b/i.exec(raw)?.[1];
-  const failure = (cause: ReadFailureCause, label: string, transient = false, excerpt = line) => ({
-    cause, transient, reason: () => redactBounded(`${label}: ${excerpt}`, 400),
+  const failure = (cause: ReadFailureCause, label: string, transient = false, excerpt = "") => ({
+    cause, transient, reason: () => redactBounded(`${label}: ${excerpt || "details withheld for privacy"}`, 400),
   });
   if (detail?.code === "ENOENT") return failure("gh-not-found", "GitHub CLI (gh) not found", false, "check the Viewer service PATH");
   if (error instanceof ForgeAppWriteRefused && !installationFailure) return failure("app-refused", "GitHub App read refused");
+  if (installationFailure) {
+    const safe = /GitHub (?:answered HTTP \d{3}(?: \(rate limited\))? while verifying the App installation|could not be reached to verify the App installation)/.exec(installationFailure)?.[0];
+    if (safe) {
+      const category: ReadFailureCause = /HTTP 429|rate limited/i.test(safe) ? "rate-limited"
+        : /HTTP 5\d\d|could not be reached/i.test(safe) ? "network"
+          : /HTTP 404/.test(safe) ? "not-found" : /HTTP 401|HTTP 403/.test(safe) ? "unauthenticated" : "command-error";
+      const label = category === "rate-limited" ? "GitHub read rate limited"
+        : category === "network" ? "GitHub read temporarily unavailable"
+          : category === "not-found" ? "GitHub read not found"
+            : category === "unauthenticated" ? "GitHub read authentication failed" : "GitHub App read refused";
+      return failure(category, label, category === "rate-limited" || category === "network", safe);
+    }
+  }
   if (status === "404" || (!status && /could not resolve to a (?:repository|pullrequest)\b/i.test(raw))) return failure("not-found", "GitHub read not found");
   if (detail?.code === "ETIMEDOUT" || (detail?.killed === true && (detail.signal === "SIGTERM" || detail.signal === "SIGKILL"))
     || (!status && /timed?\s*out|timeout|deadline exceeded/i.test(raw))) {
     const limit = typeof detail?.timeoutMs === "number" && Number.isFinite(detail.timeoutMs) && detail.timeoutMs > 0
       ? `limit ${detail.timeoutMs} ms; ` : "";
-    return failure("timed-out", "GitHub read timed out", true, `${limit}${line}`);
+    return failure("timed-out", "GitHub read timed out", true, limit.trim() || "");
   }
   // A secondary rate limit can use HTTP 403, so classify it before auth.
   if (status === "429" || /rate.?limit|secondary rate|abuse detection/i.test(raw)) return failure("rate-limited", "GitHub read rate limited", true);
+  const proxyContext = /proxy|connect tunnel|connect response|http connect/i.test(raw);
+  if (proxyContext && /proxy authentication required|407|unexpected eof|connection closed/i.test(raw)) {
+    return failure("network", "GitHub network request failed", false);
+  }
   if (status === "401" || status === "403" || (!status && (detail?.code === 4 || /authentication|bad credentials|not logged|not signed|gh auth login|requires? auth|resource not accessible/i.test(raw)))) {
     return failure("unauthenticated", "GitHub read authentication failed");
   }
   if (error instanceof SyntaxError || /parsable|parse|malformed|invalid.*(?:json|response)|unexpected.*(?:json|token)|returned no /i.test(raw)) {
     return failure("invalid-response", "GitHub read invalid response");
   }
-  if (status?.startsWith("5") || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|network|socket hang up|TLS handshake|failed to verify certificate|certificate verify failed|x509:|connection|service unavailable|no such host|could not resolve host|could not be reached/i.test(`${detail?.code ?? ""}\n${raw}`)) {
+  if (status?.startsWith("5") || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|network|socket hang up|TLS handshake|connection|service unavailable|no such host|could not resolve host|could not be reached/i.test(`${detail?.code ?? ""}\n${raw}`)) {
     return failure("network", "GitHub read temporarily unavailable", true);
   }
+  if (/failed to verify certificate|certificate verify failed|x509:/i.test(raw)) return failure("network", "GitHub network request failed", false);
   const code = typeof detail?.code === "number" ? ` (exit ${detail.code})`
     : typeof detail?.code === "string" && /^[A-Z][A-Z_]+$/.test(detail.code) ? ` (${detail.code})` : "";
-  // gh stderr is arbitrary user-controlled text. The monitor redactor does
-  // not remove every path, account handle, or repository slug, so preserve
-  // the exit status and remedy while withholding the excerpt.
-  return failure("command-error", `GitHub read failed${code}`, false, "details withheld for privacy");
+  // Preserve only known CLI phrases; arbitrary stderr can contain identities,
+  // repository names, and paths that the general monitor redactor misses.
+  const safeExcerpt = /unknown (?:flag|option)(?:\s+--[a-z][a-z0-9-]{0,30})?/i.exec(line)?.[0]
+    ?? (/^CLI invocation refused$/i.test(line) ? line : "details withheld for privacy");
+  return failure("command-error", `GitHub read failed${code}`, false, safeExcerpt);
 }
 
 /** Read failures carry no evidence that authorizes a GitHub write. */

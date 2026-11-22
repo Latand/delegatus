@@ -413,6 +413,39 @@ describe("global merge admission", () => {
     } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
   });
 
+  test("TLS read diagnostics do not admit Git-only landing for a linked PR", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-linked-tls");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.delivery!.target.pr = 17;
+      savePipelines([fixture.lane]);
+      let clock = T0, reads = 0;
+      const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
+        pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => {
+          reads++;
+          throw Object.assign(new Error("Command failed: gh pr view"), {
+            code: 1, stderr: "proxyconnect tcp: tls: failed to verify certificate: x509: unknown authority",
+          });
+        } });
+      for (let failure = 1; failure <= 3; failure++) {
+        await sweepAutoMerge(ports);
+        expect(loadPipelines()[0]!.merge?.state).toBe(failure === 3 ? "blocked" : "queued");
+        if (failure < 3) {
+          const nextReadAt = Date.parse(loadPipelines()[0]!.merge!.nextReadAt!);
+          clock += nextReadAt - clock;
+        }
+      }
+      expect(reads).toBe(3);
+      expect(loadPipelines()[0]!.merge?.reason).toContain("network request failed");
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+      expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
   test.each(["red", "pending", "head", "draft", "closed", "review", "protection"] as const)(
     "F3: a %s PR observation survives a later endpoint outage and an unavailable retry", async condition => {
       resetAutoMergeForTests();
@@ -851,7 +884,7 @@ test("retry-merge clears the persisted read failure and its counter", async () =
     write: async () => { throw new Error("forbidden write"); },
   });
   for (let n = 0; n < 3; n++, clock += MERGE_POLL_MS) await sweepAutoMerge(ports);
-  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", readFailures: 3, reason: "GitHub read authentication failed: HTTP 401: Bad credentials" });
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", readFailures: 3, reason: "GitHub read authentication failed: details withheld for privacy" });
   const retried = await patchPipeline(id, { action: "retry-merge" }, { now: () => iso(clock) } as never);
   expect(retried.error).toBeUndefined();
   expect(loadPipelines()[0]!.merge).toMatchObject({ state: "queued", readFailures: 0, reason: null, nextReadAt: null });

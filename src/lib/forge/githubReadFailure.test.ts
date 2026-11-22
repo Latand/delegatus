@@ -64,7 +64,7 @@ test("an unknown gh exit logs only a bounded scrubbed excerpt and a remedy", () 
   });
   const diagnostic = githubReadDiagnostic(error);
   expect(diagnostic.cause).toBe("command-error");
-  expect(diagnostic.message).toStartWith("GitHub read failed (exit 17): details withheld for privacy");
+  expect(diagnostic.message).toStartWith("GitHub read failed (exit 17): unknown option.");
   expect(diagnostic.message).toEndWith("Check the gh installation and configuration, then retry.");
   expect(diagnostic.message.length).toBeLessThan(500);
   for (const value of [credential, address, pathFromParts(), url, "private-argument", "second line", "\x1b"]) {
@@ -81,6 +81,27 @@ test.each([
     cause: "network",
     message: "GitHub network request failed. Check connectivity, DNS and proxy settings, then retry.",
   });
+  expect(githubReadFailure(error).transient).toBe(false);
+});
+
+test.each([
+  ["HTTP CONNECT: 407 Proxy Authentication Required", false],
+  ["proxyconnect tcp: unexpected EOF", false],
+])("proxy transport failure %s stays network classified", (stderr, transient) => {
+  const error = Object.assign(new Error("Command failed: gh api"), { code: 1, stderr });
+  expect(githubReadDiagnostic(error).cause).toBe("network");
+  expect(githubReadDiagnostic(error).message).toContain("Check connectivity");
+  expect(githubReadFailure(error).transient).toBe(transient);
+});
+
+test("classified reasons never retain handles, repository slugs, or macOS paths", () => {
+  const error = Object.assign(new Error("request failed"), {
+    code: 1, stderr: "HTTP 401: @synthetic_handle private-owner/private-repo /Volumes/Private Drive/Account A/config",
+  });
+  const reason = githubReadFailure(error).reason;
+  for (const fragment of ["@synthetic_handle", "private-owner/private-repo", "/Volumes/Private Drive/Account A/config"]) {
+    expect(reason).not.toContain(fragment);
+  }
 });
 
 test("retry backoff starts at one minute and remains capped", () => {
@@ -94,13 +115,13 @@ test.each([401, 403, 404, 429, 503])("status %s in a URL or PR number is not an 
 
 test("message-only command wrappers are stripped before classification", () => {
   expect(githubReadFailure(new Error("Command failed: gh pr view 429 --repo acme/timeout\nHTTP 401: Bad credentials")))
-    .toEqual({ transient: false, reason: "GitHub read authentication failed: HTTP 401: Bad credentials" });
+    .toEqual({ transient: false, reason: "GitHub read authentication failed: details withheld for privacy" });
 });
 
 test.each(["timeout", "rate-limit", "authentication"])("not-found evidence precedes quoted repository %s", name => {
   const diagnostic = `GraphQL: Could not resolve to a Repository with the name 'acme/${name}'. (repository)`;
   expect(githubReadFailure(Object.assign(new Error("Command failed: gh"), { stderr: diagnostic })))
-    .toEqual({ transient: false, reason: `GitHub read not found: ${diagnostic}` });
+    .toEqual({ transient: false, reason: "GitHub read not found: details withheld for privacy" });
 });
 
 test("timeout limit survives redaction and bounding before a long diagnostic", () => {
@@ -109,7 +130,7 @@ test("timeout limit survives redaction and bounding before a long diagnostic", (
     killed: true, signal: "SIGTERM", timeoutMs: 1234, stderr: `${credential} ${"detail ".repeat(200)}`,
   });
   const result = githubReadFailure(failure);
-  expect(result.reason).toStartWith("GitHub read timed out: limit 1234 ms; ");
+  expect(result.reason).toStartWith("GitHub read timed out: limit 1234 ms");
   expect(result.reason.length).toBeLessThanOrEqual(400);
   expect(result.reason).not.toContain(credential);
   expect(result.transient).toBe(true);

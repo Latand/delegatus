@@ -349,7 +349,7 @@ describe("the sweep", () => {
     ["no login", 1, "To get started with GitHub CLI, please run: gh auth login", "authentication failed", "GH_CONFIG_DIR"],
     ["network", 1, "error connecting to api.github.com: lookup api.github.com: no such host", "network request failed", "Check connectivity"],
     ["TLS certificate", 1, "proxyconnect tcp: tls: failed to verify certificate: x509: certificate signed by unknown authority", "network request failed", "Check connectivity"],
-    ["other exit", 17, "unknown flag --fixture", "(exit 17): details withheld for privacy", "Check the gh installation"],
+    ["other exit", 17, "unknown flag --fixture", "(exit 17): unknown flag --fixture", "Check the gh installation"],
   ] as const)("%s logs a remedy, keeps cached links and retries on cooldown", async (_name, code, stderr, cause, remedy) => {
     let fail = false;
     const error = Object.assign(new Error("Command failed: gh"), { code, stderr });
@@ -399,6 +399,53 @@ describe("the sweep", () => {
     expect(logs[0]).toContain("exit 17");
     expect(logs[0]).toContain("Check the gh installation and configuration");
     for (const fragment of privateFragments) expect(logs[0]).not.toContain(fragment);
+  });
+
+  test("a numbered PR fill failure keeps list evidence and waits through a nudge cooldown", async () => {
+    let fillFails = true;
+    const linked = lane({ delivery: { target: { repository: "repo-fixture", remote: `https://github.com/${REPO}.git`, branch: "main", pr: 8 } } as Pipeline["delivery"] });
+    const h = harness(args => {
+      if (args[0] === "pr" && args[1] === "view") {
+        if (fillFails) return Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" });
+        return row({ number: 8 });
+      }
+      return [row({ number: 7 })];
+    }, { pipelines: [linked] });
+    const logs: string[] = [];
+    h.ports.log = (message, detail) => { logs.push(`${message} ${detail ?? ""}`); };
+    await h.sweep();
+    expect(entry().prs["7"]).toBeDefined();
+    expect(entry()).toMatchObject({ lastError: "command-failed", prs: { "7": expect.anything() } });
+    expect(logs.join(" ")).toContain("network request failed");
+
+    h.advance(30_000);
+    await h.sweep();
+    expect(h.calls.filter(args => args[1] === "view")).toHaveLength(1);
+    expect(entry().prs["7"]).toBeDefined();
+
+    fillFails = false;
+    h.advance(FORGE_RETRY_MS - 30_000);
+    await h.sweep();
+    expect(h.calls.filter(args => args[1] === "view")).toHaveLength(2);
+    expect(entry().prs["8"]).toBeDefined();
+    expect(entry().lastError).toBeNull();
+  });
+
+  test.each(["[null]", "graphql-null"])("malformed legacy read %s reports invalid response without losing cache", async malformed => {
+    let legacy = false;
+    const h = harness(args => {
+      if (args[0] === "api") return "graphql-null";
+      if (args.at(-1)?.includes("closingIssuesReferences")) {
+        return Object.assign(new Error('Unknown JSON field: "closingIssuesReferences"'), { stderr: 'Unknown JSON field: "closingIssuesReferences"' });
+      }
+      legacy = true;
+      return malformed === "[null]" ? [null] : [row({ number: 7 })];
+    });
+    await h.sweep();
+    expect(legacy).toBe(true);
+    expect(entry().lastError).toBe("malformed-output");
+    expect(entry().lastSweepAt).toBeNull();
+    expect(entry().prs).toEqual({});
   });
 
   test("numbers a record names outright and the cache lacks are read one by one, at most ten a sweep; a non-PR is recorded as an issue", async () => {
