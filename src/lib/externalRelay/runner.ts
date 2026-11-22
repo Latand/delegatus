@@ -1002,7 +1002,8 @@ export async function runClaimedRequest(
         if (owner && !cloud) executionDeadline = Date.now() + target.hardCapMinutes * 60_000;
         const inboundRefs = new Set(inbound?.files.map(file => file.ref));
         const mediaMessageIds = request.input.conversation.filter(message => message.media?.some(media => inboundRefs.has(media.ref))).map(message => message.id);
-        const ownerAdditions = { mediaMessageIds, mandatory: [inbound?.prompt,
+        // The Cloud JSON tool loop cannot look up a catalogue through local MCP.
+        const ownerAdditions = { mediaMessageIds, requireToolTable: usingCloud, mandatory: [inbound?.prompt,
           ...(usingCloud ? [rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : "", frame] : []),
         ].filter(Boolean).join("\n") };
         // Prepare only the mode that will be sent. Cloud has no native cursor.

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 
@@ -22,6 +22,37 @@ import type { ProcBackend, ProcessMemory, ProcSnapshotEntry, SystemMemory } from
 const SNAPSHOT_TTL_MS = 5_000;
 const RUN_TIMEOUT_MS = 10_000;
 const MAX_BUFFER = 16 * 1024 * 1024;
+
+function runCaptureAsync(cmd: string, args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { windowsHide: true });
+    let stdout = "";
+    let bytes = 0;
+    let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (value: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 500);
+      killTimer.unref();
+    }, RUN_TIMEOUT_MS);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes <= MAX_BUFFER) stdout += chunk;
+      else child.kill();
+    });
+    child.once("error", () => finish(""));
+    child.once("close", (code) => finish(code === 0 && bytes <= MAX_BUFFER ? stdout : ""));
+  });
+}
 
 interface SnapshotRow {
   argv: string[];
@@ -239,6 +270,14 @@ function systemMemory(): SystemMemory | null {
   };
 }
 
+async function resourceSystemMemory(): Promise<SystemMemory | null> {
+  const ramTotal = os.totalmem();
+  const ramAvailable = parseVmStat(await runCaptureAsync("vm_stat", []));
+  if (!ramTotal || ramAvailable === null) return null;
+  const swap = parseSwapUsage(await runCaptureAsync("sysctl", ["-n", "vm.swapusage"]));
+  return { ramTotal, ramAvailable: Math.min(ramAvailable, ramTotal), swapTotal: swap?.swapTotal ?? 0, swapUsed: swap?.swapUsed ?? 0 };
+}
+
 /** One bulk `ps` pass; per-process swap has no portable source, so swapBytes
     is 0 and callers show RSS alone. */
 function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
@@ -260,6 +299,23 @@ function ppidMap(): Map<number, number> {
     if (row.ppid !== null) map.set(pid, row.ppid);
   }
   return map;
+}
+
+async function resourcePpidMap(): Promise<Map<number, number>> {
+  const rows = parsePs(await runCaptureAsync("ps", ["-axo", "pid=,ppid=,tty=,args="]));
+  const map = new Map<number, number>();
+  for (const [pid, row] of rows) if (row.ppid !== null) map.set(pid, row.ppid);
+  return map;
+}
+
+async function resourceProcessMemory(pids: Iterable<number>): Promise<Map<number, ProcessMemory>> {
+  const wanted = new Set([...pids].filter((pid) => Number.isInteger(pid) && pid > 0));
+  if (!wanted.size) return new Map();
+  const result = new Map<number, ProcessMemory>();
+  for (const [pid, rssBytes] of parsePsMemory(await runCaptureAsync("ps", ["-axo", "pid=,rss="]))) {
+    if (wanted.has(pid)) result.set(pid, { rssBytes, swapBytes: 0 });
+  }
+  return result;
 }
 
 function scanFdTargetsUnder(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): void {
@@ -301,6 +357,9 @@ export const portableBackend: ProcBackend = {
   readEnvVar,
   listProcesses,
   systemMemory,
+  resourceSystemMemory,
+  resourcePpidMap,
+  resourceProcessMemory,
   processMemory,
   ppidMap,
   scanFdTargetsUnder,

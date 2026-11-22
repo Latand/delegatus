@@ -1,16 +1,22 @@
 import { MAX_STRUCTURED_TEXT_BYTES, StructuredEnvelopeTooLargeError } from "@/lib/runtime/structuredContent";
-import type { ExternalRelayRequest } from "./protocol";
+import { visibleRelayTools, type ExternalRelayRequest } from "./protocol";
 
 type Message = ExternalRelayRequest["input"]["conversation"][number];
-const QUOTED_TEXT_BYTES = 4096;
+type Rendered = { prompt: string };
+const RECENT_HISTORY_ROWS = 10;
+export type RelayPromptCuts = {
+  older_message_texts_omitted?: number;
+  documents_omitted?: number;
+  tool_summaries_shortened?: number;
+  tool_entries_omitted?: number;
+};
 
 export class RelayMandatoryPromptTooLargeError extends StructuredEnvelopeTooLargeError {
   constructor(public readonly mandatoryBytes: number) { super(); }
 }
 
-/** Clip optional quotations at Unicode boundaries; measure the final escaped
- * prompt separately, because JSON can expand even short source strings. */
-export function quotedRelayText(text: string, maxBytes = QUOTED_TEXT_BYTES): string {
+/** Cap tool summaries at Unicode boundaries before measuring the escaped prompt. */
+function quotedRelayText(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text) <= maxBytes) return text;
   const suffix = "\n[Earlier text omitted]";
   let result = "", bytes = Buffer.byteLength(suffix);
@@ -22,77 +28,120 @@ export function quotedRelayText(text: string, maxBytes = QUOTED_TEXT_BYTES): str
   return result + suffix;
 }
 
-/** Rebuild complete sections under the receiver's actual UTF-8 bound. Keep
- * current input and its immediate parent whole, including recovered parents.
- * Refuse before dispatch when mandatory content alone cannot fit. */
-export function boundedRelayPrompt<T extends string | { prompt: string }>(request: ExternalRelayRequest,
-  render: (request: ExternalRelayRequest) => T, extraMessages: readonly Message[] = [], maxBytes = MAX_STRUCTURED_TEXT_BYTES,
-  requiredIds: readonly string[] = [],
-): { request: ExternalRelayRequest; result: T } {
-  let current = request;
-  let result = render(current);
-  const fits = () => Buffer.byteLength(typeof result === "string" ? result : result.prompt) <= maxBytes;
-  if (fits()) return { request: current, result };
-  const messages = new Map(request.input.conversation.map(message => [message.id, message]));
-  for (const message of extraMessages) messages.set(message.id, message);
-  const trigger = messages.get(request.input.respond_to ?? "");
-  const protectedIds = new Set([request.input.respond_to, ...requiredIds]);
-  // Follow explicit links, including recovered parents and earlier requests.
-  // Selection cannot remove a row that explains the requested subject.
+export function requiredRelayMessageIds(conversation: readonly Message[], triggerId: string | null,
+  recovered: readonly Message[], requiredIds: readonly string[] = []): Set<string> {
+  const triggerIndex = conversation.findIndex(message => message.id === triggerId);
+  const recent = triggerIndex < 0 ? [] : conversation.slice(Math.max(0, triggerIndex - RECENT_HISTORY_ROWS), triggerIndex + 1);
+  const required = new Set([...requiredIds, ...recent.map(message => message.id)]);
+  const messages = new Map([...conversation, ...recovered].map(message => [message.id, message]));
   const visited = new Set<string>();
-  for (const id of [trigger?.id, ...requiredIds]) {
-    for (let message: Message | undefined = id ? messages.get(id) : undefined;
-      message?.reply_to && !visited.has(message.reply_to);) {
-      visited.add(message.reply_to);
-      protectedIds.add(message.reply_to);
-      message = messages.get(message.reply_to);
+  // An explicit reply and its ancestors can be outside the recent window.
+  for (const start of [triggerId, ...requiredIds]) {
+    for (let id = start; id && !visited.has(id); id = messages.get(id)?.reply_to ?? null) {
+      visited.add(id);
+      required.add(id);
     }
   }
-  current = { ...request, input: { ...request.input, conversation: [...messages.values()] } };
-  const refresh = () => { result = render(current); return fits(); };
-  if (refresh()) return { request: current, result };
-  // Local recovery can add older rows after the service window. Remove the
-  // oldest timestamps first, keeping source order for ties. A binary search
-  // bounds rebuilds even with the protocol's maximum history and escaping.
-  const history = current.input.conversation;
-  const optional = history.map((message, index) => ({ message, index }))
-    .filter(({ message }) => !protectedIds.has(message.id))
-    .sort((a, b) => Date.parse(a.message.sent_at) - Date.parse(b.message.sent_at) || a.index - b.index);
-  const removeOldest = (count: number) => {
-    const removed = new Set(optional.slice(0, count).map(({ message }) => message.id));
-    current.input.conversation = history.filter(message => !removed.has(message.id));
-  };
-  let low = 1, high = optional.length, fitting: number | null = null;
-  while (low <= high) {
-    const count = Math.floor((low + high) / 2);
-    removeOldest(count);
-    if (refresh()) { fitting = count; high = count - 1; }
-    else low = count + 1;
-  }
-  if (fitting !== null) { removeOldest(fitting); refresh(); return { request: current, result }; }
-  removeOldest(optional.length);
-  current.input.short_term_memory = null;
-  if (refresh()) return { request: current, result };
-  const protectedRows = [...messages.values()].filter(message => protectedIds.has(message.id));
-  const mediaRefs = new Set(protectedRows.flatMap(message => message.media?.map(media => media.ref) ?? []));
-  for (const document of current.input.documents.slice()) {
-    if (document.message_id && protectedIds.has(document.message_id) || document.media_ref && mediaRefs.has(document.media_ref)
-      || !document.message_id && !document.media_ref && protectedRows.some(message =>
-        message.text.includes(`[Document attached; filename=${document.title};`))) continue;
-    current.input.documents = current.input.documents.filter(row => row !== document);
-    if (refresh()) return { request: current, result };
-  }
-  // Optional service context follows history in the trimming order. Tool
-  // identities and safety fields remain available for describe/call; only
-  // their display summaries are shortened here.
-  current.input.tool_guidance = undefined;
-  if (refresh()) return { request: current, result };
-  const tools = current.input.tools;
+  return required;
+}
+
+/** Preserve the trigger, recent window, explicit reply chains and memory.
+ * Try smaller tool projections before trimming older rows. A refusal here
+ * lets the owner runner deliver the full context through its run directory. */
+export function boundedRelayPrompt<T extends Rendered>(request: ExternalRelayRequest,
+  render: (request: ExternalRelayRequest, cuts: RelayPromptCuts) => T, requiredIds: ReadonlySet<string>, mayOmitToolTable: boolean,
+): T {
+  const input = request.input;
+  const fits = (result: T) => Buffer.byteLength(result.prompt) <= MAX_STRUCTURED_TEXT_BYTES;
+  const original = render(request, {});
+  if (fits(original)) return original;
+
+  const tools = visibleRelayTools(request);
+  const compactCuts: RelayPromptCuts = {};
+  let compactTools = input.tools;
   for (const cap of [256, 128, 64, 32, 0]) {
-    current.input.tools = tools?.map(tool => ({ ...tool, summary: cap ? quotedRelayText(tool.summary, cap) : "" }));
-    if (refresh()) return { request: current, result };
+    const summaries = new Map(tools.map(tool => [tool.name, cap ? quotedRelayText(tool.summary, cap) : ""]));
+    const shortened = tools.filter(tool => summaries.get(tool.name) !== tool.summary).length;
+    if (!shortened) continue;
+    compactCuts.tool_summaries_shortened = shortened;
+    compactTools = input.tools?.map(tool => ({ ...tool, summary: summaries.get(tool.name) ?? tool.summary }));
+    const result = render({ ...request, input: { ...input, tools: compactTools } }, compactCuts);
+    if (fits(result)) return result;
   }
-  // Instructions, requested quotations, documents and tool identities are
-  // mandatory. Never silently shorten them to obtain a successful launch.
-  throw new RelayMandatoryPromptTooLargeError(Buffer.byteLength(typeof result === "string" ? result : result.prompt));
+
+  const protectedRows = input.conversation.filter(message => requiredIds.has(message.id));
+  const mediaRefs = new Set(protectedRows.flatMap(message => message.media?.map(media => media.ref) ?? []));
+  const protectedDocuments = input.documents.filter(document =>
+    document.message_id && requiredIds.has(document.message_id) || document.media_ref && mediaRefs.has(document.media_ref)
+    || !document.message_id && !document.media_ref && protectedRows.some(message =>
+      message.text.includes(`[Document attached; filename=${document.title};`)));
+
+  if (mayOmitToolTable && tools.length) {
+    // The tool table is discoverable through the relay service. Omit its
+    // display projection before sacrificing any conversation history.
+    const toolCuts = { tool_entries_omitted: tools.length };
+    const withAllHistory = render(request, toolCuts);
+    if (fits(withAllHistory)) return withAllHistory;
+  }
+
+  // Local recovery can append older rows. Select by timestamp, then retain
+  // the order of the rows in the claim when rendering them.
+  const optional = input.conversation.map((message, index) => ({ message, index }))
+    .filter(({ message }) => !requiredIds.has(message.id))
+    .sort((a, b) => Date.parse(a.message.sent_at) - Date.parse(b.message.sent_at) || a.index - b.index);
+  let smallestBytes = Buffer.byteLength(original.prompt);
+  const fitHistory = (candidate: ExternalRelayRequest["input"], cuts: RelayPromptCuts): { result: T; omitted: number } | null => {
+    const withOldestRemoved = (count: number) => {
+      if (!count) return render({ ...request, input: candidate }, cuts);
+      const removed = new Set(optional.slice(0, count).map(({ message }) => message.id));
+      return render({ ...request, input: { ...candidate, conversation: input.conversation.filter(message => !removed.has(message.id)) } },
+        { ...cuts, older_message_texts_omitted: count });
+    };
+    let bestCount = optional.length;
+    let best = withOldestRemoved(bestCount);
+    smallestBytes = Math.min(smallestBytes, Buffer.byteLength(best.prompt));
+    if (!fits(best)) return null;
+    let low = 0, high = optional.length - 1;
+    while (low <= high) {
+      const count = Math.floor((low + high) / 2);
+      const result = withOldestRemoved(count);
+      if (fits(result)) { best = result; bestCount = count; high = count - 1; }
+      else low = count + 1;
+    }
+    return { result: best, omitted: bestCount };
+  };
+
+  const compact = { ...input, tools: compactTools };
+  // Compare the best fitting history under both projections. Removing the
+  // discoverable table can retain more recent rows than compacting summaries.
+  const candidates: Array<{ result: T; omitted: number }> = [];
+  const compactResult = fitHistory(compact, compactCuts);
+  if (compactResult) candidates.push(compactResult);
+  if (compactTools !== input.tools) {
+    const originalToolsResult = fitHistory(input, {});
+    if (originalToolsResult) candidates.push(originalToolsResult);
+  }
+  if (mayOmitToolTable && tools.length) {
+    const toolCuts = { tool_entries_omitted: tools.length };
+    for (const toolInput of [compact, input]) {
+      if (toolInput === input && compactTools === input.tools) continue;
+      const omittedTableResult = fitHistory(toolInput, toolCuts);
+      if (omittedTableResult) candidates.push(omittedTableResult);
+    }
+  }
+  if (candidates.length) return candidates.reduce((best, candidate) => candidate.omitted < best.omitted ? candidate : best).result;
+  let result: { result: T; omitted: number } | null;
+  const documentsOmitted = input.documents.length - protectedDocuments.length;
+  const documentCuts = documentsOmitted ? { documents_omitted: documentsOmitted } : {};
+  if (documentsOmitted) {
+    result = fitHistory({ ...compact, documents: protectedDocuments }, { ...compactCuts, ...documentCuts });
+    if (result) return result.result;
+  }
+  if (mayOmitToolTable && tools.length) {
+    const toolCuts = { tool_entries_omitted: tools.length };
+    result = fitHistory({ ...compact, documents: protectedDocuments }, { ...compactCuts, ...documentCuts, ...toolCuts });
+    if (!result) result = fitHistory({ ...input, documents: protectedDocuments }, { ...documentCuts, ...toolCuts });
+    if (result) return result.result;
+  }
+  throw new RelayMandatoryPromptTooLargeError(smallestBytes);
 }

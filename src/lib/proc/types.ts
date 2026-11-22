@@ -86,6 +86,11 @@ export interface ProcBackend {
    * since zeros would render as a full-pressure host.
    */
   systemMemory(): SystemMemory | null;
+  /** Async equivalents for resource collection, whose bounded reads must not
+      block the Viewer event loop on cold OS probes. */
+  resourceSystemMemory?(): Promise<SystemMemory | null>;
+  resourcePpidMap?(): Promise<Map<number, number>>;
+  resourceProcessMemory?(pids: Iterable<number>): Promise<Map<number, ProcessMemory>>;
 
   /**
    * Resident + swapped bytes for each of `pids` that is still alive; pids
