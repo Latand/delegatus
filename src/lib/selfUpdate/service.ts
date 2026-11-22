@@ -703,6 +703,7 @@ export class SelfUpdateService {
       const admissionRecord = readLauncherRecord(recordFile || launcherControlFile(record.requestFile, "launcher")) ?? (recordFile ? null : admissionDecision.record);
       if ((!this.autoEnabled && !this.hasAutoCustody()) || this.active() || this.auto.pending || !ownsRestartGate(gateFile, gateId) || !this.quietAdmits(admissionProbe)
         || dispatchActivity === null || dispatchActivity !== quietDispatchVersion(quiet, this.deps.now())
+        || quiet.launchSetupPending?.()
         || admissionRecord?.launcher.autoAdmission !== 1 || admissionRecord.launcher.pid !== dispatchOwner.pid
         || admissionRecord.launcher.startIdentity !== dispatchOwner.startIdentity || admissionRecord.requestFile !== record.requestFile
         || admissionSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)
@@ -1647,7 +1648,9 @@ export class SelfUpdateService {
     const deadline = performance.now() + LAUNCH_SETUP_WAIT_MS;
     const waitingUntil = this.deps.now() + LAUNCH_SETUP_WAIT_MS + DEPLOY_ADMISSION_WAIT_MS;
     for (;;) {
-      if (this.apply.current?.requestId !== intent.requestId) throw new StaleApplyDispatch("Update custody changed while waiting for stage launch setup");
+      if (this.stopped || this.apply.current?.requestId !== intent.requestId) {
+        throw new StaleApplyDispatch("Update custody changed while waiting for stage launch setup");
+      }
       if (!activeDrain(this.drainFile, this.deps.now())) {
         writeDrain(this.drainFile, { id: intent.requestId, target: intent.target, since: intent.startedAt,
           until: waitingUntil, waitingUntil });

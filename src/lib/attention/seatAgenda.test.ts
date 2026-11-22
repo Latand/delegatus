@@ -52,12 +52,12 @@ test("a routed lane names the stage's own question, the decision answer path and
   expect(line!.label).toContain("pipeline_action resolve-decision");
 });
 
-test("an interrupted stage launch wake names the guarded retry and its original receipt", () => {
+test.each([null, "the clicked launch is still starting"])("an interrupted stage launch wake carries its original receipt (%j)", attemptError => {
   const detail = "structured spawn interrupted before runtime admission: interrupted-launch";
   const lane = {
     id: "lane", task: "Review changes", project: "project-a", state: "needs_decision", createdAt: at, stateDetail: detail,
     stages: [{ id: "review", kind: "run" }], cursor: { stageId: "review", state: "spawning" },
-    runs: [{ stageId: "review", attempts: [{ n: 1, state: "needs_decision", launchId: "interrupted-launch", error: detail }] }],
+    runs: [{ stageId: "review", attempts: [{ n: 1, state: "needs_decision", launchId: "interrupted-launch", error: attemptError ?? detail }] }],
     attentionRoute: { key: "lane:lane:lane-decision:none", owner: "seat", seat: "conversation_seat" },
   } as unknown as Pipeline;
   const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");

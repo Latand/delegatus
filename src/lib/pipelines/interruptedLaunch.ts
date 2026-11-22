@@ -13,9 +13,15 @@ export function interruptedStageLaunch(failure: string): "before-admission" | "s
   return null;
 }
 
+export function interruptedStageLaunchFailure(attemptError?: string | null, laneDetail?: string | null): string | null {
+  if (attemptError && interruptedStageLaunch(attemptError)) return attemptError;
+  return laneDetail && interruptedStageLaunch(laneDetail) ? laneDetail : null;
+}
+
 /** A setup that got as far as native exec needs confirmed cleanup of the
  * recorded processes. The disappearance of the Viewer alone proves nothing. */
-function unstartedStageProcessRefusal(receipt: SpawnReceipt, cut: "before-admission" | "setup", failure: string): string | null {
+function unstartedStageProcessRefusal(receipt: SpawnReceipt, cut: "before-admission" | "setup",
+  failure: string, reconcileCleanup: boolean): string | null {
   if (receipt.admissionOwner && processIdentityStatus(receipt.admissionOwner) !== "dead") {
     return "the original launch still has an admission owner";
   }
@@ -27,7 +33,8 @@ function unstartedStageProcessRefusal(receipt: SpawnReceipt, cut: "before-admiss
     return "native setup custody is unavailable";
   }
   if (setup.processes.some(identity => processIdentityStatus(identity) !== "dead")
-    || setup.phase === "executing" && (!setup.cleanupConfirmed || !setup.processes.length)) {
+    || setup.phase === "executing" && (!setup.processes.length
+      || !setup.cleanupConfirmed && !(reconcileCleanup && receipt.admissionOwner))) {
     return "native setup process cleanup is unconfirmed";
   }
   // A retained waiter counts as executing even before it starts the engine.
@@ -38,7 +45,8 @@ function unstartedStageProcessRefusal(receipt: SpawnReceipt, cut: "before-admiss
   return null;
 }
 
-export function unstartedStageLaunchRefusal(file: RegistryFile, receipt: SpawnReceipt, failure: string): string | null {
+export function unstartedStageLaunchRefusal(file: RegistryFile, receipt: SpawnReceipt, failure: string,
+  reconcileCleanup = false): string | null {
   const cut = interruptedStageLaunch(failure);
   if (!cut || receipt.transport !== "structured" || receipt.purpose !== "launch" || receipt.rejection
     || receipt.queuedPinnedSpawn || !["starting", "failed"].includes(receipt.state)
@@ -59,7 +67,7 @@ export function unstartedStageLaunchRefusal(file: RegistryFile, receipt: SpawnRe
     || registryKeysMatching(file, "deliveryOperationOwners", "conversationId", receipt.conversationId).length) {
     return "the original launch has durable delivery evidence";
   }
-  return unstartedStageProcessRefusal(receipt, cut, failure);
+  return unstartedStageProcessRefusal(receipt, cut, failure, reconcileCleanup);
 }
 
 /** Absence of a receipt can also mean compaction. Cover the original admission
@@ -80,6 +88,8 @@ export async function prepublicationStageJournalProof(
   } else if (!launch || launch.operationId !== id || launch.receipt.operationId !== id
     || launch.receipt.kind !== "spawn" || launch.receipt.conversationId !== receipt.conversationId
     || !["failed", "rejected"].includes(launch.receipt.status)) return false;
+  if (cut === "setup" && (interruptedStageLaunch(launch?.receipt.reason ?? "") !== "setup"
+    || receipt.hostSetup?.phase === "executing" && !launch?.receipt.reason?.includes("bwrap: setting up uid map"))) return false;
   // Runtime admission files its own placeholder before the native process
   // can provide a session identity. A real session or writer always wins.
   if (session && (session.sessionKey?.engine !== receipt.engine || session.sessionKey?.sessionId !== receipt.conversationId

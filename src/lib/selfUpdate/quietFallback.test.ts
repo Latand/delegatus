@@ -110,13 +110,15 @@ test("automatic self-update waits for a failed launch's unreleased setup process
     f.registry.failStructuredSpawn(launchId, "launch setup interrupted");
     const p = ports(f.journal);
     p.pipelines = () => [stage({ launchId, conversationId }, "needs_decision", "spawning")];
+    expect(p.launchSetupPending!()).toBe(true);
     expect(await probeQuiet(snapshot, p, Date.now(), true, "live")).toMatchObject({
-      quiet: false, blockers: { turns: 1, turnList: [{ conversationId, reason: "setup" }] },
+      quiet: false, blockers: { launchSetup: true, turns: 1, turnList: [{ conversationId, reason: "setup" }] },
     });
     helper.kill("SIGKILL");
     await helper.exited;
     f.registry.confirmStructuredHostSetupCleanup(launchId, admissionOwner!);
     f.registry.releaseStructuredSpawnAdmissionOwner(launchId, admissionOwner!);
+    expect(p.launchSetupPending!()).toBe(false);
     expect(await probeQuiet(snapshot, p, Date.now(), true, "live")).toMatchObject({ quiet: true });
   } finally {
     if (helper.exitCode === null && helper.signalCode === null) helper.kill("SIGKILL");
@@ -254,12 +256,14 @@ test.each(["live", "unowned", "dead", "reused"] as const)("a hidden %s setup rec
   snapshotSelection(true, receipt.conversationId);
   const p = ports(f.journal), now = Date.now();
   const held = kind === "live" || kind === "unowned";
+  expect(p.launchSetupPending!()).toBe(kind === "live");
   expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: !held, blockers: { turns: held ? 1 : 0 } });
   expect(await probeQuiet(snapshot, p, now + 300_000, true)).toMatchObject({ quiet: kind !== "live",
     blockers: { turns: kind === "live" ? 1 : 0, unresolved: kind === "unowned" ? 1 : 0, unresolvedBlocking: 0 } });
   if (kind === "live") {
     child.kill();
     await child.exited;
+    expect(p.launchSetupPending!()).toBe(false);
     expect(await probeQuiet(snapshot, p, now + 300_000, true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
   }
 });
