@@ -155,14 +155,16 @@ export type StructuredHostAccessPolicy = boolean | {
       repository policy is enforced by pipeline settlement. */
   readOnly: boolean;
   sandbox: "full" | "restricted";
+  ownerRelayHandoffOnly?: boolean;
 };
 
-type DurableStructuredHostAccess = Pick<LaunchProfile, "readOnly" | "sandbox"> | null | undefined;
+type DurableStructuredHostAccess = Pick<LaunchProfile, "readOnly" | "sandbox" | "ownerRelayHandoffOnly"> | null | undefined;
 
 /** New pipeline profiles persist both axes. Profiles created before that split
     retain their legacy readOnly-to-sandbox behavior on adoption. */
 export function structuredHostAccessPolicy(profile: DurableStructuredHostAccess): StructuredHostAccessPolicy {
   const sandbox = explicitLaunchProfileSandbox(profile);
+  if (profile?.ownerRelayHandoffOnly === true) return { readOnly: true, sandbox: "restricted", ownerRelayHandoffOnly: true };
   return sandbox
     ? { readOnly: profile?.readOnly === true, sandbox }
     : profile?.readOnly === true;
@@ -201,6 +203,13 @@ export function materializeStructuredHostAccess(
   };
   const explicitAxes = typeof policy !== "boolean";
   const restricted = explicitAxes ? policy.sandbox === "restricted" : policy;
+  const ownerRelayHandoffOnly = explicitAxes && policy.ownerRelayHandoffOnly === true;
+  if (ownerRelayHandoffOnly) {
+    delete baseEnv.GH_CONFIG_DIR;
+    delete baseEnv.GH_TOKEN;
+    delete baseEnv.GITHUB_TOKEN;
+    delete baseEnv.GH_ENTERPRISE_TOKEN;
+  }
 
   const resolvedScratchParent = scratchParent ?? statePath("scratch");
   fs.mkdirSync(resolvedScratchParent, { recursive: true, mode: 0o700 });
@@ -253,7 +262,10 @@ export function materializeStructuredHostAccess(
         cleanup,
       };
     }
-    const codex = explicitAxes
+    const codex = ownerRelayHandoffOnly
+      ? { permissionProfile: READ_ONLY_STAGE_PERMISSION_PROFILE,
+          permissionProfileConfig: `permissions.${READ_ONLY_STAGE_PERMISSION_PROFILE}={extends=":read-only",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
+      : explicitAxes
       ? { sandbox: "workspace-write", permissionProfile: "llv-stage",
           permissionProfileConfig: `permissions.llv-stage={extends=":workspace",filesystem={${JSON.stringify(scratchDirectory)}="write",${JSON.stringify(evidenceDirectory)}="write"}}` }
       : {
@@ -264,11 +276,11 @@ export function materializeStructuredHostAccess(
       env: {
         ...baseEnv,
         TMPDIR: temporaryDirectory,
-        GH_CONFIG_DIR: githubConfigDirectory(sourceEnv),
+        ...(!ownerRelayHandoffOnly ? { GH_CONFIG_DIR: githubConfigDirectory(sourceEnv) } : {}),
       },
       codex,
       host: {
-        forwardGitHubConfig: true,
+        forwardGitHubConfig: !ownerRelayHandoffOnly,
         releaseCleanup: cleanup,
       },
       scratchDirectory,

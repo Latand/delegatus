@@ -1352,6 +1352,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
           cwd, prompt: initialPrompt!,
           title: `Relay · ${input.target.name}`, clientAttemptId: turn.clientAttemptId, accountId: input.accountId,
           mcpServers: ["viewer"], plugins: [], notifyLauncher: false,
+          ...(input.handoffOnly && input.request.delivery === "guest" ? { ownerRelayHandoffOnly: true } : {}),
         }, authorizeLaunch);
       }
       admitted = true;

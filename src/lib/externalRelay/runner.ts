@@ -20,7 +20,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline, remainingMs } from "./deadline";
-import { ownerRelayAuthorized, liveOwnerRelayRequest, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
+import { ownerRelayAuthorized, liveOwnerRelayRequest, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized, ownerRelayHandoffOutcome } from "./ownerAuthority";
 import { ownerRequestTimeoutText } from "./requestTimeout";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
@@ -123,6 +123,21 @@ const countKey = (relayId: string, targetId: string) =>
   `${relayId}:${targetId}`;
 function ownerRelayHandoffRequested(owner: NonNullable<ReturnType<typeof ownerTierFor>>): boolean {
   return /\b(?:pass|forward|send|hand\s+off|process|fix|delegate)\b|переда|оброб|виправ|делег/u.test(`${owner.text}\n${owner.requestText ?? ""}`);
+}
+/** Keep only the explicit reply chain needed to interpret this owner request. */
+function retainOwnerReplyChain(request: ExternalRelayRequest, ownerMessageId: string): void {
+  const byId = new Map(request.input.conversation.map(message => [message.id, message]));
+  const retained = new Set<string>();
+  let current = byId.get(ownerMessageId);
+  for (let depth = 0; current && depth < 12 && !retained.has(current.id); depth++) {
+    retained.add(current.id);
+    current = current.reply_to ? byId.get(current.reply_to) : undefined;
+  }
+  request.input.conversation = request.input.conversation.filter(message => retained.has(message.id));
+  const mediaRefs = new Set(request.input.conversation.flatMap(message => (message.media ?? []).map(media => media.ref)));
+  request.input.documents = request.input.documents.filter(document =>
+    document.message_id ? retained.has(document.message_id) : document.media_ref ? mediaRefs.has(document.media_ref) : retained.size === 1);
+  request.input.short_term_memory = null;
 }
 export function runningCount(relayId: string, targetId: string): number {
   return active.get(countKey(relayId, targetId)) ?? 0;
@@ -746,22 +761,17 @@ export async function runClaimedRequest(
     // A verified owner may arrive through guest delivery. Keep that turn
     // request-local: the handoff sees the triggering owner message and its
     // media, never the guest's surrounding history or retained memory.
-    if (owner && request.delivery === "guest") {
-      const ownerMessageId = owner.messageId;
-      const trigger = request.input.conversation.find(message => message.id === ownerMessageId);
-      request.input.conversation = trigger ? [trigger] : [];
-      request.input.short_term_memory = null;
-      request.input.documents = [];
-    }
+    if (owner && request.delivery === "guest") retainOwnerReplyChain(request, owner.messageId);
     if (owner) allowOwnerReply = () => ownerStatusReply
       ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
       : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
     // Owner turns need the authenticated Viewer handoff. Codex Cloud cannot
     // bind Viewer MCP calls to this live owner conversation, so execute those
     // turns through the local owner runner.
-    const handoffOnly = !!owner && ownerRelayHandoffRequested(owner);
-    const usingCloud = cloud && (!owner || !handoffOnly) && !!cloudEnvironment(configuredTarget!, !!owner);
-    if (cloud && owner && !usingCloud && !prototype && !handoffOnly) cloudOwnerDirectory(target.project);
+    // Owner turns need authenticated Viewer handoff regardless of phrasing or
+    // Cloud configuration; guest delivery is restricted at the spawn boundary.
+    const handoffOnly = !!owner && (request.delivery === "guest" || ownerRelayHandoffRequested(owner));
+    const usingCloud = cloud && !owner && !!cloudEnvironment(configuredTarget!, false);
     const authority = conversationAuthority(request.input.requester, !!owner);
     const usesConversation = request.delivery !== "guest" && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
@@ -977,7 +987,7 @@ export async function runClaimedRequest(
           authorize: () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); } }, inbound ?? undefined);
         if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
           async () => {
-            const registry = cloud && localOwnerConversationId
+            const registry = usingCloud && localOwnerConversationId
               ? await (await import("@/lib/agent/registry")).prepareAgentRegistry() : null;
             if (!await ownerRelayAuthorizedAsync(relay.id, target.id, requestId)) return false;
             if (registry && localOwnerConversationId) {
@@ -1076,15 +1086,15 @@ export async function runClaimedRequest(
             ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: preparedOwner!.prompt } } : {}),
             authorize: () => { if (cloud && Date.now() >= executionDeadline || leaseUnavailable && !ownerExecution || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked or execution deadline expired"); },
             credentials: ownerCredentials,
-            conciseAfterHandoff: () => !!ownerTools?.records.some(record => record.tool === "send_message_to_orchestrator")
-              || !!owner && ownerRelayHandoffRequested(owner),
+            conciseAfterHandoff: () => !!owner && (request.delivery === "guest"
+              || ownerRelayHandoffOutcome(relay.id, target.id, requestId) !== null),
             onDiagnostic: recordDiagnostic,
             rawDeadlineAt: rawRequest.deadline_at,
             preparedPrompt: preparedOwner!,
             contextDirectory: localRunDir,
             handoffOnly,
             onPromptBytes: bytes => { if (chain) chain = { ...chain, promptBytes: chain.promptBytes + bytes - Buffer.byteLength(persistentPrompt) }; },
-            request, owner, target: { ...ownerTarget, engine: configuredTarget!.engine }, deadline, admissionDeadlineAt: executionDeadline, accountId: conversation?.conversationId ? null : selectedAccount().accountId,
+            request, owner, target: ownerTarget, deadline, admissionDeadlineAt: executionDeadline, accountId: conversation?.conversationId ? null : selectedAccount().accountId,
             hardCapMs: Math.min(cloud ? Math.max(0, executionDeadline - Date.now()) : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
             onConversation: async (conversationId, initialPrompt) => {
               localOwnerConversationId = conversationId;

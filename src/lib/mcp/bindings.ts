@@ -45,7 +45,7 @@ import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
-import { liveOwnerRelayConversation, liveOwnerRelayHandoffOnly, liveOwnerRelayProject, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { liveOwnerRelayConversation, liveOwnerRelayHandoffOnly, liveOwnerRelayProject, ownerRelayPayload, ownerRelayTargetMatches, recordOwnerRelayHandoffOutcome } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
@@ -8397,6 +8397,22 @@ function orchestratorSendProject(args: McpToolArgs, ownerConversationId: string 
 }
 
 async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
+  try { return await bindOrchestratorSendCore(args, dependencies, forRecovery); }
+  catch (error) {
+    const attribution = attributionOf(dependencies);
+    if (!forRecovery && ownerRelayCaller(dependencies) && attribution.conversationId) {
+      const details = error && typeof error === "object" ? (error as { details?: { code?: unknown } }).details : undefined;
+      await recordOwnerRelayHandoffOutcome(attribution.conversationId, {
+        status: error instanceof McpDispatchUncertainError ? "uncertain" : "refused",
+        project: typeof args.project === "string" ? args.project : liveOwnerRelayProject(attribution.conversationId),
+        code: typeof details?.code === "string" ? details.code : null,
+      }).catch(() => false);
+    }
+    throw error;
+  }
+}
+
+async function bindOrchestratorSendCore(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
   const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
@@ -9218,7 +9234,32 @@ export function viewerMcpBindings(
     voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),
-    send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
+    send_message_to_orchestrator: async (args, context) => {
+      const attribution = attributionOf(domainDependencies);
+      const ownerConversationId = ownerRelayCaller(domainDependencies) ? attribution.conversationId : null;
+      try {
+        const result = await sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context);
+        if (ownerConversationId) {
+          const value = objectRecord(result) ? result : {};
+          await recordOwnerRelayHandoffOutcome(ownerConversationId, {
+            status: value.ok === true || value.state === "queued" || value.outcome === "queued" ? "accepted" : value.ok === false ? "refused" : "uncertain",
+            project: typeof value.project === "string" ? value.project : typeof args.project === "string" ? args.project : liveOwnerRelayProject(ownerConversationId),
+            code: typeof value.code === "string" ? value.code : null,
+          }).catch(() => false);
+        }
+        return result;
+      } catch (error) {
+        if (ownerConversationId) {
+          const details = error && typeof error === "object" ? (error as { details?: { code?: unknown } }).details : undefined;
+          await recordOwnerRelayHandoffOutcome(ownerConversationId, {
+            status: error instanceof McpDispatchUncertainError ? "uncertain" : "refused",
+            project: typeof args.project === "string" ? args.project : liveOwnerRelayProject(ownerConversationId),
+            code: typeof details?.code === "string" ? details.code : null,
+          }).catch(() => false);
+        }
+        throw error;
+      }
+    },
     ask_orchestrator_in_parallel: orchestratorProjectBinding(domainDependencies, (args, context) => askOrchestratorInParallelTool(args, viewerControlForCall(controlDependencies, context))),
     rotate_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies)),
     telegram_bot_chats: (args, context) => telegramBotChats(args, viewerControlForCall(controlDependencies, context)),

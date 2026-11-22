@@ -5,7 +5,7 @@ import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { agentRegistry } from "@/lib/agent/registry";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
-import { externalRelayFile, type RunLedger, type RelayStore, type RunRecord } from "./store";
+import { changeRunAsync, externalRelayFile, ownerRelayStoreDeadline, type RunLedger, type RelayStore, type RunRecord } from "./store";
 import type { ExternalRelayCompletion } from "./protocol";
 import { isOwnerRequestTimeoutReply } from "./requestTimeout";
 
@@ -21,6 +21,31 @@ export function liveOwnerRelayRequest(conversationId: string) {
 
 export function liveOwnerRelayProject(conversationId: string): string | null {
   return liveOwnerRelayRun(conversationId)?.project ?? null;
+}
+
+export function ownerRelayHandoffOutcome(relayId: string, targetId: string, requestId: string) {
+  try {
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
+    return ledger.runs.find(run => run.requestId === requestId && run.relayId === relayId && run.targetId === targetId)
+      ?.ownerTurn?.handoffOutcome ?? null;
+  } catch { return null; }
+}
+
+/** Persist the actual Viewer handoff result on the live owner request. */
+export async function recordOwnerRelayHandoffOutcome(conversationId: string, outcome: NonNullable<RunRecord["ownerTurn"]>["handoffOutcome"]): Promise<boolean> {
+  const live = liveOwnerRelayRun(conversationId)?.run;
+  if (!live?.ownerTurn || !live.ownerIdentity) return false;
+  let recorded = false;
+  await changeRunAsync(live.requestId, current => {
+    if (current.leaseId !== live.leaseId || current.relayId !== live.relayId || current.targetId !== live.targetId
+      || current.conversationId !== conversationId || current.ownerIdentity !== live.ownerIdentity
+      || !current.ownerTurn || current.ownerTurn.cancel
+      || procBackend.processIdentity(current.ownerPid) !== current.ownerIdentity
+      || !ownerRelayAuthorized(current.relayId, current.targetId, current.requestId)) return current;
+    recorded = true;
+    return { ...current, ownerTurn: { ...current.ownerTurn, handoffOutcome: outcome } };
+  }, ownerRelayStoreDeadline());
+  return recorded;
 }
 
 /** Guest-origin owner turns receive only the request-bound seat handoff. */
@@ -138,6 +163,21 @@ export function ownerRelaySpawnAuthorized(clientAttemptId: string | null | undef
     return !!run && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
       && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId);
   } catch { return false; }
+}
+
+/** Request-bound permission for the restricted guest-owner handoff spawn. */
+export function ownerRelayHandoffSpawnAuthorized(clientAttemptId: string | null | undefined): boolean {
+  if (!clientAttemptId) return false;
+  try {
+    const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
+    if (ledger.v !== 1) return false;
+    return ledger.runs.some(run => run.ownerTurn?.clientAttemptId === clientAttemptId
+      && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
+      && (run.ownerTurn.rawRequest as { delivery?: unknown } | undefined)?.delivery === "guest"
+      && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId));
+  } catch {
+    return false;
+  }
 }
 
 /** A queued continuation remains bound to its durable owner turn after the

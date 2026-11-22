@@ -148,9 +148,14 @@ const a=process.argv.slice(2);await Bun.stdin.text();require('fs').writeFileSync
 test("service-verified owner on guest delivery gets a request-local seat handoff", async () => {
   const request = guest();
   const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
+  trigger.reply_to = "linked_issue";
   request.input.request_text = "Please pass this issue to the project seat.";
   const quotedText = "The blacklist phrase still leaves matching messages visible.";
-  request.input.conversation = [{ ...trigger, text: quotedText }];
+  request.input.conversation = [{ ...trigger, text: quotedText }, { ...trigger, id: "linked_issue", reply_to: null,
+    author: { key: "project_owner", name: "Owner", self: false }, text: "The linked issue includes the screenshot description." }];
+  request.input.documents = [{ title: "Screenshot description", text: "The moderation panel still shows the matching post.",
+    message_id: "linked_issue", extraction: "complete" }];
+  expect(requestSchema.safeParse(request).error).toBeUndefined();
   request.input.conversation.unshift({ ...trigger, id: "guest_history", reply_to: null, text: "PRIVATE_GUEST_HISTORY" });
   request.input.short_term_memory = "PRIVATE_GUEST_MEMORY";
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
@@ -159,12 +164,14 @@ test("service-verified owner on guest delivery gets a request-local seat handoff
   updateRelayStore(state => ({ ...state, relays: [relay] }));
   let launches = 0;
   let launchPrompt = "";
+  let launchProfile: Record<string, unknown> = {};
   const sentRequest: { current: { text: string; requestText: string | null } | null } = { current: null };
   try {
     const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false, ownerPorts: {
       launch: async input => {
         launches++;
         launchPrompt = String(input.prompt);
+        launchProfile = input;
         sentRequest.current = readRunLedger().runs.find(run => run.requestId === request.request_id)?.ownerTurn?.request ?? null;
         expect(input.mcpServers).toContain("viewer");
         return { status: 202, body: { conversationId: "conversation_verified_guest_owner" } };
@@ -173,10 +180,14 @@ test("service-verified owner on guest delivery gets a request-local seat handoff
       stop: async () => {}, pollMs: 1,
     } });
     expect(launches).toBe(1);
+    expect(launchProfile).toMatchObject({ ownerRelayHandoffOnly: true, mcpServers: ["viewer"], plugins: [] });
     expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner).toBe(true);
     expect(sentRequest.current).toEqual({ text: quotedText, requestText: request.input.request_text });
     expect(launchPrompt).toContain(quotedText);
     expect(launchPrompt).toContain(request.input.request_text!);
+    expect(launchPrompt).toContain("linked_issue");
+    expect(launchPrompt).toContain("Screenshot description");
+    expect(launchPrompt).toContain("moderation panel still shows the matching post");
     expect(launchPrompt).not.toContain("PRIVATE_GUEST_HISTORY");
     expect(launchPrompt).not.toContain("PRIVATE_GUEST_MEMORY");
     expect(readConversations()).toEqual([]);
@@ -460,13 +471,13 @@ fs.writeFileSync(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:
 
 for (const ownerTier of [true, false]) test(`Codex Cloud guest history photos ${ownerTier ? "reach the verified handoff" : "return to the hosted assistant"}`, async () => {
   const request = guest(); request.features = ["requester_context", "relay_media_in"];
-  if (ownerTier) request.input.request_text = "Please pass this photo issue to the project seat.";
+  if (ownerTier) request.input.request_text = "Could you take care of this for the named project?";
   const message = request.input.conversation[0]!;
-  message.text = ownerTier ? "Please pass this photo to the fixture project seat; matching messages remain visible." : message.text;
+  message.text = ownerTier ? "Matching messages remain visible after this phrase." : message.text;
   message.media = [{ ref: "media_00000000000000000000000000000001", kind: "photo", availability: ownerTier ? "missing" : "ready",
     mime_type: "image/png", byte_size: 77, expires_at: "2099-01-01T00:00:00Z" }];
   const relay = paired("http://127.0.0.1:1", ownerTier);
-  relay.targets[0] = { ...relay.targets[0]!, engine: "codex-cloud", model: "gpt-6.1-sol", project: "fixture-project", cloudEnvironmentId: "fixture-environment" };
+  relay.targets[0] = { ...relay.targets[0]!, engine: "codex-cloud", model: "gpt-6.1-sol", project: ownerTier ? null : "fixture-project", cloudEnvironmentId: "fixture-environment" };
   const urls: string[] = [], completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     urls.push(req.url!);
