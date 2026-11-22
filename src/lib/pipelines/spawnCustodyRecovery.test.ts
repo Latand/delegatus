@@ -170,7 +170,8 @@ async function connect(f: Awaited<ReturnType<typeof fixture>>) {
 // The incident was a sixth attempt that already carried restart context.
 // Reconstruct the saved pipeline and its original receipt using fixture IDs.
 async function killedSetup(f: Awaited<ReturnType<typeof fixture>>,
-  state: "starting" | "failed" | "silent" | "answered" | "native-answer" | "delivered",
+  state: "starting" | "failed" | "silent" | "answered" | "native-answer" | "delivered"
+    | "path-pending-silent" | "path-pending-answer",
   extraSetupProcess?: "alive" | "unverified") {
   // Keep this receipt in the historical park instead of scheduling a retry.
   f.h.ports.unpublishedLaunchRetrySafe = async () => false;
@@ -237,7 +238,7 @@ async function killedSetup(f: Awaited<ReturnType<typeof fixture>>,
   if (state !== "starting" && state !== "failed") {
     const sessionId = `custody-${launchId}`;
     const pathname = path.join(codexSessionRoots()[0]!, `${sessionId}.jsonl`);
-    const nativeAnswer = state === "answered" || state === "native-answer";
+    const nativeAnswer = state === "answered" || state === "native-answer" || state === "path-pending-answer";
     fs.mkdirSync(path.dirname(pathname), { recursive: true });
     fs.writeFileSync(pathname, [
       { timestamp: attempt.startedAt, type: "session_meta", payload: { id: sessionId, cwd: lane.worktreeDir } },
@@ -272,7 +273,9 @@ async function killedSetup(f: Awaited<ReturnType<typeof fixture>>,
     f.h.ports.sourcePathAllowed = value => value === pathname;
   }
   f.journal.transitionOperation(launchId, "failed", { reason: KILLED_SETUP });
-  if (state !== "starting") expect((await f.registry.failStructuredSpawnOffLoop(launchId, KILLED_SETUP)).claimed).toBe(true);
+  if (state !== "starting" && !state.startsWith("path-pending-")) {
+    expect((await f.registry.failStructuredSpawnOffLoop(launchId, KILLED_SETUP)).claimed).toBe(true);
+  }
   const interrupted = f.registry.spawnReceipt(launchId)!;
   expect(interrupted.hostSetup?.cleanupConfirmed).toBeUndefined();
   expect(processIdentityStatus(interrupted.admissionOwner!)).toBe("dead");
@@ -292,10 +295,24 @@ async function killedSetup(f: Awaited<ReturnType<typeof fixture>>,
   return { lane, launchId, conversationId };
 }
 
-test.each(["failed", "starting", "compacted", "silent"] as const)("retry-stage abandons the killed setup with a %s record", async state => {
+test.each(["failed", "starting", "compacted", "silent", "path-pending-silent"] as const)("retry-stage abandons the killed setup with a %s record", async state => {
   const f = await fixture();
   try {
     const { lane, launchId } = await killedSetup(f, state === "compacted" ? "failed" : state);
+    if (state === "starting" || state === "path-pending-silent") {
+      expect(f.registry.spawnReceipt(launchId)?.state).toBe(state === "starting" ? "starting" : "path-pending");
+      lane.state = "running";
+      lane.stateDetail = null;
+      savePipelines([lane]);
+      const genericRecovery = spyOn(f.production, "recoverStagedLaunch");
+      f.h.ports.recoverStagedLaunch = genericRecovery;
+      await tickPipelines([], f.h.ports);
+      const parked = f.row();
+      expect(parked.state).toBe("needs_decision");
+      expect(parked.stateDetail).toContain(KILLED_SETUP);
+      expect(genericRecovery).not.toHaveBeenCalled();
+      expect(f.tries()).toBe(1);
+    }
     if (state === "compacted") {
       f.journal.append({ scope: { type: "operation", id: "compaction-fixture" }, kind: "fixture-marker", payload: {} });
       f.journal.compact(1);
@@ -361,7 +378,7 @@ test("retry-stage closes admission before releasing interrupted setup custody", 
   } finally { await f.close(); }
 });
 
-test.each(["answered", "native-answer", "delivered"] as const)("parked retry-stage fences interrupted setup with %s evidence", async state => {
+test.each(["answered", "native-answer", "delivered", "path-pending-answer"] as const)("parked retry-stage fences interrupted setup with %s evidence", async state => {
   const f = await fixture();
   try {
     const { lane, launchId } = await killedSetup(f, state);

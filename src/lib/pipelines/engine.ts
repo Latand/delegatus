@@ -2387,7 +2387,7 @@ export function defaultPipelinePorts(
         return "the runtime journal cannot prove the original first message did not run";
       }
       if (!checkCurrent()) return "the original launch evidence changed during recovery";
-      if (before.state === "starting") {
+      if (before.state !== "failed") {
         // A restart after terminalization can resume cleanup on the failed
         // receipt. Keep the lease bound until that terminal state is durable.
         const failed = await registry.failStructuredSpawnOffLoop(launchId, failure, { announce: false, recoveryFence: safe });
@@ -3211,7 +3211,7 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
         || stageReservationReceipt(pipeline, stage.id, attempt, active.clientAttemptId)?.launchId !== active.launchId) {
         return "stage launch recovery cannot prove no dispatch began: the original reserved receipt is unavailable or conflicts";
       }
-      if (interruptedSetup && (active.state === "starting" || active.admissionOwner)) {
+      if (interruptedSetup && (active.state !== "failed" || active.admissionOwner)) {
         const refusal = await checkInterruptedSetup(active, interruptedSetup.failure);
         if (refusal) return `stage launch recovery cannot retire interrupted setup: ${refusal}`;
         active = registry.spawnReceipt(attempt.launchId);
@@ -10650,6 +10650,15 @@ async function tickRunStage(
   if (await settleOnRecordedReport(pipeline, stage, attempt, ports, persist)) return;
   if (attempt.launchId && attempt.state === "spawning") {
     const receipt = ports.spawnReceipt(attempt.launchId);
+    if (receipt && ["starting", "path-pending"].includes(receipt.state)) {
+      const interruption = interruptedStageSetupReason(pipeline, attempt, receipt);
+      if (interruption) {
+        // Keep the original failure available to retry-stage. The generic
+        // staged-launch wait can overwrite the only saved SIGKILL diagnosis.
+        await park(pipeline, interruption, attempt);
+        return;
+      }
+    }
     const recovery = receipt?.state === "path-pending" ? stagedLaunchRecovery(receipt) : null;
     if (recovery) {
       await waitForStagedLaunch(pipeline, stage, attempt, recovery, ports);
@@ -12220,6 +12229,7 @@ async function recoverWaitingStageLaunches(ports: PipelinePorts): Promise<Map<st
       || !["running", "needs_decision"].includes(pipeline.state) || pipelineSurvivorRefusal(pipeline)) continue;
     if (pipeline.state === "needs_decision" && !isStructuredSpawnPark(pipeline, attempt)) continue;
     const receipt = ports.spawnReceipt(attempt.launchId);
+    if (interruptedStageSetupReason(pipeline, attempt, receipt)) continue;
     const recovery = stagedLaunchRecovery(receipt);
     const unresolved = !recovery && receipt && ["starting", "path-pending"].includes(receipt.state)
       && (attempt.state === "spawning" || unresolvedSpawnPark(attempt));
@@ -13199,9 +13209,14 @@ function interruptedStageSetupFailure(failure: string | null | undefined): failu
   return failure?.startsWith(`${REGISTRY_WRITER_BUSY} (spawn.setup-custody); exit: signal SIGKILL;`) === true;
 }
 
+function interruptedStageSetupReason(pipeline: Pipeline, attempt: PipelineStageAttempt,
+  receipt: PipelineSpawnReceipt | null): string | undefined {
+  return [receipt?.error, attempt.error ?? pipeline.stateDetail].find(interruptedStageSetupFailure);
+}
+
 function interruptedStageSetupRefusal(file: RegistryFile, receipt: SpawnReceipt): string | null {
   if (receipt.transport !== "structured" || receipt.purpose !== "launch" || receipt.rejection
-    || receipt.queuedPinnedSpawn || !["starting", "failed"].includes(receipt.state)) {
+    || receipt.queuedPinnedSpawn || !["starting", "path-pending", "failed"].includes(receipt.state)) {
     return "the original receipt is no longer an interrupted structured launch";
   }
   if (receipt.pane || receipt.verifiedHost || resolveConversationAlias(file, receipt.conversationId) !== receipt.conversationId
@@ -13212,7 +13227,7 @@ function interruptedStageSetupRefusal(file: RegistryFile, receipt: SpawnReceipt)
   if (receipt.key) {
     const generation = conversation?.generations.at(-1);
     const entry = file.entries[sessionKeyId(receipt.key)];
-    if (receipt.state !== "failed" || receipt.key.engine !== receipt.engine
+    if (receipt.state === "starting" || receipt.key.engine !== receipt.engine
       || !conversation || conversation.generations.length !== 1 || !generation || generation.archivedAt
       || !entry || entry.structuredHostOperationId !== receipt.launchId
       || !stageLaunchGenerationIdentityMatches(receipt, { engine: conversation.engine, path: generation.path }, entry)
@@ -13223,7 +13238,7 @@ function interruptedStageSetupRefusal(file: RegistryFile, receipt: SpawnReceipt)
       || entry.pendingHostExits?.some(({ process }) => processIdentityMayRun(process))) {
       return "the original launch has a live or conflicting native host";
     }
-  } else if (receipt.artifactPath || receipt.artifactLifecycle === "materialized" || conversation) {
+  } else if (receipt.state === "path-pending" || receipt.artifactPath || receipt.artifactLifecycle === "materialized" || conversation) {
     return "the original launch has conflicting native identity evidence";
   }
   const operationId = `spawn_message_${receipt.launchId}`;
@@ -18222,7 +18237,7 @@ async function applyPipelinePatch(
       }
       const interruptedReceipt = pipeline.cursor?.state === "spawning" && attempt?.launchId
         ? ports.spawnReceipt(attempt.launchId) : null;
-      const interruptedFailure = [interruptedReceipt?.error, attempt?.error ?? pipeline.stateDetail].find(interruptedStageSetupFailure);
+      const interruptedFailure = attempt ? interruptedStageSetupReason(pipeline, attempt, interruptedReceipt) : undefined;
       if (stage?.kind === "run" && attempt?.launchId && attempt.conversationId && interruptedFailure
         && pipeline.cursor?.state === "spawning" && ["running", "paused", "needs_decision"].includes(pipeline.state)) {
         if (attempt.report || attempt.verdict || attempt.completedAt || attempt.paneId
