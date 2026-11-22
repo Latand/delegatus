@@ -136,7 +136,9 @@
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > * + [data-bar-recent] > button { border-left-width: 0; }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button:first-child { border-top-left-radius: var(--radius-control); border-bottom-left-radius: var(--radius-control); }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button:last-child { border-top-right-radius: var(--radius-control); border-bottom-right-radius: var(--radius-control); }
-:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > [data-bar-recent] > button { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > [data-bar-recent] > button { border-radius: 0; }
+/* The recent agents' clock closes the group only when nothing follows it (a leaf bar has no chart). */
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > [data-bar-recent]:last-child > button { border-top-right-radius: var(--radius-control); border-bottom-right-radius: var(--radius-control); }
 /* A menu opened from the row owns the space under it: the «Needs you» toast hangs at the window's
    right edge 8 px under the row, so while the «+» menu, the Hidden tray, ⋯, the filter or the
    recent agents' list is open the toast is not drawn, and it returns when the menu closes. */
