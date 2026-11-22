@@ -7,11 +7,12 @@ import path from "node:path";
 import { redactBounded } from "../src/lib/monitor/redact";
 import { cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
 import { cpuOwnerIdentity, cpuOwnerStatus } from "../src/lib/runtime/signalSandboxContext";
+import { installedGateAdmissionEnv } from "../src/lib/runtime/agentSignalSandbox";
 import { realExec } from "../src/lib/workflows/provision";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { runSteps } from "./local-gate";
 import { createPublicationFixtures } from "./publicationHook.fixture";
-import { fixtureGitEnv } from "./local-gate.fixture";
+import { createHookFixture, fixtureGitEnv } from "./local-gate.fixture";
 import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 
 // This release predates bounded gate waits and cap locks. Use its actual
@@ -396,6 +397,62 @@ for (const [kind, title] of [
 
 const systemctl = process.platform === "linux" ? Bun.which("systemctl") : null;
 const hasUserManager = systemctl !== null && Bun.spawnSync([systemctl, "--user", "show-environment"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+
+test.skipIf(!hasUserManager)("a pre-commit service and its client cannot fence their own queued ESLint", async () => {
+  const f = fixture(), roots: string[] = [], control = new AbortController();
+  const log = path.join(f.dir, "pre-commit.stderr");
+  let pending: ReturnType<typeof realExec> | undefined;
+  try {
+    const hook = createHookFixture(process.cwd(), roots);
+    const hookEnv: NodeJS.ProcessEnv = hook.env;
+    fs.mkdirSync(path.join(hook.dir, "scripts/gate-runner"));
+    for (let i = 0; i < 41; i++) fs.writeFileSync(path.join(hook.dir, `input-${i}.ts`), "export {};\n");
+    hook.git("add", ".");
+    const env = { ...hookEnv, ...f.env, PATH: hookEnv.PATH, LLV_GATE_RUNNER: "off", LLV_GATE_SLOTS: "6",
+      LLV_GATE_SANDBOX_RECORD: undefined, CPU_SLOT_STDERR: log, FIXTURE_HOOK_PID: path.join(f.dir, "hook.pid") };
+    withoutInheritedGate(env);
+    const previous = Date.now() - CPU_QUEUE_SPACING_MS;
+    f.db.query("UPDATE admission SET last = ?").run(previous);
+    pending = realExec("bash", ["-c", 'echo $$ > "$FIXTURE_HOOK_PID"; exec "$@" 2>"$CPU_SLOT_STDERR"', "pre-commit-fixture", "bun", "scripts/local-gate.ts", "pre-commit"],
+      hook.dir, env, { timeoutMs: 18_000, signal: control.signal });
+    const diagnostics = () => new Error(redactBounded(fs.readFileSync(log, "utf8"), 2_000));
+    await until(() => f.count() === 1, 8_000, diagnostics);
+    const ticket = f.db.query<{ key: string; owner: string }, []>(`SELECT key, owner ${queuedTickets}`).get()!;
+    const waiter = JSON.parse(ticket.owner).pid;
+    const group = fs.readFileSync(`/proc/${waiter}/cgroup`, "utf8");
+    const unit = /\/(delegatus-gate-[\da-f-]+\.service)(?:\/|\n)/.exec(group)?.[1];
+    expect(unit).toBeDefined();
+    const service = execFileSync(systemctl!, ["--user", "show", "-p", "MainPID", "--value", unit!], { encoding: "utf8" }).trim();
+    const argv = fs.readFileSync(`/proc/${service}/cmdline`, "utf8").split("\0");
+    expect(argv[2]).toBe("--service");
+    expect(fs.existsSync(argv[3]!)).toBe(false);
+    const children = (pid: string) => fs.readdirSync(`/proc/${pid}/task`).flatMap(thread =>
+      fs.readFileSync(`/proc/${pid}/task/${thread}/children`, "utf8").trim().split(/\s+/).filter(Boolean));
+    const original = fs.readFileSync(env.FIXTURE_HOOK_PID, "utf8").trim();
+    const clients = children(original).filter(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("owned-runner.ts"));
+    expect(clients).toHaveLength(1);
+    expect(children(clients[0]!).map(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8"))
+      .some(command => command.includes("systemd-run\0") && command.includes(`--unit=${unit}\0`) && command.includes(argv[3]!))).toBe(true);
+    expect(fs.readFileSync(`/proc/${waiter}/cmdline`, "utf8")).toContain("scripts/eslint-changes.ts");
+    expect(f.db.query("SELECT 1 FROM sqlite_master WHERE name = 'gate_slots'").get()).toBeNull();
+    expect(f.db.query("SELECT last FROM admission").get()).toEqual({ last: previous });
+    for (let i = 1; i <= 6; i++) {
+      expect(Bun.spawnSync(["flock", "-n", path.join(f.dir, `llv-heavy-gate.slot${i}.lock`), "true"]).exitCode).toBe(0);
+    }
+    f.age();
+    await until(() => fs.existsSync(hookEnv.HOOK_LOG!), 5_000, diagnostics);
+    const result = await pending;
+    expect(result.code, redactBounded(result.stderr, 2_000)).toBe(0);
+    expect(hook.calls().filter(call => call.args[0] === "scripts/eslint-changes.ts")).toHaveLength(1);
+    expect(f.count()).toBe(0);
+  } finally {
+    control.abort();
+    await pending;
+    for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
+    f.close();
+  }
+}, 22_000);
+
 for (const portable of [false, true]) test.skipIf(process.platform !== "linux" || !portable && !hasUserManager)(
   `a pre-exemption ${portable ? "portable runner" : "service"} holds its cap-one grant until the ordinary hook exits`, async () => {
   const f = fixture(), control = new AbortController(), pending: ReturnType<typeof realExec>[] = [];
@@ -530,11 +587,12 @@ command -p git "$@"
   }
 }, 50_000);
 
-for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "service hooks", "historical service hook"] as const) test.skipIf(
+for (const mode of ["portable hooks first-open", "service hooks first-open", "portable prepare", "portable hooks", "service prepare", "service hooks", "historical service hook", "older helper head"] as const) test.skipIf(
   process.platform !== "linux" || !mode.startsWith("portable") && !hasUserManager
 )(`FIFO publication admits the first check while the peer waits (${mode})`, async () => {
     const useService = !mode.startsWith("portable");
-    const historical = mode === "historical service hook", ordinary = mode.includes("hooks") || historical;
+    const historical = mode === "historical service hook", olderHead = mode === "older helper head";
+    const ordinary = mode.includes("hooks") || historical || olderHead;
     const firstOpen = mode.endsWith("first-open");
     const f = fixture(), control = new AbortController(), roots: string[] = [];
     const pending: ReturnType<typeof realExec>[] = [];
@@ -550,6 +608,16 @@ for (const mode of ["portable hooks first-open", "service hooks first-open", "po
         LLV_GATE_PSI_FILE: f.env.LLV_GATE_PSI_FILE, LLV_GATE_POLL_SECONDS: f.env.LLV_GATE_POLL_SECONDS,
         LLV_GATE_PSI_RELEASE_SECONDS: "0", DELEGATUS_CPU_PRESSURE: "on", DELEGATUS_AGENT_CPU: "off", CPU_SLOT_STDERR: log(name),
         LLV_GATE_PUBLICATION_ID: name, LLV_OWNED_RUN_TIMEOUT_MS: "25000", LLV_GATE_SANDBOX_RECORD: undefined, LLV_GATE_PUSH_DEADLINE: undefined };
+      if (olderHead) {
+        // Route through the same host-only PATH binding supplied by the
+        // launcher. The fixture's Bun shim still stands in for the check.
+        const bun = path.join(publication.dir, "shims", "bun");
+        fs.writeFileSync(bun, fs.readFileSync(bun, "utf8").replace("#!/bin/bash\n", `#!/bin/bash
+case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
+`));
+        env.LLV_GATE_BUN = undefined;
+        Object.assign(env, installedGateAdmissionEnv(env));
+      }
       withoutInheritedGate(env, { keepSandbox: useService });
       let command = ["bun", "scripts/local-gate.ts", "pre-push", "--publication-prepare"];
       if (ordinary) {
@@ -600,6 +668,15 @@ for (const mode of ["portable hooks first-open", "service hooks first-open", "po
       const peer = historical
         ? createPublicationFixtures(legacyGateTree(f.dir, "c0ceb7ff5eb064b1d9d29a9aef2540edd15d5dd1"), roots).fixture()
         : publicationFixture();
+      if (olderHead) {
+        // The exact older admission implementation observed at the FIFO head.
+        const historicalTree = legacyGateTree(f.dir, "36b68a986862c5391cadf0c8c162aeea73012447");
+        for (const entry of ["cpu-admission.ts", "gate-slot.sh"]) {
+          const target = path.join(first.dir, "scripts", entry);
+          fs.unlinkSync(target);
+          fs.symlinkSync(path.join(historicalTree, "scripts", entry), target);
+        }
+      }
       for (const publication of [first, peer]) {
         if (!useService) fs.writeFileSync(path.join(publication.dir, "shims/systemctl"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
         fs.mkdirSync(path.join(publication.dir, "scripts/gate-runner"));

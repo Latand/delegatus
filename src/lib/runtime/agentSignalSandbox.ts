@@ -382,15 +382,52 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
   throw new Error("Gate wrapper unavailable: installed Delegatus tooling must support agent signal namespaces before a managed stage can launch");
 }
 
+/** Older shells resolve Bun through PATH. Keep this host-only routing out of
+ * LLV_GATE_BUN, which publication treats as a portable check input. */
+export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.ProcessEnv>> = process.env): Record<string, string> {
+  if (process.platform !== "linux" || source.LLV_GATE_BUN) return {};
+  try {
+    const helper = path.join(path.dirname(resolveSignalTooling().gate), "cpu-admission.ts");
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    const body = Buffer.from(`#!/bin/bash
+set -eu
+if [[ $# -ge 4 && \${1##*/} == cpu-admission.ts && $3 == command:bounded:drained:* ]]; then
+  case $2 in
+    --wait|--claim) shift; set -- ${quote(helper)} "$@" ;;
+  esac
+fi
+# Find the interpreter behind the installed admission shims. Leave PATH
+# available to later gate invocations spawned by the native interpreter.
+native_bun=$(IFS=: read -ra entries <<< "$PATH:"
+for entry in "\${entries[@]}"; do
+  case "$entry" in */delegatus/gate-admission/*) continue ;; esac
+  entry=\${entry:-.}
+  if [[ -x "$entry/bun" && ! -d "$entry/bun" ]]; then printf '%s' "$entry/bun"; break; fi
+done)
+[[ -n "$native_bun" ]] || { echo 'gate-slot: Bun is unavailable' >&2; exit 127; }
+exec "$native_bun" "$@"
+`);
+    const parent = path.join(os.homedir(), ".cache/delegatus/gate-admission");
+    const directory = cacheSignalTooling(parent, new Map([["bun", body]]));
+    const entries = (source.PATH ?? process.env.PATH ?? "").split(path.delimiter)
+      .filter(entry => !entry.startsWith(parent + path.sep));
+    return { PATH: [directory, ...entries].join(path.delimiter) };
+  } catch { return {}; }
+}
+
 /** Container paths cannot appear in a host agent's test instructions. The
  * bundled tools have no checkout imports and are published atomically into
  * the home mounted at the same path on both sides of the transition. */
 function cacheHostTooling(launcher: string, scripts: string): { launcher: string; gate: string } {
   const files = new Map([...gateToolingFiles.map(name => [name, fs.readFileSync(path.join(scripts, name))] as const),
     ["launch.py", fs.readFileSync(launcher)] as const]);
+  const directory = cacheSignalTooling(path.join(os.homedir(), ".cache/delegatus/signal-tooling"), files);
+  return { launcher: path.join(directory, "launch.py"), gate: path.join(directory, "gate-slot.sh") };
+}
+
+function cacheSignalTooling(parent: string, files: ReadonlyMap<string, Buffer>): string {
   const digest = createHash("sha256");
   for (const [name, body] of files) digest.update(name).update(body);
-  const parent = path.join(os.homedir(), ".cache/delegatus/signal-tooling");
   fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
   const directory = path.join(parent, digest.digest("hex"));
   if (!fs.existsSync(directory)) {
@@ -404,7 +441,7 @@ function cacheHostTooling(launcher: string, scripts: string): { launcher: string
   for (const [name, body] of files) {
     if (!fs.readFileSync(path.join(directory, name)).equals(body)) throw new Error("agent signal sandbox unavailable: cached host tooling differs from this release");
   }
-  return { launcher: path.join(directory, "launch.py"), gate: path.join(directory, "gate-slot.sh") };
+  return directory;
 }
 
 /** The resource wrapper remains outside the namespace. An injected spawn is

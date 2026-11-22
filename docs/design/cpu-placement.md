@@ -728,10 +728,19 @@ slot lock. The new wrapper waits for that pool to drain before its first
 claim. It checks the kernel's process view for wrappers that have consumed
 their tickets, owned runners and their cleanup supervisors. Signal-sandboxed
 callers use the verified host process view. A waiting shell still has its
-ticket and does not keep the pool from draining. A held slot whose admission
-already passed the drain check carries that proof forward. The same final
-claim transaction rejects a drain observation if another caller admitted
-work during the check.
+ticket. The pre-commit hook and publication preparer bootstrap an owned copy
+before heavy admission. Their original hook process identifies the cleanup
+client and service so they can wait for their own nested gate. A held slot
+whose admission already passed the drain check carries that proof forward.
+The same final claim transaction rejects a drain observation if another caller
+admitted work during the check.
+
+Managed Linux stages and the publication executor supply the installed gate
+helper through a host-local Bun launcher on `PATH`. Wrappers using the
+drained-ticket protocol send both readiness and final claim to that helper,
+including from older checkouts. When deploying this routing, retry waiters
+already running an older helper under the updated launcher. Slotless wrappers
+continue to use their original protocol.
 
 Older installed and checkout wrappers can keep polling during the transition.
 After reaching the wait bound, a current ticket can pass older pressure-only
