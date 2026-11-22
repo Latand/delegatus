@@ -9,7 +9,8 @@
       "relay_tool_calls",
       "relay_tool_actions",
       "request_deadline",
-      "relay_guest_answers"
+      "relay_guest_answers",
+      "relay_isolated_requesters"
     ],
     "slots": [
       {

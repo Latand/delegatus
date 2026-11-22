@@ -55,5 +55,6 @@ export function deadlineNegotiatedCapture(text: string): string {
   const capture = JSON.parse(text);
   capture.claim_body.features.splice(3, 0, "request_deadline");
   capture.claim_body.features.splice(4, 0, "relay_guest_answers");
+  capture.claim_body.features.splice(5, 0, "relay_isolated_requesters");
   return JSON.stringify(capture, null, 2) + "\n";
 }

@@ -447,13 +447,11 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
   }
 }
 /** What this install implements of the optional parts of v1 (§A.2 rule 11). */
-export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers"];
-const RELAY_GUEST_NON_OWNER = "relay_guest_non_owner";
+export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers", "relay_isolated_requesters"];
 export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
   const switches = readRelaySwitches();
   const rich = switches.rich_media && relay?.features?.includes("relay_rich_messages");
   const features = [...CLAIM_FEATURES,
-    ...(relay?.features?.includes(RELAY_GUEST_NON_OWNER) ? [RELAY_GUEST_NON_OWNER] : []),
     ...(relay?.features?.includes(RELAY_TOOLS_ON_DEMAND) ? [RELAY_TOOLS_ON_DEMAND] : []),
     ...(relay?.features?.includes("relay_media_in") ? ["relay_media_in"] : []),
     ...(relay?.features?.includes("relay_media_in") && relay.features.includes(RELAY_HISTORY_MEDIA) ? [RELAY_HISTORY_MEDIA] : []),
