@@ -142,6 +142,13 @@ function trailingLane(h: ReturnType<typeof fixture>, behind: number, files: Reco
   return h.lane.lastPassedCommit;
 }
 
+function exhaustProducerRepairs(h: ReturnType<typeof fixture>): void {
+  // Exercise publication recovery after the separate fresh-producer budget
+  // has already been spent.
+  h.lane.publicationProducerRepairs = 2;
+  savePipelines([h.lane]);
+}
+
 if (group === "controls") {
 for (const recovery of ["automatic", "retry-stage", "publish"] as const) for (const shape of ["old-publication", "no-publication"] as const) test(`a passed unsettled committing stage settles (${shape}, ${recovery})`, async () => {
   const h = fixture();
@@ -2147,6 +2154,7 @@ for (const failsAfterWait of [false, true]) test(`${stop === "admission" ? "pre-
   const h = fixture();
   try {
     const head = trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    if (failsAfterWait) exhaustProducerRepairs(h);
     fs.writeFileSync(h.hook, await capacityRefusalHook(stop), { mode: 0o700 });
     let clock = Date.parse("2026-10-16T10:00:00.000Z");
     const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
@@ -2199,6 +2207,7 @@ test("owned-runner cleanup refusal parks despite a deadline marker", async () =>
   const h = fixture();
   try {
     trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    exhaustProducerRepairs(h);
     fs.writeFileSync(h.hook, "#!/bin/sh\necho 'pre-push: touched tests: failed (1)' >&2\necho 'owned runner: execution guard expired' >&2\necho 'owned runner: budget cleanup failed: child tree could not be stopped' >&2\nexit 1\n", { mode: 0o700 });
     expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
     await h.tick();
@@ -2261,6 +2270,7 @@ test("a named touched assertion vetoes deadline recovery before log truncation",
   const h = fixture();
   try {
     trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    exhaustProducerRepairs(h);
     fs.writeFileSync(h.hook, `#!/bin/sh\necho 'pre-push: touched tests: failed (1)' >&2\necho 'NEW src/work.test.ts: publication assertion' >&2\n${"echo diagnostic >&2\n".repeat(500)}echo 'owned runner: deadline expired' >&2\nexit 1\n`, { mode: 0o700 });
     expect((await patchPipeline(h.lane.id, { action: "publish" }, h.ports)).error).toBeUndefined();
     await h.tick();

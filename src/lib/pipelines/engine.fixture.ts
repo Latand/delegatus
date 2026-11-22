@@ -2001,12 +2001,10 @@ function runtimeReleaseOf(f: Awaited<ReturnType<typeof idleStageHostFixture>>, o
     retired,
     terminateOwnedHost: async (key: Parameters<typeof f.registry.terminateStructuredHost>[0], expected: Parameters<typeof f.registry.terminateStructuredHost>[1]) => {
       // The fixture's own child, by the pid it recorded; its process probes then answer "gone".
-      await stopFixtureProcess(f.child);
+      f.child.kill("SIGKILL");
       f.termination.signal(f.hostPid, "SIGKILL");
       onReleased();
       f.host.emit({ status: "unhosted", endpoint: "stdio:released", pid: null, processStartIdentity: null });
-      const { flushStructuredHostPersistence } = await import("@/lib/runtime/registry");
-      await flushStructuredHostPersistence(f.host);
       retired.push(f.registry.terminateStructuredHost(key, expected));
       return true;
     },

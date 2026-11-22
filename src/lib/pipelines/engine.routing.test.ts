@@ -1966,25 +1966,36 @@ test("an automatic stop whose first step is the runtime's own release still reti
 });
 
 test("a descendant that outlives the runtime's release is still signalled, and the attempt is replaced", async () => {
+  const { captureProcessIdentity, processIdentityMayRun } = await import("@/lib/processIdentity");
   const h = harness();
   const f = await idleStageHostFixture(h);
+  const child = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
+  const identity = captureProcessIdentity(child.pid!);
   try {
     await f.bind(30_000);
     h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
     h.advanceWallClock(IDLE_TURN_QUIET_MS);
-    /* A descendant that left the host's process group. It is a number only: no
-       such process is consulted, and every signal here is recorded, never sent. */
-    const CHILD = 4_190_001;
+    // Supply the captured parent edge for a real child in its own process group.
+    expect(processIdentityMayRun(identity)).toBe(true);
     let rootGone = false;
-    let childGone = false;
     const signals: string[] = [];
-    const release = runtimeReleaseOf(f, () => { rootGone = true; });
     const termination = { ...f.termination,
-      ppidMap: () => new Map<number, number>([[f.hostPid, 1], [CHILD, f.hostPid]]),
-      pidAlive: (pid: number) => (pid === CHILD && !childGone) || (pid === f.hostPid && !rootGone),
-      processIdentity: (pid: number) => pid === CHILD ? (childGone ? null : "child:start") : f.termination.processIdentity(pid),
-      signal: (pid: number, signal: NodeJS.Signals) => { signals.push(`${signal}:${pid}`); if (pid === CHILD) childGone = true; },
-      terminateOwnedHost: release.terminateOwnedHost };
+      ppidMap: () => new Map<number, number>([[f.hostPid, 1], [identity.pid, f.hostPid]]),
+      pidAlive: (pid: number) => pid === identity.pid ? processIdentityMayRun(identity) : pid === f.hostPid && !rootGone,
+      processIdentity: (pid: number) => pid === identity.pid ? identity.startIdentity : f.termination.processIdentity(pid),
+      signal: (pid: number, signal: NodeJS.Signals) => {
+        expect(pid).toBe(identity.pid);
+        signals.push(`${signal}:${pid}`);
+        expect(child.kill(signal)).toBe(true);
+      },
+      sleep: async () => { await Bun.sleep(10); },
+      terminateOwnedHost: async () => {
+        expect(f.row().structuredTerminationSurvivors).toContainEqual(identity);
+        expect(processIdentityMayRun(identity)).toBe(true);
+        await stopFixtureProcess(f.child);
+        rootGone = true;
+        return true;
+      } };
     await withRuntimeSnapshot(f.snapshot, async () => {
       const production = defaultPipelinePorts({ termination });
       await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
@@ -1994,7 +2005,8 @@ test("a descendant that outlives the runtime's release is still signalled, and t
         stopInterruptedStageAgent: production.stopInterruptedStageAgent,
       });
     });
-    expect(signals).toEqual([`SIGTERM:${CHILD}`]);
+    expect(signals).toEqual([`SIGTERM:${identity.pid}`]);
+    expect(processIdentityMayRun(identity)).toBe(false);
     const row = f.row();
     expect(row.status).toBe("dead");
     expect(row.structuredHost?.process ?? null).toBeNull();
@@ -2003,7 +2015,7 @@ test("a descendant that outlives the runtime's release is still signalled, and t
     expect(lane.state).toBe("running");
     expect(lane.runs[0]!.attempts.map((item) => item.state)).toEqual(["failed", "pending"]);
   } finally {
-    await f.end();
+    try { await stopFixtureProcess(child); } finally { await f.end(); }
   }
 });
 
