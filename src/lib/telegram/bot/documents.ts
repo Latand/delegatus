@@ -431,15 +431,32 @@ export function readExactFile(requested: string, maxBytes: number): { real: stri
 /** A relay's private output directory may have hidden ancestors. Forbid
  * hidden descendants and traversal, and require an exact, link-free path. */
 export function readRunDocument(requested: string, outputDir: string, environment: DocumentEnvironment, maxBytes: number) {
-  const prefix = outputDir + path.sep;
-  if (!requested.startsWith(prefix) || !within(requested, outputDir)) {
+  const realOutput = fs.realpathSync.native(outputDir);
+  const realParent = fs.realpathSync.native(path.dirname(requested));
+  const real = fs.realpathSync.native(requested);
+  if (path.dirname(real) !== realParent || !within(real, realOutput)) {
     throw new DocumentRefusal("document_outside_roots", "File is outside this run's output directory");
   }
-  if (dotSegment(requested.slice(prefix.length)) !== null
-    || forbiddenDirectories(environment).some(directory => within(requested, directory))) {
+  const relative = path.relative(realOutput, real);
+  if (segments(requested).includes("..") || dotSegment(relative) !== null
+    || forbiddenDirectories(environment).some(directory => within(real, directory))) {
     throw new DocumentRefusal("document_forbidden_path", "File is hidden or inside the Delegatus state directory");
   }
-  return readExactFile(requested, maxBytes);
+  return readExactFile(real, maxBytes);
+}
+
+/** Recognize a run output spelling through a symlinked cache ancestor. */
+export function isRunDocumentPath(requested: string, outputDir: string): boolean {
+  try {
+    const realOutput = fs.realpathSync.native(outputDir);
+    const realRun = path.dirname(realOutput);
+    const realParent = fs.realpathSync.native(path.dirname(requested));
+    const real = fs.realpathSync.native(requested);
+    return path.dirname(real) === realParent && within(real, realRun)
+      && (within(real, realOutput) || segments(requested).includes("outbox"));
+  } catch {
+    return false;
+  }
 }
 
 function readOpenedFile(requested: string, real: string, maxBytes: number, recheck: (opened: string) => void): { real: string; bytes: Buffer } {

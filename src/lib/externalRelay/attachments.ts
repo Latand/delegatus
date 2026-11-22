@@ -8,7 +8,7 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { attachReadAttributionWorker } from "@/lib/readAttribution";
 import { SQLITE_MEMORY_MESSAGE_PREFIX } from "@/lib/sqliteMemoryDiagnostics";
-import { checkPhotoBytes, defaultDocumentRoots, documentBytesSecret, DocumentRefusal, readExactFile, readRunDocument, readUnderRoots, type DocumentEnvironment } from "@/lib/telegram/bot/documents";
+import { checkPhotoBytes, defaultDocumentRoots, documentBytesSecret, DocumentRefusal, isRunDocumentPath, readExactFile, readRunDocument, readUnderRoots, type DocumentEnvironment } from "@/lib/telegram/bot/documents";
 import { ExternalRelayError, relayPutBytes } from "./client";
 import { uploadedAttachmentSchema, type ExternalRelayRequest, type RelayAttachment, type RelayMediaKind } from "./protocol";
 import type { AnswerCapabilities, AnswerDrop, LocalAttachment } from "./answerV2";
@@ -276,7 +276,7 @@ export async function stageOwnerAttachmentsLocal(job: Extract<AttachmentWorkerJo
           return ext;
         };
         const { bytes, admitted: extension } = selected ? {bytes:mediaBytes!,admitted:path.extname(ref.path).toLowerCase()}
-          : ref.path.startsWith(outputDir + path.sep)
+          : isRunDocumentPath(ref.path, outputDir)
           ? { admitted: admit(ref.path), ...readRunDocument(ref.path, outputDir, environment, maxBytes) }
           : readUnderRoots(ref.path, roots ??= await configuredRoots(environment), environment, maxBytes, admit);
         if(selected && (!extensions[ref.kind]?.includes(extension) || typeClass(path.extname(filename).toLowerCase())!==typeClass(extension))) refuse("document_type");

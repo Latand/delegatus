@@ -15,7 +15,8 @@ export async function completeRelayRequest(
   plainMax = 4000,
   onRefusal?: (refusal: CompletionRefusal) => void,
   onHttpRefusal?: (record: RelayHttpRefusal) => void,
-): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery; refusalCode?: string; tooLong?: true; downgrade?: CompletionRefusal }> {
+  onDowngrade?: (refusal: CompletionRefusal) => void,
+): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery; refusalCode?: string; tooLong?: true }> {
   let wait = 1000;
   let attempted = false;
   let downgraded = false;
@@ -23,15 +24,14 @@ export async function completeRelayRequest(
   let attachmentFallbackUsed = false;
   let unresolved = false;
   let tooLong = false;
-  let downgrade: CompletionRefusal | undefined;
-  const result = (delivery: RelayAnswerDelivery) => ({ body, delivery, ...(tooLong ? { tooLong: true as const } : {}),
-    ...(downgrade ? { downgrade } : {}) });
+  const result = (delivery: RelayAnswerDelivery) => ({ body, delivery, ...(tooLong ? { tooLong: true as const } : {}) });
+  const markDowngrade = (refusal: CompletionRefusal) => { onDowngrade?.(refusal); };
   const lengthNotice = (refusal: CompletionRefusal) => {
     if (body.outcome !== "answered" || tooLong) return false;
     const text = answerTooLongNotice(plainMax);
     if (!text) return false;
     body = { ...body, answer: { action: "reply", text, reply_to: body.answer.reply_to } };
-    downgrade = refusal;
+    markDowngrade(refusal);
     tooLong = true;
     return true;
   };
@@ -72,7 +72,7 @@ export async function completeRelayRequest(
             const { action, text, reply_to } = body.answer;
             body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
           } else if (!lengthNotice(refusal)) return refused();
-          downgrade = refusal;
+          markDowngrade(refusal);
           continue;
         }
         if (v2 && error.status === 409 && error.code === "already_completed") return unresolved ? refused() : { body: { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null }, delivery: "refused" };
@@ -88,7 +88,7 @@ export async function completeRelayRequest(
           } else if (body.outcome === "answered" && body.answer.text.trim()) {
             if (!lengthNotice(refusal)) return refused();
           } else body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null };
-          downgrade = refusal;
+          markDowngrade(refusal);
           continue;
         }
         if (v2 && [415, 422].includes(error.status)) return refused();
@@ -98,7 +98,7 @@ export async function completeRelayRequest(
             || answer.buttons?.length || answer.mentions?.length || answer.attachments?.length)) {
             const { action, text, reply_to } = answer;
             body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
-            downgrade = refusal;
+            markDowngrade(refusal);
             continue;
           }
           if ([...answer.text].length > plainMax && lengthNotice(refusal)) continue;
@@ -106,7 +106,7 @@ export async function completeRelayRequest(
         }
         if (error.status === 409 && error.code === "handoff_after_action" && body.outcome === "declined" && body.reason === "handoff") {
           body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null };
-          downgrade = refusal;
+          markDowngrade(refusal);
           continue;
         }
         if ([400, 401, 404, 409, 413, 426].includes(error.status)) return refused();
