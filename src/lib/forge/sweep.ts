@@ -321,7 +321,7 @@ export async function sweepForgeLinks(ports: ForgeSweepPorts): Promise<string[]>
       }
     }
     clearForgeNudges([name, data.repositories[name]?.canonical ?? name]);
-    if (!outcome.ok) ports.log?.(`[forge links] ${name}: ${outcome.diagnostic}`);
+    if (!outcome.ok) ports.log?.(`[forge links] ${name}: ${outcome.error}`, outcome.diagnostic);
     read.push(name);
   }
   return read;

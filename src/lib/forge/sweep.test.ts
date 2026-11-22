@@ -354,7 +354,7 @@ describe("the sweep", () => {
     const error = Object.assign(new Error("Command failed: gh"), { code, stderr });
     const h = harness(() => fail ? error : [row({ number: 7 })]);
     const messages: string[] = [];
-    h.ports.log = message => { messages.push(message); };
+    h.ports.log = (message, detail) => { messages.push(`${message} ${detail ?? ""}`); };
     await h.sweep();
     const before = entry();
     fail = true;
