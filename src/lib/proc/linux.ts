@@ -134,6 +134,10 @@ function systemMemory(): SystemMemory | null {
   }
 }
 
+async function resourceSystemMemory(): Promise<SystemMemory | null> {
+  return systemMemory();
+}
+
 /** VmRSS + VmSwap per pid from /proc/<pid>/status. A smaps read would be
     orders of magnitude slower, and status granularity is enough for a
     cleanup UI. */
@@ -148,6 +152,10 @@ function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
     }
   }
   return map;
+}
+
+async function resourceProcessMemory(pids: Iterable<number>): Promise<Map<number, ProcessMemory>> {
+  return processMemory(pids);
 }
 
 function ppidMap(): Map<number, number> {
@@ -166,6 +174,10 @@ function ppidMap(): Map<number, number> {
     if (Number.isInteger(ppid) && ppid > 0) map.set(pid, ppid);
   }
   return map;
+}
+
+async function resourcePpidMap(): Promise<Map<number, number>> {
+  return ppidMap();
 }
 
 function listProcesses(): ProcSnapshotEntry[] {
@@ -295,8 +307,11 @@ export const linuxBackend: ProcBackend = {
   readEnvVar,
   listProcesses,
   systemMemory,
+  resourceSystemMemory,
   processMemory,
+  resourceProcessMemory,
   ppidMap,
+  resourcePpidMap,
   scanFdTargetsUnder,
   scanFdTargetsFor,
   pidWritesPath,

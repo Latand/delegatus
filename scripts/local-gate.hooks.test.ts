@@ -6,7 +6,7 @@ import path from "node:path";
 import { createGateSandbox, discover, endingOf, gateTemporaryRoot, isolatedEnvironment, NoVerdict, plan, pushDeadline, runPushPair, runSteps, SUPERVISOR_MARGIN_MS } from "./local-gate";
 import { createHookFixture } from "./local-gate.fixture";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 import { createGateTestFixtures } from "./gateTest.fixture";
 const root = path.resolve(import.meta.dir, "..");
@@ -260,7 +260,7 @@ if (process.argv.includes("scripts/privacy-publication-gate.ts")) {
   }
   expect(await child.exited).toBe(1);
   expect((await output).join("")).toContain("pre-push: bun failed (19); gate failed");
-  for (const identity of identities) expect(processIdentityStatus(identity)).toBe("dead");
+  for (const identity of identities) expect(processIdentityMayRun(identity)).toBeFalse();
 }, 20000);
 
 for (const slow of ["privacy", "checks"] as const) test(`a ${slow} deadline preserves its missing-verdict refusal after its peer passes`, async () => {

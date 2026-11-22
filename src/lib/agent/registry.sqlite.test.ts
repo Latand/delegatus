@@ -13,6 +13,27 @@ import { RegistryMutationRetryLimitError, SqliteAgentRegistryStore } from "./sql
 
 const CHILD = path.join(import.meta.dir, "registry.sqliteChild.ts");
 
+test("a single alias decision sees one generation across a peer commit and the next decision sees the new chain", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-alias-"));
+  const filename = path.join(directory, "registry.json");
+  const reader = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const writer = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    writer.agentStateWrite(file => { file.conversationAliases.conversation_old = "conversation_current"; });
+    reader.withConversationAliases(resolve => {
+      expect(resolve("conversation_old")).toBe("conversation_current");
+      writer.agentStateWrite(file => { file.conversationAliases.conversation_current = "conversation_next"; });
+      expect(resolve("conversation_old")).toBe("conversation_current");
+      expect(resolve("conversation_current")).toBe("conversation_current");
+    });
+    expect(reader.withConversationAliases(resolve => resolve("conversation_old"))).toBe("conversation_next");
+  } finally {
+    writer.close();
+    reader.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("compaction preserves unverified delivery evidence and blocks exact-key replay after reopen", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-owner-compaction-"));
   const filename = path.join(directory, "registry.json");

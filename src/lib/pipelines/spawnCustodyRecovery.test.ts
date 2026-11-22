@@ -331,6 +331,36 @@ test.each(["alive", "unverified"] as const)("retry-stage fences an %s setup proc
   } finally { await f.close(); }
 });
 
+test("retry-stage closes admission before releasing interrupted setup custody", async () => {
+  const f = await fixture();
+  try {
+    const { lane, launchId } = await killedSetup(f, "starting");
+    const release = f.registry.releaseStructuredSpawnAdmissionOwner.bind(f.registry);
+    const releaseAttempt = spyOn(f.registry, "releaseStructuredSpawnAdmissionOwner")
+      .mockImplementationOnce(id => {
+        const receipt = f.registry.spawnReceipt(id)!;
+        expect(receipt.state).toBe("failed");
+        return { released: false, receipt };
+      }).mockImplementation(release);
+    try {
+      const request = { action: "retry-stage", stageId: "plan", launchId } as const;
+      expect(await patchPipeline(lane.id, request, f.h.ports)).toMatchObject({ status: 409,
+        error: expect.stringContaining("setup owner changed during cleanup reconciliation") });
+      expect(f.registry.spawnReceipt(launchId)).toMatchObject({
+        state: "failed", hostSetup: { cleanupConfirmed: true }, admissionOwner: { pid: expect.any(Number) },
+      });
+      expect(f.tries()).toBe(1);
+      expect((await patchPipeline(lane.id, request, f.h.ports)).error).toBeUndefined();
+      expect(f.registry.spawnReceipt(launchId)).toMatchObject({ state: "failed", admissionOwner: null });
+      expect(f.row().runs[0]!.attempts[5]).toMatchObject({ n: 6, launchId, state: "failed",
+        error: expect.stringContaining("abandoned") });
+      await tickPipelines([], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(f.tries()).toBe(2);
+    } finally { releaseAttempt.mockRestore(); }
+  } finally { await f.close(); }
+});
+
 test.each(["answered", "native-answer", "delivered"] as const)("parked retry-stage fences interrupted setup with %s evidence", async state => {
   const f = await fixture();
   try {

@@ -50,6 +50,16 @@ test("check isolation retains admission transport without keying its per-run cap
   expect(environmentFingerprint(first)).toBe(environmentFingerprint(second));
 });
 
+test("declared check inputs under a transport prefix bind there by value", () => {
+  const env = { PATH: "/usr/bin", LLV_GATE_REVIEW_MODE: "green", LLV_GATE_CHECK_ENV: "LLV_GATE_REVIEW_MODE" };
+  const key = (input: Partial<NodeJS.ProcessEnv>) => environmentFingerprint(checkEnvironment(input));
+  const changed = { ...env, LLV_GATE_REVIEW_MODE: "red" };
+  expect(checkEnvironment(env).LLV_GATE_REVIEW_MODE).toBe("green");
+  expect(key(env)).not.toBe(key(changed));
+  expect(key({ ...env, LLV_GATE_REVIEW_MODE: "" })).not.toBe(key({ ...env, LLV_GATE_REVIEW_MODE: undefined }));
+  expect(key({ ...env, LLV_GATE_CHECK_ENV: undefined })).toBe(key({ ...changed, LLV_GATE_CHECK_ENV: undefined }));
+});
+
 test("check isolation retains an explicitly selected private admission database as transport", () => {
   const first = { PATH: "/usr/bin", LLV_CHECK_ADMISSION_FILE: path.join(fixture(), "checks.sqlite") };
   const second = { ...first, LLV_CHECK_ADMISSION_FILE: path.join(fixture(), "checks.sqlite") };

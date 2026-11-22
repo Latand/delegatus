@@ -2359,8 +2359,12 @@ export function defaultPipelinePorts(
             && provesNoNativeStageTurn(await durableStageTurnEvidence(before.engine, pathname));
         if (!silent) return "the original launch does not have a verified silent transcript";
       }
+      // Failure reporting advances after the terminal write. It carries no
+      // admission or delivery authority and can finish during recovery.
+      const custody = (receipt: SpawnReceipt) => JSON.stringify({ ...receipt, failureReporting: undefined,
+        failureRepairState: undefined, failureAnnouncementSuppressed: undefined });
       const safe = (file: RegistryFile, receipt: SpawnReceipt) => !signal.aborted && eligible()
-        && JSON.stringify(receipt) === JSON.stringify(before) && stageArtifactStamp(pathname) === stamp
+        && custody(receipt) === custody(before) && stageArtifactStamp(pathname) === stamp
         && !interruptedStageSetupRefusal(file, receipt);
       const checkCurrent = () => {
         const file = registry.readOnlySnapshot();
@@ -2383,22 +2387,27 @@ export function defaultPipelinePorts(
         return "the runtime journal cannot prove the original first message did not run";
       }
       if (!checkCurrent()) return "the original launch evidence changed during recovery";
+      if (before.state === "starting") {
+        // A restart after terminalization can resume cleanup on the failed
+        // receipt. Keep the lease bound until that terminal state is durable.
+        const failed = await registry.failStructuredSpawnOffLoop(launchId, failure, { announce: false, recoveryFence: safe });
+        invalidateRegistryProjection();
+        if (!failed.claimed || !failed.receipt) return "the original reservation could not be retired within the recovery window";
+        before = failed.receipt;
+      }
       const owner = before.admissionOwner;
       if (owner) {
         const reconciled = await registry.deliveryWriteBatchOrBusy({ label: "pipeline.setup-recovery", operationId: launchId }, () => {
-          if (!checkCurrent()) return false;
-          registry.confirmStructuredHostSetupCleanup(launchId, owner);
-          return registry.releaseStructuredSpawnAdmissionOwner(launchId, owner).released;
+          if (!checkCurrent()) return null;
+          if (!before.hostSetup?.cleanupConfirmed) registry.confirmStructuredHostSetupCleanup(launchId, owner);
+          const released = registry.releaseStructuredSpawnAdmissionOwner(launchId, owner);
+          return released.released ? released.receipt : null;
         });
         if (!reconciled) return "the original setup owner changed during cleanup reconciliation";
         invalidateRegistryProjection();
-        before = { ...before, admissionOwner: null, hostSetup: { ...before.hostSetup!, cleanupConfirmed: true } };
-        if (!checkCurrent()) return "the original launch evidence changed during cleanup reconciliation";
+        before = reconciled;
       }
-      if (before.state === "failed") return null;
-      const failed = await registry.failStructuredSpawnOffLoop(launchId, failure, { announce: false, recoveryFence: safe });
-      invalidateRegistryProjection();
-      return failed.claimed ? null : "the original reservation could not be retired within the recovery window";
+      return checkCurrent() ? null : "the original launch evidence changed during cleanup reconciliation";
     }),
     unpublishedLaunchRetrySafe: async (launchId, inheritedSignal) => {
       const signal = AbortSignal.any([AbortSignal.timeout(10_000), ...(inheritedSignal ? [inheritedSignal] : [])]);

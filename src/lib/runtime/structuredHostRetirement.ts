@@ -43,6 +43,9 @@ import {
   type StructuredHostTerminationOutcome,
 } from "./structuredHostControl";
 import { realtimeBoundConversationIds } from "./voiceViewBinding";
+import { runtimeHostClient } from "./client";
+import { reconcileUnregisteredAgentProcesses, type UnregisteredAgentOutcome } from "./unregisteredAgentProcesses";
+import { OPEN_RETIREMENT_DELIVERIES, OPEN_SPAWN_RECEIPTS, TERMINAL_SPAWN_RECEIPTS } from "./retirementOperation";
 import { pipelineRetirementReader, type PipelineRetirementStanding, type RetirementTarget } from "@/lib/pipelines/retirementEvidence";
 import type { PipelineRetirementReason } from "@/lib/pipelines/hostRetirement";
 
@@ -352,7 +355,7 @@ async function treePss(pids: readonly number[]): Promise<StructuredHostRetiremen
 
 /** Receipt states that settle a launch. Anything else still names work whose
     outcome depends on this host being there. */
-const TERMINAL_RECEIPT_STATES = new Set(["completed", "failed", "conflicted"]);
+const TERMINAL_RECEIPT_STATES = TERMINAL_SPAWN_RECEIPTS;
 /** A launch receipt older than this that never settled was abandoned: the
     production registry held 64 of them from July, and they could keep named
     hosts from retiring. Every launch step that
@@ -367,8 +370,6 @@ function receiptAbandoned(createdAt: string, nowMs: number): boolean {
   const created = Date.parse(createdAt);
   return Number.isFinite(created) && nowMs - created > RETIREMENT_ABANDONED_RECEIPT_MS;
 }
-/** Held-delivery states that have not reached the conversation yet. */
-const UNDELIVERED_HELD_STATES = new Set(["held", "assigned", "delivery-uncertain"]);
 /** The only two host states the predicate admits. Every other one — starting,
     live, handoff, unhosted — is either working or mid-transition. */
 const RETIRABLE_HOST_STATUSES = new Set<AgentHostStatus>(["idle", "dead"]);
@@ -620,12 +621,15 @@ const CLAUSE_CHECKS: Record<
     (count) => (count > 0 ? `${count} undelivered handoff entr(ies) name this key` : null)),
 
   "no-open-operation": (subject) => {
-    if (subject.pendingAction !== null) return refuses(`a ${subject.pendingAction} action is pending`);
+    if (subject.pendingAction !== null) {
+      const stamp = subject.structuredHostOperationId ? ` for operation ${subject.structuredHostOperationId}` : "";
+      return refuses(`a ${subject.pendingAction} action is pending${stamp}`);
+    }
     if (subject.structuredHostOperationId !== null
       && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState ?? "")
       && !subject.structuredHostOperationReceiptAbandoned
       && !(subject.nativeTurnSettled && subject.structuredHostOperationReceiptState === null)) {
-      return refuses("a structured host operation is still in flight");
+      return refuses(`operation ${subject.structuredHostOperationId} has no settlement proof (registry: ${subject.structuredHostOperationReceiptState ?? "absent"})`);
     }
     return subject.openOperations > 0
       ? refuses(`${subject.openOperations} spawn receipt(s) are pending or non-terminal`)
@@ -828,6 +832,7 @@ export interface StructuredHostRetirementReport {
       omit this census; unverified identities are never counted as live. */
   liveRefused?: { count: number; byClause: Partial<Record<StructuredHostRetirementClause, number>> };
   failed: StructuredHostRetirementFailure[];
+  unregisteredAgents?: UnregisteredAgentOutcome[];
   reclaimed: StructuredHostRetirementReclaim;
   /** Optional for reports persisted by earlier releases. */
   progress?: {
@@ -869,6 +874,7 @@ export interface StructuredHostRetirementDependencies {
   /** Undetermined when the queue could not be read: silence is not a drained
       queue, and reading it as one strands the message it still holds. */
   handoffRows?: () => Determinable<readonly HandoffRow[]>;
+  handoffHasPending?: (conversationId: string) => Determinable<boolean>;
   durableEventTail?: (sessionId: string) => Determinable<number>;
   realtimeBound?: (conversationId: string) => Determinable<boolean>;
   /** Undetermined when the durable seat store could not be established — the
@@ -1181,7 +1187,7 @@ function undeliveredHandoffIndex(
       if (row.engine === "claude" || row.engine === "codex" || row.engine === "copilot") index.addKey(`${row.engine}:${row.engineSessionId}`);
       else index.addConversation(row.conversationId);
     }
-    for (const delivery of registryRowsMatching(file, "heldDeliveries", "state", [...UNDELIVERED_HELD_STATES])) {
+    for (const delivery of registryRowsMatching(file, "heldDeliveries", "state", OPEN_RETIREMENT_DELIVERIES)) {
       addConversations(delivery.conversationId, delivery.runtimeConversationId);
     }
     for (const owner of registryRowsMatching(file, "deliveryOperationOwners", "custodyState", "pending")) {
@@ -1201,7 +1207,7 @@ function retirementConversation(file: RegistryFile, id: RegistryFile["conversati
     that remains unfinished. */
 function openOperationIndex(file: RegistryFile, nowMs: number): RetirementWorkIndex {
   const index = new RetirementWorkIndex();
-  for (const receipt of registryRowsMatching(file, "receipts", "state", ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"])) {
+  for (const receipt of registryRowsMatching(file, "receipts", "state", OPEN_SPAWN_RECEIPTS)) {
     if (TERMINAL_RECEIPT_STATES.has(receipt.state)) continue;
     if (receiptAbandoned(receipt.createdAt, nowMs)) continue;
     if (receipt.key !== null) index.addKey(sessionKeyId(receipt.key));
@@ -1350,7 +1356,7 @@ function sameRetirementEvidence(
  * points are exempt; children of those servers are still checked themselves.
  * Re-run at every authorization boundary, alongside owner/transcript checks.
  */
-function treeHasOnlyMcpChildren(identity: ProcessIdentity, captured?: readonly ProcessIdentity[]): boolean {
+export function treeHasOnlyMcpChildren(identity: ProcessIdentity, captured?: readonly ProcessIdentity[]): boolean {
   if (process.platform !== "linux") return false;
   const status = observeAgentProcess(identity);
   if (status === "unverified" || status === "dead" && !captured) return false;
@@ -1661,6 +1667,7 @@ export async function runStructuredHostRetirementSweep(
   };
   const memoryOf = dependencies.processMemory ?? ((pids: Iterable<number>) => procBackend.processMemory(pids));
   const ppids = dependencies.ppidMap ?? (() => procBackend.ppidMap());
+  const client = dependencies.snapshot ? null : runtimeHostClient();
   // Keep the original capture even if a concurrent release clears its durable
   // copy. Empty termination diagnostics alone do not prove a tree has exited.
   const captures = new Map<string, {
@@ -2169,6 +2176,28 @@ export async function runStructuredHostRetirementSweep(
     parents = null;
   }
 
+  if (client && publicationState() === "ready") {
+    report.unregisteredAgents = await reconcileUnregisteredAgentProcesses({
+      registry: agentRegistry(), client, now, idleMs, treeIdle: treeHasOnlyMcpChildren,
+      ready: () => publicationState() === "ready",
+      noLocalWork: (key, conversationId) => {
+        if (owned(key) || structuredDeliveryHostForConversation(conversationId)) return false;
+        const seats = sources.seatConversations();
+        const voice = readers.realtimeBound(conversationId);
+        if (!seats.determined || seats.value.has(conversationId) || !voice.determined || voice.value) return false;
+        const handoff = dependencies.handoffHasPending
+          ? dependencies.handoffHasPending(conversationId)
+          : (() => {
+              try { return determined(handoffQueue().hasPendingForConversation(conversationId)); }
+              catch { return undetermined("handoff queue could not be queried by conversation"); }
+            })();
+        return handoff.determined && !handoff.value;
+      },
+    }).catch(error => {
+      console.error("[host retirement] unregistered agent reconciliation deferred", safeReason(error));
+      return [];
+    });
+  }
   report.finishedAt = new Date(now()).toISOString();
   record(report);
   return report;
