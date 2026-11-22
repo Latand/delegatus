@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
-import { closeAgentRegistryForTests, type RegistryConversation } from "@/lib/agent/registry";
+import { AgentRegistry, closeAgentRegistryForTests, setAgentRegistryForTests, type RegistryConversation } from "@/lib/agent/registry";
 import type { ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
 import type { McpToolResult, McpToolService } from "@/lib/mcp/server";
 import { withWorkspaceMcpFence } from "@/lib/mcp/workspaceFence";
@@ -19,15 +19,8 @@ import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatC
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor, readOrchestratorSeatFile } from "./seats";
 import { damageStoredSeatRecord, writeStoredSeatRecord } from "./seatStoreFixture";
 
-/**
- * The reach of a project's orchestrator seat across member input and rotation.
- *
- * The workspace fence exists so a member cannot widen their reach through an
- * agent. A member's message to the owner's seat therefore fences the seat. The
- * incident these tests hold: the fenced seat rotated itself, the rotation wrote
- * the member into the successor's durable seat record, and from then on the
- * owner's own messages could never restore the seat's reach.
- */
+/** Seat designations retain their authority across human input and rotation.
+ * Ordinary conversations and explicitly member-bound launches stay fenced. */
 
 const AT = "2026-11-11T08:00:00.000Z";
 const PROJECT = "proj-a";
@@ -43,6 +36,7 @@ let scope: WorkspacePrincipal;
 /** What each launched successor's launch profile holds, as the spawn recorded it. */
 let launched: Map<string, { workspace: WorkspacePrincipal | null; parent: string }>;
 let requests = 0;
+let restoreRegistry: () => void;
 
 function person(id: string, role: Member["role"]): Member {
   const row: Member = { id, name: id, role, status: "active", color: "teal", telegram: null, createdAt: AT, createdBy: "claim", revokedAt: null };
@@ -62,9 +56,16 @@ beforeEach(() => {
   scope = { memberId: member.id, workspaceId: W };
   launched = new Map();
   requests = 0;
+  // Rotation reads through the production registry entry point as well as the
+  // MCP lookup. Both observe the same durable conversation facts.
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(registry);
+  const read = spyOn(registry, "conversation").mockImplementation(lookup);
+  restoreRegistry = () => read.mockRestore();
 });
 
 afterEach(() => {
+  restoreRegistry();
   closeAgentRegistryForTests();
   resetTeamStoreForTests();
   if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
@@ -148,29 +149,29 @@ async function reach(conversationId: string): Promise<{ installation: boolean; o
 const OWNER_REACH = { installation: true, ownTranscript: true };
 const MEMBER_REACH = { installation: false, ownTranscript: true };
 
-test("a member's message fences the owner's seat, and the owner's next message restores its reach", async () => {
+test("#4112: human messages leave the installation seat authority unchanged", async () => {
   designate(SEAT);
   expect(await reach(SEAT)).toEqual(OWNER_REACH);
   writes(member, SEAT);
-  expect(await reach(SEAT)).toEqual(MEMBER_REACH);
+  expect(await reach(SEAT)).toEqual(OWNER_REACH);
   writes(owner, SEAT);
   expect(await reach(SEAT)).toEqual(OWNER_REACH);
 });
 
-test("a fenced seat's self-rotation stays fenced, and the owner's next message restores the successor's reach", async () => {
+test("installation authority survives self-rotation and later member input", async () => {
   const successor = "conversation_22222222-2222-4222-8222-222222222222";
   designate(SEAT);
   writes(member, SEAT);
   await seatRotatesItself(successor);
-  // The member's request travels in the handover, so the successor starts fenced.
-  expect(await reach(successor)).toEqual(MEMBER_REACH);
+  // The handover carries the installation designation.
+  expect(await reach(successor)).toEqual(OWNER_REACH);
   writes(owner, successor);
   expect(await reach(successor)).toEqual(OWNER_REACH);
   writes(member, successor);
-  expect(await reach(successor)).toEqual(MEMBER_REACH);
+  expect(await reach(successor)).toEqual(OWNER_REACH);
 });
 
-test("the fence follows an unanswered member request through repeated rotations and ends with the owner's message", async () => {
+test("installation authority survives repeated rotations after member input", async () => {
   const second = "conversation_22222222-2222-4222-8222-222222222222";
   const third = "conversation_33333333-3333-4333-8333-333333333333";
   const fourth = "conversation_44444444-4444-4444-8444-444444444444";
@@ -178,7 +179,7 @@ test("the fence follows an unanswered member request through repeated rotations 
   writes(member, SEAT);
   await seatRotatesItself(second);
   await seatRotatesItself(third);
-  expect(await reach(third)).toEqual(MEMBER_REACH);
+  expect(await reach(third)).toEqual(OWNER_REACH);
   writes(owner, third);
   await seatRotatesItself(fourth);
   expect(await reach(fourth)).toEqual(OWNER_REACH);
@@ -209,7 +210,7 @@ test("a seat a member designated keeps the member's reach whatever the owner wri
   expect(await reach(third)).toEqual(MEMBER_REACH);
 });
 
-test("a seat stamped by an agent's rotation before the fix answers to the owner's message with no manual repair", async () => {
+test("an earlier member-bound rotation keeps its persisted restriction across human input", async () => {
   const stamped = "conversation_22222222-2222-4222-8222-222222222222";
   beginOrchestratorSeatIntent({ project: PROJECT, mandate: "own the board", clientRequestId: "stamped_000001", mode: "spawn", telegramGrant: true,
     workspace: scope, triggeredBy: { kind: "agent", conversationId: SEAT, seatEpoch: 1 }, now: AT });
@@ -222,7 +223,7 @@ test("a seat stamped by an agent's rotation before the fix answers to the owner'
   writes(member, SEAT);
   expect(await reach(stamped)).toEqual(MEMBER_REACH);
   writes(owner, stamped);
-  expect(await reach(stamped)).toEqual(OWNER_REACH);
+  expect(await reach(stamped)).toEqual(MEMBER_REACH);
 });
 
 /** The record an earlier release left: no word on where the binding came from. */
@@ -233,20 +234,19 @@ function asEarlierRelease(change: (seat: Record<string, unknown>) => void = () =
   writeStoredSeatRecord(seats);
 }
 
-test("an automatic rotation carries a member's message as message authority, and an earlier automatic stamp heals", async () => {
+test("automatic rotation keeps the installation designation and preserves earlier persisted restrictions", async () => {
   const successor = "conversation_22222222-2222-4222-8222-222222222222";
   designate(SEAT);
   writes(member, SEAT);
   const answer = await executeOrchestratorRotation({ project: PROJECT, clientRequestId: "auto_rotation_0001" }, dependencies(successor), null, { autonomous: true });
   expect(answer.status).toBe(200);
-  expect(await reach(successor)).toEqual(MEMBER_REACH);
-  // What the fenced successor launches or designates is bound in the ordinary way.
-  expect(conversationWorkspacePrincipal(lookup, successor)).toEqual(scope);
+  expect(await reach(successor)).toEqual(OWNER_REACH);
+  // A member message does not bind the automatically launched successor.
+  expect(conversationWorkspacePrincipal(lookup, successor)).toBeNull();
   writes(owner, successor);
   expect(await reach(successor)).toEqual(OWNER_REACH);
 
   // The earlier release copied the incumbent's member onto the automatic successor and named no trigger.
-  const stamped = "conversation_33333333-3333-4333-8333-333333333333";
   for (const [conversation, mark] of [
     ["conversation_33333333-3333-4333-8333-333333333333", (seat: Record<string, unknown>) => { (seat.intent as Record<string, unknown>).automaticReplacement = { conversationId: successor, seatEpoch: 1 }; }],
     ["conversation_44444444-4444-4444-8444-444444444444", (seat: Record<string, unknown>) => { (seat.intent as Record<string, unknown>).clientRequestId = seatAuthRotationKey("incident"); }],
@@ -256,7 +256,7 @@ test("an automatic rotation carries a member's message as message authority, and
     launched.set(conversation, { workspace: scope, parent: successor });
     expect(await reach(conversation)).toEqual(MEMBER_REACH);
     writes(owner, conversation);
-    expect(await reach(conversation)).toEqual(OWNER_REACH);
+    expect(await reach(conversation)).toEqual(MEMBER_REACH);
   }
 });
 
@@ -280,7 +280,7 @@ test("a person's designation for a member binds a conversation that once answere
   expect(conversationWorkspacePrincipal(lookup, conversation)).toEqual(scope);
 });
 
-test("a fenced seat that adopts a conversation hands it the fence as message authority", async () => {
+test("an installation seat adopts a conversation with installation authority after member input", async () => {
   const adopted = "conversation_22222222-2222-4222-8222-222222222222";
   designate(SEAT);
   writes(member, SEAT);
@@ -290,7 +290,7 @@ test("a fenced seat that adopts a conversation hands it the fence as message aut
     { workspace: conversationWorkspacePrincipal(lookup, SEAT) ?? undefined });
   expect(answer).toMatchObject({ status: 200 });
   expect(orchestratorSeatFor(PROJECT).active?.conversationId).toBe(adopted);
-  expect(await reach(adopted)).toEqual(MEMBER_REACH);
+  expect(await reach(adopted)).toEqual(OWNER_REACH);
   writes(owner, adopted);
   expect(await reach(adopted)).toEqual(OWNER_REACH);
 });
@@ -300,7 +300,9 @@ test("a message-authority seat keeps answering to the latest person after it lea
   const next = "conversation_33333333-3333-4333-8333-333333333333";
   designate(SEAT);
   writes(member, SEAT);
-  await seatRotatesItself(fenced);
+  designate(fenced, scope);
+  launched.set(fenced, { workspace: { ...scope, fromMessage: true }, parent: SEAT });
+  writes(member, fenced);
   await personRotates(owner, next);
   // No longer the seat: the launch profile alone says the fence came from a message.
   expect(await reach(fenced)).toEqual(MEMBER_REACH);
@@ -308,4 +310,49 @@ test("a message-authority seat keeps answering to the latest person after it lea
   expect(await reach(fenced)).toEqual(MEMBER_REACH);
   writes(owner, fenced);
   expect(await reach(fenced)).toEqual(OWNER_REACH);
+});
+
+for (const depth of [1, 2, 4]) test(`a non-seat descendant at depth ${depth} keeps the member fence inherited from its parent`, async () => {
+  designate(SEAT);
+  const worker = "conversation_55555555-5555-4555-8555-555555555555";
+  // An existing installation worker was launched before the member's message.
+  let parent = SEAT;
+  for (let index = 1; index < depth; index++) {
+    const intermediate = `conversation_ancestor_${index}`;
+    launched.set(intermediate, { workspace: null, parent }); parent = intermediate;
+  }
+  launched.set(worker, { workspace: null, parent });
+  writes(member, SEAT);
+  expect(await reach(worker)).toEqual(MEMBER_REACH);
+});
+
+test.each(["project", "superseded", "revoked", "conflict", "generation"])("a stale seat record cannot restore installation access: %s", async invalid => {
+  designate(SEAT);
+  writes(member, SEAT);
+  const foreign = "proj-b";
+  const seats = readOrchestratorSeatFile();
+  if (invalid === "revoked") seats.revocations.push({ conversationId: SEAT, project: PROJECT,
+    seatEpoch: seats.seats[PROJECT]!.seatEpoch, revokedAt: AT });
+  if (invalid === "conflict") seats.seats[foreign] = { ...seats.seats[PROJECT]!, project: foreign };
+  writeStoredSeatRecord(seats);
+  const foreignWorkspace = `w_${"e".repeat(32)}`;
+  createWorkspace(store, owner, { id: foreignWorkspace, name: "Beta", projects: [foreign] });
+  const foreignLookup = (id: string) => {
+    const record = lookup(id)!;
+    return { ...record, projectOwnership: { project: invalid === "project" ? foreign : PROJECT },
+      ...(invalid === "superseded" ? { supersededBy: { conversationId: "conversation_successor", at: AT, reason: "replaced" } } : {}),
+      generations: invalid === "generation" ? [] : record.generations } as RegistryConversation;
+  };
+  const { authorizedManagerSeats } = await import("./authority");
+  const authorized = authorizedManagerSeats({
+    activeSeats: () => Object.values(readOrchestratorSeatFile().seats), revocations: () => seats.revocations, resolveAlias: id => id,
+    conversationFacts: () => ({ superseded: invalid === "superseded", hasGeneration: invalid !== "generation", project: invalid === "project" ? foreign : PROJECT }),
+  });
+  expect(authorized).toEqual([]);
+  const fenced = withWorkspaceMcpFence({ callTool: async tool => ({ ok: true, toolName: tool, clientRequestId: null, replayed: false }) } as McpToolService, {
+    attentionAuthority: () => ({ kind: "worker", conversationId: SEAT, role: "builder" }),
+    registrySnapshot: () => ({ conversations: {} }), workspaceConversation: foreignLookup, workspaceProject: () => foreign,
+  } as unknown as ViewerMcpDomainDependencies);
+  const answer = await fenced.callTool("account_limits", { clientRequestId: "foreign-installation-read" });
+  expect(answer).toMatchObject({ ok: false, code: "workspace_forbidden" });
 });

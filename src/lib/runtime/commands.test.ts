@@ -206,6 +206,9 @@ test("automatic kill preserves its idle fence and rejects malformed conditions",
     sessionKey: { engine: "codex", sessionId: "generation-one" } };
   expect(parseRuntimeCommand("kill", { ...command, onlyIfIdle: { revision: 4, writerClaim: "owner:1" } }))
     .toMatchObject({ onlyIfIdle: { revision: 4, writerClaim: "owner:1" } });
+  expect(parseRuntimeCommand("kill", { ...command, onlyIfIdle: {
+    revision: 4, writerClaim: "released-session", releasedSession: true,
+  } })).toMatchObject({ onlyIfIdle: { revision: 4, writerClaim: "released-session", releasedSession: true } });
   for (const onlyIfIdle of [null, {}, true, { revision: 0, writerClaim: "owner:1" },
     { revision: 4, writerClaim: "" }, { revision: "4", writerClaim: "owner:1" }]) {
     expect(() => parseRuntimeCommand("kill", { ...command, onlyIfIdle })).toThrow();
@@ -236,5 +239,15 @@ test("provider recovery authority requires a valid idle-only kill", () => {
     { ...providerRecovery, pipelineId: "" }, { ...providerRecovery, stageId: "bad id" },
     { ...providerRecovery, controlGeneration: undefined }, { ...providerRecovery, controlGeneration: "" }]) {
     expect(() => parseRuntimeCommand("kill", { ...command, providerRecovery: invalid })).toThrow();
+  }
+});
+
+
+test("kill cohorts survive parsing and reject malformed operation identifiers", () => {
+  const command = { conversationId: "conv-cohort", operationId: "kill-cohort", sessionKey: { engine: "codex", sessionId: "session-cohort" } };
+  expect(parseRuntimeCommand("kill", { ...command, pendingSendIds: ["send-before", "send-before"] }))
+    .toMatchObject({ pendingSendIds: ["send-before"] });
+  for (const pendingSendIds of [null, "send-before", [null], [""], ["x".repeat(201)]]) {
+    expect(() => parseRuntimeCommand("kill", { ...command, pendingSendIds })).toThrow("pending send cohort is invalid");
   }
 });
