@@ -5,6 +5,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { BAR_CONTROL, BAR_OUTLINED, BAR_PRESSED } from "@/components/ProjectBar";
 import { useLocale } from "@/lib/i18n";
 import { projectTaskTimelines, type TaskTimeline, type TimelineAttempt, type TimelineMember } from "@/lib/board/taskTimeline";
+import { attemptWork, attemptWorkWindows, mergeWorkWindows } from "@/lib/board/attemptWork";
 import { HOUR, anchorShift, attemptSegment, clipSpan, compareTimelineRows, dueMark, pageTo, startWords, timelineDuration, timelineWindow, type DueMark } from "@/lib/board/taskTimelineView";
 import { formatDue } from "@/lib/tasks/helpers";
 import { timelineGroup, type KanbanCard, type TimelineGroup } from "./kanbanModel";
@@ -14,6 +15,7 @@ import type { Pipeline, PipelineRoleId } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import { STAGE_TONES, stageDisplayName, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { StageGlyph } from "./StageGlyph";
+import { useAttemptWork, loadAttemptWork, type WorkLoader, type WantedWork } from "./useAttemptWork";
 import { TIMELINE_HOURS, earlierKey, earlierOpen, groupKey, groupOpen, timelineExpanded, type TimelinePreference } from "./boardTimelineStore";
 
 const STILL_LONG_DAYS = DONE_TASK_BOARD_RETENTION_MS / 86_400_000;
@@ -49,10 +51,17 @@ export function BoardTimelineToggle({ active, onToggle }: { active: boolean; onT
   </button>;
 }
 
-export function BoardTimeline({ project, cards, pipelines, members, nowMs, preference, onPreference, phone = false }: {
+/** What a stage row records of the conversation it ran in; the board's own open-conversation action takes it. */
+export interface AttemptConversation { conversationId: string | null; agentPath: string | null }
+
+export function BoardTimeline({ project, cards, pipelines, members, nowMs, preference, onPreference, phone = false, onOpenConversation, loadWork = loadAttemptWork }: {
   project: string; cards: readonly KanbanCard[]; pipelines: readonly Pipeline[]; nowMs: number;
   members?: readonly TimelineMember[];
   preference: TimelinePreference; onPreference: (patch: Partial<TimelinePreference>) => void; phone?: boolean;
+  /** Opens the conversation of a stage row, the way a stage chip on a card does. A row without one is not a control. */
+  onOpenConversation?: (target: AttemptConversation) => void;
+  /** Reads the turn windows behind a stage's working time; replaceable for tests. */
+  loadWork?: WorkLoader;
 }) {
   const { t, locale } = useLocale();
   const tasks = useMemo(() => cards.flatMap(card => card.task ? [card.task] : []), [cards]);
@@ -236,9 +245,22 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
   // A task's start in words that do not depend on the window, with how long it has been open.
   const since = (start: number | null, end: number | null) => start === null ? t("timeline.startUnknown") : end === null ? elapsed(null, null)
     : t("timeline.since", { start: startWords(start, nowMs, locale), duration: duration(start, end) });
+  const attemptIdentity = (attempt: TimelineAttempt) => attempt.conversationId || attempt.agentPath || null;
   const turnDuration = (attempt: TimelineAttempt) => attempt.observedTurn
     ? t("timeline.lastTurn", { duration: duration(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) })
     : t("timeline.workUnknown");
+  // The agent's own working time: the turn windows of its transcript, clipped to the attempt. Until the first read answers it says so,
+  // and when the transcript cannot be read it falls back to the one observed turn, labelled as such, or to «unknown».
+  const workOf = (attempt: TimelineAttempt) => {
+    const identity = attemptIdentity(attempt);
+    const read = identity ? workReads.get(identity) : undefined;
+    return { read, work: attemptWork(attempt, read?.work, nowMs), pending: !!identity && !read };
+  };
+  const workText = (attempt: TimelineAttempt) => {
+    const { work, pending } = workOf(attempt);
+    return work.kind === "known" ? t("timeline.worked", { duration: timelineDuration(work.ms, locale, t) })
+      : pending ? t("timeline.workLoading") : turnDuration(attempt);
+  };
   const tone = (attempt: TimelineAttempt) => STAGE_TONES[chipState(attempt)];
   // Engine identity stays constant when an attempt's outcome changes.
   const agentColor = (attempt: TimelineAttempt) => attempt.engine === "claude" ? "var(--color-claude)"
@@ -260,6 +282,15 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
   // A history control above the visible range grows a phone stage row, so the fitted viewport is measured again when the count changes.
   const earlierCount = shown.reduce((count, row) => timelineExpanded(preference, row.task.taskId) && earlierOpen(preference, row.task.taskId)
     ? count + [...row.task.pipelines.flatMap(pipeline => pipeline.attempts), ...row.task.agents].filter(hiddenBefore).length : count, 0);
+  // The working time of every open stage row is read from its transcript; closed tasks cost nothing.
+  const wanted: WantedWork[] = shown.flatMap(row => timelineExpanded(preference, row.task.taskId)
+    ? [...row.task.pipelines.flatMap(pipeline => pipeline.attempts), ...row.task.agents].flatMap(attempt => {
+      const identity = attemptIdentity(attempt);
+      return identity ? [{ identity, settled: !attempt.live && attempt.endAtMs !== null }] : [];
+    }) : []);
+  const workReads = useAttemptWork(wanted, nowMs, loadWork);
+  // A read that lands rewrites a stage row's words and fill, so the fitted viewport is measured again, without moving a chart someone scrolled.
+  useLayoutEffect(() => fit(false), [fit, workReads]);
   useLayoutEffect(() => fit(false), [fit, earlierCount]);
   // Paging back changes which phone stage rows carry the «‹ date» lane, and so their height.
   useLayoutEffect(() => fit(true), [fit, view.paged]);
@@ -388,7 +419,15 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
       </div> : null}
       {open ? attempts.filter(attempt => foldOpen || !folded.includes(attempt)).map(attempt => {
         const bounds = bar(attempt.startedAtMs, attempt.endAtMs);
-        const work = attempt.observedTurn ? bar(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) : null;
+        // The fill is the agent's turn time from its transcript; one observed turn stands in until that is read, and when it cannot be.
+        const found = workOf(attempt);
+        const turns = attemptWorkWindows(attempt, found.read?.work, nowMs);
+        const observedBox = attempt.observedTurn ? bar(attempt.observedTurn.startedAtMs, attempt.observedTurn.endAtMs) : null;
+        const works = turns ? mergeWorkWindows(turns, 2 / pxPerMs).flatMap(([from, to]) => {
+          const box = clipSpan(from, to, view, laneWidth, 2);
+          return box ? [{ ...box, startMs: from, endMs: to }] : [];
+        }) : attempt.observedTurn && observedBox ? [{ ...observedBox, startMs: attempt.observedTurn.startedAtMs, endMs: attempt.observedTurn.endAtMs }] : [];
+        const target = onOpenConversation && attemptIdentity(attempt) ? { conversationId: attempt.conversationId, agentPath: attempt.agentPath } : null;
         const model = attempt.engine && attempt.model ? { engine: attempt.engine, model: attempt.model } : null;
         const earlier = hiddenBefore(attempt);
         // A start without an end draws the same 3 px tick the task row draws.
@@ -396,16 +435,20 @@ export function BoardTimeline({ project, cards, pipelines, members, nowMs, prefe
         // A waiting stage has a lifecycle box and no tick; only a start with no lifecycle end draws one.
         const tickBox = segment?.kind === "tick" && attempt.endAtMs === null ? clipSpan(segment.startMs, segment.startMs, view, laneWidth, 3) : null;
         const stageLive = segment?.kind === "live" ? liveMark(nowX) : null;
-        return <div className="bt-row bt-stage" key={attempt.key} data-timeline-attempt={attempt.key} data-live={attempt.live ? "1" : "0"} data-earlier={earlier ? "1" : "0"}>
-          <div className="bt-label">
+        // The whole row opens the stage's conversation; the label is its keyboard stop, and the earlier-work button keeps its own click.
+        const open = target ? () => onOpenConversation!(target) : null;
+        return <div className="bt-row bt-stage" key={attempt.key} data-timeline-attempt={attempt.key} data-live={attempt.live ? "1" : "0"} data-earlier={earlier ? "1" : "0"} data-openable={open ? "1" : undefined}
+          onClick={open ? event => { if (!(event.target as Element).closest("button")) open(); } : undefined}>
+          <div className="bt-label" {...(open ? { role: "button", tabIndex: 0, "data-timeline-open": "", "aria-label": t("timeline.openAttempt", { stage: name(attempt) }),
+            onKeyDown: (event: KeyboardEvent<HTMLElement>) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open(); } } } : {})}>
             <div className="bt-stage-name text-body font-semibold text-primary"><StageGlyph state={chipState(attempt)} model={model} fallback="mark" badge={false} live={attempt.live} /><span>{name(attempt)}</span></div>
-            <div className="bt-meta text-label text-secondary"><span>{stateWord(attempt)}</span><span>{elapsed(attempt.startedAtMs, attempt.endAtMs)}</span><span>{turnDuration(attempt)}</span></div>
+            <div className="bt-meta text-label text-secondary"><span>{stateWord(attempt)}</span><span data-timeline-work-time={found.work.kind === "known" ? "known" : found.pending ? "loading" : "unknown"}>{workText(attempt)}</span><span data-timeline-wall="">{elapsed(attempt.startedAtMs, attempt.endAtMs)}</span></div>
             <div className="bt-runtime text-caption text-secondary">{[attempt.engine, attempt.model].filter(Boolean).join(" · ")}</div>
           </div>
           {lane(<>
             {bounds ? <>
-            <span className="bt-stage-bar" data-timeline-bar="" data-start-ms={attempt.startedAtMs ?? undefined} data-end-ms={attempt.endAtMs ?? undefined} style={{ ...bounds, background: "transparent", borderColor: `color-mix(in srgb, ${tone(attempt).color} 60%, transparent)` }} title={`${name(attempt)} · ${elapsed(attempt.startedAtMs, attempt.endAtMs)} · ${turnDuration(attempt)}`} />
-            {work ? <span className="bt-stage-work" data-timeline-work="" data-start-ms={attempt.observedTurn?.startedAtMs} data-end-ms={attempt.observedTurn?.endAtMs} style={{ ...work, background: agentColor(attempt) }} title={turnDuration(attempt)} /> : null}
+            <span className="bt-stage-bar" data-timeline-bar="" data-start-ms={attempt.startedAtMs ?? undefined} data-end-ms={attempt.endAtMs ?? undefined} style={{ ...bounds, background: "transparent", borderColor: `color-mix(in srgb, ${tone(attempt).color} 60%, transparent)` }} title={`${name(attempt)} · ${workText(attempt)} · ${elapsed(attempt.startedAtMs, attempt.endAtMs)}`} />
+            {works.map(work => <span key={work.startMs} className="bt-stage-work" data-timeline-work="" data-start-ms={work.startMs} data-end-ms={work.endMs} style={{ left: work.left, width: work.width, background: agentColor(attempt) }} title={workText(attempt)} />)}
             </> : null}
             {stageLive ? <span className="bt-live-mark bt-stage-live" data-timeline-live="" style={{ left: stageLive.left, width: stageLive.width, background: `linear-gradient(to right, transparent, ${tone(attempt).color})` }}
               title={`${name(attempt)} · ${stateWord(attempt)} · ${t("timeline.startUnknown")}`} /> : null}

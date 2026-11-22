@@ -107,3 +107,7 @@
 .board-timeline[data-phone="1"] .bt-split { grid-column: 1 / -1; column-gap: 10px; }
 .board-timeline[data-phone="1"] .bt-legend { grid-column: 1; margin: 0; }
 .board-timeline[data-phone="1"] .bt-zoom { grid-column: 2; }
+/* A stage row with a conversation opens it: the whole row is a click target, its label the keyboard stop. */
+.bt-stage[data-openable="1"] { cursor: pointer; }
+.bt-stage .bt-label[role="button"]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.board-timeline[data-phone="1"] .bt-stage .bt-label[role="button"] { min-height: 44px; }

@@ -3259,7 +3259,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t(timelineShown ? "timeline.title" : "kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
       {timelineShown && loaded ? (
         <BoardTimeline project={project} cards={timelineCards} members={timelineMembers}
-          pipelines={pipelines} nowMs={props.now * 1000} preference={timeline.preference} onPreference={timeline.update} />
+          pipelines={pipelines} nowMs={props.now * 1000} preference={timeline.preference} onPreference={timeline.update}
+          onOpenConversation={target => openRecorded({ path: target.agentPath, conversationId: target.conversationId })} />
       ) : null}
       <div className="board-rest" hidden={timelineShown && loaded} inert={timelineShown && loaded}>
       {!loaded ? (
