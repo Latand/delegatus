@@ -104,6 +104,7 @@ const feedDependencies = {
 };
 
 const { OrchestratorPanel, REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH, UNBOUND_STATUS_RETRY_MS } = await import("./OrchestratorPanel");
+const { SEAT_TRANSCRIPT_TIMEOUT_MS } = await import("./useSeatFile");
 const { SEAT_CONFIRM_TTL_MS, requestOrchestratorDraft } = await import("./draftPrefill");
 const { SEAT_BIND_TIMEOUT_MS } = await import("./seatState");
 const { resetMessageProvenanceCacheForTests } = await import("../feed/messageProvenance");
@@ -330,6 +331,7 @@ beforeEach(() => {
   installFetch();
 });
 afterEach(() => {
+  jest.useRealTimers();
   detachCatalog?.();
   detachCatalog = null;
   for (const root of roots) flushSync(() => root.unmount());
@@ -887,6 +889,25 @@ test("the desktop panel opens an old seat from the single-record read", async ()
   expect(host.textContent).not.toContain("Opening the conversation");
 });
 
+test("a board predecessor cannot suppress lookup of the incumbent path", async () => {
+  seatStatus = { seat: activeSeat(), pending: null, exists: false };
+  const current = { ...orchestratorFile, path: "/transcripts/orch.current.jsonl", name: "orch.current.jsonl" };
+  incumbentStatus = incumbent({ transcriptPath: current.path, liveness: { lifecycle: "running", hostState: "alive", silentForMs: 0 } });
+  let reads = 0;
+  transcriptRead = async () => {
+    reads += 1;
+    return Response.json({ conversationId: current.conversationId, file: current });
+  };
+  const predecessor = { ...orchestratorFile, path: "/transcripts/orch.archived.jsonl", migratedTo: current.path } as FileEntry;
+  const host = mountReloadableCatalog([predecessor], []);
+  await settle();
+  flushSync(() => undefined);
+  expect(reads).toBe(1);
+  expect(host.querySelector('[data-orchestrator-conversation="conversation_orch"]')).not.toBeNull();
+  expect(host.textContent).not.toContain("Opening the conversation");
+  expect(host.textContent).not.toContain("Transcript not found");
+});
+
 test("a late lookup cannot replace the new seat after rotation", async () => {
   const late = Promise.withResolvers<Response>();
   let oldSignal: AbortSignal | null | undefined;
@@ -984,7 +1005,7 @@ test("a restart-time status read that fails is retried, and the dock binds itsel
 }, SEAT_BIND_TIMEOUT_MS + 20_000);
 
 test("a hung transcript read times out with its path and can be rebound", async () => {
-  seatStatus = { seat: activeSeat(), pending: null, exists: true };
+  seatStatus = { seat: activeSeat(), pending: null, exists: false };
   incumbentStatus = incumbent({ liveness: { lifecycle: "running", hostState: "alive", silentForMs: 0 } });
   let signal: AbortSignal | null | undefined;
   transcriptRead = (requestSignal) => {
@@ -995,17 +1016,19 @@ test("a hung transcript read times out with its path and can be rebound", async 
 
   /* Nothing in the catalog answers for this seat, on any key — until it is
      re-read, which is the half this failure is actually missing. */
+  jest.useFakeTimers();
   const host = mountReloadableCatalog([], [orchestratorFile]);
-  await settle();
+  for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
   flushSync(() => undefined);
   expect(panelState(host)).toBe("live");
   expect(host.textContent).toContain("Opening the conversation");
   expect(host.querySelector("[data-orchestrator-rebind]")).toBeNull();
 
-  /* Past the bound, «opening» is no longer an honest answer. */
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
-  await settle();
+  /* Advance the fixed deadline while the response body remains stalled. */
+  flushSync(() => jest.advanceTimersByTime(SEAT_TRANSCRIPT_TIMEOUT_MS));
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
   flushSync(() => undefined);
+  jest.useRealTimers();
 
   expect(bindReason(host)).toBe("catalog");
   expect(signal?.aborted).toBe(true);

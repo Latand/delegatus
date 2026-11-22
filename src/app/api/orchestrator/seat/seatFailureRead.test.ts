@@ -53,8 +53,17 @@ test("the seat read hides a failed automatic replacement when its incumbent is a
 test("no working seat keeps the failed designation and its terminal time", async () => {
   beginOrchestratorSeatIntent({ project: "atlas", mandate: "Run the board.", clientRequestId: "failed_designation", mode: "spawn", now: AT });
   failOrchestratorSeatIntent("atlas", "failed_designation", "database is locked", "2026-10-11T17:11:00.000Z");
-  expect(await read()).toMatchObject({ seat: null, lastFailure: { error: "database is locked", terminalizedAt: "2026-10-11T17:11:00.000Z" } });
+  expect(await read()).toMatchObject({ seat: null, exists: true, lastFailure: { error: "database is locked", terminalizedAt: "2026-10-11T17:11:00.000Z" } });
   expect(liveness).not.toHaveBeenCalled();
+});
+
+test("a retained designation with a missing activation path stays distinct from an empty seat", async () => {
+  beginOrchestratorSeatIntent({ project: "atlas", mandate: "Run the board.", clientRequestId: "missing_activation", mode: "existing", now: AT });
+  const activated = completeOrchestratorSeatIntent({ project: "atlas", clientRequestId: "missing_activation",
+    conversationId: "conversation_missing_activation", path: path.join(sandbox, "deleted-activation.jsonl"), now: AT });
+  if (activated.kind !== "activated") throw new Error("fixture seat did not activate");
+  const retained = await read();
+  expect(retained).toMatchObject({ exists: false, seat: { conversationId: "conversation_missing_activation", path: activated.seat.path } });
 });
 
 test("an unknown host observation keeps the failure visible", async () => {

@@ -69,6 +69,7 @@ const { fakeHistory } = await import("./mobileNavTestHistory");
 const { resetOrchestratorSeatCacheForTests } = await import("../orchestrator/useOrchestratorSeat");
 
 const { resetOrchestratorIncumbentCacheForTests } = await import("../orchestrator/useOrchestratorIncumbent");
+const { SEAT_TRANSCRIPT_TIMEOUT_MS } = await import("../orchestrator/useSeatFile");
 const { FILES_CHANGED_EVENT } = await import("@/lib/filesEvents");
 
 interface SeatAnswer { seat: unknown; pending: unknown; exists: boolean; deputies?: unknown[] }
@@ -81,6 +82,7 @@ const requests: Recorded[] = [];
 const realFetch = globalThis.fetch;
 let incumbentAnswer: Record<string, unknown> | null = null;
 let runtimeRefreshes = 0;
+let transcriptAnswer: (signal?: AbortSignal | null) => Promise<Response> = async () => Response.json({ conversationId: null, file: null });
 
 /* The launch module's account catalog; empty unless a test names one. */
 let claudeAccounts: { active: string; accounts: Array<Record<string, unknown>> } = { active: "", accounts: [] };
@@ -89,6 +91,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const method = init?.method ?? "GET";
   const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
   requests.push({ url, method, body });
+  if (url.startsWith("/api/orchestrator/seat/transcript?")) return transcriptAnswer(init?.signal);
   if (url.startsWith("/api/orchestrator/seat/status")) return Response.json(incumbentAnswer);
   if (url.startsWith("/api/orchestrator/seat") && method === "POST") return postSeat(body);
   if (url.startsWith("/api/orchestrator/seat")) {
@@ -114,6 +117,7 @@ beforeEach(() => {
   resetOrchestratorSeatCacheForTests();
   resetOrchestratorIncumbentCacheForTests();
   incumbentAnswer = null;
+  transcriptAnswer = async () => Response.json({ conversationId: null, file: null });
   runtimeRefreshes = 0;
   nav = createMobileNav(navHost());
   requests.length = 0;
@@ -121,6 +125,7 @@ beforeEach(() => {
   postSeat = async () => new Response(JSON.stringify({ ok: true, state: "starting" }), { status: 200, headers: { "content-type": "application/json" } });
 });
 afterEach(() => {
+  jest.useRealTimers();
   for (const root of roots) flushSync(() => root.unmount());
   roots.clear();
   setLogFeedDependenciesForTests(null);
@@ -862,7 +867,7 @@ test("an unreadable seat offers a re-read that recovers the row without a page r
 
 
 test("a missing seat transcript keeps the path, board link, rotation and Re-bind in the sheet", async () => {
-  seatAnswer = { seat: seat(), pending: null, exists: true };
+  seatAnswer = { seat: seat(), pending: null, exists: false };
   incumbentAnswer = { project: "atlas", designated: true, conversationId: "conv_orchestrator", engine: "claude", model: "opus", liveness: { hostState: "alive", lifecycle: "running" } };
   // The board-card host, without mounting a conversation screen behind it.
   const cardView = (files: FileEntry[]) => <MobileNavContext.Provider value={nav}>
@@ -942,6 +947,46 @@ test("a create on a vacated seat carries replaceIncumbent on the first attempt",
   expect(posts).toHaveLength(1);
   expect(posts[0]!.body.replaceIncumbent).toBe(true);
   expect(posts[0]!.body.expectedIncumbentSeatEpoch).toBe(4);
+});
+
+test("a predecessor row cannot stand in for the mobile incumbent path", async () => {
+  seatAnswer = { seat: seat(), pending: null, exists: false };
+  const current = { ...orchestrator, path: "/orchestrator-current.jsonl", name: "orchestrator-current.jsonl" };
+  incumbentAnswer = { project: "atlas", designated: true, conversationId: "conv_orchestrator", transcriptPath: current.path,
+    engine: "claude", model: "opus", liveness: { hostState: "alive", lifecycle: "running" } };
+  transcriptAnswer = async () => Response.json({ conversationId: "conv_orchestrator", file: current });
+  const predecessor = { ...orchestrator, path: "/orchestrator-archived.jsonl", migratedTo: current.path } as FileEntry;
+  const { host, root } = await mount([predecessor]);
+  flushSync(() => openButton(host).click());
+  await settle(root, view([predecessor]));
+  expect(requests.filter((request) => request.url.startsWith("/api/orchestrator/seat/transcript?")).length).toBe(1);
+  expect(host.querySelector('[data-mobile2-seat-state="live"]')).not.toBeNull();
+  expect(sheet(host)?.textContent).not.toContain("Transcript not found");
+});
+
+test("a stalled mobile transcript body aborts at the deadline and exposes recovery actions", async () => {
+  seatAnswer = { seat: seat(), pending: null, exists: false };
+  incumbentAnswer = { project: "atlas", designated: true, conversationId: "conv_orchestrator", engine: "claude", model: "opus",
+    liveness: { hostState: "alive", lifecycle: "running" } };
+  let signal: AbortSignal | null | undefined;
+  transcriptAnswer = async (requestSignal) => {
+    signal = requestSignal;
+    return { ok: true, json: () => new Promise(() => {}) } as Response;
+  };
+  const { host, root } = await mount([]);
+  jest.useFakeTimers();
+  flushSync(() => openButton(host).click());
+  for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
+  flushSync(() => jest.advanceTimersByTime(SEAT_TRANSCRIPT_TIMEOUT_MS));
+  for (let turn = 0; turn < 4; turn += 1) await Promise.resolve();
+  flushSync(() => undefined);
+  jest.useRealTimers();
+  expect(signal?.aborted).toBe(true);
+  expect(sheet(host)?.textContent).toContain("Transcript not found");
+  expect(sheet(host)?.textContent).toContain("/orchestrator.jsonl");
+  expect(host.querySelector("[data-orchestrator-open-board]")).not.toBeNull();
+  expect(host.querySelector("[data-orchestrator-rotate]")).not.toBeNull();
+  expect(host.textContent).not.toContain("Opening the conversation");
 });
 
 test("a retry after a refused create on a vacated seat still carries replaceIncumbent (fresh key)", async () => {

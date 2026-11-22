@@ -7,6 +7,7 @@ import { catalogEntryToFileEntry, conversationCatalogEntry } from "@/lib/scanner
 import { describe } from "@/lib/scanner/describe";
 import { pathAllowedWithRoots, scanRootEntries } from "@/lib/scanner/roots";
 import { createTranscriptPathCanonicalizer } from "@/lib/scanner/transcriptIdentity";
+import type { Engine, TranscriptEngine } from "@/lib/types";
 import { requestWorkspaceScope, workspaceConversationResolver, workspaceDenied, workspaceRoute } from "@/lib/team/workspaceRoute";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
@@ -47,8 +48,16 @@ async function readSeatTranscript(request: Request): Promise<Response> {
     const root = roots.filter(([, directory]) => pathname.startsWith(directory + path.sep))
       .sort((left, right) => right[1].length - left[1].length)[0];
     if (!root) return answer(null);
+    const description = describe(root[0], root[1], pathname, metadata);
+    if (!isTranscriptEngine(description.engine)) return answer(null);
     entry = {
-      ...describe(root[0], root[1], pathname, metadata),
+      project: description.project,
+      projectUnresolved: description.projectUnresolved,
+      worktree: description.worktree,
+      title: description.title,
+      engine: description.engine,
+      kind: description.kind,
+      fmt: description.fmt,
       root: root[0],
       name: path.relative(root[1], pathname),
       path: pathname,
@@ -57,11 +66,16 @@ async function readSeatTranscript(request: Request): Promise<Response> {
       mtime,
     };
   }
+  if (!entry) return answer(null);
   const currentSeat = orchestratorSeatFor(project).active;
   if (currentSeat?.seatEpoch !== active.seatEpoch || currentSeat.conversationId !== conversationId || currentSeat.path !== active.path) {
     return answer(null);
   }
   return answer({ ...catalogEntryToFileEntry({ ...entry, size, mtime }), conversationId });
+}
+
+function isTranscriptEngine(engine: Engine): engine is TranscriptEngine {
+  return engine === "codex" || engine === "claude" || engine === "openclaw" || engine === "copilot";
 }
 
 export const GET = workspaceRoute("/api/orchestrator/seat/transcript", (request: Request) =>

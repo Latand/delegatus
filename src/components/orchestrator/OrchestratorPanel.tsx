@@ -256,7 +256,7 @@ export function OrchestratorPanel({
   };
 
   const seatConversationId = status?.seat?.conversationId ?? null;
-  const seated = Boolean(seatConversationId && status?.exists);
+  const seated = Boolean(seatConversationId && status?.seat);
   /* The incumbent's wear is only a question while there IS an incumbent; a
      project sitting on its draft asks nothing. */
   const { incumbent: read, stale: readStale, refresh: refreshIncumbent } = useOrchestratorIncumbent(project, seated);
@@ -272,7 +272,7 @@ export function OrchestratorPanel({
      recorded path stays a hint, tried last. */
   const seatPath = status?.seat?.path ?? null;
   const currentPath = incumbent?.transcriptPath ?? null;
-  const { file, transcriptMissing, retryTranscript } = useSeatFile({
+  const { file, transcriptMissing, transcriptPending, retryTranscript } = useSeatFile({
     project, files, conversationId: seatConversationId, seatPath, currentPath, enabled: seated && !collapsed,
   });
   const surface = useSeatSurface(file);
@@ -403,6 +403,7 @@ export function OrchestratorPanel({
     hostLive,
     unboundForMs,
     transcriptMissing,
+    transcriptPending,
   });
   /**
    * A rotation whose outcome is not yet settled KEEPS the panel, even after the

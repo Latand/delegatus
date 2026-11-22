@@ -209,7 +209,7 @@ export function MobileSeatCard({
   }, [sheetOpen, arm]);
 
   const seatConversationId = status?.seat?.conversationId ?? null;
-  const seated = Boolean(seatConversationId && status?.exists);
+  const seated = Boolean(seatConversationId && status?.seat);
   /* The incumbent's wear and parameters are a question only while the sheet
      is showing them or a rotate draft is about to prefill from them: the card
      itself carries the board's own reading, so a phone that never opens the
@@ -222,7 +222,7 @@ export function MobileSeatCard({
   const incumbent = read && read.project === project && read.conversationId === seatConversationId ? read : null;
   const currentPath = incumbent?.transcriptPath ?? null;
   const seatPath = status?.seat?.path ?? null;
-  const { file, transcriptMissing, retryTranscript } = useSeatFile({
+  const { file, transcriptMissing, transcriptPending, retryTranscript } = useSeatFile({
     project, files, conversationId: seatConversationId, seatPath, currentPath, enabled: seated && sheetOpen,
   });
   const surface = useSeatSurface(file);
@@ -255,6 +255,7 @@ export function MobileSeatCard({
     hostLive: !readStale && incumbentHostLive(incumbent),
     unboundForMs,
     transcriptMissing,
+    transcriptPending,
   });
   const view = seatCardView(state, { conversationReady: Boolean(file) });
 

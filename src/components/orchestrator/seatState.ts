@@ -573,6 +573,12 @@ export function resolveSeatFile(input: {
   currentPath: string | null;
 }): FileEntry | null {
   if (!input.conversationId) return null;
+  // Once status supplies an incumbent generation, a conversation-id hit may
+  // still be an archived stand-in. Bind only that generation and let the
+  // targeted transcript endpoint fill a board-window miss.
+  if (input.currentPath) {
+    return input.files.find((file) => file.path === input.currentPath) ?? null;
+  }
   const byId = currentConversationFile(input.files, input.conversationId);
   if (byId) return byId;
   for (const path of [input.currentPath, input.seatPath]) {
@@ -649,12 +655,13 @@ export function deriveOrchestratorPanelState(input: {
   unboundForMs?: number | null;
   /** The direct seat transcript read reached a terminal outcome without a file. */
   transcriptMissing?: boolean;
+  transcriptPending?: boolean;
   /** Epoch SECONDS, for the one reading that ages: the attention queue's
       stalled tier. Defaults to the wall clock, exactly as `attentionId` does. */
   now?: number;
 }): OrchestratorPanelState {
   const { status } = input;
-  const active = status?.seat && status.exists ? status.seat : null;
+  const active = status?.seat && (status.exists || input.transcriptPending || input.transcriptMissing) ? status.seat : null;
   const pending = status?.pending ?? null;
   const clientError = unsettledClientError(status, input.submitFailure);
   const failure = currentSeatFailure(status?.lastFailure ?? null, active, status?.hostObservation ?? null);

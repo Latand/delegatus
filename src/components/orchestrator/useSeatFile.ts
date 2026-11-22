@@ -5,7 +5,7 @@ import { useEffect, useMemo, useReducer, useState } from "react";
 import type { FileEntry } from "@/lib/types";
 import { resolveSeatFile } from "./seatState";
 
-const SEAT_TRANSCRIPT_TIMEOUT_MS = 1_800;
+export const SEAT_TRANSCRIPT_TIMEOUT_MS = 1_800;
 
 export function useSeatFile(input: {
   project: string;
@@ -14,7 +14,7 @@ export function useSeatFile(input: {
   seatPath: string | null;
   currentPath: string | null;
   enabled: boolean;
-}): { file: FileEntry | null; transcriptMissing: boolean; retryTranscript: () => void } {
+}): { file: FileEntry | null; transcriptMissing: boolean; transcriptPending: boolean; retryTranscript: () => void } {
   const { project, files, conversationId, seatPath, currentPath, enabled } = input;
   const boardFile = useMemo(() => resolveSeatFile({ files, conversationId, seatPath, currentPath }),
     [files, conversationId, seatPath, currentPath]);
@@ -58,6 +58,7 @@ export function useSeatFile(input: {
   return {
     file: boardFile ?? found,
     transcriptMissing: !boardFile && key !== null && lookup?.key === key && !found,
+    transcriptPending: !boardFile && key !== null && lookup?.key !== key,
     retryTranscript,
   };
 }
