@@ -132,6 +132,9 @@
    bar of a leaf without a board (`[data-project-bar]`) draws the same group. */
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button { border-radius: 0; }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] :is(button, [data-bar-recent] > button):not(:focus-visible) { box-shadow: none; }
+/* A segment's focus ring is drawn inside it (the `.or-seg .or-jump` rule's way), so the focused segment
+   stays within the group's outline and height; an outer ring would frame one segment as a box of its own. */
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] :is(button, [data-bar-recent] > button):focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 70%, transparent); }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > * + button,
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > * + [data-bar-recent] > button { border-left-width: 0; }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button:first-child { border-top-left-radius: var(--radius-control); border-bottom-left-radius: var(--radius-control); }

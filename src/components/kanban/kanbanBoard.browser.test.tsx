@@ -2040,6 +2040,30 @@ describe("board header chart toggle", () => {
             await frame("pressed-by-click");
             await toggle.click();
             await frame("toggled-back");
+            /* The focus ring of each segment stays inside the group: after a click and a key (the state
+               the operator's frame showed) on the chart, and by Tab on every segment. */
+            const insideGroup = (name: string, node: NonNullable<Awaited<ReturnType<typeof segmentReadings>>>["chart"], at: string) => {
+              if (!node) { check(false, `${at}: ${name} is missing`); return; }
+              const layers = node.shadow.replace(/(?:rgba?|color)\([^)]*\)/g, "c").split(",").map(layer => layer.trim()).filter(layer => layer !== "none");
+              check(layers.length > 0 && layers.every(layer => layer.includes("inset")), `${at}: ${name} focus shadow "${node.shadow}" is not drawn inside the segment`);
+              check(node.outline === "none", `${at}: ${name} focus outline ${node.outline}`);
+              check(node.shadow !== rest?.[name === "chart" ? "chart" : name === "clock" ? "recent" : "orchestrator"]?.shadow, `${at}: ${name} shows no focus indicator`);
+              check(node.height === rest?.chart?.height && node.y === rest?.chart?.y, `${at}: ${name} spans ${node.height} at ${node.y}, the group ${rest?.chart?.height} at ${rest?.chart?.y}`);
+            };
+            await toggle.click();
+            await page.keyboard.press("ArrowDown");
+            await page.mouse.move(0, 300);
+            const keyed = await frame("focus-after-click-and-key");
+            check(await page.evaluate(() => document.activeElement?.hasAttribute("data-board-timeline-toggle") === true && document.activeElement.matches(":focus-visible")), "the chart toggle is not in focus-visible after click and key");
+            insideGroup("chart", keyed?.chart ?? null, "click+key");
+            await page.locator("[data-orchestrator-toggle]").focus();
+            await page.keyboard.press("Shift+Tab"); await page.keyboard.press("Tab");
+            for (const [name, key, selector] of [["orchestrator", "orchestrator", "[data-orchestrator-toggle]"], ["clock", "recent", "[data-bar-recent-toggle]"], ["chart", "chart", "[data-board-timeline-toggle]"]] as const) {
+              if (name !== "orchestrator") await page.keyboard.press("Tab");
+              check(await page.evaluate(selector => document.activeElement?.matches(`${selector}:focus-visible`) === true, selector), `Tab did not reach ${name} with focus-visible`);
+              const tabbed = await frame(`focus-tab-${name}`);
+              insideGroup(name, tabbed?.[key] ?? null, `Tab ${name}`);
+            }
           } finally { await context.close(); }
         }
       }
