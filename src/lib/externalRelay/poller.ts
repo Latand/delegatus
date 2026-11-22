@@ -20,6 +20,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { noteRelayOutcome, relayActivity, relayOutcomeLabel } from "./activity";
 import { pruneAnswerRecords, recordAnswerCompletionRefusal, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { recordCompletionRefusal } from "./completionRefusal";
+import { readAnswerRecord } from "./answers";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
 import { requestSchema, RELAY_BUSINESS_ANSWERS, RELAY_ISOLATED_REQUESTERS, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
 import { RELAY_HISTORY_MEDIA, RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
@@ -454,7 +455,8 @@ export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
   const features = [...CLAIM_FEATURES,
     ...(relay?.features?.includes(RELAY_TOOLS_ON_DEMAND) ? [RELAY_TOOLS_ON_DEMAND] : []),
     ...(relay?.features?.includes("relay_media_in") ? ["relay_media_in"] : []),
-    ...(relay?.features?.includes("relay_media_in") && relay.features.includes(RELAY_HISTORY_MEDIA) ? [RELAY_HISTORY_MEDIA] : []),
+    ...(relay?.features?.includes("relay_media_in") && (relay.features.includes(RELAY_HISTORY_MEDIA) || switches.business_answers)
+      ? [RELAY_HISTORY_MEDIA] : []),
     ...(relay?.features?.includes("relay_media_in") && relay.features.includes(RELAY_MEDIA_ANY_DOCUMENT) ? [RELAY_MEDIA_ANY_DOCUMENT] : []),
     ...(rich ? ["relay_rich_messages", ...(relay?.features?.includes("relay_media_out") ? ["relay_media_out"] : [])] : []),
     ...(switches.business_answers ? [RELAY_ISOLATED_REQUESTERS, RELAY_BUSINESS_ANSWERS] : [])];
@@ -569,7 +571,11 @@ async function poll(
         void run.then(leaseReady, leaseReady);
         const trackedRun = run
           .then((outcome) => {
-            noteRelayOutcome(relay.id, relayOutcomeLabel(outcome));
+            const request = result.body?.request as { request_id?: unknown; target_id?: unknown } | undefined;
+            const delivery = typeof request?.request_id === "string" && typeof request.target_id === "string"
+              ? readAnswerRecord(relay.id, request.target_id, request.request_id)?.delivery
+              : null;
+            noteRelayOutcome(relay.id, relayOutcomeLabel(outcome, delivery ?? "unconfirmed"));
           })
           .catch(() => {
             noteRelayOutcome(relay.id, "local_error");

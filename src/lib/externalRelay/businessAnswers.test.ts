@@ -70,6 +70,20 @@ test("Business history photos are retained with the production media advertiseme
     .safeParse(pair.request).success).toBe(false);
 });
 
+test("enabled Business claims lease history media even when the peer descriptor omits that feature", () => {
+  setRelaySwitch("relay:business_answers:enabled", true);
+  try {
+    const pair = paired("http://127.0.0.1");
+    pair.features = ["relay_business_answers", "relay_media_in"];
+    updateRelayStore(store => ({ ...store, relays: [pair] }));
+    const claim = relayClaimBody(pair);
+    expect(claim.features).toContain("relay_history_media");
+    const fixture = answerPair("business_contact", 1, true);
+    expect(claimedRequestSchema(claim.features).safeParse(fixture.request).success).toBe(true);
+    expect(validateMediaInput(fixture.request, true)).toEqual(fixture.request.input.conversation[0]!.media!);
+  } finally { setRelaySwitch("relay:business_answers:enabled", false); }
+});
+
 test("Business history photo claim matches descriptor without the optional history media feature", () => {
   const pair = answerPair("business_contact", 1, false);
   const parsed = claimedRequestSchema(pair.advertised).parse(pair.request);

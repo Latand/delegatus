@@ -1276,10 +1276,16 @@ test("a terminal late answer inside its window is retained without another ledge
 });
 
 
-test("history media claims require both history and inbound capabilities in the descriptor", () => {
+test("history media claims follow the descriptor, with Business negotiation enabling the lease feature", () => {
   expect(relayClaimCapabilities({ features: ["relay_media_in", "relay_history_media"] }).features)
     .toEqual(expect.arrayContaining(["relay_media_in", "requester_context", "relay_history_media"]));
   for (const features of [[], ["relay_media_in"], ["relay_history_media"]]) {
     expect(relayClaimCapabilities({ features }).features).not.toContain("relay_history_media");
   }
+  setRelaySwitch("relay:business_answers:enabled", true);
+  try {
+    expect(relayClaimCapabilities({ features: ["relay_media_in"] }).features)
+      .toEqual(expect.arrayContaining(["relay_media_in", "relay_history_media", "relay_business_answers"]));
+    expect(relayClaimCapabilities({ features: [] }).features).not.toContain("relay_history_media");
+  } finally { setRelaySwitch("relay:business_answers:enabled", false); }
 });
