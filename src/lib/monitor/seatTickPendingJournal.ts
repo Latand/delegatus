@@ -2,11 +2,27 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { appendSeatTickRecordAsync, sanitizeSeatTickRecord, seatTickJournalPath } from "./journalStore";
 import type { SeatTickRunRecord } from "./types";
 
 type PendingRecord = { id: string; record: SeatTickRunRecord };
+
+type RecoveryState = { promise: Promise<boolean> | null; retryAt: number; retryMs: number; warned: boolean };
+const recoveries = new Map<string, RecoveryState>();
+
+function recoveryState(file: string): RecoveryState {
+  let state = recoveries.get(file);
+  if (!state) {
+    state = { promise: null, retryAt: 0, retryMs: 1_000, warned: false };
+    recoveries.set(file, state);
+  }
+  return state;
+}
+
+function deferRecovery(state: RecoveryState): void {
+  state.retryAt = Date.now() + state.retryMs;
+  state.retryMs = Math.min(state.retryMs * 2, 60_000);
+}
 
 function decodePendingRecords(text: string): PendingRecord[] | null {
   let rows: unknown;
@@ -30,23 +46,51 @@ export class SeatTickPendingJournal {
   private readonly pending: PendingRecord[] = [];
   private readonly file: string;
   private readonly directory: string;
+  private readonly recovery: RecoveryState;
 
   constructor(file = seatTickJournalPath()) {
     this.file = path.resolve(file);
     this.directory = `${this.file}.pending-checks`;
+    this.recovery = recoveryState(this.file);
   }
 
   isBlocked(): boolean { return this.blocked; }
 
   async ready(): Promise<boolean> {
     if (this.blocked) return false;
+    if (this.recovery.promise) {
+      const ready = await this.recovery.promise;
+      this.blocked = !ready;
+      return ready;
+    }
+    if (this.recovery.retryAt > Date.now()) {
+      this.blocked = true;
+      return false;
+    }
+    const admission = Promise.resolve().then(() => this.recoverPendingBatch());
+    this.recovery.promise = admission;
+    try {
+      const ready = await admission;
+      this.blocked = !ready;
+      if (ready) {
+        this.recovery.retryAt = 0;
+        this.recovery.retryMs = 1_000;
+        this.recovery.warned = false;
+      }
+      return ready;
+    } finally {
+      if (this.recovery.promise === admission) this.recovery.promise = null;
+    }
+  }
+
+  private async recoverPendingBatch(): Promise<boolean> {
     let entries: string[];
     try { entries = await fs.readdir(this.directory); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
       throw error;
     }
-    const [first, next] = entries.filter(name => /^\d{16}-[a-f0-9]{32}\.json$/.test(name)).sort();
+    const [first, next] = entries.filter(name => /^\d{16}-[a-f0-9]{32}\.json(?:\.tmp)?$/.test(name)).sort();
     if (!first) return true;
     const filename = path.join(this.directory, first);
     // Another release may have already finished this batch.
@@ -59,8 +103,10 @@ export class SeatTickPendingJournal {
       if (pending) {
         try {
           for (const row of pending) await appendSeatTickRecordAsync(row.record, this.file, row.id);
-        } catch (error) {
-          if (!(error instanceof FileTransactionBusyError)) throw error;
+        } catch {
+          // A missing worker reply may follow a successful commit. Keep the
+          // batch and its receipt ids; a later pass can safely replay it.
+          deferRecovery(this.recovery);
           this.blocked = true;
           return false;
         }
@@ -76,12 +122,16 @@ export class SeatTickPendingJournal {
   }
 
   async append(row: SeatTickRunRecord): Promise<void> {
-    if (!this.pending.length) {
-      try { await appendSeatTickRecordAsync(row, this.file); return; }
-      catch (error) { if (!(error instanceof FileTransactionBusyError)) throw error; }
-    }
     const record = sanitizeSeatTickRecord(row);
-    if (record) this.pending.push({ id: randomUUID().replaceAll("-", ""), record });
+    if (!record) return;
+    // The receipt identity precedes the first attempt. A worker can commit and
+    // lose its reply, so every retry must use the same idempotency key.
+    const pending = { id: randomUUID().replaceAll("-", ""), record };
+    if (!this.pending.length) {
+      try { await appendSeatTickRecordAsync(record, this.file, pending.id); return; }
+      catch { /* Any failed reply is ambiguous: persist the row for receipt replay. */ }
+    }
+    this.pending.push(pending);
   }
 
   async finish(): Promise<boolean> {
@@ -99,7 +149,10 @@ export class SeatTickPendingJournal {
     }
     this.pending.length = 0;
     this.blocked = true;
-    console.warn("[seat tick] the journal is busy. The check result was saved for retry on the next sweep.");
+    if (!this.recovery.warned) {
+      this.recovery.warned = true;
+      console.warn("[seat tick] the journal is busy. The check result was saved for retry on the next sweep.");
+    }
     return false;
   }
 }

@@ -121,6 +121,9 @@ test("a persistently busy SQLite journal yields, warns once and saves the result
     let checks = 0;
     rig.deps.workStarted = () => { checks++; };
     const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let pending = "";
+    let temporary = "";
+    let bytes = new Uint8Array();
     const recoverInNewProcess = async () => {
       const child = Bun.spawn([process.execPath, "-e", `
         import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
@@ -134,10 +137,19 @@ test("a persistently busy SQLite journal yields, warns once and saves the result
     try {
       database.exec("BEGIN IMMEDIATE");
       await reconcileSeatTick(rig.deps, [PROJECT]);
-      await reconcileSeatTick(rig.deps, [PROJECT]);
+      await Promise.all(Array.from({ length: 32 }, (_, index) => reconcileSeatTick(rig.deps, [`resume-${index}`])));
       await recoverInNewProcess();
       expect(checks).toBe(1);
       expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
+      const pendingDir = `${file}.pending-checks`;
+      const [batch] = fs.readdirSync(pendingDir);
+      expect(batch).toBeDefined();
+      pending = path.join(pendingDir, batch!);
+      bytes = fs.readFileSync(pending);
+      temporary = `${pending}.tmp`;
+      fs.renameSync(pending, temporary);
+      await recoverInNewProcess();
+      expect(fs.existsSync(temporary)).toBe(true);
       expect(warn.mock.calls.filter(([message]) => String(message).includes("journal is busy"))).toEqual([
         [expect.stringContaining("retry on the next sweep")],
       ]);
@@ -145,13 +157,8 @@ test("a persistently busy SQLite journal yields, warns once and saves the result
       database.close();
       warn.mockRestore();
     }
-    const pendingDir = `${file}.pending-checks`;
-    const [batch] = fs.readdirSync(pendingDir);
-    expect(batch).toBeDefined();
-    const pending = path.join(pendingDir, batch!);
-    const bytes = fs.readFileSync(pending);
     await recoverInNewProcess();
-    expect(fs.existsSync(pending)).toBe(false);
+    expect(fs.existsSync(temporary)).toBe(false);
     // Replay the same bytes as if the previous process stopped after commit
     // and before it could remove the batch.
     fs.writeFileSync(pending, bytes, { flag: "wx", mode: 0o600 });
@@ -162,6 +169,67 @@ test("a persistently busy SQLite journal yields, warns once and saves the result
     })]);
   });
 }, 15_000);
+
+test("a worker reply lost after commit replays its preassigned receipt exactly once", async () => {
+  const { readSeatTickRecords } = await import("./journalStore");
+  const { configureSeatTickJournalWorkerForTests, stopSeatTickJournalWorkerForTests } = await import("./seatTickJournalWorker");
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { importLegacySeatTickJournal } = await import("./journalStore");
+  const previous = { audit: process.env.LLV_SEAT_TICK_AUDIT_FILE, worker: process.env.LLV_SEAT_TICK_JOURNAL_WORKER };
+  const restoreWorker = configureSeatTickJournalWorkerForTests({ timeoutMs: 1_000, dropReplies: 1 });
+  const file = path.join(SANDBOX, "lost-worker-reply", "runs.ndjson");
+  process.env.LLV_SEAT_TICK_AUDIT_FILE = file;
+  process.env.LLV_SEAT_TICK_JOURNAL_WORKER = "1";
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const rig = harness({ state: RECENT });
+    delete rig.deps.appendRecord;
+    await reconcileSeatTick(rig.deps, [PROJECT]);
+    expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+    const [batch] = fs.readdirSync(`${file}.pending-checks`);
+    expect(batch).toBeDefined();
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+      await reconcileSeatTick({ ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null }, []);
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(await child.exited).toBe(0);
+    expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+
+    const busyFile = path.join(SANDBOX, "lost-busy-reply", "runs.ndjson");
+    process.env.LLV_SEAT_TICK_AUDIT_FILE = busyFile;
+    importLegacySeatTickJournal(busyFile);
+    const database = new Database(statePath("state.sqlite"));
+    let databaseOpen = true;
+    const restoreBusyReply = configureSeatTickJournalWorkerForTests({ timeoutMs: 1_000, dropReplies: 1 });
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      const busyRig = harness({ state: RECENT });
+      delete busyRig.deps.appendRecord;
+      await reconcileSeatTick(busyRig.deps, [PROJECT]);
+      expect(readSeatTickRecords(10, busyFile, PROJECT)).toEqual([]);
+      database.close();
+      databaseOpen = false;
+      const retry = Bun.spawn([process.execPath, "-e", `
+        import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+        await reconcileSeatTick({ ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null }, []);
+      `], { stdout: "pipe", stderr: "pipe" });
+      expect(await retry.exited).toBe(0);
+      expect(readSeatTickRecords(10, busyFile, PROJECT)).toHaveLength(1);
+    } finally {
+      if (databaseOpen) database.close();
+      restoreBusyReply();
+    }
+  } finally {
+    warn.mockRestore();
+    restoreWorker();
+    await stopSeatTickJournalWorkerForTests();
+    if (previous.audit === undefined) delete process.env.LLV_SEAT_TICK_AUDIT_FILE;
+    else process.env.LLV_SEAT_TICK_AUDIT_FILE = previous.audit;
+    if (previous.worker === undefined) delete process.env.LLV_SEAT_TICK_JOURNAL_WORKER;
+    else process.env.LLV_SEAT_TICK_JOURNAL_WORKER = previous.worker;
+  }
+});
 
 function deployRig() {
   const rig = harness({ state: RECENT, seatDeployments: [{ deploymentId: "deploy-own", conversationId: CONVERSATION }],

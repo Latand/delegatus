@@ -31,6 +31,8 @@ import type { SeatTickRunRecord } from "./types";
 
 const ANSWER_TIMEOUT_MS = 10_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
+let answerTimeoutMs = ANSWER_TIMEOUT_MS;
+let repliesToDrop = 0;
 
 type Pending = { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
 interface Held {
@@ -97,7 +99,10 @@ function worker(): Held | null {
   created.unref();
   const state: Held = { worker: created, pending: new Map(), next: 0, detach: attachReadAttributionWorker(created, "seat-tick-journal") };
   created.on("message", (message: unknown) => {
-    if (message && typeof message === "object" && (message as Done).type === "seat-tick-journal-done") settle(state, message as Done);
+    if (message && typeof message === "object" && (message as Done).type === "seat-tick-journal-done") {
+      if (repliesToDrop > 0) { repliesToDrop--; return; }
+      settle(state, message as Done);
+    }
   });
   created.on("error", (error) => {
     consecutiveFailures += 1;
@@ -129,7 +134,7 @@ export function appendThroughSeatTickJournalWorker(record: SeatTickRunRecord, fi
       const error = new Error("the seat tick journal worker did not answer");
       retire(state, error);
       reject(error);
-    }, ANSWER_TIMEOUT_MS);
+    }, answerTimeoutMs);
     timer.unref?.();
     // A pending append keeps the process alive until it is answered.
     if (state.pending.size === 0) state.worker.ref();
@@ -148,6 +153,14 @@ export function appendThroughSeatTickJournalWorker(record: SeatTickRunRecord, fi
 /** Test seam: how many journal workers this process started. */
 export function seatTickJournalWorkersStartedForTests(): number {
   return started;
+}
+
+/** Test seam for exercising an append whose worker committed but reply vanished. */
+export function configureSeatTickJournalWorkerForTests(options: { timeoutMs?: number; dropReplies?: number }): () => void {
+  const previous = { answerTimeoutMs, repliesToDrop };
+  if (options.timeoutMs !== undefined) answerTimeoutMs = options.timeoutMs;
+  if (options.dropReplies !== undefined) repliesToDrop = options.dropReplies;
+  return () => { answerTimeoutMs = previous.answerTimeoutMs; repliesToDrop = previous.repliesToDrop; };
 }
 
 /** Test seam: stop the worker and forget its failures. */
