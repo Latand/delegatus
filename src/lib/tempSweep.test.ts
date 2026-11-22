@@ -1071,10 +1071,10 @@ test("temp cleanup protects a live owner without loading full registry history",
   } finally {full.mockRestore();fs.rmSync(root,{recursive:true,force:true});}
 });
 
-test("a root owned by the attempt ledger is kept without a walk of its tree", async () => {
+test.each([false, true])("a registered attempt root skips inspection even when its marker write is interrupted (%s)", async marked => {
   const root = tempRoot();
   const owned = aged(root, "llv-stage-ledger", 2 * DAY), plain = aged(root, "llv-stage-plain", 2 * DAY);
-  fs.writeFileSync(path.join(owned, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n");
+  if (marked) fs.writeFileSync(path.join(owned, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n");
   fs.writeFileSync(path.join(owned, "payload"), "kept");
   const inspected: string[] = [], measured: string[] = [];
   const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }],

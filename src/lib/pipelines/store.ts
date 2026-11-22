@@ -1492,20 +1492,22 @@ export function loadPipelinesForTask(taskId: string): Pipeline[] {
   });
 }
 
-/** Bounded feed for consumers that need task membership changes without loading
+/** Bounded feed for consumers that need committed changes without loading
  * the full pipeline registry. The cursor follows the active collection log. */
-export function pipelineTaskBindingSource() {
+export function pipelineChangeSource() {
   const collection = pipelineStore();
   return {
     revision: () => collection.revision(),
     changesAfter: (revision: number, key: string, limit: number) => collection.changesAfter(revision, key, limit),
     parse: (valueJson: string) => {
       const pipeline = decodePipeline(JSON.parse(valueJson));
-      if (!pipeline) throw new PipelineStoreError("invalid pipeline row in task-binding feed");
+      if (!pipeline) throw new PipelineStoreError("invalid pipeline row in change feed");
       return pipeline;
     },
   };
 }
+
+export const pipelineTaskBindingSource = pipelineChangeSource;
 
 /** Validates durable task membership at the pipeline store seam. */
 export function pipelineTaskLinkError(

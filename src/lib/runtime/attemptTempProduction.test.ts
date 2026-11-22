@@ -7,10 +7,12 @@ import { buildPipeline, savePipelines, findPipelineRecord } from "@/lib/pipeline
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { materializeStructuredHostAccess } from "./structuredSpawn";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
-import { runTempSweep, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
+import { runTempSweep, scanProcesses, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { statePath } from "@/lib/configDir";
 import { attemptReferencesClear, RepositoryLinkInventory } from "./attemptTempFilesystem";
-import { holdFinishedRoot, finishedLane } from "./attemptTempRetention.testSupport";
+import { holdFinishedRoot, finishedLane, nameInReport } from "./attemptTempRetention.testSupport";
+import { ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS } from "./attemptScratchPolicy";
+import { attemptScratchAuthority } from "./attemptTempProduction";
 import { RecordedCheckStore, recordedRootHeld } from "@/lib/recordedChecks/store";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
@@ -760,51 +762,152 @@ test.each([0, 1, 2, 3, 4])("a restored checkout holds scratch across consumer aw
   } finally { store.close(); }
 });
 
-test("production retains settled scratch while open and retires it after close", async () => {
+test("production schedules scratch on attempt completion, cancels on reopen and retires after the next completion", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-production-")); roots.push(root);
+  isolateState(root);
+  const { AttemptTempStore } = await import("./attemptTempRetention");
+  const { runAttemptTempSweep } = await import("./attemptTempProduction");
+  const start = Date.parse("2026-10-22T12:00:00Z");
+  let now = start;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
   const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
   const pipeline = buildPipeline({ id: "temp-lane", task: "Temp lifetime", project: "fixture", repoDir: root,
     stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
     srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
   pipeline.state = "running";
-  const attempt: PipelineStageAttempt = { n: 1, state: "passed", launchId: "temp-launch", effectiveRole: role,
+  pipeline.cursor = null;
+  const attempt: PipelineStageAttempt = { n: 1, state: "running", launchId: "temp-launch", effectiveRole: role,
     conversationId: "fixture-conversation", sessionId: null, agentPath: null, paneId: null, flowId: null,
-    startedAt: "2026-10-22T12:00:00Z", completedAt: "2026-10-22T12:01:00Z", input: null, activatedBy: null,
-    output: "done", verdict: { status: "pass" }, error: null };
+    startedAt: "2026-10-22T12:00:00Z", completedAt: null, input: null, activatedBy: null,
+    output: null, verdict: null, error: null };
   pipeline.runs = [{ stageId: "build", attempts: [attempt] }];
   fs.mkdirSync(pipeline.worktreeDir!, { recursive: true });
   savePipelines([pipeline]);
-  const access = materializeStructuredHostAccess({ readOnly: false, sandbox: "full" }, { ...process.env }, null, root,
+  const access = materializeStructuredHostAccess({ readOnly: false, sandbox: "full" }, { ...process.env, HOME: root }, null, undefined,
     { pipelineId: pipeline.id, launchId: "temp-launch", retainUntilClose: false });
   const sandbox = access.env.LLV_AGENT_SANDBOX_ROOT;
-  if (sandbox) roots.push(sandbox);
-  const child = withAgentConfigSandbox({ NODE_ENV: "test" }, access.env);
   fs.writeFileSync(path.join(access.env.TMPDIR!, "review-export"), "settled scratch");
-  // Main has no attempt retirement tick: its existing stale sweep leaves the
-  // fresh settled root behind. This fallback makes that regression observable.
-  const modulePath = "./attemptTempProduction";
-  const production = await import(modulePath).catch(() => null);
-  if (production) {
-    const { AttemptTempStore, sweepAttemptTemps } = await import("./attemptTempRetention");
-    const store = new AttemptTempStore();
-    try {
-      const options = { state: production.attemptTempState, references, scan: () => ({ ownNamespace: null, processes: [] }) };
-      expect((await sweepAttemptTemps(store, options)).removed).toBe(0);
-      expect(fs.existsSync(access.scratchDirectory!)).toBeTrue();
-      pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z"; savePipelines([pipeline]);
-      for (const directory of [access.scratchDirectory!, sandbox!]) store.release(directory);
-      await sweepAttemptTemps(store, options);
-    }
-    finally { store.close(); }
-  } else {
-    await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], maxAgeMs: 86400000, scan: { ownNamespace: null, processes: [] } });
-  }
-  expect(fs.existsSync(access.scratchDirectory!)).toBeFalse();
-  if (sandbox) {
-    expect(child.XDG_CONFIG_HOME).toBe(path.join(sandbox, "config"));
-    expect(fs.existsSync(sandbox)).toBeFalse();
-  }
+  const directories = [access.scratchDirectory!, sandbox!];
+  const scan = () => ({ ownNamespace: null, processes: [] });
+  const tick = (mode = "on") => runAttemptTempSweep({ scan, references }, { NODE_ENV: "test", LLV_TEMP_SWEEP: mode });
+  const store = new AttemptTempStore();
+  const deadlines = () => directories.map(directory => store.retentionExpiry(directory));
+  const finish = () => {
+    attempt.state = "passed"; attempt.completedAt = new Date(now).toISOString();
+    attempt.output = "done"; attempt.verdict = { status: "pass" };
+    savePipelines([pipeline]);
+    return now + ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS;
+  };
+  try {
+    await tick(); await tick(); await tick(); // Complete the initial audit.
+    expect(deadlines()).toEqual([null, null]);
+    now += 60_000;
+    const first = finish();
+    const scheduled = await tick();
+    expect(deadlines()).toEqual([first, first]);
+    expect(scheduled).toMatchObject({ checked: 0, inventoryWalks: 0, backfill: { checked: 0 }, recovery: { entries: 0 } });
+    expect(directories.map(directory => store.owner(directory)?.released)).toEqual([0, 0]);
+    pipeline.cursor = { stageId: "build", state: "committing", input: null, activatedBy: null };
+    savePipelines([pipeline]);
+    expect((await tick())?.checked).toBe(0);
+    expect(deadlines()).toEqual([null, null]);
+    pipeline.cursor = null;
+    attempt.state = "running"; attempt.completedAt = null; attempt.verdict = null; savePipelines([pipeline]);
+    expect((await tick())?.checked).toBe(0);
+    expect(deadlines()).toEqual([null, null]);
+    now = first + 60_000;
+    expect((await tick())?.removed).toBe(0);
+    expect(fs.readFileSync(path.join(access.env.TMPDIR!, "review-export"), "utf8")).toBe("settled scratch");
+    const second = finish();
+    await tick();
+    expect(deadlines()).toEqual([second, second]);
+    now = second - 1;
+    expect((await tick())?.checked).toBe(0);
+    now = second;
+    const checkout = pipeline.worktreeDir!, saved = checkout + "-saved";
+    for (const [index, directory] of directories.entries()) fs.symlinkSync(directory, path.join(checkout, `dependency-${index}`), "dir");
+    expect(await tick()).toMatchObject({ checked: 2, removed: 0, liveHeld: 2 });
+    fs.renameSync(checkout, saved);
+    now += 30 * 60_000;
+    expect(await tick()).toMatchObject({ checked: 2, removed: 0, operatorHeld: 2 });
+    for (const index of directories.keys()) fs.unlinkSync(path.join(saved, `dependency-${index}`));
+    fs.renameSync(saved, checkout);
+    now += 30 * 60_000;
+    const preview = await tick("dry-run");
+    expect(preview).toMatchObject({ removed: 2, reclaimedBytes: 0, cleanup: { reclaimedBytesLastHour: 0 } });
+    expect(directories.every(directory => fs.existsSync(directory))).toBeTrue();
+    now += 60_000;
+    const retired = await tick();
+    expect(retired).toMatchObject({ checked: 2, removed: 2, errors: 0 });
+    expect(directories.some(directory => fs.existsSync(directory) || store.has(directory))).toBeFalse();
+  } finally { store.close(); clock.mockRestore(); }
 });
+
+test.skipIf(process.platform !== "linux").each(["live child", "mount", "linked evidence", "unknown checkout", "swap"] as const)(
+  "an expired production root keeps its data when protected by %s", async protection => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "scheduled-protection-")); roots.push(root);
+    isolateState(root);
+    const at = Date.parse("2035-01-15T00:00:00Z");
+    const lane = finishedLane(root, "2035-01-13T00:00:00Z"); savePipelines([lane]);
+    const directory = statePath("scratch", "llv-stage-parent");
+    fs.mkdirSync(path.join(directory, "checkout"), { recursive: true });
+    const payload = path.join(directory, "frame.png"); fs.writeFileSync(payload, "protected data");
+    const { AttemptTempStore } = await import("./attemptTempRetention");
+    const { runAttemptTempSweep } = await import("./attemptTempProduction");
+    const store = new AttemptTempStore();
+    store.register({ directory, pipelineId: lane.id, launchId: "prior-launch", retainUntilClose: true, createdAt: at - 3 * 86400000 });
+    store.close();
+    const clock = spyOn(Date, "now").mockReturnValue(at);
+    const restore: Array<() => void> = [];
+    let scan = (): ProcessScan => ({ ownNamespace: null, processes: [] });
+    let child: Bun.Subprocess<"pipe", "pipe", "pipe"> | undefined;
+    let preserved = payload, swapped = false;
+    try {
+      if (protection === "live child") {
+        child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), "--hold"],
+          { cwd: directory, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+        const reader = child.stdout.getReader();
+        try { expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready\n"); }
+        finally { reader.releaseLock(); }
+        const proc = path.join(root, "proc"); fs.mkdirSync(proc);
+        fs.symlinkSync("/proc/self", path.join(proc, "self"));
+        fs.symlinkSync(`/proc/${child.pid}`, path.join(proc, String(child.pid)));
+        scan = () => scanProcesses(proc, [directory]);
+        expect(scan().processes).toHaveLength(1);
+      } else if (protection === "mount") {
+        const read = fs.readFileSync.bind(fs);
+        const mounted = spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: unknown) => {
+          const value = read(file, options as BufferEncoding);
+          return file === "/proc/self/mountinfo" ? `${value}\n431 24 0:1 / ${directory}/checkout rw - tmpfs tmpfs rw\n` : value;
+        }) as typeof fs.readFileSync);
+        restore.push(() => mounted.mockRestore());
+      } else if (protection === "linked evidence") nameInReport(payload);
+      else if (protection === "unknown checkout") fs.writeFileSync(path.join(directory, "checkout", ".git"), "gitdir: missing\n");
+      else {
+        const rename = fs.renameSync.bind(fs);
+        const replace = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+          rename(from, to);
+          if (from !== directory || !path.basename(String(to)).startsWith(".delegatus-trash-")) return;
+          const saved = path.join(root, "original"); rename(to, saved);
+          fs.mkdirSync(to); fs.writeFileSync(path.join(String(to), "replacement"), "new owner");
+          preserved = path.join(saved, "frame.png"); swapped = true;
+        });
+        restore.push(() => replace.mockRestore());
+      }
+      const report = await runAttemptTempSweep({ scan, references }, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" });
+      expect(report).toMatchObject({ checked: 1, removed: 0, reclaimedBytes: 0 });
+      expect(fs.readFileSync(preserved, "utf8")).toBe("protected data");
+      if (protection === "swap") {
+        expect(swapped).toBeTrue();
+        const journal = JSON.parse(fs.readFileSync(attemptTempJournalPath(directory), "utf8"));
+        expect(fs.readFileSync(path.join(journal.trash, "replacement"), "utf8")).toBe("new owner");
+      }
+    } finally {
+      for (const stop of restore.reverse()) stop();
+      clock.mockRestore();
+      if (child) { child.stdin.end(); await child.exited; }
+    }
+  });
 
 
 test("foreign and gate-named directories with no creation record survive registration, the capped tick and the legacy sweep", async () => {
@@ -887,7 +990,10 @@ test("an idle minute tick writes no journal line or report, and a changed condit
     expect(fs.existsSync(report)).toBeFalse();
     const held = path.join(root, "llv-stage-held"); fs.mkdirSync(held); fs.writeFileSync(path.join(held, "data"), Buffer.alloc(8192));
     const store = new AttemptTempStore();
-    try { store.register({ directory: held, pipelineId: "missing-lane", launchId: "held", retainUntilClose: false, createdAt: Date.now() }); }
+    try {
+      store.register({ directory: held, pipelineId: "missing-lane", launchId: "held", retainUntilClose: false, createdAt: Date.now() });
+      store.measure(held, 8192);
+    }
     finally { store.close(); }
     const over = await tick({ LLV_ATTEMPT_TEMP_CAP_BYTES: "0" });
     expect(over).toHaveLength(1); expect(over[0]).toContain("measured bytes over cap");
@@ -921,7 +1027,11 @@ test.each(["passed", "failed", "needs_decision", "skipped", "committing"] as con
   expect(await attemptTempState(owner)).toBe("live");
   pipeline.runs[0]!.attempts[0]!.retiredLaunches = [{ launchId: "prior-launch", conversationId: null,
     error: "startup retired", retiredAt: "2026-10-22T12:01:00Z" }]; savePipelines([pipeline]);
-  expect(await attemptTempState({ ...owner, launchId: "prior-launch" })).toBe("live");
+  const retiredAt = Date.parse("2026-10-22T12:01:00Z"), dueAt = retiredAt + ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS;
+  expect(await attemptScratchAuthority({ ...owner, launchId: "prior-launch" }, undefined, () => dueAt - 1)).toMatchObject({ state: "closed", expiresAt: dueAt });
+  expect(await attemptScratchAuthority({ ...owner, launchId: "prior-launch" }, undefined, () => dueAt)).toMatchObject({ state: "expired", expiresAt: dueAt });
+  expect(await attemptTempState({ ...owner, launchId: "prior-launch", retainUntilClose: true })).toBe("live");
+  expect(await attemptTempState({ ...owner, launchId: "prior-launch", createdAt: retiredAt + 1 })).toBe("live");
   expect(await attemptTempState({ ...owner, launchId: "unrecorded-launch" })).toBe("unknown");
   fs.mkdirSync(path.join(pipeline.worktreeDir!, "nested"), { recursive: true });
   fs.symlinkSync(path.join(owner.directory, "packages"), path.join(pipeline.worktreeDir!, "nested/node_modules"), "dir");

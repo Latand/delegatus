@@ -104,21 +104,31 @@ export class AttemptTrashRecovery {
       this.db.query("DELETE FROM trash_recovery WHERE directory=?").run(directory);
     })();
   }
-  page(now: () => number, deadline: number, budgetNow = now) {
-    const result = { entries: 0, manifestEntries: 0, checks: 0, restored: 0,
+  page(now: () => number, deadline: number, budgetNow = now,
+    discovery: false | { unknown: (scratch: string, name: string) => boolean; complete: () => void } | undefined = undefined) {
+    const result = { entries: 0, manifestEntries: 0, checks: 0, restored: 0, adopted: 0, recoveredDirectory: null as string | null,
       outcomes: [] as Array<{ directory: string; disposition: "held" | "deferred"; bytes: number; reason: string }> };
     if (budgetNow() >= deadline) return result;
     const scan = this.db.query<{ cursor: string; turn: number }, []>("SELECT cursor,turn FROM trash_recovery_scan WHERE id=1").get()!;
-    try {
+    if (discovery !== false) try {
       const parent = fs.lstatSync(this.scratch, { throwIfNoEntry: false });
-      if (!parent) return result;
+      if (!parent) { discovery?.complete(); return result; }
       if (!parent.isDirectory() || parent.isSymbolicLink() || fs.realpathSync(this.scratch) !== this.scratch
         || process.getuid && parent.uid !== process.getuid()) throw new Error("owner-unknown: indirect scratch parent");
       const page = discoverAttemptCopies(this.scratch, scan.cursor, budgetNow, deadline, "identity");
       result.entries = page.read;
       for (const name of page.names) {
         if (budgetNow() >= deadline) return result; // Revisit this bounded page after interruption.
-        if (!/^\.delegatus-sweep-[a-f0-9]{64}\.json$/.test(name)) continue;
+        if (!/^\.delegatus-sweep-[a-f0-9]{64}\.json$/.test(name)) {
+          try {
+            if (discovery?.unknown(this.scratch, name)) {
+              result.adopted++;
+              result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason: "owner-unknown" });
+            }
+          }
+          catch (error) { result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason: `owner-unknown: ${String(error)}` }); }
+          continue;
+        }
         const journal = readAttemptTempTrash(path.join(this.scratch, name), this.scratch);
         if (!journal) { result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason: "owner-unknown" }); continue; }
         if (this.db.query("SELECT 1 FROM roots WHERE directory=?").get(journal.directory)) continue;
@@ -128,6 +138,7 @@ export class AttemptTrashRecovery {
         if (reset.changes) this.clearObservations(journal.directory);
       }
       this.db.query("UPDATE trash_recovery_scan SET cursor=? WHERE id=1").run(page.done ? "" : page.cursor);
+      if (page.done) discovery?.complete();
     } catch (error) {
       this.db.query("UPDATE trash_recovery_scan SET cursor='' WHERE id=1").run();
       result.outcomes.push({ directory: this.scratch, disposition: "held", bytes: 0, reason: `owner-unknown: ${String(error)}` });
@@ -230,6 +241,7 @@ export class AttemptTrashRecovery {
           .run(cursor, JSON.stringify(agreed), JSON.stringify(matches), journal.directory);
         if (inserted.changes) result.restored++;
       })();
+      result.recoveredDirectory = journal.directory;
       return result;
     } catch { return hold(); }
   }

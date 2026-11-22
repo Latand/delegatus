@@ -742,7 +742,11 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const pinned = (directory: string) => {
     try { fs.lstatSync(path.join(directory, ".delegatus-keep")); return true; } catch { return false; }
   };
+  const listedAttempt = (original: string, physical = original) => options.attemptLedger
+    && /^llv-(?:read-only-stage|stage|stage-config)-/.test(path.basename(original))
+    && (options.attemptLedger(original) || original !== physical && options.attemptLedger(physical));
   const trashPolicyHolds = (root: TempSweepRoot, trash: string, original: string) => {
+    if (!options.onlyDirectories && (listedAttempt(original) || fs.existsSync(path.join(trash, ".delegatus-attempt-owner")))) return true;
     const inspection = inspect(trash, root, original, true);
     const protectedTrees = [...readWorktrees(), ...accounted].map(entry => path.resolve(entry));
     return !!pinned(trash) || !!inspection.hold || (options.now?.() ?? Date.now()) - inspection.newestMs < options.maxAgeMs
@@ -849,10 +853,12 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       // root the ledger does not list has no owner left; it stays, and the
       // report names it. No process was asked about it, so it is counted as
       // the ledger's, never as in use.
-      if (!options.onlyDirectories && fs.existsSync(path.join(reachable, ".delegatus-attempt-owner"))) {
-        const listed = options.attemptLedger?.(candidate) ?? true;
-        if (await keep("ledger", 0) && !listed) report.held!.push({ path: candidate, via: root.via, reason: "attempt-owner-unlisted", bytes: 0 });
-        continue;
+      if (!options.onlyDirectories) {
+        const listed = listedAttempt(candidate, originalPath);
+        if (listed || fs.existsSync(path.join(reachable, ".delegatus-attempt-owner"))) {
+          if (await keep("ledger", 0) && listed === false) report.held!.push({ path: candidate, via: root.via, reason: "attempt-owner-unlisted", bytes: 0 });
+          continue;
+        }
       }
       const inspection = inspect(reachable, root, candidate);
       const newest = inspection.newestMs;
