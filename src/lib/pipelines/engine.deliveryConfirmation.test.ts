@@ -10,7 +10,7 @@ const NOW = "2026-11-17T12:00:00.000Z";
 async function confirmationPark(withTranscript = true) {
   const h = harness();
   h.ports.now = () => NOW;
-  const pathname = path.join(sharedClaudeProjectsRoot(), "confirmation-project", "confirmation.jsonl");
+  const pathname = path.join(sharedClaudeProjectsRoot(), withTranscript ? "confirmation-project" : "pending-confirmation-project", "confirmation.jsonl");
   if (withTranscript) {
     fs.mkdirSync(path.dirname(pathname), { recursive: true });
     fs.writeFileSync(pathname, "");
@@ -68,6 +68,7 @@ test.each(["native", "receipt"] as const)("#4068: controller reconciliation reop
 
 test.each(["tick", "report"] as const)("#4068: %s trusts the delivered receipt before the transcript materializes", async entry => {
   const f = await confirmationPark(false);
+  expect(fs.existsSync(f.pathname)).toBe(false);
   expect(await f.report()).toMatchObject({ code: "STAGE_REPORT_SETTLED" });
   f.delivered();
   if (entry === "tick") await tickPipelines([], f.h.ports);
