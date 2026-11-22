@@ -75,6 +75,7 @@ test("an unknown gh exit logs only a bounded scrubbed excerpt and a remedy", () 
 test.each([
   ["gh: unknown flag: --private-account-handle", "unknown flag"],
   ["unknown option --private-account-handle", "unknown option"],
+  ["unknown option --connection-timeout-configuration", "unknown option"],
   ["unexpected output: unknown option --private-account-handle", "details withheld for privacy"],
 ])("only an actual unknown option diagnostic supplies a fixed phrase: %s", (stderr, excerpt) => {
   const error = { code: 17, stderr };
@@ -107,6 +108,17 @@ test("Go DNS failures are actionable without admitting transient merge fallback"
   });
   expect(githubReadFailure(error)).toEqual({
     reason: "GitHub DNS lookup failed: details withheld for privacy", transient: false,
+  });
+});
+
+test.each([
+  ["gh: pull request not found\nwarning: connection closed", "not-found", "not found"],
+  ["dial tcp: ENETUNREACH", "network", "temporarily unavailable"],
+] as const)("the optional read diagnoses %s while the merge read blocks", (stderr, cause, label) => {
+  const error = { code: 1, stderr };
+  expect(githubReadDiagnostic(error).cause).toBe(cause);
+  expect(githubReadFailure(error)).toEqual({
+    reason: `GitHub read ${label}: details withheld for privacy`, transient: false,
   });
 });
 

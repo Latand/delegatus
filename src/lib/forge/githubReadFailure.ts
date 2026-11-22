@@ -6,7 +6,7 @@ import { ForgeAppWriteRefused } from "./appWrite";
 type ReadFailureCause = "gh-not-found" | "app-refused" | "not-found" | "timed-out" | "rate-limited"
   | "unauthenticated" | "invalid-response" | "dns" | "certificate" | "network" | "command-error";
 
-function classifyGithubReadFailure(error: unknown) {
+function readFailureEvidence(error: unknown) {
   const detail = error as { stderr?: unknown; message?: unknown; code?: unknown; killed?: unknown; signal?: unknown; timeoutMs?: unknown } | null;
   const stderr = typeof detail?.stderr === "string" ? detail.stderr : "";
   const message = typeof detail?.message === "string" ? detail.message : typeof error === "string" ? error : "";
@@ -21,14 +21,58 @@ function classifyGithubReadFailure(error: unknown) {
   const diagnostics = stripVTControlCharacters(installationFailure || stderr || message).split(/[\r\n\u2028\u2029]+/)
     .filter(part => !/^Command failed\b/i.test(part.trim()))
     .map(part => part.replace(/^gh:\s*/, "").trim()).filter(Boolean);
-  const raw = diagnostics.join("\n").replace(/https?:\/\/[^\s)]+/gi, "");
   const line = diagnostics[0] ?? "no diagnostic returned";
+  // CLI option names can contain arbitrary text, including transport words.
+  const unknownSwitch = /^unknown (flag|option)(?=[:\s]|$)/i.exec(line)?.[1]?.toLowerCase();
+  const raw = unknownSwitch ? `unknown ${unknownSwitch}` : diagnostics.join("\n").replace(/https?:\/\/[^\s)]+/gi, "");
   const status = /\bHTTP(?:\/\d+(?:\.\d+)?)?[ :]+(\d{3})\b/i.exec(raw)?.[1];
-  const failure = (cause: ReadFailureCause, label: string, transient = false, excerpt = "") => ({
-    cause, transient, reason: () => redactBounded(`${label}: ${excerpt || "details withheld for privacy"}`, 400),
+  const transport = `${detail?.code ?? ""}\n${raw}`;
+  return {
+    detail, line, installationFailure, unknownSwitch,
+    missingCli: detail?.code === "ENOENT",
+    appRefused: error instanceof ForgeAppWriteRefused && !installationFailure,
+    certificateFailure: /failed to verify certificate|certificate verify failed|x509:/i.test(raw),
+    dnsFailure: /\bno such host\b/i.test(raw),
+    resourceNotFound: status === "404" || (!status && /could not resolve to a (?:repository|pullrequest)\b/i.test(raw)),
+    timedOut: detail?.code === "ETIMEDOUT" || (detail?.killed === true && (detail.signal === "SIGTERM" || detail.signal === "SIGKILL"))
+      || (!status && /timed?\s*out|timeout|deadline exceeded/i.test(raw)),
+    rateLimited: status === "429" || /rate.?limit|secondary rate|abuse detection/i.test(raw),
+    proxyFailure: /proxy|connect tunnel|connect response|http connect/i.test(raw)
+      && /proxy authentication required|407|unexpected eof|connection closed/i.test(raw),
+    unauthenticated: status === "401" || status === "403" || (!status && (detail?.code === 4
+      || /authentication|bad credentials|not logged|not signed|gh auth login|requires? auth|resource not accessible/i.test(raw))),
+    plainNotFound: !status && /not found/i.test(raw),
+    invalidResponse: error instanceof SyntaxError || /parsable|parse|malformed|invalid.*(?:json|response)|unexpected.*(?:json|token)|returned no /i.test(raw),
+    transientTransport: status?.startsWith("5") === true
+      || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|network|socket hang up|TLS handshake|connection|service unavailable|could not resolve host|could not be reached/i.test(transport),
+    unreachableNetwork: /\bENETUNREACH\b/i.test(transport),
+  };
+}
+
+type ReadFailureEvidence = ReturnType<typeof readFailureEvidence>;
+
+function mergeReadIsTransient(evidence: ReadFailureEvidence): boolean {
+  if (evidence.missingCli || evidence.appRefused || evidence.certificateFailure || evidence.dnsFailure
+    || evidence.resourceNotFound || evidence.unknownSwitch) return false;
+  // A secondary rate limit can use HTTP 403. Keep the established outage
+  // cases eligible and refuse explicit read errors ahead of generic transport text.
+  if (evidence.timedOut || evidence.rateLimited) return true;
+  if (evidence.proxyFailure || evidence.unauthenticated || evidence.plainNotFound || evidence.invalidResponse) return false;
+  return evidence.transientTransport;
+}
+
+/** Apply the merge outage policy independently of optional read diagnostics. */
+export function isTransientMergeReadFailure(error: unknown): boolean {
+  return mergeReadIsTransient(readFailureEvidence(error));
+}
+
+function classifyGithubReadFailure(evidence: ReadFailureEvidence) {
+  const { detail, line, installationFailure } = evidence;
+  const failure = (cause: ReadFailureCause, label: string, excerpt = "") => ({
+    cause, reason: () => redactBounded(`${label}: ${excerpt || "details withheld for privacy"}`, 400),
   });
-  if (detail?.code === "ENOENT") return failure("gh-not-found", "GitHub CLI (gh) not found", false, "check the Viewer service PATH");
-  if (error instanceof ForgeAppWriteRefused && !installationFailure) return failure("app-refused", "GitHub App read refused");
+  if (evidence.missingCli) return failure("gh-not-found", "GitHub CLI (gh) not found", "check the Viewer service PATH");
+  if (evidence.appRefused) return failure("app-refused", "GitHub App read refused");
   if (installationFailure) {
     const safe = /GitHub (?:answered HTTP \d{3}(?: \(rate limited\))? while verifying the App installation|could not be reached to verify the App installation)/.exec(installationFailure)?.[0];
     if (safe) {
@@ -39,56 +83,44 @@ function classifyGithubReadFailure(error: unknown) {
         : category === "network" ? "GitHub read temporarily unavailable"
           : category === "not-found" ? "GitHub read not found"
             : category === "unauthenticated" ? "GitHub read authentication failed" : "GitHub App read refused";
-      return failure(category, label, category === "rate-limited" || category === "network", safe);
+      return failure(category, label, safe);
     }
   }
-  // These diagnostics can also contain generic transport words. Keep them
-  // out of the transient set used by the Git-only landing fallback.
-  if (/failed to verify certificate|certificate verify failed|x509:/i.test(raw)) {
+  if (evidence.certificateFailure) {
     return failure("certificate", "GitHub TLS certificate verification failed");
   }
-  if (/\bno such host\b/i.test(raw)) return failure("dns", "GitHub DNS lookup failed");
-  if (status === "404" || (!status && /could not resolve to a (?:repository|pullrequest)\b/i.test(raw))) return failure("not-found", "GitHub read not found");
-  if (detail?.code === "ETIMEDOUT" || (detail?.killed === true && (detail.signal === "SIGTERM" || detail.signal === "SIGKILL"))
-    || (!status && /timed?\s*out|timeout|deadline exceeded/i.test(raw))) {
+  if (evidence.dnsFailure) return failure("dns", "GitHub DNS lookup failed");
+  if (evidence.resourceNotFound) return failure("not-found", "GitHub read not found");
+  if (evidence.timedOut) {
     const limit = typeof detail?.timeoutMs === "number" && Number.isFinite(detail.timeoutMs) && detail.timeoutMs > 0
-      ? `limit ${detail.timeoutMs} ms; ` : "";
-    return failure("timed-out", "GitHub read timed out", true, limit.trim() || "");
+      ? `limit ${detail.timeoutMs} ms;` : "";
+    return failure("timed-out", "GitHub read timed out", limit);
   }
-  // A secondary rate limit can use HTTP 403, so classify it before auth.
-  if (status === "429" || /rate.?limit|secondary rate|abuse detection/i.test(raw)) return failure("rate-limited", "GitHub read rate limited", true);
-  const proxyContext = /proxy|connect tunnel|connect response|http connect/i.test(raw);
-  if (proxyContext && /proxy authentication required|407|unexpected eof|connection closed/i.test(raw)) {
-    return failure("network", "GitHub network request failed", false);
-  }
-  if (status === "401" || status === "403" || (!status && (detail?.code === 4 || /authentication|bad credentials|not logged|not signed|gh auth login|requires? auth|resource not accessible/i.test(raw)))) {
-    return failure("unauthenticated", "GitHub read authentication failed");
-  }
-  if (error instanceof SyntaxError || /parsable|parse|malformed|invalid.*(?:json|response)|unexpected.*(?:json|token)|returned no /i.test(raw)) {
-    return failure("invalid-response", "GitHub read invalid response");
-  }
-  if (status?.startsWith("5") || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|network|socket hang up|TLS handshake|connection|service unavailable|could not resolve host|could not be reached/i.test(`${detail?.code ?? ""}\n${raw}`)) {
-    return failure("network", "GitHub read temporarily unavailable", true);
-  }
+  if (evidence.rateLimited) return failure("rate-limited", "GitHub read rate limited");
+  if (evidence.proxyFailure) return failure("network", "GitHub network request failed");
+  if (evidence.unauthenticated) return failure("unauthenticated", "GitHub read authentication failed");
+  if (evidence.plainNotFound) return failure("not-found", "GitHub read not found");
+  if (evidence.invalidResponse) return failure("invalid-response", "GitHub read invalid response");
+  if (evidence.transientTransport || evidence.unreachableNetwork) return failure("network", "GitHub read temporarily unavailable");
   const code = typeof detail?.code === "number" ? ` (exit ${detail.code})`
     : typeof detail?.code === "string" && /^[A-Z][A-Z_]+$/.test(detail.code) ? ` (${detail.code})` : "";
   // Preserve only known CLI phrases; arbitrary stderr can contain identities,
   // repository names, and paths that the general monitor redactor misses.
-  const unknownSwitch = /^unknown (flag|option)(?=[:\s]|$)/i.exec(line)?.[1]?.toLowerCase();
+  const { unknownSwitch } = evidence;
   const safeExcerpt = unknownSwitch ? `unknown ${unknownSwitch}`
     : /^CLI invocation refused$/i.test(line) ? "CLI invocation refused" : "details withheld for privacy";
-  return failure("command-error", `GitHub read failed${code}`, false, safeExcerpt);
+  return failure("command-error", `GitHub read failed${code}`, safeExcerpt);
 }
 
 /** Read failures carry no evidence that authorizes a GitHub write. */
 export function githubReadFailure(error: unknown): { reason: string; transient: boolean } {
-  const { reason, transient } = classifyGithubReadFailure(error);
-  return { reason: reason(), transient };
+  const evidence = readFailureEvidence(error);
+  return { reason: classifyGithubReadFailure(evidence).reason(), transient: mergeReadIsTransient(evidence) };
 }
 
 /** Actionable diagnostics for optional Viewer reads. Only command errors need stderr. */
 export function githubReadDiagnostic(error: unknown): { cause: ReadFailureCause; message: string } {
-  const { cause, reason } = classifyGithubReadFailure(error);
+  const { cause, reason } = classifyGithubReadFailure(readFailureEvidence(error));
   if (cause === "command-error") return { cause, message: `${reason()}. Check the gh installation and configuration, then retry.` };
   const messages: Record<Exclude<ReadFailureCause, "command-error">, string> = {
     "gh-not-found": "GitHub CLI (gh) not found on PATH. Install gh or add it to the Viewer service PATH.",
