@@ -2,7 +2,6 @@ import { workspaceRuntime } from "@/lib/team/workspaceProjection";
 import { workspaceRoute, requestWorkspaceScope } from "@/lib/team/workspaceRoute";
 import { NextResponse } from "next/server";
 
-import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import { statePath } from "@/lib/configDir";
 import { readRuntimeHostStartupState } from "../../../../runtime-host/runtimeHostStartup";
 import { isRuntimeHostTransportFailure, runtimeHostClient } from "@/lib/runtime/client";
@@ -51,10 +50,9 @@ async function workspaceGET(request: Request): Promise<NextResponse> {
       ?? JSON.stringify({ ...(snapshot ?? JSON.parse(Buffer.from(encoded!).toString("utf8")) as object), ...viewer });
     const headers = { "content-type": "application/json", "cache-control": "no-store", vary: "accept-encoding" };
     /* A cold open and every authoritative rejoin read the whole projection,
-       megabytes of it; compressed it is a fifth of that on the wire (#1994). */
-    if (acceptsGzip(request) && body.length >= 1024) {
-      return new NextResponse(await gzipBody(body) as BodyInit, { headers: { ...headers, "content-encoding": "gzip" } });
-    }
+       megabytes of it. The body leaves unencoded: Next drops a route's own
+       `content-encoding` (the pinned 16.4.6 does), and its compression layer
+       then encodes the answer for a caller that accepts it. */
     return new NextResponse(body as BodyInit, { headers });
   } catch (error) {
     if (isRuntimeHostTransportFailure(error)) {

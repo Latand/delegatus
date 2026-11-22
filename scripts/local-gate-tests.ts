@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
-import { gateInputSnapshot, gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
+import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment } from "./local-gate";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
@@ -409,9 +409,9 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2
       ? `; over half the ${budgets.fileMs / 1000} s file budget; split it` : "";
-    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
     results[index] = { failures, passed, completed, elapsedMs: 0 };
     options.onFile?.(results[index]!, cleanupConfirmed);
+    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
   };
   const workers: PromiseSettledResult<void>[] = [];
   for (const group of groups) {
@@ -482,15 +482,14 @@ function isGreenHeadFile(value: unknown): value is TestRun {
 /** The comparator preserves caller variables beyond the publication wrapper's
  * allowlist. Bind those values with the baseline environment identity, plus
  * identity/privacy/network values that a direct comparator call still passes. */
-function headEnvironmentKey(env: NodeJS.ProcessEnv, inherited: NodeJS.ProcessEnv): string {
+function headEnvironmentKey(env: NodeJS.ProcessEnv): string {
   const consumed = /^(?:GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)|LLV_PRIVACY_[A-Z0-9_]+|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
-  return fingerprint([environmentFingerprint(env), checkInputEnvironment(inherited), env.XDG_RUNTIME_DIR ?? null, Object.entries(env)
+  return fingerprint([environmentFingerprint(env), checkInputEnvironment(env), env.XDG_RUNTIME_DIR ?? null, Object.entries(env)
     .filter(([name, value]) => value !== undefined && consumed.test(name)).sort(([a], [b]) => a.localeCompare(b))]);
 }
 
-/** Only the two inherited paths written by the local gate allocator can be
- * folded. Every file replaces them with its own directories. Keep the selected
- * temp parent and the original values of any explicitly declared inputs. */
+/** Every file gets its own roots. Fold inherited paths proven to come from
+ * the gate allocator, including when the caller declared one as an input. */
 function headCheckpointEnvironment(root: string, sandbox: string, inherited: NodeJS.ProcessEnv) {
   const temporary = path.dirname(sandbox);
   const outer = path.dirname(temporary);
@@ -500,27 +499,15 @@ function headCheckpointEnvironment(root: string, sandbox: string, inherited: Nod
     && inherited.XDG_RUNTIME_DIR === path.join(outer, "xdg_runtime_dir")
     && hasActiveGateSandbox(outer, inherited.LLV_GATE_SANDBOX_RECORD);
   const env = { ...inherited };
-  // The gate-slot.sh bash wrappers read BASH_ENV before launching the
-  // comparator. Its bytes stand for startup effects outside the environment,
-  // such as umask, rlimits, and cwd. Unknown or unreadable startup inputs
-  // keep reusable per-file receipts cold.
-  let bashEnv: readonly unknown[] | null = null;
-  if (inherited.BASH_ENV !== undefined) {
-    try {
-      const file = path.resolve(root, inherited.BASH_ENV);
-      const stat = statSync(file);
-      if (!stat.isFile()) return;
-      bashEnv = [inherited.BASH_ENV, realpathSync(file), stat.dev, stat.ino, fileFingerprint(file)];
-      if (bashEnv[4] === "missing") return;
-    } catch { return; }
-  }
   // The Linux owned runner's check-worker-entry.py always issues these
   // two identities anew before executing a file.
   delete env.LLV_CHECK_ENTRY_PID;
   delete env.LLV_CHECK_ENTRY_SUPERVISOR;
   if (owned) {
-    delete env.XDG_STATE_HOME;
-    delete env.XDG_RUNTIME_DIR;
+    for (const name of ISOLATED_DIRECTORY_KEYS) {
+      if (env[name] === path.join(outer, name.toLowerCase())) delete env[name];
+    }
+    if (env.CLAUDE_CODE_TMPDIR === temporary) delete env.CLAUDE_CODE_TMPDIR;
   }
   const parent = owned ? path.dirname(outer) : temporary;
   try {
@@ -532,13 +519,13 @@ function headCheckpointEnvironment(root: string, sandbox: string, inherited: Nod
     // The checked-out directory is still an input to the test process.
     const source = statSync(root);
     const key = fingerprint([[root, realpathSync(root), source.dev, source.ino],
-      [owned, parent, physical, stat.dev, stat.ino], bashEnv, headEnvironmentKey(env, inherited)]);
+      [owned, parent, physical, stat.dev, stat.ino], headEnvironmentKey(env)]);
     return { env, key };
   } catch { return undefined; }
 }
 
-/** The fresh runtime directory has no private systemd socket. Identify the
- * actual local bus and its manager connection before using a service receipt. */
+/** Probe from the worker's fresh runtime directory and fingerprint the actual
+ * local bus, manager connection and cleanup tools. */
 function serviceCleanupIdentity(root: string, isolated: NodeJS.ProcessEnv): string | undefined {
   if (process.platform !== "linux") return;
   const PATH = fileRunnerPath(isolated);
@@ -597,7 +584,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   };
   const env = isolatedEnvironment(sandbox, inherited);
   const git = (...args: string[]) => command(["git", ...args], root, env);
-  let sealHeadSamples: (() => (() => void) | undefined) | undefined;
+  let verifyHeadReuse: (() => void) | undefined;
   try {
     const base = git("rev-parse", "--verify", `${baseRef}^{commit}`).trim();
     const headCommit = git("rev-parse", "--verify", "HEAD^{commit}").trim();
@@ -615,7 +602,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const initial = inputs?.snapshot();
     const headCache = initial ? headFileCache(root) : undefined;
     const headKey = (file: string) => fingerprint([4, initial?.key, checkpointEnvironment?.key, cleanupIdentity, files, budgets, file]);
-    const reused: TestRun[] = [], pending: string[] = [], freshGreen: TestRun[] = [];
+    const reused: TestRun[] = [], pending: string[] = [];
     for (const file of files) {
       const cached = headCache?.read(headKey(file));
       if (cached?.completed[0] === file) {
@@ -623,21 +610,22 @@ export async function touchedTests(root: string, baseRef: string, selected: read
         log(`touched-tests: reused complete green head file ${file}; identical source, selection, toolchain and environment`);
       } else pending.push(file);
     }
-    // Compare inputs only at the invocation boundaries, never once per file.
-    // The caller still gets the aggregate failure, but completed files survive
-    // that failure for a retry of exactly the same inputs. A killed supervisor
-    // or failed cleanup cannot seal a checkpoint.
-    sealHeadSamples = () => {
-      if (!initial || !headCache || (!reused.length && !freshGreen.length)) return;
-      if (serviceCleanupIdentity(root, env) !== cleanupIdentity || headCheckpointEnvironment(root, sandbox, inherited)?.key !== checkpointEnvironment?.key
-        || inputs?.snapshot()?.key !== initial.key) {
-        if (reused.length) throw new Error("head checkpoint inputs changed during this run; fresh checks required");
-        return;
-      }
-      return () => { for (const run of freshGreen) headCache.write(headKey(run.completed[0]!), run); };
+    let inputsChanged = false;
+    const sameHeadInputs = () => !inputsChanged && (serviceCleanupIdentity(root, env) === cleanupIdentity
+      && headCheckpointEnvironment(root, sandbox, inherited)?.key === checkpointEnvironment?.key
+      && inputs?.snapshot()?.key === initial?.key);
+    if (reused.length) verifyHeadReuse = () => {
+      if (!sameHeadInputs()) throw new Error("head checkpoint inputs changed during this run; fresh checks required");
     };
+    // A hook deadline can kill the comparator before its finally runs. Seal
+    // a green file after its runner and sandbox have been cleaned, with the
+    // same inputs verified on both sides of that file's execution.
     const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers: HEAD_FILE_WORKERS,
-      onFile: headCache ? (run, cleanupConfirmed) => { if (cleanupConfirmed && isGreenHeadFile(run)) freshGreen.push(run); } : undefined });
+      onFile: headCache ? (run, cleanupConfirmed) => {
+        if (!cleanupConfirmed || !isGreenHeadFile(run)) return;
+        if (sameHeadInputs()) headCache.write(headKey(run.completed[0]!), run);
+        else inputsChanged = true;
+      } : undefined });
     const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
       completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };
     log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
@@ -759,9 +747,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     return comparison;
   } finally {
     budget.close();
-    let persist: (() => void) | undefined;
-    try { persist = sealHeadSamples?.(); } finally { releaseGateSandbox(sandbox); }
-    persist?.();
+    try { verifyHeadReuse?.(); } finally { releaseGateSandbox(sandbox); }
   }
 }
 
