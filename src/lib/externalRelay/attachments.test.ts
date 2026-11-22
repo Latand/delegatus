@@ -9,6 +9,7 @@ import { answerCapabilities, type AnswerDrop } from "./answerV2";
 import { richRequest } from "./rich.fixture";
 import { startTestRelay } from "./testRelay";
 import { readSqliteMemory, SQLITE_MEMORY_MESSAGE_PREFIX } from "@/lib/sqliteMemoryDiagnostics";
+import { createOwnerRunDirectory } from "./runDirectory";
 // Owner documents reject hidden ancestors, including a stage's TMPDIR.
 // Keep the fixture's dedicated root independent of that runner environment.
 const root = fs.mkdtempSync(path.join("/tmp", "relay-attachments-"));
@@ -290,6 +291,35 @@ test("owner output is confined to this run and retains the document checks", asy
   await expect(send([output, "..", "context.txt"].join(path.sep))).rejects.toMatchObject({ code: "document_outside_roots" });
   await expect(send(outside)).rejects.toMatchObject({ code: "document_outside_roots" });
   await expect(send(disguised)).rejects.toMatchObject({ code: "document_type" });
+});
+
+test("owner run output remains usable when the cache ancestor is a symlink", async () => {
+  const target = path.join(root, "cache-target");
+  const linkedCache = path.join(root, "linked-cache");
+  fs.mkdirSync(target);
+  fs.symlinkSync(target, linkedCache, "dir");
+  const runDir = await createOwnerRunDirectory(path.join(linkedCache, "delegatus", "relay-runs"));
+  const output = path.join(runDir, "outbox");
+  await fs.promises.mkdir(output, { recursive: true });
+  const report = path.join(output, "report.md");
+  await fs.promises.writeFile(report, "Report");
+  const instructions = await ownerAnswerFileInstructions(runDir);
+
+  expect(runDir.startsWith(path.join(target, "delegatus", "relay-runs") + path.sep)).toBe(true);
+  expect(instructions).toContain(JSON.stringify(output));
+  const [staged] = await stageOwnerAttachments([{ path: report, kind: "document" }], runDir, caps, [],
+    { home: root, stateDir: path.join(root, "state") }, []);
+  expect(fs.readFileSync(staged!.file, "utf8")).toBe("Report");
+  const server = await startTestRelay(req => ({ status: 201, body: {
+    attachment_id: req.url!.split("/").at(-1), sha256: req.headers["delegatus-relay-sha256"],
+    byte_size: Buffer.byteLength("Report"), mime_type: "text/markdown", filename: "report.md",
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+  } }));
+  try {
+    const uploaded = await uploadAnswerAttachments({ api_base: `${server.origin}/v1`, credential: "x".repeat(43) },
+      richRequest(true), [staged!], Date.now() + 10_000, new AbortController().signal, []);
+    expect(uploaded).toEqual([{ attachment_id: staged!.id, kind: "document", caption: "" }]);
+  } finally { await server.close(); }
 });
 
 test("owner staging reads configured document roots and keeps malformed settings failures private", async () => {
