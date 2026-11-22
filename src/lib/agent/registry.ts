@@ -10691,6 +10691,13 @@ export class AgentRegistry {
   }
 
   /** Alias resolution needs no conversation payload or grant normalization. */
+  /** Resolve a decision's aliases against the same registry generation. The
+      resolver is valid only for the synchronous duration of the callback. */
+  withConversationAliases<T>(read: (resolve: (id: string) => string) => T): T {
+    return this.readKeyed(file => read(id => resolveConversationAlias(file, id as ViewerConversationId)),
+      { skipColdKeyInitialization: true });
+  }
+
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
     return this.readKeyed(file => resolveConversationAlias(file, id), { skipColdKeyInitialization: true });
   }
