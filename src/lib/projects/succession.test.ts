@@ -17,6 +17,7 @@ fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
 
 const { globalCache } = await import("@/lib/scanner/caches");
 const { canonicalProject, recordedProjectRemote } = await import("@/lib/projects/aliases");
+const { projectRemoteStore } = await import("@/lib/projects/persistence");
 const {
   forgeRenameCandidateFor,
   forgeRenamesSettledForTests,
@@ -203,7 +204,7 @@ test("a re-pointed fork whose old key predates the ledger does not merge, and no
   setForgeLookupForTests(forgeAnswers);
   const before = await transcript("gizmos-before", repo);
   await scan([before]);
-  fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "project-remotes.json"), { force: true });
+  projectRemoteStore.patchRows(path.join(process.env.LLV_STATE_DIR!, "project-remotes.json"), 2, tx => { tx.delete(original); });
   expect(recordedProjectRemote(original)).toBeNull();
 
   repoint(repo, "gizmos-fork");

@@ -388,7 +388,7 @@ test("under a gh that rejects closingIssuesReferences the forge cache stays empt
   const logged: string[] = [];
   await sweepForgeLinks({ now: () => Date.parse("2026-09-25T10:00:00Z"), run: oldGh(rows), loadPipelines: () => [lanePipeline], loadTasks: () => [], file: forgeFile, log: (message) => logged.push(message) });
   expect(readForgeCache(forgeFile).data.repositories[REPOSITORY]).toMatchObject({ completeSince: null, lastError: "command-failed" });
-  expect(logged).toEqual([`[forge links] ${REPOSITORY}: command-failed`]);
+  expect(logged).toEqual([`[forge links] ${REPOSITORY}: GitHub read failed (exit 1): Unknown JSON field: "title". Check the gh installation and configuration, then retry.`]);
   const cache = forgeCacheMergedPullRequests(() => readForgeCache(forgeFile).data);
   expect(cache(REPOSITORY)).toBeNull();
 
