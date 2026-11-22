@@ -62,6 +62,8 @@ import { adoptStructuredHostsAtStartup, prepareStructuredStartupRecipient, start
 import { interruptionObligationDirectory, interruptionObligationStore, initializeRecipientInterruptionIndex } from "./interruptionObligations";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import * as structuredRecovery from "./structuredRecovery";
+import { CHECKOUT_MERGER_CAPTURE, CHECKOUT_MERGER_WINDOW_MS, type CheckoutMergerCut } from "./checkoutMergerRecovery";
 import { ClaudeStreamBrokerHost } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost } from "./codexAppServerHost";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
@@ -2376,6 +2378,162 @@ async function restartCutSettled(predicate: () => boolean, what: string): Promis
     await Bun.sleep(5);
   }
 }
+
+test.each((["codex", "claude"] as const).flatMap(engine =>
+  (["interrupted", "legacy", "unlocked", "release-record", "release-uncertain", "quiet", "finished", "stopped", "stopped-before-capture", "live", "unverified", "expired"] as const).map(mode => [engine, mode] as const)))(
+  "%s checkout standalone merger custody: %s", async (engine, mode) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-checkout-merger-"));
+  const filename = path.join(directory, "agent-registry.json");
+  let registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  const sessionId = ["c3000000", "0000", "4000", "8000", "000000000001"].join("-");
+  const key = { engine, sessionId };
+  const hostKey = `${engine}:${sessionId}`;
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const started = Date.now();
+  const capturedAt = new Date(started - (mode === "expired" ? CHECKOUT_MERGER_WINDOW_MS + 5_000 : 5_000)).toISOString();
+  const at = new Date(started - (mode === "quiet" || mode === "stopped-before-capture" ? 6_000 : 4_000)).toISOString();
+  // The old engine had time to report the tool interruption before exiting.
+  const final = engine === "codex"
+    ? [
+      { type: "response_item", timestamp: at, payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Gate process exited 143." }] } },
+      { type: "event_msg", timestamp: at, payload: { type: "task_complete", turn_id: "merger-turn" } },
+    ]
+    : [{ type: "assistant", timestamp: at, message: { content: [{ type: "text", text: "Gate process exited 143." }], stop_reason: "end_turn" } }];
+  fs.writeFileSync(artifactPath, [...openTurnRecords(engine), ...final].map(value => JSON.stringify(value)).join("\n") + "\n");
+  const launch = beginLegacySpawnFixture(registry, { engine, cwd: directory, role: "merger" });
+  if (launch.kind !== "created") throw new Error("merger launch reservation refused");
+  const conversationId = launch.receipt.conversationId;
+  const processIdentity = mode === "live" ? captureProcessIdentity(process.pid)
+    : mode === "unverified" ? { ...captureProcessIdentity(process.pid), bootEpoch: null }
+      : { pid: 2_000_000_001, startIdentity: "fixture-ended-native" };
+  const writer = { pid: 2_000_000_002, startIdentity: "fixture-ended-viewer" };
+  const columns = { kind: engine === "codex" ? "codex-app-server" as const : "claude-broker" as const,
+    endpoint: "stdio:retained", process: processIdentity, eventCursor: 4, protocolVersion: "fixture",
+    writerClaimEpoch: 2, activeTurnRef: "merger-turn", pendingAttention: [], activeFlags: [] };
+  const entry = registry.completeSpawn(launch.receipt.launchId, { key, artifactPath, cwd: directory, accountId: null,
+    launchProfile: launch.receipt.launchProfile, status: "live", host: null, claimEpoch: 2,
+    claimOwner: `structured-host:${JSON.stringify(writer)}`, structuredHost: columns, pendingAction: null });
+  registry.upsert({ ...entry, status: "dead", structuredHost: null, hostExitProcess: processIdentity, claimOwner: null,
+    structuredHostOperationId: launch.receipt.launchId });
+  if (mode === "legacy" || mode === "release-uncertain") {
+    const persisted = structuredClone(registry.readOnlySnapshot());
+    delete (persisted.conversations[conversationId] as { deliveryEvidenceTracked?: boolean }).deliveryEvidenceTracked;
+    registry.close();
+    fs.writeFileSync(filename, JSON.stringify(persisted));
+    registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  }
+  const tmp = path.join(directory, "tmp");
+  fs.mkdirSync(tmp);
+  const state = { version: 3, branch: `merge-batch/${sessionId}`, landed: mode === "finished",
+    gated: null, published: null, rows: [{ status: "merged", detail: "closed" }] };
+  const stateFile = path.join(tmp, "merge-batch.json");
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  const lockRetained = mode !== "quiet" && mode !== "unlocked";
+  if (lockRetained) fs.mkdirSync(stateFile + ".lock");
+  const stat = fs.statSync(directory);
+  const cut: CheckoutMergerCut = { engine, sessionId, conversationId, path: artifactPath, claimEpoch: 2, process: processIdentity,
+    writer, capturedAt, boundary: `checkout-merger:${"a".repeat(32)}`, admissionProof: "fresh-cut-v1",
+    batch: { directory, identity: `${stat.dev}:${stat.ino}`, branch: state.branch } };
+  fs.writeFileSync(path.join(directory, CHECKOUT_MERGER_CAPTURE), JSON.stringify([cut]));
+  const interruptions = interruptionObligationStore(interruptionObligationDirectory(filename));
+  const release = mode === "release-record" || mode === "release-uncertain" ? interruptions.record({
+    conversationId, engine, hostKey, path: artifactPath, owner: processIdentity, claimEpoch: 2, turnRef: "merger-turn",
+    boundary: "ordinary-release", reason: "viewer-release", recordedAt: at, checkpoint: { lastEventKind: null, lastEventAt: null }, seat: null,
+  }).obligation : null;
+  if (mode === "release-uncertain" && release) interruptions.update(release.id, { attempts: 1 });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true,
+    ...(mode === "stopped-before-capture" ? { now: () => Date.parse(at) } : {}) });
+  const client = runtimeJournalClient(journal);
+  if (mode === "stopped-before-capture" || mode === "stopped") {
+    const effects = client.effectBatch;
+    client.effectBatch = async (kinds, cursor, options) => kinds?.includes("runtime.stop-boundary")
+      ? [{ id: "operator-stop-effect", kind: "runtime.stop-boundary", eventSeq: 1, payload: {
+        conversationId, operationId: "operator-stop", admittedAt: at, origin: "operator", originAuthenticated: true,
+      } }] : effects(kinds, cursor, options);
+    if (mode === "stopped-before-capture") client.operationStatus = async () => ({ receipt: { status: "queued" } } as never);
+  }
+  if (mode === "stopped-before-capture") {
+    const { hasRuntimeSwitchKill } = await import("@/lib/pipelines/runtimeSwitch");
+    expect(await hasRuntimeSwitchKill(client, conversationId, capturedAt, [], true, true)).toBe(true);
+  }
+  const ledger = createFakeDeliveryLedger();
+  const processOwner = captureProcessIdentity(process.pid);
+  const host = new ObservedDeliveryHost(ledger, {
+    status: "idle", sessionKey: sessionId, endpoint: "fake:recovered-merger", pid: processOwner.pid,
+    processStartIdentity: processOwner.startIdentity, eventCursor: 4, protocolVersion: "fixture",
+    activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null,
+  });
+  Object.assign(host, { onStateChange: () => () => {} });
+  const recovery = spyOn(structuredRecovery, "recoverDeadStructuredConversation").mockImplementation(async request => {
+    expect(request.conversationId).toBe(conversationId);
+    expect(request.path).toBe(artifactPath);
+    request.authorityGuard?.();
+    const claimed = registry.claimStructuredHost(key, processOwner, { allowUnhosted: true, setupHost: { ...columns, process: null } });
+    if (!claimed?.structuredHost || !claimed.claimOwner) throw new Error("replacement merger claim unavailable");
+    registry.setStructuredHostClaimed(key, { ...claimed.structuredHost, endpoint: "fake:recovered-merger",
+      process: processOwner, activeTurnRef: null }, "idle", claimed.claimOwner, claimed.claimEpoch);
+    projectHostedRestart(journal, engine, conversationId, sessionId, directory, artifactPath);
+    await publishStructuredDeliveryHost({ key, host: host as never });
+    return { target: null, path: artifactPath, conversationId, spawned: true };
+  });
+  const scheduled: (() => void | Promise<void>)[] = [];
+  const deps: StructuredStartupDependencies = { registry, client, orchestratorSeats: () => [],
+    schedule: callback => { scheduled.push(callback); return { unref() {} }; },
+    pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+  };
+  try {
+    await adoptStructuredHostsAtStartup(deps);
+    await kickStructuredDeliveryQueue();
+    const readCuts = () => interruptions.list().filter(obligation => obligation.boundary === cut.boundary);
+    if (mode !== "interrupted" && mode !== "legacy" && mode !== "unlocked" && mode !== "release-record") {
+      expect(recovery).not.toHaveBeenCalled();
+      expect(ledger.writes).toEqual([]);
+      expect(registry.readOnlySnapshot().entries[hostKey]?.claimEpoch).toBe(2);
+      if (mode === "expired") {
+        expect(readCuts()).toEqual([]);
+        expect(interruptions.list().filter(row => row.reason === "viewer-restart"
+          && row.conversationId === conversationId)).toEqual([]);
+      } else if (mode === "unverified" || mode === "live") {
+        expect(readCuts()).toEqual([]);
+        expect(structuredStartupDeferral()?.hostKeys).toContain(hostKey);
+      } else if (mode === "release-uncertain") {
+        expect(readCuts()).toEqual([]);
+        expect(ledger.writes).toEqual([]);
+        expect(structuredStartupDeferral()?.hostKeys).toContain(hostKey);
+      } else {
+        expect(readCuts()).toMatchObject([{ boundary: cut.boundary, state: "discharged",
+          resolution: mode === "stopped" || mode === "stopped-before-capture" ? "the merger was explicitly stopped" : "the captured merger turn settled" }]);
+      }
+      return;
+    }
+    expect(recovery).toHaveBeenCalledTimes(1);
+    await drainHeldDeliveries(conversationId, {
+      deliver: async ({ delivery, path: deliveryPath, clientMessageId }) =>
+        await deliverHeldStructuredMessage({ conversationId, path: deliveryPath, deliveryId: delivery.id,
+          clientMessageId, text: delivery.text, command: delivery.command,
+        }, { enabled: () => true, client: () => client, registry: () => registry }) ?? "delivery-uncertain",
+    }, registry);
+    await kickStructuredDeliveryQueue();
+    await restartCutSettled(() => ledger.writes.length === 1, "merger recovery delivery");
+    expect(ledger.writes).toEqual([expect.objectContaining({ text: expect.stringContaining("missing receipt grants no pass") })]);
+    expect(registry.conversation(conversationId)?.agentRole).toBe("merger");
+    expect(registry.readOnlySnapshot().entries[hostKey]?.claimEpoch).toBe(3);
+    for (const callback of scheduled.splice(0)) await callback();
+    await restartCutSettled(() => readCuts()[0]?.state === "delivered", "merger recovery receipt");
+    if (release) expect(interruptions.list().find(row => row.id === release.id)?.state).toBe("discharged");
+    expect(Date.now() - Date.parse(capturedAt)).toBeLessThan(CHECKOUT_MERGER_WINDOW_MS);
+    expect(JSON.parse(fs.readFileSync(stateFile, "utf8"))).toEqual(state);
+    expect(fs.existsSync(stateFile + ".lock")).toBe(lockRetained);
+    expect(ledger.writes).toHaveLength(1);
+    console.info(`checkout merger ${engine}: same-conversation continuation delivered after ${Date.now() - started} ms in the successor`);
+  } finally {
+    recovery.mockRestore();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 function recentClaudeRecords(end: "tool-call" | "end-turn"): Record<string, unknown>[] {
   const at = (offset: number) => new Date(Date.now() - 60_000 + offset * 1_000).toISOString();
