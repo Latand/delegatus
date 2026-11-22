@@ -117,7 +117,8 @@ type RunningPrompt = {
 type DeliveryAcceptanceRecord =
   | { state: "pending"; turnId: string }
   | { state: "accepted"; turnId: string; acceptedAt: string }
-  | { state: "failed"; turnId: string; reason: string };
+  | { state: "failed"; turnId: string; reason: string }
+  | { state: "unavailable"; turnId: string; reason: string };
 
 export interface AntigravitySessionIdentity {
   sessionId: string;
@@ -829,12 +830,36 @@ export class AntigravityAcpHost implements EngineHost {
   }
 
   /** Records owner-verified ACP acceptance for one specific delivery id.
-      Called only after ACP confirms the running `session/prompt` via a live
-      turn update, a permission request, or a non-error prompt result. */
-  private confirmDeliveryAcceptance(running: RunningPrompt): void {
-    if (running.accepted) return;
+      Persists the durable `deliveryEcho` to the runtime event ledger BEFORE
+      publishing in-memory `materialized` or writing `user.message`, so a
+      ledger write failure reports explicit uncertainty (`unavailable`) on both
+      this host and any successor after `adopt()`. */
+  private confirmDeliveryAcceptance(running: RunningPrompt): boolean {
+    if (running.accepted) return this.deliveryAcceptance.get(running.entryId)?.state === "accepted";
     running.accepted = true;
     const acceptedAt = new Date().toISOString();
+    const persisted = this.emit({
+      kind: "item",
+      turnId: running.turnId,
+      phase: "completed",
+      item: {
+        type: "user.message",
+        entryId: running.entryId,
+        turnId: running.turnId,
+      },
+      deliveryEcho: {
+        operationId: running.entryId,
+        at: acceptedAt,
+      },
+    });
+    if (!persisted) {
+      this.recordDeliveryAcceptance(running.entryId, {
+        state: "unavailable",
+        turnId: running.turnId,
+        reason: `Antigravity runtime event ledger failed while persisting acceptance for delivery ${running.entryId}`,
+      });
+      return false;
+    }
     this.appendTranscriptRecord("user.message", {
       turnId: running.turnId,
       entryId: running.entryId,
@@ -851,20 +876,7 @@ export class AntigravityAcpHost implements EngineHost {
       turnId: running.turnId,
       acceptedAt,
     });
-    this.emit({
-      kind: "item",
-      turnId: running.turnId,
-      phase: "completed",
-      item: {
-        type: "user.message",
-        entryId: running.entryId,
-        turnId: running.turnId,
-      },
-      deliveryEcho: {
-        operationId: running.entryId,
-        at: acceptedAt,
-      },
-    });
+    return true;
   }
 
   private flushPendingAssistantText(turnId: string | null): void {
@@ -896,6 +908,16 @@ export class AntigravityAcpHost implements EngineHost {
     const normalized = normalizeQueueEntry(entry);
     const already = this.sentEntries.get(normalized.id);
     if (already) return { outcome: "turn-started", turnId: already };
+    const priorAcceptance = this.deliveryAcceptance.get(normalized.id);
+    if (priorAcceptance?.state === "accepted") {
+      const restoredTurnId = priorAcceptance.turnId || `restored:${normalized.id}`;
+      this.sentEntries.set(normalized.id, restoredTurnId);
+      boundMap(this.sentEntries, ANTIGRAVITY_SENT_ENTRY_MEMORY);
+      return { outcome: "turn-started", turnId: restoredTurnId };
+    }
+    if (priorAcceptance?.state === "unavailable") {
+      return { outcome: "rejected", reason: "stale-turn", refusal: priorAcceptance.reason };
+    }
     if (this.running || this.outstandingPrompt) return { outcome: "rejected", reason: "stale-turn" };
     if (typeof normalized.expectedTurnId === "string") return { outcome: "rejected", reason: "stale-turn" };
 
@@ -926,7 +948,25 @@ export class AntigravityAcpHost implements EngineHost {
     this.running = running;
     this.outstandingPrompt = running;
 
-    this.emit({ kind: "turn-started", turnId });
+    const startedPersisted = this.emit({ kind: "turn-started", turnId });
+    const dispatchedPersisted = startedPersisted && this.emit({
+      kind: "item",
+      turnId,
+      phase: "started",
+      item: {
+        type: "antigravity.delivery_dispatched",
+        entryId: normalized.id,
+        turnId,
+      },
+    });
+    if (!dispatchedPersisted) {
+      if (this.running === running) this.running = null;
+      if (this.outstandingPrompt === running) this.outstandingPrompt = null;
+      this.sentEntries.delete(normalized.id);
+      this.deliveryAcceptance.delete(normalized.id);
+      settle();
+      return { outcome: "rejected", reason: "dead-host", refusal: "Antigravity runtime event ledger failed before prompt dispatch" };
+    }
 
     const request = this.request("session/prompt", { sessionId: this.identity.sessionId, prompt }, null);
     void request.then(
@@ -935,13 +975,25 @@ export class AntigravityAcpHost implements EngineHost {
         const usage = record(record(result)?.usage);
         const interrupted = this.cancelledTurns.has(turnId) || stopReason === "cancelled";
         if (!interrupted || running.accepted) {
-          this.confirmDeliveryAcceptance(running);
+          if (!this.confirmDeliveryAcceptance(running)) {
+            if (this.outstandingPrompt === running) this.outstandingPrompt = null;
+            settle();
+            return;
+          }
         } else {
-          this.recordDeliveryAcceptance(running.entryId, {
-            state: "failed",
+          const reason = `Antigravity cancelled delivery ${running.entryId} before ACP confirmed acceptance`;
+          const failedPersisted = this.emit({
+            kind: "item",
             turnId,
-            reason: `Antigravity cancelled delivery ${running.entryId} before ACP confirmed acceptance`,
+            phase: "completed",
+            item: { type: "antigravity.delivery_failed", entryId: running.entryId, turnId, reason },
           });
+          this.recordDeliveryAcceptance(
+            running.entryId,
+            failedPersisted
+              ? { state: "failed", turnId, reason }
+              : { state: "unavailable", turnId, reason: `Antigravity runtime event ledger failed while recording cancellation for delivery ${running.entryId}` },
+          );
         }
         this.flushPendingAssistantText(turnId);
         const status = interrupted
@@ -973,13 +1025,21 @@ export class AntigravityAcpHost implements EngineHost {
         const message = safeError(error);
         const interrupted = this.cancelledTurns.has(turnId);
         if (!running.accepted) {
-          this.recordDeliveryAcceptance(running.entryId, {
-            state: "failed",
+          const reason = interrupted
+            ? `Antigravity cancelled delivery ${running.entryId} before ACP confirmed acceptance`
+            : `Antigravity rejected delivery ${running.entryId}: ${message}`;
+          const failedPersisted = this.emit({
+            kind: "item",
             turnId,
-            reason: interrupted
-              ? `Antigravity cancelled delivery ${running.entryId} before ACP confirmed acceptance`
-              : `Antigravity rejected delivery ${running.entryId}: ${message}`,
+            phase: "completed",
+            item: { type: "antigravity.delivery_failed", entryId: running.entryId, turnId, reason },
           });
+          this.recordDeliveryAcceptance(
+            running.entryId,
+            failedPersisted
+              ? { state: "failed", turnId, reason }
+              : { state: "unavailable", turnId, reason: `Antigravity runtime event ledger failed while recording outcome for delivery ${running.entryId}` },
+          );
         }
         if (interrupted) {
           this.appendTranscriptRecord("abort", { turnId, reason: "user_initiated" });
@@ -1071,6 +1131,7 @@ export class AntigravityAcpHost implements EngineHost {
     }
     const acceptance = this.deliveryAcceptance.get(deliveryId);
     if (acceptance?.state === "accepted") return { state: "materialized" };
+    if (acceptance?.state === "unavailable") return { state: "unavailable", reason: acceptance.reason };
     if (acceptance?.state === "failed") return { state: "failed", reason: acceptance.reason };
     if (this.dead || this.released) {
       return {
@@ -1203,13 +1264,35 @@ export class AntigravityAcpHost implements EngineHost {
     );
     let restoredTurn: string | null = null;
     const restoredAttention = new Set<string>();
+    const dispatched = new Map<string, string>();
+    const finalized = new Set<string>();
     for (const event of stored) {
-      if (event.kind === "item" && event.deliveryEcho?.operationId) {
-        this.recordDeliveryAcceptance(event.deliveryEcho.operationId, {
-          state: "accepted",
-          turnId: event.turnId ?? "",
-          acceptedAt: event.deliveryEcho.at,
-        });
+      if (event.kind === "item") {
+        const itemObj = record(event.item);
+        const itemType = stringField(itemObj, "type");
+        const itemEntryId = stringField(itemObj, "entryId");
+        if (itemType === "antigravity.delivery_dispatched" && itemEntryId) {
+          dispatched.set(itemEntryId, event.turnId ?? stringField(itemObj, "turnId") ?? "");
+        }
+        if (event.deliveryEcho?.operationId) {
+          const opId = event.deliveryEcho.operationId;
+          const restoredTurnId = event.turnId || dispatched.get(opId) || `restored:${opId}`;
+          finalized.add(opId);
+          this.sentEntries.set(opId, restoredTurnId);
+          boundMap(this.sentEntries, ANTIGRAVITY_SENT_ENTRY_MEMORY);
+          this.recordDeliveryAcceptance(opId, {
+            state: "accepted",
+            turnId: restoredTurnId,
+            acceptedAt: event.deliveryEcho.at,
+          });
+        } else if (itemType === "antigravity.delivery_failed" && itemEntryId) {
+          finalized.add(itemEntryId);
+          this.recordDeliveryAcceptance(itemEntryId, {
+            state: "failed",
+            turnId: event.turnId ?? stringField(itemObj, "turnId") ?? "",
+            reason: stringField(itemObj, "reason") ?? `Antigravity rejected delivery ${itemEntryId}`,
+          });
+        }
       }
       if (event.kind === "turn-started") restoredTurn = event.turnId;
       if (event.kind === "turn-ended" && event.turnId === restoredTurn) restoredTurn = null;
@@ -1220,22 +1303,31 @@ export class AntigravityAcpHost implements EngineHost {
         restoredAttention.clear();
       }
     }
+    for (const [entryId, turnId] of dispatched) {
+      if (!finalized.has(entryId)) {
+        this.recordDeliveryAcceptance(entryId, {
+          state: "unavailable",
+          turnId,
+          reason: `Antigravity delivery ${entryId} acceptance could not be verified after an interrupted host or ledger failure`,
+        });
+      }
+    }
     if (restoredTurn) this.emit({ kind: "turn-ended", turnId: restoredTurn, status: "error" });
     for (const attentionId of restoredAttention) {
       this.emit({ kind: "attention-resolved", id: attentionId, resolution: "host-restarted" });
     }
   }
 
-  private emit(event: UnsequencedEvent): void {
+  private emit(event: UnsequencedEvent): boolean {
     this.turnSilence?.observe(event);
-    if (this.ledgerFailed || this.identity.sessionId === "pending") return;
+    if (this.ledgerFailed || this.identity.sessionId === "pending") return false;
     let nextCursor: number;
     try {
       nextCursor = nextRuntimeEventSequence(this.cursor);
     } catch (error) {
       this.ledgerFailed = true;
       this.fail(new Error(safeError(error)));
-      return;
+      return false;
     }
     this.cursor = nextCursor;
     const sequenced = { ...event, seq: nextCursor } as RuntimeEvent;
@@ -1245,7 +1337,7 @@ export class AntigravityAcpHost implements EngineHost {
       this.cursor = this.events.at(-1)?.seq ?? Math.max(0, this.cursor - 1);
       this.ledgerFailed = true;
       this.fail(new Error(`runtime event ledger failed: ${safeError(error)}`));
-      return;
+      return false;
     }
     this.eventWindowRevision += 1;
     this.eventWindow.append(sequenced);
@@ -1254,6 +1346,7 @@ export class AntigravityAcpHost implements EngineHost {
       subscriber.wake?.();
     }
     this.notifyStateListeners();
+    return true;
   }
 
   private request(
@@ -1337,7 +1430,10 @@ export class AntigravityAcpHost implements EngineHost {
         this.write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
         return;
       }
-      this.confirmDeliveryAcceptance(this.running);
+      if (!this.confirmDeliveryAcceptance(this.running)) {
+        this.write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
+        return;
+      }
       const attentionId = `antigravity-permission:${String(id)}`;
       this.attentions.set(attentionId, { rpcId: id, request: params });
       const toolCall = record(params.toolCall);
@@ -1379,7 +1475,7 @@ export class AntigravityAcpHost implements EngineHost {
       || kind === "tool_call_update"
       || kind === "usage_update"
     )) {
-      this.confirmDeliveryAcceptance(running);
+      if (!this.confirmDeliveryAcceptance(running)) return;
     }
     if (kind === "agent_thought_chunk") {
       const text = stringField(record(update.content), "text");
@@ -1474,11 +1570,19 @@ export class AntigravityAcpHost implements EngineHost {
     this.attentions.clear();
     if (running && !this.dead) {
       if (!running.accepted) {
-        this.recordDeliveryAcceptance(running.entryId, {
-          state: "failed",
+        const reason = `Antigravity host released before ACP confirmed delivery ${running.entryId}`;
+        const persisted = this.emit({
+          kind: "item",
           turnId: running.turnId,
-          reason: `Antigravity host released before ACP confirmed delivery ${running.entryId}`,
+          phase: "completed",
+          item: { type: "antigravity.delivery_failed", entryId: running.entryId, turnId: running.turnId, reason },
         });
+        this.recordDeliveryAcceptance(
+          running.entryId,
+          persisted
+            ? { state: "failed", turnId: running.turnId, reason }
+            : { state: "unavailable", turnId: running.turnId, reason: `Antigravity delivery ${running.entryId} outcome could not be persisted during release` },
+        );
       }
       this.flushPendingAssistantText(running.turnId);
       this.appendTranscriptRecord("abort", { turnId: running.turnId, reason: "host_release" });
@@ -1519,11 +1623,27 @@ export class AntigravityAcpHost implements EngineHost {
     this.rejectPending(error);
     if (running) {
       if (!running.accepted) {
-        this.recordDeliveryAcceptance(running.entryId, {
-          state: "failed",
-          turnId: running.turnId,
-          reason: `Antigravity host exited before ACP accepted delivery ${running.entryId}: ${safeError(error)}`,
-        });
+        if (this.ledgerFailed) {
+          this.recordDeliveryAcceptance(running.entryId, {
+            state: "unavailable",
+            turnId: running.turnId,
+            reason: `Antigravity runtime event ledger failed while tracking delivery ${running.entryId}: ${safeError(error)}`,
+          });
+        } else {
+          const reason = `Antigravity host exited before ACP accepted delivery ${running.entryId}: ${safeError(error)}`;
+          const persisted = this.emit({
+            kind: "item",
+            turnId: running.turnId,
+            phase: "completed",
+            item: { type: "antigravity.delivery_failed", entryId: running.entryId, turnId: running.turnId, reason },
+          });
+          this.recordDeliveryAcceptance(
+            running.entryId,
+            persisted
+              ? { state: "failed", turnId: running.turnId, reason }
+              : { state: "unavailable", turnId: running.turnId, reason: `Antigravity runtime event ledger failed while recording host exit for delivery ${running.entryId}` },
+          );
+        }
       }
       this.flushPendingAssistantText(running.turnId);
       this.appendTranscriptRecord("session.error", {

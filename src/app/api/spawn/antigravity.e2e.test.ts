@@ -1,3 +1,4 @@
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -117,19 +118,6 @@ function makeSeedEntry(
   };
 }
 
-function snapshotDirEntries(dir: string): Map<string, { mtimeMs: number; size: number }> {
-  const out = new Map<string, { mtimeMs: number; size: number }>();
-  if (!fs.existsSync(dir)) return out;
-  for (const entry of fs.readdirSync(dir)) {
-    const full = path.join(dir, entry);
-    try {
-      const stat = fs.lstatSync(full);
-      out.set(entry, { mtimeMs: stat.mtimeMs, size: stat.size });
-    } catch { /* vanished concurrently */ }
-  }
-  return out;
-}
-
 function collectDescendantPids(rootPid: number): Set<number> {
   const pids = new Set<number>([rootPid]);
   if (process.platform !== "linux") return pids;
@@ -183,12 +171,57 @@ function makeWritableRecursive(dir: string): void {
   } catch { /* best effort cleanup */ }
 }
 
+function passwdHomeDir(): string {
+  if (process.platform === "linux" && typeof process.getuid === "function") {
+    const uid = String(process.getuid());
+    try {
+      for (const line of fs.readFileSync("/etc/passwd", "utf8").split("\n")) {
+        const fields = line.split(":");
+        if (fields[2] === uid && fields[5]) return fields[5];
+      }
+    } catch { /* fall back to os.userInfo */ }
+  }
+  return os.userInfo().homedir;
+}
+
 function copyLoginFileReadOnly(src: string, dst: string): boolean {
   if (!fs.existsSync(src)) return false;
   fs.mkdirSync(path.dirname(dst), { recursive: true, mode: 0o700 });
   fs.copyFileSync(src, dst);
   fs.chmodSync(dst, 0o400);
   return true;
+}
+
+/** Verifies bubblewrap enforces MS_RDONLY everywhere outside `sandbox`, then wraps
+    any spawned `agy` process tree so the Linux kernel rejects external writes with EROFS. */
+function assertAndCreateBwrapSpawner(sandbox: string, operatorPasswdHome: string) {
+  const bwrapBin = "/usr/bin/bwrap";
+  if (process.platform !== "linux" || !fs.existsSync(bwrapBin)) {
+    throw new Error("kernel write-confinement proof requires /usr/bin/bwrap on Linux");
+  }
+  const baseArgs = [
+    "--ro-bind", "/", "/",
+    "--dev", "/dev",
+    "--proc", "/proc",
+    "--bind", sandbox, sandbox,
+    "--die-with-parent",
+    "--",
+  ];
+  // Positive controls: kernel MUST refuse writes outside sandbox with Read-only file system.
+  for (const probeTarget of [
+    path.join("/tmp", `llv-bwrap-ro-probe-${crypto.randomUUID().slice(0, 8)}`),
+    path.join(operatorPasswdHome, ".gemini", `llv-bwrap-ro-probe-${crypto.randomUUID().slice(0, 8)}`),
+  ]) {
+    const check = spawnSync(bwrapBin, [...baseArgs, "sh", "-c", `touch "$1"`, "_", probeTarget], {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    expect(check.status).not.toBe(0);
+    expect(`${check.stderr}${check.stdout}`).toMatch(/Read-only file system|Permission denied|No such file/i);
+    expect(fs.existsSync(probeTarget)).toBe(false);
+  }
+  return (command: string, args: string[], options: import("node:child_process").SpawnOptionsWithoutStdio) =>
+    spawn(bwrapBin, [...baseArgs, command, ...args], options);
 }
 
 describe.skipIf(!RUN_REAL_AGY_E2E)("in-process Antigravity E2E with real agy (AGY_E2E=1)", () => {
@@ -207,17 +240,8 @@ describe.skipIf(!RUN_REAL_AGY_E2E)("in-process Antigravity E2E with real agy (AG
     ] as const;
     const savedEnv: Record<string, string | undefined> = {};
     for (const key of envKeys) savedEnv[key] = process.env[key];
-    const operatorHome = savedEnv.HOME || os.homedir();
-
-    // Snapshot operator's native agy/config dirs before the test so we can prove zero outside writes.
-    const operatorConfigAgyDir = path.join(operatorHome, ".config", "antigravity");
-    const operatorGeminiConfigDir = path.join(operatorHome, ".gemini", "config");
-    const operatorGeminiCliLogDir = path.join(operatorHome, ".gemini", "antigravity-cli", "log");
-    const beforeOperatorConfigAgy = snapshotDirEntries(operatorConfigAgyDir);
-    const beforeOperatorGeminiConfig = snapshotDirEntries(operatorGeminiConfigDir);
-    const beforeOperatorAcpLogs = new Set(
-      [...snapshotDirEntries(operatorGeminiCliLogDir).keys()].filter((name) => name.startsWith("acp-server-")),
-    );
+    // Resolve the real passwd home (test-preload.ts already isolated process.env.HOME).
+    const operatorHome = passwdHomeDir();
 
     const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-agy-real-e2e-"));
     const tempHome = path.join(sandbox, "home");
@@ -228,6 +252,9 @@ describe.skipIf(!RUN_REAL_AGY_E2E)("in-process Antigravity E2E with real agy (AG
     const stateDir = path.join(xdgConfig, "agent-log-viewer", "state");
     const tmpDir = path.join(sandbox, "tmp");
     const cwd = path.join(sandbox, "work");
+
+    // Kernel-enforced read-only filesystem outside `sandbox` for the entire agy process tree.
+    const confinedSpawnProcess = assertAndCreateBwrapSpawner(sandbox, operatorHome);
 
     let liveHost: import("@/lib/runtime/antigravityAcpHost").AntigravityAcpHost | null = null;
     let store: import("@/lib/agent/registry").AgentRegistry | null = null;
@@ -255,6 +282,7 @@ describe.skipIf(!RUN_REAL_AGY_E2E)("in-process Antigravity E2E with real agy (AG
           if (copyLoginFileReadOnly(src, dstXdg)) copiedLoginPaths.push(dstXdg);
         }
       }
+      expect(copiedLoginPaths.length).toBeGreaterThan(0);
 
       process.env.HOME = tempHome;
       process.env.XDG_CONFIG_HOME = xdgConfig;
@@ -404,6 +432,7 @@ describe.skipIf(!RUN_REAL_AGY_E2E)("in-process Antigravity E2E with real agy (AG
                 viewerMcpServer: null,
                 mcpServers: [],
                 eventStore: new FileRuntimeEventStore(path.join(stateDir, "structured-host-events")),
+                spawnProcess: confinedSpawnProcess,
                 requestTimeoutMs: 45_000,
               });
               liveHost = host;
@@ -557,7 +586,7 @@ describe.skipIf(!RUN_REAL_AGY_E2E)("in-process Antigravity E2E with real agy (AG
       ]);
       expect(finalRecords.filter((r) => r.type === "assistant.turn_end")).toHaveLength(2);
 
-      // 8. Verify native agy state was confined inside sandbox and nothing was written outside.
+      // 8. Verify native agy state was created inside sandbox (kernel bwrap enforced MS_RDONLY everywhere else).
       const agAccount = antigravityAccountForSpawn();
       const nativeConvDb = path.join(
         antigravityNativeHome(agAccount.home),
@@ -569,21 +598,46 @@ describe.skipIf(!RUN_REAL_AGY_E2E)("in-process Antigravity E2E with real agy (AG
       expect(nativeConvDb.startsWith(sandbox + path.sep)).toBe(true);
       expect(fs.existsSync(nativeConvDb)).toBe(true);
 
-      const afterOperatorConfigAgy = snapshotDirEntries(operatorConfigAgyDir);
-      expect(afterOperatorConfigAgy).toEqual(beforeOperatorConfigAgy);
-      const afterOperatorGeminiConfig = snapshotDirEntries(operatorGeminiConfigDir);
-      expect(afterOperatorGeminiConfig).toEqual(beforeOperatorGeminiConfig);
-      expect(fs.existsSync(path.join(operatorHome, ".gemini", "antigravity-cli", "conversations", `${host.identity.sessionId}.db`))).toBe(false);
-      expect(fs.existsSync(path.join(operatorHome, ".gemini", "antigravity-cli", "brain", host.identity.sessionId))).toBe(false);
-      expect(fs.existsSync(path.join(operatorHome, ".gemini", "antigravity-cli", "annotations", `${host.identity.sessionId}.pbtxt`))).toBe(false);
-      const afterOperatorAcpLogs = [...snapshotDirEntries(operatorGeminiCliLogDir).keys()]
-        .filter((name) => name.startsWith("acp-server-") && !beforeOperatorAcpLogs.has(name));
-      expect(afterOperatorAcpLogs).toEqual([]);
-
-      // 9. Explicit stop + process cleanup verification before finally deletes temp dir.
-      const tCleanup = performance.now();
+      // 9. Release and adopt the real session inside bwrap, then verify idempotent resend of secondDeliveryId.
+      const tAdopt = performance.now();
+      const sessionId = host.identity.sessionId;
       for (const pid of collectDescendantPids(hostStateAfterSpawn.pid!)) trackedPids.add(pid);
       await host.release();
+      liveHost = null;
+
+      const eventStore = new FileRuntimeEventStore(path.join(stateDir, "structured-host-events"));
+      const adopted = await AntigravityAcpHost.adopt(sessionId, {
+        cwd,
+        antigravityHome: agAccount.home,
+        accountId: agAccount.accountId,
+        model: "gemini-3.8-flash-low",
+        allowAll: true,
+        viewerMcpServer: null,
+        mcpServers: [],
+        eventStore,
+        spawnProcess: confinedSpawnProcess,
+        requestTimeoutMs: 45_000,
+      });
+      liveHost = adopted;
+      const adoptedHealth = await adopted.health();
+      if (adoptedHealth.pid) for (const pid of collectDescendantPids(adoptedHealth.pid)) trackedPids.add(pid);
+
+      expect(await adopted.sessionMaterializationEvidence(`spawn_message_${spawnLaunchId}`)).toEqual({ state: "materialized" });
+      expect(await adopted.sessionMaterializationEvidence(secondDeliveryId)).toEqual({ state: "materialized" });
+      expect((await adopted.sessionMaterializationEvidence(unseenDeliveryId)).state).toBe("absent");
+      const echoesBeforeRetry = eventStore.load(sessionId)
+        .filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === secondDeliveryId).length;
+      const resendReceipt = await adopted.send({ id: secondDeliveryId, text: "Reply with exactly the single token: SECOND_OK" });
+      expect(resendReceipt.outcome).toBe("turn-started");
+      const echoesAfterRetry = eventStore.load(sessionId)
+        .filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === secondDeliveryId).length;
+      expect(echoesAfterRetry).toBe(echoesBeforeRetry);
+      expect(echoesAfterRetry).toBe(1);
+      mark("adoptAndIdempotentResendMs", tAdopt);
+
+      // 10. Explicit stop + process cleanup verification before finally deletes temp dir.
+      const tCleanup = performance.now();
+      await adopted.release();
       liveHost = null;
       await new Promise((r) => setTimeout(r, 100));
       for (const pid of trackedPids) {

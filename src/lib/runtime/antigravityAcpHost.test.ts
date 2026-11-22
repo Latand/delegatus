@@ -685,4 +685,120 @@ describe("AntigravityAcpHost", () => {
     expect(movedContent).toContain("\"user.message\"");
     expect(movedContent).toContain("\"session.shutdown\"");
   });
+
+  it("deduplicates accepted delivery ids across adopt() and reports consistent unavailable state on ledger EIO", async () => {
+    const mintedSessionId = crypto.randomUUID();
+    let fake!: ScriptedAcpServer;
+    let lastPromptId = 0;
+    const outboundPrompts: string[] = [];
+    let failDeliveryEcho = false;
+    let failedWrites = 0;
+
+    const eventStore = new FileRuntimeEventStore(path.join(stateDir, "runtime-events-recovery"));
+    const originalAppend = eventStore.append.bind(eventStore);
+    eventStore.append = (session, event) => {
+      if (failDeliveryEcho && event.kind === "item" && event.deliveryEcho) {
+        failedWrites += 1;
+        throw Object.assign(new Error("simulated ledger EIO"), { code: "EIO" });
+      }
+      originalAppend(session, event);
+    };
+
+    const makeOpts = (): AntigravityAcpHostOptions => ({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore,
+      shutdownGraceMs: 50,
+      processIdentity: () => "start-id-recovery",
+      signalProcess: ((_pid: number, signal?: NodeJS.Signals | number) => {
+        fake.signals.push(signal ?? "SIGTERM");
+        fake.closeChild(0);
+        return true;
+      }) as typeof process.kill,
+      spawnProcess: () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          } else if (method === "session/new" || method === "session/resume") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId: mintedSessionId } });
+          } else if (method === "session/prompt" && id !== undefined) {
+            lastPromptId = id;
+            outboundPrompts.push(String(id));
+          } else if (method === "session/close") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          }
+        });
+        return fake.child;
+      },
+    });
+
+    // 1. Accept delivery-one normally and release.
+    let host = await AntigravityAcpHost.start(makeOpts());
+    const firstReceipt = await host.send({ id: "delivery-one", text: "First message" });
+    expect(firstReceipt.outcome).toBe("turn-started");
+    expect((await host.sessionMaterializationEvidence("delivery-one")).state).toBe("absent");
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await host.sessionMaterializationEvidence("delivery-one")).toEqual({ state: "materialized" });
+    expect((await host.sessionMaterializationEvidence("never-sent")).state).toBe("absent");
+    await host.release();
+
+    // 2. Adopt and retry delivery-one with the SAME delivery id: MUST be idempotent (0 native prompts, 1 echo).
+    host = await AntigravityAcpHost.adopt(mintedSessionId, makeOpts());
+    expect(await host.sessionMaterializationEvidence("delivery-one")).toEqual({ state: "materialized" });
+    expect((await host.sessionMaterializationEvidence("delivery-two")).state).toBe("absent");
+    const promptsBeforeRetry = outboundPrompts.length;
+    const retryReceipt = await host.send({ id: "delivery-one", text: "First message" });
+    expect(retryReceipt).toEqual(firstReceipt);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(outboundPrompts.length - promptsBeforeRetry).toBe(0);
+    const echoesForOne = eventStore.load(mintedSessionId)
+      .filter((event) => event.kind === "item" && event.deliveryEcho?.operationId === "delivery-one");
+    expect(echoesForOne).toHaveLength(1);
+    expect(await host.sessionMaterializationEvidence("delivery-one")).toEqual({ state: "materialized" });
+
+    // 3. Inject EIO when persisting deliveryEcho for delivery-two:
+    //    Current host MUST NOT report materialized; MUST report unavailable and write no user.message/echo.
+    failDeliveryEcho = true;
+    const secondReceipt = await host.send({ id: "delivery-two", text: "Second message" });
+    expect(secondReceipt.outcome).toBe("turn-started");
+    expect((await host.sessionMaterializationEvidence("delivery-two")).state).toBe("absent");
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(failedWrites).toBe(1);
+    expect((await host.sessionMaterializationEvidence("delivery-two")).state).toBe("unavailable");
+    const echoIdsAfterFailure = eventStore.load(mintedSessionId)
+      .filter((event): event is Extract<typeof event, { kind: "item" }> => event.kind === "item" && Boolean(event.deliveryEcho))
+      .map((event) => event.deliveryEcho!.operationId);
+    expect(echoIdsAfterFailure).toEqual(["delivery-one"]);
+    const userMessageIds = fs.readFileSync(host.identity.path, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; data: Record<string, unknown> })
+      .filter((record) => record.type === "user.message")
+      .map((record) => record.data.entryId);
+    expect(userMessageIds).toEqual(["delivery-one"]);
+    await host.release();
+
+    // 4. Re-adopt (twice!): BOTH adopted generations agree on unavailable for delivery-two,
+    //    keep materialized for delivery-one, keep absent for unseen ids, and refuse blind resend.
+    failDeliveryEcho = false;
+    for (let generation = 0; generation < 2; generation += 1) {
+      const recovered = await AntigravityAcpHost.adopt(mintedSessionId, makeOpts());
+      expect(await recovered.sessionMaterializationEvidence("delivery-one")).toEqual({ state: "materialized" });
+      expect((await recovered.sessionMaterializationEvidence("delivery-two")).state).toBe("unavailable");
+      expect((await recovered.sessionMaterializationEvidence("never-sent")).state).toBe("absent");
+      const promptsBeforeUncertain = outboundPrompts.length;
+      const resendUncertain = await recovered.send({ id: "delivery-two", text: "Second message" });
+      expect(resendUncertain.outcome).toBe("rejected");
+      expect(outboundPrompts.length).toBe(promptsBeforeUncertain);
+      await recovered.release();
+    }
+  });
 });
