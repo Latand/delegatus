@@ -24,7 +24,7 @@ afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.spli
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
 
 test("native recursive removal is awaited, killed at the shared cutoff, and reported as a deferral", async () => {
-  const directory = root(); fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "owned");
+  const directory = root(); fs.writeFileSync(path.join(directory, "payload"), "owned");
   const stat = fs.lstatSync(directory);
   let now = 3000, started!: () => void, release!: () => void;
   const running = new Promise<void>(resolve => { started = resolve; });
@@ -49,7 +49,7 @@ test("native recursive removal is awaited, killed at the shared cutoff, and repo
 });
 
 test("native cleanup reports CPU measured by its owned subprocess", async () => {
-  const directory = root(); fs.mkdirSync(directory);
+  const directory = root();
   for (let index = 0; index < 512; index++) fs.writeFileSync(path.join(directory, `entry-${index}`), "payload");
   const stat = fs.lstatSync(directory); let childCpu = 0;
   await removeTreeWithinAttemptBudget(directory, () => {}, undefined, `${stat.dev}:${stat.ino}`, seconds => { childCpu += seconds; });
@@ -986,13 +986,13 @@ test.each(["cache/uv/sdists-v9", "uv-cache/sdists-v9", "uvcache/sdists-v9/nested
   expect(await inspectAttemptTree(directory)).toBeFalse();
 });
 
-test("fixture Git worktrees contained in the attempt can retire", async () => {
+test("fixture Git checkouts contained in the attempt remain protected", async () => {
   const directory = root(), repo = path.join(directory, "repo"), wt = path.join(directory, "wt");
   fs.mkdirSync(repo);
   await exec("git", ["init", "-q", repo]);
   await exec("git", ["-C", repo, "-c", "user.name=Fixture", "-c", `user.email=${["noreply", "example.invalid"].join("@")}`, "commit", "--allow-empty", "-qm", "fixture"]);
   await exec("git", ["-C", repo, "worktree", "add", "--detach", wt]);
-  expect(await inspectAttemptTree(directory)).toBeTrue();
+  expect(await inspectAttemptTree(directory)).toBeFalse();
   const external = root();
   await exec("git", ["-C", repo, "worktree", "add", "--detach", path.join(external, "outside")]);
   expect(await inspectAttemptTree(directory)).toBeFalse();
@@ -1003,7 +1003,10 @@ test.each([".git", "project/.git", ".delegatus-keep"])("unknown marker %s is ret
   const directory = root(), file = path.join(directory, marker);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (path.basename(file) === KEEP_MARKER) plantKeepMarker(file, "");
-  else fs.writeFileSync(file, "");
+  else if (path.basename(file) === ".git") {
+    fs.mkdirSync(file);
+    fs.writeFileSync(path.join(file, "config"), "unknown checkout");
+  } else fs.writeFileSync(file, "");
   expect(await inspectAttemptTree(directory)).toBeFalse();
 });
 

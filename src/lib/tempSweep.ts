@@ -508,7 +508,7 @@ export async function finishTreeTrash(journal: string, held: (trash: string) => 
   remove?: (trash: string, mutationStarted: () => void) => Promise<void>, validate?: (trash: string) => boolean, allowDisposable = false, dispatch?: (trash: string) => boolean, keepRefusedTrash = false): Promise<boolean> {
   const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { directory: string; trash: string; uid: number; identity: string; snapshot?: TreeSnapshot; disposable?: boolean };
   const recovered = readAttemptTempTrash(journal, path.dirname(row.directory));
-  const trashPath = recovered?.trash ?? row.trash;
+  const trashPath = recovered?.trash ?? claimedTrashForJournal(row) ?? row.trash;
   const matches = () => row.snapshot ? matchesSnapshot(trashPath, row.snapshot) : allowDisposable && row.disposable === true;
   if (path.dirname(row.directory) !== path.dirname(row.trash)
     || !path.basename(row.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) return false;
@@ -545,6 +545,23 @@ export async function finishTreeTrash(journal: string, held: (trash: string) => 
   }
   fs.unlinkSync(journal);
   return true;
+}
+
+/** Resolve a claim made after the journal was written. The journal's owner,
+ * identity and same-parent relationship prove which one interrupted native
+ * removal may resume; this works for worktree and evidence journals too. */
+function claimedTrashForJournal(row: { directory: string; trash: string; identity: string }) {
+  if (typeof row.directory !== "string" || typeof row.trash !== "string" || typeof row.identity !== "string"
+    || !/^\d+:\d+$/.test(row.identity) || path.dirname(row.directory) !== path.dirname(row.trash)
+    || !path.basename(row.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) return null;
+  const parent = path.dirname(row.directory), prefix = `.delegatus-trash-claim-${row.identity.replace(":", "-")}-`;
+  try {
+    const claims = fs.readdirSync(parent).filter(name => name.startsWith(prefix)).filter(name => {
+      const stat = fs.lstatSync(path.join(parent, name), { throwIfNoEntry: false });
+      return stat?.isDirectory() && !stat.isSymbolicLink() && `${stat.dev}:${stat.ino}` === row.identity;
+    });
+    return claims.length === 1 && !fs.lstatSync(row.directory, { throwIfNoEntry: false }) ? path.join(parent, claims[0]!) : null;
+  } catch { return null; }
 }
 
 type TreeSnapshot = { entries: Record<string, { kind: "directory" | "file" | "symlink" | "other"; dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number; mode: number }>; count: number };

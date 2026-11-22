@@ -201,7 +201,7 @@ test("reporting reads remain bounded with a large copy and root backlog", () => 
     db.transaction(() => {
       for (let n = 0; n < 10000; n++) {
         db.query("INSERT INTO copies VALUES(?,NULL,'legacy','unattributed',1,NULL,0,4096)").run(`copy-${n}`);
-        db.query("INSERT INTO roots VALUES(?,'lane','launch',1,1,'1:1',0,0,4096)").run(`root-${n}`);
+        db.query("INSERT INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt,released,bytes) VALUES(?,'lane','launch',1,1,'1:1',0,0,4096)").run(`root-${n}`);
         db.query("INSERT INTO root_retention(directory,expiresAt) VALUES(?,1)").run(`root-${n}`);
       }
     })();
@@ -241,6 +241,17 @@ test("reporting reads remain bounded with a large copy and root backlog", () => 
     expect(f.store.retention(NOW).dueBytes).toBe(10000 * 4096);
     expect(f.store.unattributedCopies()).toEqual({ count: 10000, bytes: 10000 * 4096 });
   } finally { db.close(); f.store.close(); }
+});
+
+test("an incomplete allocation refresh preserves bytes and advances to another due root", () => {
+  const f = fixture(), first = f.make("allocation-first", 0), second = f.make("allocation-second", 0);
+  try {
+    f.store.measure(first, 8 * 1024 ** 3, NOW - 120_000);
+    f.store.measure(second, 2 * 1024 ** 3, NOW - 120_000);
+    f.store.measurementFailed(first, NOW);
+    expect(f.store.owner(first)?.bytes).toBe(8 * 1024 ** 3);
+    expect(f.store.allocationDue(NOW + 60_000, 1).map(owner => owner.directory)).toEqual([second]);
+  } finally { f.store.close(); }
 });
 
 test("legacy reporting advances bounded pages across real helper restarts and skips an exhausted deadline", async () => {
@@ -1695,12 +1706,13 @@ test("dry run records the decision without removing or spending the ledger", asy
   } finally { f.store.close(); }
 });
 
-test("disposable test repositories retire but linked worktrees remain for their owner", async () => {
+test("unknown checkouts and linked worktrees remain protected", async () => {
   const f = fixture(); const disposable = f.make("fixture"); const linked = f.make("linked");
   fs.mkdirSync(path.join(disposable, ".git")); fs.writeFileSync(path.join(disposable, ".git/HEAD"), "fixture");
   fs.writeFileSync(path.join(linked, ".git"), "gitdir: retained-metadata");
   try {
-    expect((await f.sweep()).removed).toBe(1); expect(fs.existsSync(disposable)).toBeFalse();
+    expect((await f.sweep()).removed).toBe(0); expect(fs.existsSync(disposable)).toBeTrue();
+    expect(fs.readFileSync(path.join(disposable, ".git/HEAD"), "utf8")).toBe("fixture");
     expect(fs.readFileSync(path.join(linked, "data")).length).toBe(4096);
   } finally { f.store.close(); }
 });
@@ -1950,7 +1962,7 @@ test("legacy adoption advances its bounded cursor across store restarts", () => 
 function legacyEvidence(f: ReturnType<typeof fixture>) {
   const directory = path.join(f.root, "scratch/llv-stage-AbC123");
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  fs.mkdirSync(path.join(directory, ".git")); fs.mkdirSync(path.join(directory, ".artifacts"));
+  fs.mkdirSync(path.join(directory, ".artifacts"));
   fs.writeFileSync(path.join(directory, ".artifacts/prototype.png"), "prototype bytes");
   fs.writeFileSync(path.join(directory, "report.webp"), "report bytes");
   fs.writeFileSync(path.join(directory, "scratch.bin"), "disposable");

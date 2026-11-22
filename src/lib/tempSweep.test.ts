@@ -77,6 +77,22 @@ test("a process restart resolves an inode-claimed quarantine and completes its j
   expect(fs.readdirSync(scratch).filter(name => name.startsWith(".delegatus-trash-claim-"))).toEqual([]);
 });
 
+test.each(["repo-pipeline-fixture", "evidence-copy-fixture"])("a restarted removal completes a partial claim for %s", async name => {
+  const root = tempRoot(), directory = path.join(root, name), journal = path.join(root, `${name}.json`);
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "partial"), "remove");
+  fs.writeFileSync(path.join(directory, "remaining"), "keep until replay");
+  const identity = `${fs.lstatSync(directory).dev}:${fs.lstatSync(directory).ino}`;
+  const interrupted = async (target: string, started: () => void) => removeTreeWithinAttemptBudget(target, started,
+    (async (_exe: string, args: string[], _opts: unknown) => {
+      fs.unlinkSync(path.join(args[2]!, "partial"));
+      throw new Error("owned remover interrupted");
+    }) as never, identity);
+  await expect(removeTreeViaTrash(directory, { journal, disposable: true, held: () => false, remove: interrupted })).rejects.toThrow("owned remover interrupted");
+  expect(await finishTreeTrash(journal, () => false, undefined, undefined, true, () => true, true)).toBeTrue();
+  expect(fs.existsSync(journal)).toBeFalse();
+  expect(fs.readdirSync(root).some(file => file.startsWith(".delegatus-trash-claim-"))).toBeFalse();
+});
+
 /** A directory with a few entries, every modification time `ageMs` in the past. */
 function aged(root: string, name: string, ageMs: number): string {
   const directory = path.join(root, name);

@@ -708,7 +708,7 @@ const namespaceSnapshot = "find /attempt -xdev -type d -exec stat -c '%d:%i:%f:%
   + 'LC_ALL=C sort /tmp/directories > /tmp/sorted || exit; '
   + 'sha256sum /tmp/sorted > /tmp/digest || exit; read digest rest < /tmp/digest; ';
 export type AttemptNamespaceProtection = { digest: string };
-type NamespaceBudget = { budgetMs?: number; bytes?: number; recordedOnly?: boolean; expectedIdentity?: string; accountCpuSeconds?: (seconds: number) => void };
+type NamespaceBudget = { budgetMs?: number; bytes?: number; recordedOnly?: boolean; expectedIdentity?: string; accountCpuSeconds?: (seconds: number) => void; beforeRemoval?: () => void };
 type AttemptRemovalSettings = NamespaceBudget & {
   closedRoot?: boolean;
   /** Called when native deletion starts or the cleanup namespace reaches its delete command. */
@@ -794,7 +794,7 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
   // Record the baseline and durable intent before the destructive command.
   // The bind mount pins the admitted directory inode for the container even
   // if its source pathname is replaced after dispatch.
-  if (operation === "remove") mutationStarted?.();
+  if (operation === "remove") settings.beforeRemoval?.();
   try {
     result = await run("docker", ["run", "--rm", "--name", name, "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=4m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
@@ -820,11 +820,15 @@ async function containerCommand(directory: string, operation: "inspect" | "remov
       throw new Error(`owned cleanup container removal failed: ${attemptTempFailureDetail(cleanupError)}`, { cause: failure ?? cleanupError });
   }
   if (failure) {
+    const output = String((failure as { stdout?: unknown }).stdout ?? "");
+    if (operation === "remove" && !(Number((failure as { code?: unknown }).code) === 75
+      && !output.includes("DELEGATUS_REMOVAL_STARTED"))) mutationStarted?.();
     if (failure instanceof AttemptTempBudgetDeferred) throw failure;
     const code = (failure as NodeJS.ErrnoException & { code?: unknown }).code;
     if (code === "ENOENT" || [125, 126, 127].includes(Number(code))) throw unavailable(attemptTempFailureDetail(failure));
     throw new Error(attemptTempFailureDetail(failure), { cause: failure });
   }
+  if (operation === "remove" && result!.stdout.includes("DELEGATUS_REMOVAL_STARTED")) mutationStarted?.();
   const cpu = /DELEGATUS_RM_CPU:([0-9.]+)/.exec(result!.stdout)?.[1];
   if (cpu) settings.accountCpuSeconds?.(Number(cpu));
   return { identity, stdout: result!.stdout };
@@ -1239,6 +1243,7 @@ export async function removeAttemptTree(directory: string, original = directory,
     // Mount and physical-path reads may observe a changed root or protection.
     // Admit from the final synchronous snapshots immediately before native rm.
     if (dispatchGuard && !dispatchGuard()) throw new AttemptTempBudgetDeferred("authority changed before native removal");
+    settings.beforeRemoval?.();
     try {
       if (settings.nativeRemove) await settings.nativeRemove(directory, () => { mutationStarted = true; settings.mutationStarted?.(); });
       else await removeTreeWithinAttemptBudget(directory, () => { mutationStarted = true; settings.mutationStarted?.(); }, undefined,
@@ -1250,7 +1255,8 @@ export async function removeAttemptTree(directory: string, original = directory,
       if (error instanceof AttemptTempBudgetDeferred) throw error;
       if (!["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") || process.platform !== "linux") throw error;
       try {
-        const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection, settings.mutationStarted);
+        const { identity } = await containerCommand(directory, "remove", original, guard, !discardExpiredEvidence, dispatchGuard, settings, protection,
+          () => { mutationStarted = true; settings.mutationStarted?.(); });
         removeEmptyNamespaceRoot(directory, identity, postDeleteGuard);
       } catch (fallbackError) {
         if (fallbackError instanceof AttemptTempBudgetDeferred) throw fallbackError;

@@ -122,7 +122,7 @@ export class AttemptTempStore {
         retainUntilClose INTEGER NOT NULL, createdAt REAL NOT NULL,
         identity TEXT NOT NULL, released INTEGER NOT NULL DEFAULT 0,
         checkedAt REAL NOT NULL DEFAULT 0, bytes REAL NOT NULL DEFAULT 0)`);
-      if (!this.db.query("PRAGMA table_info(roots)").all().some((column: { name: string }) => column.name === "measuredAt"))
+      if (!this.db.query<{ name: string }, []>("PRAGMA table_info(roots)").all().some(column => column.name === "measuredAt"))
         this.db.exec("ALTER TABLE roots ADD COLUMN measuredAt REAL NOT NULL DEFAULT 0");
       this.db.exec(`CREATE TABLE IF NOT EXISTS copies (
         destination TEXT PRIMARY KEY, pipelineId TEXT, launchId TEXT NOT NULL, kind TEXT NOT NULL,
@@ -226,6 +226,7 @@ export class AttemptTempStore {
   }
   queueTrashIntent(directory: string, identity: string) { this.recovery.queueIntent(directory, identity); }
   refreshTrashRecovery(directory: string) { this.recovery.refresh(directory); }
+  clearTrashRecovery(directory: string) { this.recovery.forget(directory); }
   trashRecoveryWatches(directory: string) { return this.recovery.watches(directory); }
   recoveredTrashCurrent(directory: string) { return this.recovery.current(directory); }
   recoveredTrash(directory: string) { return this.recovery.restored(directory); }
@@ -490,6 +491,7 @@ export class AttemptTempStore {
     this.db.query("INSERT INTO copy_eligibility VALUES(?,?) ON CONFLICT(destination) DO UPDATE SET eligible=excluded.eligible").run(destination, Number(eligible));
   }
   measure(directory: string, bytes: number, at = Date.now()) { this.db.query("UPDATE roots SET bytes=?,measuredAt=? WHERE directory=?").run(bytes, at, directory); }
+  measurementFailed(directory: string, at = Date.now()) { this.db.query("UPDATE roots SET measuredAt=? WHERE directory=?").run(at, directory); }
   bytes() { return this.db.query<{ bytes: number }, []>("SELECT bytes FROM totals WHERE id=1").get()!.bytes; }
   close() { this.db.close(); this.releaseMemoryTracking?.(); this.releaseMemoryTracking = undefined; }
 }
@@ -702,7 +704,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           // then clear only its recovery proof so reopening can proceed.
           if (authority.isCurrent() && authority.state !== "expired" && !stat) {
             restoreRefusedAttemptTrash(owner.directory, owner.identity);
-            store.forget(owner.directory);
+            store.clearTrashRecovery(owner.directory);
             outcome(owner.directory, authorityDisposition(authority.state), bytes, "interrupted quarantine restored before expiry");
             return;
           }
@@ -1052,7 +1054,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
                 [...rootWatches(directory), ...authorityWatches(), ...(permissionProof?.mutationDirectories ?? [])],
                 () => retirementAuthorityCurrent(directory, false) && permissionProof?.current() === true && (binding?.() ?? true),
                 remaining(), ownerAuthorityCurrent) : undefined,
-              mutationStarted: startRemoval,
+              beforeRemoval: () => { beforeRemoval ??= free(); },
+              mutationStarted,
               expectedIdentity: owner.identity,
               accountCpuSeconds: options.accountCpuSeconds,
               permissionChange: (file, mode, apply) => {

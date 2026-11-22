@@ -210,8 +210,10 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
             if (!before?.isDirectory() || before.isSymbolicLink() || `${before.dev}:${before.ino}` !== owner.identity) continue;
             const measured = await measureAttemptAllocation(owner.directory, { budgetMs: Math.max(1, remaining()) });
             const after = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
-            if (after?.isDirectory() && !after.isSymbolicLink() && `${after.dev}:${after.ino}` === owner.identity)
-              store.measure(owner.directory, measured.bytes, Date.now());
+            if (after?.isDirectory() && !after.isSymbolicLink() && `${after.dev}:${after.ino}` === owner.identity) {
+              if (measured.unreadable) store.measurementFailed(owner.directory, Date.now());
+              else store.measure(owner.directory, measured.bytes, Date.now());
+            }
           } catch { /* Keep the last allocation until this bounded visit retries. */ }
         }
         if (attemptScratchAuditDue(store.schedulePosition().auditAfter, Date.now()))

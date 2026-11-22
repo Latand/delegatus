@@ -71,8 +71,16 @@ test("a restarted scheduled sweep restores a quarantined root before expiry and 
       expect(report.removed).toBe(0);
       expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("retained payload");
       expect(fs.existsSync(trash)).toBeFalse();
+      expect(restarted.owner(directory)).toMatchObject({ pipelineId: pipeline.id, launchId: "crash-launch" });
       const reopened = structuredClone(pipeline); reopened.state = "running"; reopened.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
       expect(() => savePipelines([reopened])).not.toThrow();
+      const terminal = structuredClone(reopened); terminal.state = "completed"; terminal.cursor = null;
+      terminal.runs[0]!.attempts[0]!.state = "passed";
+      terminal.runs[0]!.attempts[0]!.completedAt = new Date(now).toISOString();
+      savePipelines([terminal]);
+      const { recordingAttemptTempState } = await import("./attemptTempProduction");
+      await recordingAttemptTempState(restarted)(restarted.owner(directory)!);
+      expect(restarted.retentionExpiry(directory)).not.toBeNull();
     } finally { restarted.close(); }
   } finally { if (!storeClosed) store.close(); clock.mockRestore(); }
 });
@@ -953,7 +961,7 @@ test.skipIf(process.platform !== "linux").each(["live child", "mount", "linked e
           const value = statfs(...args);
           if (!swapped) {
             const claim = fs.readdirSync(path.dirname(directory)).map(name => path.join(path.dirname(directory), name))
-              .find(name => path.basename(name).startsWith(`.delegatus-trash-${path.basename(directory)}-claim-`));
+              .find(name => path.basename(name).startsWith(".delegatus-trash-claim-"));
             if (claim) {
               const saved = path.join(root, "claimed-original"); fs.renameSync(claim, saved);
               fs.mkdirSync(claim); fs.writeFileSync(path.join(claim, "replacement"), "new owner");
