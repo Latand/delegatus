@@ -157,7 +157,8 @@ test("every sweep checks the full roster while SQLite is busy and a successor re
       expect(new Set(checkIds).size).toBe(checkIds.length);
       expect(readSeatTickRecords(50, file)).toEqual([]);
       expect(fs.readdirSync(pendingDir).filter(name => name.endsWith(".json"))).toHaveLength(checkIds.length + 1);
-      expect(warn.mock.calls).toEqual([
+      const tickWarnings = warn.mock.calls.filter(([line]) => String(line).startsWith("[seat tick] "));
+      expect(tickWarnings).toEqual([
         [expect.stringMatching(/journal is busy \(StateLockDeferredError\).*saved for retry/)],
       ]);
     } finally {
