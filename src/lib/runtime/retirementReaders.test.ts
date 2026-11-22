@@ -195,6 +195,9 @@ test.each(["off", "sqlite"] as const)("Viewer membership census keeps verified r
   const filename = path.join(root, "registry.json");
   fs.writeFileSync(filename, JSON.stringify(file));
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+  // The snapshot reader also uses a real abort timer. Scale the virtual row
+  // cost so the test exercises the census deadline under a loaded runner.
+  const rowCostMs = 1_000;
   let clock = 0;
   const time = spyOn(performance, "now").mockImplementation(() => clock);
   const checkpoint = {};
@@ -208,10 +211,10 @@ test.each(["off", "sqlite"] as const)("Viewer membership census keeps verified r
       let firstReport = true;
       try {
         result = await pipelineStartupMembershipsAsync(registry, {
-          checkpoint, deadline: clock + 24,
+          checkpoint, deadline: clock + 24 * rowCostMs,
           onProgress: count => {
             const previous = firstReport ? (count >= saved ? saved : 0) : completed;
-            clock += count - previous;
+            clock += (count - previous) * rowCostMs;
             completed = count;
             firstReport = false;
           },
