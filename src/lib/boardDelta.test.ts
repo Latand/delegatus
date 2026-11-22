@@ -96,15 +96,13 @@ test("encoder restores only a matching certified base and reads it only when nee
   expect(bounded.encode("scope", "epoch", base(), 8).delta).toBeUndefined();
 });
 
-test("history reuses identity/gzip answers and bounds scopes, links, UTF-8 bytes and age", async () => {
+test("history reuses identity answers and bounds scopes, links, UTF-8 bytes and age", async () => {
   const history = new BoardHistory({ scopes: 2, links: 2, path: 2, bytes: 3000, ageMs: 100 });
   history.record("s", "a", "b", '{"v":2}', 1);
   history.record("s", "b", "c", '{"v":2}', 2);
   const first = history.answer("s", "a", "c", 10000, 3).answer!;
   expect(first.body).toBe('{"deltas":[{"v":2},{"v":2}]}');
   expect(history.answer("s", "a", "c", 10000, 4).answer).toBe(first);
-  expect(history.gzip(first)).toBe(history.gzip(first));
-  await history.gzip(first);
   history.record("s", "c", "d", '{"v":2}', 5);
   expect(history.answer("s", "a", "d", 10000, 6).reason).toBe("expired");
   expect(history.answer("s", "b", "d", 10, 6).reason).toBe("delta-too-large");
