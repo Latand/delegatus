@@ -20,7 +20,7 @@ function recoveryState(file: string): RecoveryState {
 }
 
 function deferRecovery(state: RecoveryState): void {
-  state.retryAt = Date.now() + state.retryMs;
+  state.retryAt = performance.now() + state.retryMs;
   state.retryMs = Math.min(state.retryMs * 2, 60_000);
 }
 
@@ -63,7 +63,7 @@ export class SeatTickPendingJournal {
       this.blocked = !ready;
       return ready;
     }
-    if (this.recovery.retryAt > Date.now()) {
+    if (this.recovery.retryAt > performance.now()) {
       this.blocked = true;
       return false;
     }
@@ -90,7 +90,9 @@ export class SeatTickPendingJournal {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
       throw error;
     }
-    const [first, next] = entries.filter(name => /^\d{16}-[a-f0-9]{32}\.json(?:\.tmp)?$/.test(name)).sort();
+    // A temporary file belongs to an active publisher. Only the atomic rename
+    // creates a visible, recoverable intent; a sweep must never inspect it.
+    const [first, next] = entries.filter(name => /^\d{16}-[a-f0-9]{32}\.json$/.test(name)).sort();
     if (!first) return true;
     const filename = path.join(this.directory, first);
     // Another release may have already finished this batch.
@@ -127,26 +129,26 @@ export class SeatTickPendingJournal {
     // The receipt identity precedes the first attempt. A worker can commit and
     // lose its reply, so every retry must use the same idempotency key.
     const pending = { id: randomUUID().replaceAll("-", ""), record };
+    // Publish the stable receipt and result before dispatch. If the Viewer exits
+    // at any point after this, a successor can replay the same idempotent row.
+    const filename = path.join(this.directory, `${String(Date.now()).padStart(16, "0")}-${pending.id}.json`);
+    const temp = `${filename}.tmp`;
+    await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
+    await fs.writeFile(temp, JSON.stringify([pending]), { flag: "wx", mode: 0o600 });
+    try { await fs.rename(temp, filename); }
+    finally { await fs.rm(temp, { force: true }); }
     if (!this.pending.length) {
-      try { await appendSeatTickRecordAsync(record, this.file, pending.id); return; }
-      catch { /* Any failed reply is ambiguous: persist the row for receipt replay. */ }
+      try {
+        await appendSeatTickRecordAsync(record, this.file, pending.id);
+        await fs.rm(filename, { force: true });
+        return;
+      } catch { /* Any failed reply is ambiguous: retain the durable intent. */ }
     }
     this.pending.push(pending);
   }
 
   async finish(): Promise<boolean> {
     if (!this.pending.length) return true;
-    const filename = path.join(this.directory, `${String(Date.now()).padStart(16, "0")}-${this.pending[0]!.id}.json`);
-    const temp = `${filename}.tmp`;
-    await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
-    // Publish atomically with the same process-restart guarantee as the
-    // SQLite journal's synchronous=NORMAL commits.
-    try {
-      await fs.writeFile(temp, JSON.stringify(this.pending), { flag: "wx", mode: 0o600 });
-      await fs.rename(temp, filename);
-    } finally {
-      await fs.rm(temp, { force: true });
-    }
     this.pending.length = 0;
     this.blocked = true;
     if (!this.recovery.warned) {

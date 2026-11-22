@@ -158,7 +158,9 @@ test("a persistently busy SQLite journal yields, warns once and saves the result
       warn.mockRestore();
     }
     await recoverInNewProcess();
-    expect(fs.existsSync(temporary)).toBe(false);
+    // A temporary name is still owned by its publisher and is never replayed.
+    expect(fs.existsSync(temporary)).toBe(true);
+    fs.rmSync(temporary, { force: true });
     // Replay the same bytes as if the previous process stopped after commit
     // and before it could remove the batch.
     fs.writeFileSync(pending, bytes, { flag: "wx", mode: 0o600 });
@@ -169,6 +171,78 @@ test("a persistently busy SQLite journal yields, warns once and saves the result
     })]);
   });
 }, 15_000);
+
+test("a wall-clock rollback cannot extend the bounded pending-journal cooldown", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
+  const { SeatTickPendingJournal } = await import("./seatTickPendingJournal");
+  await withCheckJournal("monotonic-journal-cooldown", false, async file => {
+    importLegacySeatTickJournal(file);
+    const id = "0123456789abcdef0123456789abcdef";
+    const record = { schemaVersion: 1, at: new Date(NOW).toISOString(), project: PROJECT, seatEpoch: null,
+      verdict: "quiet", reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null };
+    const dir = `${file}.pending-checks`;
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `0000000000000001-${id}.json`), JSON.stringify([{ id, record }]));
+    const wall = spyOn(Date, "now").mockReturnValue(1_000);
+    let monotonic = 10;
+    const clock = spyOn(performance, "now").mockImplementation(() => monotonic);
+    const database = new Database(statePath("state.sqlite"));
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      expect(await new SeatTickPendingJournal(file).ready()).toBe(false);
+      database.close();
+      wall.mockReturnValue(-3_599_000);
+      monotonic += 60_001;
+      expect(await new SeatTickPendingJournal(file).ready()).toBe(true);
+      expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+      expect(await new SeatTickPendingJournal(file).ready()).toBe(true);
+      expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+    } finally {
+      database.close();
+      wall.mockRestore();
+      clock.mockRestore();
+    }
+  });
+});
+
+test("a process exit after a busy append reply leaves its result for one successor replay", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { statePath } = await import("@/lib/configDir");
+  const { importLegacySeatTickJournal, readSeatTickRecords } = await import("./journalStore");
+  await withCheckJournal("exit-after-busy-reply", true, async file => {
+    importLegacySeatTickJournal(file);
+    const database = new Database(statePath("state.sqlite"));
+    try {
+      database.exec("BEGIN IMMEDIATE");
+      const child = Bun.spawn([process.execPath, "-e", `
+        import { SeatTickPendingJournal } from "./src/lib/monitor/seatTickPendingJournal";
+        await new SeatTickPendingJournal(process.env.LLV_SEAT_TICK_AUDIT_FILE).append({
+          schemaVersion: 1, at: "2026-08-28T12:00:00.000Z", project: "viewer", seatEpoch: null,
+          verdict: "quiet", reasons: [], items: 0, deferred: 0, eventsThrough: 0, delivery: null,
+        });
+        process.exit(0);
+      `], { stdout: "pipe", stderr: "pipe" });
+      const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+      expect(fs.readdirSync(`${file}.pending-checks`).filter(name => name.endsWith(".json"))).toHaveLength(1);
+      expect(readSeatTickRecords(10, file, PROJECT)).toEqual([]);
+    } finally { database.close(); }
+    const recover = Bun.spawn([process.execPath, "-e", `
+      import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+      await reconcileSeatTick({ ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null }, []);
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(await recover.exited).toBe(0);
+    expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+    const replay = Bun.spawn([process.execPath, "-e", `
+      import { reconcileSeatTick } from "./src/lib/monitor/seatTickController";
+      await reconcileSeatTick({ ownsTraffic: () => true, recordSuccessions: () => [], policy: null, curation: null }, []);
+    `], { stdout: "pipe", stderr: "pipe" });
+    expect(await replay.exited).toBe(0);
+    expect(readSeatTickRecords(10, file, PROJECT)).toHaveLength(1);
+  });
+});
 
 test("a worker reply lost after commit replays its preassigned receipt exactly once", async () => {
   const { readSeatTickRecords } = await import("./journalStore");
