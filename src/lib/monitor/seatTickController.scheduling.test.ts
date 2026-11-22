@@ -884,23 +884,22 @@ test.skipIf(!childMode)("seat deadline subprocess case", async () => {
 
 test.skipIf(!!childMode)("a deadline in a real process preserves the wake for the restarted controller", async () => {
   const filename = path.join(fs.mkdtempSync(path.join(SANDBOX, "deadline-process-")), "state.json");
+  const runner = path.resolve(import.meta.dir, "../../../scripts/owned-runner.ts");
   for (const mode of ["expire", "recover"]) {
-    const child = spawn(process.execPath, ["test", import.meta.path, "--test-name-pattern", "seat deadline subprocess case"], {
-      env: { ...process.env, LLV_SEAT_DEADLINE_TEST_MODE: mode, LLV_SEAT_DEADLINE_TEST_STATE: filename }, stdio: ["pipe", "pipe", "pipe"],
+    const child = spawn(process.execPath, [runner, "--budget", "15000", process.execPath,
+      "test", import.meta.path, "--test-name-pattern", "seat deadline subprocess case"], {
+      env: { ...process.env, LLV_SEAT_DEADLINE_TEST_MODE: mode, LLV_SEAT_DEADLINE_TEST_STATE: filename }, stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "", errors = "";
     child.stdout.on("data", chunk => { output += chunk.toString(); });
     child.stderr.on("data", chunk => { errors += chunk.toString(); });
-    const timeout = setTimeout(() => { child.kill("SIGKILL"); }, 15_000);
-    try {
-      const code = await new Promise<number | null>((resolve, reject) => {
-        child.once("error", reject); child.once("exit", resolve);
-      });
-      expect({ code, errors }).toMatchObject({ code: 0 });
-      expect(output).toContain(`DEADLINE_DONE:${mode}`);
-      expect(output).toContain("PREPARATION_READY");
-      if (mode === "expire") expect(output).toMatch(/DEADLINE_READY:[^\s]+/);
-      else expect(output).toMatch(/RECOVERY_READY:[^\s]+/);
-    } finally { clearTimeout(timeout); child.stdin.end(); }
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject); child.once("close", resolve);
+    });
+    expect({ code, errors }).toMatchObject({ code: 0 });
+    expect(output).toContain(`DEADLINE_DONE:${mode}`);
+    expect(output).toContain("PREPARATION_READY");
+    if (mode === "expire") expect(output).toMatch(/DEADLINE_READY:[^\s]+/);
+    else expect(output).toMatch(/RECOVERY_READY:[^\s]+/);
   }
 });
