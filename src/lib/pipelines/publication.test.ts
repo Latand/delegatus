@@ -32,6 +32,16 @@ test("a production admission lock deadline before checks start is retryable", as
   expect(publicationDeadlineOnly(await admissionFailureOutput())).toBe(true);
 });
 
+test("the publication admission deadline retains the hook's reason", async () => {
+  const reason = "CPU admission deadline exceeded after 60000 ms; checks did not start";
+  const outputTail = `pre-push: CPU admission for publication checks\npre-push: ${reason}`;
+  expect(publicationDeadlineOnly(outputTail)).toBe(true);
+  expect(publicationDeadlineOnly(`PRIVACY GATE: FAIL\n${outputTail}`)).toBe(false);
+  const { publicationFailureCause } = await import("./git");
+  expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 75, signal: null, durationMs: 60_000,
+    outputTail, admissionDeadline: true, retryableDeadline: true })).toBe(reason);
+});
+
 test.each(["types", "eslint", "touched tests", "frozen install", "touched tests: failed (1)", "Linux tests: failed (1)"])("a started %s phase prevents an admission retry", async phase => {
   const output = await admissionFailureOutput();
   expect(publicationDeadlineOnly(`pre-push: ${phase}\n${output}`)).toBe(false);

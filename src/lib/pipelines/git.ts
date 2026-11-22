@@ -19,7 +19,7 @@ import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/stat
 import { mailboxPattern } from "@/lib/privacy/mailbox";
 import publicationFingerprints from "../../../scripts/privacy-known-value-fingerprints.json";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
-import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, readPublicationCheckReceipt, supportsPublicationPreparation } from "@/lib/git/publicationCheckReceipt";
+import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, publicationPreparationVersion, readPublicationCheckReceipt } from "@/lib/git/publicationCheckReceipt";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { procBackend } from "@/lib/proc";
@@ -1663,7 +1663,10 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const lines = failure.outputTail.split("\n").map((line) => line.trim());
   const transport = publicationTransportLine(failure.outputTail);
   if (transport) return `git push was refused (${status}): ${transport.slice(0, 160)}`;
-  if (failure.admissionDeadline && failure.retryableDeadline) return "the pre-push hook's CPU admission lock-wait budget expired before checks started";
+  if (failure.admissionDeadline && failure.retryableDeadline) {
+    const deadline = lines.find(line => /^pre-push: CPU admission deadline exceeded after \d+ ms; checks did not start$/.test(line));
+    return deadline?.slice("pre-push: ".length) ?? "the pre-push hook's CPU admission lock-wait budget expired before checks started";
+  }
   const phase = publicationFailurePhase(failure);
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
@@ -2108,7 +2111,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
       fs.futimesSync(descriptor, new Date(), new Date());
       const preparingDependencies = command === "bun" && args[0] === "install";
-      const preparingChecks = command === "bun" && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare";
+      const preparingChecks = (command === "bun" || command === process.execPath)
+        && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare";
       // The push runs the repository's pre-push gates; both leave the
       // production service for a work scope. Its PID, group and the inherited
       // lock descriptor stay this command's.
@@ -2486,10 +2490,10 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // The repository's gate can finish before Git's authenticated discovery.
   // The subsequent native hook verifies this exact operation's consumed
   // inputs, with fresh privacy, under a separate bounded transport deadline.
-  const preparedGate = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
-    && supportsPublicationPreparation(pipeline.worktreeDir);
+  const preparation = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"))
+    ? publicationPreparationVersion(pipeline.worktreeDir) : undefined;
   let transportBudgetMs = PUBLICATION_TRANSPORT_MS + PUBLICATION_PACK_MARGIN_MS;
-  const receiptFile = preparedGate ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
+  const receiptFile = preparation ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
   let push: ExecResult;
   try {
     if (receiptFile) {
@@ -2503,7 +2507,10 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
         LLV_GATE_PUBLICATION_REMOTE_HEAD: remoteSha || "0".repeat(40),
       });
       const checkStarted = performance.now();
-      const checked = await exec("bun", ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
+      // Version 2's native hook stays in the image. Its preparation must
+      // fingerprint the same Bun, Git and environment before minting.
+      const runtime = preparation === 2 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
+      const checked = await exec(runtime, ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
       if (checked.code !== 0) return failure("checking the publication before transport", checked);
       // Preparation includes privacy: its elapsed time is a conservative
       // observation even with older hooks that report no per-step timings.

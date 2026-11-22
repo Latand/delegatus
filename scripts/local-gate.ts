@@ -938,21 +938,33 @@ class AdmittedGateFailed extends Error {
 
 /** One ledger spans the slot handoff. Nested supervisors may create their
  * own ledgers; the admitted hook still credits this invocation's queue wait.
- * Cancellation remains owned by execute throughout admission and execution. */
-export async function runAdmittedChecks(command: string[], root: string, env: NodeJS.ProcessEnv, deadline: PushDeadline | null, cancel?: AbortSignal): Promise<void> {
+ * Bound the admission itself independently of the execution budget. */
+export async function runAdmittedChecks(command: string[], root: string, env: NodeJS.ProcessEnv, deadline: PushDeadline | null,
+  cancel?: AbortSignal, admissionMs = 60_000): Promise<void> {
   const budget = cpuWaitBudget(env);
+  const started = path.join(budget.directory, "running");
+  const admission = new AbortController();
+  const stop = cancel ? AbortSignal.any([cancel, admission.signal]) : admission.signal;
+  const timer = setTimeout(() => {
+    if (!cancel?.aborted && !existsSync(started)) {
+      console.error(`pre-push: CPU admission deadline exceeded after ${admissionMs} ms; checks did not start`);
+      admission.abort();
+    }
+  }, admissionMs);
   console.error("pre-push: CPU admission for publication checks");
   try {
     const outcome = await execute(command, root, {
-      ...budget.env, LLV_GATE_ADMISSION_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS,
+      ...budget.env, LLV_GATE_ADMISSION_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS, LLV_GATE_WAIT_STARTED: started,
       ...(deadline ? { LLV_GATE_PUSH_DEADLINE: String(deadline.at + (deadline.cpuWaitMs ?? 0)) } : {}),
       LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(deadline ? deadline.at + (deadline.cpuWaitMs ?? 0) : Date.now() + 15 * 60_000, env)),
-    }, Infinity, undefined, cancel);
+    }, Infinity, undefined, stop);
     if (outcome.leaked) throw new ContainmentFailed("admitted checks", outcome.leaked, outcome.cancelled);
+    if (admission.signal.aborted) throw new AdmittedGateFailed(75, "publication checks stopped while waiting for CPU admission");
     if (outcome.cancelled) return;
     if (outcome.stopped) throw new NoVerdict({ name: "push checks", command }, deadline ?? { startedAt: Date.now() - (outcome.ranMs ?? 0), at: Date.now() }, outcome);
     if (outcome.code !== 0) throw new AdmittedGateFailed(outcome.code ?? 1);
   } finally {
+    clearTimeout(timer);
     console.error(`pre-push: publication checks CPU wait: ${Math.round(budget.elapsed())} ms (excluded from execution budget)`);
     budget.close();
   }
@@ -1123,6 +1135,13 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       delete env.LLV_GATE_TYPES_CHECKED;
       delete env.LLV_GATE_FULL_TYPES;
       if (step.name === "privacy") Object.assign(env, privacyEnv);
+      if (path.basename(process.execPath) === "bun-container") {
+        const executable = Bun.which(command[0]!, { PATH: env.PATH ?? "" });
+        if (command[0] === "bun" && executable === "/usr/local/bin/bun") command[0] = process.execPath;
+        // The installed compiler is already in the locked dependency tree.
+        // Use it directly so bunx cannot invoke the image's host shell shim.
+        if (step.name === "types" && executable === "/usr/local/bin/bunx") command.splice(0, 2, "node", "node_modules/typescript/bin/tsc");
+      }
       if (step.pinned) {
         runtime ??= pinnedRuntime(root, cache, until, cancel, env);
         command[0] = await runtime;

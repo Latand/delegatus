@@ -578,6 +578,20 @@ settings take precedence. The slot locks live in
 `/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
 share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage starts and gates share a durable FIFO CPU queue. After ten minutes,
 the head can start under sustained pressure, with two seconds between admissions.
+A publication hook allows up to 60 seconds for its outer checks to acquire
+admission. If the wait expires, the hook names CPU admission as the cause
+and stops the queued work. An admitted check still gets its execution budget.
+
+The Viewer sees the same lock inodes through its read-only `/var/tmp` bind.
+On a new host, provision the claim file and at least one slot and matching
+cap file from the writable host side using the configured `LLV_GATE_SLOTS`
+value. For the default cap of six, those files are
+`llv-heavy-gate.claim.lock`, `llv-heavy-gate.slot1.lock` and
+`llv-heavy-gate.slot1.cap6.lock`. Each additional pair gives the Viewer
+another slot to use. The hook reports an unavailable lock pool if it cannot
+use the claim file or any pair. Container checks use the image's Bun and the
+portable owned runner when a user systemd manager is unavailable.
+
 A test, a driver or any instance on a state directory of its own queues its
 stage starts in `<state>/cpu-gate`, never in the machine queue; a stage ticket
 nobody polls for a minute is passed over, and so is a command ticket whose

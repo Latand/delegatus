@@ -72,6 +72,57 @@ test("another command waits for the same legacy-compatible slot", async () => {
   expect(await child.exited).toBe(0);
 });
 
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("read-only shared locks exclude a writable host holder and work with portable cleanup", async () => {
+  const f = fixture(false);
+  const locks = join(f.root, "read-only"), helper = join(f.root, "gate-bun");
+  mkdirSync(locks);
+  const claim = "llv-heavy-gate.claim.lock", slot = "llv-heavy-gate.slot1.lock", cap = "llv-heavy-gate.slot1.cap1.lock";
+  for (const file of [claim, slot, cap]) writeFileSync(join(locks, file), "");
+  // Keep SQLite outside the simulated bind, as the Viewer's default queue is.
+  writeFileSync(helper, `#!/bin/bash
+case "$2" in
+  --reuse-slot) exit 75 ;;
+  --wait|--claim|--release-slot) exit 0 ;;
+esac
+export LLV_GATE_LOCK_DIR="$SLOT_WRITABLE"
+exec "$SLOT_BUN" "$@"
+`, { mode: 0o755 });
+  const holder = Bun.spawn(["/bin/bash", "-ec", 'exec 9>"$1"; /usr/bin/flock 9; echo held; read -r release', "host", join(locks, slot)],
+    { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+  try {
+    const reader = holder.stdout.getReader();
+    try { expect(new TextDecoder().decode((await reader.read()).value)).toBe("held\n"); }
+    finally { reader.releaseLock(); }
+    for (const file of [claim, slot, cap]) chmodSync(join(locks, file), 0o444);
+    chmodSync(locks, 0o555);
+    Object.assign(f.env, { LLV_GATE_LOCK_DIR: locks, LLV_GATE_BUN: helper, SLOT_WRITABLE: f.root, LLV_GATE_POLL_SECONDS: "0.02" });
+    // The host still owns the inode. A read-only opener must wait on it.
+    const started = join(f.root, "started");
+    const gate = Bun.spawn(["/bin/bash", join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", 'echo ran >"$1"', "fixture", started],
+      { env: f.env, stdout: "ignore", stderr: "pipe" });
+    try {
+      expect(await Promise.race([gate.exited, Bun.sleep(200).then(() => "waiting")])).toBe("waiting");
+      expect(await Bun.file(started).exists()).toBe(false);
+      holder.stdin.write("release\n");
+      holder.stdin.end();
+      expect(await holder.exited).toBe(0);
+      const output = await new Response(gate.stderr).text();
+      expect(await gate.exited, output).toBe(0);
+      expect(output).toContain("portable cleanup on linux");
+      expect(await Bun.file(started).text()).toBe("ran\n");
+    } finally { if (gate.exitCode === null) gate.kill(); await gate.exited; }
+    expect(f.run("exit 37").status).toBe(37);
+    f.env.LLV_GATE_SLOTS = "2";
+    const incomplete = f.run("exit 37");
+    expect(incomplete.status).toBe(69);
+    expect(incomplete.stderr).toContain("cannot open a shared slot and cap lock pair");
+  } finally {
+    if (holder.exitCode === null) holder.kill();
+    await holder.exited;
+    chmodSync(locks, 0o755);
+  }
+});
+
 const WORK_GROUP = "/user.slice/user-1000.slice/user@1000.service/delegatus.slice/delegatus-agents.slice/delegatus-agents-work.slice";
 /** A fake cgroup tree under `root`: the cgroup file names `group`, and each `cpu.max` the kernel would show. */
 function fakeCgroup(root: string, group: string, controls: { scope?: string; slice?: string }) {

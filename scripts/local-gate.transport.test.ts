@@ -95,7 +95,7 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
     delete f.env.LLV_GATE_PUBLICATION_RECEIPT;
     const marker = path.join(f.dir, "scripts/local-gate-capabilities.json");
     if (capability === "absent") fs.rmSync(marker);
-    else fs.writeFileSync(marker, capability === "unsupported" ? '{"publicationPrepare":2}' : '{');
+    else fs.writeFileSync(marker, capability === "unsupported" ? '{"publicationPrepare":3}' : '{');
     // The native entry point retains the ordinary pre-push protocol. In
     // particular, nothing may try its unknown --publication-prepare argument.
     f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json", "scripts/local-gate.ts");

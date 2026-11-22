@@ -1012,3 +1012,31 @@ for (const fails of [false, true]) test(`pre-push credits admission across a sup
     expect(result.stderr).toContain(fails ? "publication assertion" : "touched tests: passed");
   } finally { fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n"); f.age(); await Promise.resolve(pending).catch(() => {}); f.close(); }
 }, 60_000);
+
+test.skipIf(process.platform !== "linux")("publication bounds admission while a host holds the shared slot, then can retry", async () => {
+  const f = fixture(), gate = path.resolve("scripts/local-gate.ts");
+  const lock = path.join(f.dir, "llv-heavy-gate.slot1.lock");
+  const holder = Bun.spawn(["flock", lock, "/bin/bash", "-c", "echo held; read -r release"],
+    { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+  const caller = `import { runAdmittedChecks, endHook } from ${JSON.stringify(gate)};
+    try { await runAdmittedChecks(${JSON.stringify(f.command("admitted"))}, process.cwd(), process.env, null, undefined, 1500); }
+    catch (error) { endHook("pre-push", error); }`;
+  const env = { ...f.env, LLV_GATE_SLOTS: "1", LLV_GATE_RUNNER: "off", DELEGATUS_CPU_PRESSURE: "off" };
+  try {
+    const reader = holder.stdout.getReader();
+    try { expect(new TextDecoder().decode((await reader.read()).value)).toBe("held\n"); }
+    finally { reader.releaseLock(); }
+    const refused = await realExec(process.execPath, ["-e", caller], process.cwd(), env, { timeoutMs: 10_000 });
+    expect(refused.code, refused.stderr).toBe(75);
+    expect(refused.stderr).toContain("pre-push: CPU admission deadline exceeded after 1500 ms; checks did not start");
+    expect(fs.existsSync(f.env.CPU_QUEUE_OUTPUT)).toBe(false);
+    expect(Bun.spawnSync(["flock", "-n", lock, "true"]).exitCode).toBe(1);
+    holder.stdin.write("release\n");
+    holder.stdin.end();
+    expect(await holder.exited).toBe(0);
+    const retried = await realExec(process.execPath, ["-e", caller.replace(", 1500);", ", 8000);")], process.cwd(), env, { timeoutMs: 12_000 });
+    expect(retried.code, retried.stderr).toBe(0);
+    expect(fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8")).toBe("admitted\n");
+    expect(f.count()).toBe(0);
+  } finally { if (holder.exitCode === null) holder.kill(); await holder.exited; f.close(); }
+}, 30_000);
