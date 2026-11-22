@@ -228,7 +228,7 @@ test.each(["off", "sqlite"] as const)("Viewer membership census keeps verified r
         fs.writeFileSync(draft, JSON.stringify({ ...file, memberships: { ...file.memberships, [changed]: next } }));
         fs.renameSync(draft, filename);
       } else {
-        const store = new SqliteAgentRegistryStore(path.join(root, "registry.sqlite"), { normalize: normalizeRegistry });
+        const store = new SqliteAgentRegistryStore(path.join(root, "registry.sqlite"), { initialSnapshot: file, normalize: normalizeRegistry });
         try { store.mutate(rows => { rows.memberships[changed] = next; }, false); }
         finally { store.close(); }
       }
