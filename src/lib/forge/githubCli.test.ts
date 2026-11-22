@@ -9,7 +9,7 @@ import { runGithubCliRead } from "./githubCli";
 test.skipIf(process.platform === "win32")("Darwin resolves gh outside a minimal PATH and preserves its pinned config", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gh-resolution-"));
   try {
-    const env = { HOME: root, PATH: path.join(root, "path"), XDG_CONFIG_HOME: path.join(root, "sandbox"), GH_CONFIG_DIR: path.join(root, "pinned") };
+    const env = { NODE_ENV: "test" as const, HOME: root, PATH: path.join(root, "path"), XDG_CONFIG_HOME: path.join(root, "sandbox"), GH_CONFIG_DIR: path.join(root, "pinned") };
     fs.mkdirSync(env.PATH);
     const candidates = agentBinaryCandidates("gh", { home: root, platform: "darwin", envPath: "" });
     expect(candidates).toContain("/opt/homebrew/bin/gh");
