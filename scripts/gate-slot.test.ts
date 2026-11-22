@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
@@ -98,10 +98,20 @@ exec "$SLOT_BUN" "$@"
     Object.assign(f.env, { LLV_GATE_LOCK_DIR: locks, LLV_GATE_BUN: helper, SLOT_WRITABLE: f.root, LLV_GATE_POLL_SECONDS: "0.02" });
     // The host still owns the inode. A read-only opener must wait on it.
     const started = join(f.root, "started");
+    const flockAttempts = join(f.root, "slot-flock-attempts");
+    unlinkSync(join(f.root, "flock"));
+    writeFileSync(join(f.root, "flock"), '#!/bin/bash\n/usr/bin/flock "$@"\nstatus=$?\nif [[ ${1:-} == -n && ${2:-} == 9 ]]; then printf "%s\\n" "$status" >> "$SLOT_FLOCK_ATTEMPTS"; fi\nexit "$status"\n', { mode: 0o755 });
+    f.env.SLOT_FLOCK_ATTEMPTS = flockAttempts;
     const gate = Bun.spawn(["/bin/bash", join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", 'echo ran >"$1"', "fixture", started],
       { env: f.env, stdout: "ignore", stderr: "pipe" });
     try {
-      expect(await Promise.race([gate.exited, Bun.sleep(200).then(() => "waiting")])).toBe("waiting");
+      const deadline = Date.now() + 5_000;
+      while (!Bun.file(flockAttempts).size && Date.now() < deadline) {
+        if (gate.exitCode !== null) break;
+        await Bun.sleep(10);
+      }
+      expect(gate.exitCode).toBeNull();
+      expect(await Bun.file(flockAttempts).text()).toContain("1\n");
       expect(await Bun.file(started).exists()).toBe(false);
       holder.stdin.write("release\n");
       holder.stdin.end();

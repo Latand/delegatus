@@ -1727,7 +1727,7 @@ export function pipelinePublicationHookEnv(source: NodeJS.ProcessEnv = process.e
   const env: Partial<NodeJS.ProcessEnv> = {};
   for (const key of Object.keys(source)) {
     if (key === "NODE_ENV" || key === "NEXT_PHASE" || key === "NEXT_RUNTIME" || /^__NEXT_/.test(key)
-      || (/^(?:LLV|DELEGATUS)_/.test(key) && !/^(?:LLV_(?:GATE|PRIVACY)_|(?:LLV|DELEGATUS)_PUBLICATION_|LLV_AGENT_GIT_GUARD_DIR$|(?:LLV|DELEGATUS)_(?:AGENT_CPU$|CPU_PRESSURE|WORK_(?:SCOPE_)?CPU_QUOTA$))/.test(key))) env[key] = undefined;
+      || (/^(?:LLV|DELEGATUS)_/.test(key) && !/^(?:LLV_(?:GATE|PRIVACY)_|(?:LLV|DELEGATUS)_PUBLICATION_|LLV_AGENT_GIT_GUARD_DIR$|LLV_DOCKER_NSENTER_SHIMS$|(?:LLV|DELEGATUS)_(?:AGENT_CPU$|CPU_PRESSURE|WORK_(?:SCOPE_)?CPU_QUOTA$))/.test(key))) env[key] = undefined;
   }
   return env;
 }

@@ -1343,9 +1343,11 @@ test("the publication hook environment drops the Viewer's settings and keeps the
     LLV_SKIP_HOOKS: "1", DELEGATUS_DEBUG: "1", NEXT_RUNTIME: "nodejs", LLV_GATE_SLOTS: "2", LLV_PRIVACY_OCR_LANGUAGES: "eng",
     LLV_PUBLICATION_NAME: "Agent", NEXT_TELEMETRY_DISABLED: "1",
     // The operator's CPU placement choices reach the hook's gates.
-    DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_CPU_PRESSURE_HOLD: "30", DELEGATUS_WORK_CPU_QUOTA: "900", DELEGATUS_WORK_SCOPE_CPU_QUOTA: "200" });
+    DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "off", DELEGATUS_CPU_PRESSURE_HOLD: "30", DELEGATUS_WORK_CPU_QUOTA: "900", DELEGATUS_WORK_SCOPE_CPU_QUOTA: "200",
+    LLV_DOCKER_NSENTER_SHIMS: "1" });
   // Every key present is an explicit removal; a kept variable is inherited untouched.
   expect(Object.values(env).every((value) => value === undefined)).toBe(true);
+  expect(Object.hasOwn(env, "LLV_DOCKER_NSENTER_SHIMS")).toBe(false);
   expect(Object.keys(env).sort()).toEqual(["DELEGATUS_DEBUG", "LLV_LANG", "LLV_LAUNCHER_CHECKOUT", "LLV_LAUNCHER_REEXEC", "LLV_SKIP_HOOKS", "LLV_STATE_OWNER", "LLV_TOKEN", "NEXT_RUNTIME", "NODE_ENV"]);
 });
 
