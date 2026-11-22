@@ -18460,22 +18460,6 @@ async function applyPipelinePatch(
         delete pipeline.delivery.operation;
         pipeline.publishedCommit = null;
       }
-      if (receiptRetry && stage && attempt && parkedRunningReceipt(
-        (ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId) : ports.spawnReceipt(retryLaunchId)?.state) ?? "", ports.spawnReceipt(retryLaunchId))) {
-        if (attempt.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
-          return { error: "the parked attempt has a pending delivery; retry once that delivery settles", status: 409 };
-        }
-        const stopped = await stopInterruptedStageAttempt(stage, attempt, ports);
-        if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running") {
-          await persist();
-          return { error: "the host of the parked attempt has not confirmed termination; retry once it has stopped", status: 409 };
-        }
-        if (attempt.report) {
-          await persist();
-          return { error: "the parked attempt recorded a stage report while its host was stopping", status: 409 };
-        }
-      }
-      if (attempt && !completedRetry) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
       const beforeStop = completedRetryRefusal();
       if (beforeStop) return beforeStop;
       if (completedRetry && stage && attempt) {
@@ -18514,14 +18498,46 @@ async function applyPipelinePatch(
         attempt.state = "failed";
         attempt.completedAt ??= ports.now();
       }
-      /* A fresh failed settlement, or a retry parked while reading its receipt,
-         may have no completed transcript receipt to enter completedRetry above.
-         The conversation can still have a live successor that owns the writer;
-         inspect it after every awaited retry preparation and immediately before
-         the synchronous reset. */
-      if (!completedRetry && (attempt?.state === "failed" || attempt?.state === "needs_decision")
-        && attempt.conversationId && (await ports.conversationHostProcess?.(attempt.conversationId))?.state === "alive") {
-        return { error: "the failed attempt still has a live stage host; retry was cancelled", status: 409 };
+      const liveHostRefusal = { error: "the failed attempt still has a live stage host; retry was cancelled", status: 409 };
+      let checkedRetryHost: string | null = null;
+      if (!completedRetry && (attempt?.state === "failed" || attempt?.state === "needs_decision") && attempt.conversationId) {
+        const conversationId = attempt.conversationId;
+        checkedRetryHost = conversationId;
+        const live = await ports.conversationHostProcess?.(conversationId);
+        const resident = live?.state === "alive" || live?.state === "unknown" && live.pid !== null;
+        const receipt = retryLaunchId ? ports.spawnReceipt(retryLaunchId) : null;
+        const openReceipt = receiptRetry && parkedRunningReceipt(
+          (ports.spawnReceiptState ? ports.spawnReceiptState(retryLaunchId) : receipt?.state) ?? "", receipt);
+        if (resident || openReceipt) {
+          if (stage?.kind !== "run" || attempt.historical || attempt.paneId
+            || !attempt.launchId || !attempt.agentPath || !attempt.sessionId
+            || resident && receipt?.generationMatches !== true
+            || conversationId === pipeline.srcConversationId || attempt.agentPath === pipeline.srcPath
+            || pipelinePublicationHoldsHost(pipeline) || pipelineSurvivorRefusal(pipeline)
+            || ports.conversationRestartCutHeld?.(conversationId)
+            || ports.conversationDeliveryOutstanding?.(conversationId)) return liveHostRefusal;
+          const target = { stageId: stage.id, attempt: attempt.n, conversationId, agentPath: attempt.agentPath,
+            paneId: null, launchId: attempt.launchId };
+          // A parked decision normally retains its host. Publish the narrow
+          // authorization before the runtime checks ownership for the stop.
+          attempt.retryHostStopRequested = true;
+          await persist();
+          let stopped: PipelineStageStopResult;
+          try {
+            stopped = await ports.stopStageAgent(target, { onlyIfIdle: true, requireIdleEvidence: true,
+              operationId: terminalIdleStopKey(target) });
+            if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, ports.now());
+          } finally {
+            delete attempt.retryHostStopRequested;
+            await persist();
+          }
+          if (stopped.outcome !== "stopped" && stopped.outcome !== "not-running" || attempt.report && openReceipt) return liveHostRefusal;
+        }
+      }
+      if (attempt && !completedRetry) await cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by operator retry");
+      if (checkedRetryHost) {
+        const latest = await ports.conversationHostProcess?.(checkedRetryHost);
+        if (latest?.state === "alive" || latest?.state === "unknown" && latest.pid !== null) return liveHostRefusal;
       }
       if (attempt?.conversationId && ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
         return { error: "the attempt has a pending delivery; retry once that delivery settles", status: 409 };

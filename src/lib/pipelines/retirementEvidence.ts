@@ -12,7 +12,8 @@ import type { Pipeline } from "./types";
 import { readRecorded, recordedHostHeld } from "@/lib/recordedChecks/store";
 
 type Reason = { name: PipelineRetirementReason; expiresAt: number };
-type Claim = { pipeline: string; stage: string | null; attempt: number | null; publishing: boolean; recoverable: boolean; source: boolean; fenced: boolean; identities: string[]; reason?: Reason };
+type RetryHost = { conversationId: string; launchId: string; agentPath: string; sessionId: string; engine: RuntimeEngine };
+type Claim = { pipeline: string; stage: string | null; attempt: number | null; publishing: boolean; recoverable: boolean; source: boolean; fenced: boolean; identities: string[]; reason?: Reason; retryHost?: RetryHost };
 type Projection = { id: string; claims: Claim[]; releasedSources: string[] };
 type Evidence = { compact: CompactEvidenceCache<Projection>; index: Map<string, Claim[]>; releasedSources: Set<string>; version: string; nextExpiry: number };
 type Slot = { value?: Evidence; pending?: Promise<Evidence> };
@@ -37,12 +38,13 @@ function project(raw: unknown, now: number, idleMs: number): Projection {
   const claims: Claim[] = [];
   const releasedSources: string[] = [];
   const add = (stage: string | null, attempt: number | null, values: ReadonlyArray<readonly [string, string | null | undefined]>, options?: {
-    recoverable?: boolean; fenced?: boolean; reason?: Reason;
+    recoverable?: boolean; fenced?: boolean; reason?: Reason; retryHost?: RetryHost;
   }) => {
     const identities = values.flatMap(([kind, value]) => value ? [identity(kind, value)] : []);
     if (identities.length) claims.push({ pipeline: pipeline.id, stage, attempt, publishing,
       recoverable: options?.recoverable ?? false, fenced: options?.fenced ?? publishing,
-      source: stage === null, identities, ...(options?.reason ? { reason: options.reason } : {}) });
+      source: stage === null, identities, ...(options?.reason ? { reason: options.reason } : {}),
+      ...(options?.retryHost ? { retryHost: options.retryHost } : {}) });
   };
   if (sourceHeld) {
     add(null, null, [["conversation", pipeline.srcConversationId], ["path", pipeline.srcPath]]);
@@ -53,8 +55,14 @@ function project(raw: unknown, now: number, idleMs: number): Projection {
         if (value) releasedSources.push(identity(kind, value));
       }
     }
-    if (held) add(stageId, attempt.n, identities.flatMap(host => [["conversation", host.conversationId], ["path", host.agentPath],
-      ["session", host.sessionId], ["pane", host.paneId], ["launch", host.launchId]] as const), { recoverable, fenced });
+    const retryHost = attempt.retryHostStopRequested === true && !fenced && recoverable
+      && pipeline.state === "needs_decision" && pipeline.cursor?.stageId === stageId
+      && (attempt.state === "failed" || attempt.state === "needs_decision")
+      && attempt.conversationId && attempt.launchId && attempt.agentPath && attempt.sessionId
+      ? { conversationId: attempt.conversationId, launchId: attempt.launchId, agentPath: attempt.agentPath,
+        sessionId: attempt.sessionId, engine: attempt.effectiveRole.engine } : undefined;
+    if (held || retryHost) add(stageId, attempt.n, identities.flatMap(host => [["conversation", host.conversationId], ["path", host.agentPath],
+      ["session", host.sessionId], ["pane", host.paneId], ["launch", host.launchId]] as const), { recoverable, fenced, retryHost });
     if (reason) {
       const attemptSettledAt = Math.max(timestamp(attempt.completedAt), timestamp(attempt.report?.at));
       const settledAt = reason === "terminal lane" ? Math.max(laneSettledAt, attemptSettledAt) : attemptSettledAt;
@@ -194,6 +202,12 @@ export async function pipelineRetirementReader(
         if (claim.source && !claim.publishing && sourceReleased) continue;
         if (recovery && !claim.publishing && claim.recoverable
           && claim.pipeline === recovery.pipelineId && claim.stage === recovery.stageId && claim.attempt === recovery.attempt) continue;
+        // Only the conditional kill's exact registry launch can use this
+        // exemption. Every other claim on the same host still applies.
+        const retry = claim.retryHost;
+        if (!sweep && retry && target.launchId === retry.launchId && target.engine === retry.engine
+          && target.sessionId === retry.sessionId && target.agentPath === retry.agentPath
+          && target.conversations.includes(retry.conversationId)) continue;
         if (!sweep || claim.fenced) return "held";
         // Ordinary pipeline ownership withholds the quiet-interval waiver.
         // The sweep's runtime checks still govern idle and abandoned hosts.

@@ -457,6 +457,8 @@ export type PipelineStageAttempt = {
       converted to a run stage: history of the legacy flow, never this stage's
       own attempt, so its verdict passes nothing. */
   legacyReview?: true;
+  /** An explicit retry authorized an idle-only stop of this attempt's recorded launch. */
+  retryHostStopRequested?: true;
   state: PipelineAttemptState;
   /** Durable custody across the pipeline/registry boundary. Rollback keeps draining these. */
   activation?: {
