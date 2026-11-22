@@ -48,7 +48,7 @@ test("redacts before bounding a diagnostic and never retains the command line", 
   expect(result.reason).toStartWith("GitHub read authentication failed:");
   expect(result.reason.length).toBeLessThanOrEqual(400);
   for (const value of [credential, address, privatePath, "Command failed"]) expect(result.reason).not.toContain(value);
-  expect(githubReadFailure(new Error(`Command failed: gh --credential ${credential}`)).reason).toBe("GitHub read failed: no diagnostic returned");
+  expect(githubReadFailure(new Error(`Command failed: gh --credential ${credential}`)).reason).toBe("GitHub read failed: details withheld for privacy");
 });
 
 function pathFromParts(): string {
@@ -64,12 +64,23 @@ test("an unknown gh exit logs only a bounded scrubbed excerpt and a remedy", () 
   });
   const diagnostic = githubReadDiagnostic(error);
   expect(diagnostic.cause).toBe("command-error");
-  expect(diagnostic.message).toStartWith("GitHub read failed (exit 17): unknown option");
+  expect(diagnostic.message).toStartWith("GitHub read failed (exit 17): details withheld for privacy");
   expect(diagnostic.message).toEndWith("Check the gh installation and configuration, then retry.");
   expect(diagnostic.message.length).toBeLessThan(500);
   for (const value of [credential, address, pathFromParts(), url, "private-argument", "second line", "\x1b"]) {
     expect(diagnostic.message).not.toContain(value);
   }
+});
+
+test.each([
+  "proxyconnect tcp: tls: failed to verify certificate: x509: certificate signed by unknown authority",
+  "certificate verify failed: x509: unknown authority",
+])("classifies TLS verification failures as network errors: %s", stderr => {
+  const error = Object.assign(new Error("Command failed: gh api"), { code: 1, stderr });
+  expect(githubReadDiagnostic(error)).toEqual({
+    cause: "network",
+    message: "GitHub network request failed. Check connectivity, DNS and proxy settings, then retry.",
+  });
 });
 
 test("retry backoff starts at one minute and remains capped", () => {

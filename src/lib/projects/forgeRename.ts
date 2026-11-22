@@ -106,11 +106,13 @@ export function forgeRenameCandidatesFromMoves(moves: readonly RemoteProjectMove
     .filter((candidate): candidate is ForgeRenameCandidate => candidate !== null);
 }
 
-function repositoryAnswer(body: { id?: unknown; full_name?: unknown }): ForgeRepositoryLookup | null {
-  if (typeof body.id !== "number" || !Number.isSafeInteger(body.id) || body.id <= 0) return null;
-  return { status: "found", id: body.id,
-    ...(typeof body.full_name === "string" && githubFullName(`github.com/${body.full_name}`)
-      ? { fullName: body.full_name } : {}) };
+function repositoryAnswer(body: unknown): ForgeRepositoryLookup | null {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return null;
+  const response = body as { id?: unknown; full_name?: unknown };
+  if (typeof response.id !== "number" || !Number.isSafeInteger(response.id) || response.id <= 0) return null;
+  return { status: "found", id: response.id,
+    ...(typeof response.full_name === "string" && githubFullName(`github.com/${response.full_name}`)
+      ? { fullName: response.full_name } : {}) };
 }
 
 const LOOKUP_TIMEOUT_MS = 10_000;
@@ -166,6 +168,8 @@ export async function githubRepositoryLookup(fullName: string, {
 const decisions = new Map<string, Exclude<ForgeRenameDecision, "undecided">>();
 const pendingChecks = new Set<string>();
 const retryAfter = new Map<string, number>();
+let retryAdmissionAfter = 0;
+let retryAdmissionCursor: string | null = null;
 let activeLookup: ForgeLookup = githubRepositoryLookup;
 let queue: Promise<unknown> = Promise.resolve();
 
@@ -228,13 +232,31 @@ export async function recordForgeRenames(
  */
 export function scheduleForgeRenames(candidates: readonly ForgeRenameCandidate[]): void {
   const now = Date.now();
+  for (const [key, deadline] of retryAfter) if (deadline <= now) retryAfter.delete(key);
+  if (retryAdmissionAfter <= now) retryAdmissionAfter = 0;
   const pending = new Map<string, ForgeRenameCandidate>();
-  for (const candidate of candidates) {
+  let deferred = false;
+  const ordered = [...candidates];
+  const cursorIndex = retryAdmissionCursor === null ? -1
+    : ordered.findIndex(candidate => decisionKey(candidate) === retryAdmissionCursor);
+  const start = cursorIndex < 0 ? 0 : (cursorIndex + 1) % Math.max(1, ordered.length);
+  const rotated = ordered.length ? [...ordered.slice(start), ...ordered.slice(0, start)] : ordered;
+  for (const candidate of rotated) {
     const key = decisionKey(candidate);
-    if (pendingChecks.has(key) || now < (retryAfter.get(key) ?? 0)) continue;
-    retryAfter.delete(key);
+    if (pendingChecks.has(key) || retryAfter.has(key)) continue;
+    if (retryAdmissionAfter > now) continue;
+    if (retryAfter.size + pendingChecks.size >= MAX_RETRY_ENTRIES) {
+      deferred = true;
+      continue;
+    }
     pendingChecks.add(key);
     pending.set(key, candidate);
+  }
+  // Keep every admitted deadline intact. Excess candidates share this
+  // admission window and are reconsidered on a later scan after it expires.
+  if (deferred) {
+    retryAdmissionAfter = now + RETRY_MS;
+    retryAdmissionCursor = pending.size ? [...pending.keys()].at(-1)! : retryAdmissionCursor;
   }
   if (!pending.size) return;
   queue = queue
@@ -247,7 +269,6 @@ export function scheduleForgeRenames(candidates: readonly ForgeRenameCandidate[]
         pendingChecks.delete(key);
         retryAfter.set(key, next);
       }
-      while (retryAfter.size > MAX_RETRY_ENTRIES) retryAfter.delete(retryAfter.keys().next().value!);
     });
 }
 
@@ -266,6 +287,8 @@ export function resetForgeRenameDecisionsForTests(): void {
   decisions.clear();
   sharedChecks.clear();
   retryAfter.clear();
+  retryAdmissionAfter = 0;
+  retryAdmissionCursor = null;
   lastDiagnostic.clear();
 }
 

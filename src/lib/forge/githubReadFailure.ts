@@ -44,13 +44,15 @@ function classifyGithubReadFailure(error: unknown) {
   if (error instanceof SyntaxError || /parsable|parse|malformed|invalid.*(?:json|response)|unexpected.*(?:json|token)|returned no /i.test(raw)) {
     return failure("invalid-response", "GitHub read invalid response");
   }
-  if (status?.startsWith("5") || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|network|socket hang up|TLS handshake|connection|service unavailable|no such host|could not resolve host|could not be reached/i.test(`${detail?.code ?? ""}\n${raw}`)) {
+  if (status?.startsWith("5") || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|network|socket hang up|TLS handshake|failed to verify certificate|certificate verify failed|x509:|connection|service unavailable|no such host|could not resolve host|could not be reached/i.test(`${detail?.code ?? ""}\n${raw}`)) {
     return failure("network", "GitHub read temporarily unavailable", true);
   }
   const code = typeof detail?.code === "number" ? ` (exit ${detail.code})`
     : typeof detail?.code === "string" && /^[A-Z][A-Z_]+$/.test(detail.code) ? ` (${detail.code})` : "";
-  const excerpt = line.replace(/https?:\/\/[^\s)]+/gi, "[url]");
-  return failure("command-error", `GitHub read failed${code}`, false, excerpt);
+  // gh stderr is arbitrary user-controlled text. The monitor redactor does
+  // not remove every path, account handle, or repository slug, so preserve
+  // the exit status and remedy while withholding the excerpt.
+  return failure("command-error", `GitHub read failed${code}`, false, "details withheld for privacy");
 }
 
 /** Read failures carry no evidence that authorizes a GitHub write. */

@@ -348,7 +348,8 @@ describe("the sweep", () => {
     ["missing CLI", "ENOENT", "", "gh) not found on PATH", "Install gh"],
     ["no login", 1, "To get started with GitHub CLI, please run: gh auth login", "authentication failed", "GH_CONFIG_DIR"],
     ["network", 1, "error connecting to api.github.com: lookup api.github.com: no such host", "network request failed", "Check connectivity"],
-    ["other exit", 17, "unknown flag --fixture", "(exit 17): unknown flag --fixture", "Check the gh installation"],
+    ["TLS certificate", 1, "proxyconnect tcp: tls: failed to verify certificate: x509: certificate signed by unknown authority", "network request failed", "Check connectivity"],
+    ["other exit", 17, "unknown flag --fixture", "(exit 17): details withheld for privacy", "Check the gh installation"],
   ] as const)("%s logs a remedy, keeps cached links and retries on cooldown", async (_name, code, stderr, cause, remedy) => {
     let fail = false;
     const error = Object.assign(new Error("Command failed: gh"), { code, stderr });
@@ -376,6 +377,28 @@ describe("the sweep", () => {
     expect(await h.sweep()).toEqual([REPO]);
     expect(h.calls).toHaveLength(3);
     expect(entry().lastError).toBeNull();
+  });
+
+  test("generic gh stderr is withheld from sweep log detail while cache remains usable", async () => {
+    let fail = false;
+    const privateFragments = ["@synthetic_handle", "private-owner/private-repo", "/Volumes/Private Drive/Account A/config"];
+    const error = Object.assign(new Error("Command failed: gh"), {
+      code: 17,
+      stderr: `unknown gh failure ${privateFragments.join(" ")}`,
+    });
+    const h = harness(() => fail ? error : [row({ number: 7 })]);
+    const logs: string[] = [];
+    h.ports.log = (message, detail) => { logs.push(`${message} ${detail ?? ""}`); };
+    await h.sweep();
+    const before = entry();
+    fail = true;
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    expect(entry()).toMatchObject({ lastError: "command-failed", completeSince: before.completeSince, lastSweepAt: before.lastSweepAt, prs: before.prs });
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("exit 17");
+    expect(logs[0]).toContain("Check the gh installation and configuration");
+    for (const fragment of privateFragments) expect(logs[0]).not.toContain(fragment);
   });
 
   test("numbers a record names outright and the cache lacks are read one by one, at most ten a sweep; a non-PR is recorded as an issue", async () => {

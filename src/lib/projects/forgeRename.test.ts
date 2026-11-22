@@ -11,7 +11,7 @@ process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 const { canonicalProject, recordProjectRemote, recordedProjectRemote, resetProjectAliasesForTests } = await import("./aliases");
 const { projectIdentityFromRemote } = await import("./identity");
 const { setShared, sharedProjects, knownProjects, patchShared } = await import("../links/state");
-const { githubRepositoryLookup, setForgeLookupForTests, forgeRenamesSettledForTests, resetForgeRenameDecisionsForTests } = await import("./forgeRename");
+const { forgeRenameCandidate, githubRepositoryLookup, scheduleForgeRenames, setForgeLookupForTests, forgeRenamesSettledForTests, resetForgeRenameDecisionsForTests } = await import("./forgeRename");
 const old = projectIdentityFromRemote("https://github.com/example/old-repo.git", "/")!;
 const current = projectIdentityFromRemote("https://github.com/example/current-repo.git", "/")!;
 let sequence = 0;
@@ -86,6 +86,69 @@ test("a private repository can recover after unsigned REST returns 404", async (
     log, run: async () => JSON.stringify({ id: 42, full_name: "example/current-repo" }),
   })).toEqual({ status: "found", id: 42, fullName: "example/current-repo" });
   expect(logs).toHaveLength(1);
+});
+
+test("generic gh stderr is withheld from rename warnings", async () => {
+  const logs: string[] = [];
+  const privateFragments = ["@synthetic_handle", "private-owner/private-repo", "/Volumes/Private Drive/Account A/config" ];
+  const stderr = `unknown gh failure ${privateFragments.join(" ")}`;
+  const answer = await githubRepositoryLookup("example/old-repo", {
+    run: async () => { throw Object.assign(new Error("Command failed: gh"), { code: 17, stderr }); },
+    request: async () => new Response(null, { status: 404 }),
+    log: message => { logs.push(message); },
+  });
+  expect(answer).toEqual({ status: "unreachable" });
+  expect(logs).toHaveLength(1);
+  expect(logs[0]).toContain("exit 17");
+  expect(logs[0]).toContain("Check the gh installation and configuration");
+  for (const fragment of privateFragments) expect(logs[0]).not.toContain(fragment);
+});
+
+test("invalid JSON shapes report invalid response and retain local project identity", async () => {
+  for (const body of [null, [], "invalid", { id: "42" }]) {
+    resetForgeRenameDecisionsForTests();
+    const logs: string[] = [];
+    const answer = await githubRepositoryLookup("example/old-repo", {
+      run: async () => JSON.stringify(body),
+      request: async () => new Response(null, { status: 404 }),
+      log: message => { logs.push(message); },
+    });
+    expect(answer).toEqual({ status: "unreachable" });
+    expect(logs).toEqual([expect.stringContaining("GitHub read returned an invalid response")]);
+    expect(canonicalProject(old.project)).toBe(old.project);
+  }
+});
+
+test("rename retries above the bookkeeping cap stay deferred through cooldown", async () => {
+  const candidates = Array.from({ length: 1_025 }, (_, index) => {
+    const source = projectIdentityFromRemote(`https://github.com/example/old-${index}.git`, "/")!;
+    const target = projectIdentityFromRemote(`https://github.com/example/new-${index}.git`, "/")!;
+    recordProjectRemote(source);
+    return forgeRenameCandidate(source.project, target)!;
+  });
+  let calls = 0;
+  const lookedUp = new Set<string>();
+  setForgeLookupForTests(async name => { calls++; lookedUp.add(name); return { status: "unreachable" }; });
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    scheduleForgeRenames(candidates);
+    await forgeRenamesSettledForTests();
+    expect(calls).toBe(2_048);
+    for (let pass = 0; pass < 4; pass++) {
+      scheduleForgeRenames(candidates);
+      await forgeRenamesSettledForTests();
+      expect(calls).toBe(2_048);
+    }
+    now += 3 * 60_000 + 1;
+    scheduleForgeRenames(candidates);
+    await forgeRenamesSettledForTests();
+    expect(calls).toBe(4_096);
+    expect(lookedUp).toContain("example/old-1024");
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test("a failed CLI read can still resolve a public repository through REST", async () => {
