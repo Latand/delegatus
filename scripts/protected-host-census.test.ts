@@ -6,7 +6,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { censusDescriber, censusSnapshot, readOnlyReferences } from "./protected-host-census";
+import { capturedBatch, censusDescriber, censusSnapshot, readOnlyReferences } from "./protected-host-census";
 import { agentLivenessSnapshot } from "../src/lib/lifecycle/liveness";
 import { retainedLivenessFixture as nativeRetainedFixture } from "../src/lib/lifecycle/liveness.retained.fixture";
 import { describeTranscriptPath } from "../src/lib/lifecycle/transcript";
@@ -18,7 +18,10 @@ import { publishRegistryBackendIdentity } from "../src/lib/agent/registryBackend
 import { projectInfoFromCwd } from "../src/lib/scanner/describe";
 import type { AgentRegistryEntry, RegistryFile } from "../src/lib/agent/registry";
 import type { Flow } from "../src/lib/flows/types";
-import { bindHostExitWriter } from "../src/lib/runtime/hostExit";
+import { bindHostExitWriter, recordHostExit, recordHostStop } from "../src/lib/runtime/hostExit";
+import { AttemptTempStore } from "../src/lib/runtime/attemptTempRetention";
+import { registryRetiredHostRows } from "../src/lib/agent/sqliteRegistryStore";
+import { AgentRegistry } from "../src/lib/agent/registry";
 
 const TARGET = "a".repeat(40);
 const NOW = "2026-10-29T12:00:00.000Z";
@@ -118,6 +121,267 @@ test("custody census carries recorded identities and bounded writer evidence wit
     }
   } finally { f.close(); }
 });
+
+test("census captures busy and quiet standalone merger custody and retains unlocked batch identity", async () => {
+  const f = fixture();
+  try {
+    const busy = f.rows[0]!;
+    const quiet = f.rows[1]!;
+    const writer = { pid: 8001, startIdentity: "8001:42", bootEpoch: "fixture-boot" };
+    for (const row of [busy, quiet]) {
+      f.file.conversations[row.id]!.agentRole = "merger";
+      row.entry.claimEpoch = 2;
+      row.entry.claimOwner = `structured-host:${JSON.stringify(writer)}`;
+      row.entry.structuredHost!.writerClaimEpoch = 2;
+    }
+    const answer = await censusSnapshot(f.sources, 1, TARGET, 30000);
+    expect(answer.conversations.find(row => row.merger?.conversationId === busy.id)?.merger).toMatchObject({
+      conversationId: busy.id, engine: "codex", sessionId: busy.entry.key.sessionId, path: busy.pathname,
+      claimEpoch: 2, process: busy.entry.structuredHost!.process, writer, batch: null,
+    });
+    expect(answer.conversations.find(row => row.merger?.conversationId === quiet.id)?.merger).toMatchObject({
+      conversationId: quiet.id, turnState: "idle",
+    });
+    const python = spawnSync("python3", ["-c",
+      "import json,runpy,sys; m=runpy.run_path('scripts/deploy-checkout.py'); "
+      + "m['validate_merger_census_row'](json.load(sys.stdin)); print('OK')"], {
+      cwd: process.cwd(), input: JSON.stringify(answer.conversations.find(row => row.merger?.conversationId === quiet.id)),
+      encoding: "utf8", timeout: 15_000,
+    });
+    expect(python.error).toBeUndefined();
+    expect(python.status).toBe(0);
+    expect(python.stdout.trim()).toBe("OK");
+    f.file.conversations[busy.id]!.agentRole = null;
+    const launch = f.file.receipts["receipt-only"]!;
+    Object.assign(launch, { conversationId: busy.id, agentRole: "merger", state: "completed", key: busy.entry.key, artifactPath: busy.pathname });
+    const state = temporary();
+    const directory = path.join(state, "scratch", "llv-stage-merger-fixture");
+    const batchFile = path.join(directory, "tmp", "merge-batch.json");
+    fs.mkdirSync(path.dirname(batchFile), { recursive: true });
+    const batchId = ["00000000", "0000", "4000", "8000", "000000000001"].join("-");
+    const branch = `merge-batch/${batchId}`;
+    fs.writeFileSync(batchFile, JSON.stringify({ version: 3, branch, landed: false, rows: [{ status: "pending" }] }));
+    const attempts = new AttemptTempStore(path.join(state, "attempt-temp.sqlite"));
+    try { attempts.register({ directory, pipelineId: null, launchId: launch.launchId, retainUntilClose: false, createdAt: Date.parse(NOW) }); }
+    finally { attempts.close(); }
+    const legacy = await censusSnapshot(f.sources, 2, TARGET, 30000, (registry, id) => capturedBatch(state, registry, id));
+    const stat = fs.statSync(directory);
+    expect(legacy.conversations.find(row => row.conversationId === busy.id)?.merger).toMatchObject({
+      claimEpoch: 2, batch: { directory, identity: `${stat.dev}:${stat.ino}`, branch },
+    });
+    f.file.memberships = { ...f.file.memberships, [busy.id]: [{
+      kind: "pipeline", conversationId: busy.id as `conversation_${string}`, containerId: "fixture-lane",
+      stageId: "merge", stageOrder: 0, round: 1, role: "merger", slot: "merge", createdAt: NOW, parentConversationId: null,
+    }] };
+    const pipeline = await censusSnapshot(f.sources, 3, TARGET, 30000);
+    expect(pipeline.conversations.find(row => row.conversationId === busy.id)?.merger).toBeNull();
+  } finally { f.close(); }
+});
+
+test("post-stop census retains a merger retired after admission with its durable cut receipt", async () => {
+  const f = fixture();
+  const previousState = process.env.LLV_STATE_DIR;
+  const state = temporary();
+  try {
+    process.env.LLV_STATE_DIR = state;
+    const row = f.rows[0]!;
+    const processIdentity = row.entry.structuredHost!.process!;
+    f.file.conversations[row.id]!.agentRole = "merger";
+    row.entry.status = "dead";
+    row.entry.structuredHost = null;
+    row.entry.hostExitProcess = processIdentity;
+    row.entry.claimEpoch = 2;
+    row.entry.claimOwner = null;
+    row.entry.previousHostExit = undefined;
+    expect(recordHostStop(processIdentity, "SIGTERM", "deploy-cut")).toBeDefined();
+    expect(recordHostExit(processIdentity, null, "SIGTERM")).toBe(true);
+    const exitKey = crypto.createHash("sha256").update(JSON.stringify([
+      processIdentity.pid, processIdentity.startIdentity, processIdentity.bootEpoch ?? null,
+    ])).digest("hex");
+    const stopFile = path.join(state, "host-exits", `${exitKey}.stop.json`);
+    const receipt = JSON.parse(fs.readFileSync(stopFile, "utf8"));
+    receipt.at = "2026-10-29T11:59:59.999Z";
+    fs.writeFileSync(stopFile, JSON.stringify(receipt));
+
+    const answer = await censusSnapshot(f.sources, 2, TARGET, 30000, undefined, "2026-10-29T11:59:59.998Z");
+    const retired = answer.conversations.find(item => item.conversationId === row.id)!;
+    expect(retired).toMatchObject({ host: { state: "gone", kind: "structured" }, pipeline: null,
+      turnState: "busy", evidenceSource: "transcript", merger: { conversationId: row.id, process: processIdentity, writer: null } });
+    expect(answer.selection.selected).toBe(answer.conversations.length);
+    const python = spawnSync("python3", ["-c",
+      "import json,runpy,sys; m=runpy.run_path('scripts/deploy-checkout.py'); "
+      + "m['validate_merger_census_row'](json.load(sys.stdin)); print('OK')"], {
+      cwd: process.cwd(), input: JSON.stringify(retired), encoding: "utf8", timeout: 15_000,
+    });
+    expect(python.status).toBe(0);
+    expect(python.stdout.trim()).toBe("OK");
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    f.close();
+  }
+});
+
+test("retired-host candidate payload reads stay bounded as unrelated terminal history grows", () => {
+  const f = retainedLivenessFixture(12);
+  try {
+    const base = structuredClone(f.registry.readOnlySnapshot().entries[f.worker.key]!);
+    const baseConversation = structuredClone(f.registry.readOnlySnapshot().conversations[f.conversationId]!);
+    f.peer.mutate(file => {
+      for (let index = 0; index < 2048; index++) {
+        const entry = structuredClone(base);
+        entry.key = { engine: "codex", sessionId: `unrelated-terminal-${index}` };
+        entry.status = "dead";
+        entry.structuredHost = null;
+        delete entry.hostExitProcess;
+        entry.claimOwner = null;
+        file.entries[`codex:${entry.key.sessionId}`] = entry;
+      }
+      const candidate = structuredClone(base);
+      candidate.key = { engine: "codex", sessionId: "retired-merger-candidate" };
+      candidate.status = "dead";
+      candidate.structuredHost = null;
+      candidate.hostExitProcess = { pid: 999, startIdentity: "retired-candidate" };
+      candidate.claimOwner = null;
+      file.entries[`codex:${candidate.key.sessionId}`] = candidate;
+      const conversationId = "conversation_retired_merger_candidate";
+      file.conversations[conversationId] = { ...baseConversation, id: conversationId, agentRole: "merger",
+        generations: [{ ...baseConversation.generations.at(-1)!, id: candidate.key.sessionId, path: candidate.artifactPath }] };
+    });
+    const coldReads = new Map<string, number>();
+    const cold = new AgentRegistry(path.join(f.directory, "cold-registry.json"), undefined, undefined, {
+      sqliteMode: "sqlite", sqliteFilename: f.dataset.filename,
+      onSqliteRowPayloadRead: (collection, count) => coldReads.set(collection, (coldReads.get(collection) ?? 0) + count),
+    });
+    try {
+    expect(cold.archiveInactiveRows(5000)).toBeGreaterThanOrEqual(2049);
+    const snapshot = cold.readOnlySnapshot();
+    coldReads.clear();
+    const selected = registryRetiredHostRows(snapshot, 200, NOW);
+    expect(selected.overflow).toBe(false);
+    expect(selected.entries.map(entry => entry.key.sessionId)).toEqual(["retired-merger-candidate"]);
+    // Only the selected retirement is hydrated; unrelated archived history
+    // stays in SQLite during census candidate discovery.
+    expect(coldReads.get("entries") ?? 0).toBe(1);
+    const db = new Database(f.dataset.filename, { readonly: true });
+    try {
+      const plan = db.query<{ detail: string }, [string, string, number]>(`EXPLAIN QUERY PLAN
+        SELECT row_key FROM (
+          SELECT r.row_key,r.row_order FROM registry_rows r INDEXED BY registry_hot_retired_host_cut
+            WHERE r.collection='entries'
+              AND NOT EXISTS (SELECT 1 FROM registry_cold hot WHERE hot.collection='entries' AND hot.row_key=r.row_key)
+              AND json_extract(r.value_json,'$.hostExitProcess.pid') IS NOT NULL
+              AND json_extract(r.value_json,'$.updatedAt')>=?
+          UNION ALL
+          SELECT c.row_key,a.row_order FROM registry_archive a INDEXED BY registry_archive_retired_host_cut
+            JOIN registry_cold c ON a.id=c.archive_id AND a.collection=c.collection AND a.row_key=c.row_key
+            WHERE c.collection='entries' AND a.collection='entries'
+              AND json_extract(a.value_json,'$.hostExitProcess.pid') IS NOT NULL
+              AND json_extract(a.value_json,'$.updatedAt')>=?
+        ) ORDER BY row_order DESC LIMIT ?`).all(NOW, NOW, 201).map(row => row.detail).join("\n");
+      expect(plan).toContain("registry_archive_retired_host_cut");
+      expect(plan).toContain("registry_hot_retired_host_cut");
+    } finally { db.close(); }
+    } finally { cold.close(); }
+  } finally { f.close(); }
+}, 30_000);
+
+test("ordinary current-cut exits cannot hide a merger after the candidate bound", async () => {
+  const f = retainedLivenessFixture(12);
+  try {
+    const base = structuredClone(f.registry.readOnlySnapshot().entries[f.worker.key]!);
+    const baseConversation = structuredClone(f.registry.readOnlySnapshot().conversations[f.conversationId]!);
+    f.peer.mutate(file => {
+      for (let index = 0; index < 201; index++) {
+        const entry = structuredClone(base);
+        entry.key = { engine: "codex", sessionId: `retired-overflow-${index}` };
+        entry.status = "dead";
+        entry.structuredHost = null;
+        entry.updatedAt = NOW;
+        entry.hostExitProcess = { pid: 10000 + index, startIdentity: `retired-${index}` };
+        entry.claimOwner = null;
+        file.entries[`codex:${entry.key.sessionId}`] = entry;
+      }
+      const candidate = structuredClone(base);
+      candidate.key = { engine: "codex", sessionId: "merger-after-ordinary-exits" };
+      candidate.status = "dead";
+      candidate.structuredHost = null;
+      candidate.updatedAt = NOW;
+      candidate.hostExitProcess = { pid: 20000, startIdentity: "current-cut-merger" };
+      candidate.claimOwner = null;
+      file.entries[`codex:${candidate.key.sessionId}`] = candidate;
+      const conversationId = "conversation_merger_after_ordinary_exits";
+      file.conversations[conversationId] = { ...baseConversation, id: conversationId, agentRole: "merger",
+        generations: [{ ...baseConversation.generations.at(-1)!, id: candidate.key.sessionId, path: candidate.artifactPath }] };
+    });
+    const cold = new AgentRegistry(path.join(f.directory, "overflow-registry.json"), undefined, undefined, {
+      sqliteMode: "sqlite", sqliteFilename: f.dataset.filename,
+    });
+    try {
+      expect(cold.archiveInactiveRows(5000)).toBeGreaterThanOrEqual(201);
+      const selected = registryRetiredHostRows(cold.readOnlySnapshot(), 200, NOW);
+      expect(selected.overflow).toBe(false);
+      expect(selected.entries.map(entry => entry.key.sessionId)).toEqual(["merger-after-ordinary-exits"]);
+    } finally { cold.close(); }
+  } finally { f.close(); }
+}, 30_000);
+
+test("a true deploy-cut retirement overflow remains incomplete", () => {
+  const f = retainedLivenessFixture(12);
+  try {
+    const base = structuredClone(f.registry.readOnlySnapshot().entries[f.worker.key]!);
+    const baseConversation = structuredClone(f.registry.readOnlySnapshot().conversations[f.conversationId]!);
+    f.peer.mutate(file => {
+      for (let index = 0; index < 201; index++) {
+        const entry = structuredClone(base);
+        entry.key = { engine: "codex", sessionId: `current-cut-exit-${index}` };
+        entry.status = "dead";
+        entry.structuredHost = null;
+        entry.updatedAt = NOW;
+        entry.hostExitProcess = { pid: 30000 + index, startIdentity: `current-cut-${index}` };
+        entry.claimOwner = null;
+        file.entries[`codex:${entry.key.sessionId}`] = entry;
+        const conversationId = `conversation_current_cut_merger_${index}` as const;
+        file.conversations[conversationId] = { ...baseConversation, id: conversationId, agentRole: "merger",
+          generations: [{ ...baseConversation.generations.at(-1)!, id: entry.key.sessionId, path: entry.artifactPath }] };
+      }
+    });
+    const cold = new AgentRegistry(path.join(f.directory, "current-cut-registry.json"), undefined, undefined, {
+      sqliteMode: "sqlite", sqliteFilename: f.dataset.filename,
+    });
+    try {
+      expect(cold.archiveInactiveRows(5000)).toBeGreaterThanOrEqual(201);
+      const selected = registryRetiredHostRows(cold.readOnlySnapshot(), 200, NOW);
+      expect(selected.entries).toHaveLength(200);
+      expect(selected.overflow).toBe(true);
+    } finally { cold.close(); }
+  } finally { f.close(); }
+}, 30_000);
+
+test("retired-host selection invalidates a held census view after a peer write", () => {
+  const f = retainedLivenessFixture(12);
+  try {
+    const baseEntry = structuredClone(f.registry.readOnlySnapshot().entries[f.worker.key]!);
+    const baseConversation = structuredClone(f.registry.readOnlySnapshot().conversations[f.conversationId]!);
+    const sessionId = "captured-cut-exit";
+    const key = `codex:${sessionId}`;
+    const conversationId = "conversation_captured_cut_merger";
+    f.peer.mutate(file => {
+      const entry = structuredClone(baseEntry);
+      entry.key = { engine: "codex", sessionId };
+      entry.status = "dead";
+      entry.hostExitProcess = { pid: 30001, startIdentity: "captured-cut-exit" };
+      entry.updatedAt = NOW;
+      file.entries[key] = entry;
+      file.conversations[conversationId] = { ...baseConversation, id: conversationId, agentRole: "merger",
+        generations: [{ ...baseConversation.generations.at(-1)!, id: sessionId, path: entry.artifactPath }] };
+    });
+    const held = f.registry.readOnlySnapshot();
+    expect(registryRetiredHostRows(held, 200, NOW).entries).toHaveLength(1);
+    f.peer.mutate(file => { delete file.entries[key]!.hostExitProcess; });
+    expect(() => registryRetiredHostRows(held, 200, NOW)).toThrow(/fresh snapshot/);
+  } finally { f.close(); }
+}, 30_000);
 
 test("custody census refuses ambiguous recorded identities for the same PID", async () => {
   const f = fixture();
