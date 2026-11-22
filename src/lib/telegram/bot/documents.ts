@@ -437,24 +437,26 @@ export function readRunDocument<Admitted>(requested: string, outputDir: string, 
   const runName = path.basename(runDir);
   const outputName = path.basename(outputDir);
   const runRoot = path.dirname(runDir);
+  let requestedOutput: string | null = null;
   for (let candidate = requested; candidate !== path.dirname(candidate); candidate = path.dirname(candidate)) {
     if (path.basename(candidate) !== outputName) continue;
     const candidateRun = path.dirname(candidate);
     if (path.basename(candidateRun) !== runName) continue;
     const candidateRoot = path.dirname(candidateRun);
-    if (candidateRoot !== runRoot && realOrSelf(candidateRoot) !== runRoot) continue;
-    const relative = path.relative(candidate, requested);
-    if (!relative || !within(requested, candidate) || segments(requested).includes("..")) {
-      throw new DocumentRefusal("document_outside_roots", "File is outside this run's output directory");
-    }
-    const expected = path.join(outputDir, relative);
-    if (dotSegment(relative) !== null || forbiddenDirectories(environment).some(directory => within(expected, directory))) {
-      throw new DocumentRefusal("document_forbidden_path", "File is hidden or inside the Delegatus state directory");
-    }
-    const admitted = admit(expected);
-    return { ...readExactFile(expected, maxBytes), admitted };
+    // Keep the outermost spelling so a link below it cannot start a new boundary.
+    if (candidateRoot === runRoot || realOrSelf(candidateRoot) === runRoot) requestedOutput = candidate;
   }
-  return null;
+  if (!requestedOutput) return null;
+  const relative = path.relative(requestedOutput, requested);
+  if (!relative || !within(requested, requestedOutput) || segments(requested).includes("..")) {
+    throw new DocumentRefusal("document_outside_roots", "File is outside this run's output directory");
+  }
+  const expected = path.join(outputDir, relative);
+  if (dotSegment(relative) !== null || forbiddenDirectories(environment).some(directory => within(expected, directory))) {
+    throw new DocumentRefusal("document_forbidden_path", "File is hidden or inside the Delegatus state directory");
+  }
+  const admitted = admit(expected);
+  return { ...readExactFile(expected, maxBytes), admitted };
 }
 
 function readOpenedFile(requested: string, real: string, maxBytes: number, recheck: (opened: string) => void): { real: string; bytes: Buffer } {

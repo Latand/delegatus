@@ -310,6 +310,10 @@ test("owner output is confined to this run and retains the document checks", asy
   const linkedInside = path.join(output, "linked-inside.md");
   fs.symlinkSync(report, linkedInside);
   await expect(send(linkedInside)).rejects.toMatchObject({ code: "document_forbidden_path" });
+  const linkedRoot = path.join(output, "linked-root");
+  fs.symlinkSync(path.dirname(runDir), linkedRoot, "dir");
+  await expect(send(path.join(linkedRoot, "current", "outbox", "report.md")))
+    .rejects.toMatchObject({ code: "document_forbidden_path" });
 });
 
 test("owner run output remains usable when the cache ancestor is a symlink", async () => {
