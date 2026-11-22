@@ -166,6 +166,12 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     const parent = readParent();
     if (!proof?.parent || proof.mode !== hook.mode || proof.entry !== hook.entry || !parent ||
       !recordedParent(proof.parent) || proof.parent.pid !== Number(path.basename(parent))) return false;
+    // The launch marker proves the live command relationship. A retired
+    // legacy ticket for that exact client proves it already consumed
+    // admission, so it cannot be treated as an unadmitted cleanup bootstrap.
+    if (!epoch) return false;
+    const prior = history ??= queue.legacyGateHistory(epoch);
+    if (typeof proof.parent.startIdentity !== "string" || prior.retirements.has(proof.parent.startIdentity)) return false;
     const original = parent && hookBootstrap(readArgv(parent), readCwd(parent));
     return !!original && original.mode === hook.mode && original.entry === hook.entry;
   };

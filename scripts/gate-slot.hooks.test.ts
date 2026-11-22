@@ -27,19 +27,24 @@ test.each(["bun", "bun-1.4.0"]) ("installed admission routing keeps %s as its na
   } finally { f.close(); }
 });
 
-test.skipIf(!hasUserManager)("a pre-commit service and its client cannot fence their own queued ESLint", async () => {
+test.skipIf(!hasUserManager).each(["bun", "bun-1.4.0"])("a pre-commit service and its %s client cannot fence their own queued ESLint", async name => {
   const f = fixture(), roots: string[] = [], control = new AbortController();
   const log = path.join(f.dir, "pre-commit.stderr");
   let pending: ReturnType<typeof realExec> | undefined;
   try {
     const hook = createHookFixture(process.cwd(), roots);
     const hookEnv: NodeJS.ProcessEnv = hook.env;
+    const nativeBun = path.join(f.dir, name);
+    fs.symlinkSync(process.execPath, nativeBun);
+    hookEnv.HOOK_BUN = nativeBun;
     fs.mkdirSync(path.join(hook.dir, "scripts/gate-runner"));
     for (let i = 0; i < 41; i++) fs.writeFileSync(path.join(hook.dir, `input-${i}.ts`), "export {};\n");
     hook.git("add", ".");
-    const env = { ...hookEnv, ...f.env, PATH: hookEnv.PATH, LLV_GATE_RUNNER: "off", LLV_GATE_SLOTS: "6",
+    const env: NodeJS.ProcessEnv = { ...hookEnv, ...f.env, PATH: hookEnv.PATH, LLV_GATE_RUNNER: "off", LLV_GATE_SLOTS: "6",
       LLV_GATE_PUSH_DEADLINE: undefined, LLV_GATE_SANDBOX_RECORD: undefined,
+      LLV_GATE_BUN: nativeBun,
       CPU_SLOT_STDERR: log, FIXTURE_HOOK_PID: path.join(f.dir, "hook.pid") };
+    env.HOOK_BUN = nativeBun;
     withoutInheritedGate(env);
     const previous = Date.now() - CPU_QUEUE_SPACING_MS;
     f.db.query("UPDATE admission SET last = ?").run(previous);
@@ -48,7 +53,8 @@ test.skipIf(!hasUserManager)("a pre-commit service and its client cannot fence t
     const enclosingDeadline = process.env.LLV_GATE_PUSH_DEADLINE;
     process.env.LLV_GATE_PUSH_DEADLINE = "1";
     try {
-      pending = realExec("bash", ["-c", 'echo $$ > "$FIXTURE_HOOK_PID"; exec "$@" 2>"$CPU_SLOT_STDERR"', "pre-commit-fixture", "bun", "scripts/local-gate.ts", "pre-commit"],
+      const invocation = ["bun", "scripts/local-gate.ts", "pre-commit"];
+      pending = realExec("bash", ["-c", 'echo $$ > "$FIXTURE_HOOK_PID"; exec "$@" 2>"$CPU_SLOT_STDERR"', "pre-commit-fixture", ...invocation],
         hook.dir, env, { timeoutMs: 18_000, signal: control.signal });
     } finally {
       if (enclosingDeadline === undefined) delete process.env.LLV_GATE_PUSH_DEADLINE;
@@ -67,11 +73,13 @@ test.skipIf(!hasUserManager)("a pre-commit service and its client cannot fence t
     expect(fs.existsSync(argv[3]!)).toBe(false);
     const children = (pid: string) => fs.readdirSync(`/proc/${pid}/task`).flatMap(thread =>
       fs.readFileSync(`/proc/${pid}/task/${thread}/children`, "utf8").trim().split(/\s+/).filter(Boolean));
-    const original = fs.readFileSync(env.FIXTURE_HOOK_PID, "utf8").trim();
-    const clients = children(original).filter(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("owned-runner.ts"));
-    expect(clients).toHaveLength(1);
-    expect(children(clients[0]!).map(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8"))
-      .some(command => command.includes("systemd-run\0") && command.includes(`--unit=${unit}\0`) && command.includes(argv[3]!))).toBe(true);
+    const original = fs.readFileSync(env.FIXTURE_HOOK_PID!, "utf8").trim();
+    if (name === "bun") {
+      const clients = children(original).filter(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("owned-runner.ts"));
+      expect(clients).toHaveLength(1);
+      expect(children(clients[0]!).map(pid => fs.readFileSync(`/proc/${pid}/cmdline`, "utf8"))
+        .some(command => command.includes("systemd-run\0") && command.includes(`--unit=${unit}\0`) && command.includes(argv[3]!))).toBe(true);
+    }
     expect(fs.readFileSync(`/proc/${waiter}/cmdline`, "utf8")).toContain("scripts/eslint-changes.ts");
     expect(f.db.query("SELECT 1 FROM sqlite_master WHERE name = 'gate_slots'").get()).toBeNull();
     expect(f.db.query("SELECT last FROM admission").get()).toEqual({ last: previous });
@@ -321,6 +329,16 @@ case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
       for (const publication of [first, peer]) {
         if (!useService) fs.writeFileSync(path.join(publication.dir, "shims/systemctl"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
         fs.mkdirSync(path.join(publication.dir, "scripts/gate-runner"));
+        if (olderHead) {
+          fs.writeFileSync(path.join(publication.dir, "scripts/privacy-publication-gate.ts"),
+            'import fs from "node:fs"; fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n');
+          fs.writeFileSync(path.join(publication.dir, "scripts/local-gate-tests.ts"),
+            'import fs from "node:fs"; fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n');
+          fs.writeFileSync(path.join(publication.dir, "scripts/eslint-changes.ts"),
+            'import fs from "node:fs"; fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n');
+          fs.writeFileSync(path.join(publication.dir, "scripts/verify-platform-backend.ts"),
+            'import fs from "node:fs"; fs.appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n');
+        }
       }
       fs.appendFileSync(path.join(first.dir, "record.ts"), `\nif (process.argv[2] === "tsc") {
         const fs = require("node:fs");

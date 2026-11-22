@@ -288,8 +288,10 @@ export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Sign
  * the independent monitor for the run's entire lifetime. */
 export function spawnHeadlessSignalSandbox(command: string, args: string[], options: SpawnOptions,
   start: typeof spawn = spawn, scope?: string | null): ChildProcess {
-  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
-  const prepared = prepareLaunch(options.env ?? process.env, options.env ?? process.env, bridged);
+  const sourceEnv = options.env ?? process.env;
+  const routedOptions = { ...options, env: { ...sourceEnv, ...installedGateAdmissionEnv(sourceEnv) } };
+  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || routedOptions.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
+  const prepared = prepareLaunch(routedOptions.env!, routedOptions.env!, bridged);
   if ("off" in prepared) {
     // No launcher runs to print the fallback, so a run's own stderr file gets
     // the line here, before the engine's first byte.
@@ -298,15 +300,15 @@ export function spawnHeadlessSignalSandbox(command: string, args: string[], opti
       try { fs.writeSync(stderr, `agent signal sandbox: boundary off, running unprotected: ${prepared.off}\n`); }
       catch { /* The Viewer log below still names the launch. */ }
     }
-    const child = start(command, args, options);
+    const child = start(command, args, routedOptions);
     recordSignalBoundaryOff(child, prepared.off, "headless");
     return child;
   }
   const { launcher, directory } = prepared;
   const receipt = path.join(directory, "ready.json");
-  const env: NodeJS.ProcessEnv = { ...launcherEnv(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt, LLV_SIGNAL_AUTOMATIC: "1" };
-  const child = bridged ? start(command, args, { ...options, env })
-    : start("python3", [launcher, "--automatic", "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
+  const env: NodeJS.ProcessEnv = { ...launcherEnv(routedOptions.env!), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt, LLV_SIGNAL_AUTOMATIC: "1" };
+  const child = bridged ? start(command, args, { ...routedOptions, env })
+    : start("python3", [launcher, "--automatic", "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...routedOptions, env });
   pendingReceipts.set(child, receipt);
   // The launcher's fallback line is in the run's own stderr from its start.
   // Its receipt is read at cleanup, or here, which removes its scratch.
@@ -450,11 +452,13 @@ function cacheSignalTooling(parent: string, files: ReadonlyMap<string, Buffer>):
 export async function spawnSignalSandbox(command: string, args: string[], options: SpawnOptions,
   start: typeof spawn = spawn, scope?: string | null, capabilityEnv = options.env ?? process.env, assertCurrent?: () => void): Promise<ChildProcess> {
   assertCurrent?.();
-  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
-  const prepared = prepareLaunch(capabilityEnv, options.env ?? process.env, bridged);
+  const sourceEnv = options.env ?? process.env;
+  const routedOptions = { ...options, env: { ...sourceEnv, ...installedGateAdmissionEnv(sourceEnv) } };
+  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || routedOptions.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
+  const prepared = prepareLaunch(capabilityEnv, routedOptions.env!, bridged);
   if ("off" in prepared) {
     // Main's launch path: the engine under its memory and CPU wrapper only.
-    const child = start(command, args, options);
+    const child = start(command, args, routedOptions);
     await (child as ChildProcess & { spawnReady?: Promise<void> }).spawnReady;
     await retainStructuredSetupProcessOffLoop(child.pid);
     recordSignalBoundaryOff(child, prepared.off, "managed");
@@ -463,11 +467,11 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   const { launcher, directory } = prepared;
   const receipt = path.join(directory, "ready.json");
   const diagnosticFile = options.env?.LLV_SIGNAL_IGNORE_NATIVE_STDIO === "1" ? `${directory}.stderr` : undefined;
-  const env: NodeJS.ProcessEnv = { ...launcherEnv(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt,
+  const env: NodeJS.ProcessEnv = { ...launcherEnv(routedOptions.env!), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt,
     LLV_SIGNAL_EXEC_ACK: assertCurrent ? "1" : undefined,
     ...(diagnosticFile ? { LLV_SIGNAL_DIAGNOSTIC: diagnosticFile } : {}) };
-  const child = bridged ? start(command, args, { ...options, env })
-    : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
+  const child = bridged ? start(command, args, { ...routedOptions, env })
+    : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...routedOptions, env });
   let stderr = "", failure: Error | undefined, closed = false;
   // The head of the output keeps a secret's opening marker with its payload;
   // a clipped tail could start inside one and defeat redaction.
