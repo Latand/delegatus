@@ -12,7 +12,7 @@ import { AgentTranscriptCache } from "@/lib/agentState/transcript";
 import { registryKeysMatching, registryRowsMatching, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
-import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
+import { detachCodexHostForViewerRestart, flushStructuredHostPersistence, matchesStructuredHostCustody, structuredHostCustody, type AdoptedHostCustody } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
@@ -104,6 +104,7 @@ import {
 type ObservableEngineHost = EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
 type IdentityBoundEngineHost = ObservableEngineHost & {
   releaseIfOwned?(expected: Readonly<ProcessIdentity>): Promise<boolean>;
+  detachAfterStartupCustodyLoss?(): void;
 };
 type StructuredConversationRecovery = typeof import("./structuredRecovery")["recoverDeadStructuredConversation"];
 export interface StructuredDeliveryHost {
@@ -115,6 +116,7 @@ export interface StructuredDeliveryHost {
       outlives its claim never publishes under a successor's fence. */
   writerEpoch?: number | null;
   mcpOwner?: SeatTickConversation["viewerMcpOwner"];
+  custody?: AdoptedHostCustody | null;
 }
 
 interface HostAttachment {
@@ -141,11 +143,7 @@ type RegisterStructuredDeliveryHost = (
    successor goes live, and filled in by the registration that follows. Giving
    the seat up sets `cancelled`, which that registration can no longer commit
    past — so a host released or terminated mid-registration stays gone. */
-interface HostRegistration {
-  key: SessionKey;
-  host: ObservableEngineHost;
-  writerEpoch?: number | null;
-  mcpOwner?: SeatTickConversation["viewerMcpOwner"];
+interface HostRegistration extends StructuredDeliveryHost {
   attachment: HostAttachment | null;
   cancelled: boolean;
 }
@@ -181,6 +179,7 @@ interface ControllerState {
      successor takes them over at the swap, so a rebind never leaves a
      conversation without a resolvable host (#1191). */
   activeRegistrations: (() => readonly StructuredDeliveryHost[]) | null;
+  activeRegistration?: ((key: SessionKey) => StructuredDeliveryHost | undefined) | null;
   republishActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   releaseActiveHost: ((key: SessionKey) => Promise<boolean>) | null;
   terminateActiveHost: ((key: SessionKey, expected?: Readonly<ProcessIdentity>) => Promise<boolean>) | null;
@@ -285,6 +284,7 @@ function retireStructuredDeliveryPublication(): void {
   state.readMcpObservation = null;
   state.registerActiveHost = null;
   state.activeRegistrations = null;
+  state.activeRegistration = null;
   state.republishActiveHost = null;
   state.releaseActiveHost = null;
   state.terminateActiveHost = null;
@@ -1969,12 +1969,19 @@ export async function bindStructuredDeliveryQueue(
     /* A carried-over seat keeps the epoch it was registered at. */
     if (item.writerEpoch === undefined) item = { ...item, writerEpoch: publicationEntry?.structuredHost?.writerClaimEpoch ?? null };
     if (item.mcpOwner === undefined) item = { ...item, mcpOwner: viewerMcpOwnerForEntry(publicationEntry ?? undefined) };
+    if (item.custody === undefined) item = { ...item, custody: structuredHostCustody(publicationEntry) };
     /* The same host under the same key either already holds a registration of
        this generation, with nothing left to do, or holds a carried-over seat
        this call is filling in. Any other host under that key is replaced. */
     const seat = current && current.host === item.host ? current : null;
     if (seat?.attachment) return async () => {};
     if (current && !seat) {
+      if (current.custody && item.custody && matchesStructuredHostCustody(item.custody, publicationEntry)
+        && !matchesStructuredHostCustody(current.custody, publicationEntry)) {
+        // The successor can own the same native listener. Disconnect only
+        // the predecessor adapter before removing its event subscription.
+        (current.host as IdentityBoundEngineHost).detachAfterStartupCustodyLoss?.();
+      }
       await unregisterHost(key, current.host);
       if (ownsStartupHost?.() === false) return async () => {};
     }
@@ -2122,7 +2129,7 @@ export async function bindStructuredDeliveryQueue(
        registration of the same host sees a seat that is already filled in and
        stands down instead of installing a second subscription and pump. */
     const registration: HostRegistration = seat
-      ?? { key: item.key, host: item.host, writerEpoch: item.writerEpoch, mcpOwner: item.mcpOwner, attachment: null, cancelled: false };
+      ?? { ...item, attachment: null, cancelled: false };
     registration.writerEpoch ??= item.writerEpoch;
     registration.mcpOwner ??= item.mcpOwner;
     registry.invalidateAccountCreditGuard();
@@ -2182,7 +2189,7 @@ export async function bindStructuredDeliveryQueue(
   for (const item of inherited) {
     const id = sessionKeyId(item.key);
     if (registrations.has(id)) continue;
-    seatRegistration(id, { key: item.key, host: item.host, writerEpoch: item.writerEpoch, mcpOwner: item.mcpOwner, attachment: null, cancelled: false });
+    seatRegistration(id, { ...item, attachment: null, cancelled: false });
   }
   state.activeHosts = hosts;
   state.readMcpObservation = conversationId => {
@@ -2209,7 +2216,8 @@ export async function bindStructuredDeliveryQueue(
     for (const registration of registrations.values()) if (registration.attachment) attachments++;
     return { registrations: registrations.size, attachments, pendingPublishChains: publishChains.size };
   };
-  state.activeRegistrations = () => [...registrations.values()].map(({ key, host, writerEpoch, mcpOwner }) => ({ key, host, writerEpoch, mcpOwner }));
+  state.activeRegistrations = () => [...registrations.values()].map(({ key, host, writerEpoch, mcpOwner, custody }) => ({ key, host, writerEpoch, mcpOwner, custody }));
+  state.activeRegistration = key => registrations.get(sessionKeyId(key));
   state.republishActiveHost = async (key) => {
     const registration = registrations.get(sessionKeyId(key));
     if (!registration) return false;
@@ -2335,6 +2343,7 @@ export async function bindStructuredDeliveryQueue(
       state.readMcpObservation = null;
       state.registerActiveHost = null;
       state.activeRegistrations = null;
+      state.activeRegistration = null;
       state.republishActiveHost = null;
       state.releaseActiveHost = null;
       state.terminateActiveHost = null;
@@ -2626,6 +2635,14 @@ export function hasStructuredDeliveryController(registry: AgentRegistry): boolea
 
 export function hasStructuredDeliveryHost(key: SessionKey): boolean {
   return state.activeHosts?.has(sessionKeyId(key)) ?? false;
+}
+
+export function structuredDeliveryRegistration(registry: AgentRegistry, key: SessionKey): StructuredDeliveryHost | undefined {
+  return state.activeRegistry === registry ? state.activeRegistration?.(key) : undefined;
+}
+
+export function structuredDeliveryRegistrations(registry: AgentRegistry): readonly StructuredDeliveryHost[] {
+  return state.activeRegistry === registry ? state.activeRegistrations?.() ?? [] : [];
 }
 
 /** Scalar attachment counts from the current publication; reads no payload. */

@@ -747,6 +747,24 @@ export interface AdoptedHostCustody {
   process: ProcessIdentity | null;
 }
 
+export function structuredHostCustody(entry: AgentRegistryEntry | null | undefined): AdoptedHostCustody | null {
+  if (!entry?.structuredHost) return null;
+  const { endpoint, process, writerClaimEpoch } = entry.structuredHost;
+  return { claimOwner: entry.claimOwner, claimEpoch: entry.claimEpoch, writerEpoch: writerClaimEpoch, endpoint, process };
+}
+
+export function matchesStructuredHostCustody(
+  custody: AdoptedHostCustody | null | undefined,
+  entry: AgentRegistryEntry | null | undefined,
+): boolean {
+  const host = entry?.structuredHost;
+  return Boolean(custody && entry && host && entry.claimOwner === custody.claimOwner && entry.claimEpoch === custody.claimEpoch
+    && host.writerClaimEpoch === custody.writerEpoch && host.endpoint === custody.endpoint
+    && (custody.process && host.process
+      ? sameRecordedProcessIdentity(host.process, custody.process) && host.process.bootEpoch === custody.process.bootEpoch
+      : host.process === custody.process));
+}
+
 export interface AdoptedCodexHost {
   key: SessionKey;
   host: CodexAppServerHost;

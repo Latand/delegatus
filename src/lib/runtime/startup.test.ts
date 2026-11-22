@@ -43,8 +43,9 @@ import {
   hasStructuredDeliveryController,
   publishStructuredDeliveryHost,
   releaseStructuredDeliveryHost,
+  structuredDeliveryHostForConversation,
 } from "./structuredDeliveryController";
-import { STRUCTURED_STARTUP_PASS_DEADLINE_MS } from "./startupWork";
+import { STRUCTURED_STARTUP_PASS_DEADLINE_MS, StructuredStartupDeadlineError } from "./startupWork";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { createFakeDeliveryLedger, FakeEngineHost } from "./fixtures/fakeEngineHost";
@@ -351,6 +352,89 @@ test("startup retry preserves a host registered after the first attempt fails", 
   await bindStructuredDeliveryQueue([], { registry, client: null });
   journal.close();
   fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test.each([true, false])("Viewer startup retry requires current custody for a controller-published adapter (adopt=%s)", async adoptReplacement => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-controller-custody-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const key = { engine: "codex" as const, sessionId: "00000000-0000-0000-0000-000000000011" };
+  const { conversation } = addStructuredRestartConversation(registry, directory, { sessionId: key.sessionId, status: "idle", turn: "idle" });
+  const old = registry.hostEntry(key)!;
+  registry.upsert({ ...old, pendingAction: "handoff", claimOwner: "predecessor", claimEpoch: 1,
+    structuredHost: { ...old.structuredHost!, process: null, writerClaimEpoch: 1, endpoint: "fixture:predecessor" } });
+  let detachments = 0, retiredSubscriptions = 0, successorSubscriptions = 0, adoptions = 0, refreshes = 0;
+  const predecessor = Object.assign(new FakeEngineHost(createFakeDeliveryLedger()), {
+    onStateChange: () => () => { retiredSubscriptions++; },
+    detachAfterStartupCustodyLoss: () => { detachments++; },
+  });
+  const successor = Object.assign(new FakeEngineHost(createFakeDeliveryLedger()), {
+    onStateChange: () => { successorSubscriptions++; return () => {}; },
+  });
+  const callbacks: Array<() => void> = [];
+  const refused = Promise.withResolvers<void>();
+  const ready = Promise.withResolvers<void>();
+  const dependencies: StructuredStartupDependencies = {
+    registry,
+    client: runtimeJournalClient(journal),
+    refreshTranscriptState: async () => {
+      if (++refreshes === 1) throw new StructuredStartupDeadlineError("structured startup read deadline exceeded");
+    },
+    pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+    orchestratorSeats: () => [],
+    adopt: async (_registry, _options, _env, eligible, _progress, hooks) => {
+      if (!eligible?.(registry.hostEntry(key)!) || !adoptReplacement) return [];
+      adoptions++;
+      const item = { key, host: successor as never };
+      hooks?.onAdopted?.(item);
+      return [item];
+    },
+    adoptClaude: async () => [],
+    schedule: () => ({}),
+  };
+  try {
+    await runStructuredHostStartup(async () => {
+      try {
+        await adoptStructuredHostsAtStartup(dependencies);
+        ready.resolve();
+      } catch (error) {
+        if (!(error instanceof StructuredStartupDeadlineError)) expect(error).toMatchObject({ hostKey: `codex:${key.sessionId}` });
+        throw error;
+      }
+    }, () => {}, {
+      jitterRatio: 0,
+      schedule: callback => {
+        callbacks.push(callback);
+        if (refreshes > 1) refused.resolve();
+        return {};
+      },
+    });
+    expect(structuredStartupStatus()).toMatchObject({ state: "failed", failurePhase: "refreshing transcripts" });
+    await publishStructuredDeliveryHost({ key, host: predecessor });
+    expect(structuredDeliveryHostForConversation(conversation.id, registry)).toBe(predecessor);
+    const before = registry.hostEntry(key)!;
+    registry.upsert({ ...before, claimOwner: "successor", claimEpoch: 2,
+      structuredHost: { ...before.structuredHost!, writerClaimEpoch: 2, endpoint: "fixture:successor" } });
+    callbacks.shift()!();
+    await Promise.race([ready.promise, refused.promise]);
+    if (adoptReplacement) {
+      expect(structuredStartupStatus()?.state).toBe("ready");
+      expect(structuredDeliveryHostForConversation(conversation.id, registry)).toBe(successor);
+      expect([adoptions, detachments, retiredSubscriptions, successorSubscriptions]).toEqual([1, 1, 1, 1]);
+      await adoptStructuredHostsAtStartup(dependencies);
+      expect(adoptions).toBe(1);
+    } else {
+      expect(structuredStartupStatus()).toMatchObject({ state: "failed", hostKey: `codex:${key.sessionId}`, nextRetryAt: expect.any(String) });
+      expect([adoptions, detachments, successorSubscriptions]).toEqual([0, 0, 0]);
+    }
+    expect(registry.hostEntry(key)).toMatchObject({ claimEpoch: 2, claimOwner: "successor",
+      structuredHost: { writerClaimEpoch: 2, endpoint: "fixture:successor" } });
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test.each([
@@ -6212,6 +6296,82 @@ test("startup retry logs the error and host key and exposes its failure category
   expect(structuredStartupStatus()).toMatchObject({ state: "failed", failureCategory: "runtime-host-unavailable" });
   await runStructuredHostStartup(async () => {});
   expect(structuredStartupStatus()?.failureCategory).toBeNull();
+});
+
+test("Viewer startup reports each failure at the phase of its own attempt", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-retry-phase-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const generation = Promise.withResolvers<string>();
+  const probing = Promise.withResolvers<void>();
+  const firstRetry = Promise.withResolvers<() => void>();
+  const secondRetry = Promise.withResolvers<() => void>();
+  const abort = new AbortController();
+  const started = Date.parse("2026-11-01T10:00:00Z");
+  let attempts = 0, clock = 0;
+  const time = spyOn(performance, "now").mockImplementation(() => clock);
+  setSystemTime(started);
+  const client = {
+    ...runtimeJournalClient(journal),
+    startupGeneration: async () => {
+      if (attempts === 2) {
+        probing.resolve();
+        return await generation.promise;
+      }
+      return "fixture-generation";
+    },
+  };
+  const dependencies: StructuredStartupDependencies = {
+    registry, client, signal: abort.signal,
+    refreshTranscriptState: async () => {
+      if (attempts === 1) throw new StructuredStartupDeadlineError("structured startup read deadline exceeded");
+    },
+    pipelineEvidence: () => ({ settled: new Set(), deferred: new Set() }),
+    adopt: async () => [],
+    adoptClaude: async () => [],
+  };
+  const completion = runStructuredHostStartup(() => {
+    attempts++;
+    return adoptStructuredHostsAtStartup(dependencies);
+  }, () => {}, {
+    signal: abort.signal, waitUntilReady: true, initialRetryMs: 1000, jitterRatio: 0,
+    schedule: callback => {
+      if (attempts === 1) firstRetry.resolve(callback);
+      if (attempts === 2) secondRetry.resolve(callback);
+      return {};
+    },
+  });
+  void completion.catch(() => {});
+  try {
+    const retryGeneration = await firstRetry.promise;
+    expect(structuredStartupStatus()).toMatchObject({ state: "failed", failurePhase: "refreshing transcripts",
+      deadline: "structured startup read deadline exceeded", nextRetryAt: new Date(started + 1000).toISOString() });
+    setSystemTime(started + 1000);
+    retryGeneration();
+    await probing.promise;
+    expect(structuredStartupStatus()).toMatchObject({ state: "failed", phase: "probing runtime host generation",
+      failurePhase: "refreshing transcripts", deadline: "structured startup read deadline exceeded", nextRetryAt: null });
+    clock += STRUCTURED_STARTUP_PASS_DEADLINE_MS;
+    generation.resolve("fixture-generation");
+    const retry = await secondRetry.promise;
+    expect(structuredStartupStatus()).toMatchObject({ state: "failed", phase: "probing runtime host generation",
+      failurePhase: "probing runtime host generation", deadline: "structured startup pass deadline exceeded",
+      completedHosts: 0, totalHosts: null, hostKey: null, nextRetryAt: new Date(started + 3000).toISOString() });
+    setSystemTime(started + 3000);
+    retry();
+    await completion;
+    expect(structuredStartupStatus()).toMatchObject({ state: "ready", failurePhase: null, deadline: null, nextRetryAt: null });
+  } finally {
+    generation.resolve("fixture-generation");
+    abort.abort();
+    await completion.catch(() => {});
+    time.mockRestore();
+    setSystemTime();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test.each(["codex", "claude"] as const)("production %s claim failures retain their host key in the startup retry log", async (engine) => {

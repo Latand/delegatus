@@ -884,6 +884,22 @@ function startupSelectionFacts(collection: string, row: unknown): string {
   return JSON.stringify(pending ? [value.conversationId] : []);
 }
 
+/** JSON snapshots are immutable and have no change journal. Compare the
+    inputs shared with the SQLite proof before reusing a startup projection. */
+export function registryStartupSnapshotChanges(previous: RegistryFile, current: RegistryFile): StartupSelectionChange[] {
+  const changes: StartupSelectionChange[] = [];
+  for (const collection of startupSelectionCollections) {
+    const before = previous[collection] as Record<string, unknown>;
+    const after = current[collection] as Record<string, unknown>;
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (before[key] !== after[key] && startupSelectionFacts(collection, before[key]) !== startupSelectionFacts(collection, after[key])) {
+        changes.push({ collection, key });
+      }
+    }
+  }
+  return changes;
+}
+
 /** Whether entry-key lookups on this file read the generation identity index. */
 export function registryHasEntryKeyIndex(file: RegistryFile): boolean {
   return entryKeyReaders.has(file);

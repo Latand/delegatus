@@ -171,8 +171,9 @@ test("membership retries finish a census larger than one budget and discard a ch
     expect(progress.remaining).toBeGreaterThan(0);
     expect(progress.completed + progress.remaining).toBe(82);
     const changed = "conversation_reader_0";
-    file.memberships[changed] = [{ ...file.memberships[changed]![0]!, containerId: "replacement-lane" }];
-    current = view(file);
+    current = view({ ...file, memberships: { ...file.memberships,
+      [changed]: [{ ...file.memberships[changed]![0]!, containerId: "replacement-lane" }],
+    } });
     let selected: Awaited<ReturnType<typeof read>> | undefined;
     for (let i = 0; i < 12 && !selected; i++) {
       try { selected = await read(); }
@@ -186,13 +187,14 @@ test("membership retries finish a census larger than one budget and discard a ch
   } finally { time.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("Viewer membership census keeps verified rows as late memberships change between deadlines", async () => {
+test.each(["off", "sqlite"] as const)("Viewer membership census keeps verified rows as late memberships change between deadlines (%s)", async sqliteMode => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-membership-churn-"));
   const file = seeded(root, 63);
   const host = file.entries["codex:reader-0"]!.structuredHost!;
   for (const entry of Object.values(file.entries)) entry.structuredHost = host;
-  const store = new SqliteAgentRegistryStore(path.join(root, "registry.sqlite"), { initialSnapshot: file, normalize: normalizeRegistry });
-  const registry = { readOnlySnapshot: () => store.readOnlySnapshot().file } as AgentRegistry;
+  const filename = path.join(root, "registry.json");
+  fs.writeFileSync(filename, JSON.stringify(file));
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
   let clock = 0;
   const time = spyOn(performance, "now").mockImplementation(() => clock);
   const checkpoint = {};
@@ -219,7 +221,17 @@ test("Viewer membership census keeps verified rows as late memberships change be
         expect(error).toMatchObject({ deadline: "startup membership deadline exceeded" });
       }
       changes++;
-      store.mutate(rows => { rows.memberships[changed]![0]!.containerId = `moved-${changes}`; }, false);
+      const next = structuredClone(registry.readOnlySnapshot().memberships[changed]!);
+      next[0]!.containerId = `moved-${changes}`;
+      if (sqliteMode === "off") {
+        const draft = path.join(root, "next.json");
+        fs.writeFileSync(draft, JSON.stringify({ ...file, memberships: { ...file.memberships, [changed]: next } }));
+        fs.renameSync(draft, filename);
+      } else {
+        const store = new SqliteAgentRegistryStore(path.join(root, "registry.sqlite"), { normalize: normalizeRegistry });
+        try { store.mutate(rows => { rows.memberships[changed] = next; }, false); }
+        finally { store.close(); }
+      }
     }
     expect(changes).toBeGreaterThan(0);
     expect(completed).toBe(65);
@@ -229,7 +241,7 @@ test("Viewer membership census keeps verified rows as late memberships change be
     expect(result?.byPipeline.has("lane-63")).toBe(false);
   } finally {
     time.mockRestore();
-    store.close();
+    registry.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -584,6 +596,8 @@ test("Viewer completes runtime evidence across session and operation deadlines a
   let effectsChanged = false;
   let pageFinished = false;
   let candidateEvidence: boolean[] = [];
+  let witnessReads = 0;
+  let unrelatedWrites = 0;
   try {
     const fixtures = Array.from({ length: 257 }, (_, index) => addStructuredRestartConversation(registry, root, {
       sessionId: retirementSession(index), status: "idle", turn: "idle",
@@ -594,6 +608,12 @@ test("Viewer completes runtime evidence across session and operation deadlines a
       id: `test-effect-${seq}`, kind: "runtime.send", eventSeq: seq, payload: { conversationId },
     });
     const startupSessionEvidence: NonNullable<RuntimeHostClient["startupSessionEvidence"]> = async (ids, options) => {
+      if (!options?.includeEvidence) {
+        journal.append({ scope: runtimeScope("session", "conversation_unselected"), kind: "session-status",
+          payload: { turn: ++unrelatedWrites % 2 === 0 ? "idle" : "running" } });
+        // Bound a regression even if startup loops without reading any detail.
+        if (++witnessReads === 32) clock += STRUCTURED_STARTUP_PASS_DEADLINE_MS;
+      }
       const read = journal.startupSessionEvidence(ids, options?.includeEvidence);
       if (options?.includeEvidence) {
         await Promise.resolve();
@@ -650,6 +670,7 @@ test("Viewer completes runtime evidence across session and operation deadlines a
     } satisfies NonNullable<Parameters<typeof adoptStructuredHostsAtStartup>[0]>;
     completion = runStructuredHostStartup(() => {
       sessionReads = 0;
+      witnessReads = 0;
       return adoptStructuredHostsAtStartup(startup);
     }, () => {}, {
       signal: abort.signal, waitUntilReady: true, jitterRatio: 0,
@@ -684,6 +705,8 @@ test("Viewer completes runtime evidence across session and operation deadlines a
     expect([...visits.values()].filter(count => count === 1)).toHaveLength(255);
     expect(effectCursors).toEqual([0, 100, 200, 0, 100, 200]);
     expect(candidateEvidence).toEqual([false, true]);
+    expect(unrelatedWrites).toBeGreaterThan(6);
+    expect(visits.has("conversation_unselected")).toBe(false);
   } finally {
     abort.abort();
     await completion?.catch(() => {});

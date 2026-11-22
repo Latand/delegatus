@@ -9,6 +9,8 @@ const startupStore = process as typeof process & {
 
 export type StructuredHostStartupPhase =
   | "waiting for structured startup"
+  | "probing runtime host generation"
+  | "binding structured delivery controller"
   | "reading structured startup registry"
   | "recognizing interrupted hosts"
   | "reading startup memberships"
@@ -130,6 +132,7 @@ export function markStructuredHostStartupFailed(
 }
 
 export function markStructuredHostStartupRetryStarted(): void {
+  markStructuredHostStartupProgress({ phase: "probing runtime host generation", completedHosts: 0, totalHosts: null });
   const status = startupStore.__llvStructuredHostStartupProgress;
   if (status) status.nextRetryAt = null;
 }
