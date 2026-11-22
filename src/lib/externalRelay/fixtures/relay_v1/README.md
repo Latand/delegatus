@@ -317,4 +317,4 @@ final validation. A missing delivery field keeps the prior defaults.
 
 | Guest capture | Bytes | SHA-256 |
 |---|---:|---|
-| `install_guest_loop.json` | 845 | `3397b1f7c5bdf32f195fc2534a562413bebf5d3fba446d15cbda742b28a5ab41` |
+| `install_guest_loop.json` | 880 | `e373f347cc89400f41a1b001f29549d17e0710bcc9e182ad2da1e1bbd684b0a4` |
