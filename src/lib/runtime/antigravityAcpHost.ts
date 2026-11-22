@@ -32,6 +32,7 @@ import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGro
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 
 import type { AgentMemoryCell } from "./agentMemory";
+import { agentConfigSandboxRoot, withAgentConfigSandbox } from "./agentConfigSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import { nativeProcessId, signalAgentDomain, signalBoundaryOff, signalDomain, spawnManagedEngine } from "./agentSignalSandbox";
 import type {
@@ -67,9 +68,24 @@ import { TURN_SILENCE_REASON, TurnSilence, type TurnSilenceOptions } from "./tur
  * the account default across restarts.
  *
  * `AntigravityAcpHost` writes its own append-only NDJSON transcript
- * (`<antigravityHome>/sessions/<sessionId>/events.jsonl`) directly from
- * structured ACP events so Delegatus never decodes `agy`'s internal protobuf
- * SQLite tables.
+ * (`<antigravityHome>/sessions/<sessionId>/events.jsonl`) through one verified
+ * open file descriptor directly from structured ACP events so Delegatus never
+ * decodes `agy`'s internal protobuf SQLite tables.
+ *
+ * Write confinement (all paths remain under Delegatus-managed roots):
+ * - Transcript NDJSON: `<antigravityHome>/sessions/<sessionId>/events.jsonl`
+ *   (single verified `O_NOFOLLOW` descriptor, opened once after `sessionId` validation).
+ * - Native `agy` CLI state: `<antigravityHome>/native-home/.gemini/`
+ *   (confined via child `HOME` so `agy` never writes into the operator's `~/.gemini/`,
+ *   while preserving per-account native session DBs for `session/resume`).
+ * - Agent sandbox XDG/state roots: `<sandboxRoot>/{config,cache,data,state}`
+ *   (`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`,
+ *   and `LLV_STATE_DIR` via `withAgentConfigSandbox`).
+ * - Runtime event ledger: `<LLV_STATE_DIR>/structured-host-events/<sessionId>.jsonl`
+ *   via `FileRuntimeEventStore` (shared schema with Claude/Codex/Copilot hosts
+ *   and read by `structuredHostRetirement`).
+ * - Non-sensitive metadata: `<LLV_STATE_DIR>/antigravity-auth-state.json` and
+ *   `<LLV_STATE_DIR>/antigravity-models.json`.
  *
  * ACP has no documented steer semantics: concurrent `send()` is refused as
  * `stale-turn`, and mid-turn delivery routes through `session/cancel` ->
@@ -80,6 +96,7 @@ import { TURN_SILENCE_REASON, TurnSilence, type TurnSilenceOptions } from "./tur
 type JsonObject = Record<string, unknown>;
 type Subscriber = RuntimeEventSubscriber;
 const ANTIGRAVITY_SENT_ENTRY_MEMORY = 4096;
+const ANTIGRAVITY_SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 type UnsequencedEvent = RuntimeEvent extends infer Event
   ? Event extends RuntimeEvent ? Omit<Event, "seq"> : never
   : never;
@@ -92,8 +109,15 @@ type PendingRequest = {
 type RunningPrompt = {
   turnId: string;
   entryId: string;
+  promptText: string;
+  imageCount: number;
+  accepted: boolean;
   settled: Promise<void>;
 };
+type DeliveryAcceptanceRecord =
+  | { state: "pending"; turnId: string }
+  | { state: "accepted"; turnId: string; acceptedAt: string }
+  | { state: "failed"; turnId: string; reason: string };
 
 export interface AntigravitySessionIdentity {
   sessionId: string;
@@ -160,12 +184,40 @@ const CHILD_ENV_ALLOWLIST = [
   "LLV_EVIDENCE_DIR", "LLV_STATE_DIR", "LLV_VIEWER_DEPLOY_TARGET", "LLV_VIEWER_PORT",
 ] as const;
 
-export function antigravityTranscriptPath(antigravityHome: string, sessionId: string): string {
-  return path.join(antigravityHome, "sessions", sessionId, "events.jsonl");
+export function validateAntigravitySessionId(sessionId: string): string {
+  if (
+    typeof sessionId !== "string"
+    || !ANTIGRAVITY_SESSION_ID_PATTERN.test(sessionId)
+    || sessionId.includes("..")
+  ) {
+    throw new Error("Antigravity session id is invalid");
+  }
+  return sessionId;
 }
 
-/** Builds the filtered child environment for `agy acp`. Pure over its inputs. */
-export function antigravityChildEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function antigravityNativeHome(antigravityHome: string): string {
+  return path.join(antigravityHome, "native-home");
+}
+
+export function antigravityTranscriptPath(antigravityHome: string, sessionId: string): string {
+  const valid = validateAntigravitySessionId(sessionId);
+  const sessionsDir = path.resolve(antigravityHome, "sessions");
+  const transcriptPath = path.resolve(sessionsDir, valid, "events.jsonl");
+  if (!transcriptPath.startsWith(sessionsDir + path.sep)) {
+    throw new Error("Antigravity transcript path escapes sessions directory");
+  }
+  return transcriptPath;
+}
+
+/** Builds the filtered, confined child environment for `agy acp`.
+    Applies `withAgentConfigSandbox` (matching Claude/Codex/Copilot hosts) and
+    confines `HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, and `XDG_STATE_HOME`
+    so native `agy` state stays under Delegatus's managed directories instead
+    of writing into the operator's `~/.gemini/` or XDG roots. */
+export function antigravityChildEnv(
+  source: NodeJS.ProcessEnv,
+  antigravityHome?: string,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { NODE_ENV: source.NODE_ENV };
   for (const name of CHILD_ENV_ALLOWLIST) {
     if (source[name] !== undefined) env[name] = source[name];
@@ -173,6 +225,23 @@ export function antigravityChildEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEn
   /* Never leak the spawn capability into the child environment; it travels
      strictly inside the Viewer MCP server descriptor. */
   delete env[VIEWER_SPAWN_CAPABILITY_ENV];
+  withAgentConfigSandbox(env, source, antigravityHome);
+  const sandboxRoot = agentConfigSandboxRoot(source, antigravityHome);
+  const cacheHome = path.join(sandboxRoot, "cache");
+  const dataHome = path.join(sandboxRoot, "data");
+  const stateHome = path.join(sandboxRoot, "state");
+  env.XDG_CACHE_HOME = cacheHome;
+  env.XDG_DATA_HOME = dataHome;
+  env.XDG_STATE_HOME = stateHome;
+  const dirs = [cacheHome, dataHome, stateHome];
+  if (antigravityHome) {
+    const nativeHome = antigravityNativeHome(antigravityHome);
+    env.HOME = nativeHome;
+    dirs.unshift(nativeHome);
+  }
+  for (const dir of dirs) {
+    try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { /* best effort */ }
+  }
   env[STRUCTURED_HOST_STAMP_ENV] = structuredHostStamp();
   return env;
 }
@@ -285,21 +354,6 @@ function safeError(error: unknown): string {
     .slice(0, 500);
 }
 
-function transcriptHasUserMessage(transcript: string): boolean | null {
-  let text: string;
-  try { text = fs.readFileSync(transcript, "utf8"); }
-  catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? false : null;
-  }
-  for (const line of text.split("\n")) {
-    if (!line.includes("\"user.message\"")) continue;
-    try {
-      if (record(JSON.parse(line))?.type === "user.message") return true;
-    } catch { /* partial trailing line */ }
-  }
-  return false;
-}
-
 function extractToolOutputText(update: JsonObject): string {
   const rawOutput = record(update.rawOutput);
   if (typeof rawOutput?.output === "string") return rawOutput.output;
@@ -383,9 +437,11 @@ export class AntigravityAcpHost implements EngineHost {
   private readonly cancelledTurns = new Set<string>();
   private readonly failedInterrupts = new Map<string, number>();
   private readonly sentEntries = new Map<string, string>();
+  private readonly deliveryAcceptance = new Map<string, DeliveryAcceptanceRecord>();
   private readonly stateListeners = new Set<(state: HostState) => void>();
   private readonly stdoutDecoder = new StringDecoder("utf8");
   private readonly launchFlags: readonly string[];
+  private transcriptFd: number | null = null;
   private stdoutBuffer = "";
   private nextRequestId = 1;
   private turnCounter = 0;
@@ -395,7 +451,6 @@ export class AntigravityAcpHost implements EngineHost {
   private currentBaseModel: string | null = null;
   private currentEffort: string | null = null;
   private tierName: string | null = null;
-  private firstPromptFailure: string | null = null;
   private cursor: number;
   private protocolVersion: string | null = null;
   private replaying = false;
@@ -515,7 +570,7 @@ export class AntigravityAcpHost implements EngineHost {
       `thought_level` via `session/set_config_option`. */
   static async adopt(sessionId: string, options: AntigravityAcpHostOptions): Promise<AntigravityAcpHost> {
     if (!sessionId) throw new Error("Antigravity session id is required for adoption");
-    return this.open(sessionId, options);
+    return this.open(validateAntigravitySessionId(sessionId), options);
   }
 
   private static async open(
@@ -534,11 +589,12 @@ export class AntigravityAcpHost implements EngineHost {
     let mcpServersPayload: JsonObject[] = [];
     try {
       options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
-      const env = antigravityChildEnv(options.env ?? process.env);
+      const env = antigravityChildEnv(options.env ?? process.env, options.antigravityHome);
       const viewer = options.viewerMcpServer === undefined
         ? (options.mcpServers ?? ["viewer"]).includes("viewer") ? antigravityViewerMcpServer(options.env ?? {}) : null
         : options.viewerMcpServer;
-      const registered = resolveClaudeMcpServers(os.homedir(), options.cwd, path.join(os.homedir(), ".claude.json"));
+      const lookupHome = options.env?.HOME?.trim() || os.homedir();
+      const registered = resolveClaudeMcpServers(lookupHome, options.cwd, path.join(lookupHome, ".claude.json"));
       const capability = options.env?.[VIEWER_SPAWN_CAPABILITY_ENV] ?? null;
       mcpServersPayload = antigravityMcpServers(viewer, capability, registered, options.mcpServers ?? ["viewer"]);
       child = await spawnManagedEngine(binary, antigravityLaunchArgs(options), {
@@ -558,8 +614,10 @@ export class AntigravityAcpHost implements EngineHost {
       try {
         await withHostStopOrigin({ path: "antigravity-startup-cleanup", operationId: host.identity.sessionId }, () => host.release());
       } catch (cleanupError) {
+        host.closeTranscriptFd();
         throw new StructuredHostAdoptionCleanupError(safeError(error), host, { cause: cleanupError });
       }
+      host.closeTranscriptFd();
       throw new Error(safeError(error));
     }
   }
@@ -576,17 +634,22 @@ export class AntigravityAcpHost implements EngineHost {
     let sessionId: string;
     let sessionPayload: JsonObject | null = null;
     if (resumeSessionId) {
+      const expectedSessionId = validateAntigravitySessionId(resumeSessionId);
       this.replaying = true;
       try {
         sessionPayload = record(await this.request("session/resume", {
-          sessionId: resumeSessionId,
+          sessionId: expectedSessionId,
           cwd: this.options.cwd,
           mcpServers: this.mcpServersPayload,
         }));
       } finally {
         this.replaying = false;
       }
-      sessionId = stringField(sessionPayload, "sessionId") ?? resumeSessionId;
+      const returned = stringField(sessionPayload, "sessionId");
+      if (returned !== null && returned !== expectedSessionId) {
+        throw new Error("Antigravity session/resume returned a different session id");
+      }
+      sessionId = expectedSessionId;
     } else {
       const params: JsonObject = {
         cwd: this.options.cwd,
@@ -605,7 +668,7 @@ export class AntigravityAcpHost implements EngineHost {
       sessionPayload = record(await this.request("session/new", params));
       const minted = stringField(sessionPayload, "sessionId");
       if (!minted) throw new Error("Antigravity session/new returned no session id");
-      sessionId = minted;
+      sessionId = validateAntigravitySessionId(minted);
     }
 
     const tier = record(record(record(sessionPayload?._meta)?.antigravity)?.tier);
@@ -628,7 +691,8 @@ export class AntigravityAcpHost implements EngineHost {
     this.currentBaseModel = defaultResolved.baseModel;
     this.currentEffort = defaultResolved.thoughtLevel;
 
-    this.identity = { sessionId, path: antigravityTranscriptPath(this.options.antigravityHome, sessionId) };
+    const transcriptPath = this.openVerifiedTranscript(sessionId);
+    this.identity = { sessionId, path: transcriptPath };
     await this.applyModelAndEffort(sessionId, this.options.model, this.options.effort, false);
 
     this.appendTranscriptRecord(resumeSessionId ? "session.resume" : "session.start", {
@@ -700,10 +764,52 @@ export class AntigravityAcpHost implements EngineHost {
     await this.applyModelAndEffort(this.identity.sessionId, settings.model, settings.effort, true);
   }
 
-  private appendTranscriptRecord(type: string, data: JsonObject): void {
-    if (!this.identity.path) return;
+  private openVerifiedTranscript(sessionId: string): string {
+    const valid = validateAntigravitySessionId(sessionId);
+    const sessionsDir = path.resolve(this.options.antigravityHome, "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+    const sessionsStat = fs.lstatSync(sessionsDir);
+    if (sessionsStat.isSymbolicLink() || !sessionsStat.isDirectory()) {
+      throw new Error("Antigravity sessions root must be a real directory");
+    }
+    const canonicalSessionsDir = fs.realpathSync(sessionsDir);
+    const sessionDir = path.join(canonicalSessionsDir, valid);
+    fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+    const sessionStat = fs.lstatSync(sessionDir);
+    if (sessionStat.isSymbolicLink() || !sessionStat.isDirectory()) {
+      throw new Error("Antigravity session directory must be a real directory");
+    }
+    const canonicalSessionDir = fs.realpathSync(sessionDir);
+    if (!canonicalSessionDir.startsWith(canonicalSessionsDir + path.sep)) {
+      throw new Error("Antigravity session directory escapes sessions root");
+    }
+    const canonicalTranscriptPath = path.join(canonicalSessionDir, "events.jsonl");
+    const nofollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+    const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND | nofollow;
+    const fd = fs.openSync(canonicalTranscriptPath, flags, 0o600);
     try {
-      fs.mkdirSync(path.dirname(this.identity.path), { recursive: true, mode: 0o700 });
+      if (!fs.fstatSync(fd).isFile()) {
+        throw new Error("Antigravity transcript target is not a regular file");
+      }
+      this.closeTranscriptFd();
+      this.transcriptFd = fd;
+      return antigravityTranscriptPath(this.options.antigravityHome, valid);
+    } catch (error) {
+      try { fs.closeSync(fd); } catch { /* best effort */ }
+      throw error;
+    }
+  }
+
+  private closeTranscriptFd(): void {
+    if (this.transcriptFd === null) return;
+    const fd = this.transcriptFd;
+    this.transcriptFd = null;
+    try { fs.closeSync(fd); } catch { /* already closed */ }
+  }
+
+  private appendTranscriptRecord(type: string, data: JsonObject): void {
+    if (this.transcriptFd === null) return;
+    try {
       const line = JSON.stringify({
         schemaVersion: ANTIGRAVITY_TRANSCRIPT_SCHEMA_VERSION,
         type,
@@ -711,10 +817,54 @@ export class AntigravityAcpHost implements EngineHost {
         timestamp: new Date().toISOString(),
         data,
       });
-      fs.appendFileSync(this.identity.path, `${line}\n`, { mode: 0o600 });
+      fs.writeSync(this.transcriptFd, `${line}\n`, undefined, "utf8");
     } catch (error) {
       console.warn("[antigravity] failed to append transcript record", safeError(error));
     }
+  }
+
+  private recordDeliveryAcceptance(entryId: string, record: DeliveryAcceptanceRecord): void {
+    this.deliveryAcceptance.set(entryId, record);
+    boundMap(this.deliveryAcceptance, ANTIGRAVITY_SENT_ENTRY_MEMORY);
+  }
+
+  /** Records owner-verified ACP acceptance for one specific delivery id.
+      Called only after ACP confirms the running `session/prompt` via a live
+      turn update, a permission request, or a non-error prompt result. */
+  private confirmDeliveryAcceptance(running: RunningPrompt): void {
+    if (running.accepted) return;
+    running.accepted = true;
+    const acceptedAt = new Date().toISOString();
+    this.appendTranscriptRecord("user.message", {
+      turnId: running.turnId,
+      entryId: running.entryId,
+      content: running.promptText,
+      imageCount: running.imageCount,
+      acceptedAt,
+    });
+    this.appendTranscriptRecord("assistant.turn_start", {
+      turnId: running.turnId,
+      entryId: running.entryId,
+    });
+    this.recordDeliveryAcceptance(running.entryId, {
+      state: "accepted",
+      turnId: running.turnId,
+      acceptedAt,
+    });
+    this.emit({
+      kind: "item",
+      turnId: running.turnId,
+      phase: "completed",
+      item: {
+        type: "user.message",
+        entryId: running.entryId,
+        turnId: running.turnId,
+      },
+      deliveryEcho: {
+        operationId: running.entryId,
+        at: acceptedAt,
+      },
+    });
   }
 
   private flushPendingAssistantText(turnId: string | null): void {
@@ -758,7 +908,6 @@ export class AntigravityAcpHost implements EngineHost {
 
     this.turnCounter += 1;
     const turnId = `antigravity:${this.turnCounter}-${crypto.randomBytes(4).toString("hex")}`;
-    const firstPrompt = this.sentEntries.size === 0;
     this.sentEntries.set(normalized.id, turnId);
     boundMap(this.sentEntries, ANTIGRAVITY_SENT_ENTRY_MEMORY);
 
@@ -766,29 +915,35 @@ export class AntigravityAcpHost implements EngineHost {
     const running: RunningPrompt = {
       turnId,
       entryId: normalized.id,
+      promptText: normalized.content.text,
+      imageCount: normalized.content.images.length,
+      accepted: false,
       settled: new Promise((resolve) => { settle = resolve; }),
     };
+    this.recordDeliveryAcceptance(normalized.id, { state: "pending", turnId });
     this.agentStateTurnStartedAt = Date.now();
     this.pendingAssistantText = "";
     this.running = running;
     this.outstandingPrompt = running;
 
-    this.appendTranscriptRecord("user.message", {
-      turnId,
-      entryId: normalized.id,
-      content: normalized.content.text,
-      imageCount: normalized.content.images.length,
-    });
-    this.appendTranscriptRecord("assistant.turn_start", { turnId });
     this.emit({ kind: "turn-started", turnId });
 
     const request = this.request("session/prompt", { sessionId: this.identity.sessionId, prompt }, null);
     void request.then(
       (result) => {
-        this.flushPendingAssistantText(turnId);
         const stopReason = stringField(result, "stopReason");
         const usage = record(record(result)?.usage);
         const interrupted = this.cancelledTurns.has(turnId) || stopReason === "cancelled";
+        if (!interrupted || running.accepted) {
+          this.confirmDeliveryAcceptance(running);
+        } else {
+          this.recordDeliveryAcceptance(running.entryId, {
+            state: "failed",
+            turnId,
+            reason: `Antigravity cancelled delivery ${running.entryId} before ACP confirmed acceptance`,
+          });
+        }
+        this.flushPendingAssistantText(turnId);
         const status = interrupted
           ? "interrupted"
           : stopReason === "end_turn" || stopReason === "max_tokens" || stopReason === "max_turn_requests"
@@ -815,9 +970,17 @@ export class AntigravityAcpHost implements EngineHost {
       },
       (error) => {
         this.flushPendingAssistantText(turnId);
-        if (firstPrompt) this.firstPromptFailure = safeError(error);
         const message = safeError(error);
         const interrupted = this.cancelledTurns.has(turnId);
+        if (!running.accepted) {
+          this.recordDeliveryAcceptance(running.entryId, {
+            state: "failed",
+            turnId,
+            reason: interrupted
+              ? `Antigravity cancelled delivery ${running.entryId} before ACP confirmed acceptance`
+              : `Antigravity rejected delivery ${running.entryId}: ${message}`,
+          });
+        }
         if (interrupted) {
           this.appendTranscriptRecord("abort", { turnId, reason: "user_initiated" });
         } else {
@@ -901,13 +1064,28 @@ export class AntigravityAcpHost implements EngineHost {
 
   setWriterFence(fence: () => boolean): void { this.writerFence = fence; }
 
-  async sessionMaterializationEvidence(_clientMessageId: string): Promise<SessionMaterializationEvidence> {
-    const present = transcriptHasUserMessage(this.identity.path);
-    if (present === true) return { state: "materialized" };
-    if (present === null) return { state: "unavailable", reason: "the Antigravity transcript could not be read" };
-    if (this.firstPromptFailure) return { state: "failed", reason: `Antigravity rejected the first prompt: ${this.firstPromptFailure}` };
-    if (this.dead) return { state: "failed", reason: "the Antigravity host exited before writing the first message" };
-    return { state: "absent", reason: "Antigravity has not written the first message to its transcript yet" };
+  async sessionMaterializationEvidence(clientMessageId: string): Promise<SessionMaterializationEvidence> {
+    const deliveryId = typeof clientMessageId === "string" ? clientMessageId.trim() : "";
+    if (!deliveryId) {
+      return { state: "absent", reason: "Antigravity delivery id is empty" };
+    }
+    const acceptance = this.deliveryAcceptance.get(deliveryId);
+    if (acceptance?.state === "accepted") return { state: "materialized" };
+    if (acceptance?.state === "failed") return { state: "failed", reason: acceptance.reason };
+    if (this.dead || this.released) {
+      return {
+        state: "failed",
+        reason: acceptance
+          ? `the Antigravity host exited before ACP accepted delivery ${deliveryId}`
+          : `the Antigravity host is unavailable and never accepted delivery ${deliveryId}`,
+      };
+    }
+    return {
+      state: "absent",
+      reason: acceptance
+        ? `Antigravity ACP has not confirmed acceptance of delivery ${deliveryId} yet`
+        : `Antigravity host has no acceptance fact for delivery ${deliveryId}`,
+    };
   }
 
   async release(): Promise<void> {
@@ -1026,6 +1204,13 @@ export class AntigravityAcpHost implements EngineHost {
     let restoredTurn: string | null = null;
     const restoredAttention = new Set<string>();
     for (const event of stored) {
+      if (event.kind === "item" && event.deliveryEcho?.operationId) {
+        this.recordDeliveryAcceptance(event.deliveryEcho.operationId, {
+          state: "accepted",
+          turnId: event.turnId ?? "",
+          acceptedAt: event.deliveryEcho.at,
+        });
+      }
       if (event.kind === "turn-started") restoredTurn = event.turnId;
       if (event.kind === "turn-ended" && event.turnId === restoredTurn) restoredTurn = null;
       if (event.kind === "attention") restoredAttention.add(event.id);
@@ -1152,6 +1337,7 @@ export class AntigravityAcpHost implements EngineHost {
         this.write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
         return;
       }
+      this.confirmDeliveryAcceptance(this.running);
       const attentionId = `antigravity-permission:${String(id)}`;
       this.attentions.set(attentionId, { rpcId: id, request: params });
       const toolCall = record(params.toolCall);
@@ -1179,10 +1365,21 @@ export class AntigravityAcpHost implements EngineHost {
     const update = record(params?.update);
     const kind = stringField(update, "sessionUpdate");
     if (!update || !kind) return;
-    const turnId = this.running?.turnId ?? null;
+    const running = this.running;
+    const turnId = running?.turnId ?? null;
     if (kind === "config_option_update") {
       this.captureModelCatalog(update.configOptions);
       return;
+    }
+    if (running && (
+      kind === "user_message_chunk"
+      || kind === "agent_thought_chunk"
+      || kind === "agent_message_chunk"
+      || kind === "tool_call"
+      || kind === "tool_call_update"
+      || kind === "usage_update"
+    )) {
+      this.confirmDeliveryAcceptance(running);
     }
     if (kind === "agent_thought_chunk") {
       const text = stringField(record(update.content), "text");
@@ -1276,12 +1473,20 @@ export class AntigravityAcpHost implements EngineHost {
     this.outstandingPrompt = null;
     this.attentions.clear();
     if (running && !this.dead) {
+      if (!running.accepted) {
+        this.recordDeliveryAcceptance(running.entryId, {
+          state: "failed",
+          turnId: running.turnId,
+          reason: `Antigravity host released before ACP confirmed delivery ${running.entryId}`,
+        });
+      }
       this.flushPendingAssistantText(running.turnId);
       this.appendTranscriptRecord("abort", { turnId: running.turnId, reason: "host_release" });
       this.emit({ kind: "turn-ended", turnId: running.turnId, status: "interrupted" });
     }
-    if (this.identity.path) {
+    if (this.transcriptFd !== null) {
       this.appendTranscriptRecord("session.shutdown", { reason: "released" });
+      this.closeTranscriptFd();
     }
     this.released = true;
     this.releasing = false;
@@ -1313,6 +1518,13 @@ export class AntigravityAcpHost implements EngineHost {
     this.attentions.clear();
     this.rejectPending(error);
     if (running) {
+      if (!running.accepted) {
+        this.recordDeliveryAcceptance(running.entryId, {
+          state: "failed",
+          turnId: running.turnId,
+          reason: `Antigravity host exited before ACP accepted delivery ${running.entryId}: ${safeError(error)}`,
+        });
+      }
       this.flushPendingAssistantText(running.turnId);
       this.appendTranscriptRecord("session.error", {
         turnId: running.turnId,
@@ -1321,6 +1533,7 @@ export class AntigravityAcpHost implements EngineHost {
       });
       this.emit({ kind: "turn-ended", turnId: running.turnId, status: "error" });
     }
+    this.closeTranscriptFd();
     this.dead = true;
     this.emit({ kind: "session-status", status: "dead" });
     this.notifyStateListeners();

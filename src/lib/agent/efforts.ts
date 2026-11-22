@@ -74,10 +74,23 @@ const ANTIGRAVITY_MODEL_SCALES: Readonly<Record<string, readonly string[]>> = {
   "gpt-oss-120b-medium": ["medium"],
 };
 const ANTIGRAVITY_CATALOG_SCALES = new Map<string, readonly string[]>();
+let antigravityCatalogScope: string | null = null;
 const ANTIGRAVITY_EFFORT_SUFFIX = /-(low|medium|high|xhigh|max)$/;
 
-/** Seed per-model ladders discovered from Antigravity ACP `configOptions` or `agy models`. */
+function currentAntigravityCatalogScope(): string {
+  if (typeof process === "undefined" || !process.env) return "";
+  return `${process.env.LLV_STATE_DIR ?? ""}\0${process.env.XDG_CONFIG_HOME ?? ""}\0${process.env.HOME ?? ""}`;
+}
+
+/** Seed per-model ladders discovered from Antigravity ACP `configOptions` or `agy models`.
+    Scoped to the active state/config environment so isolated state roots never inherit
+    another directory's cached model catalog. */
 export function registerAntigravityEffortScales(models: readonly { id: string; efforts: readonly string[] | null }[]): void {
+  const scope = currentAntigravityCatalogScope();
+  if (antigravityCatalogScope !== scope) {
+    ANTIGRAVITY_CATALOG_SCALES.clear();
+    antigravityCatalogScope = scope;
+  }
   for (const model of models) if (model.efforts?.length) ANTIGRAVITY_CATALOG_SCALES.set(model.id, [...model.efforts]);
 }
 
@@ -108,7 +121,10 @@ export function effortScale(engine: string, model: string | null | undefined, co
   }
   if (engine === "antigravity") {
     const id = antigravityBaseModelKey(model ?? "");
-    return ANTIGRAVITY_CATALOG_SCALES.get(id) ?? ANTIGRAVITY_MODEL_SCALES[id] ?? ENGINE_EFFORTS.antigravity;
+    const dynamic = antigravityCatalogScope === currentAntigravityCatalogScope()
+      ? ANTIGRAVITY_CATALOG_SCALES.get(id)
+      : undefined;
+    return dynamic ?? ANTIGRAVITY_MODEL_SCALES[id] ?? ENGINE_EFFORTS.antigravity;
   }
   if (engine !== "codex") return null;
   const id = (model ?? "").trim().toLowerCase();
