@@ -382,13 +382,14 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
   throw new Error("Gate wrapper unavailable: installed Delegatus tooling must support agent signal namespaces before a managed stage can launch");
 }
 
-/** Older shells resolve Bun through PATH. Keep this host-only routing out of
- * LLV_GATE_BUN, which publication treats as a portable check input. */
+/** Route Linux admission calls from older helper copies through the installed
+ * detector, even when they carry an explicit LLV_GATE_BUN interpreter. */
 export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.ProcessEnv>> = process.env): Record<string, string> {
-  if (process.platform !== "linux" || source.LLV_GATE_BUN) return {};
+  if (process.platform !== "linux") return {};
   try {
     const helper = path.join(path.dirname(resolveSignalTooling().gate), "cpu-admission.ts");
     const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    const nativeBun = source.LLV_GATE_BUN || process.execPath;
     const body = Buffer.from(`#!/bin/bash
 set -eu
 if [[ $# -ge 4 && \${1##*/} == cpu-admission.ts && $3 == command:bounded:drained:* ]]; then
@@ -405,13 +406,13 @@ for entry in "\${entries[@]}"; do
   if [[ -x "$entry/bun" && ! -d "$entry/bun" ]]; then printf '%s' "$entry/bun"; break; fi
 done)
 [[ -n "$native_bun" ]] || { echo 'gate-slot: Bun is unavailable' >&2; exit 127; }
-exec "$native_bun" "$@"
+    exec ${quote(nativeBun)} "$@"
 `);
     const parent = path.join(os.homedir(), ".cache/delegatus/gate-admission");
     const directory = cacheSignalTooling(parent, new Map([["bun", body]]));
     const entries = (source.PATH ?? process.env.PATH ?? "").split(path.delimiter)
       .filter(entry => !entry.startsWith(parent + path.sep));
-    return { PATH: [directory, ...entries].join(path.delimiter) };
+    return { LLV_GATE_BUN: path.join(directory, "bun"), PATH: [directory, ...entries].join(path.delimiter) };
   } catch { return {}; }
 }
 

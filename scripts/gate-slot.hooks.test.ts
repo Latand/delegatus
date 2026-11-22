@@ -15,6 +15,18 @@ import { createPublicationFixtures } from "./publicationHook.fixture";
 const systemctl = process.platform === "linux" ? Bun.which("systemctl") : null;
 const hasUserManager = systemctl !== null && Bun.spawnSync([systemctl, "--user", "show-environment"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
 
+test.each(["bun", "bun-1.4.0"]) ("installed admission routing keeps %s as its native interpreter", name => {
+  const f = fixture(), bin = path.join(f.dir, name);
+  try {
+    fs.symlinkSync(process.execPath, bin);
+    const routed = installedGateAdmissionEnv({ ...f.env, LLV_GATE_BUN: bin });
+    expect(routed.LLV_GATE_BUN).not.toBe(bin);
+    const result = Bun.spawnSync([routed.LLV_GATE_BUN!, "--version"], { env: { ...process.env, ...routed } });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(result.stdout.toString()).toMatch(/^\d+\.\d+/);
+  } finally { f.close(); }
+});
+
 test.skipIf(!hasUserManager)("a pre-commit service and its client cannot fence their own queued ESLint", async () => {
   const f = fixture(), roots: string[] = [], control = new AbortController();
   const log = path.join(f.dir, "pre-commit.stderr");
@@ -244,7 +256,7 @@ for (const mode of ["portable hooks first-open", "service hooks first-open", "po
         fs.writeFileSync(bun, fs.readFileSync(bun, "utf8").replace("#!/bin/bash\n", `#!/bin/bash
 case "$1" in */cpu-admission.ts|*/owned-runner.ts) exec "$HOOK_BUN" "$@" ;; esac
 `));
-        env.LLV_GATE_BUN = undefined;
+        env.LLV_GATE_BUN = process.execPath;
         Object.assign(env, installedGateAdmissionEnv(env));
       }
       withoutInheritedGate(env, { keepSandbox: useService });
