@@ -1959,6 +1959,120 @@ describe("board timeline manager view", () => {
   }, 900_000);
 });
 
+/* The «Графік» toggle is the last segment of the header's panel group: Orchestrator, the recent
+   agents' clock and the chart read as one segmented control, pressed or not. Every frame is the
+   header at the exact width, in both languages and themes, with the chart shown and hidden, and
+   after a click (the focus the press leaves). The readings compare the segments' own computed
+   height, radius, border and fill. `LLV_HEADER_FRAMES_PHASE=before` names the frames of a run on
+   the base. */
+describe("board header chart toggle", () => {
+  const phase = process.env.LLV_HEADER_FRAMES_PHASE ?? "after";
+  const segmentReadings = (page: Page) => page.evaluate(() => {
+    const group = document.querySelector<HTMLElement>('.bar[data-bar="project"] [data-bar-group="panels"]');
+    if (!group) return null;
+    const chart = group.querySelector<HTMLElement>("[data-board-timeline-toggle]");
+    const segments = [group.querySelector<HTMLElement>("[data-orchestrator-toggle]"), group.querySelector<HTMLElement>("[data-bar-recent-toggle]"), chart];
+    const read = (node: HTMLElement | null) => {
+      if (!node) return null;
+      const style = getComputedStyle(node), box = node.getBoundingClientRect(), label = node.querySelector<HTMLElement>("[data-fit-label]");
+      const text = label && getComputedStyle(label).display !== "none" ? label.textContent : null;
+      const range = document.createRange(); range.selectNodeContents(node);
+      return { pressed: node.getAttribute("aria-pressed"), x: box.x, y: box.y, width: box.width, height: box.height, radius: [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomRightRadius, style.borderBottomLeftRadius],
+        border: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth], borderColor: style.borderTopColor, background: style.backgroundColor, color: style.color,
+        shadow: style.boxShadow, outline: style.outlineStyle === "none" ? "none" : `${style.outlineWidth} ${style.outlineColor}`, font: `${style.fontSize}/${style.fontWeight}`, text,
+        icon: (() => { const svg = node.querySelector("svg"); if (!svg) return null; const r = svg.getBoundingClientRect(); return { y: r.y + r.height / 2 - (box.y + box.height / 2), width: r.width }; })(),
+        cut: range.getBoundingClientRect().right > box.right + 0.5 || range.getBoundingClientRect().left < box.left - 0.5 };
+    };
+    return { bar: document.querySelector<HTMLElement>('.bar[data-bar="project"]')!.getBoundingClientRect().toJSON(), orchestrator: read(segments[0]!), recent: read(segments[1]!), chart: read(chart) };
+  });
+
+  browserTest("the chart toggle is the third segment of the panel group in every state", async () => {
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-header-chart-toggle"); fs.mkdirSync(evidence, { recursive: true });
+    const out = path.join(os.tmpdir(), `llv-header-chart-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    let current = await managerRecords("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang);
+        for (const theme of ["dark", "light"] as const) for (const { width, height } of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }]) for (const shown of [false, true]) {
+          const tag = `${width}-${lang}-${theme}-${shown ? "chart" : "board"}`;
+          const { page, context, pageErrors } = await openFixture(browser, "about:blank", { width, height }, theme, lang, "reduce", false, 1, new Date(MANAGER_NOW));
+          try {
+            await context.addInitScript(({ lang, theme, shown }) => {
+              localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+              if (localStorage.getItem("llv:kanban-seat:v2") === null) localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: false }, placement: "top", height: null, width: null }));
+              if (localStorage.getItem("llv:board-timeline:v1:atlas") === null) localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify({ view: shown ? "timeline" : "board", hours: 24, expanded: {} }));
+            }, { lang, theme, shown });
+            await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+            await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+            const toggle = page.locator("[data-board-timeline-toggle]");
+            await toggle.waitFor({ timeout: 20_000 });
+            await page.waitForFunction(() => document.querySelector("[data-board-timeline-toggle]")?.getAttribute("aria-pressed") !== null);
+            const bar = page.locator('.bar[data-bar="project"]');
+            const frame = async (state: string) => {
+              const box = (await bar.boundingBox())!;
+              const reading = await segmentReadings(page);
+              await page.screenshot({ path: path.join(evidence, `${phase}-${tag}-${state}.png`), clip: { x: Math.max(0, box.x + box.width - 560), y: box.y, width: Math.min(560, box.width), height: box.height }, animations: "disabled" });
+              readings.push({ name: `${phase}-${tag}-${state}`, reading });
+              return reading;
+            };
+            const rest = await frame("rest");
+            const check = (ok: boolean, detail: string) => { if (!ok) failures.push(`${tag}: ${detail}`); };
+            check(pageErrors.length === 0, `page errors ${pageErrors.join(" | ")}`);
+            check(!!rest?.chart && !!rest.recent && !!rest.orchestrator, "a segment is missing");
+            if (rest?.chart && rest.recent && rest.orchestrator) {
+              check(rest.chart.pressed === String(shown), `aria-pressed ${rest.chart.pressed}`);
+              for (const name of ["orchestrator", "recent"] as const) check(rest[name]!.height === rest.chart.height && rest[name]!.y === rest.chart.y, `${name} height ${rest[name]!.height} at ${rest[name]!.y} against the chart's ${rest.chart.height} at ${rest.chart.y}`);
+              check(Math.abs(rest.chart.x - (rest.recent.x + rest.recent.width)) < 1.01, `the chart segment sits ${rest.chart.x - (rest.recent.x + rest.recent.width)} px from the clock`);
+              check(rest.chart.radius.join(" ") === `0px ${rest.orchestrator.radius[0]} ${rest.orchestrator.radius[0]} 0px`, `chart radius ${rest.chart.radius.join(" ")}`);
+              check(rest.recent.radius.join(" ") === "0px 0px 0px 0px", `the clock's radius ${rest.recent.radius.join(" ")} is not square inside the group`);
+              check(rest.chart.border.join(" ") === `${rest.chart.border[0]} ${rest.chart.border[1]} ${rest.chart.border[2]} 0px`, `chart border ${rest.chart.border.join(" ")}`);
+              check(rest.chart.outline === "none" && rest.chart.shadow === "none", `chart resting outline ${rest.chart.outline}, shadow ${rest.chart.shadow}`);
+              check(Math.abs(rest.chart.icon!.y - rest.orchestrator.icon!.y) <= 1 && rest.chart.icon!.width === rest.orchestrator.icon!.width, "chart icon is not aligned with the orchestrator's");
+              check(!rest.chart.cut && (rest.chart.text === null) === (rest.orchestrator.text === null), `the chart's label is ${rest.chart.text} beside the orchestrator's ${rest.orchestrator.text} (cut: ${rest.chart.cut})`);
+            }
+            await toggle.click();
+            await page.mouse.move(0, 300);
+            await frame("pressed-by-click");
+            await toggle.click();
+            await frame("toggled-back");
+            /* The focus ring of each segment stays inside the group: after a click and a key (the state
+               the operator's frame showed) on the chart, and by Tab on every segment. */
+            const insideGroup = (name: string, node: NonNullable<Awaited<ReturnType<typeof segmentReadings>>>["chart"], at: string) => {
+              if (!node) { check(false, `${at}: ${name} is missing`); return; }
+              const layers = node.shadow.replace(/(?:rgba?|color)\([^)]*\)/g, "c").split(",").map(layer => layer.trim()).filter(layer => layer !== "none");
+              check(layers.length > 0 && layers.every(layer => layer.includes("inset")), `${at}: ${name} focus shadow "${node.shadow}" is not drawn inside the segment`);
+              check(node.outline === "none", `${at}: ${name} focus outline ${node.outline}`);
+              check(node.shadow !== rest?.[name === "chart" ? "chart" : name === "clock" ? "recent" : "orchestrator"]?.shadow, `${at}: ${name} shows no focus indicator`);
+              check(node.height === rest?.chart?.height && node.y === rest?.chart?.y, `${at}: ${name} spans ${node.height} at ${node.y}, the group ${rest?.chart?.height} at ${rest?.chart?.y}`);
+            };
+            await toggle.click();
+            await page.keyboard.press("ArrowDown");
+            await page.mouse.move(0, 300);
+            const keyed = await frame("focus-after-click-and-key");
+            check(await page.evaluate(() => document.activeElement?.hasAttribute("data-board-timeline-toggle") === true && document.activeElement.matches(":focus-visible")), "the chart toggle is not in focus-visible after click and key");
+            insideGroup("chart", keyed?.chart ?? null, "click+key");
+            await page.locator("[data-orchestrator-toggle]").focus();
+            await page.keyboard.press("Shift+Tab"); await page.keyboard.press("Tab");
+            for (const [name, key, selector] of [["orchestrator", "orchestrator", "[data-orchestrator-toggle]"], ["clock", "recent", "[data-bar-recent-toggle]"], ["chart", "chart", "[data-board-timeline-toggle]"]] as const) {
+              if (name !== "orchestrator") await page.keyboard.press("Tab");
+              check(await page.evaluate(selector => document.activeElement?.matches(`${selector}:focus-visible`) === true, selector), `Tab did not reach ${name} with focus-visible`);
+              const tabbed = await frame(`focus-tab-${name}`);
+              insideGroup(name, tabbed?.[key] ?? null, `Tab ${name}`);
+            }
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(evidence, `${phase}-readings.json`), JSON.stringify(readings, null, 2));
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); served.stop(); if (fd !== null) fs.closeSync(fd); }
+  }, 600_000);
+});
+
 describe("project default stage runtime", () => {
   browserTest("project menus show the saved runtime and roll back refused choices", async () => {
     const out = path.resolve(".artifacts/project-stage-runtime");
