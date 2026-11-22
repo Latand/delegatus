@@ -8,7 +8,8 @@ import * as controls from "@/lib/conversation/actions";
 import * as sourcesModule from "@/lib/monitor/seatTickSources";
 import * as storeModule from "./store";
 import { confirmOwnerStop, OWNER_STOP_PENDING_LIMIT_MS, observeOwnerContinuation, type OwnerRunPorts } from "./ownerRun";
-import { dropRun, newTargetSettings, readRelayStore, readRunLedger, reserveRun, updateRelayStore, writeRelayFile, type PairedRelay, type RunRecord } from "./store";
+import { dropRun, newTargetSettings, readRelayStore, readRunLedger, reserveRun, updateRelayStore, writeRelayFile, type RunRecord } from "./store";
+import { clonePairing } from "./clone.fixture";
 import { advertisedSlots } from "./runner";
 import { sweepExternalRelayOrphans } from "./poller";
 import type { RegistryFile } from "@/lib/agent/registry";
@@ -109,7 +110,7 @@ test("a legacy slot-only release quarantines across fresh processes, detaching i
   const lateAnswer = { body: { lease_id: f.run.leaseId, outcome: "answered" as const,
     answer: { action: "reply" as const, text: "Saved answer", reply_to: context.messageId }, duration_ms: 1 }, files: [] };
   const target = { ...newTargetSettings({ target_id: f.run.targetId, name: "Target", answered_by: "install", fallback: "none" }), engine: "codex" as const, ownerTier: true };
-  const relay = { id: f.run.relayId, targets: [target], paused: false } as PairedRelay;
+  const relay = { ...clonePairing("http://127.0.0.1:1"), id: f.run.relayId, targets: [target] };
   const previousRelays = readRelayStore();
   updateRelayStore(store => ({ ...store, relays: [relay] }));
   const chainFile = statePath("external-relay/conversations.json");
@@ -149,7 +150,7 @@ test("a legacy slot-only release quarantines across fresh processes, detaching i
         if (next) await releaseConversationAsync(next.id, {}, Date.now() + 5000, request.request_id);
       `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
       const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-      expect(code).toBe(0);
+      expect(code, error).toBe(0);
       expect(JSON.parse(output)).toEqual({ settled: true, stops: restart ? 0 : 3, pending: false, capacityReleased: true,
         admitted: true, conversationId: null, authorized: false, sends: 0 });
       expect(error.includes("ALARM:")).toBe(!restart);
