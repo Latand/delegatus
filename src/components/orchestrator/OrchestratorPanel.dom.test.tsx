@@ -1010,8 +1010,12 @@ test("a hung transcript read times out with its path and can be rebound", async 
   let signal: AbortSignal | null | undefined;
   transcriptRead = (requestSignal) => {
     signal = requestSignal;
-    // Simulate a response whose body never arrives.
-    return Promise.resolve({ ok: true, json: () => new Promise(() => {}) } as Response);
+    // Hold the actual response body open until the request deadline aborts it.
+    return Promise.resolve(new Response(new ReadableStream({
+      start(controller) {
+        requestSignal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
+      },
+    })));
   };
 
   /* Nothing in the catalog answers for this seat, on any key — until it is

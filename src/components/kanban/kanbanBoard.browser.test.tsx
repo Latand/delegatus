@@ -81,6 +81,85 @@ describe("accepted queued creation continuity", () => {
   }, 600_000);
 });
 
+describe("#4273 seat transcript recovery rendering", () => {
+  browserTest("long designated paths render loading, opened and missing states in both surfaces, languages and themes", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "seat-transcript-recovery");
+    fs.mkdirSync(out, { recursive: true });
+    const conversationId = "conversation_orchestrator";
+    const seatPath = `/transcripts/${"quiet-seat-generation-".repeat(7)}.jsonl`;
+    const seat = {
+      project: "atlas", seatEpoch: 3, conversationId, path: seatPath, mandate: "Keep the board moving.", promptVersion: null,
+      predecessorConversationId: null, state: "active",
+      intent: { clientRequestId: "fixture-seat-designation", mode: "existing", launchId: null, error: null },
+      designatedAt: "2026-11-01T10:00:00.000Z", activatedAt: "2026-11-01T10:00:01.000Z",
+    };
+    const openedFile = {
+      path: seatPath, root: "claude-projects", name: "quiet-seat-generation.jsonl", project: "repo-former-alias",
+      title: "Keep the board moving.", engine: "claude", kind: "session", fmt: "claude", parent: null,
+      mtime: 1793527200, size: 128, activity: "idle", conversationId,
+    };
+    let mode: "loading" | "opened" | "missing" = "loading";
+    const server = await serveEvidenceFixture(out, "src/components/kanban/issue1695Evidence.fixture.tsx", {
+      "/api/orchestrator/seat": () => Response.json({ seat, pending: null, exists: false, lastFailure: null, previous: [], currentTask: null, all: null }),
+      "/api/orchestrator/seat/status": () => Response.json({ project: "atlas", designated: true, conversationId,
+        transcriptPath: seatPath, engine: "claude", model: "opus", liveness: { lifecycle: "idle", hostState: "alive", silentForMs: 0 } }),
+      "/api/orchestrator/seat/transcript": () => mode === "opened"
+        ? Response.json({ conversationId, file: openedFile })
+        : mode === "loading"
+          ? new Response(new ReadableStream({ start() {} }), { headers: { "content-type": "application/json" } })
+          : Response.json({ conversationId, file: null }),
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Array<Record<string, unknown>> = [];
+    try {
+      for (const phone of [false, true]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        for (const state of ["loading", "opened", "missing"] as const) {
+          mode = state;
+          const width = phone ? 390 : 1440;
+          const label = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${state}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seat=gone#p=atlas`,
+            { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+          try {
+            if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+            const rootSelector = phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat] [data-orchestrator-panel]";
+            const root = page.locator(rootSelector);
+            await root.waitFor();
+            if (state === "loading") await page.getByText(translate(lang, "orchPanel.resolving")).waitFor();
+            if (state === "opened") await page.locator(`[data-orchestrator-conversation="${conversationId}"]`).waitFor();
+            if (state === "missing") await page.getByText(translate(lang, "orchPanel.transcriptNotFound")).waitFor();
+            await root.scrollIntoViewIfNeeded();
+            const geometry = await root.evaluate((element) => {
+              const bounds = element.getBoundingClientRect();
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              const textRects: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+              while (walker.nextNode()) {
+                if (!walker.currentNode.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+                textRects.push(...[...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom })));
+              }
+              return { inside: bounds.left >= 0 && bounds.right <= innerWidth && bounds.top >= 0 && bounds.bottom <= innerHeight,
+                textInside: textRects.every(rect => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1
+                  && rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1 && rect.top >= 0 && rect.bottom <= innerHeight),
+                text: element.textContent ?? "" };
+            });
+            expect(geometry.inside, label).toBe(true);
+            expect(geometry.textInside, label).toBe(true);
+            if (state === "missing") {
+              expect(geometry.text).toContain(seatPath);
+              expect(await page.locator("[data-orchestrator-open-board]").count()).toBeGreaterThan(0);
+              expect(await page.locator("[data-orchestrator-rotate]").count()).toBeGreaterThan(0);
+            }
+            expect(pageErrors, label).toEqual([]);
+            await page.screenshot({ path: path.join(out, `${label}.png`), fullPage: true });
+            readings.push({ label, width, lang, theme, state, geometry });
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(out, "rendered.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2)}\n`);
+  }, 300_000);
+});
+
 describe("independent creation lock", () => {
   type CreationResult = { id?: string; accepted?: boolean; error?: string; warning?: string };
   type CreationWindow = typeof window & { createAcceptedEvidence(): Promise<CreationResult>; firstResult: CreationResult | null };

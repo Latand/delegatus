@@ -78,9 +78,17 @@ test("the route returns only the aliased seat outside the bounded board window w
   const catalog = Array.from({ length: 53_298 }, (_, index) =>
     row(path.join(transcriptRoot, `recent-${index}.jsonl`), project, old.mtime + index + 1)).reverse();
   catalog.push(old);
-  replaceConversationCatalog(catalog);
+  let catalogIterations = 0;
+  const indexedCatalog = new Proxy(catalog, {
+    get(target, property, receiver) {
+      if (property === Symbol.iterator) catalogIterations += 1;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  replaceConversationCatalog(indexedCatalog);
   const window = selectSchemeWindow(catalog, (entry) => entry.project === formerProject ? project : entry.project);
   expect(window.some((entry) => entry.path === seatPath)).toBe(false);
+  catalogIterations = 0;
 
   const elapsed: number[] = [];
   const readDir = spyOn(fs.promises, "readdir");
@@ -97,11 +105,13 @@ test("the route returns only the aliased seat outside the bounded board window w
         conversationId,
         file: expect.objectContaining({ path: seatPath, conversationId, project: formerProject, mtime: old.mtime }),
       });
+      expect(Object.keys(JSON.parse(body) as Record<string, unknown>)).toEqual(["conversationId", "file"]);
       expect(body).not.toContain("Catalog-only text");
       expect(Buffer.byteLength(body)).toBeLessThan(1_024);
     }
     const walked = [...readDir.mock.calls, ...readDirSync.mock.calls].map(([directory]) => String(directory));
     expect(walked.some((directory) => directory.startsWith(path.dirname(transcriptRoot)))).toBe(false);
+    expect(catalogIterations).toBe(0);
   } finally {
     readDir.mockRestore();
     readDirSync.mockRestore();

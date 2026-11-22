@@ -971,7 +971,11 @@ test("a stalled mobile transcript body aborts at the deadline and exposes recove
   let signal: AbortSignal | null | undefined;
   transcriptAnswer = async (requestSignal) => {
     signal = requestSignal;
-    return { ok: true, json: () => new Promise(() => {}) } as Response;
+    return new Response(new ReadableStream({
+      start(controller) {
+        requestSignal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
+      },
+    }));
   };
   const { host, root } = await mount([]);
   jest.useFakeTimers();
