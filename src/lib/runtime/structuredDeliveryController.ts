@@ -1362,7 +1362,8 @@ export async function bindStructuredDeliveryQueue(
           if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt)) return false;
           const target: RetirementTarget = {
             conversations: conversationIdsResolvingTo(snapshot, resolve(conversationId) as ViewerConversationId),
-            sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null,
+            engine: expectedKey.engine, sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null,
+            launchId: entry?.structuredHostOperationId ?? null,
           };
           if (pipelineReader(target, recoveryAttempt ? providerRecovery : undefined)) return false;
         } catch { return false; }

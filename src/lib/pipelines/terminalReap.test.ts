@@ -710,6 +710,15 @@ test("finished attempts are swept as the pipeline advances and later rounds reop
   savePipelines([parked]);
 
   await tickPipelines([], h.ports);
+  expect(h.stops).toEqual(["implement:1:conversation_finished"]);
+
+  const resumed = loadPipelines()[0]!;
+  resumed.runs[0]!.attempts.push(attempt(3, "conversation_replacement", false));
+  resumed.state = "running";
+  h.resident.set("conversation_replacement", true);
+  h.active.set("conversation_replacement", true);
+  savePipelines([resumed]);
+  await tickPipelines([], h.ports);
 
   expect(h.stops).toEqual([
     "implement:1:conversation_finished",
@@ -852,11 +861,12 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
   // first sweep and is still held when the finished host is finally retired.
   const drained = named.startsWith(DRAINED);
   const scenario = drained ? named.slice(DRAINED.length) : named;
+  const failedRetry = scenario.startsWith("failed-retry:");
   const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
   const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
   const { procBackend } = await import("@/lib/proc");
   const { systemBootEpoch } = await import("@/lib/processIdentity");
-  const { defaultPipelinePorts } = await import("./engine");
+  const { defaultPipelinePorts, patchPipeline } = await import("./engine");
   const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
   const { runtimeHostClient } = await import("@/lib/runtime/client");
   const { RuntimeJournal } = await import("../../runtime-host/journal");
@@ -911,11 +921,19 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
     }
     if (failure === "readiness") throw new Error("injected readiness failure");
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      // The host fence checks the liveness of its lock owner with signal zero.
+      if (signal === 0) return originalKill.call(process, pid, signal);
       signals.push(pid);
       if (pid !== recordedPid && pid !== helperPid) throw new Error("fixture refused a signal to an unrecorded process");
       return originalKill.call(process, pid, signal);
     }) as typeof process.kill;
-    const key = { engine: "codex" as const, sessionId: (await import("node:crypto")).randomUUID() };
+    const { createHash, randomUUID } = await import("node:crypto");
+    // Derive the native UUID from the fixture name so every run binds the same session.
+    const hash = createHash("sha256").update(scenario).digest("hex");
+    const sessionId = failedRetry
+      ? [hash.slice(0, 8), hash.slice(8, 12), `8${hash.slice(13, 16)}`, `8${hash.slice(17, 20)}`, hash.slice(20, 32)].join("-")
+      : randomUUID();
+    const key = { engine: "codex" as const, sessionId };
     const transcript = path.join(root, `${key.sessionId}.jsonl`);
     fs.writeFileSync(transcript, "");
     const registry = registryResource = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
@@ -927,6 +945,7 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
     if (begun.kind !== "created") throw new Error("fixture launch refused");
     const settled = registry.settleSpawn(begun.receipt.launchId, {
       key, artifactPath: transcript, cwd: root, accountId: "account-a", status: "live", host: null,
+      ...(failedRetry ? { structuredHostOperationId: begun.receipt.launchId } : {}),
       structuredHost: { kind: "codex-app-server", endpoint: "stdio", process: {
         pid: recordedPid, startIdentity: procBackend.processIdentity(recordedPid), bootEpoch: systemBootEpoch(),
       }, eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1,
@@ -1017,6 +1036,7 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
     };
     let observedIdle = false;
     let actuationChecked = false;
+    let retryRequested = false;
     let recovered = false;
     let seatAcquired = false;
     let ownershipAcquired = false;
@@ -1084,6 +1104,13 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
         }
         return response;
       }
+      if (request.method === "session-read" && retryRequested && scenario === "failed-retry:resumed" && !actuationChecked) {
+        const response = await host.handle(request, options);
+        actuationChecked = true;
+        publish(true);
+        setRegistryBusy(true);
+        return response;
+      }
       if (request.method === "operation-status" && scenario === "seat-before-signal" && !recovered && !seatAcquired) {
         // First authority read admits the idle host. Acquire a seat at the
         // ladder's next async boundary, after its process tree was captured.
@@ -1134,9 +1161,77 @@ async function socketScenario(named: string, failure?: SetupFailure, ownership: 
     const { activeDrain, drainFile, writeDrain } = await import("@/lib/selfUpdate/drain");
     if (drained) writeDrain(drainFile(), { id: "fixture-drain", target: "fixture-update",
       since: new Date(Date.now() - 60_000).toISOString(), until: 0, persistent: true });
-    await tick();
+    if (!failedRetry) await tick();
     expect(commands).toEqual([]);
     await bindStructuredDeliveryQueue([], { registry, client: runtimeHostClient(), recover: async () => null });
+    if (failedRetry) {
+      const turn = scenario.slice("failed-retry:".length);
+      const idle = turn === "idle" || turn === "resumed";
+      publish(!idle);
+      setRegistryBusy(!idle);
+      if (turn === "unknown") {
+        setRegistryBusy(false);
+        journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status",
+          payload: { ...payload, turn: "unknown", activeTurnId: null } });
+      }
+      const failed: PipelineStageAttempt = { ...finished, state: "needs_decision", sessionId: key.sessionId, verdict: null,
+        error: "stage cut by provider error after 0 tries; last: provider rejected the request" };
+      const lane = pipelineRecord({ id: "failed-retry", state: "needs_decision", attempts: [failed] });
+      lane.stateDetail = failed.error;
+      lane.cursor = { stageId: "implement", state: "running", input: null, activatedBy: null };
+      lane.repoDir = path.join(root, "repository");
+      Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir));
+      savePipelines([lane]);
+      const read = () => loadPipelines()[0]!;
+      const originalAttempt = read().runs[0]!.attempts[0]!;
+      const oldRevision = journal.readSession({ conversationId })!.revision;
+      const production = defaultPipelinePorts();
+      let stopResult: PipelineStageStopResult | undefined;
+      const ports = { ...harness().ports, spawnReceipt: production.spawnReceipt,
+        conversationHostProcess: production.conversationHostProcess,
+        conversationDeliveryOutstanding: production.conversationDeliveryOutstanding,
+        stopStageAgent: async (...args: Parameters<PipelinePorts["stopStageAgent"]>) => {
+          stopResult = await production.stopStageAgent(...args);
+          return stopResult;
+        },
+        now: () => "2026-07-31T00:20:00.000Z" };
+      expect(ports.spawnReceipt(begun.receipt.launchId)).toMatchObject({ state: "completed", conversationId, generationMatches: true });
+      expect(await ports.conversationHostProcess!(conversationId)).toMatchObject({ state: "alive", pid: recordedPid });
+      retryRequested = true;
+      const retried = await patchPipeline(lane.id, { action: "retry-stage", expectedStageId: "implement", expectedAttempt: 1 }, ports);
+      if (turn === "idle") {
+        const [kill] = commands as Array<{ operationId: string }>;
+        const operation = kill && journal.operationResult(kill.operationId);
+        expect(retried.error, JSON.stringify({ stopResult, receipt: operation?.receipt.status, reason: operation?.receipt.reason })).toBeUndefined();
+        await child.exited;
+        expect(procBackend.pidAlive(recordedPid)).toBe(false);
+        expect(signals).toEqual([recordedPid]);
+        expect(read().state).toBe("running");
+        expect(read().cursor).toMatchObject({ stageId: "implement", state: "pending" });
+        expect(commands).toEqual([expect.objectContaining({ kind: "kill", conversationId, sessionKey: key,
+          onlyIfIdle: { revision: oldRevision, writerClaim: payload.writerClaim } })]);
+        expect(journal.operationResult(kill!.operationId)?.receipt).toMatchObject({
+          conversationId, kind: "kill", status: "delivered", origin: "system", originAuthenticated: true,
+        });
+        await tickPipelines([], { ...ports, structuredDeliveryPublication: () => "unbound" });
+        expect(read().runs[0]!.attempts).toEqual([
+          originalAttempt, expect.objectContaining({ n: 2, state: "pending", launchId: null, conversationId: null }),
+        ]);
+      } else {
+        expect(retried).toMatchObject({ status: 409, error: "the failed attempt still has a live stage host; retry was cancelled" });
+        expect(read().state).toBe("needs_decision");
+        expect(read().cursor).toEqual(lane.cursor);
+        expect(read().runs[0]!.attempts).toEqual([originalAttempt]);
+        expect(procBackend.pidAlive(recordedPid)).toBe(true);
+        expect(signals).toEqual([]);
+        if (turn === "resumed") {
+          expect(actuationChecked).toBe(true);
+          expect(journal.readSession({ conversationId })).toMatchObject({ turn: "running", activeTurnId: "resumed-live-turn" });
+          expect(commands.every(command => !!(command as { onlyIfIdle?: unknown }).onlyIfIdle)).toBe(true);
+        } else expect(commands).toEqual([]);
+      }
+      return;
+    }
     if (helperPid !== null) {
       const { bindCodexHostPersistence } = await import("@/lib/runtime/registry");
       type HostState = import("@/lib/runtime/engineHost").HostState;
@@ -1346,6 +1441,13 @@ test.each(socketScenarios)("automatic retirement over the production socket: %s"
   if (!socketChild) return isolatedSocketCase(`automatic retirement over the production socket: ${scenario}`);
   await socketScenario(scenario);
   process.stdout.write(`socket case completed: automatic retirement over the production socket: ${scenario}\n`);
+}, 15_000);
+
+test.each(["idle", "running", "unknown", "resumed"] as const)("retry-stage with a failed attempt's %s host", async turn => {
+  const name = `retry-stage with a failed attempt's ${turn} host`;
+  if (!socketChild) return isolatedSocketCase(name);
+  await socketScenario(`failed-retry:${turn}`);
+  process.stdout.write(`socket case completed: ${name}\n`);
 }, 15_000);
 
 test.each(drainedScenarios)("an update drain keeps automatic retirement's protections: %s", async (scenario) => {
