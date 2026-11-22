@@ -15,7 +15,7 @@ test("an internal terminal pass an older build left waiting on publication close
   waiting.stateDetail = "passed but unpublished: the delivery remote is unavailable";
   const delivery = waiting.delivery!;
   delivery.operation = { id: "legacy-publication", epoch: delivery.epoch, sha: accepted, state: "settled",
-    at, passedStage: true, result: { ok: true, remote: "unavailable", sha: accepted } };
+    passedStage: true, result: { ok: true, remote: "unavailable", sha: accepted } };
 
   /* An explicitly internal lane can settle a previously waiting pass locally. */
   waiting.publication = "internal";
