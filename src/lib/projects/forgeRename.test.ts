@@ -2,6 +2,7 @@ import { afterAll, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ForgeRenameCandidate } from "./forgeRename";
 const restore = { HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL };
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-shared-forge-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -11,7 +12,7 @@ process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 const { canonicalProject, recordProjectRemote, recordedProjectRemote, resetProjectAliasesForTests } = await import("./aliases");
 const { projectIdentityFromRemote } = await import("./identity");
 const { setShared, sharedProjects, knownProjects, patchShared } = await import("../links/state");
-const { forgeRenameCandidate, githubRepositoryLookup, scheduleForgeRenames, setForgeLookupForTests, forgeRenamesSettledForTests, resetForgeRenameDecisionsForTests } = await import("./forgeRename");
+const { githubRepositoryLookup, scheduleForgeRenames, setForgeLookupForTests, forgeRenamesSettledForTests, resetForgeRenameDecisionsForTests } = await import("./forgeRename");
 const old = projectIdentityFromRemote("https://github.com/example/old-repo.git", "/")!;
 const current = projectIdentityFromRemote("https://github.com/example/current-repo.git", "/")!;
 let sequence = 0;
@@ -120,17 +121,17 @@ test("invalid JSON shapes report invalid response and retain local project ident
 });
 
 test("rename retries above the bookkeeping cap stay deferred through cooldown", async () => {
-  const candidates = Array.from({ length: 1_025 }, (_, index) => {
+  const candidates = Array.from({ length: 1_025 }, (_, index): ForgeRenameCandidate => {
     const source = projectIdentityFromRemote(`https://github.com/example/old-${index}.git`, "/")!;
     const target = projectIdentityFromRemote(`https://github.com/example/new-${index}.git`, "/")!;
-    recordProjectRemote(source);
-    return forgeRenameCandidate(source.project, target)!;
+    return { source: source.project, sourceRemote: source.canonicalRemote,
+      target: target.project, targetRemote: target.canonicalRemote, displayName: target.displayName };
   });
   let calls = 0;
   const lookedUp = new Set<string>();
   setForgeLookupForTests(async name => { calls++; lookedUp.add(name); return { status: "unreachable" }; });
   const realNow = Date.now;
-  let now = realNow();
+  let now = Date.parse("2026-09-23T10:00:00Z");
   Date.now = () => now;
   try {
     scheduleForgeRenames(candidates);
@@ -141,6 +142,7 @@ test("rename retries above the bookkeeping cap stay deferred through cooldown", 
       await forgeRenamesSettledForTests();
       expect(calls).toBe(2_048);
     }
+    expect(lookedUp.has("example/old-1024")).toBe(false);
     now += 3 * 60_000 + 1;
     scheduleForgeRenames(candidates);
     await forgeRenamesSettledForTests();

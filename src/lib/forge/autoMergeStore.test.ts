@@ -413,10 +413,13 @@ describe("global merge admission", () => {
     } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
   });
 
-  test("TLS read diagnostics do not admit Git-only landing for a linked PR", async () => {
+  test.each([
+    ["DNS lookup", "error connecting to api.github.com: lookup api.github.com: no such host", "DNS lookup failed"],
+    ["TLS hostname mismatch", "connection failed: tls: failed to verify certificate: x509: certificate is valid for example.invalid, not api.github.com", "certificate verification failed"],
+  ])("%s keeps the linked PR's ref and task open", async (_case, stderr, reason) => {
     resetAutoMergeForTests();
     setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
-    const fixture = gitOnlyFixture("git-only-linked-tls");
+    const fixture = gitOnlyFixture("git-only-linked-read-refused");
     try {
       const taskId = markedTask(fixture.lane);
       fixture.lane.delivery!.target.pr = 17;
@@ -428,21 +431,20 @@ describe("global merge admission", () => {
         run: async () => {
           reads++;
           throw Object.assign(new Error("Command failed: gh pr view"), {
-            code: 1, stderr: "proxyconnect tcp: tls: failed to verify certificate: x509: unknown authority",
+            code: 1, stderr,
           });
         } });
-      for (let failure = 1; failure <= 3; failure++) {
+      for (let poll = 0; poll < 3; poll++) {
         await sweepAutoMerge(ports);
-        expect(loadPipelines()[0]!.merge?.state).toBe(failure === 3 ? "blocked" : "queued");
-        if (failure < 3) {
-          const nextReadAt = Date.parse(loadPipelines()[0]!.merge!.nextReadAt!);
-          clock += nextReadAt - clock;
-        }
+        await sweepTaskFinishes(ports);
+        clock += MERGE_POLL_MS;
       }
-      expect(reads).toBe(3);
-      expect(loadPipelines()[0]!.merge?.reason).toContain("network request failed");
-      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
-      expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
+      expect({
+        ref: fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main"),
+        task: loadTasks().find(task => task.id === taskId)?.status,
+        reads,
+      }).toEqual({ ref: fixture.base, task: "inbox", reads: 3 });
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: expect.stringContaining(reason) });
     } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
   });
 

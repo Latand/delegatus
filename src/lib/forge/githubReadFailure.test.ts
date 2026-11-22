@@ -73,15 +73,41 @@ test("an unknown gh exit logs only a bounded scrubbed excerpt and a remedy", () 
 });
 
 test.each([
+  ["gh: unknown flag: --private-account-handle", "unknown flag"],
+  ["unknown option --private-account-handle", "unknown option"],
+  ["unexpected output: unknown option --private-account-handle", "details withheld for privacy"],
+])("only an actual unknown option diagnostic supplies a fixed phrase: %s", (stderr, excerpt) => {
+  const error = { code: 17, stderr };
+  const reason = `GitHub read failed (exit 17): ${excerpt}`;
+  expect(githubReadFailure(error)).toEqual({ reason, transient: false });
+  expect(githubReadDiagnostic(error)).toEqual({
+    cause: "command-error",
+    message: `${reason}. Check the gh installation and configuration, then retry.`,
+  });
+});
+
+test.each([
   "proxyconnect tcp: tls: failed to verify certificate: x509: certificate signed by unknown authority",
   "certificate verify failed: x509: unknown authority",
-])("classifies TLS verification failures as network errors: %s", stderr => {
+  "connection failed: tls: failed to verify certificate: x509: certificate is valid for example.invalid, not api.github.com",
+])("diagnoses TLS verification failures ahead of transport text: %s", stderr => {
   const error = Object.assign(new Error("Command failed: gh api"), { code: 1, stderr });
   expect(githubReadDiagnostic(error)).toEqual({
-    cause: "network",
-    message: "GitHub network request failed. Check connectivity, DNS and proxy settings, then retry.",
+    cause: "certificate",
+    message: "GitHub TLS certificate verification failed. Check the system trust store and proxy certificate configuration, then retry.",
   });
   expect(githubReadFailure(error).transient).toBe(false);
+});
+
+test("Go DNS failures are actionable without admitting transient merge fallback", () => {
+  const error = { code: 1, stderr: "network connection failed: lookup example.invalid: no such host" };
+  expect(githubReadDiagnostic(error)).toEqual({
+    cause: "dns",
+    message: "GitHub DNS lookup failed. Check DNS and proxy settings, then retry.",
+  });
+  expect(githubReadFailure(error)).toEqual({
+    reason: "GitHub DNS lookup failed: details withheld for privacy", transient: false,
+  });
 });
 
 test.each([

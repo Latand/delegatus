@@ -193,16 +193,23 @@ describe("the sweep", () => {
   });
 
   test("old gh falls back to GraphQL and preserves closing issue links", async () => {
-    const h = harness((args) => {
+    const delivery = { target: { repository: "repo-fixture", remote: `https://github.com/${REPO}.git`, branch: "main", pr: 8 } } as Pipeline["delivery"];
+    const h = harness(args => {
       if (args[0] === "api" && args[1] === "graphql") return { data: { repository: { p0: { closingIssuesReferences: { nodes: [{ number: 42, url: "https://github.com/acme/widgets/issues/42" }], pageInfo: { hasNextPage: false } } } } } };
       if (args.at(-1)?.includes("closingIssuesReferences")) return Object.assign(new Error("Unknown JSON field: closingIssuesReferences"), { stderr: 'Unknown JSON field: "closingIssuesReferences"' });
+      if (args[1] === "view") return row({ number: 8 });
       const legacy = row({ number: 7, headRefName: "pipeline/lane-a" });
       delete (legacy as Partial<typeof legacy>).closingIssuesReferences;
       return [legacy];
-    });
+    }, { pipelines: [lane({ delivery })] });
     expect(await h.sweep()).toEqual([REPO]);
-    expect(h.calls.map((args) => args.slice(0, 2))).toEqual([["pr", "list"], ["pr", "list"], ["api", "graphql"]]);
+    expect(h.calls.map(args => args.slice(0, 2))).toEqual([
+      ["pr", "list"], ["pr", "list"], ["api", "graphql"],
+      ["pr", "view"], ["pr", "view"], ["api", "graphql"],
+    ]);
     expect(entry().prs["7"]).toMatchObject({ closes: [42], headRefName: "pipeline/lane-a", state: "open" });
+    expect(entry().prs["8"]).toMatchObject({ closes: [42], state: "open" });
+    expect(entry().lastError).toBeNull();
     expect(entry().canonical).toBe(REPO);
   });
 
@@ -347,9 +354,9 @@ describe("the sweep", () => {
   test.each([
     ["missing CLI", "ENOENT", "", "gh) not found on PATH", "Install gh"],
     ["no login", 1, "To get started with GitHub CLI, please run: gh auth login", "authentication failed", "GH_CONFIG_DIR"],
-    ["network", 1, "error connecting to api.github.com: lookup api.github.com: no such host", "network request failed", "Check connectivity"],
-    ["TLS certificate", 1, "proxyconnect tcp: tls: failed to verify certificate: x509: certificate signed by unknown authority", "network request failed", "Check connectivity"],
-    ["other exit", 17, "unknown flag --fixture", "(exit 17): unknown flag --fixture", "Check the gh installation"],
+    ["DNS", 1, "error connecting to api.github.com: lookup api.github.com: no such host", "DNS lookup failed", "Check DNS"],
+    ["TLS certificate", 1, "proxyconnect tcp: tls: failed to verify certificate: x509: certificate signed by unknown authority", "certificate verification failed", "Check the system trust store"],
+    ["other exit", 17, "unknown flag --fixture", "(exit 17): unknown flag.", "Check the gh installation"],
   ] as const)("%s logs a remedy, keeps cached links and retries on cooldown", async (_name, code, stderr, cause, remedy) => {
     let fail = false;
     const error = Object.assign(new Error("Command failed: gh"), { code, stderr });
@@ -401,12 +408,15 @@ describe("the sweep", () => {
     for (const fragment of privateFragments) expect(logs[0]).not.toContain(fragment);
   });
 
-  test("a numbered PR fill failure keeps list evidence and waits through a nudge cooldown", async () => {
+  test.each([
+    ["command failure", Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }), "command-failed", "network request failed"],
+    ["empty object", {}, "malformed-output", "invalid response"],
+  ] as const)("a numbered PR fill with %s keeps list evidence and waits through a nudge cooldown", async (_case, failure, code, diagnostic) => {
     let fillFails = true;
     const linked = lane({ delivery: { target: { repository: "repo-fixture", remote: `https://github.com/${REPO}.git`, branch: "main", pr: 8 } } as Pipeline["delivery"] });
     const h = harness(args => {
       if (args[0] === "pr" && args[1] === "view") {
-        if (fillFails) return Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" });
+        if (fillFails) return failure;
         return row({ number: 8 });
       }
       return [row({ number: 7 })];
@@ -415,20 +425,78 @@ describe("the sweep", () => {
     h.ports.log = (message, detail) => { logs.push(`${message} ${detail ?? ""}`); };
     await h.sweep();
     expect(entry().prs["7"]).toBeDefined();
-    expect(entry()).toMatchObject({ lastError: "command-failed", prs: { "7": expect.anything() } });
-    expect(logs.join(" ")).toContain("network request failed");
+    expect(entry()).toMatchObject({ lastError: code, prs: { "7": expect.anything() }, issues: {} });
+    expect(entry().prs["8"]).toBeUndefined();
+    expect(logs).toEqual([expect.stringContaining(diagnostic)]);
 
-    h.advance(30_000);
-    await h.sweep();
+    resetForgeCacheForTests();
+    nudgeForgeSweep(REPO, T0);
+    h.advance(FORGE_RETRY_MS - 1);
+    expect(await h.sweep()).toEqual([]);
     expect(h.calls.filter(args => args[1] === "view")).toHaveLength(1);
     expect(entry().prs["7"]).toBeDefined();
 
     fillFails = false;
-    h.advance(FORGE_RETRY_MS - 30_000);
+    h.advance(1);
     await h.sweep();
     expect(h.calls.filter(args => args[1] === "view")).toHaveLength(2);
     expect(entry().prs["8"]).toBeDefined();
     expect(entry().lastError).toBeNull();
+  });
+
+  test.each([false, true])("a slow read failure waits from completion (numbered fill: %s)", async fill => {
+    const duration = FORGE_RETRY_MS + 1;
+    const link = { target: { repository: "repo-fixture", remote: `https://github.com/${REPO}.git`, branch: "main", pr: 8 } } as Pipeline["delivery"];
+    let fail = true;
+    const h = harness(args => {
+      if (fill && args[1] === "list") return [row({ number: 7 })];
+      if (!fail) return fill ? row({ number: 8 }) : [row({ number: 7 })];
+      h.advance(duration);
+      return Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" });
+    }, { pipelines: [lane({ ...(fill ? { delivery: link } : {}) })] });
+    expect(await h.sweep()).toEqual([REPO]);
+    resetForgeCacheForTests();
+    const finishedAt = new Date(T0 + duration).toISOString();
+    expect(entry()).toMatchObject({ lastError: "timed-out", lastAttemptAt: finishedAt,
+      lastSweepAt: fill ? new Date(T0).toISOString() : null });
+    if (fill) expect(entry().prs["7"]?.checkedAt).toBe(new Date(T0).toISOString());
+    const calls = h.calls.length;
+    fail = false;
+    expect(await h.sweep()).toEqual([]);
+    h.advance(FORGE_RETRY_MS - 1);
+    expect(await h.sweep()).toEqual([]);
+    expect(h.calls).toHaveLength(calls);
+    h.advance(1);
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(entry().lastError).toBeNull();
+  });
+
+  test.each([
+    ["DNS failure", Object.assign(new Error("Command failed: gh api"), {
+      code: 1, stderr: "error connecting to api.github.com: lookup api.github.com: no such host",
+    }), "command-failed", "DNS lookup failed"],
+    ["null PR node", { data: { repository: { p0: null } } }, "malformed-output", "invalid response"],
+    ["PR lookup failure", new Error("Could not resolve to a PullRequest"), "command-failed", "repository data was not found"],
+  ] as const)("legacy GraphQL %s keeps its failure classification in list and fill", async (_case, answer, code, diagnostic) => {
+    for (const method of ["list", "view"]) {
+      clearForgeCacheForTests(file);
+      resetForgeCacheForTests();
+      const delivery = { target: { repository: "repo-fixture", remote: `https://github.com/${REPO}.git`, branch: "main", pr: 8 } } as Pipeline["delivery"];
+      const h = harness(args => {
+        if (args[0] === "api") return answer;
+        if (args[1] !== method) return [row({ number: 7 })];
+        if (args.at(-1)?.includes("closingIssuesReferences")) return new Error("Unknown JSON field: closingIssuesReferences");
+        return method === "list" ? [row({ number: 7 })] : row({ number: 8 });
+      }, { pipelines: [lane({ delivery })] });
+      const logs: string[] = [];
+      h.ports.log = (message, detail) => { logs.push(`${message} ${detail ?? ""}`); };
+      expect(await h.sweep()).toEqual([REPO]);
+      expect(h.calls.at(-1)?.slice(0, 2)).toEqual(["api", "graphql"]);
+      expect(entry().lastError).toBe(code);
+      expect(logs).toEqual([expect.stringContaining(diagnostic)]);
+      expect(Object.keys(entry().prs)).toEqual(method === "list" ? [] : ["7"]);
+      expect(entry().issues).toEqual({});
+    }
   });
 
   test.each(["[null]", "graphql-null"])("malformed legacy read %s reports invalid response without losing cache", async malformed => {

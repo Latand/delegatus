@@ -4,7 +4,7 @@ import { redactBounded } from "@/lib/monitor/redact";
 import { ForgeAppWriteRefused } from "./appWrite";
 
 type ReadFailureCause = "gh-not-found" | "app-refused" | "not-found" | "timed-out" | "rate-limited"
-  | "unauthenticated" | "invalid-response" | "network" | "command-error";
+  | "unauthenticated" | "invalid-response" | "dns" | "certificate" | "network" | "command-error";
 
 function classifyGithubReadFailure(error: unknown) {
   const detail = error as { stderr?: unknown; message?: unknown; code?: unknown; killed?: unknown; signal?: unknown; timeoutMs?: unknown } | null;
@@ -42,6 +42,12 @@ function classifyGithubReadFailure(error: unknown) {
       return failure(category, label, category === "rate-limited" || category === "network", safe);
     }
   }
+  // These diagnostics can also contain generic transport words. Keep them
+  // out of the transient set used by the Git-only landing fallback.
+  if (/failed to verify certificate|certificate verify failed|x509:/i.test(raw)) {
+    return failure("certificate", "GitHub TLS certificate verification failed");
+  }
+  if (/\bno such host\b/i.test(raw)) return failure("dns", "GitHub DNS lookup failed");
   if (status === "404" || (!status && /could not resolve to a (?:repository|pullrequest)\b/i.test(raw))) return failure("not-found", "GitHub read not found");
   if (detail?.code === "ETIMEDOUT" || (detail?.killed === true && (detail.signal === "SIGTERM" || detail.signal === "SIGKILL"))
     || (!status && /timed?\s*out|timeout|deadline exceeded/i.test(raw))) {
@@ -61,16 +67,16 @@ function classifyGithubReadFailure(error: unknown) {
   if (error instanceof SyntaxError || /parsable|parse|malformed|invalid.*(?:json|response)|unexpected.*(?:json|token)|returned no /i.test(raw)) {
     return failure("invalid-response", "GitHub read invalid response");
   }
-  if (status?.startsWith("5") || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|network|socket hang up|TLS handshake|connection|service unavailable|no such host|could not resolve host|could not be reached/i.test(`${detail?.code ?? ""}\n${raw}`)) {
+  if (status?.startsWith("5") || /ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|network|socket hang up|TLS handshake|connection|service unavailable|could not resolve host|could not be reached/i.test(`${detail?.code ?? ""}\n${raw}`)) {
     return failure("network", "GitHub read temporarily unavailable", true);
   }
-  if (/failed to verify certificate|certificate verify failed|x509:/i.test(raw)) return failure("network", "GitHub network request failed", false);
   const code = typeof detail?.code === "number" ? ` (exit ${detail.code})`
     : typeof detail?.code === "string" && /^[A-Z][A-Z_]+$/.test(detail.code) ? ` (${detail.code})` : "";
   // Preserve only known CLI phrases; arbitrary stderr can contain identities,
   // repository names, and paths that the general monitor redactor misses.
-  const safeExcerpt = /unknown (?:flag|option)(?:\s+--[a-z][a-z0-9-]{0,30})?/i.exec(line)?.[0]
-    ?? (/^CLI invocation refused$/i.test(line) ? line : "details withheld for privacy");
+  const unknownSwitch = /^unknown (flag|option)(?=[:\s]|$)/i.exec(line)?.[1]?.toLowerCase();
+  const safeExcerpt = unknownSwitch ? `unknown ${unknownSwitch}`
+    : /^CLI invocation refused$/i.test(line) ? "CLI invocation refused" : "details withheld for privacy";
   return failure("command-error", `GitHub read failed${code}`, false, safeExcerpt);
 }
 
@@ -87,6 +93,8 @@ export function githubReadDiagnostic(error: unknown): { cause: ReadFailureCause;
   const messages: Record<Exclude<ReadFailureCause, "command-error">, string> = {
     "gh-not-found": "GitHub CLI (gh) not found on PATH. Install gh or add it to the Viewer service PATH.",
     "unauthenticated": "GitHub authentication failed. Run `gh auth login` with the Viewer's GH_CONFIG_DIR or check the configured GitHub App credentials.",
+    dns: "GitHub DNS lookup failed. Check DNS and proxy settings, then retry.",
+    certificate: "GitHub TLS certificate verification failed. Check the system trust store and proxy certificate configuration, then retry.",
     network: "GitHub network request failed. Check connectivity, DNS and proxy settings, then retry.",
     "app-refused": "GitHub App read refused. Check the App installation and credentials for this repository.",
     "not-found": "GitHub repository data was not found. Check the remote and repository access.",
