@@ -121,7 +121,12 @@ test.each(["foreign-root", "foreign-nested", "changed-output", "missing-record",
   if (change === "damaged-record") writeFileSync(marker, "{");
   const refused = h.start();
   expect(refused.state).toBe("failed");
-  expect(refused.steps.find(step => step.name === "checkout")?.state).toBe("failed");
+  expect(refused.steps.find(step => step.name === "checkout")).toMatchObject({
+    state: "failed",
+    exitCode: null,
+    failure: { kind: "error", text: "Existing release has ignored contents that cannot be proven generated; checkout was refused" },
+    tail: ["Existing release has ignored contents that cannot be proven generated; checkout was refused"],
+  });
   expect(refused.calls).toEqual([]);
   expect(readFileSync(join(h.root, "logs", "checkout.log"), "utf8")).toContain("cannot be proven generated");
   expect(readFileSync(h.pointerFile, "utf8")).toBe(h.rollback);

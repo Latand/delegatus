@@ -28,7 +28,7 @@ export function applyCheck(previous: CheckSlice, outcome: CheckOutcome, now: Dat
     installed: outcome.installed,
     available,
     check: {
-      state: available ? "update-available" : "up-to-date",
+      state: available ? "update-available" : outcome.greenTip ? "no-green" : "up-to-date",
       at,
       error: null,
       errorCode: null,
@@ -37,6 +37,7 @@ export function applyCheck(previous: CheckSlice, outcome: CheckOutcome, now: Dat
       ahead: outcome.ahead,
       behind: outcome.behind,
       delta: available ? outcome.delta : null,
+      ...(outcome.greenTip ? { greenTip: outcome.greenTip } : {}),
     },
   };
 }

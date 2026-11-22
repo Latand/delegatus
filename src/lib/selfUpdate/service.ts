@@ -444,9 +444,11 @@ export class SelfUpdateService {
 
   private async autoView(decision: ModeDecision, snapshot: Snapshot, auto: AutoState = this.auto): Promise<AutoView> {
     if (this.disabledByAdmin) return { availability: "disabled-by-admin", enabled: false, off: null, phase: "idle", target: null, green: null, blockers: null, waitingSince: null, longWait: false, decision: null, drain: null };
-    const built = snapshot.installed.sha;
+    const built = snapshot.installed;
     const target = auto.off ? (this.described.get(auto.off.target) ?? { ...UNKNOWN_REVISION, sha: auto.off.target, short: shortSha(auto.off.target) })
-      : auto.drain ? auto.drain.target : auto.managedPending?.target ?? this.slice.available ?? (built && (snapshot.serving.web?.sha !== built || snapshot.serving.runtimeHost?.sha !== built) ? snapshot.installed : null);
+      : auto.drain ? auto.drain.target : auto.managedPending?.target ?? this.slice.available
+        ?? (built.sha && (snapshot.serving.web?.short !== built.short || snapshot.serving.runtimeHost?.short !== built.short) ? built : null);
+    const noGreen = snapshot.check.state === "no-green" ? snapshot.check.greenTip : undefined;
     const sha = target?.sha ?? null;
     const pending = auto.pending;
     const managedPending = auto.managedPending;
@@ -454,10 +456,12 @@ export class SelfUpdateService {
       : pending ? pending.role === "web" ? "restarting-web" : "restarting-host"
       : managedPending || decision.mode === "managed" && snapshot.update.state === "running" && snapshot.update.trigger === "auto" ? "deploying"
       : snapshot.update.state === "running" && snapshot.update.trigger === "auto" ? "building"
+      : noGreen && !target ? "not-green"
       : sha && auto.green[sha] && auto.green[sha].state !== "green" ? "not-green"
       : auto.waitingSince ? "waiting"
       : sha && !auto.green[sha] ? "checks" : "idle";
-    return { availability: (await this.autoAvailability(decision)), enabled: auto.enabled, off: auto.off, phase, target, green: sha ? auto.green[sha] ?? null : null,
+    return { availability: (await this.autoAvailability(decision)), enabled: auto.enabled, off: auto.off, phase,
+      target: target ?? noGreen?.revision ?? null, green: sha ? auto.green[sha] ?? (this.slice.available?.sha === sha && snapshot.check.greenTip ? { state: "green" } : null) : noGreen?.verdict ?? null,
       blockers: phase === "waiting" ? this.autoBlockers ?? auto.lastBlockers : null,
       deferred: auto.deferred ?? null,
       waitingSince: auto.waitingSince, longWait: auto.enabled && !auto.drain?.admitted && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_NOTICE_MS,
@@ -472,6 +476,7 @@ export class SelfUpdateService {
   /** Re-read durable facts on every pass. A web restart replaces this object
       between the two restart requests, so no in-memory phase is authoritative. */
   async autoTick(): Promise<void> {
+    if (this.stopped) return;
     // Renew accepted custody, or expire waiting, even while an earlier
     // GitHub or host observation awaits. I/O cannot extend the waiting bound.
     try { this.refreshDrain(); }
@@ -521,6 +526,7 @@ export class SelfUpdateService {
     if (this.auto.managedPending && this.managed && !managedActive(this.managed)) this.finishManagedAuto();
     if (!this.autoEnabled && !this.hasAutoCustody()) return;
     const decision = await this.decide();
+    if (!this.hasAutoCustody() && this.checking) return;
     // Older releases could admit a cohort without ever filing an operation.
     // Release that orphan only when no durable work still owns its custody.
     if (this.unsafeLegacyAuto(decision) && this.auto.drain?.admitted && !this.auto.pending
@@ -609,6 +615,7 @@ export class SelfUpdateService {
     }
     if (!this.autoEnabled && !this.hasAutoCustody()) return;
     if ((await this.autoAvailability(decision)) !== "available" || (!this.autoEnabled && !this.hasAutoCustody()) || this.auto.pending) return;
+    this.followCheckedTarget(snapshot);
     const staleBuilt = snapshot.installed.sha && (snapshot.serving.web?.short !== snapshot.installed.short || snapshot.serving.runtimeHost?.short !== snapshot.installed.short);
     const target = this.auto.drain ? this.auto.drain.target : this.slice.available ?? ((staleBuilt || this.auto.waitingSince) ? snapshot.installed : null);
     if (!target?.sha) return;
@@ -633,7 +640,8 @@ export class SelfUpdateService {
       if (snapshot.busy || this.checking || snapshot.check.state === "checking" || needsMemory()) return;
       green = await this.refreshGreen(target.sha, record.checkout!, green);
       const admissionSnapshot = await this.snapshot();
-      if (green.state !== "green" || (!this.autoEnabled && !this.hasAutoCustody()) || this.auto.pending || (!this.draining() && this.slice.available?.sha !== target.sha)
+      if (this.stopped || green.state !== "green" || (!this.autoEnabled && !this.hasAutoCustody()) || this.auto.pending
+        || ((!this.draining() || this.slice.check.greenTip) && this.slice.available?.sha !== target.sha)
         || this.active() || admissionSnapshot.busy || this.checking || admissionSnapshot.check.state === "checking" || needsMemory()) return;
       const runner = this.runnerFor(record);
       if (!this.auto.rollbackCaptured) {
@@ -733,14 +741,35 @@ export class SelfUpdateService {
   }
 
   private async autoGreen(target: string, repo: string, now: number): Promise<GreenVerdict> {
-    let green = this.auto.green[target] ?? null;
+    let green = this.auto.green[target] ?? (this.slice.available?.sha === target && this.slice.check.greenTip ? { state: "green" as const } : null);
     if (!green || (["pending", "unknown", "red", "untested-tree"].includes(green.state) && (!green.nextAt || Date.parse(green.nextAt) <= now))) {
-      green = await this.greenReader.read(this.deps.remote, this.deps.branch, target, repo, green?.firstReadAt, ["red", "untested-tree"].includes(green?.state ?? ""));
+      green = await this.readTrackedGreen(repo, target, ["red", "untested-tree"].includes(green?.state ?? ""));
       if (["pending", "unknown", "red", "untested-tree"].includes(green.state)) green = { ...green, nextAt: green.nextAt ?? new Date(now + 15 * 60_000).toISOString() };
-      this.auto = { ...this.auto, green: Object.fromEntries(Object.entries({ ...this.auto.green, [target]: green }).slice(-8)) };
-      this.saveAuto();
+      if (!this.stopped) {
+        this.auto = { ...this.auto, green: Object.fromEntries(Object.entries({ ...this.auto.green, [target]: green }).slice(-8)) };
+        this.saveAuto();
+      }
     }
     return green;
+  }
+
+  /** A check can replace a waiting target. A running build or admitted apply
+      keeps its revision, as does a built revision still awaiting activation. */
+  private followCheckedTarget(snapshot: Snapshot): void {
+    const { available, check } = this.slice;
+    const drain = this.auto.drain;
+    if (!drain || !check.greenTip || !this.autoEnabled || this.hasAutoCustody() || this.checking
+      || this.stopped || this.active() || snapshot.busy || drain.target.sha === available?.sha
+      || (snapshot.mode === "checkout" && snapshot.installed.sha === drain.target.sha)) return;
+    if (check.state === "no-green") {
+      this.endDrain();
+      this.auto = { ...this.auto, waitingSince: null, waitingTarget: null, quietSince: null, lastBlockers: null };
+      this.saveAuto();
+    } else if (check.state === "update-available" && available) {
+      this.auto = { ...this.auto, waitingTarget: available.sha, quietSince: null, drain: { ...drain, target: available } };
+      this.saveAuto();
+      this.refreshDrain();
+    }
   }
 
   /** A failed revision that never acquired deployment custody may yield to
@@ -994,6 +1023,7 @@ export class SelfUpdateService {
     if (!this.autoEnabled) return;
     if ((await this.autoAvailability(decision)) !== "available" || !this.autoEnabled || managedActive(this.managed)
       || this.checking || snapshot.check.state === "checking") return;
+    this.followCheckedTarget(snapshot);
     const target = this.draining() ? this.auto.drain!.target : pending?.target ?? this.slice.available;
     if (this.slice.check.state !== "update-available" || !target?.sha || (!this.draining() && this.slice.available?.sha !== target.sha)
       || snapshot.installed.sha === target.sha
@@ -1064,10 +1094,16 @@ export class SelfUpdateService {
   }
 
   private async refreshGreen(target: string, checkout: string, prior: GreenVerdict): Promise<GreenVerdict> {
-    const verdict = await this.greenReader.read(this.deps.remote, this.deps.branch, target, checkout, prior.firstReadAt, true);
+    const verdict = await this.readTrackedGreen(checkout, target, true);
+    if (this.stopped) return verdict;
     this.auto = { ...this.auto, green: { ...this.auto.green, [target]: verdict } };
     this.saveAuto();
+    if (prior.state === "green" && verdict.state !== "green" && this.slice.available?.sha === target && this.slice.check.greenTip) void this.check();
     return verdict;
+  }
+
+  private readTrackedGreen(repo: string, sha: string, fresh = false): Promise<GreenVerdict> {
+    return this.greenReader.read(this.deps.remote, this.deps.branch, sha, repo, undefined, fresh, "tracked-update");
   }
 
   /** The launcher calls this under the held admission gate, immediately before
@@ -1416,7 +1452,17 @@ export class SelfUpdateService {
         const outcome: CheckOutcome = input
           ? await this.deps.check(input)
           : { ok: false, error: "This install cannot check for updates", code: "cannot-check", installed: null };
-        if (epoch === this.comparisonEpoch) this.slice = applyCheck(this.slice, outcome, new Date(this.deps.now()), this.autoEnabled ? 15 : this.deps.pollMinutes);
+        if (!this.stopped && epoch === this.comparisonEpoch) {
+          this.slice = applyCheck(this.slice, outcome, new Date(this.deps.now()), this.autoEnabled ? 15 : this.deps.pollMinutes);
+          if (outcome.ok && outcome.greenTip && outcome.available) {
+            const sha = outcome.available.sha;
+            const { [sha]: previousVerdict, ...recent } = this.auto.green;
+            if (previousVerdict?.state !== "green") {
+              this.auto = { ...this.auto, green: Object.fromEntries(Object.entries({ ...recent, [sha]: { state: "green" as const } }).slice(-8)) };
+              this.saveAuto();
+            }
+          }
+        }
       } catch (error) {
         const failed: CheckOutcome = {
           ok: false,
@@ -1424,15 +1470,17 @@ export class SelfUpdateService {
           ...(error instanceof CheckError ? { code: error.code } : {}),
           installed: null,
         };
-        if (epoch === this.comparisonEpoch) this.slice = applyCheck(this.slice, failed, new Date(this.deps.now()), this.autoEnabled ? 15 : this.deps.pollMinutes);
+        if (!this.stopped && epoch === this.comparisonEpoch) this.slice = applyCheck(this.slice, failed, new Date(this.deps.now()), this.autoEnabled ? 15 : this.deps.pollMinutes);
       } finally {
         this.checking = null;
-        this.undescribable.clear();
-        this.schedulePoll();
-        this.saveNow();
-        this.changes.emit();
-        if (this.recheckPending && !this.stopped) void this.check();
-        if (this.autoEnabled) void this.autoTick();
+        if (!this.stopped) {
+          this.undescribable.clear();
+          this.schedulePoll();
+          this.saveNow();
+          this.changes.emit();
+          if (this.recheckPending) void this.check();
+          if (this.autoEnabled) void this.autoTick();
+        }
       }
     })();
     return this.checking;
@@ -1440,14 +1488,17 @@ export class SelfUpdateService {
 
   private async checkInput(decision: ModeDecision): Promise<CheckInput | null> {
     const { remote, branch } = this.deps;
+    const green = (repo: string) => githubRepositoryOfRemote(remote)
+      ? { readGreen: (sha: string) => this.readTrackedGreen(repo, sha) } : {};
     if (decision.mode === "checkout" && decision.record?.checkout) {
       const installed = (await new ReleasePointer(decision.record.releasePointer, decision.record.checkout).current()).sha || "HEAD";
-      return { repo: decision.record.checkout, remote, branch, installed };
+      return { repo: decision.record.checkout, remote, branch, installed, ...green(decision.record.checkout) };
     }
     if (decision.mode === "managed") {
       const revision = this.deps.web.revision;
       if (!revision) throw new CheckError("no-release-target", "The serving Viewer revision is unknown");
-      return { repo: await this.deps.prepareCheckRepo(), remote, branch, installed: revision, fetchInstalled: true };
+      const repo = await this.deps.prepareCheckRepo();
+      return { repo, remote, branch, installed: revision, fetchInstalled: true, ...green(repo) };
     }
     return null;
   }
@@ -1467,7 +1518,9 @@ export class SelfUpdateService {
   ensureChecked(): void {
     const { check } = this.slice;
     const stale = !check.at || this.deps.now() - Date.parse(check.at) > (this.autoEnabled ? 15 : this.deps.pollMinutes) * 60_000;
-    if (check.state === "idle" || (stale && check.state !== "checking")) void this.check();
+    const oldSelection = !!this.slice.available && !!check.at && !check.greenTip && !!githubRepositoryOfRemote(this.deps.remote)
+      && this.decision?.value.mode !== "package";
+    if (check.state === "idle" || ((stale || oldSelection) && check.state !== "checking")) void this.check();
     else if (!this.pollTimer) this.schedulePoll();
   }
 
@@ -1487,6 +1540,7 @@ export class SelfUpdateService {
       checkout: record.checkout!,
       remote: this.deps.remote,
       branch: this.deps.branch,
+      allowTrackedAncestor: !!githubRepositoryOfRemote(this.deps.remote),
       bun: this.deps.bun,
       logDir: join(this.deps.dir, "steps"),
       releasesDir: record.releasesDir,
@@ -1548,16 +1602,35 @@ export class SelfUpdateService {
       && ((decision.mode === "checkout" && await this.handManagedCheckout(decision.record)) || snapshot.action?.id === "update-first")
       && this.slice.check.relation === "equal" && !!snapshot.installed.sha;
     if (rebuild) available = snapshot.installed;
-    if ((!rebuild && this.slice.check.state !== "update-available") || !available) return refuse(409, "no-update", "No update is available; run a check first");
+    if (!rebuild && available && (decision.mode === "checkout" || decision.mode === "managed") && githubRepositoryOfRemote(this.deps.remote)) {
+      if (!this.slice.check.greenTip || this.checking) await this.check();
+      available = this.slice.available;
+      if (available && this.slice.check.greenTip && this.slice.check.state === "update-available") {
+        const repo = decision.record?.checkout ?? await this.deps.prepareCheckRepo();
+        let green = await this.readTrackedGreen(repo, available.sha, true);
+        if (green.state !== "green" || this.slice.available?.sha !== available.sha || this.checking) {
+          await this.check();
+          available = this.slice.available;
+          if (available && this.slice.check.state === "update-available") green = await this.readTrackedGreen(repo, available.sha, true);
+        }
+        if (available && (green.state !== "green" || this.slice.available?.sha !== available.sha || this.checking))
+          return refuse(409, "deployment-refused", "The checked update changed or could not be confirmed green", green.state);
+      }
+    }
+    if ((!rebuild && this.slice.check.state !== "update-available") || !available)
+      return refuse(409, "no-update", this.slice.check.state === "no-green"
+        ? "No newer green revision was found on the tracked branch" : "No update is available; run a check first");
     if (!/^[a-f0-9]{40}$/.test(available.sha)) return refuse(409, "cannot-update", "The published package names no revision; update it with the package manager it came from");
     if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
-      const refusal = await this.operatorRevisionAdmission(decision.record, available.sha);
+      const refusal = !rebuild && this.slice.check.greenTip ? null : await this.operatorRevisionAdmission(decision.record, available.sha);
       if (refusal) return refusal;
       const fresh = await this.snapshot();
       if (fresh.busy) return busy(fresh.busy);
+      if (this.stopped || (!rebuild && (this.slice.check.state !== "update-available" || this.slice.available?.sha !== available.sha)))
+        return refuse(409, "no-update", "The checked update changed; run a check first");
       return this.startCheckout(decision.record, available);
     }
-    if (decision.mode === "managed") return this.deploy(available, clientKey);
+    if (decision.mode === "managed" && !this.stopped) return this.deploy(available, clientKey);
     return refuse(409, "cannot-update", "This install cannot update itself");
   }
 

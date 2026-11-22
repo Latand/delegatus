@@ -21,6 +21,7 @@ const defaultPorts: GreenPorts = {
 };
 const TIMEOUT_MS = 15_000;
 const WAIT_MS = 90 * 60_000;
+const UPDATE_POLL_MS = 15 * 60_000;
 type RequiredCheck = { name: string; appId: number | null };
 class GitHubReadError extends Error {
   constructor(message: string, readonly nextAt?: string) { super(message); }
@@ -28,6 +29,8 @@ class GitHubReadError extends Error {
 
 export class GreenReader {
   private readonly final = new MeasuredCache<string, GreenVerdict>("verdicts", "selfUpdate/green");
+  private readonly update = new MeasuredCache<string, { verdict: GreenVerdict; until: number }>("update verdicts", "selfUpdate/green");
+  private updateRateLimit: GreenVerdict | null = null;
   private readonly firstPending = new Map<string, number>();
   private readonly required = new Map<string, { at: number; checks: RequiredCheck[] }>();
   constructor(private readonly ports: GreenPorts = defaultPorts) {}
@@ -35,7 +38,8 @@ export class GreenReader {
   private async page(url: string): Promise<{ body: unknown; next: string | null }> {
     const response = await this.ports.fetch(url, { headers: { accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(TIMEOUT_MS) });
     if (!response.ok) {
-      const reset = response.headers.get("x-ratelimit-reset");
+      const limited = response.status === 429 || (response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0");
+      const reset = limited ? response.headers.get("x-ratelimit-reset") : null;
       const nextAt = reset && /^\d+$/.test(reset) ? new Date(Number(reset) * 1000).toISOString() : "";
       throw new GitHubReadError(`GitHub HTTP ${response.status}${nextAt ? `; retry after ${nextAt}` : ""}`, nextAt || undefined);
     }
@@ -110,14 +114,35 @@ export class GreenReader {
     return checks;
   }
   async read(remote: string, branch: string, target: string, checkout: string, firstReadAt?: string, fresh = false,
-    policy: "automatic" | "exact-deploy" = "automatic"): Promise<GreenVerdict> {
+    policy: "automatic" | "exact-deploy" | "tracked-update" = "automatic"): Promise<GreenVerdict> {
     const repository = githubRepositoryOfRemote(remote);
     if (!repository) return { state: "unavailable" };
-    const exactDeploy = policy === "exact-deploy";
+    const trackedUpdate = policy === "tracked-update";
+    const exactDeploy = policy !== "automatic";
+    const updateKey = `${repository}:${branch}:${target}`;
+    if (trackedUpdate) {
+      const cached = this.update.get(updateKey);
+      if (!fresh && cached && cached.until > this.ports.now()) return cached.verdict;
+      if (this.updateRateLimit?.nextAt && Date.parse(this.updateRateLimit.nextAt) > this.ports.now()) return this.updateRateLimit;
+      const verdict = await this.readEvidence(repository, branch, target, checkout, firstReadAt, fresh, true, false);
+      if (verdict.state === "unknown" && verdict.nextAt) this.updateRateLimit = verdict;
+      const until = Math.max(Date.parse(verdict.nextAt ?? "") || 0,
+        this.ports.now() + (verdict.state === "red" ? 4 : 1) * UPDATE_POLL_MS);
+      this.update.delete(updateKey);
+      this.update.set(updateKey, { verdict, until });
+      if (this.update.size > 16) this.update.delete(this.update.keys().next().value!);
+      return verdict;
+    }
+    return this.readEvidence(repository, branch, target, checkout, firstReadAt, fresh, exactDeploy, true);
+  }
+
+  private async readEvidence(repository: string, branch: string, target: string, checkout: string,
+    firstReadAt: string | undefined, fresh: boolean, exactDeploy: boolean, cache: boolean): Promise<GreenVerdict> {
     const cacheKey = exactDeploy ? `${target}:exact-deploy` : target;
-    const cached = this.final.get(cacheKey);
+    const cached = cache ? this.final.get(cacheKey) : undefined;
     if (cached && !fresh) return cached;
     const finish = (verdict: GreenVerdict) => {
+      if (!cache) return verdict;
       // A failed run can be rerun. The next deployment must read its result,
       // including when this fresh failure replaced a previously cached green.
       if (verdict.state === "red") this.final.delete(cacheKey);

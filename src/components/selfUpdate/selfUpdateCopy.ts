@@ -88,8 +88,14 @@ export function headerStatus(s: Snapshot, t: TFunction): HeaderStatus {
     return { icon: "done", text, next: t("selfUpdate.status.nextCheck", { time: clock(check.nextPollAt) }), edge: null };
   }
   if (check.state === "update-available") {
+    if (check.greenTip && s.available && check.greenTip.revision.sha !== s.available.sha) {
+      return { icon: "warning", text: t("selfUpdate.status.greenAvailable", { sha: s.available.short, branch }), next: null, edge: "warning" };
+    }
     const behind = check.relation === "diverged" ? t("selfUpdate.status.diverged", { branch }) : t("selfUpdate.status.behind", { branch, count: check.behind });
     return { icon: "warning", text: t("selfUpdate.status.available", { behind, time }), next: null, edge: "warning" };
+  }
+  if (check.state === "no-green") {
+    return { icon: "pending", text: t("selfUpdate.status.noGreen", { branch }), next: t("selfUpdate.status.nextCheck", { time: clock(check.nextPollAt) }), edge: null };
   }
   if (check.state === "failed") {
     return { icon: "failed", text: t("selfUpdate.status.failed", { time }), next: t("selfUpdate.status.nextCheck", { time: clock(check.nextPollAt) }), edge: "danger" };

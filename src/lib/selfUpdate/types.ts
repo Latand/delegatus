@@ -43,7 +43,12 @@ export interface UpdateDelta { commits: CommitLine[]; summary: DeltaSummary }
 
 export type Relation = "equal" | "behind" | "ahead" | "diverged";
 
-export type CheckStateName = "idle" | "checking" | "up-to-date" | "update-available" | "failed";
+export type CheckStateName = "idle" | "checking" | "up-to-date" | "update-available" | "no-green" | "failed";
+
+export interface GreenTip {
+  revision: Revision;
+  verdict: import("./green").GreenVerdict;
+}
 
 /** Why a check failed, when the reason is ours to word; a failure git or
     the network reported travels as `error`, its own line, instead. */
@@ -60,6 +65,7 @@ export interface CheckState {
   ahead: number;
   behind: number;
   delta: UpdateDelta | null;
+  greenTip?: GreenTip;
 }
 
 /** Checkout mode builds in its own release directory; managed mode follows

@@ -248,6 +248,7 @@ export interface RunnerConfig {
   checkout: string;
   remote: string;
   branch: string;
+  allowTrackedAncestor?: boolean;
   bun: string;
   logDir: string;
   releasesDir: string;
@@ -509,17 +510,15 @@ export class UpdateRunner {
         const code = await command(["git", "fetch", "--no-tags", remote, `+refs/heads/${branch}:${TIP_REF}`], checkout);
         const fetched = (await this.ports.revParse(TIP_REF, checkout)).trim();
         if (fetched !== target) {
-          // Automatic admission freezes a green revision while its original
-          // cohort finishes. Later merges may advance main without invalidating
-          // that revision. Verify it is still on main before building it;
-          // manual updates retain the exact-tip check and rewrites fail closed.
+          // A checked green target can precede a red or pending tip. Verify
+          // that the selected commit is still on this branch before checkout.
           const ancestry = ["git", "merge-base", "--is-ancestor", target, fetched];
-          const ancestor = (this.state.trigger === "auto" || this.state.trigger === "seat")
-            && await this.ports.run(ancestry, { cwd: checkout, env, onLine: (line) => push(line), lowPriority: true }) === 0;
+          const ancestor = (this.config.allowTrackedAncestor || this.state.trigger === "auto" || this.state.trigger === "seat")
+            && await this.ports.run(ancestry, { cwd: checkout, env, onLine: (line) => push(line), lowPriority: this.state.trigger !== "operator" }) === 0;
           if (!ancestor) {
             throw new StepError({ kind: "remote-moved", expected: shortSha(target), fetched: shortSha(fetched) }, `The remote moved since the last check (${shortSha(target)} → ${shortSha(fetched)}). Check again.`);
           }
-          push(`main advanced to ${shortSha(fetched)}; building its validated ancestor ${shortSha(target)}`, false);
+          push(`Remote tip is ${shortSha(fetched)}; building its validated ancestor ${shortSha(target)}`, false);
         }
         return code;
       }
@@ -527,7 +526,7 @@ export class UpdateRunner {
         /* A directory an earlier attempt at this target left is reused. */
         if (this.ports.exists(release)) {
           const refusal = await (this.ports.prepareExistingRelease ?? prepareExistingRelease)(release, checkout);
-          if (refusal) { push(refusal, false); throw new CommandFailure(1); }
+          if (refusal) throw new StepError({ kind: "error", text: refusal }, refusal);
           return command(["git", "checkout", "--detach", target], release);
         }
         return command(["git", "worktree", "add", "--detach", release, target], checkout);

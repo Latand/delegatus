@@ -726,6 +726,77 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     return h;
   }
 
+  test.each([
+    ["red", "operator"],
+    ["pending", "operator"],
+    ["red", "auto"],
+    ["pending", "auto"],
+    ["all-red", "auto"],
+  ] as const)("tracked checkout with %s CI selects the newest green revision for %s", async (headState, trigger) => {
+    const h = harness({ relaunch: true, remote: "https://github.com/example/project.git" });
+    const fixture = mkdtempSync(join(root, "green-selection-"));
+    const source = join(fixture, "source"), local = join(fixture, "checkout");
+    await git(fixture, "clone", remote, source);
+    await git(source, "commit", "--allow-empty", "-m", "Unchecked tip");
+    const head = await git(source, "rev-parse", "HEAD");
+    await git(fixture, "clone", source, local);
+    await git(local, "checkout", "--detach", firstSha);
+    const record = JSON.parse(readFileSync(h.recordFile, "utf8"));
+    writeFileSync(h.recordFile, JSON.stringify({ ...record, checkout: local }));
+
+    h.deps.now = () => Date.parse("2026-11-22T00:00:00Z");
+    h.deps.check = input => checkForUpdate({ ...input, remote: source });
+    const createRunner = h.deps.createRunner;
+    h.deps.createRunner = (config, ...args) => createRunner({ ...config, remote: source }, ...args);
+    h.deps.green = new GreenReader({
+      now: h.deps.now,
+      treeOf: (repo, sha) => git(repo, "rev-parse", `${sha}^{tree}`),
+      fetch: (async (input: string | URL | Request) => {
+        const url = new URL(String(input));
+        const [, , , , , sha, part] = url.pathname.split("/");
+        if (part === "pulls") return Response.json([{ merged_at: "2026-11-21", merge_commit_sha: sha, base: { ref: "main" }, head: { sha } }]);
+        if (part === "check-runs") {
+          const state = headState === "all-red" ? "red" : sha === head ? headState : "green";
+          return Response.json({ check_runs: [{ name: "runtime-gate", status: state === "pending" ? "queued" : "completed",
+            conclusion: state === "green" ? "success" : state === "red" ? "failure" : null, app: { id: 15368 } }] });
+        }
+        if (part === "statuses") return Response.json([]);
+        if (url.pathname.endsWith("/branches/main")) return Response.json({ protected: true, protection: { required_status_checks: {
+          checks: [{ context: "runtime-gate", app_id: 15368 }],
+        } } });
+        return Response.json({ commit: { tree: { sha: await git(local, "rev-parse", `${sha}^{tree}`) } } });
+      }) as typeof fetch,
+    });
+    mkdirSync(h.deps.dir, { recursive: true });
+    writeAuto(join(h.deps.dir, "auto.json"), { ...initialAuto(), enabled: trigger === "auto" });
+    h.service.stop();
+    h.service = new SelfUpdateService(h.deps);
+    setSelfUpdateServiceForTests(h.service);
+    try {
+      await h.service.check();
+      const checked = await snapshot();
+      expect(checked.check.greenTip).toMatchObject({ revision: { sha: head }, verdict: { state: headState === "pending" ? "pending" : "red" } });
+      if (headState === "all-red") {
+        expect(checked.check.state).toBe("no-green");
+        expect(checked.available).toBeNull();
+        expect(checked.auto).toMatchObject({ enabled: true, phase: "not-green", off: null, drain: null });
+        expect((await updatePost(post("/update", { key: "all-red" }))).status).toBe(409);
+        await h.service.autoTick();
+        expect(h.spawned).toEqual([]);
+        return;
+      }
+      if (trigger === "operator") {
+        expect(checked.available?.sha).toBe(tipSha);
+        expect(checked.check.delta?.commits.map(commit => commit.subject)).toEqual(["Say what runs"]);
+        expect((await updatePost(post("/update", { key: "checked-ancestor" }))).status).toBe(202);
+      }
+      const built = await until(s => s.update.steps.some(step => step.name === "ready" && step.state === "done"));
+      expect(built.update).toMatchObject({ target: tipSha, trigger });
+      expect(h.spawned).toContainEqual(["git", "merge-base", "--is-ancestor", tipSha, head]);
+      expect(h.spawned.some(command => command.includes("worktree") && command.at(-1) === tipSha)).toBe(true);
+    } finally { h.service.stop(); }
+  });
+
   async function finishHeldBuild(h: Harness): Promise<void> {
     // Cleanup observes only fixture state. Reading the browser snapshot here
     // would start a fresh repository check while the fixture is being removed.
