@@ -34,18 +34,22 @@ compatibility raises the major version.
   minutes with `<1 min` below that, and a live row whose start is unknown says
   so. The return control moved onto the time axis, which keeps a constant
   height, and the flag at the right edge stays inside its lane ([#4234]).
-- **A stage's agent is retired as soon as the stage has a verdict.** It no
-  longer waits an hour idle once the turn is closed and no delivery, attention
-  request or continuation still needs it. The reason is recorded and the
-  transcripts and stage records stay ([#4276]).
+- **A stage's agent is retired earlier once the stage has a verdict.** The
+  verdict waives the one-hour idle wait when the turn is closed and no
+  delivery, attention request, continuation or live work still needs the agent.
+  Publication custody still applies: while a publication, a publication
+  admission or a remote action is pending, the matching agent is kept. The
+  reason is recorded and the transcripts and stage records stay ([#4276]).
 - **Pipelines start sooner when several lanes share a repository.** A new lane
   releases the shared Git turn as soon as its checkout is verified instead of
   waiting for another lane's dependency setup ([#4223]). An already linked
   worktree dependency set is admitted without waiting for the writer, and a
   reused set is trusted only while its recorded seal still matches. A damaged
-  receipt is recreated, and a restore no longer invalidates the seal because
-  inode numbers changed. Permission repair resumes within the stage deadline
-  ([#4196], [#4341], [#4342], [#4351]). In the authors' fixtures a warm link
+  receipt is recreated, and a graph whose receipt already records the portable
+  digest survives a byte-identical restore even though inode numbers changed;
+  a copy that has only the older inode-bound digest is still refused when that
+  digest changes. A permission repair that times out is retried once with a
+  fresh preparation budget ([#4196], [#4341], [#4342], [#4351]). In the authors' fixtures a warm link
   went from about eight seconds to under 80 ms with 331 linked worktrees.
 - **Resource statistics are collected inside the Viewer on macOS and Windows.**
   The separate collector worker cannot verify kernel containment there. Linux
@@ -53,10 +57,13 @@ compatibility raises the major version.
 - **Managed releases keep bounded Docker storage.** The current and the
   rollback image are retained, unreadable checkout holds are reported, and the
   disk report accounts for allocated scratch space and Docker usage.
-- **A checkout install switches through the launcher's in-place relaunch.**
-  Live agent hosts and helpers keep running instead of being stopped with the
-  service's scopes. Claude hosts that talk over stdio still end when the
-  Viewer is replaced ([#4260]). Evidence sampling during such a switch has a
+- **A checkout install whose services are already in their expected slice
+  switches through the launcher's in-place relaunch.** Live agent hosts and
+  helpers keep running instead of being stopped with the service's scopes. An
+  install with a service outside its expected slice still switches by
+  relocation, which stops and starts it, and the preflight names the mode.
+  Claude hosts that talk over stdio still end when the Viewer is replaced
+  ([#4260]). Evidence sampling during such a switch has a
   per-sample deadline, and a restart needs a fresh healthy serving witness
   ([#4193]).
 
@@ -78,12 +85,14 @@ compatibility raises the major version.
 - **Numbers survive in custom Telegram form replies.** A word of several
   letters after a numeric separator stays in the custom text instead of being
   read as a choice ([#4249]).
-- **Typing and dictation stay responsive on large boards.** Dictation is
-  captured in an AudioWorklet, so a long page stall no longer repeats part of
-  the recording, and the orchestrator seat is sent to the client in the
-  portions its panel reads ([#4269]). A board clock tick no longer re-reads
-  the width of every pipeline card's stage strip; it measures when the fold or
-  the width changes ([#4272]). The composer field sizes itself with the
+- **Typing and dictation stay responsive on large boards.** In browsers with
+  AudioWorklet, dictation is captured there, so a long page stall no longer
+  repeats part of the recording; other browsers keep capturing on the main
+  thread. The orchestrator seat is sent to the client in the portions its panel
+  reads ([#4269]). In browsers with ResizeObserver, a board clock tick no
+  longer re-reads the width of every pipeline card's stage strip; it measures
+  when the fold or the width changes, and browsers without it still measure on
+  each commit ([#4272]). The composer field sizes itself with the
   browser's intrinsic sizing where supported, which removed 184 forced geometry
   reads when typing 37 characters in Chromium ([#4277]). Scanner frames of
   several megabytes are split by searching each new chunk once ([#4294]).
@@ -99,8 +108,11 @@ compatibility raises the major version.
   ([#4301], [#4302], [#4304]), and the admission queue, sweep worker and rules
   view ([#4248]).
 - **Delivery and registry.** Every delivery wait has a deadline and ends in a
-  terminal state when its target dies, is replaced or is mid-turn, and queued
-  instructions whose attempt was replaced keep a notice for the sender
+  terminal state when its target dies or is replaced. A send to a Codex agent
+  that is mid-turn waits for the turn boundary within a bounded deadline, which
+  verified work renews, and answers `switch-after-turn` with a plain
+  explanation and the deadline while the pending account switch is preserved.
+  Queued instructions whose attempt was replaced keep a notice for the sender
   ([#4144]). The registry no longer opens a nested SQLite transaction, so seat
   alarms survive a transient store error ([#4156]). The first read after the
   database is replaced sees the new database ([#4180]). Spawn attempt identity
@@ -127,11 +139,12 @@ compatibility raises the major version.
   claim not made by the owner are now declined as invalid. Before this, a forged
   owner flag on a member's message exposed the owner's tools and the owner
   session ([#4328]).
-- **Seat tool permissions follow the current seat.** A caller that is not the
-  project's designated seat, including a superseded or revoked seat, is
-  refused with `workspace_forbidden` when it reads, scopes or publishes a
-  prototype form. A stored receipt is checked against the caller's scope again
-  before it is replayed ([#4158]).
+- **Seat tool permissions follow the current seat.** When a prototype form is
+  read, scoped or published without a task, a caller that is not the project's
+  designated seat, including a superseded or revoked seat, is refused with
+  `workspace_forbidden`. A pipeline agent bound to one task keeps the task
+  path. A stored receipt is checked against the caller's scope again before it
+  is replayed ([#4158]).
 
 ### Maintainer notes
 - **Privacy checks.** The trusted publication scan still runs on every pull
@@ -158,9 +171,16 @@ compatibility raises the major version.
   ([#4226]).
 - **Cleanup.** Dead scanner code is removed ([#4297]). Attempt cleanup resumes
   and removes eligible roots within each bounded pass.
-- **Test stability.** [#3934], [#4217], [#4227], [#4235], [#4257], [#4259],
-  [#4299], [#4308], [#4309] and several relay fixtures repair or tighten
-  fixtures and assertions without changing product behaviour.
+- **Batch landing proof.** A batch carrier counts as landed only when the
+  reviewed patch is present both at the carrier's landing and at the current
+  default-branch tip, including for work merged with a merge commit ([#4257]).
+- **Stage evidence retention.** When a stage's evidence is preserved, files
+  that the repository already tracks are recognized through a Git lookup and
+  skipped instead of being copied, and the selection is reported alongside the
+  pressure outcomes ([#4259]).
+- **Test stability.** [#3934], [#4217], [#4227], [#4235], [#4299], [#4308],
+  [#4309] and several relay fixtures repair or tighten fixtures and assertions
+  without changing product behaviour.
 
 ## [2.2.0] — 2026-11-18
 
