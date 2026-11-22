@@ -2077,6 +2077,32 @@ describe("board timeline attempt rows: open the conversation, show real working 
             check(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
             const scroller = page.locator("[data-timeline-scroll]");
             await page.screenshot({ path: path.join(evidence, `${tag}-rows.png`) });
+            // Every row shows its open cue at rest, and on a desktop all five rows are one height (the calendar span stays on the meta line; the phone sets name and state on one line).
+            const cues = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-timeline-attempt]")].map(row => {
+              const cue = row.querySelector<SVGElement>("[data-timeline-open-cue]"), box = cue?.getBoundingClientRect(), name = row.querySelector(".bt-stage-name span")!.getBoundingClientRect();
+              return { shown: !!box && box.width > 0 && box.height > 0, afterName: !!box && box.left >= name.right - 0.5, height: row.querySelector(".bt-label")!.getBoundingClientRect().height };
+            }));
+            check(cues.length === ATTEMPTS.length && cues.every(cue => cue.shown && cue.afterName), `${tag}: open cue at rest ${JSON.stringify(cues)}`);
+            check(phone || new Set(cues.map(cue => Math.round(cue.height))).size === 1, `${tag}: stage row heights ${cues.map(cue => cue.height).join(",")}`);
+            // A hover tint (a pointer) and a pressed tint (any input) wash the row; the press ends off the row so it opens nothing.
+            const stage = scroller.locator(`[data-timeline-attempt*="9]"]`);
+            const tint = () => stage.evaluate(node => getComputedStyle(node).backgroundColor);
+            const rest = await tint();
+            if (!phone) {
+              await stage.hover();
+              const hovered = await tint();
+              check(hovered !== rest, `${tag}: hover leaves the row at ${hovered}`);
+              await page.screenshot({ path: path.join(evidence, `${tag}-hover.png`) });
+            }
+            const box = (await stage.boundingBox())!;
+            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+            await page.mouse.down();
+            const pressed = await tint();
+            check(pressed !== rest, `${tag}: press leaves the row at ${pressed}`);
+            await page.screenshot({ path: path.join(evidence, `${tag}-pressed.png`) });
+            await page.mouse.move(box.x + box.width / 2, Math.max(1, box.y - 40));
+            await page.mouse.up();
+            await page.mouse.move(1, 1);
             // The legend names the outline as the stage's calendar span and the fill as the agent's working time, whole at this width.
             const legend = page.locator(".bt-legend");
             await legend.scrollIntoViewIfNeeded();
@@ -2086,6 +2112,7 @@ describe("board timeline attempt rows: open the conversation, show real working 
               return { text: node.textContent ?? "", whole: box.left >= host.left - 0.5 && box.right <= host.right + 0.5 && box.right <= window.innerWidth && box.bottom <= window.innerHeight + 0.5 };
             });
             check(legendRead.text === t("timeline.legend"), `${tag}: legend «${legendRead.text}»`);
+            check(legendRead.text.includes(lang === "uk" ? "товста лінія — етапи йшли (календарний час)" : "Thick line: stages ran (calendar time)"), `${tag}: legend does not name the thick task segment`);
             check(legendRead.whole, `${tag}: legend cut by an edge`);
             await legend.screenshot({ path: path.join(evidence, `${tag}-legend.png`) });
             readings.push({ name: tag, rows, legend: legendRead, failures: geometry.failures });

@@ -5282,7 +5282,7 @@ export const en = {
   "timeline.openAttempt": "Open the conversation of {stage}",
   "timeline.idle": "not working now",
   "timeline.activityUnknown": "activity unconfirmed",
-  "timeline.legend": "Line: task open. Outline: calendar span of a stage. Fill: agent working time (its turns). ⚑: due date.",
+  "timeline.legend": "Line: task open. Thick line: stages ran (calendar time). Outline: calendar span of a stage. Fill: agent working time (its turns). ⚑: due date.",
   "timeline.since": "since {start} · {duration}",
   "timeline.due": "due {date}",
   "timeline.overdueBy": "overdue by {duration}",
