@@ -9,6 +9,7 @@ import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdent
 import { emptyRepositoryEntry, forgeCacheFile, clearForgeNudges, pendingForgeNudges, readForgeCache, updateForgeCache, proposalIssueSnapshot, PROPOSAL_ISSUE_LIMIT, type ForgeRepositoryEntry, type ForgeSweepError, type StoredPullRequest } from "./cache";
 import { pipelineRepository, taskRepository } from "./resolve";
 import { githubRepositoryOfRemote, type PullRequestState } from "./workLinks";
+import { githubReadDiagnostic } from "./githubReadFailure";
 
 /*
  * The one poller (#2059, docs/design/pr-issue-chips.md §4.2). One
@@ -140,7 +141,17 @@ function due(entry: ForgeRepositoryEntry | undefined, demand: Demand, nudgedAt: 
 
 type RepositoryOutcome =
   | { ok: true; rows: SweptRow[]; complete: boolean; full: boolean; canonical: string | null; filled: SweptRow[]; issues: number[] }
-  | { ok: false; error: ForgeSweepError };
+  | RepositoryReadFailure;
+
+type RepositoryReadFailure = { ok: false; error: ForgeSweepError; diagnostic: string };
+
+function failedRead(error: unknown): RepositoryReadFailure {
+  return { ok: false, error: githubUnavailableFromError(error), diagnostic: githubReadDiagnostic(error).message };
+}
+
+const malformedRead: RepositoryReadFailure = {
+  ok: false, error: "malformed-output", diagnostic: "GitHub read returned an invalid response. Check the gh version and retry.",
+};
 
 /** Debian's gh cannot name closingIssuesReferences in --json. Keep that
  * linkage by asking GraphQL for each returned page in one bounded batch. */
@@ -174,27 +185,27 @@ async function legacyPullRequestRows(raw: string, run: GithubRunner): Promise<st
 
 async function readRepository(repository: string, entry: ForgeRepositoryEntry | undefined, demand: Demand, ports: ForgeSweepPorts, startedAt: string): Promise<RepositoryOutcome> {
   const name = entry?.canonical ?? repository;
-  const list = async (args: string[]): Promise<SweptRow[] | ForgeSweepError> => {
+  const list = async (args: string[]): Promise<SweptRow[] | RepositoryReadFailure> => {
     try {
-      return parseRows(await ports.run(["pr", "list", "--repo", name, "--state", "all", ...args, "--json", PR_FIELDS]), startedAt) ?? "malformed-output";
+      return parseRows(await ports.run(["pr", "list", "--repo", name, "--state", "all", ...args, "--json", PR_FIELDS]), startedAt) ?? malformedRead;
     } catch (error) {
-      if (!/Unknown JSON field[^\n]*closingIssuesReferences/i.test(`${(error as { stderr?: unknown })?.stderr ?? ""}\n${(error as Error)?.message ?? ""}`)) return githubUnavailableFromError(error);
+      if (!/Unknown JSON field[^\n]*closingIssuesReferences/i.test(`${(error as { stderr?: unknown })?.stderr ?? ""}\n${(error as Error)?.message ?? ""}`)) return failedRead(error);
       try {
         const raw = await ports.run(["pr", "list", "--repo", name, "--state", "all", ...args, "--json", LEGACY_PR_FIELDS]);
-        return parseRows(await legacyPullRequestRows(raw, ports.run), startedAt) ?? "malformed-output";
+        return parseRows(await legacyPullRequestRows(raw, ports.run), startedAt) ?? malformedRead;
       } catch (fallbackError) {
-        return githubUnavailableFromError(fallbackError);
+        return failedRead(fallbackError);
       }
     }
   };
-  let rows: SweptRow[] | ForgeSweepError | null = null;
+  let rows: SweptRow[] | null = null;
   let complete = false;
   let full = false;
   /* An entry cached before head commits were read is read in full once, so
      the merged PRs it already holds gain theirs. */
   if (entry?.completeSince && entry.lastSweepAt && entry.headRefOids) {
     const page = await list(["--limit", String(FORGE_PAGE_LIMIT), "--search", "sort:updated-desc"]);
-    if (typeof page === "string") return { ok: false, error: page };
+    if (!Array.isArray(page)) return page;
     const oldest = Math.min(...page.map((row) => ms(row.updatedAt)).filter(Number.isFinite));
     /* The page proves coverage when it reaches back to the previous sweep, or
        when it is the repository's whole history. An empty page proves nothing
@@ -207,7 +218,7 @@ async function readRepository(repository: string, entry: ForgeRepositoryEntry | 
   }
   if (rows === null) {
     const all = await list(["--limit", String(FORGE_FULL_LIMIT)]);
-    if (typeof all === "string") return { ok: false, error: all };
+    if (!Array.isArray(all)) return all;
     rows = all;
     complete = true;
     full = true;
@@ -305,11 +316,12 @@ export async function sweepForgeLinks(ports: ForgeSweepPorts): Promise<string[]>
         updateForgeCache(next => { (next.repositories[name] ??= emptyRepositoryEntry()).proposals = proposals; }, file);
       } catch (error) {
         // Keep the previous observation and its age, including after restart.
-        ports.log?.(`[forge proposals] ${name}: unavailable`, error instanceof Error ? error.name : "unknown");
+        const diagnostic = githubReadDiagnostic(error).message;
+        if (outcome.ok || diagnostic !== outcome.diagnostic) ports.log?.(`[forge proposals] ${name}: ${diagnostic}`);
       }
     }
     clearForgeNudges([name, data.repositories[name]?.canonical ?? name]);
-    if (!outcome.ok) ports.log?.(`[forge links] ${name}: ${outcome.error}`);
+    if (!outcome.ok) ports.log?.(`[forge links] ${name}: ${outcome.diagnostic}`);
     read.push(name);
   }
   return read;

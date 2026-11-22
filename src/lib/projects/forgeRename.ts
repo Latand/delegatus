@@ -1,6 +1,7 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 
+import { runGithubCliRead } from "@/lib/forge/githubCli";
+import { githubReadDiagnostic } from "@/lib/forge/githubReadFailure";
 import {
   canonicalProject,
   isRemoteRepositoryIdentity,
@@ -113,32 +114,22 @@ function repositoryAnswer(body: { id?: unknown; full_name?: unknown }): ForgeRep
 }
 
 const LOOKUP_TIMEOUT_MS = 10_000;
+const RETRY_MS = 3 * 60_000;
+const MAX_RETRY_ENTRIES = 1024;
 
-function ghLookup(fullName: string): Promise<ForgeRepositoryLookup | null> {
-  return new Promise((resolve) => {
-    execFile("gh", ["api", `repos/${fullName}`, "--jq", "{id, full_name}"], { timeout: LOOKUP_TIMEOUT_MS }, (error, stdout, stderr) => {
-      if (!error) {
-        try {
-          const body = JSON.parse(String(stdout)) as { id?: unknown; full_name?: unknown };
-          resolve(repositoryAnswer(body));
-        } catch { resolve(null); }
-        return;
-      }
-      /* A 404 from an authenticated `gh` is an answer; anything else (no `gh`,
-         not logged in, no network) hands the question to plain REST. */
-      resolve(/HTTP 404/.test(String(stderr)) ? { status: "missing" } : null);
-    });
-  });
-}
+const lastDiagnostic = new Map<ReturnType<typeof githubReadDiagnostic>["cause"], number>();
+const defaultGithubRead = (args: string[]) => runGithubCliRead(args, { timeout: LOOKUP_TIMEOUT_MS });
+type RepositoryRequest = (url: string, init: RequestInit) => Promise<Response>;
 
-async function restLookup(fullName: string): Promise<ForgeRepositoryLookup> {
+async function restLookup(fullName: string, request: RepositoryRequest): Promise<ForgeRepositoryLookup> {
   try {
-    const response = await fetch(`https://api.github.com/repos/${fullName}`, {
+    const response = await request(`https://api.github.com/repos/${fullName}`, {
       headers: { accept: "application/vnd.github+json", "user-agent": "delegatus-forge-rename" },
       redirect: "follow",
       signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
     });
-    if (response.status === 404) return { status: "missing" };
+    // The public endpoint can also return 404 for a private repository.
+    // Only a successful public response can supply evidence after gh failed.
     if (!response.ok) return { status: "unreachable" };
     const body = await response.json() as { id?: unknown; full_name?: unknown };
     return repositoryAnswer(body) ?? { status: "unreachable" };
@@ -150,9 +141,31 @@ async function restLookup(fullName: string): Promise<ForgeRepositoryLookup> {
 /** `gh api` when `gh` is installed and signed in (it sees private
     repositories), else an unauthenticated REST request, which is enough for a
     public repository. Both follow GitHub's redirect from a former name. */
-export const githubRepositoryLookup: ForgeLookup = async (fullName) => (await ghLookup(fullName)) ?? restLookup(fullName);
+export async function githubRepositoryLookup(fullName: string, {
+  run = defaultGithubRead, request = fetch, log = console.warn,
+}: { run?: typeof defaultGithubRead; request?: RepositoryRequest; log?: (message: string) => void } = {}): Promise<ForgeRepositoryLookup> {
+  try {
+    const answer = repositoryAnswer(JSON.parse(await run(["api", `repos/${fullName}`, "--jq", "{id, full_name}"])));
+    if (answer) return answer;
+    throw new SyntaxError("Missing repository id in GitHub response");
+  } catch (error) {
+    const diagnostic = githubReadDiagnostic(error);
+    if (diagnostic.cause === "not-found") return { status: "missing" };
+    const answer = await restLookup(fullName, request);
+    if (answer.status === "unreachable") {
+      const now = Date.now();
+      if (now - (lastDiagnostic.get(diagnostic.cause) ?? -Infinity) >= RETRY_MS) {
+        lastDiagnostic.set(diagnostic.cause, now);
+        log(`[forge rename] ${diagnostic.message}`);
+      }
+    }
+    return answer;
+  }
+}
 
 const decisions = new Map<string, Exclude<ForgeRenameDecision, "undecided">>();
+const pendingChecks = new Set<string>();
+const retryAfter = new Map<string, number>();
 let activeLookup: ForgeLookup = githubRepositoryLookup;
 let queue: Promise<unknown> = Promise.resolve();
 
@@ -163,9 +176,8 @@ function decisionKey(candidate: ForgeRenameCandidate): string {
 /**
  * Ask the forge whether the two remotes are one repository. Equal ids prove
  * the rename; different ids, or no repository at the old name, refuse it; a
- * lookup that could not be answered decides nothing, and the next scan asks
- * again. Proofs and refusals are held for the life of the process, so each
- * pair costs at most two requests per boot.
+ * lookup that could not be answered decides nothing. Proofs and refusals are
+ * held for the life of the process, so a decided pair requires no more reads.
  */
 export async function decideForgeRename(
   candidate: ForgeRenameCandidate,
@@ -177,11 +189,15 @@ export async function decideForgeRename(
   const oldName = githubFullName(candidate.sourceRemote);
   const newName = githubFullName(candidate.targetRemote);
   if (!oldName || !newName) return "refused";
-  const [before, after] = await Promise.all([lookup(oldName), lookup(newName)]);
-  if (before.status === "unreachable" || after.status === "unreachable") return "undecided";
-  const decision = before.status === "found" && after.status === "found" && before.id === after.id ? "proven" : "refused";
-  decisions.set(key, decision);
-  return decision;
+  try {
+    const [before, after] = await Promise.all([lookup(oldName), lookup(newName)]);
+    if (before.status === "unreachable" || after.status === "unreachable") return "undecided";
+    const decision = before.status === "found" && after.status === "found" && before.id === after.id ? "proven" : "refused";
+    decisions.set(key, decision);
+    return decision;
+  } catch {
+    return "undecided";
+  }
 }
 
 /**
@@ -207,16 +223,31 @@ export async function recordForgeRenames(
 }
 
 /**
- * The catalog's entry: judge `candidates` after every pass already queued, so
- * two scans never record the same succession side by side. Never throws; an
- * unanswered pass is simply asked again by a later scan.
+ * The catalog's entry: share pending checks across scans and give the forge
+ * time to recover before asking again. The scan continues with local identity.
  */
 export function scheduleForgeRenames(candidates: readonly ForgeRenameCandidate[]): void {
-  if (candidates.length === 0) return;
+  const now = Date.now();
+  const pending = new Map<string, ForgeRenameCandidate>();
+  for (const candidate of candidates) {
+    const key = decisionKey(candidate);
+    if (pendingChecks.has(key) || now < (retryAfter.get(key) ?? 0)) continue;
+    retryAfter.delete(key);
+    pendingChecks.add(key);
+    pending.set(key, candidate);
+  }
+  if (!pending.size) return;
   queue = queue
-    .then(() => recordForgeRenames(candidates))
+    .then(() => recordForgeRenames(pending.values()))
     .catch(() => {
       console.error("[project catalog] forge rename check deferred; a later scan will retry");
+    }).finally(() => {
+      const next = Date.now() + RETRY_MS;
+      for (const key of pending.keys()) {
+        pendingChecks.delete(key);
+        retryAfter.set(key, next);
+      }
+      while (retryAfter.size > MAX_RETRY_ENTRIES) retryAfter.delete(retryAfter.keys().next().value!);
     });
 }
 
@@ -234,6 +265,8 @@ export async function forgeRenamesSettledForTests(): Promise<void> {
 export function resetForgeRenameDecisionsForTests(): void {
   decisions.clear();
   sharedChecks.clear();
+  retryAfter.clear();
+  lastDiagnostic.clear();
 }
 
 const sharedChecks = new Map<string, number>();

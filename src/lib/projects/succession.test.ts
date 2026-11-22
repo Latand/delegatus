@@ -245,7 +245,7 @@ test("through the same re-description, a repository that gained its origin still
   expect(forgeAnswers.asked).toEqual([]);
 });
 
-test("an unreachable forge records nothing, and the next scan asks again", async () => {
+test("an unreachable forge leaves projects usable and retries after a cooldown", async () => {
   const repo = repositoryAt("sprockets", "sprockets");
   const old = projectForCwd(repo)!;
   const offline = forge({ "acme/sprockets": "unreachable", "acme/delegated-sprockets": "unreachable" });
@@ -256,13 +256,26 @@ test("an unreachable forge records nothing, and the next scan asks again", async
   repoint(repo, "delegated-sprockets");
   const renamed = projectForCwd(repo)!;
   const after = await transcript("sprockets-after", repo);
-  await scan([before, after]);
-  expect(offline.asked.length).toBeGreaterThan(0);
-  expect(canonicalProject(old)).toBe(old);
-  expect(moved(renamed)).toEqual([]);
+  const realNow = Date.now;
+  let now = Date.parse("2026-11-21T10:00:00Z");
+  Date.now = () => now;
+  try {
+    const snapshot = await scan([before, after]);
+    expect(snapshot.projectCatalog.map(entry => entry.project)).toContain(renamed);
+    expect(offline.asked).toEqual(["acme/sprockets", "acme/delegated-sprockets"]);
+    expect(canonicalProject(old)).toBe(old);
+    expect(moved(renamed)).toEqual([]);
 
-  setForgeLookupForTests(forge({ "acme/sprockets": 7300, "acme/delegated-sprockets": 7300 }));
-  await scan([before, after]);
+    const online = forge({ "acme/sprockets": 7300, "acme/delegated-sprockets": 7300 });
+    setForgeLookupForTests(online);
+    await scan([before, after]);
+    expect(online.asked).toEqual([]);
+    now += 3 * 60_000;
+    await scan([before, after]);
+    expect(online.asked).toEqual(["acme/sprockets", "acme/delegated-sprockets"]);
+  } finally {
+    Date.now = realNow;
+  }
   expect(canonicalProject(old)).toBe(renamed);
   expect(moved(renamed)).toHaveLength(1);
 });

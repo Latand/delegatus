@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
+import { githubReadBackoff, githubReadDiagnostic, githubReadFailure } from "./githubReadFailure";
 import { ForgeAppWriteRefused } from "./appWrite";
 import { refusalMessage } from "../../../bin/forge-app-token.mjs";
 
@@ -54,6 +54,23 @@ test("redacts before bounding a diagnostic and never retains the command line", 
 function pathFromParts(): string {
   return ["", "home", "fixture", "private", "config"].join("/");
 }
+
+test("an unknown gh exit logs only a bounded scrubbed excerpt and a remedy", () => {
+  const credential = ["ghp", "x".repeat(36)].join("_");
+  const address = ["fixture", "example.invalid"].join("@");
+  const url = "https://example.invalid/private";
+  const error = Object.assign(new Error("Command failed: gh private-argument"), {
+    code: 17, stderr: `\x1b[31munknown option\x1b[0m ${credential} ${address} ${pathFromParts()} ${url} ${"detail ".repeat(200)}\nsecond line`,
+  });
+  const diagnostic = githubReadDiagnostic(error);
+  expect(diagnostic.cause).toBe("command-error");
+  expect(diagnostic.message).toStartWith("GitHub read failed (exit 17): unknown option");
+  expect(diagnostic.message).toEndWith("Check the gh installation and configuration, then retry.");
+  expect(diagnostic.message.length).toBeLessThan(500);
+  for (const value of [credential, address, pathFromParts(), url, "private-argument", "second line", "\x1b"]) {
+    expect(diagnostic.message).not.toContain(value);
+  }
+});
 
 test("retry backoff starts at one minute and remains capped", () => {
   expect([1, 2, 3, 4, 5, 100].map(githubReadBackoff)).toEqual([60_000, 120_000, 240_000, 480_000, 600_000, 600_000]);

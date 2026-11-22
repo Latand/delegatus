@@ -11,7 +11,7 @@ process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 const { canonicalProject, recordProjectRemote, recordedProjectRemote, resetProjectAliasesForTests } = await import("./aliases");
 const { projectIdentityFromRemote } = await import("./identity");
 const { setShared, sharedProjects, knownProjects, patchShared } = await import("../links/state");
-const { setForgeLookupForTests, forgeRenamesSettledForTests, resetForgeRenameDecisionsForTests } = await import("./forgeRename");
+const { githubRepositoryLookup, setForgeLookupForTests, forgeRenamesSettledForTests, resetForgeRenameDecisionsForTests } = await import("./forgeRename");
 const old = projectIdentityFromRemote("https://github.com/example/old-repo.git", "/")!;
 const current = projectIdentityFromRemote("https://github.com/example/current-repo.git", "/")!;
 let sequence = 0;
@@ -68,6 +68,38 @@ test("known but unshared repositories never trigger forge discovery", async () =
   await forgeRenamesSettledForTests();
   expect(calls).toBe(0);
   expect(canonicalProject(old.project)).toBe(old.project);
+});
+
+test("a private repository can recover after unsigned REST returns 404", async () => {
+  const logs: string[] = [];
+  const run = async () => { throw Object.assign(new Error("Command failed: gh"), { code: 4 }); };
+  const request = async () => new Response(null, { status: 404 });
+  const log = (message: string) => { logs.push(message); };
+  const lookup = () => githubRepositoryLookup("example/old-repo", { run, request, log });
+  expect(await lookup()).toEqual({ status: "unreachable" });
+  expect(await lookup()).toEqual({ status: "unreachable" });
+  expect(logs).toEqual([expect.stringContaining("gh auth login")]);
+  expect(await githubRepositoryLookup("example/old-repo", { log, request, run: async () => {
+    throw Object.assign(new Error("Command failed: gh"), { stderr: "gh: Not Found (HTTP 404)" });
+  } })).toEqual({ status: "missing" });
+  expect(await githubRepositoryLookup("example/old-repo", {
+    log, run: async () => JSON.stringify({ id: 42, full_name: "example/current-repo" }),
+  })).toEqual({ status: "found", id: 42, fullName: "example/current-repo" });
+  expect(logs).toHaveLength(1);
+});
+
+test("a failed CLI read can still resolve a public repository through REST", async () => {
+  const logs: string[] = [];
+  const answer = await githubRepositoryLookup("example/old-repo", {
+    run: async () => { throw Object.assign(new Error("spawn gh"), { code: "ENOENT" }); },
+    request: async (url) => {
+      expect(url).toBe("https://api.github.com/repos/example/old-repo");
+      return Response.json({ id: 42, full_name: "example/current-repo" });
+    },
+    log: message => { logs.push(message); },
+  });
+  expect(answer).toEqual({ status: "found", id: 42, fullName: "example/current-repo" });
+  expect(logs).toEqual([]);
 });
 
 

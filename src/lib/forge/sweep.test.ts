@@ -10,7 +10,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 
 import { clearForgeCacheForTests, FORGE_LINKS_COLLECTION, forgeCacheView, nudgeForgeSweep, observeForgePullRequest, readForgeCache, resetForgeCacheForTests, updateForgeCache, PROPOSAL_ISSUE_LIMIT } from "./cache";
 import { recordProjectRemote } from "@/lib/projects/aliases";
-import { FORGE_FILL_LIMIT, FORGE_IDLE_INTERVAL_MS, FORGE_LIVE_INTERVAL_MS, FORGE_NUDGE_DEBOUNCE_MS, FORGE_PAGE_LIMIT, sweepForgeLinks, type ForgeSweepPorts } from "./sweep";
+import { FORGE_FILL_LIMIT, FORGE_IDLE_INTERVAL_MS, FORGE_LIVE_INTERVAL_MS, FORGE_NUDGE_DEBOUNCE_MS, FORGE_PAGE_LIMIT, FORGE_RETRY_MS, sweepForgeLinks, type ForgeSweepPorts } from "./sweep";
 
 /* The forge sweep (#2059) against an injected `gh` and clock, in a private
    directory: invented repositories and branches, no network. */
@@ -342,6 +342,40 @@ describe("the sweep", () => {
     expect(entry()).toMatchObject({ lastError: "timed-out", completeSince: before.completeSince, lastSweepAt: before.lastSweepAt, prs: before.prs });
     h.advance(60_000);
     expect(await h.sweep()).toEqual([]);
+  });
+
+  test.each([
+    ["missing CLI", "ENOENT", "", "gh) not found on PATH", "Install gh"],
+    ["no login", 1, "To get started with GitHub CLI, please run: gh auth login", "authentication failed", "GH_CONFIG_DIR"],
+    ["network", 1, "error connecting to api.github.com: lookup api.github.com: no such host", "network request failed", "Check connectivity"],
+    ["other exit", 17, "unknown flag --fixture", "(exit 17): unknown flag --fixture", "Check the gh installation"],
+  ] as const)("%s logs a remedy, keeps cached links and retries on cooldown", async (_name, code, stderr, cause, remedy) => {
+    let fail = false;
+    const error = Object.assign(new Error("Command failed: gh"), { code, stderr });
+    const h = harness(() => fail ? error : [row({ number: 7 })]);
+    const messages: string[] = [];
+    h.ports.log = message => { messages.push(message); };
+    await h.sweep();
+    const before = entry();
+    fail = true;
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(entry()).toMatchObject({ lastError: "command-failed", completeSince: before.completeSince, lastSweepAt: before.lastSweepAt, prs: before.prs });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain(cause);
+    expect(messages[0]).toContain(remedy);
+
+    resetForgeCacheForTests();
+    h.advance(FORGE_RETRY_MS - 1);
+    expect(await h.sweep()).toEqual([]);
+    expect(h.calls).toHaveLength(2);
+    expect(messages).toHaveLength(1);
+
+    fail = false;
+    h.advance(1);
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(h.calls).toHaveLength(3);
+    expect(entry().lastError).toBeNull();
   });
 
   test("numbers a record names outright and the cache lacks are read one by one, at most ten a sweep; a non-PR is recorded as an issue", async () => {
