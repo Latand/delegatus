@@ -742,7 +742,7 @@ test("a stage conversation switched to another account continues on the message 
     resolveAccount: ((engine: string, accountId: string) => ({ accountId, home: process.env.LLV_STATE_DIR!, engine })) as never,
     preflightSource: (source, _accounts, assertCurrent) => preflightCodexSource(source, {
       resolveTranscriptOwner: (engine, pathname) => engine === "codex" && pathname === sourcePath
-        ? { engine, accountId: "account-a", kind: "managed", home: transcriptRoot, transcriptRoot, env: {} }
+        ? { engine, accountId: "account-a", kind: "managed", home: transcriptRoot, transcriptRoot, env: { NODE_ENV: "test" } }
         : null,
     }, assertCurrent),
     releaseHost: async () => true,
