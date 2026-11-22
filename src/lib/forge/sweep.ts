@@ -178,10 +178,12 @@ async function legacyPullRequestRows(raw: string, run: GithubRunner): Promise<st
     for (const [index, row] of batch.entries()) {
       const pr = response.data.repository[`p${index}`] as { closingIssuesReferences?: { nodes?: unknown[]; pageInfo?: { hasNextPage?: boolean } } } | null;
       const refs = pr?.closingIssuesReferences;
-      if (!Array.isArray(refs?.nodes) || refs.pageInfo?.hasNextPage !== false
+      const hasNextPage = refs?.pageInfo?.hasNextPage;
+      if (!Array.isArray(refs?.nodes) || typeof hasNextPage !== "boolean"
         || refs.nodes.some((ref) => !ref || typeof ref !== "object"
           || !Number.isSafeInteger((ref as { number?: unknown }).number)
           || typeof (ref as { url?: unknown }).url !== "string")) throw new InvalidLegacyResponse();
+      if (hasNextPage) throw new Error("closing issue references are incomplete");
       row.closingIssuesReferences = refs.nodes;
     }
   }
