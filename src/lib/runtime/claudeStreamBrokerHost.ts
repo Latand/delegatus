@@ -1292,6 +1292,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
           mcpServers: telegram.mcpServers,
           mcpStatePath: options.mcpStatePath,
           viewerTransport: viewerMcpTransportForLaunch(env),
+          standaloneReadOnly: options.standaloneReadOnly,
         });
       } catch (error) { relay?.close(); options.releaseCleanup?.(); throw error; }
       args.push(

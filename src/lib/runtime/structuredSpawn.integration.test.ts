@@ -1049,6 +1049,30 @@ test.each(["stdio", "http"] as const)("the launch receipt records the Codex host
   } finally { await host.release(); journal.close(); }
 });
 
+test("first execution refuses a legacy queued read-only role before runtime host dispatch", async () => {
+  const cwd = path.join(sandbox, `legacy-read-only-${crypto.randomUUID()}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", role: "maintainer", accountId: "fixture-account", accountPin: true,
+    launchProfile: emptyLaunchProfile({ cwd, sandbox: "full", readOnly: false }) });
+  if (begun.kind !== "created") throw new Error("legacy queued role fixture admission failed");
+  const queued = registry.queuePinnedSpawn(begun.receipt.launchId, {
+    version: 1, retryAt: new Date(0).toISOString(), accountId: "fixture-account", locale: "en",
+    spec: { command: "codex", cwd, windowName: "legacy-role", engine: "codex", launchProfile: begun.receipt.launchProfile },
+    ["prompt"]: "Fixture first execution", imageRefs: [], parentArtifactPath: null, pipelineSourceConversationId: null,
+  }, "Queued maintainer launch");
+  let hostDispatches = 0;
+  await expect(spawnStructuredConversation({ engine: "codex", receipt: queued,
+    spec: { command: "codex", cwd, engine: "codex", windowName: "legacy-role" },
+    account: { engine: "codex", accountId: "fixture-account", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+    ["prompt"]: "Fixture first execution", registry, client: runtimeClient(journal),
+  }, { startHost: async () => { hostDispatches += 1; throw new Error("unexpected host dispatch"); } }))
+    .rejects.toThrow("unrestricted legacy profile; launch it again");
+  expect(hostDispatches).toBe(0);
+  journal.close();
+});
+
 test.each([false, true])("structured Claude symlink materialization with precomputed transcript=%s", async (precomputed) => {
   const id = crypto.randomUUID();
   const directory = path.join(sandbox, `symlink-${id}`);

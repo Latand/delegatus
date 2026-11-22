@@ -475,6 +475,24 @@ test("allowSubagents uses an isolated profile while the denied profile stays enf
   expect(allowed.hooks.PreToolUse.some(group => group.matcher === NATIVE_MULTI_AGENT_HOOK_MATCHER)).toBe(false);
 });
 
+test.each(["account", "shared"] as const)("standalone read-only Claude policy drops inherited %s command hooks and keeps scoped Viewer MCP", source => {
+  const accountHome = home();
+  const settings = { hooks: {
+    UserPromptSubmit: [{ hooks: [{ type: "command", command: "inherited-prompt-hook" }] }],
+    PreToolUse: [{ matcher: "Read", hooks: [{ type: "command", command: "inherited-tool-hook" }] }],
+  } };
+  const baseSettingsPath = source === "shared" ? path.join(home(), "settings.json") : undefined;
+  if (baseSettingsPath) fs.writeFileSync(baseSettingsPath, JSON.stringify(settings));
+  else fs.writeFileSync(path.join(accountHome, "settings.json"), JSON.stringify(settings));
+  const installed = applyClaudeSpawnPolicy(accountHome, { profileId: `standalone-${source}`, cwd: "/repo", standaloneReadOnly: true, mcpServers: ["viewer"] });
+  const output = JSON.parse(fs.readFileSync(installed.settingsPath, "utf8"));
+  const mcp = JSON.parse(fs.readFileSync(installed.mcpConfigPath, "utf8"));
+  expect(JSON.stringify(output.hooks)).not.toContain("inherited-");
+  expect(output.hooks.PreToolUse).toContainEqual(expect.objectContaining({ matcher: "Bash" }));
+  expect(mcp.mcpServers.viewer).toBeDefined();
+  expect(Object.keys(mcp.mcpServers)).toEqual(["viewer"]);
+});
+
 test("managed Claude launch state accepts bypass mode and trusts the exact spawn directory", () => {
   const accountHome = home();
   const statePath = path.join(accountHome, ".claude.json");

@@ -46,6 +46,7 @@ import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { statePath } from "@/lib/configDir";
 import { readHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
+import { listRoles } from "@/lib/roles/registry";
 import { rememberHandoffChild, persistHandoffLineage } from "@/lib/handoffLineage";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
@@ -1498,6 +1499,11 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
   const receipt = input.registry.spawnReceipt(input.receipt.launchId);
   if (!receipt) throw new Error("structured spawn receipt is unavailable before launch");
   assertMemberLaunchAllowed(receipt);
+  const roleDefinition = receipt.agentRole ? listRoles().find(role => role.id === receipt.agentRole) : undefined;
+  if (receipt.queuedPinnedSpawn && roleDefinition?.capabilities.includes("read-only")
+    && (receipt.launchProfile.sandbox === "full" || receipt.launchProfile.sandbox == null)) {
+    throw new Error(`queued ${receipt.agentRole} launch has an unrestricted legacy profile; launch it again to apply the current read-only role policy`);
+  }
   if (!receipt.key && input.receipt.admissionOwner && (!receipt.admissionOwner
     || !sameRecordedProcessIdentity(input.receipt.admissionOwner, receipt.admissionOwner))) {
     throw new Error("structured spawn admission ownership changed");

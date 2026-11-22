@@ -458,6 +458,8 @@ export function applyClaudeSpawnPolicy(
     /** How this launch reaches the Viewer tools; see
         {@link viewerMcpTransportForLaunch}. Absent means stdio. */
     viewerTransport?: ViewerMcpTransport;
+    /** Standalone role launches must not inherit account or shared command hooks. */
+    standaloneReadOnly?: boolean;
   } = {},
 ): ClaudeSpawnPolicyResult {
   const publicationIdentity = agentPublicationIdentityEnv(options.publicationEnv ?? process.env);
@@ -486,7 +488,7 @@ export function applyClaudeSpawnPolicy(
   if (sourceSettings.allowManagedHooksOnly === true) {
     throw new Error("Claude settings allowManagedHooksOnly prevents the Viewer spawn policy from enforcing process cleanup");
   }
-  const hooks = sourceSettings.hooks === undefined ? {} : record(sourceSettings.hooks);
+  const hooks = options.standaloneReadOnly ? {} : sourceSettings.hooks === undefined ? {} : record(sourceSettings.hooks);
   if (!hooks) throw new Error("Claude settings hooks must contain a JSON object");
 
   const preToolUse = withoutManagedHandlers(hooks.PreToolUse);
