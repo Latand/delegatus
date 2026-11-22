@@ -333,24 +333,26 @@ type DependencyPlan = Awaited<ReturnType<typeof lockedDependencyInputs>>;
 function graphPaths(cache: string, key: string) {
   const target = path.join(cache, key);
   return { target, modules: path.join(target, "node_modules"), receipt: path.join(target, "installed.json"),
-    payload: path.join(target, "payload.sha256"), validation: path.join(target, "validated.sha256") };
+    payload: path.join(target, "payload.sha256"), content: path.join(target, "payload-content.sha256"),
+    validation: path.join(target, "validated.sha256") };
 }
 
 type GraphPaths = ReturnType<typeof graphPaths>;
 
-async function readValidation(filename: string, entry: BigIntStats | undefined): Promise<string | undefined> {
+async function readDigest(filename: string, entry: BigIntStats | undefined): Promise<string | undefined> {
   if (!entry?.isFile() || Number(entry.size) !== 64) return;
-  const handle = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch(error => {
-    if (error.code !== "ENOENT" && error.code !== "ELOOP") throw error;
-  });
-  if (!handle) return;
   try {
-    if (!sameVersion(entry, await handle.stat({ bigint: true }))) return;
-    const bytes = Buffer.alloc(65);
-    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-    const digest = bytes.toString("utf8", 0, bytesRead);
-    if (bytesRead === 64 && /^[a-f0-9]{64}$/.test(digest) && sameVersion(entry, await handle.stat({ bigint: true }))) return digest;
-  } finally { await handle.close(); }
+    const handle = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      if (!sameVersion(entry, await handle.stat({ bigint: true }))) return;
+      const bytes = Buffer.alloc(65);
+      const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+      const digest = bytes.toString("utf8", 0, bytesRead);
+      if (bytesRead === 64 && /^[a-f0-9]{64}$/.test(digest) && sameVersion(entry, await handle.stat({ bigint: true }))) return digest;
+    } finally { await handle.close(); }
+  } catch (error) {
+    if (!["ENOENT", "ENOTDIR", "ELOOP", "EISDIR", "EACCES", "EPERM", "EIO"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+  }
 }
 
 function validationFingerprint(target: string, key: string, receipt: string,
@@ -367,23 +369,24 @@ function validationFingerprint(target: string, key: string, receipt: string,
 }
 
 type PayloadInventory = {
-  metadata: string; payload: string | false; reseal: boolean; executables: string[]; cliLinks: CliLink[];
+  metadata: string; payload: string | false; portable: string | false;
+  reseal: boolean; executables: string[]; cliLinks: CliLink[];
 };
 type ScanPayload = (modules: string, content: boolean) => Promise<PayloadInventory>;
 
 async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () => void, scan: ScanPayload, allowWalk: boolean) {
-  const { target, modules, receipt, payload, validation } = graph;
+  const { target, modules, receipt, payload, content, validation } = graph;
   const reads = new ValidationReads();
-  const [directory, root, seal, validationEntry, payloadEntry] = await Promise.all([
+  const [directory, root, seal, validationEntry, payloadEntry, contentEntry] = await Promise.all([
     statBigInt(target), reads.read(modules), reads.read(receipt), statBigInt(validation), statBigInt(payload),
+    statBigInt(content),
   ]);
   check();
   if (!directory?.isDirectory() || !root?.isDirectory() || !seal?.isFile()) return null;
-  if (!allowWalk && (!validationEntry?.isFile() || !payloadEntry?.isFile())) return null;
-  const [savedStamp, savedPayload] = await Promise.all([
-    readValidation(validation, validationEntry), readValidation(payload, payloadEntry),
+  if (!allowWalk && (!validationEntry?.isFile() || !payloadEntry?.isFile() || !contentEntry?.isFile())) return null;
+  const [savedStamp, savedPayload, savedContent] = await Promise.all([
+    readDigest(validation, validationEntry), readDigest(payload, payloadEntry), readDigest(content, contentEntry),
   ]);
-  if (payloadEntry && !savedPayload) throw new Error("invalid dependency payload receipt");
   const receiptText = await fs.readFile(receipt, "utf8");
   check();
   const record = JSON.parse(receiptText);
@@ -437,13 +440,13 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
   const anchorDigest = validationFingerprint(target, plan.key, receiptText, anchors);
   const stamp = (metadata: string, payload: string) =>
     createHash("sha256").update(anchorDigest + metadata + payload).digest("hex");
-  if (!allowWalk && !savedStamp) {
+  if (!allowWalk && (!savedStamp || !savedPayload || !savedContent)) {
     assertAnchors(false);
     check();
     return null;
   }
-  let inventory = await scan(modules, allowWalk && (!savedStamp || !savedPayload));
-  const reusable = !inventory.reseal && !!savedPayload && savedStamp === stamp(inventory.metadata, savedPayload);
+  let inventory = await scan(modules, allowWalk && (!savedStamp || !savedPayload || !savedContent));
+  const reusable = !inventory.reseal && !!savedPayload && !!savedContent && savedStamp === stamp(inventory.metadata, savedPayload);
   check();
   const recordedExecutables = new Set(executables as string[]);
   const recordedLinks = new Map((cliLinks as CliLink[]).map(link => [link.file, link.target]));
@@ -464,15 +467,18 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
     if (verified.metadata !== inventory.metadata) throw new Error("dependency graph changed during validation; retry setup");
     inventory = verified;
   }
-  if (!reusable && savedPayload && savedPayload !== inventory.payload) {
+  // Keep the local digest readable to earlier versions. Once a portable
+  // digest has been verified, it also proves byte-identical restored files.
+  const payloadChanged = savedContent ? savedContent !== inventory.portable : savedPayload && savedPayload !== inventory.payload;
+  if (!reusable && payloadChanged) {
     throw new Error("dependency payload changed since the installation was validated");
   }
 
-  function assertAnchors(reuse: boolean, expectedPayload = payloadEntry) {
+  function assertAnchors(reuse: boolean, expectedPayload = payloadEntry, expectedContent = contentEntry) {
     if (reuse && !sameVersion(validationEntry, entryNow(validation))) {
       throw new Error("dependency validation receipt changed during preparation; retry setup");
     }
-    if (!sameVersion(expectedPayload, entryNow(payload))) {
+    if (!sameVersion(expectedPayload, entryNow(payload)) || !sameVersion(expectedContent, entryNow(content))) {
       throw new Error("dependency payload receipt changed during validation; retry setup");
     }
     for (const [filename, expected] of anchors) {
@@ -486,11 +492,14 @@ async function inspectGraph(graph: GraphPaths, plan: DependencyPlan, check: () =
     // the final anchor check immediately before any return or link commit.
     installed.reads.assertCurrentNow("shared dependency manifest changed during preparation; retry setup");
   }
-  const payloadDigest = savedPayload || inventory.payload;
-  if (!payloadDigest) throw new Error("dependency payload scan did not certify its contents");
+  const payloadDigest = inventory.payload || savedPayload;
+  const contentDigest = inventory.portable || savedContent;
+  if (!payloadDigest || !contentDigest) throw new Error("dependency payload scan did not certify its contents");
+  const records: [string, string][] = [];
+  if (contentDigest !== savedContent) records.push([content, contentDigest]);
+  if (payloadDigest !== savedPayload) records.push([payload, payloadDigest]);
   return { reseal: inventory.reseal, reusable, metadata: inventory.metadata,
-    payload: payloadDigest, newPayload: !savedPayload,
-    fingerprint: stamp(inventory.metadata, payloadDigest), assertAnchors };
+    records, fingerprint: stamp(inventory.metadata, payloadDigest), assertAnchors };
 }
 
 /** Match Git's registration backlink, so a copied .git pointer cannot give a
@@ -577,7 +586,8 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
     remaining();
     if (result.code !== 0) throw new Error("dependency graph changed during validation or could not be scanned");
     const inventory: PayloadInventory = JSON.parse(result.stdout);
-    if (!/^[a-f0-9]{64}$/.test(inventory.metadata) || (content && (!inventory.payload || !/^[a-f0-9]{64}$/.test(inventory.payload)))) {
+    if (!/^[a-f0-9]{64}$/.test(inventory.metadata) || (content &&
+      [inventory.payload, inventory.portable].some(digest => !digest || !/^[a-f0-9]{64}$/.test(digest)))) {
       throw new Error("invalid dependency payload scan");
     }
     return inventory;
@@ -808,9 +818,10 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
             saveStamp = false;
           }
         }
-        const records: [string, string][] = [];
-        if (checked.newPayload) records.push([graph.payload, checked.payload]);
-        if (saveStamp) records.push([graph.validation, checked.fingerprint]);
+        // A directory occupying a payload record path can hold unrelated
+        // contents. Revalidate without caching over that directory.
+        const records = checked.records.filter(([file]) => !entryNow(file)?.isDirectory());
+        if (saveStamp && records.length === checked.records.length) records.push([graph.validation, checked.fingerprint]);
         const temporary = (file: string) => file + ".next";
         let committedRecords = false;
         try {
@@ -818,7 +829,11 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
             assertWriter();
             await fs.rm(temporary(file), { force: true });
             assertWriter();
-            await fs.writeFile(temporary(file), digest, { flag: "wx", mode: 0o600 });
+            const handle = await fs.open(temporary(file), "wx", 0o600);
+            try {
+              await handle.writeFile(digest);
+              await handle.sync();
+            } finally { await handle.close(); }
           }
           if ((await scan(modules, false)).metadata !== checked.metadata) {
             throw new Error("dependency graph changed during validation; retry setup");
@@ -827,8 +842,9 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
           assertAnchors(false);
           for (const [file] of records) filesystem.renameSync(temporary(file), file);
           const payloadEntry = entryNow(graph.payload);
+          const contentEntry = entryNow(graph.content);
           committedRecords = true;
-          return () => assertAnchors(false, payloadEntry);
+          return () => assertAnchors(false, payloadEntry, contentEntry);
         } finally {
           if (!committedRecords) for (const [file] of records) await fs.rm(temporary(file), { force: true });
         }
