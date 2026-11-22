@@ -225,6 +225,8 @@ test.each([
   { explicit: true, delivery: "pending-reservation", cut: "before-admission" },
   { explicit: true, delivery: "killed-owner", cut: "killed-setup" },
   { explicit: true, delivery: "killed-owner-starting", cut: "killed-setup" },
+  { explicit: true, delivery: "retirement-interrupted", cut: "killed-setup" },
+  { explicit: true, delivery: "release-interrupted", cut: "killed-setup" },
   { explicit: true, delivery: "live-setup-process", cut: "killed-setup" },
   { explicit: true, delivery: "setup-owner-change", cut: "killed-setup" },
   { explicit: true, delivery: "different-journal-failure", cut: "killed-setup" },
@@ -253,7 +255,9 @@ test.each([
       memberships: [{ kind: "pipeline", containerId: lane.id, stageId: "plan", slot: "plan:2",
         round: 2, role: "architect", stageOrder: 0, parentConversationId: null }] });
     const active = replacement.receipt;
-    const interruptedOwner = ["killed-owner", "killed-owner-starting", "live-setup-process", "setup-owner-change"].includes(delivery);
+    const interruptedRetirement = delivery === "retirement-interrupted" || delivery === "release-interrupted";
+    const interruptedOwner = interruptedRetirement
+      || ["killed-owner", "killed-owner-starting", "live-setup-process", "setup-owner-change"].includes(delivery);
     const ownerIdentity = active.admissionOwner!;
     const failure = cut === "before-admission" ? `structured spawn interrupted before runtime admission: ${active.launchId}`
       : cut === "killed-setup" ? KILLED_SETUP : FAILURE;
@@ -277,7 +281,7 @@ test.each([
       });
       if (delivery !== "cleanup-unproven" && !interruptedOwner) f.registry.confirmStructuredHostSetupCleanup(active.launchId, ownerIdentity);
     }
-    const starting = delivery === "pending-reservation" || delivery === "killed-owner-starting";
+    const starting = interruptedRetirement || delivery === "pending-reservation" || delivery === "killed-owner-starting";
     if (!starting) await f.registry.failStructuredSpawnOffLoop(active.launchId, failure);
     if (!interruptedOwner) f.registry.releaseStructuredSpawnAdmissionOwner(active.launchId, ownerIdentity);
     Object.assign(attempt, { launchId: active.launchId, conversationId: active.conversationId, spawnCalls: 1, error: failure });
@@ -328,9 +332,27 @@ test.each([
     if (delivery !== "uncertain") expect(f.journal.operationResult(`spawn_message_${active.launchId}`)).toBeNull();
     const current = { ...f, launch: () => active.launchId };
     sdk = await connect(current);
-    const answer = await sdk.retry(explicit);
-    expect(sdk.calls()).toBe(1);
-    if (["absent", "pending-reservation", "killed-owner", "killed-owner-starting"].includes(delivery)) {
+    if (interruptedRetirement) {
+      const checkpoint = delivery === "retirement-interrupted"
+        ? spyOn(f.registry, "confirmStructuredHostSetupCleanup").mockImplementationOnce(() => { throw new Error("fixture interruption before setup cleanup"); })
+        : spyOn(f.registry, "releaseStructuredSpawnAdmissionOwner").mockImplementationOnce(() => { throw new Error("fixture interruption before owner release"); });
+      try {
+        expect((await sdk.retry(explicit)).isError).toBe(true);
+        expect(f.registry.spawnReceipt(active.launchId)).toMatchObject({
+          state: "failed", error: failure, hostSetup: { phase: "executing" },
+        });
+        expect(f.registry.spawnReceipt(active.launchId)?.hostSetup?.cleanupConfirmed)
+          .toBe(delivery === "release-interrupted" ? true : undefined);
+        expect(f.registry.spawnReceipt(active.launchId)?.admissionOwner).not.toBeNull();
+        expect(f.row().runs[0]!.attempts).toHaveLength(2);
+        expect(f.tries()).toBe(1);
+      } finally { checkpoint.mockRestore(); }
+    }
+    const requestId = interruptedRetirement ? "retirement-resume" : "custody-retry";
+    const retryCalls = interruptedRetirement ? 2 : 1;
+    const answer = await sdk.retry(explicit, requestId);
+    expect(sdk.calls()).toBe(retryCalls);
+    if (interruptedRetirement || ["absent", "pending-reservation", "killed-owner", "killed-owner-starting"].includes(delivery)) {
       expect(answer.isError, JSON.stringify(answer)).not.toBe(true);
       expect(f.row().cursor!.state).toBe("pending");
       expect(f.row().runs[0]!.attempts[1]).toMatchObject({ n: 2, state: "failed", launchId: active.launchId });
@@ -339,8 +361,8 @@ test.each([
       if (interruptedOwner) expect(f.registry.spawnReceipt(active.launchId)).toMatchObject({
         state: "failed", admissionOwner: null, hostSetup: { cleanupConfirmed: true },
       });
-      expect((await sdk.retry(explicit)).isError).not.toBe(true);
-      expect(sdk.calls()).toBe(1);
+      expect((await sdk.retry(explicit, requestId)).isError).not.toBe(true);
+      expect(sdk.calls()).toBe(retryCalls);
       if (explicit && cut !== "setup") {
         expect((await sdk.retry(true, "custody-stale-launch")).isError).toBe(true);
         expect(f.row().runs[0]!.attempts).toHaveLength(3);

@@ -2352,30 +2352,37 @@ export function defaultPipelinePorts(
       if (!source || !await prepublicationStageJournalProof(withRuntimeRecoveryReads(source, signal), before, failure, signal)) {
         return "the runtime journal does not establish that the original launch never started";
       }
-      const safe = (currentFile: RegistryFile, current: RegistryFile["receipts"][string], reconcileCleanup = false) =>
-        !signal.aborted && eligible() && JSON.stringify(current) === JSON.stringify(before)
-          && unstartedStageLaunchRefusal(currentFile, current, failure, reconcileCleanup) === null;
+      // Terminalization reports the failure after committing the receipt.
+      // Those reporting checkpoints carry no launch or retry authority.
+      const custody = (receipt: typeof before) => JSON.stringify(receipt, (field, value) =>
+        ["failureReporting", "failureRepairState", "failureAnnouncementSuppressed"].includes(field) ? undefined : value);
+      const safe = (currentFile: RegistryFile, current: RegistryFile["receipts"][string]) =>
+        !signal.aborted && eligible() && custody(current) === custody(before)
+          && unstartedStageLaunchRefusal(currentFile, current, failure, true) === null;
+      if (before.state === "starting") {
+        // End admission before releasing the dead owner's lease. A restart
+        // after this write can still reconcile setup on the failed receipt.
+        const failed = await registry.failStructuredSpawnOffLoop(launchId, failure, { announce: false,
+          recoveryFence: safe });
+        invalidateRegistryProjection();
+        if (!failed.claimed || !failed.receipt) return "the original reservation or its ownership changed";
+        before = failed.receipt;
+      }
       const owner = before.admissionOwner;
-      if (owner && before.hostSetup && !before.hostSetup.cleanupConfirmed) {
+      if (owner && before.hostSetup) {
         // The interrupted owner could not write its cleanup receipt. Record
         // the proven exit while holding the same writer as the ownership release.
         const reconciled = await registry.deliveryWriteBatchOrBusy({ label: "pipeline.setup-recovery", operationId: launchId }, () => {
           const currentFile = registry.readOnlySnapshot();
           const current = currentFile.receipts[launchId];
-          if (!current || !safe(currentFile, current, true)) return null;
-          registry.confirmStructuredHostSetupCleanup(launchId, owner);
-          const released = registry.releaseStructuredSpawnAdmissionOwner(launchId, owner);
-          return released.released ? released.receipt : null;
+          if (!current || !safe(currentFile, current)) return false;
+          if (!current.hostSetup?.cleanupConfirmed) registry.confirmStructuredHostSetupCleanup(launchId, owner);
+          return registry.releaseStructuredSpawnAdmissionOwner(launchId, owner).released;
         });
         if (!reconciled) return "the original setup reservation or its ownership changed";
-        before = reconciled;
         invalidateRegistryProjection();
       }
-      if (before.state === "failed") return null;
-      const failed = await registry.failStructuredSpawnOffLoop(launchId, failure, { announce: false,
-        recoveryFence: (currentFile, current) => safe(currentFile, current) });
-      invalidateRegistryProjection();
-      return failed.claimed ? null : "the original reservation or its ownership changed";
+      return null;
     },
     unpublishedLaunchRetrySafe: async (launchId, inheritedSignal) => {
       const signal = AbortSignal.any([AbortSignal.timeout(10_000), ...(inheritedSignal ? [inheritedSignal] : [])]);
@@ -3169,7 +3176,7 @@ async function unreservedStageRetryRefusal(pipeline: Pipeline, stage: PipelineSt
     const original = bound && attempt.launchId ? registry.spawnReceipt(attempt.launchId) : null;
     const interruption = original?.error ?? cutFailure;
     if (original && !stopHosts && interruption && interruptedStageLaunch(interruption) && ports.retireInterruptedStageLaunch
-      && (original.state === "starting" || original.state === "failed" && original.hostSetup && !original.hostSetup.cleanupConfirmed)) {
+      && (original.state === "starting" || original.state === "failed" && original.hostSetup && original.admissionOwner)) {
       if (!original?.clientAttemptId || original.conversationId !== attempt.conversationId
         || stageReservationReceipt(pipeline, stage.id, attempt, original.clientAttemptId)?.launchId !== original.launchId) {
         return "stage launch recovery cannot prove no dispatch began: the original reserved receipt is unavailable or conflicts";
