@@ -2901,18 +2901,23 @@ test("maintenance handoffs page task/action pairs and credit only the delivered 
   expect(first.verdict.items[0]!.label).toContain("handoff-3: Reason 3 — Run action 3");
   expect(first.verdict.items[0]!.label).not.toContain("handoff-4:");
   const firstText = seatTickWakeMessage({ project: PROJECT, ...first.verdict, signals: [] });
-  const firstPlan = seatTickWakeCommitPlan({ ...first.verdict, items: [...first.verdict.items] }, { fingerprint: "maintenance-1", eventsThrough: 0, frozenText: firstText })!;
+  const firstPlan = seatTickWakeCommitPlan({ ...first.verdict, items: [...first.verdict.items] }, { fingerprint: "maintenance-unchanged", eventsThrough: 0, frozenText: firstText })!;
   const landed = seatTickWakeCommit(first.state, firstPlan, NOW);
   check = { ...check, now: NOW + SEAT_TICK_WAKE_INTERVAL_MS, state: JSON.parse(JSON.stringify(landed)) };
   const second = seatTickDecision(check);
   if (second.verdict.kind !== "wake") throw new Error("remaining maintenance page must stay owed");
   expect(second.verdict.items[0]!.label).toContain("handoff-4: Reason 4 — Run action 4");
   const secondText = seatTickWakeMessage({ project: PROJECT, ...second.verdict, signals: [] });
-  const secondPlan = seatTickWakeCommitPlan({ ...second.verdict, items: [...second.verdict.items] }, { fingerprint: "maintenance-2", eventsThrough: 0, frozenText: secondText })!;
+  const secondPlan = seatTickWakeCommitPlan({ ...second.verdict, items: [...second.verdict.items] }, { fingerprint: "maintenance-unchanged", eventsThrough: 0, frozenText: secondText })!;
   const secondLanded = seatTickWakeCommit(second.state, secondPlan, check.now);
   const third = seatTickDecision({ ...check, now: check.now + SEAT_TICK_WAKE_INTERVAL_MS, state: JSON.parse(JSON.stringify(secondLanded)) });
   if (third.verdict.kind !== "wake") throw new Error("last maintenance page must stay owed");
   expect(third.verdict.items[0]!.label).toContain("handoff-7: Reason 7 — Run action 7");
+  const thirdText = seatTickWakeMessage({ project: PROJECT, ...third.verdict, signals: [] });
+  const thirdPlan = seatTickWakeCommitPlan({ ...third.verdict, items: [...third.verdict.items] }, { fingerprint: "maintenance-unchanged", eventsThrough: 0, frozenText: thirdText })!;
+  const complete = seatTickWakeCommit(third.state, thirdPlan, check.now + SEAT_TICK_WAKE_INTERVAL_MS);
+  expect(complete.announcedMaintenance).toEqual(["maintenance-run:page:0", "maintenance-run:page:1", "maintenance-run:page:2"]);
+  expect(seatTickDecision({ ...check, now: check.now + 2 * SEAT_TICK_WAKE_INTERVAL_MS, state: complete }).verdict.kind).toBe("quiet");
 });
 
 

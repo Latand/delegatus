@@ -991,16 +991,18 @@ test("the deployment signal reports the latest deployment, and stays silent when
   expect(running.signals).toEqual([]);
 });
 
-test("a settled deploy wake carries the linked seat-paused Waiting task from gathered source rows", async () => {
+test("a settled deploy wake carries the linked legacy seat pause and omits operator-held tasks", async () => {
   const { gatherSeatTickDeployInput } = await import("./seatTickSources");
   const pipelineId = "paused-after-deploy";
   const task = { id: "task-after-deploy", project: PROJECT, text: "Resume the release", status: "blocked", placement: "unplaced", assignments: [],
     createdAt: new Date(NOW - 60 * 60_000).toISOString(), updatedAt: new Date(NOW - 60 * 60_000).toISOString(),
     hold: { kind: "external", note: "Paused for deployment", since: new Date(NOW - 60 * 60_000).toISOString(), by: "agent" } };
+  const operatorTask = { ...task, id: "operator-access-task", text: "Change account access", hold: { kind: "operator", note: "Grant access to the release account", since: new Date(NOW - 60 * 60_000).toISOString(), by: "operator" } };
   const pipeline = lane({ id: pipelineId, state: "paused", taskIds: [task.id], pausedAt: new Date(NOW - 60 * 60_000).toISOString(),
-    pause: { reason: "Deploy in progress", actor: { kind: "agent", conversationId: CONVERSATION } } });
+    stateDetail: `paused by builder ${CONVERSATION}`, pause: { reason: "Deploy in progress" } });
+  pipeline.taskIds = [task.id, operatorTask.id];
   const settledAt = new Date(NOW - 30 * 60_000).toISOString();
-  const ports = sources({ now: NOW, pipelines: [pipeline], tasks: [task], seatDeployments: () => [{ deploymentId: "deployment-fixture", conversationId: CONVERSATION,
+  const ports = sources({ now: NOW, pipelines: [pipeline], tasks: [task, operatorTask], seatDeployments: () => [{ deploymentId: "deployment-fixture", conversationId: CONVERSATION,
     project: PROJECT, revision: "a".repeat(40), requestedAt: new Date(NOW - 45 * 60_000).toISOString() }],
   deployment: () => ({ state: "ok", value: { deploymentId: "deployment-fixture", phase: "succeeded", revision: "a".repeat(40), updatedAt: settledAt, terminal: true } }) as never });
   const gathered = await gatherSeatTickDeployInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
@@ -1023,6 +1025,8 @@ test("the default worker-ask source preserves archived merged-task acceptance ac
     text: "Verify the running build", status: "blocked", placement: "unplaced", assignments: [],
     createdAt: new Date(NOW - 5 * DAY_MS).toISOString(), updatedAt: new Date(NOW - 5 * DAY_MS).toISOString(),
     hold: { kind: "external", note: "Verify acceptance", since: new Date(NOW - 5 * DAY_MS).toISOString(), by: "agent" } };
+  const activeTask: import("@/lib/tasks/types").BoardTask = { ...task, id: "active-build-task", text: "Continue the current build" };
+  const unrelatedTask: import("@/lib/tasks/types").BoardTask = { ...task, id: "unrelated-held-task", text: "Wait for a separate prerequisite" };
   const closedAt = new Date(NOW - 4 * DAY_MS).toISOString();
   const merged = { ...buildPipeline({ id: "archived-merged-lane", task: "Verify the running build", project: PROJECT, repoDir: "/srv/repo",
     stages: [{ id: "build", kind: "run", prompt: "build", next: null,
@@ -1032,11 +1036,19 @@ test("the default worker-ask source preserves archived merged-task acceptance ac
       prNumber: null, policyChangedAt: closedAt, reviewedHead: "", chain: [], updates: [], seenChecks: [], head: null, headSeenAt: null, lastChecks: null,
       readAt: null, nextReadAt: null, requestedAt: closedAt, mergedHead: null, mergeCommit: null, method: null, mergedAt: closedAt,
       attempts: 0, reason: null, blockedAt: null, updatedAt: closedAt } };
+  const recentHidden = { ...merged, id: "recent-hidden-merge", task: activeTask.text, taskIds: [activeTask.id],
+    closedAt: new Date(NOW - 60 * 60_000).toISOString(), hiddenAt: new Date(NOW - 30 * 60_000).toISOString(),
+    merge: { ...merged.merge, mergedAt: new Date(NOW - 60 * 60_000).toISOString(), updatedAt: new Date(NOW - 60 * 60_000).toISOString() } };
+  const active = { ...buildPipeline({ id: "active-build-lane", task: activeTask.text, project: PROJECT, repoDir: "/srv/repo",
+    stages: [], srcPath: null, srcConversationId: null, now: new Date(NOW - 10 * 60_000).toISOString(), state: "running" }),
+    state: "running" as const, taskIds: [activeTask.id] };
   expect(isPipeline(merged)).toBe(true);
-  saveTasks([task]);
-  savePipelines([merged] as never);
+  saveTasks([task, activeTask, unrelatedTask]);
+  savePipelines([merged, recentHidden, active] as never);
   expect(await archiveSettledPipelines(NOW)).toBe(1);
-  const agenda = spyOn(projection, "operatorSeatAgenda").mockResolvedValue({ asks: [], forms: { rows: [], count: 0 } } as never);
+  const agenda = spyOn(projection, "operatorSeatAgenda").mockResolvedValue({ asks: [
+    { key: "existing-unrelated", id: unrelatedTask.id, waitingTaskIds: [unrelatedTask.id], label: "Existing seat ask", sinceMs: NOW - 60_000 },
+  ], forms: { rows: [], count: 0 } } as never);
   try {
     const source = defaultSeatTickSources();
     const result = await source.workerAsks!(PROJECT, CONVERSATION);
@@ -1045,6 +1057,8 @@ test("the default worker-ask source preserves archived merged-task acceptance ac
     expect(ask).toMatchObject({ id: task.id, waitingTaskIds: [task.id] });
     expect(ask?.label).toContain("deployment_status");
     expect(ask?.label).toContain(task.id);
+    expect(result.asks.filter(item => item.id === unrelatedTask.id)).toHaveLength(1);
+    expect(result.asks.some(item => item.id === activeTask.id && item.waitingTaskIds?.includes(activeTask.id))).toBe(false);
   } finally { agenda.mockRestore(); }
 });
 

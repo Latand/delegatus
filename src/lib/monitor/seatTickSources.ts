@@ -3447,8 +3447,7 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   if (deployThrough > 0) {
     const waitingTasks = projectRows(sources.tasks(), project).filter(task => task.status !== "done");
     const waitingIndex = waitingRouteIndex(waitingTasks, paused);
-    const eligible = new Set(paused.filter(lane => !pausedByOperator(lane)
-      && (lane.pause?.actor?.kind !== "agent" || lane.pause.actor.conversationId === seat.conversationId)
+    const eligible = new Set(paused.filter(lane => pausedBy(lane, seat) === "seat"
       && Date.parse(lane.pausedAt ?? "") <= deployThrough
       && (!lane.pause.resumeCondition || pauseReminderDue(lane.pause, lane.pausedAt, now,
         pauses.get(lane.id)?.pauseConditionMet ?? false))).map(lane => lane.id));

@@ -190,6 +190,27 @@ test("no orchestrator keeps the decision, combination, exact comment and history
   expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.delivery.text).not.toContain("amended");
 });
 
+test("task Waiting writes follow the stored decision form before and after its answer", async () => {
+  const { waitingRoute, waitingRouteIndex } = await import("@/lib/tasks/waitingRoute");
+  const reviewId = await publish(await fullInput("stored-form-hold"));
+  let stored = loadTasks()[0]!;
+  const write = patchTask([stored], stored.id, { status: "blocked", hold: { kind: "operator", note: "" } }, "2026-10-01T01:00:00Z", { actor: "operator" });
+  expect(write.ok).toBe(true);
+  if (!write.ok) throw new Error(write.error);
+  saveTasks(write.tasks);
+  stored = loadTasks()[0]!;
+  expect(stored.status).toBe("blocked");
+  expect(waitingRoute(stored, waitingRouteIndex([stored], []), Date.parse("2026-10-01T01:00:00Z"))).toMatchObject({ owner: "operator", rule: "form" });
+
+  const answer = await reviewPOST(request("/review", { reviewId, chosen: [1], comment: "Approved" }), "task-prototype");
+  expect(answer.status).toBe(200);
+  stored = loadTasks()[0]!;
+  const afterAnswer = patchTask([stored], stored.id, { status: "blocked", hold: { kind: "operator", note: "" } }, "2026-10-01T02:00:00Z", { actor: "operator" });
+  expect(afterAnswer).toMatchObject({ ok: true, task: { status: "inbox" } });
+  if (!afterAnswer.ok) throw new Error(afterAnswer.error);
+  expect(waitingRoute(afterAnswer.task, waitingRouteIndex([afterAnswer.task], []), Date.parse("2026-10-01T02:00:00Z"))).toMatchObject({ owner: "seat", rule: "unowned" });
+});
+
 test("a decision on the newer of two rounds retires the older undecided one: nothing waits, history keeps it as superseded", async () => {
   const older = await publish(await fullInput("design-round")); const newer = await publish(await fullInput("revise-round"));
   expect((await read()).waitingReviewId).toBe(newer);
