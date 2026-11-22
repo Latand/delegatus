@@ -801,4 +801,153 @@ describe("AntigravityAcpHost", () => {
       await recovered.release();
     }
   });
+
+  it("reconciles retry EIO by latest attempt turnId, keeps lost ACP replies unavailable, and point-reads evicted deliveries past 4096", async () => {
+    const mintedSessionId = `ag_edge_${crypto.randomUUID().slice(0, 8)}`;
+    const baseEventStore = new FileRuntimeEventStore(path.join(stateDir, "runtime-events-edge"));
+    let failDeliveryEcho = false;
+    let failedWrites = 0;
+    const originalAppend = baseEventStore.append.bind(baseEventStore);
+    baseEventStore.append = (id, event) => {
+      if (failDeliveryEcho && event.kind === "item" && event.deliveryEcho) {
+        failedWrites += 1;
+        throw Object.assign(new Error("simulated ledger EIO"), { code: "EIO" });
+      }
+      originalAppend(id, event);
+    };
+    const eventStore = baseEventStore;
+
+    const outboundPrompts: string[] = [];
+    let lastPromptId = 0;
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+    const makeOpts = (sessionId = mintedSessionId) => ({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore,
+      shutdownGraceMs: 50,
+      processIdentity: () => "start-id-edge",
+      signalProcess: ((_pid: number, signal?: NodeJS.Signals | number) => {
+        fake.signals.push(signal ?? "SIGTERM");
+        fake.closeChild(0);
+        return true;
+      }) as typeof process.kill,
+      spawnProcess: () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          } else if (method === "session/new" || method === "session/resume") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+          } else if (method === "session/prompt" && id !== undefined) {
+            lastPromptId = id;
+            outboundPrompts.push(String(id));
+          } else if (method === "session/close") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          }
+        });
+        return fake.child;
+      },
+    });
+
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    // A. Retry after explicit ACP error followed by EIO on second attempt's deliveryEcho:
+    //    First attempt's `failed` MUST NOT mask the second attempt's uncertain outcome.
+    const retryEntry = { id: "edge-retry-eio", text: "Retry message" };
+    let host = await AntigravityAcpHost.start(makeOpts());
+    expect((await host.send(retryEntry)).outcome).toBe("turn-started");
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, error: { code: -32000, message: "first attempt rejected" } });
+    await tick();
+    expect((await host.sessionMaterializationEvidence(retryEntry.id)).state).toBe("failed");
+    await host.release();
+
+    host = await AntigravityAcpHost.adopt(mintedSessionId, makeOpts());
+    failDeliveryEcho = true;
+    expect((await host.send(retryEntry)).outcome).toBe("turn-started");
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await tick();
+    expect(failedWrites).toBe(1);
+    expect((await host.sessionMaterializationEvidence(retryEntry.id)).state).toBe("unavailable");
+    await host.release();
+
+    failDeliveryEcho = false;
+    host = await AntigravityAcpHost.adopt(mintedSessionId, makeOpts());
+    expect((await host.sessionMaterializationEvidence(retryEntry.id)).state).toBe("unavailable");
+    const promptsBeforeRetryEio = outboundPrompts.length;
+    const thirdTry = await host.send(retryEntry);
+    expect(thirdTry.outcome).toBe("rejected");
+    expect(outboundPrompts.length - promptsBeforeRetryEio).toBe(0);
+    await host.release();
+
+    // B. Lost ACP reply (child disconnects after receiving session/prompt with no reply):
+    //    MUST stay `unavailable` on both live host and successor, refusing blind resend.
+    const lostSessionId = `ag_lost_${crypto.randomUUID().slice(0, 8)}`;
+    const lostEntry = { id: "edge-lost-reply", text: "Lost reply message" };
+    host = await AntigravityAcpHost.start(makeOpts(lostSessionId));
+    const promptsBeforeLost = outboundPrompts.length;
+    expect((await host.send(lostEntry)).outcome).toBe("turn-started");
+    expect(outboundPrompts.length - promptsBeforeLost).toBe(1);
+    fake.closeChild(1);
+    await tick();
+    expect((await host.sessionMaterializationEvidence(lostEntry.id)).state).toBe("unavailable");
+    await host.release();
+
+    host = await AntigravityAcpHost.adopt(lostSessionId, makeOpts(lostSessionId));
+    expect((await host.sessionMaterializationEvidence(lostEntry.id)).state).toBe("unavailable");
+    const promptsBeforeLostRetry = outboundPrompts.length;
+    const lostRetry = await host.send(lostEntry);
+    expect(lostRetry.outcome).toBe("rejected");
+    expect(outboundPrompts.length - promptsBeforeLostRetry).toBe(0);
+    await host.release();
+
+    // C. Eviction beyond 4,096 accepted deliveries: point-read durable ledger on cache miss.
+    const retentionSessionId = `ag_ret_${crypto.randomUUID().slice(0, 8)}`;
+    const firstEntry = { id: "edge-retention-first", text: "First of 4097" };
+    host = await AntigravityAcpHost.start(makeOpts(retentionSessionId));
+    const firstReceipt = await host.send(firstEntry);
+    expect(firstReceipt.outcome).toBe("turn-started");
+    if (firstReceipt.outcome !== "turn-started") throw new Error("expected turn-started");
+    const firstTurnId = firstReceipt.turnId;
+    fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+    await tick();
+    expect((await host.sessionMaterializationEvidence(firstEntry.id)).state).toBe("materialized");
+    await host.release();
+
+    const stored = baseEventStore.load(retentionSessionId);
+    const turnEvents = stored.filter((event) => "turnId" in event && event.turnId === firstTurnId);
+    expect(turnEvents.some((event) => event.kind === "item" && event.deliveryEcho)).toBe(true);
+    let seq = stored.at(-1)!.seq;
+    const extraLines: string[] = [];
+    for (let n = 0; n < 4096; n += 1) {
+      for (const ev of turnEvents) {
+        extraLines.push(
+          JSON.stringify({ ...ev, seq: ++seq })
+            .replaceAll(firstTurnId, `edge-later-turn-${n}`)
+            .replaceAll(firstEntry.id, `edge-later-delivery-${n}`),
+        );
+      }
+    }
+    fs.appendFileSync(
+      path.join(stateDir, "runtime-events-edge", `${retentionSessionId}.jsonl`),
+      `${extraLines.join("\n")}\n`,
+    );
+
+    host = await AntigravityAcpHost.adopt(retentionSessionId, makeOpts(retentionSessionId));
+    const totalEchoes = baseEventStore.load(retentionSessionId).filter((ev) => ev.kind === "item" && ev.deliveryEcho).length;
+    expect(totalEchoes).toBe(4097);
+    expect(await host.sessionMaterializationEvidence(firstEntry.id)).toEqual({ state: "materialized" });
+    expect((await host.sessionMaterializationEvidence("edge-never-sent")).state).toBe("absent");
+    const promptsBeforeRetentionRetry = outboundPrompts.length;
+    const retentionRetry = await host.send(firstEntry);
+    expect(retentionRetry).toEqual(firstReceipt);
+    expect(outboundPrompts.length - promptsBeforeRetentionRetry).toBe(0);
+    const echoesForFirst = baseEventStore.load(retentionSessionId)
+      .filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === firstEntry.id);
+    expect(echoesForFirst).toHaveLength(1);
+    await host.release();
+  });
 });

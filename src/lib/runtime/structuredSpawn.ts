@@ -453,18 +453,25 @@ async function waitForStructuredSessionMaterialization(
     now: () => number;
     sleep: (ms: number) => Promise<void>;
     timeoutMs: number;
+    requireDeliveryEvidence?: boolean;
   },
 ): Promise<void> {
+  const requireDeliveryEvidence = options.requireDeliveryEvidence === true;
   const deadline = options.now() + options.timeoutMs;
   let lastEvidence: SessionMaterializationEvidence | null = null;
   for (;;) {
     const evidence = host.sessionMaterializationEvidence
       ? await host.sessionMaterializationEvidence(clientMessageId)
-      : { state: "materialized" as const };
+      : requireDeliveryEvidence
+        ? { state: "unavailable" as const, reason: "structured host provides no delivery materialization evidence" }
+        : { state: "materialized" as const };
     if (evidence.state === "failed") throw new StructuredSessionMaterializationError(evidence.reason);
+    if (requireDeliveryEvidence && evidence.state === "unavailable") {
+      throw new StructuredSessionMaterializationError(evidence.reason);
+    }
     lastEvidence = evidence;
     if (evidence.state === "materialized" && structuredTranscriptIsReadable(artifactPath)) return;
-    if (evidence.state === "unavailable" && structuredTranscriptIsReadable(artifactPath)) return;
+    if (!requireDeliveryEvidence && evidence.state === "unavailable" && structuredTranscriptIsReadable(artifactPath)) return;
     const remaining = deadline - options.now();
     if (remaining <= 0) {
       if (lastEvidence.state === "absent") {
@@ -3454,6 +3461,7 @@ export async function spawnStructuredConversation(
             now,
             sleep,
             timeoutMs: Math.max(0, durableSetupDeadline - now()),
+            requireDeliveryEvidence: input.receipt.engine === "antigravity",
           },
         ));
       } finally {

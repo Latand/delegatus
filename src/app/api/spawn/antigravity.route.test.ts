@@ -359,4 +359,214 @@ describe("POST /api/spawn and /api/roles for Antigravity", () => {
       generations: [expect.objectContaining({ accountId: "default", launchProfile: expect.objectContaining({ model: "gemini-3.8-flash-low" }) })],
     });
   });
+
+  test("requires confirmed Antigravity delivery evidence before transitioning spawn operation to delivered (paired control vs deliveryEcho EIO)", async () => {
+    const { EventEmitter } = await import("node:events");
+    const { PassThrough } = await import("node:stream");
+    const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
+    const { RuntimeJournal } = await import("@/runtime-host/journal");
+    const { spawnStructuredConversation, startAntigravityStructuredHost } = await import("@/lib/runtime/structuredSpawn");
+    type ChildProcessWithoutNullStreams = import("node:child_process").ChildProcessWithoutNullStreams;
+
+    const runSpawnCase = async (injectDeliveryEchoEio: boolean) => {
+      const caseDir = fs.mkdtempSync(path.join(sandbox, injectDeliveryEchoEio ? "spawn-eio-" : "spawn-ok-"));
+      const stateDir = path.join(caseDir, "state");
+      const workDir = path.join(caseDir, "work");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.mkdirSync(workDir, { recursive: true });
+
+      const store = new AgentRegistry(path.join(stateDir, "agent-registry.json"));
+      const journal = new RuntimeJournal(path.join(stateDir, "runtime-journal.sqlite"), {
+        structuredHosts: true,
+        maxEvents: 500,
+      });
+      const eventStoreDir = path.join(stateDir, "structured-host-events");
+      let eioCount = 0;
+      let liveHost: import("@/lib/runtime/antigravityAcpHost").AntigravityAcpHost | null = null;
+      let launchId = "";
+      let launchResult: Awaited<ReturnType<typeof spawnStructuredConversation>> | undefined;
+      const deferred: Array<() => Promise<void>> = [];
+      let closeFakeChild: (code?: number) => void = () => {};
+
+      const makeFakeChild = (): ChildProcessWithoutNullStreams => {
+        const stdin = new PassThrough();
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const emitter = new EventEmitter();
+        let closed = false;
+        const child = Object.assign(emitter, {
+          stdin,
+          stdout,
+          stderr,
+          pid: 65_000 + Math.floor(Math.random() * 1_000),
+          exitCode: null as number | null,
+          signalCode: null as NodeJS.Signals | null,
+          killed: false,
+          kill: () => { closeFakeChild(0); return true; },
+        });
+        closeFakeChild = (code = 0) => {
+          if (closed) return;
+          closed = true;
+          child.exitCode = code;
+          stdout.end();
+          stderr.end();
+          emitter.emit("exit", code, null);
+          emitter.emit("close", code, null);
+        };
+        let buffer = "";
+        const mintedId = crypto.randomUUID();
+        stdin.on("data", (chunk: Buffer | string) => {
+          buffer += chunk.toString();
+          let nl = buffer.indexOf("\n");
+          while (nl >= 0) {
+            const line = buffer.slice(0, nl).trim();
+            buffer = buffer.slice(nl + 1);
+            if (line) {
+              const msg = JSON.parse(line) as { id?: number; method?: string };
+              if (msg.id !== undefined) {
+                let result: unknown = {};
+                if (msg.method === "initialize") result = { protocolVersion: 1, agentInfo: { version: "1.5.14" } };
+                else if (msg.method === "session/new" || msg.method === "session/resume") result = { sessionId: mintedId };
+                else if (msg.method === "session/prompt") result = { stopReason: "end_turn" };
+                stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result })}\n`);
+              }
+            }
+            nl = buffer.indexOf("\n");
+          }
+        });
+        return child as unknown as ChildProcessWithoutNullStreams;
+      };
+
+      type RuntimeOperationCommand = import("@/lib/runtime/contracts").RuntimeOperationCommand;
+      type RuntimeReceiptStatus = import("@/lib/runtime/contracts").RuntimeReceiptStatus;
+      type RuntimeTransitionDetails = import("@/lib/runtime/contracts").RuntimeTransitionDetails;
+      type RuntimeTransitionOptions = import("@/lib/runtime/contracts").RuntimeTransitionOptions;
+      const runtimeClient = {
+        command: async (command: RuntimeOperationCommand) => journal.executeOperation(command),
+        transitionOperation: async (
+          operationId: string,
+          status: Exclude<RuntimeReceiptStatus, "pending">,
+          details?: RuntimeTransitionDetails,
+          options?: RuntimeTransitionOptions,
+        ) => journal.transitionOperation(operationId, status, details, options),
+      } as unknown as RuntimeHostClient;
+
+      try {
+        const response = await POST.withDependencies(makeRequest({
+          title: injectDeliveryEchoEio ? "Spawn EIO check" : "Spawn control check",
+          engine: "antigravity",
+          model: "gemini-3.8-flash-low",
+          cwd: workDir,
+          ["prompt"]: "Confirm delivery",
+          clientAttemptId: `ag_spawn_eio_${crypto.randomUUID().slice(0, 8)}`,
+        }), {
+          registry: () => store,
+          assertStructuredRuntime: () => {},
+          antigravityBinaryGap: () => null,
+          storeImages: () => [],
+          resolveHealthySpawnAccount: async () => antigravityAccountForSpawn("default"),
+          resolveSpawnAccount: () => antigravityAccountForSpawn("default"),
+          resolvePinnedSpawnAdmission: async () => ({
+            kind: "admissible",
+            basis: "current",
+            stale: false,
+            retryAt: null,
+          }),
+          runtimeHostClient: () => runtimeClient,
+          defer: (work) => { deferred.push(work); },
+          spawnStructuredConversation: async (input) => {
+            launchId = input.receipt.launchId;
+            launchResult = await spawnStructuredConversation(input, {
+              durableSetupTimeoutMs: 5_000,
+              startHost: async (spawnInput, capability) => {
+                const ledger = new FileRuntimeEventStore(eventStoreDir);
+                const origAppend = ledger.append.bind(ledger);
+                ledger.append = (session, event) => {
+                  if (injectDeliveryEchoEio && event.kind === "item" && event.deliveryEcho) {
+                    eioCount += 1;
+                    throw Object.assign(new Error("simulated ledger EIO"), { code: "EIO" });
+                  }
+                  origAppend(session, event);
+                };
+                const host = await startAntigravityStructuredHost(spawnInput, capability, {
+                  viewerMcpServer: null,
+                  mcpServers: [],
+                  eventStore: ledger,
+                  signalProcess: () => { closeFakeChild(0); return true; },
+                  processIdentity: () => "fixture-spawn-eio",
+                  spawnProcess: () => makeFakeChild(),
+                  requestTimeoutMs: 5_000,
+                  shutdownGraceMs: 50,
+                });
+                liveHost = host;
+                return host;
+              },
+              publishHost: async () => async () => {},
+              deliverFirst: async (spawnInput) => {
+                if (!liveHost) throw new Error("live Antigravity host was not captured");
+                const receipt = await liveHost.send({
+                  id: `spawn_message_${spawnInput.receipt.launchId}`,
+                  text: spawnInput.prompt,
+                });
+                if (receipt.outcome === "rejected") {
+                  throw new Error(`first Antigravity message rejected: ${receipt.reason}`);
+                }
+              },
+            });
+            return launchResult;
+          },
+        });
+        expect(response.status).toBe(202);
+        expect(deferred).toHaveLength(1);
+        await deferred[0]!();
+        expect(liveHost).not.toBeNull();
+        const host = liveHost!;
+        const evidence = (await host.sessionMaterializationEvidence(`spawn_message_${launchId}`)).state;
+        const ledgerRead = new FileRuntimeEventStore(eventStoreDir);
+        const echoes = ledgerRead.load(host.identity.sessionId).filter((e) => e.kind === "item" && e.deliveryEcho).length;
+        const userRows = fs.readFileSync(host.identity.path, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { type: string })
+          .filter((rec) => rec.type === "user.message").length;
+        const runtime = journal.snapshot().recentOperations.find((op) => op.operationId === launchId)?.status;
+        const registry = store.spawnRecoverySnapshot([launchId]).receipts[launchId]?.state;
+        return {
+          eioCount,
+          evidence,
+          echoes,
+          userRows,
+          runtime,
+          registry,
+          launchState: launchResult?.state,
+          initialMessage: launchResult?.initialMessage,
+        };
+      } finally {
+        if (liveHost) await (liveHost as import("@/lib/runtime/antigravityAcpHost").AntigravityAcpHost).release().catch(() => {});
+        store.close();
+        journal.close();
+      }
+    };
+
+    const control = await runSpawnCase(false);
+    expect(control).toEqual({
+      eioCount: 0,
+      evidence: "materialized",
+      echoes: 1,
+      userRows: 1,
+      runtime: "delivered",
+      registry: "completed",
+      launchState: "settled",
+      initialMessage: "delivered",
+    });
+
+    const failed = await runSpawnCase(true);
+    expect(failed.eioCount).toBe(1);
+    expect(failed.evidence).toBe("unavailable");
+    expect(failed.echoes).toBe(0);
+    expect(failed.userRows).toBe(0);
+    expect(failed.runtime).not.toBe("delivered");
+    expect(failed.registry).toBe("failed");
+    expect(failed.initialMessage).not.toBe("delivered");
+  });
 });
