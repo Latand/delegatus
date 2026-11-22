@@ -256,8 +256,8 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
-test.each(["enabled", "disabled", "long-reservation", "numbered-prose"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
-  const ownerTier = kind === "enabled";
+test.each(["enabled", "two-pairing-owners", "disabled", "long-reservation", "numbered-prose"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
+  const ownerTier = kind === "enabled" || kind === "two-pairing-owners";
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
@@ -265,7 +265,8 @@ test.each(["enabled", "disabled", "long-reservation", "numbered-prose"])("protot
     return { body: { status: "ok" } };
   });
   const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = ownerTier;
-  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const second = { ...paired, id: "other-pairing", owner: { ...paired.owner, id: "202" }, targets: [] };
+  updateRelayStore(s => ({ ...s, relays: kind === "two-pairing-owners" ? [paired, second] : [paired] }));
   let selections = 0, launches = 0;
   const previous = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
@@ -343,19 +344,21 @@ test("the claimed relay records an Other token before a recommendation marker", 
   } finally { await server.close(); }
 });
 
-for (const scenario of ["references", "lease-lost", "revoked", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
+for (const scenario of ["references", "lease-lost", "revoked", "revoked-with-two-owners", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const paired = relay("https://unused.invalid/v1"); paired.targets[0]!.ownerTier = scenario !== "disabled";
   const server = await startTestRelay((req) => {
     if (req.url?.endsWith("/heartbeat")) {
       if (scenario === "lease-lost") return { status: 409, body: { error: { code: "lease_lost", message: "gone" } } };
-      if (scenario === "revoked") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, ownerTier: false }] }] }));
+      if (scenario === "revoked" || scenario === "revoked-with-two-owners") updateRelayStore(s => ({ ...s,
+        relays: s.relays.map(relay => relay.id === paired.id ? { ...relay, targets: [{ ...paired.targets[0]!, ownerTier: false }] } : relay) }));
       if (scenario === "disabled") updateRelayStore(s => ({ ...s, relays: [{ ...paired, targets: [{ ...paired.targets[0]!, enabled: false }] }] }));
     }
     return { body: { status: "ok" } };
   });
   paired.api_base = `${server.origin}/v1`; paired.origin = server.origin;
-  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const second = { ...paired, id: "other-pairing", owner: { ...paired.owner, id: "202" }, targets: [] };
+  updateRelayStore(s => ({ ...s, relays: scenario === "revoked-with-two-owners" ? [paired, second] : [paired] }));
   const text = prototypeCopyLine(round, 2) + (scenario === "references" ? `\n${prototypeReference(round)}` : "");
   try {
     const result = await runClaimedRequest(paired, { ...contextRequest, request_id: `prototype-${scenario}`, answer: { ...contextRequest.answer, max_chars: 4000 },

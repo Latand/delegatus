@@ -49,6 +49,7 @@ import type { HeadlessReviewRuntime } from "@/lib/agent/headless";
 import { ExternalRelayError } from "./client";
 import { completeRelayRequest } from "./relayCompletion";
 import { InlineRelayLeaseTransport, RelayLeaseTransport } from "./relayLeaseTransport";
+import { endRequesterLease, openRequesterLease, requesterLeaseActive, type RequesterLease } from "./requesterLease";
 import {
   answerSchema,
   checkedAnswer,
@@ -337,6 +338,8 @@ export async function runClaimedRequest(
   let activeCapacityFreed = false;
   let activeTarget: RelayTargetSettings | null = null;
   let recorded = false;
+  let requesterLease: RequesterLease | undefined;
+  let requesterTier = false;
   let capacityReleaseRetry: Promise<void> | null = null;
   let releaseCapacity: (() => Promise<void>) | null = null;
   let initialLeaseNotified = false;
@@ -587,6 +590,12 @@ export async function runClaimedRequest(
   let runFinished = false;
   let cloudUncertain = false;
   const callAbort = new AbortController();
+  const loseLease = () => {
+    if (ownerPastWindow()) return;
+    leaseUnavailable = true;
+    if (requesterLease) endRequesterLease(requesterLease);
+    if (!ownerExecution) { run?.cancel(); callAbort.abort(); }
+  };
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   // A refused cutoff write can leave cancel absent from the ledger. The
   // unsettled owner still owns its capacity, chain reservation and files.
@@ -658,10 +667,13 @@ export async function runClaimedRequest(
     const started = Date.now();
     const stallMs = request.liveness.stall_window_s * 1000;
     const cancelStalledRun = () => {
-      if (ownerPastWindow()) return;
+      if (leaseUnavailable || ownerPastWindow()) return;
+      if (requesterTier && acked && requesterLease && !completionInFlight && !completionAccepted && !requesterLeaseActive(requesterLease)) {
+        loseLease();
+        return;
+      }
       if (!heartbeatBusy && !completionAccepted && !completionInFlight && !leaseUnavailable && Date.now() - heartbeatAt > stallMs) {
-        leaseUnavailable = true;
-        if (!ownerExecution) { run?.cancel(); callAbort.abort(); }
+        loseLease();
       }
     };
     // Lease HTTP traffic has its own process and event loop. Viewer stalls and
@@ -669,34 +681,46 @@ export async function runClaimedRequest(
     const initialProgress = steps?.beat(++progressSeq, Date.now(), true) ?? newestProgress;
     newestProgress = initialProgress;
     if (initialProgress?.kind === "step") noteRelayProgress(relay.id, target.id, initialProgress);
-    let firstAcknowledged!: () => void;
-    const firstAck = new Promise<void>(resolve => { firstAcknowledged = resolve; });
+    const firstBeat = Promise.withResolvers<void>();
+    const firstAck = Promise.withResolvers<void>();
+    let firstAckAt = Infinity;
     const onHeartbeat = (frame: Parameters<ConstructorParameters<typeof RelayLeaseTransport>[5]>[0]) => {
       if (frame.phase === "attempt") heartbeatBusy = true;
       else if (frame.phase === "acknowledged" || frame.phase === "failed" || frame.phase === "post_completion") heartbeatBusy = false;
       console.info("External relay heartbeat", { path: "/requests/:request/heartbeat", seq: frame.seq,
         phase: frame.phase, status: frame.status, ...(frame.code ? { code: safeRelayHttpReason(frame.code) } : {}) });
-      if (frame.phase === "acknowledged") { acked = true; heartbeatAt = Date.now(); firstAcknowledged(); }
+      if (frame.phase === "acknowledged") {
+        heartbeatAt = Date.now();
+        if (!acked) firstAckAt = heartbeatAt;
+        acked = true;
+        firstBeat.resolve(); firstAck.resolve();
+      }
       else if (frame.phase === "failed") {
-        if (!ownerPastWindow() && (frame.status === 404 || frame.status === 409 && frame.code === "lease_lost") && !completionAccepted) {
-          leaseUnavailable = true; if (!ownerExecution) { run?.cancel(); callAbort.abort(); }
+        if ((frame.status === 404 || frame.status === 409 && frame.code === "lease_lost") && !completionAccepted) {
+          loseLease();
+          firstAck.resolve();
         }
-        firstAcknowledged();
+        firstBeat.resolve();
       }
       if (frame.phase === "failed" && frame.code === "unknown_feature")
-        void runtime?.onUnknownFeature?.().finally(firstAcknowledged);
+        void runtime?.onUnknownFeature?.().finally(firstBeat.resolve);
     };
+    if (!recovery && request.input.requester && (target.ownerTier || target.requesters)) {
+      runDir = await createOwnerRunDirectory();
+      requesterLease = { requestId, leaseId, relayId: relay.id, targetId: target.id, runDir, stallMs, deadlineAt: serviceDeadline.at };
+      await openRequesterLease(requesterLease);
+    }
     transport = recovery ? null : runtime?.leaseWorker === false
       ? new InlineRelayLeaseTransport(relay, requestId, target.id, leaseId, intervalMs, onHeartbeat, initialProgress,
-        () => { void runtime?.onUnknownFeature?.(); }, recorder?.recordCompletionRefusal)
+        () => { void runtime?.onUnknownFeature?.(); }, recorder?.recordCompletionRefusal, requesterLease)
       : new RelayLeaseTransport(relay, requestId, target.id, leaseId, intervalMs, onHeartbeat, initialProgress,
-        () => { void runtime?.onUnknownFeature?.(); }, undefined, recorder?.recordCompletionRefusal);
+        () => { void runtime?.onUnknownFeature?.(); }, undefined, recorder?.recordCompletionRefusal, requesterLease);
     if (transport) {
       await transport.ready;
       const firstBeatDeadline = runtime?.leaseWorker === false ? null
-        : setTimeout(firstAcknowledged, Math.max(1, Math.min(stallMs, deadline.at - Date.now())));
+        : setTimeout(firstBeat.resolve, Math.max(1, Math.min(stallMs, deadline.at - Date.now())));
       firstBeatDeadline?.unref();
-      await firstAck;
+      await firstBeat.promise;
       if (firstBeatDeadline) clearTimeout(firstBeatDeadline);
       if (leaseUnavailable) {
         await transport.close(); transport = null;
@@ -708,7 +732,6 @@ export async function runClaimedRequest(
       // poller leaves leaseWorker unset and always uses the independent helper.
       acked = true;
       heartbeatAt = Date.now();
-      firstAcknowledged();
     }
     notifyInitialLease();
     pendingBeat = Promise.resolve();
@@ -747,9 +770,8 @@ export async function runClaimedRequest(
     const trigger = request.input.conversation.find(message => message.id === ownerMessage?.messageId);
     const parent = request.input.conversation.find(message => message.id === trigger?.reply_to && message.author.self);
     const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId, undefined, parent?.text) : null;
-    const prototypeBoundToEarlierSwitch = prototype && (target.ownerTier === true
-      || requesterEntries(relay, target).some(entry => entry.source === "earlier-switch"
-        && canonicalRelayProject(entry.project) === canonicalRelayProject(target.project)));
+    const prototypeGrant = prototype && requesterEntries(relay, target).find(entry => entry.kind === "paired-owner"
+      && entry.source === "earlier-switch" && canonicalRelayProject(entry.project) === canonicalRelayProject(target.project));
     const current = target.ownerTier || target.requesters || recovery ? readRelayStore() : null;
     const paired = current?.relays.find(item => item.id === relay.id && item.credential === relay.credential);
     const currentTarget = paired?.targets.find(item => item.id === target.id);
@@ -759,10 +781,23 @@ export async function runClaimedRequest(
     if (!prototype && !elevation && current && elevatedRequesterFor(relay, target, request, current.relays))
       return await finish(failed(leaseId, "cancelled"));
     owner = prototype ? ownerMessage : elevation?.instruction ?? null;
-    const requesterTier = owner?.entry?.tier === "requester";
-    if (recovery && (!owner || requesterTier || !current || !ownerRunSettingsAllow(recovery, current)
+    requesterTier = owner?.entry?.tier === "requester";
+    if (recovery && (!owner || prototype || requesterTier || !current || !ownerRunSettingsAllow(recovery, current)
       || recovery.ownerTurn?.entry && recovery.ownerTurn.entry.id !== owner.entry?.id)) {
       return await finish(failed(leaseId, "cancelled"));
+    }
+    const requesterLeaseAllowsAdmission = () => !requesterTier || !!requesterLease && requesterLeaseActive(requesterLease);
+    if (requesterTier) {
+      const ackDeadlineAt = Math.min(serviceDeadline.at, serviceDeadline.receivedAt + request.liveness.ack_window_s * 1000);
+      if (!acked && !leaseUnavailable && Date.now() < ackDeadlineAt) {
+        const timer = setTimeout(firstAck.resolve, ackDeadlineAt - Date.now());
+        timer.unref();
+        try { await firstAck.promise; } finally { clearTimeout(timer); }
+      }
+      if (!acked || firstAckAt >= ackDeadlineAt || !requesterLeaseAllowsAdmission()) {
+        loseLease();
+        return null;
+      }
     }
     if (elevation && elevation.source !== "earlier-switch") cloud = false;
     // The provider cannot guarantee termination by the requester's lease deadline.
@@ -798,6 +833,7 @@ export async function runClaimedRequest(
         preResolvedConversation = await lookupChainConversationAsync(relay, target, request, authority!);
       }
     }
+    if (!requesterLeaseAllowsAdmission()) { loseLease(); return null; }
     const selectAccount = () => prototype || usingCloud || owner && (conversation ?? preResolvedConversation)?.conversationId ? null : accountManager.resolveHeadlessSpawn(target.engine!,
       conversation?.accountId ?? preResolvedConversation?.accountId ?? null,
       [], target.project, target.model);
@@ -810,7 +846,7 @@ export async function runClaimedRequest(
       selection.kind === "exhausted" && selection.resetsAt ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000)) : null) : null;
     const earlyCapacityDecline = capacityDecline();
     if (earlyCapacityDecline) return await finish(earlyCapacityDecline);
-    runDir = recovery?.runDir ?? (owner && !prototype ? await createOwnerRunDirectory()
+    runDir ??= recovery?.runDir ?? (owner && !prototype ? await createOwnerRunDirectory()
       : await fs.promises.mkdtemp(path.join(externalRelayTempRoot(), "llv-external-relay-")));
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
@@ -832,7 +868,7 @@ export async function runClaimedRequest(
         ...(requesterTier ? { leaseDeadlineAt: serviceDeadline.at } : {}),
         request: { text: owner.text, requestText: owner.requestText },
         ...(owner.bridgeReport ? { bridgeReport: owner.bridgeReport } : {}),
-        ...(prototype && !prototypeBoundToEarlierSwitch ? { prototype: true as const } : {}) } } : {}),
+        ...(prototype ? { prototype: true as const, ...(prototypeGrant ? { prototypeGrant: { id: prototypeGrant.id, project: prototypeGrant.project } } : {}) } : {}) } } : {}),
     };
     let admissionDecline: ExternalRelayCompletion | null = null;
     let wakeHold: (() => void) | null = null;
@@ -843,6 +879,7 @@ export async function runClaimedRequest(
     const admit = async (): Promise<boolean> => {
       let lastCause: RelayHoldCause | null = null;
       while (!leaseUnavailable) {
+        if (!requesterLeaseAllowsAdmission()) { loseLease(); return false; }
         if (Date.now() >= admissionCutoff()) {
           admissionDecline = declined(leaseId, "busy", null, lastCause === "chat" ? "chat busy" : null);
           return false;
@@ -889,6 +926,7 @@ export async function runClaimedRequest(
             await releaseAdmission(); cause = "capacity"; admissionHeld = true;
           }
         }
+        if (!requesterLeaseAllowsAdmission()) loseLease();
         if (leaseUnavailable) return false;
         if (releaseRequested || releasingRelayHolds()) {
           releaseRequested = true;
@@ -923,18 +961,17 @@ export async function runClaimedRequest(
       await releaseAdmission();
       return await finish(declined(leaseId, "busy"));
     }
-    const lose = () => { if (ownerPastWindow()) return; leaseUnavailable = true; if (!ownerExecution) { run?.cancel(); callAbort.abort(); } };
     const lease = {
       deadlineAt: serviceDeadline.at,
       verificationBudget: (callId: string, until: number, consume: boolean | "send") => reserveRelayActionVerificationAsync(requestId, leaseId, callId, until, consume),
-      signal: callAbort.signal, lose,
+      signal: callAbort.signal, lose: loseLease,
       ack: async () => {
         while (!acked && !leaseUnavailable) {
           if (pendingBeat) await pendingBeat;
           if (acked || leaseUnavailable) break;
           await toolSleep(1000, callAbort.signal);
         }
-        return acked && !leaseUnavailable;
+        return acked && !leaseUnavailable && requesterLeaseAllowsAdmission();
       },
     };
     // Codex Cloud receives text-only turns through this transport. Guest
@@ -1437,6 +1474,7 @@ export async function runClaimedRequest(
     return await finish(failed(leaseId, "agent_error"));
   } finally {
     try {
+      if (requesterLease) endRequesterLease(requesterLease);
       if (!claimSettled) {
         try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
         catch { console.error("External relay request claim cleanup failed"); }

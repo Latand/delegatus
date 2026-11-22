@@ -9,6 +9,7 @@ import { externalRelayFile, runHoldsConversation, type PairedRelay, type RunLedg
 import type { ExternalRelayCompletion } from "./protocol";
 import { isOwnerRequestTimeoutReply } from "./requestTimeout";
 import { bindRequesterEntry, canonicalRelayProject, legacyRequesterId, pairedOwnerTier, requesterEntries } from "./trustedRequesters";
+import { requesterLeaseActive, requesterLeaseActiveAsync } from "./requesterLease";
 
 function currentRunEntry(run: RunRecord, relay: PairedRelay, relays: readonly PairedRelay[]) {
   const target = relay.targets.find(item => item.id === run.targetId);
@@ -23,21 +24,34 @@ function currentRunEntry(run: RunRecord, relay: PairedRelay, relays: readonly Pa
   return saved ?? current;
 }
 
-function requesterLeaseAllows(run: RunRecord, tier: "owner" | "requester"): boolean {
-  if (tier === "owner") return true;
+function requesterDeadlineAllows(run: RunRecord): boolean {
   const deadline = run.ownerTurn?.leaseDeadlineAt;
   return typeof deadline === "number" && Number.isFinite(deadline) && Date.now() < deadline;
 }
 
+function requesterLeaseAllows(run: RunRecord, tier: "owner" | "requester"): boolean {
+  return tier === "owner" || requesterDeadlineAllows(run) && requesterLeaseActive(run);
+}
+
 export function ownerRunSettingsAllow(run: RunRecord, store: Pick<RelayStore, "relays">): boolean {
   if (run.ownerTurn?.prototype !== true) return effectiveOwnerRunTier(run, store) !== null;
-  return store.relays.some(relay => relay.id === run.relayId && relay.paused === false
-    && relay.targets.some(target => target.id === run.targetId && target.enabled === true));
+  const relay = store.relays.find(relay => relay.id === run.relayId);
+  const target = relay?.targets.find(target => target.id === run.targetId);
+  if (relay?.paused !== false || target?.enabled !== true) return false;
+  const grant = run.ownerTurn.prototypeGrant;
+  return !grant || requesterEntries(relay, target).some(entry => entry.id === grant.id && entry.kind === "paired-owner"
+    && canonicalRelayProject(entry.project) === canonicalRelayProject(grant.project)
+    && canonicalRelayProject(target.project) === canonicalRelayProject(grant.project));
+}
+
+function configuredRunTier(run: RunRecord, store: Pick<RelayStore, "relays">) {
+  if (run.ownerTurn?.prototype) return null;
+  const relay = store.relays.find(item => item.id === run.relayId);
+  return (relay && currentRunEntry(run, relay, store.relays)?.tier) ?? null;
 }
 
 export function effectiveOwnerRunTier(run: RunRecord, store: Pick<RelayStore, "relays">) {
-  const relay = store.relays.find(item => item.id === run.relayId);
-  const tier = relay && currentRunEntry(run, relay, store.relays)?.tier;
+  const tier = configuredRunTier(run, store);
   return tier && requesterLeaseAllows(run, tier) ? tier : null;
 }
 
@@ -207,8 +221,9 @@ export async function ownerRelayAuthorizedAsync(relayId: string, targetId: strin
     const store = JSON.parse(storeText) as RelayStore;
     const ledger = JSON.parse(ledgerText) as RunLedger;
     const run = ledger.runs.find(row => row.requestId === requestId && row.relayId === relayId && row.targetId === targetId);
-    return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn && !run.ownerTurn.cancel
-      && ownerRunSettingsAllow(run, store);
+    if (store.v !== 1 || ledger.v !== 1 || !run?.ownerTurn || run.ownerTurn.cancel) return false;
+    const tier = configuredRunTier(run, store);
+    return tier === "owner" || tier === "requester" && await requesterLeaseActiveAsync(run) && requesterDeadlineAllows(run);
   } catch { return false; }
 }
 
@@ -218,7 +233,7 @@ export function ownerRelaySpawnAuthorized(clientAttemptId: string | null | undef
   try {
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
     const run = ledger.runs.find(row => row.ownerTurn?.clientAttemptId === clientAttemptId);
-    return !!run && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
+    return !!run && !run.ownerTurn?.prototype && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
       && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId);
   } catch { return false; }
 }
@@ -235,7 +250,7 @@ export function ownerRelayOperationAuthorized(operationId: string, conversationI
     const continuation = run?.ownerTurn?.continuation;
     if (continuation?.retryOfOperationId && (!Number.isFinite(Date.parse(continuation.deadlineAt ?? ""))
       || Date.now() >= Date.parse(continuation.deadlineAt!))) return false;
-    return !!run?.ownerTurn && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
+    return !!run?.ownerTurn && !run.ownerTurn.prototype && !!run.ownerIdentity && procBackend.processIdentity(run.ownerPid) === run.ownerIdentity
       && ownerRelayAuthorized(run.relayId, run.targetId, run.requestId);
   } catch { return false; }
 }

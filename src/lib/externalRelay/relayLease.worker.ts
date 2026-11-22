@@ -4,12 +4,14 @@ import { ExternalRelayError, relayCall } from "./client";
 import { ownerRelayAuthorized, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
 import type { PairedRelay } from "./store";
 import type { ExternalRelayCompletion, ExternalRelayProgress } from "./protocol";
+import { requesterLeaseWriter, type RequesterLease } from "./requesterLease";
 
-type Start = { type: "start"; relay: PairedRelay; requestId: string; targetId: string; leaseId: string; intervalMs: number; progress: ExternalRelayProgress | null };
+type Start = { type: "start"; relay: PairedRelay; requestId: string; targetId: string; leaseId: string; intervalMs: number; progress: ExternalRelayProgress | null; requesterLease?: RequesterLease };
 type Command = { type: "progress"; progress: ExternalRelayProgress | null }
   | { type: "complete"; body: ExternalRelayCompletion; until: number; plainMax: number; ownerAuthorization: boolean | "status" | "failure" }
   | { type: "stop" };
 let start: Start | undefined;
+let requesterLease: ReturnType<typeof requesterLeaseWriter> | undefined;
 let progress: ExternalRelayProgress | null = null;
 let seq = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -27,18 +29,21 @@ async function beat() {
   busy = true;
   heartbeatSettled = new Promise<void>(resolve => { settleHeartbeat = resolve; });
   const current = ++seq, sent = progress;
+  const sentAt = Date.now();
   send({ type: "heartbeat", seq: current, phase: "attempt", status: 0 });
   try {
     const response = await relayCall(start.relay.api_base, `/requests/${encodeURIComponent(start.requestId)}/heartbeat`, "POST",
       { lease_id: start.leaseId, seq: current, progress: sent }, start.relay.credential,
       { timeoutMs: 5000, maxBytes: start.relay.limits.max_response_bytes,
         onHttpRefusal: record => send({ type: "http_refusal", record }) });
+    requesterLease?.acknowledge(sentAt);
     send({ type: "heartbeat", seq: current, phase: "acknowledged", status: response.status });
     if (progress === sent) progress = null;
   } catch (error) {
     const status = error instanceof ExternalRelayError ? error.status : 0;
     const code = error instanceof ExternalRelayError ? error.code : "transport_error";
     const leaseLost = status === 404 || status === 409 && code === "lease_lost";
+    if (leaseLost) requesterLease?.end();
     const phase = completionAccepted && leaseLost ? "post_completion" : completionInFlight && leaseLost ? "completion_pending" : "failed";
     send({ type: "heartbeat", seq: current, phase, status, code });
     if (phase === "completion_pending") completionLeaseLost = { status, code };
@@ -61,6 +66,7 @@ input.on("line", line => {
   if (command.type === "start") {
     if (start) { process.exit(1); return; }
     start = command;
+    if (command.requesterLease) requesterLease = requesterLeaseWriter(command.requesterLease);
     progress = command.progress;
     nextDue = Date.now() + command.intervalMs;
     send({ type: "ready" });
@@ -69,7 +75,7 @@ input.on("line", line => {
   }
   if (!start) { process.exit(1); return; }
   if (command.type === "progress") { progress = command.progress; return; }
-  if (command.type === "stop") { stopped = true; clearTimeout(timer); return; }
+  if (command.type === "stop") { stopped = true; clearTimeout(timer); requesterLease?.end(); return; }
   if (command.type === "complete") {
     const body = command.body;
     completionInFlight = true;
@@ -83,16 +89,18 @@ input.on("line", line => {
         completionInFlight = false;
         if (result.delivery === "accepted") completionAccepted = true;
         stopped = true; clearTimeout(timer);
+        requesterLease?.end();
         send({ type: "completion", result });
         if (busy) await heartbeatSettled;
         if (completionLeaseLost) send({ type: "heartbeat", seq, phase: result.delivery === "accepted" ? "post_completion" : "failed", ...completionLeaseLost });
         send({ type: "drained" });
       }).catch(async () => {
         completionInFlight = false; stopped = true; clearTimeout(timer);
+        requesterLease?.end();
         send({ type: "completion", error: true });
         if (busy) await heartbeatSettled;
         send({ type: "drained" });
       });
   }
 });
-input.once("close", () => { stopped = true; clearTimeout(timer); });
+input.once("close", () => { stopped = true; clearTimeout(timer); requesterLease?.end(); });

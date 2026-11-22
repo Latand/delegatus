@@ -28,6 +28,7 @@ import * as cloud from "./cloud";
 import * as ownerRun from "./ownerRun";
 import { relayAnswerOp } from "./ownerAnswer";
 import { readAnswerRecord } from "./answers";
+import { endRequesterLease, openRequesterLease, requesterLeaseWriter } from "./requesterLease";
 import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayHandoff, ownerRelayOperationAuthorized, ownerRelaySpawnAuthorized, ownerRelayTargetMatches } from "./ownerAuthority";
 import { openOwnerServiceTools, relayServiceToolsOp } from "./ownerServiceTools";
 import { refreshRelayTargets } from "./poller";
@@ -41,7 +42,7 @@ import { runClaimedRequest } from "./runner";
 import { setRelaySwitch } from "./switches";
 import * as relayStore from "./store";
 import { addPairedOwnerRequester, addTrustedRequester, removeTrustedRequester, trustedRequesterAuditFile } from "./trustedRequesterStore";
-import { changeRun, dropRun, externalRelayFile, readRunLedger, readRelayStore, reserveRun, updateRelayStore, updateRelayStoreAsync, type PairedRelay, type RelayTargetSettings } from "./store";
+import { changeRun, dropRun, externalRelayFile, readRunLedger, readRelayStore, reserveRun, updateRelayStore, updateRelayStoreAsync, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
 import { startTestRelay } from "./testRelay";
 
 const addedAt = "2026-09-28T12:00:00Z";
@@ -65,6 +66,7 @@ const request = (id: string, targetId = target.id) => {
     input: { ...parsed.input, requester: parsed.input.requester! } };
 };
 const snapshot = { id: entry.id, kind: entry.kind, tier: "requester" as const, project, label: entry.label };
+const leaseFixture = (run: RunRecord) => ({ ...run, stallMs: 45_000, deadlineAt: run.ownerTurn!.leaseDeadlineAt! });
 const link = { userId: "101", username: null, firstName: null, linkedAt: addedAt };
 const ownerMember = () => {
   const store = teamStore();
@@ -171,6 +173,145 @@ test("only the bound key on its target launches a local elevated run", async () 
   }
 });
 
+test("requester admission waits for a successful heartbeat and loses custody on a service refusal", async () => {
+  const waitingForAck = Promise.withResolvers<void>();
+  const acknowledge = Promise.withResolvers<void>();
+  const loseLease = Promise.withResolvers<void>();
+  const observing = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const stopped = Promise.withResolvers<void>();
+  const completions: unknown[] = [];
+  const reply = { body: { status: "ok" } };
+  let heartbeats = 0;
+  const service = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    if (!req.url?.endsWith("/heartbeat")) return reply;
+    if (++heartbeats === 1) return { status: 503, body: { error: { code: "unavailable" } } };
+    if (heartbeats === 2) { waitingForAck.resolve(); await acknowledge.promise; return reply; }
+    await loseLease.promise;
+    return { status: 409, body: { error: { code: "lease_lost" } } };
+  });
+  const relay = { ...paired([granted]), origin: service.origin, api_base: `${service.origin}/v1` };
+  setRelays(relay);
+  const raw = request("heartbeat_authority");
+  raw.liveness = { ...raw.liveness, heartbeat_interval_s: 2 };
+  const conversation = "conversation_heartbeat_authority";
+  const select = spyOn(accountManager, "resolveHeadlessSpawn").mockReturnValue({ kind: "available", account: {
+    engine: "codex", accountId: "fixture", kind: "managed", home: process.env.HOME!, transcriptRoot: process.env.HOME!, env: { NODE_ENV: "test" } } });
+  const launch = mock(async () => ({ status: 202, body: { conversationId: conversation, initialMessage: "delivered" } }));
+  const pending = runClaimedRequest(relay, raw, undefined, { ownerPorts: {
+    launch,
+    observe: async () => { observing.resolve(); await finish.promise; return { state: "ended", finalText: "Suppressed" }; },
+    stop: async () => { stopped.resolve(); },
+  } });
+  const earlyExit = pending.then(() => { throw new Error("request settled before its expected checkpoint"); });
+  try {
+    await Promise.race([waitingForAck.promise, earlyExit]);
+    expect(select).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+    expect(readRunLedger().runs.find(row => row.requestId === raw.request_id)).toBeUndefined();
+    expect(ownerRelayHandoff("context", conversation)).toEqual({ payload: null, requester: false });
+    expect(completions).toEqual([]);
+
+    acknowledge.resolve();
+    await Promise.race([observing.promise, earlyExit]);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(ownerRelayAuthorized(relay.id, target.id, raw.request_id)).toBe(true);
+    expect(await ownerRelayAuthorizedAsync(relay.id, target.id, raw.request_id)).toBe(true);
+    expect(ownerRelayHandoff("context", conversation).payload?.requesterRequestId).toBe(raw.request_id);
+
+    loseLease.resolve();
+    await Promise.race([stopped.promise, earlyExit]);
+    expect(ownerRelayAuthorized(relay.id, target.id, raw.request_id)).toBe(false);
+    expect(await ownerRelayAuthorizedAsync(relay.id, target.id, raw.request_id)).toBe(false);
+    expect(ownerRelayHandoff("context", conversation).payload).toBeNull();
+    finish.resolve();
+    expect(await pending).toBeNull();
+    expect(completions).toEqual([]);
+  } finally {
+    acknowledge.resolve(); loseLease.resolve(); finish.resolve();
+    await Promise.allSettled([pending, earlyExit]);
+    select.mockRestore();
+    await service.close();
+  }
+}, 15_000);
+
+test("a heartbeat response arriving after the acknowledgement window cannot start a requester", async () => {
+  const initialWaitEnded = Promise.withResolvers<void>();
+  const heartbeatPending = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const completions: unknown[] = [];
+  const service = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    if (req.url?.endsWith("/heartbeat")) { heartbeatPending.resolve(); await release.promise; }
+    return { body: { status: "ok" } };
+  });
+  const relay = { ...paired([granted]), origin: service.origin, api_base: `${service.origin}/v1` };
+  setRelays(relay);
+  const raw = request("heartbeat_timeout");
+  raw.liveness = { ...raw.liveness, ack_window_s: 1, stall_window_s: 1 };
+  const select = spyOn(accountManager, "resolveHeadlessSpawn");
+  const launch = mock(async () => { throw new Error("unexpected launch"); });
+  const pending = runClaimedRequest(relay, raw, undefined, { onLeaseReady: initialWaitEnded.resolve, ownerPorts: {
+    launch, observe: async () => ({ state: "failed" }), stop: async () => {},
+  } });
+  const earlyExit = pending.then(() => { throw new Error("request settled before its expected checkpoint"); });
+  try {
+    await Promise.race([heartbeatPending.promise, earlyExit]);
+    await Promise.race([initialWaitEnded.promise, earlyExit]);
+    release.resolve();
+    expect(await pending).toBeNull();
+    expect(select).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+    expect(completions).toEqual([]);
+    expect(readRunLedger().runs.find(row => row.requestId === raw.request_id)).toBeUndefined();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([pending, earlyExit]);
+    select.mockRestore();
+    await service.close();
+  }
+}, 10_000);
+
+test("elapsed request time cannot establish, extend or transfer requester lease custody", async () => {
+  const relay = paired([granted]);
+  setRelays(relay);
+  const now = Date.parse(addedAt);
+  const run: RunRecord = { requestId: "lease_binding", leaseId: "lease-one", relayId: relay.id, targetId: target.id,
+    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
+    runDir: await fs.promises.mkdtemp(`${process.env.TMPDIR}/requester-binding-`), startedAt: addedAt, conversationId: "conversation_lease_binding",
+    ownerTurn: { clientAttemptId: "relay-owner-lease-binding", entry: snapshot, leaseDeadlineAt: now + 60_000 } };
+  const lease = { ...leaseFixture(run), stallMs: 5000 };
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  reserveRun(run);
+  try {
+    await openRequesterLease(lease);
+    const writer = requesterLeaseWriter(lease);
+    const authorized = () => ownerRelayAuthorized(relay.id, target.id, run.requestId);
+    expect(authorized()).toBe(false);
+    writer.acknowledge(now);
+    expect(authorized()).toBe(true);
+    clock.mockReturnValue(now + 4000);
+    writer.acknowledge(now + 3500);
+    changeRun(run.requestId, row => ({ ...row, leaseId: "lease-two" }));
+    expect(authorized()).toBe(false);
+    changeRun(run.requestId, row => ({ ...row, leaseId: run.leaseId }));
+    clock.mockReturnValue(now + 5000);
+    expect(authorized()).toBe(true);
+    clock.mockReturnValue(now + 8500);
+    expect(authorized()).toBe(false);
+    writer.acknowledge(now + 8500);
+    expect(authorized()).toBe(false);
+    expect(await ownerRelayAuthorizedAsync(relay.id, target.id, run.requestId)).toBe(false);
+    expect(ownerRelayHandoff("context", run.conversationId!)).toEqual({ payload: null, requester: true });
+  } finally {
+    clock.mockRestore();
+    endRequesterLease(lease);
+    dropRun(run.requestId);
+    await fs.promises.rm(run.runDir, { recursive: true, force: true });
+  }
+});
+
 test("fresh authority rejects a suspended or removed entry at every durable boundary", async () => {
   const relay = paired([granted]);
   setRelays(relay);
@@ -179,11 +320,14 @@ test("fresh authority rejects a suspended or removed entry at every durable boun
   const conversation = "conversation_granted";
   const operation = "relay-owner-continuation";
   const run = { requestId: id, leaseId: "lease", relayId: relay.id, targetId: target.id, ownerPid: process.pid,
-    ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null, runDir: process.env.TMPDIR!,
+    ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null, runDir: await fs.promises.mkdtemp(`${process.env.TMPDIR}/requester-auth-`),
     startedAt: addedAt, conversationId: conversation, ownerTurn: { clientAttemptId: attempt, entry: snapshot, leaseDeadlineAt: Date.now() + 60_000,
       request: { text: "Work", requestText: null } } };
   reserveRun(run, 1);
   try {
+    const lease = leaseFixture(run);
+    await openRequesterLease(lease);
+    requesterLeaseWriter(lease).acknowledge(Date.now());
     expect(conversationAuthority(request("conversation").input.requester, snapshot)).toBe("trusted:grant-one");
     expect(ownerRelayTargetMatches(conversation, project, null)).toBe(true);
     expect(ownerRelayTargetMatches(conversation, otherProject, null)).toBe(false);
@@ -208,7 +352,7 @@ test("fresh authority rejects a suspended or removed entry at every durable boun
     await check(false);
     expect(ownerRelayOperationAuthorized(operation, conversation)).toBe(false);
     expect(ownerRelayHandoff("context", conversation)).toEqual({ payload: null, requester: true });
-  } finally { dropRun(id); }
+  } finally { dropRun(id); await fs.promises.rm(run.runDir, { recursive: true, force: true }); }
 });
 
 test.each(["configured", "no environment", "oversized context", "owner"] as const)("Cloud admission before either execution path (%s)", async scenario => {
@@ -347,7 +491,11 @@ test.each(["settled", "settles during cutoff"] as const)("target refresh leaves 
       completionAttempt: { body: { lease_id: "old_lease", outcome: "answered" as const, duration_ms: 1,
         answer: { action: "reply" as const, text: "Older answer", reply_to: "m1" } }, files: [] } } };
   const newRun = { ...oldRun, requestId: "later_turn", leaseId: "new_lease", targetId: remainingTarget.id,
+    runDir: await fs.promises.mkdtemp(`${process.env.TMPDIR}/requester-refresh-`),
     capacityReleased: undefined, ownerTurn: { clientAttemptId: "relay-owner-later_turn", entry: snapshot, leaseDeadlineAt: Date.now() + 60_000 } };
+  const lease = leaseFixture(newRun);
+  await openRequesterLease(lease);
+  requesterLeaseWriter(lease).acknowledge(Date.now());
   const write = relayStore.changeRunAsync;
   const cutoff = spyOn(relayStore, "changeRunAsync").mockImplementation(async (id, update, until) => {
     if (id === oldRun.requestId && state === "settles during cutoff") {
@@ -370,6 +518,7 @@ test.each(["settled", "settles during cutoff"] as const)("target refresh leaves 
     expect(ownerRelayAuthorized(relay.id, remainingTarget.id, newRun.requestId)).toBe(true);
   } finally {
     dropRun(oldRun.requestId); dropRun(newRun.requestId); cutoff.mockRestore(); fetch.mockRestore(); stop.mockRestore();
+    await fs.promises.rm(newRun.runDir, { recursive: true, force: true });
   }
 });
 
@@ -417,11 +566,15 @@ test("an async MCP call rechecks its grant after awaiting acknowledgement", asyn
   raw.input.tools = [{ name: "lookup_notes", summary: "Look up notes", mode: "direct", effect: "read", parameters: { type: "object" } }];
   const claim = requestSchema.parse(raw);
   const conversationId = "conversation_async_tool";
-  reserveRun({ requestId: claim.request_id, leaseId: claim.lease_id, relayId: relay.id, targetId: target.id,
+  const run = { requestId: claim.request_id, leaseId: claim.lease_id, relayId: relay.id, targetId: target.id,
     ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
-    runDir: process.env.TMPDIR!, startedAt: addedAt, conversationId,
+    runDir: await fs.promises.mkdtemp(`${process.env.TMPDIR}/requester-tool-`), startedAt: addedAt, conversationId,
     ownerTurn: { clientAttemptId: "relay-owner-async-tool", entry: snapshot, leaseDeadlineAt: Date.now() + 60_000 },
-  }, 1);
+  };
+  const lease = leaseFixture(run);
+  await openRequesterLease(lease);
+  requesterLeaseWriter(lease).acknowledge(Date.now());
+  reserveRun(run, 1);
   const wire = spyOn(client, "relayCall").mockResolvedValue({ status: 200, body: { status: "ok" } } as never);
   let entered!: () => void, release!: (value: boolean) => void;
   const acknowledging = new Promise<void>(resolve => { entered = resolve; });
@@ -446,6 +599,7 @@ test("an async MCP call rechecks its grant after awaiting acknowledgement", asyn
     await adapter.dispose();
     wire.mockRestore();
     dropRun(claim.request_id);
+    await fs.promises.rm(run.runDir, { recursive: true, force: true });
   }
 });
 

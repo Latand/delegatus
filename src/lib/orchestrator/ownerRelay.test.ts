@@ -118,6 +118,7 @@ const { enqueueStructuredMessage } = await import("@/lib/runtime/structuredMessa
 const { procBackend } = await import("@/lib/proc");
 const { reserveRun, changeRun, dropRun, updateRelayStore } = await import("@/lib/externalRelay/store");
 const { liveOwnerRelayConversation } = await import("@/lib/externalRelay/ownerAuthority");
+const { endRequesterLease, openRequesterLease, requesterLeaseWriter } = await import("@/lib/externalRelay/requesterLease");
 const { ownerTierFor } = await import("@/lib/externalRelay/profile");
 const { runOwnerAgent } = await import("@/lib/externalRelay/ownerRun");
 const { requestSchema } = await import("@/lib/externalRelay/protocol");
@@ -202,7 +203,7 @@ test("verified owner turn reaches the designated seat through MCP and HTTP with 
   expect(delivered[1].text).toBe(delivered[0].text);
 });
 
-function requesterRun(sender: ReturnType<typeof actor>) {
+async function requesterRun(sender: ReturnType<typeof actor>) {
   ownerRun(sender);
   const addedAt = "2026-10-01T00:00:00.000Z";
   const entry = { id: "requester", kind: "requester" as const, key: "u1", project: "project-b",
@@ -210,9 +211,15 @@ function requesterRun(sender: ReturnType<typeof actor>) {
   updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, targets: relay.targets.map(target => ({
     ...target, ownerTier: undefined, project: entry.project, requesters: { revision: 1, entries: [entry] },
   })) })) }));
-  changeRun("owner-request", row => ({ ...row, ownerTurn: { ...row.ownerTurn!, leaseDeadlineAt: Date.now() + 60_000, entry: {
+  const deadlineAt = Date.now() + 60_000;
+  const runDir = await fs.promises.mkdtemp(path.join(root, "requester-lease-"));
+  const lease = { requestId: "owner-request", leaseId: "lease", relayId: "paired", targetId: "target", runDir, deadlineAt, stallMs: 45_000 };
+  await openRequesterLease(lease);
+  requesterLeaseWriter(lease).acknowledge(Date.now());
+  changeRun("owner-request", row => ({ ...row, runDir, ownerTurn: { ...row.ownerTurn!, leaseDeadlineAt: deadlineAt, entry: {
     id: entry.id, kind: entry.kind, project: entry.project, label: entry.label, tier: "requester",
   } } }));
+  return lease;
 }
 
 function revokeRequester() {
@@ -223,7 +230,7 @@ function revokeRequester() {
 
 test("trusted requester handoffs are delivered to the granted project on the MCP and HTTP paths", async () => {
   const sender = actor(); const own = actor("project-b"); const other = actor("project-a");
-  requesterRun(sender);
+  await requesterRun(sender);
   const tools = toolsFor(sender);
   expect(await tools.service.callTool("send_message_to_orchestrator", { ...relayArgs("cross-project"), project: "project-a" }))
     .toMatchObject({ ok: false, code: "trusted_requester_project_refused" });
@@ -249,10 +256,11 @@ test("trusted requester handoffs are delivered to the granted project on the MCP
   expect(delivered).toHaveLength(2);
 });
 
-test("revoked requester custody suppresses independent seat authority until stop settles", async () => {
-  const sender = actor("project-a"); actor("project-b"); requesterRun(sender);
+test.each(["grant revoked", "lease lost"] as const)("requester custody suppresses seat authority until stop settles (%s)", async reason => {
+  const sender = actor("project-a"); actor("project-b"); const lease = await requesterRun(sender);
   const tools = toolsFor(sender);
-  revokeRequester();
+  if (reason === "grant revoked") revokeRequester();
+  else endRequesterLease(lease);
   for (const phase of ["revoked", "stopping"]) {
     if (phase === "stopping") changeRun("owner-request", row => ({ ...row,
       ownerTurn: { ...row.ownerTurn!, cancel: "interrupt" } }));
@@ -273,7 +281,7 @@ test("revoked requester custody suppresses independent seat authority until stop
 });
 
 test("an MCP requester send cannot become a seat send after the requester turn settles in transit", async () => {
-  const sender = actor("project-a"); actor("project-b"); requesterRun(sender);
+  const sender = actor("project-a"); actor("project-b"); await requesterRun(sender);
   let dispatches = 0;
   const tools = toolsFor(sender, { post: async (_pathname, body, headers) => {
     dispatches++;
@@ -488,7 +496,7 @@ function realAdmission(afterRead?: () => void) {
 }
 
 test("HTTP rechecks a requester's grant after reading the recipient session", async () => {
-  const sender = actor("project-a"); actor("project-b"); requesterRun(sender);
+  const sender = actor("project-a"); actor("project-b"); await requesterRun(sender);
   let reads = 0;
   realAdmission(() => {
     if (++reads === 1) revokeRequester();

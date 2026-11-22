@@ -10,6 +10,7 @@ import { sweepExternalRelayOrphans } from "./poller";
 import { procBackend } from "@/lib/proc";
 import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
+import { endRequesterLease, openRequesterLease, requesterLeaseWriter } from "./requesterLease";
 
 const context = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 };
 const body = { lease_id: "fixture", outcome: "answered" as const,
@@ -73,6 +74,12 @@ test.each(["owner", "unverifiable", "expired", "valid"] as const)("legacy handof
       ...(lease === "expired" || lease === "valid" ? { leaseDeadlineAt: Date.now() + (lease === "expired" ? 0 : 20_000) } : {}) },
   }));
   try {
+    if (lease === "valid") {
+      const run = readRunLedger().runs.find(row => row.requestId === requestId)!;
+      const custody = { ...run, stallMs: 45_000, deadlineAt: run.ownerTurn!.leaseDeadlineAt! };
+      await openRequesterLease(custody);
+      requesterLeaseWriter(custody).acknowledge(Date.now());
+    }
     const authorized = lease === "owner" || lease === "valid";
     expect(liveOwnerRelayRequest(conversation)?.tier).toBe(lease === "owner" ? "owner" : authorized ? "requester" : undefined);
     const handoff = ownerRelayHandoff("Work context", conversation);
@@ -82,6 +89,18 @@ test.each(["owner", "unverifiable", "expired", "valid"] as const)("legacy handof
     expect(await completeRelayRequest(f.relay, requestId, body, () => Date.now() + 5000, authorize))
       .toMatchObject({ delivery: "accepted" });
     expect(completions).toEqual([authorized ? body : { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null }]);
+    if (lease === "valid") {
+      const run = readRunLedger().runs.find(row => row.requestId === requestId)!;
+      const handedOff = await completeRelayRequest(f.relay, requestId, { lease_id: body.lease_id, outcome: "declined",
+        reason: "handoff", retry_after_s: null, detail: null }, () => Date.now() + 5000, () => {
+        const allowed = authorize();
+        endRequesterLease(run);
+        return allowed;
+      });
+      const cancelled = { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null };
+      expect(handedOff).toEqual({ body: cancelled, delivery: "accepted" });
+      expect(completions).toEqual([body, cancelled]);
+    }
     if (lease !== "owner") expect(await f.send()).toMatchObject({ delivery: "refused" });
     await sweepExternalRelayOrphans();
     if (lease === "owner") {

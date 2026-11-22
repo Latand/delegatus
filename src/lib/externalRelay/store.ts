@@ -8,7 +8,7 @@ import type { OwnerBridgeContext } from "./ownerBridgeContext";
 import type { OwnerTurnDiagnostic } from "./diagnostic";
 import { ACTION_VERIFICATION_READS } from "./actionOutcome";
 import { ExternalRelayError } from "./errors";
-import { canonicalRelayProject, requesterEntries, type RelayRunEntry, type TrustedRequesterSettings } from "./trustedRequesters";
+import { canonicalRelayProject, requesterEntries, type RelayRunEntry, type TrustedRequesterEntry, type TrustedRequesterSettings } from "./trustedRequesters";
 import type { RelayGrantStatus } from "./settingsView";
 
 export type RelayTargetSettings = {
@@ -121,7 +121,10 @@ export type RunRecord = {
       parts?: { payload: import("./cloneSend").CloneSendInput; firstAttemptAt?: number;
         receipt?: Extract<import("./cloneSend").CloneSendResult, { kind: "sent" }> }[];
       status?: "retry" | "pending-delivery-context" | "uncertain" | "retry-expired" | "refused" };
-    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string; retryOfOperationId?: string; deadlineAt?: string; failureReason?: string; primaryFailure?: OwnerTurnDiagnostic["primaryFailure"] }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
+    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string; retryOfOperationId?: string; deadlineAt?: string; failureReason?: string; primaryFailure?: OwnerTurnDiagnostic["primaryFailure"] }; clientAttemptId: string; prototype?: true;
+    /** A carried switch still has to be present when a prototype decision is written. */
+    prototypeGrant?: Pick<TrustedRequesterEntry, "id" | "project">;
+    request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
     /** When the cutoff was first written; older rows are stamped on recovery. */
     cancelledAt?: string;
     /** Terminal local recovery; executor termination is still unproven. The
