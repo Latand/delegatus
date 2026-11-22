@@ -1279,7 +1279,9 @@ function commitDiffAttributes(repository: string, commit: string, paths: Buffer,
     commitInputGit(snapshot, ["read-tree", "--no-sparse-checkout", "--no-recurse-submodules", commit], { ...snapshotEnv, GIT_INDEX_FILE: index });
     // Attribute precedence outside the tree remains that of the inspection repository.
     const attributeEnv = { ...withoutUnsupportedApiCredentials(process.env), GIT_ATTR_SOURCE: undefined, GIT_INDEX_FILE: index };
-    return commitInputGit(repository, ["check-attr", "--cached", ...args], attributeEnv, paths);
+    // Git 2.39 can hide committed attributes outside a cone-mode sparse
+    // checkout even when the scratch index contains the complete tree.
+    return commitInputGit(repository, ["-c", "core.sparseCheckout=false", "check-attr", "--cached", ...args], attributeEnv, paths);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

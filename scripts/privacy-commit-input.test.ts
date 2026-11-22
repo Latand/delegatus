@@ -277,7 +277,7 @@ for (const attributeState of ["dirty removal", "later committed removal"] as con
   refuses(await f.scan(), "known_value");
 });
 
-test("Git without check-attr --source scans historical attributes with its own index", async () => {
+test("Git without check-attr --source reads historical attributes outside a cone sparse checkout", async () => {
   const f = fixture();
   const git = Bun.which("git", { PATH: f.env.PATH });
   if (!git) throw new Error("fixture requires Git");
@@ -305,15 +305,19 @@ exec "$FIXTURE_GIT" "$@"
   writeFileSync(join(f.repo, ".git", "hooks", "post-index-change"),
     '#!/bin/sh\n: > "$FIXTURE_INDEX_HOOK_MARKER"\n', { mode: 0o700 });
 
-  f.write(".gitattributes", "*.txt -diff\n");
-  f.write("content.txt", `synthetic catalog\n${"\n".repeat(10)}safe text\n${"\n".repeat(10)}end\n`);
+  mkdirSync(join(f.repo, "excluded"));
+  f.write("excluded/.gitattributes", "*.txt -diff\n");
+  f.write("excluded/data.txt", `synthetic catalog\n${"\n".repeat(10)}safe text\n${"\n".repeat(10)}end\n`);
   f.commit();
   passes(await f.scan());
   f.rebase();
-  f.write("content.txt", `synthetic catalog\n${"\n".repeat(20)}phrase\n`);
+  f.git("sparse-checkout", "init", "--cone");
+  f.git("sparse-checkout", "set", "included");
+  mkdirSync(join(f.repo, "excluded"), { recursive: true });
+  f.write("excluded/data.txt", `synthetic catalog\n${"\n".repeat(20)}phrase\n`);
+  f.git("add", "--sparse", "excluded/data.txt");
   f.commit();
-  f.write(".gitattributes", "*.txt diff\n");
-  f.git("add", ".gitattributes");
+  expect(f.inputs().map(input => ({ path: input.path, kind: input.kind }))).toEqual([{ path: "excluded/data.txt", kind: "blob" }]);
   const index = f.git("ls-files", "--stage");
 
   refuses(await f.scan(), "known_value");
