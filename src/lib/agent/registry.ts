@@ -1,3 +1,4 @@
+import { measureRegistryRead } from "./registryReadPerformance";
 import { incomingDeliveryOutcome, normalizeIncomingDeliveryHealth, type IncomingDeliveryHealth } from "@/lib/runtime/incomingDeliveryHealth";
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
 import type { AgentProjection, AgentStateJournal, AgentStateMetrics } from "@/lib/agentState/model";
@@ -50,6 +51,7 @@ import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accou
 import { admitAutomaticAccountTarget, placedAccountHolds } from "@/lib/accounts/projectSelection";
 import {
   emptyLaunchProfile,
+  DELIVERY_ATTEMPT_LIMIT,
   normalizeProjectOwnership,
   validExplicitProject,
   type AutoBalancePolicy,
@@ -348,6 +350,9 @@ export interface SpawnReceipt {
   launchId: string;
   /** Client-owned idempotency key. Legacy callers leave this null. */
   clientAttemptId: string | null;
+  /** Controller provenance for a scheduled Cleaner launch, derived by the
+      spawn route from its durable run record and retained for recovery. */
+  scheduledCleanerRunId?: string;
   /** SHA-256 of the public launch shape. Prompt/image contents never enter this identity field. */
   requestDigest: string | null;
   /** The identity wave replaced this receipt's generic launch title. */
@@ -576,6 +581,8 @@ export interface SpawnRequest {
   ownStartingActuation?: boolean;
   launchProfile?: Partial<LaunchProfile>;
   clientAttemptId?: string | null;
+  /** Trusted in-process marker; request bodies cannot set receipt provenance. */
+  scheduledCleanerRunId?: string | null;
   requestDigest?: string | null;
   spawnCapabilityDigest?: string | null;
   accountId?: string | null;
@@ -4254,6 +4261,21 @@ function recordObservedLineage(
   };
 }
 
+function curatorRows(file: RegistryFile, conversationIds: readonly string[]): RegistryFile {
+  const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+  const ids = new Set(conversationIds.map(id => resolveConversationAlias(file, id as ViewerConversationId)));
+  for (const id of ids) {
+    for (const identity of conversationIdentities(file, id)) {
+      if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+    }
+    if (file.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
+    if (file.lineageEdges[id]) result.lineageEdges[id] = clone(file.lineageEdges[id]!);
+    if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
+    for (const receipt of registryRowsMatching(file, "receipts", "conversationId", id)) result.receipts[receipt.launchId] = clone(receipt);
+  }
+  return result;
+}
+
 /** Every id that resolves to `conversationId`: itself and each alias whose
     chain ends there, found through the alias index where the file has one. */
 export function conversationIdsResolvingTo(file: RegistryFile, conversationId: ViewerConversationId): ViewerConversationId[] {
@@ -6650,8 +6672,8 @@ export class AgentRegistry {
   }
 
   private readKeyed<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
-    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-      ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot())));
+    return measureRegistryRead("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot()), true);
   }
 
   /** Ordered controller discovery, with predicates applied before payloads are
@@ -6707,7 +6729,7 @@ export class AgentRegistry {
       in one keyed read transaction without materializing unrelated history. */
   conversationRetentionSnapshot(conversationId: string): Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
-      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.conversationRetentionSnapshot(conversationId));
+      return measureRegistryRead("registry.keyed", () => this.sqliteStore!.conversationRetentionSnapshot(conversationId));
     }
     return this.readKeyed(file => {
       const result: Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> = {
@@ -6761,17 +6783,18 @@ export class AgentRegistry {
   /** Curator authority needs one identity and its receipts, role and project.
       Keyed reads preserve alias resolution without hydrating retained history. */
   curatorConversationSnapshot(conversationId: string): RegistryFile {
+    return this.readKeyed(file => curatorRows(file, [conversationId]));
+  }
+
+  /** Detached facts from one registry generation for a synchronous admission check. */
+  curatorAdmissionFacts(seatId: ViewerConversationId, clientAttemptId?: string, callerId?: string) {
     return this.readKeyed(file => {
-      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
-      const id = resolveConversationAlias(file, conversationId as ViewerConversationId);
-      for (const identity of conversationIdentities(file, id)) {
-        if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
-      }
-      if (file.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
-      if (file.lineageEdges[id]) result.lineageEdges[id] = clone(file.lineageEdges[id]!);
-      if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
-      for (const receipt of registryRowsMatching(file, "receipts", "conversationId", id)) result.receipts[receipt.launchId] = clone(receipt);
-      return result;
+      const seat = file.conversations[resolveConversationAlias(file, seatId)];
+      const receipt = clientAttemptId ? registryRowsMatching(file, "receipts", "clientAttemptId", clientAttemptId)[0] : undefined;
+      const ids = callerId ? [callerId] : [];
+      if (receipt) ids.push(receipt.conversationId);
+      return { seat: seat ? { supersededBy: Boolean(seat.supersededBy) } : null, receipt: receipt ? clone(receipt) : null,
+        snapshot: curatorRows(file, ids) };
     });
   }
 
@@ -6975,6 +6998,30 @@ export class AgentRegistry {
       }
       return result;
     }, { skipColdKeyInitialization: mode === "targeted-activity" });
+  }
+
+  /** Discover only deliveries associated with this revoked seat, preserving registry order.
+      A retained operation owner may refer to a delivery under a different conversation. */
+  revokedSeatDeliveries(conversationId: ViewerConversationId) {
+    return this.readKeyed(file => {
+      const ids = conversationIdsResolvingTo(file, resolveConversationAlias(file, conversationId));
+      const owners = registryRowsMatching(file, "deliveryOperationOwners", "conversationId", ids).map(row => clone(row));
+      const held = registryRowsMatching(file, "heldDeliveries", "conversationId", ids).map(row => clone(row));
+      const byId = new Map(held.map(row => [row.id, row]));
+      for (const { deliveryId } of owners) {
+        if (byId.has(deliveryId)) continue;
+        const row = file.heldDeliveries[deliveryId];
+        if (row) byId.set(deliveryId, clone(row));
+      }
+      return { owners, held, byId };
+    }, { skipColdKeyInitialization: true });
+  }
+
+  heldDeliveryById(id: string): HeldDelivery | undefined {
+    return this.readKeyed(file => {
+      const row = file.heldDeliveries[id];
+      return row && clone(row);
+    }, { skipColdKeyInitialization: true });
   }
 
   deliverySnapshotForOperation(operationId: string, options: { recipientEvidence?: boolean } = {}): RegistryFile {
@@ -7309,7 +7356,7 @@ export class AgentRegistry {
   /** Caller identity reads only the capability and ancestry candidates. */
   mcpCallerSnapshot(conversationId: string | null, ancestry: readonly number[], configuredRootId: string | null) {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
-      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpCallerSnapshot(conversationId, ancestry, configuredRootId));
+      return measureRegistryRead("registry.keyed", () => this.sqliteStore!.mcpCallerSnapshot(conversationId, ancestry, configuredRootId));
     }
     const snapshot = this.readOnlySnapshot();
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
@@ -7317,7 +7364,7 @@ export class AgentRegistry {
 
   mcpNativeCallerSnapshot(sessionId: string, configuredRootId: string | null) {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
-      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpNativeCallerSnapshot(sessionId, configuredRootId));
+      return measureRegistryRead("registry.keyed", () => this.sqliteStore!.mcpNativeCallerSnapshot(sessionId, configuredRootId));
     }
     const snapshot = this.readOnlySnapshot();
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
@@ -8177,6 +8224,8 @@ export class AgentRegistry {
       const receipt: SpawnReceipt = {
         launchId: crypto.randomUUID(),
         clientAttemptId: input.clientAttemptId ?? null,
+        ...(input.scheduledCleanerRunId && input.scheduledCleanerRunId === input.clientAttemptId
+          ? { scheduledCleanerRunId: input.scheduledCleanerRunId } : {}),
         requestDigest: input.requestDigest ?? null,
         pendingOrchestratorSeatIdentity: null,
         transport: input.transport ?? null,
@@ -10642,6 +10691,13 @@ export class AgentRegistry {
   }
 
   /** Alias resolution needs no conversation payload or grant normalization. */
+  /** Resolve a decision's aliases against the same registry generation. The
+      resolver is valid only for the synchronous duration of the callback. */
+  withConversationAliases<T>(read: (resolve: (id: string) => string) => T): T {
+    return this.readKeyed(file => read(id => resolveConversationAlias(file, id as ViewerConversationId)),
+      { skipColdKeyInitialization: true });
+  }
+
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
     return this.readKeyed(file => resolveConversationAlias(file, id), { skipColdKeyInitialization: true });
   }
@@ -11997,14 +12053,19 @@ export class AgentRegistry {
    */
   async stopMigrationIntent(
     id: string,
-    options: { expectedRevision?: number; reason?: string } = {},
+    options: { expectedRevision?: number; reason?: string; canStop?: (file: RegistryFile) => boolean } = {},
   ): Promise<{ acquired: true; value: MigrationIntent } | { acquired: false }> {
     const reason = options.reason ?? STOPPED_MIGRATION_DELIVERY_REASON;
     const owned = await conversationIdsWhere(Object.values((await this.migrationStopView()).conversations),
       (conversation) => conversation.migration?.intentId === id && conversation.migration.phase !== "committed");
     const stopped = await this.deliveryWrite({ label: "migration.stop" },
-      () => this.mutate((file) => stopMigrationIntentInFile(file, id, options.expectedRevision, reason, owned)));
-    if (!stopped.acquired) return stopped;
+      () => this.mutate((file) => {
+        const intent = file.migrationIntents[id];
+        if (!intent) throw new Error("migration intent is unknown");
+        if (options.canStop && !options.canStop(file)) return clone(intent);
+        return stopMigrationIntentInFile(file, id, options.expectedRevision, reason, owned);
+      }));
+    if (!stopped.acquired || stopped.value.state !== "stopped") return stopped;
     await yieldToRuntime();
     try {
       await this.continueMigrationStop(id, reason);
@@ -12634,6 +12695,10 @@ export class AgentRegistry {
       if (claimed) settleStoppedMigrationOf(file, claimed.conversationId);
       const delivery = file.heldDeliveries[id];
       if (!delivery || delivery.state !== "assigned" || delivery.generationId !== generationId) return null;
+      if (delivery.attempts >= DELIVERY_ATTEMPT_LIMIT) {
+        this.recordDeliveryOutcomeInFile(file, id, "failed", "delivery attempt limit reached; verify the recipient before retrying", "unverified");
+        return null;
+      }
       const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
       // Recovery authorizes exactly the selected candidate under the same
       // writer as its claim. A replacement admission or newly started migration

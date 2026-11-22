@@ -19,6 +19,8 @@ import { pruneSpawnNotices, readSpawnNoticeTurn, settleSpawnNotices } from "@/li
 import { LAUNCH_FAILURE_NOTICE_WINDOW_MS } from "@/lib/tasks/launchFailureReporting";
 import { closeStateMutationActivationForTests, openStateMutationActivation, stateMutationRefusal } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
+import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
+import { claimCleanerRun } from "@/lib/cleaner/store";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
@@ -313,6 +315,44 @@ test("a runtime-host transport failure becomes actionable on the structured spaw
   });
 });
 
+test("a Cleaner drain after runtime admission keeps the durable launch replayable", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_runtime_reply_drain", "off", true);
+  const claimed = store.claimStartingStructuredSpawn(receipt.launchId);
+  expect(claimed.claimed).toBe(true);
+  const saved = claimed.receipt.queuedPinnedSpawn;
+  let draining = false, starts = 0;
+  const client = {
+    command: async () => {
+      draining = true;
+      return {
+        operationId: receipt.launchId,
+        replayed: false,
+        receipt: { operationId: receipt.launchId, idempotencyKey: receipt.launchId,
+          conversationId: receipt.conversationId, kind: "spawn" as const, status: "queued" as const,
+          reason: null, at: receipt.createdAt, revision: 1 },
+      };
+    },
+    transitionOperation: async () => { throw new Error("drain-held launch must retain its queued operation"); },
+  } as unknown as RuntimeHostClient;
+  const account = { engine: "codex" as const, accountId: "account-a", kind: "managed" as const,
+    home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } };
+  try {
+    await expect(spawnStructuredConversation({
+      engine: "codex", receipt: claimed.receipt, spec: saved!.spec, account, prompt: saved!.prompt,
+      registry: store, client,
+      authorize: () => {
+        if (draining) { const error = new Error("Cleaner admission held by update drain"); error.name = "CleanerDrainHold"; throw error; }
+      },
+    }, { startHost: async () => { starts++; throw new Error("host must not start during drain"); } }))
+      .rejects.toThrow("Cleaner admission held by update drain");
+    expect(starts).toBe(0);
+    const after = store.spawnReceipt(receipt.launchId);
+    expect(after).toMatchObject({ state: "starting", clientAttemptId: receipt.clientAttemptId,
+      admissionOwner: null });
+    expect(after?.queuedPinnedSpawn).toMatchObject({ prompt: saved!.prompt, spec: saved!.spec, imageRefs: saved!.imageRefs });
+  } finally { store.close(); }
+});
+
 test("a stale dead-evidence structured launch converges to durable retry-safe failed exactly once", async () => {
   const store = registry();
   const receipt = staleStructuredReceipt(store, "stale_20260719_a1");
@@ -524,7 +564,7 @@ test.each(["off", "sqlite"] as const)("a fresh loss stays handled when both repo
   expect(readSpawnNoticeTurn(receipt.conversationId, turn)).not.toBeNull();
   settleSpawnNotices(receipt.conversationId, [turn], { state: "sent", recipientConversationId: "conversation_current_launcher", clientMessageId: "notice-fixture", operationId: null }, new Date().toISOString());
   pruneSpawnNotices(new Date(Date.now() + 1_000).toISOString());
-  fs.rmSync(lifecycleJournalPath(), { force: true });
+  fs.rmSync(lifecycleJournalPath(), { recursive: true, force: true });
   expect(readSpawnNoticeTurn(receipt.conversationId, turn)).toBeNull();
   const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode });
   await terminalizeStaleStructuredSpawns(reopened, null);
@@ -1225,22 +1265,125 @@ test("the actuation cap bounds one cycle and the remainder converges on the next
   }
 });
 
-function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off") {
+async function cleanerAttemptFixture(ageMs = 0) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cleaner-queue-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const now = Date.now() - ageMs;
+  const run = await claimCleanerRun({
+    project: "repo-test", cwd: root, now: () => now, episode: `queue-fixture-${ageMs}`,
+    evidence: { volumes: [], categories: [] }, allowed: () => true,
+  });
+  if (typeof run === "string") throw new Error(`failed to seed cleaner admission: ${run}`);
+  return { runId: run.runId, cleanup() {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  } };
+}
+
+function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off", cleaner = false, scheduledCleanerRunId?: string) {
   const store = registry(mode);
   const cwd = path.dirname(store.filename);
-  const profile = emptyLaunchProfile({ cwd, title: curator ? "Role memory curation" : "Owner queue fixture",
+  const profile = emptyLaunchProfile({ cwd, title: cleaner ? "Cleaner queue fixture" : curator ? "Role memory curation" : "Owner queue fixture",
+    ...(cleaner ? { agentMemoryRoleParams: { mode: "disk" }, readOnly: true, sandbox: "restricted" as const, permissionMode: "never" as const, allowSubagents: false } : {}),
     ...(curator ? { project: curator.project, role: "curator" as never } : {}) });
-  const begun = store.beginSpawnRequest({ engine: "claude", cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
+  const engine = cleaner ? "codex" as const : "claude" as const;
+  const begun = store.beginSpawnRequest({ engine, cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
+    ...(cleaner ? { role: "cleaner" } : {}),
     ...(curator ? { role: "curator", explicitProject: curator.receiptProject ?? curator.project } : {}),
-    clientAttemptId: attemptId ?? curator?.id ?? `relay-owner-queued-${transport}`, launchProfile: profile });
+    clientAttemptId: attemptId ?? curator?.id ?? `relay-owner-queued-${transport}`,
+    ...(scheduledCleanerRunId ? { scheduledCleanerRunId } : {}), launchProfile: profile });
   if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw Error("queued owner fixture unavailable");
   const prompt = "Owner queue fixture instruction";
   store.queuePinnedSpawn(begun.receipt.launchId, { version: 1, retryAt: new Date(0).toISOString(), accountId: "account-a", locale: "en",
-    spec: { engine: "claude", command: "claude", cwd, windowName: "owner-fixture", launchProfile: profile },
+    spec: { engine, command: engine, cwd, windowName: "owner-fixture", launchProfile: profile },
     prompt, imageRefs: [], parentArtifactPath: null, pipelineSourceConversationId: null }, "Owner queue fixture");
   store.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner);
   return { store, cwd, receipt: begun.receipt };
 }
+
+test.serial("queued cleaner recovery holds its saved attempt throughout an update drain", async () => {
+  const cleanerSeed = await cleanerAttemptFixture();
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true, cleanerSeed.runId);
+  const saved = store.spawnReceipt(receipt.launchId)?.queuedPinnedSpawn;
+  let actuations = 0;
+  const options = {
+    resolveSpawnAccount: () => ({ engine: "codex" as const, accountId: "account-a", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } }),
+    resolvePinnedSpawnAdmission: async () => ({ kind: "admissible" as const, basis: "current" as const, stale: false, retryAt: null }),
+    spawnStructuredConversation: async (input: Parameters<typeof spawnStructuredConversation>[0]) => {
+      actuations++;
+      expect(input.receipt.clientAttemptId).toBe(receipt.clientAttemptId);
+      return { state: "running" } as never;
+    },
+  };
+  writeDrain(drainFile(), { id: "cleaner-recovery-drain", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 });
+  try {
+    const held = await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, options);
+    expect(held.examined).toBe(1);
+    expect(actuations).toBe(0);
+    expect(store.spawnReceipt(receipt.launchId)).toMatchObject({ state: "starting", admissionOwner: null, queuedPinnedSpawn: saved });
+    releaseDrain(drainFile(), "cleaner-recovery-drain");
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, options);
+    expect(actuations).toBe(1);
+    expect(store.spawnReceipt(receipt.launchId)?.clientAttemptId).toBe(receipt.clientAttemptId);
+  } finally {
+    releaseDrain(drainFile(), "cleaner-recovery-drain");
+    store.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    cleanerSeed.cleanup();
+  }
+});
+
+test.serial("queued manual guarded disk Cleaner resumes without scheduled-run state", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_manual_prefix_spoof", "off", true);
+  let actuations = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      resolveSpawnAccount: () => ({ engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async input => { actuations++; return { state: "running", launchId: input.receipt.launchId } as never; },
+    });
+    expect(actuations).toBe(1);
+    expect(store.spawnReceipt(receipt.launchId)?.state).not.toBe("failed");
+  } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test.serial("queued cleaner recovery fences a reservation after its durable run deadline", async () => {
+  const cleanerSeed = await cleanerAttemptFixture(91 * 60_000);
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true, cleanerSeed.runId);
+  let actuations = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      now: () => Date.now(),
+      resolveSpawnAccount: () => ({ engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async () => { actuations++; throw Error("expired Cleaner must not start"); },
+    });
+    expect(actuations).toBe(0);
+    expect(store.spawnReceipt(receipt.launchId)).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
+    expect(store.spawnReceipt(receipt.launchId)?.error).toContain("disk cleaner run expired");
+  } finally {
+    store.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    cleanerSeed.cleanup();
+  }
+});
+
+test.serial("queued scheduled cleaner with a missing run record refuses actuation", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_missing_run", "off", true, "cleaner_missing_run");
+  let actuations = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      resolveSpawnAccount: () => ({ engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async () => { actuations++; throw Error("missing scheduled run must not start"); },
+    });
+    expect(actuations).toBe(0);
+    expect(store.spawnReceipt(receipt.launchId)).toMatchObject({ state: "failed", scheduledCleanerRunId: "cleaner_missing_run" });
+    expect(store.spawnReceipt(receipt.launchId)?.error).toContain("disk cleaner run expired");
+  } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
 
 test("a launch queued by a release with the terminal transport ends failed and starts nothing", async () => {
   const { store, cwd, receipt } = queuedOwnerFixture("tmux", undefined, "queued-terminal-transport-fixture");

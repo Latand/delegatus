@@ -22,6 +22,7 @@ import {
   SEAT_TICK_WAKE_REASON_KINDS,
   type SeatTickActivity,
   type SeatTickReportOwed,
+  type SeatTickReportsInput,
   type SeatTickCard,
   type SeatTickCheckInput,
   type SeatTickChildInput,
@@ -1733,6 +1734,33 @@ function instant(value: string | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : Number.NaN;
 }
 
+type ReportCoverage = Pick<SeatTickReportsInput, "reportedIds" | "coveredIds" | "reportIdsFor"> & { reservedIds?: readonly string[]; occupiedIds?: readonly string[]; acknowledgedOutcomeKeys?: readonly string[] };
+
+function reportKeyOccupied(reports: ReportCoverage | undefined, key: string): boolean {
+  if (!reports) return false;
+  return reports.reportIdsFor(key).some(id => reports.reportedIds.includes(id) || reports.reservedIds?.includes(id) || reports.occupiedIds?.includes(id));
+}
+
+function reportRequestKey(owed: readonly SeatTickReportOwed[], reports: ReportCoverage | undefined, seatEpoch: number | null): string {
+  const outcomeKeys = [...new Set(owed.map(entry => entry.key))].sort();
+  const identity = createHash("sha256").update(JSON.stringify(outcomeKeys)).digest("hex").slice(0, 16);
+  // A multi-outcome request gets its own identity so a peer outcome report
+  // cannot impersonate the delivered set and a later set cannot reuse it.
+  // Keep the familiar outcome key for an unoccupied singleton.
+  if (outcomeKeys.length === 1 && !reportKeyOccupied(reports, outcomeKeys[0]!)) return outcomeKeys[0]!;
+  const base = `wake-report:${seatEpoch ?? 0}:${identity}`;
+  let key = base;
+  for (let suffix = 2; reportKeyOccupied(reports, key); suffix++) key = `${base}:${suffix}`;
+  return key;
+}
+
+function outcomeReported(reports: ReportCoverage | undefined): (key: string) => boolean {
+  if (!reports) return () => false;
+  const ids = new Set([...reports.reportedIds, ...(reports.coveredIds ?? [])]);
+  const acknowledged = new Set(reports.acknowledgedOutcomeKeys ?? []);
+  return (key) => acknowledged.has(key) || reports.reportIdsFor(key).some((id) => ids.has(id));
+}
+
 /**
  * One check's bookkeeping of what the report log owes. Pure: it reads the
  * report log as the gather saw it.
@@ -1747,11 +1775,16 @@ function instant(value: string | null | undefined): number {
 function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): SeatTickProjectState {
   const reports = input.reports;
   if (!reports) return state;
-  const ids = new Set(reports.reportedIds);
-  const reported = (key: string) => reports.reportIdsFor(key).some((id) => ids.has(id));
+  const reported = outcomeReported(reports);
   const coveredThrough = instant(reports.latestCoversOwedAt);
-  const owed = (state.reportsOwed ?? []).filter((entry) => !reported(entry.key)
-    && !(Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));
+  const prior = state.reportsOwed ?? [];
+  const requestKeys = new Set(prior.flatMap(entry => entry.requestedBy ?? []));
+  const acknowledgedRequests = new Set([...requestKeys].filter(key => reports.reportIdsFor(key).some(id => reports.reportedIds.includes(id))));
+  const cleared = prior.filter(entry => reported(entry.key)
+    || (entry.requestedBy ?? []).some(key => acknowledgedRequests.has(key))
+    || (Number.isFinite(coveredThrough) && coveredThrough >= instant(entry.receivedAt)));
+  const acknowledged = [...new Set([...(state.reportsAcknowledged ?? []), ...cleared.map(entry => entry.key)])].slice(-64);
+  const owed = prior.filter(entry => !cleared.includes(entry));
 
   let reportSeenAt = state.reportSeenAt ?? null;
   // Without a prior board observation, establish a baseline. Signal-only
@@ -1786,6 +1819,7 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   return {
     ...state,
     reportsOwed: owed,
+    reportsAcknowledged: acknowledged,
     reportSeenAt,
     reportFingerprint,
     checkFingerprint: current,
@@ -1857,8 +1891,9 @@ export function seatTickReportLines(
   const language = reports.operatorLocale ? `, in ${LANGUAGE_NAME[reports.operatorLocale]}` : "";
   const lines: string[] = [];
   const owed: { key: string; label: string }[] = [...(state.reportsOwed ?? [])];
+  const reported = outcomeReported({ ...reports, acknowledgedOutcomeKeys: state.reportsAcknowledged });
   for (const outcome of seatTickOwedOutcomes(items)) {
-    if (!owed.some((entry) => entry.key === outcome.key)) owed.push(outcome);
+    if (!reported(outcome.key) && !owed.some((entry) => entry.key === outcome.key)) owed.push(outcome);
   }
   if (owed.length > 0) {
     const labels = owed.slice(0, OWED_NAMED_LIMIT).map((entry) => entry.label).join(", ");
@@ -1868,7 +1903,8 @@ export function seatTickReportLines(
     const named = compact ? `${owed.length} outcome(s)` : labels;
     const more = !compact && owed.length > OWED_NAMED_LIMIT ? `, and ${owed.length - OWED_NAMED_LIMIT} more` : "";
     const dropped = state.reportsOwedDropped ? ` (${state.reportsOwedDropped} older owed outcome(s) no longer listed)` : "";
-    lines.push(`Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${owed[0]!.key} and coversOwed: true.`);
+    const request = seatTickReportRequest(input, state, items);
+    lines.push(`Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${request?.key ?? owed[0]!.key} and coversOwed: true.`);
     if (!input.pipelines.some(isOpenLane) && owed.some((entry) => entry.key.startsWith("lane:"))) {
       lines.push("Nothing is running now: the report says so.");
     }
@@ -1891,13 +1927,37 @@ function recordOwed(
   dropped: number,
   outcomes: readonly { key: string; label: string }[],
   receivedAt: string,
+  request?: { key: string; outcomeKeys: string[] },
 ): { reportsOwed: SeatTickReportOwed[]; reportsOwedDropped: number } {
   const merged = [...before];
   for (const outcome of outcomes) {
     if (!merged.some((entry) => entry.key === outcome.key)) merged.push({ ...outcome, receivedAt });
   }
+  if (request) {
+    const set = new Set(request.outcomeKeys);
+    for (const entry of merged) if (set.has(entry.key)) {
+      entry.requestedBy = [...new Set([...(entry.requestedBy ?? []), request.key])].slice(-16);
+    }
+  }
   const over = Math.max(0, merged.length - SEAT_TICK_REPORTS_OWED_LIMIT);
   return { reportsOwed: merged.slice(over), reportsOwedDropped: dropped + over };
+}
+
+export function seatTickReportRequest(
+  input: SeatTickCheckInput,
+  state: SeatTickProjectState,
+  items: readonly SeatTickItem[],
+): { key: string; outcomeKeys: string[] } | undefined {
+  const reports = input.reports;
+  if (!reports?.bridgeReports) return undefined;
+  const owed = [...(state.reportsOwed ?? [])];
+  const reported = outcomeReported({ ...reports, acknowledgedOutcomeKeys: state.reportsAcknowledged });
+  for (const outcome of seatTickOwedOutcomes(items)) {
+    if (!reported(outcome.key) && !owed.some(entry => entry.key === outcome.key)) {
+      owed.push({ ...outcome, receivedAt: new Date(input.now).toISOString() });
+    }
+  }
+  return owed.length ? { key: reportRequestKey(owed, reports, state.seatEpoch), outcomeKeys: owed.map(entry => entry.key) } : undefined;
 }
 
 function quiet(state: SeatTickProjectState, at: string): SeatTickProjectState {
@@ -2179,6 +2239,12 @@ export function seatTickWakeCommitPlan(
     /** The project's Bridge reports setting: off, the landing records no
         owed outcome (docs/design/orchestrator-reports.md §5.1). */
     bridgeReports?: boolean;
+    /** Report coverage observed by the decision that composed this wake. */
+    reportCoverage?: ReportCoverage;
+    /** Exact report key and debt set rendered into this wake. */
+    reportRequest?: { key: string; outcomeKeys: string[] };
+    /** Outcomes already owed before this wake's agenda was frozen. */
+    priorReportKeys?: readonly string[];
     /** Exact rendered payload, before reserving any outcome acknowledgments. */
     frozenText?: string;
   },
@@ -2230,9 +2296,16 @@ export function seatTickWakeCommitPlan(
     .map(item => item.occurredAt!).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
   /* The outcomes the report log is owed once this wake lands (§5.1). */
   const catchUp = verdict.catchUp && items.length === verdict.items.length ? verdict.catchUp : undefined;
+  const reported = outcomeReported(context.reportCoverage);
   const reportsOwed = context.bridgeReports ? catchUp?.pending ? [] : catchUp
     ? [{ key: catchUp.key, label: `catch-up ${catchUp.from} through ${catchUp.through}` }]
-    : seatTickOwedOutcomes(items) : [];
+    : seatTickOwedOutcomes(items).filter(outcome => !reported(outcome.key)) : [];
+  const deliveredReportKeys = new Set(seatTickOwedOutcomes(items).map(outcome => outcome.key));
+  const reportRequest = context.reportRequest ? {
+    key: context.reportRequest.key,
+    outcomeKeys: context.reportRequest.outcomeKeys.filter(key => context.priorReportKeys?.includes(key) || deliveredReportKeys.has(key)),
+  } : undefined;
+  const owedKeys = new Set(reportsOwed.map(outcome => outcome.key));
   /* The stalls the wake actually names, never the check's whole stall list:
      one the per-wake bound cut was not reported. */
   const reportedStalls = items.flatMap((item) => item.stallToken ? [item.stallToken] : []);
@@ -2247,7 +2320,7 @@ export function seatTickWakeCommitPlan(
       ...(item.maintenance ? [`maintenance:${item.maintenance.runId}:page:${item.maintenance.page}`] : []),
       ...(item.kind === "deploy" ? [`deploy:${item.id}`] : []),
       ...(item.stallToken ? [`stall:${item.stallToken}`] : []),
-      ...(context.bridgeReports ? seatTickOwedOutcomes([item]).map(outcome => `report:${outcome.key}`) : []),
+      ...seatTickOwedOutcomes([item]).filter(outcome => owedKeys.has(outcome.key)).map(outcome => `report:${outcome.key}`),
     ];
     return keys.map(key => ({ key, line: redactMonitorText(item.manifestLine ?? seatTickBullet(item)) }));
   });
@@ -2261,6 +2334,7 @@ export function seatTickWakeCommitPlan(
   }
   return {
     ...(catchUp ? { catchUp } : {}),
+    ...(reportRequest?.outcomeKeys.length ? { reportRequest } : {}),
     ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}),
     ...(deployResumeThrough ? { deployResumeThrough } : {}),
     formPage,
@@ -2305,9 +2379,9 @@ export function seatTickWakeCommit(
   const formPageAfter = visibleFormCursor(state, commit);
   const at = new Date(now).toISOString();
   const received = reachedAt && Number.isFinite(Date.parse(reachedAt)) && Date.parse(reachedAt) <= now ? reachedAt : at;
-  const owed = commit.reportsOwed?.length
+  const owed = (commit.reportsOwed?.length || commit.reportRequest)
     ? recordOwed(commit.catchUp ? (state.reportsOwed ?? []).filter(entry => !commit.catchUp!.covers.includes(entry.key)) : state.reportsOwed ?? [],
-      state.reportsOwedDropped ?? 0, commit.reportsOwed, received)
+      state.reportsOwedDropped ?? 0, commit.reportsOwed ?? [], received, commit.reportRequest)
     : null;
   const clearsOutage = (!!commit.catchUp && !commit.catchUp.pending) || !state.unreachableSince
     || (commit.wakeIntervalMs !== undefined && Date.parse(received) - Date.parse(state.unreachableBacklogSince ?? state.unreachableSince) <= commit.wakeIntervalMs);

@@ -974,6 +974,8 @@ export interface SeatTickWakeCommit {
       must carry (docs/design/orchestrator-reports.md §5.1). A landing records
       them as owed; a wake that never landed announced nothing. */
   reportsOwed?: { key: string; label: string }[];
+  /** The report key and complete owed set named by this delivered wake. */
+  reportRequest?: { key: string; outcomeKeys: string[] };
   /** The stall tokens of the stall lines this wake carries, recorded by a
       landing and by nothing else: a stall the per-wake bound cut was never
       reported. Absent on a plan written before this field, which records none. */
@@ -1129,7 +1131,13 @@ export interface SeatTickReportOwed {
   label: string;
   /** When the wake that announced it reached the seat. */
   receivedAt: string;
+  /** Request keys on delivered wakes that included this outcome. */
+  requestedBy?: string[];
 }
+
+/** Outcome keys discharged from a delivered wake, retained so later agenda
+    changes cannot turn the same parked outcome back into new report debt. */
+export type SeatTickReportAcknowledged = SeatTickReportOwed;
 
 /** Owed outcomes one project's row keeps; past it the oldest are dropped and
     counted (§5.1). */
@@ -1148,9 +1156,17 @@ export interface SeatTickReportsInput {
   operatorLocale: "en" | "uk" | null;
   /** `at` of the newest manager report of the project. */
   lastReportAt: string | null;
-  /** Project-scoped ids of the project's manager reports and of every key
-      they name in `covers`. */
+  /** Project-scoped ids of manager reports filed under their own keys. */
   reportedIds: readonly string[];
+  /** Project-scoped ids explicitly named by manager reports' `covers` field. */
+  coveredIds?: readonly string[];
+  /** Report ids retained after their full rows were retired. */
+  reservedIds?: readonly string[];
+  /** IDs of every current project report row, including worker-authored rows;
+      these reserve keys without providing settlement evidence. */
+  occupiedIds?: readonly string[];
+  /** Outcome keys settled by an earlier check and retained in project state. */
+  acknowledgedOutcomeKeys?: readonly string[];
   /** The ids a report filed under `key` may carry: scoped by the project, and
       by every older key of the project a manager report was filed under. */
   reportIdsFor: (key: string) => readonly string[];
@@ -1342,6 +1358,9 @@ export interface SeatTickProjectState {
   /** Settled outcomes a landed wake announced that the report log has not
       received yet (§5.1). The project's, so a successor inherits them. */
   reportsOwed?: SeatTickReportOwed[];
+  /** Bounded keys already discharged, preventing the same parked outcome
+      from returning when its agenda presentation changes. */
+  reportsAcknowledged?: string[];
   /** Owed outcomes dropped past the bound, which the wake states. */
   reportsOwedDropped?: number;
   /** The newest manager report this tick has observed, and the material

@@ -90,7 +90,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends, settleEchoedSend } from "./sendSettlement";
+import { confirmJournalDelivery, deliveryRouteOf, fencePendingSends, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends, settleEchoedSend } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary, realtimeBoundConversationIds } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -319,9 +319,10 @@ function hostProjectionKey(state: HostState): string {
 export async function publishStructuredHostProjection(
   client: RuntimeHostClient,
   event: RuntimeEventInput,
+  invalidateFiles = true,
 ): Promise<void> {
   await client.append(event);
-  await publishFilesRevision(client);
+  if (invalidateFiles) await publishFilesRevision(client);
 }
 
 function hostResolver(
@@ -968,6 +969,9 @@ export async function bindStructuredDeliveryQueue(
       progressStore.note(operationId, conversationId, note);
     },
     stalled: (operationId) => progressStore.stalled(operationId),
+    flush: () => !stopped && state.activeQueue === queue && progressStore.flush(),
+    releaseRecoveryAttempt: (operationId, attempt, executorId) => !stopped && state.activeQueue === queue
+      && progressStore.releaseRecoveryAttempt(operationId, attempt, executorId),
     deadline: (operationId, deadlineAt, policy) => {
       if (!stopped && state.activeQueue === queue) progressStore.deadline(operationId, deadlineAt, policy);
     },
@@ -1154,6 +1158,9 @@ export async function bindStructuredDeliveryQueue(
       },
       ...(typeof client.events === "function" ? { events: (afterEventSeq: number) => client.events(afterEventSeq) } : {}),
       status: async (operationId: string) => (await client.operationStatus(operationId))?.receipt ?? null,
+      fencePendingSends: operationIds => fencePendingSends(operationIds, { registry, client, progress, assertActive: () => {
+        if (stopped || state.activeQueue !== queue) throw new Error("delivery executor retired");
+      } }),
       /* The durable delivery record's own fence (#1131): a send a receipt query
          already ended — the only answer it could give while this socket was
          unreachable — must not be actuated when the socket comes back. */

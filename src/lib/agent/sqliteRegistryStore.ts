@@ -1,3 +1,4 @@
+import { measureRegistryRead } from "./registryReadPerformance";
 import { compareDeliveryAdmission, seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { beginRegistryTransaction } from "./registryTransaction";
@@ -363,6 +364,8 @@ const registryRowIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_migration_page ON registry_rows(collection,json_extract(value_json,'$.migration.phase'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_delivery_claim ON registry_rows(json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),json_extract(value_json,'$.generationId'),json_extract(value_json,'$.admissionSeq'),json_extract(value_json,'$.createdAt'),json_extract(value_json,'$.id'),row_key) WHERE collection='heldDeliveries'",
   "CREATE INDEX IF NOT EXISTS registry_receipt_claim_owner ON registry_rows(collection,json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.engine'),json_extract(value_json,'$.state'),row_order)",
+  "CREATE INDEX IF NOT EXISTS registry_pending_delivery_owner_origin ON registry_rows(json_extract(value_json,'$.conversationId'),row_order) WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IS NULL",
+  "CREATE INDEX IF NOT EXISTS registry_pending_delivery_owner_runtime ON registry_rows(json_extract(value_json,'$.runtimeConversationId'),row_order) WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IS NULL",
   "CREATE INDEX IF NOT EXISTS registry_open_delivery_page ON registry_rows(collection,json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_phase ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),json_extract(value_json,'$.migration.phase'),row_order)",
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_custody ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END,row_order)",
@@ -385,7 +388,7 @@ const registryFailureRepairIndexes = declaredIndexes([
 const DEFERRED_LOOKUP_INDEXES = new Set([
   "clientMessageId",
   "launchId", "requestDigest", "supersedes.conversationId", "structuredHost.kind",
-  "parentConversationId", "launchProfile.parentConversationId", "pendingSpawnCapability.operationId",
+  "parentConversationId", "launchProfile.parentConversationId", "pendingSpawnCapability.operationId", "runtimeConversationId",
 ]);
 function registryLookupIndexes(): ReturnType<typeof declaredIndexes> {
   return declaredIndexes(Object.entries(LOOKUP_PATHS)
@@ -455,9 +458,9 @@ const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
 /** The rows whose MCP grant lists a complete load decides from other rows. */
 const READER_GRANT_COLLECTIONS: ReadonlySet<RowCollection> = new Set(["entries", "receipts", "conversations"]);
 type LookupValue = string | readonly string[];
-export type RegistryKeyFilter = { field: "engine" | "migration.custodyState" | "migration.phase" | "migration.intentId" | "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind" | "custodyState"; value: LookupValue };
+export type RegistryKeyFilter = { field: "engine" | "migration.custodyState" | "migration.phase" | "migration.intentId" | "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "runtimeConversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind" | "custodyState"; value: LookupValue };
 type LookupField = RegistryKeyFilter["field"];
-const LOOKUP_PATHS: Record<LookupField, string> = { engine: "$.engine", "migration.custodyState": "$.migration.phase", "migration.phase": "$.migration.phase", "migration.intentId": "$.migration.intentId", custodyState: "$.terminalState", clientMessageId: "$.clientMessageId", launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
+const LOOKUP_PATHS: Record<LookupField, string> = { engine: "$.engine", "migration.custodyState": "$.migration.phase", "migration.phase": "$.migration.phase", "migration.intentId": "$.migration.intentId", custodyState: "$.terminalState", clientMessageId: "$.clientMessageId", launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", runtimeConversationId: "$.runtimeConversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
 function lookupSql(field: LookupField): string {
   if (field === "custodyState") return "CASE WHEN json_extract(value_json,'$.terminalState') IS NULL THEN 'pending' ELSE 'terminal' END";
   if (field === "migration.custodyState") return "CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END";
@@ -480,6 +483,7 @@ interface RegistryFileReaders {
   startupSelection: WeakMap<RegistryFile, () => boolean>;
   projection: WeakMap<object, ProjectionReader>;
   liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
+  structuredProcess?: WeakMap<object, (pids: readonly number[]) => boolean>;
 }
 /* Next standalone evaluates instrumentation and route handlers in separate
    bundle realms, each with its own copy of this module, while the process
@@ -506,6 +510,15 @@ const endedOwnerReaders = fileReaders.endedOwner;
 const startupSelectionReaders = fileReaders.startupSelection ??= new WeakMap();
 const projectionReaders = fileReaders.projection;
 const livenessReaders = fileReaders.liveness;
+const structuredProcessReaders = fileReaders.structuredProcess ??= new WeakMap();
+
+/** An extant process slot, including scope custody on a terminal row, belongs
+ * to registered host recovery. Never seize it through orphan discovery. */
+export function registryHasStructuredProcess(file: RegistryFile, pids: readonly number[]): boolean {
+  // A caller without a keyed view cannot prove vacancy within the sweep's
+  // bound. Leave custody with the registry until an indexed read is available.
+  return structuredProcessReaders.get(file)?.(pids) ?? true;
+}
 
 /**
  * A narrow, immutable reading of every row of one collection (#2761).
@@ -2125,7 +2138,7 @@ export class SqliteAgentRegistryStore {
       the caller's page, and a quiet pass reads no receipt payloads. */
   failedLaunchRepairKeys(limit: number, legacy: boolean): string[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new RangeError("invalid failure repair page size");
-    return performanceSpans.sync("registry.keyed", () => this.db.query<{ row_key: string }, [number]>(
+    return measureRegistryRead("registry.keyed", () => this.db.query<{ row_key: string }, [number]>(
       failedLaunchRepairQuery(legacy)).all(limit).map(row => row.row_key));
   }
 
@@ -2321,7 +2334,7 @@ export class SqliteAgentRegistryStore {
 
   readOnlySnapshot(): SqliteRegistrySnapshot {
     if (this.preparedReader && !this.writerHeld) return this.preparedReader.readOnlySnapshot();
-    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => this.readOnlySnapshotMeasured()));
+    return measureRegistryRead("registry.snapshot", () => this.readOnlySnapshotMeasured(), true);
   }
 
   /** Filesystem retention needs current owner evidence, never historical
@@ -2429,7 +2442,7 @@ export class SqliteAgentRegistryStore {
     if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const replayed = this.journalIsBounded(cold.coldIds)
-        ? withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => finishSteps(this.refreshSnapshotSteps(true))))
+        ? measureRegistryRead("registry.snapshot", () => finishSteps(this.refreshSnapshotSteps(true)), true)
         : null;
       if (ownsTransaction) this.db.exec("COMMIT");
       return replayed;
@@ -4587,6 +4600,20 @@ export class SqliteAgentRegistryStore {
       return { field, values };
     }).filter(filter => filter.values.length);
     if (filters.length !== clauses.length) return [];
+    // The partial indexes cover pending custody and return keys only.
+    // Express the null predicate directly so SQLite can use the partial index.
+    if (collection === "deliveryOperationOwners" && clauses.length === 2
+      && clauses.some(({ field, values }) => field === "custodyState" && values.length === 1 && values[0] === "pending")) {
+      const identity = clauses.find(({ field }) => field === "conversationId" || field === "runtimeConversationId");
+      if (identity) {
+        const index = identity.field === "conversationId" ? "registry_pending_delivery_owner_origin" : "registry_pending_delivery_owner_runtime";
+        const placeholders = identity.values.map(() => "?").join(",");
+        return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key FROM registry_rows INDEXED BY ${index}
+          WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IS NULL
+            AND ${lookupSql(identity.field)} IN (${placeholders})
+          ORDER BY row_order LIMIT ?`).all(...identity.values, limit).map(row => row.row_key);
+      }
+    }
     const messageAndRecipient = clauses.some(filter => filter.field === "clientMessageId")
       && clauses.some(filter => filter.field === "conversationId");
     const indexedBy = messageAndRecipient
@@ -5898,6 +5925,21 @@ export class SqliteAgentRegistryStore {
         } finally { statement.finalize(); }
       }
       return false;
+    });
+    structuredProcessReaders.set(file, pids => {
+      // A writer may already have installed another process in this view.
+      // Refuse vacancy while entry changes have yet to reach the index.
+      if (dirtyRows.get("entries")?.size || reorderedCollections.has("entries")) return true;
+      const occupied = this.db.query<{ present: number }, [number, number]>(`
+        SELECT 1 AS present FROM registry_rows
+          WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.process.pid')=?
+        UNION ALL
+        SELECT 1 AS present FROM registry_rows
+          WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid')=?
+            AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
+              OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)
+        LIMIT 1`);
+      return pids.some(pid => occupied.get(pid, pid) !== null);
     });
     boundedReaders.set(file, (collection, filters, limit) => this.matchingRowKeysBounded(collection, filters, limit));
     keyedReaders.set(file, (collection, field, value) => {
