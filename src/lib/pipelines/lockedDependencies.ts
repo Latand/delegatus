@@ -204,6 +204,62 @@ async function dependencyPermissions(directory: string, writable: boolean, check
   }
 }
 
+async function repairDependencyPermissions(modules: string, check: () => void, assertWriter: () => void): Promise<void> {
+  const batchSize = 32;
+  const pending = [modules];
+  while (pending.length) {
+    check();
+    const entries = await Promise.allSettled(pending.splice(-batchSize).map(async file => {
+      const entry = await fs.lstat(file, { bigint: true });
+      if (entry.isSymbolicLink()) return;
+      const names = entry.isDirectory() ? await fs.readdir(file) : [];
+      const bin = entry.isDirectory() && path.basename(file) === ".bin" && path.basename(path.dirname(file)) === "node_modules";
+      const mode = Number(entry.mode) & 0o777;
+      const dirty = (mode & (bin ? 0o022 : 0o222)) !== 0;
+      return { file, entry, names, dirty, mode: (mode & ~0o222) | (bin ? 0o200 : 0) };
+    }));
+    const changes = entries.flatMap(result => {
+      if (result.status === "rejected") throw result.reason;
+      if (!result.value) return [];
+      const { file, names, dirty } = result.value;
+      for (const name of names.sort()) pending.push(path.join(file, name));
+      return dirty ? [result.value] : [];
+    });
+    if (!changes.length) continue;
+    check();
+    const handles = await Promise.allSettled(changes.map(async ({ file, entry, mode }) => {
+      if ((!entry.isFile() && !entry.isDirectory()) || await fs.realpath(file) !== file) {
+        throw new Error("dependency permission target changed during repair");
+      }
+      const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        if (!sameVersion(entry, await handle.stat({ bigint: true }))) {
+          throw new Error("dependency permission target changed during repair");
+        }
+        return { handle, mode };
+      } catch (error) {
+        await handle.close();
+        throw error;
+      }
+    }));
+    try {
+      const writes = handles.map(result => {
+        if (result.status === "rejected") throw result.reason;
+        return result.value;
+      });
+      // Fence the actual writes once per batch, after all awaited reads. Use
+      // the verified descriptors so a path swap cannot redirect a chmod.
+      assertWriter();
+      for (const result of await Promise.allSettled(writes.map(({ handle, mode }) => handle.chmod(mode)))) {
+        if (result.status === "rejected") throw result.reason;
+      }
+    } finally {
+      await Promise.allSettled(handles.map(result => result.status === "fulfilled" && result.value.handle.close()));
+    }
+  }
+  check();
+}
+
 async function dependencyTarget(link: string): Promise<string | null> {
   try { return await fs.realpath(link); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
@@ -478,16 +534,18 @@ async function dependencyNamespace(cwd: string, common: string) {
   return assertNamespace;
 }
 
-class DependencyDeadline extends Error {}
+class DependencyDeadline extends Error {
+  retry?: "validation" | "permission repair";
+}
 
-/** Retry one validation deadline with fresh reads and a fresh attempt budget.
+/** Retry one validation or repair deadline with fresh reads and attempt budget.
  * The prior attempt has already released its writer and temporary link. */
 export async function prepareLockedDependencies(cwd: string, options: PreparationOptions = {}): Promise<boolean> {
   try {
     return await prepareLockedDependenciesOnce(cwd, options);
   } catch (error) {
-    if (!(error instanceof DependencyDeadline)) throw error;
-    console.warn(`${error.message}; retrying validation in ${VALIDATION_RETRY_MS} ms`);
+    if (!(error instanceof DependencyDeadline) || !error.retry) throw error;
+    console.warn(`${error.message}; retrying ${error.retry} in ${VALIDATION_RETRY_MS} ms`);
     await delay(VALIDATION_RETRY_MS, undefined, { signal: options.signal });
     return prepareLockedDependenciesOnce(cwd, options);
   }
@@ -743,7 +801,7 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
           if (!entryNow(graph.validation)?.isDirectory()) await fs.rm(graph.validation, { force: true });
           assertWriter();
           checked.assertAnchors(false);
-          await dependencyPermissions(modules, false, assertWriter);
+          await repairDependencyPermissions(modules, remaining, assertWriter);
           enter("validation", "repaired graph seal");
           checked = await inspectGraph(graph, plan, remaining, scan, true);
           if (!checked || checked.reseal) throw new Error("shared dependency permissions could not be sealed");
@@ -874,7 +932,11 @@ async function prepareLockedDependenciesOnce(cwd: string, options: PreparationOp
     const prefix = "stage environment: dependency preparation failed: ";
     const reason = error instanceof Error ? error.message : "unknown setup error";
     const evidence = (["wait", "validation", "commit"] as const).map(name => `${name} ${Math.round(elapsed[name])} ms`).join(", ");
-    const Failure = failedPhase === "validation" && error instanceof DependencyDeadline ? DependencyDeadline : Error;
-    throw new Failure(`${prefix}${reason.startsWith(prefix) ? reason.slice(prefix.length) : reason} [${failedPhase}: ${failedOperation}, ${evidence}]`, { cause: error });
+    const message = `${prefix}${reason.startsWith(prefix) ? reason.slice(prefix.length) : reason} [${failedPhase}: ${failedOperation}, ${evidence}]`;
+    if (!(error instanceof DependencyDeadline)) throw new Error(message, { cause: error });
+    const failure = new DependencyDeadline(message, { cause: error });
+    if (failedPhase === "validation") failure.retry = "validation";
+    if (failedOperation === "permission repair") failure.retry = "permission repair";
+    throw failure;
   }
 }
