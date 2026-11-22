@@ -17,17 +17,31 @@ import { RecordedCheckStore, recordedRootHeld } from "@/lib/recordedChecks/store
 import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 
-test("parked terminal failures schedule from completedAt while a passed reopened cursor stays retained", () => {
+test("a production tick schedules a parked terminal failure and retains a passed reopened cursor", async () => {
+  const { AttemptTempStore } = await import("./attemptTempRetention");
+  const { runAttemptTempSweep } = await import("./attemptTempProduction");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-parked-failure-")); roots.push(root);
+  isolateState(root);
+  const now = Date.parse("2026-10-20T12:30:00.000Z"), clock = spyOn(Date, "now").mockReturnValue(now);
   const p = finishedLane(root, "2026-10-01T00:00:00Z"); p.state = "running";
   p.cursor = { stageId: "build", state: "pending", input: null, activatedBy: null };
   const completedAt = "2026-10-20T12:00:00.000Z";
-  const attempt = { n: 1, state: "failed", launchId: "parked-launch", completedAt } as PipelineStageAttempt;
+  const attempt: PipelineStageAttempt = { n: 1, state: "failed", launchId: "parked-launch", effectiveRole: p.stages[0]!.effectiveRole,
+    conversationId: "fixture", sessionId: null, agentPath: null, paneId: null, flowId: null,
+    startedAt: "2026-10-20T11:00:00.000Z", completedAt, input: null, activatedBy: null, output: "failed", verdict: { status: "fail" }, error: null };
   p.runs = [{ stageId: "build", attempts: [attempt] }];
+  savePipelines([p]);
   const owner = { launchId: attempt.launchId!, retainUntilClose: false, createdAt: Date.parse("2026-10-20T11:00:00Z") };
-  expect(attemptScratchExpiry(p, owner)).toBe(Date.parse(completedAt) + ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS);
-  p.runs[0]!.attempts[0] = { ...attempt, state: "passed" };
-  expect(attemptScratchExpiry(p, owner)).toBeNull();
+  const directory = statePath("scratch", "llv-stage-parked"); fs.mkdirSync(directory, { recursive: true });
+  const store = new AttemptTempStore();
+  try {
+    store.register({ directory, pipelineId: p.id, launchId: owner.launchId, retainUntilClose: false, createdAt: owner.createdAt });
+    expect(await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }) },
+      { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" })).not.toBeNull();
+    expect(store.retentionExpiry(directory)).toBe(Date.parse(completedAt) + ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS);
+    p.runs[0]!.attempts[0] = { ...attempt, state: "passed" }; savePipelines([p]);
+    expect(attemptScratchExpiry(p, owner)).toBeNull();
+  } finally { store.close(); clock.mockRestore(); }
 });
 
 test("a restarted scheduled sweep restores a quarantined root before expiry and permits reopening", async () => {
