@@ -3,7 +3,13 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-import { recordBlockingWait } from "@/lib/blockingWaits";
+import {
+  blockingWaitRole,
+  currentWaitCorrelation,
+  recordBlockingWait,
+  registryWaitCallSite,
+  type FileLockHolder,
+} from "@/lib/blockingWaits";
 import { noteWriterAdmitted } from "./admissionWitness";
 import { procBackend } from "@/lib/proc";
 
@@ -13,12 +19,106 @@ const LOCK_STALE_MS = 30_000;
 const SYNC_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 const activeAsyncTransactions = new Map<string, number>();
 
+const BUCKETED_LOCK_PARENTS = new Set([
+  "recorded-check-host-fences",
+  "recorded-check-observers",
+  "seat-quota-recovery",
+  "done-media",
+  "telegram",
+  "prototype-reviews",
+  "codex-update",
+]);
+const GENERIC_LOCK_BASENAMES = new Set(["owner.lock", "switch", "job", "lock"]);
+const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const LONG_HEX_PATTERN = /[0-9a-f]{16,}/gi;
+
+function sanitizeLockSegment(segment: string): string {
+  const trimmed = segment.trim();
+  if (!trimmed) return "";
+  if (/^\d+$/.test(trimmed)) return "<slot>";
+  const replaced = trimmed
+    .replace(UUID_PATTERN, "<id>")
+    .replace(LONG_HEX_PATTERN, "<id>")
+    .replace(/[^A-Za-z0-9._<>-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return replaced;
+}
+
+/** Derives a bounded, privacy-safe lock subject from a target path without
+    exposing home directories, usernames, project roots, UUIDs, or hashes. */
+export function fileTransactionSubject(filePath: string): string {
+  const segments = filePath.replaceAll("\\", "/").split("/").filter(Boolean);
+  const rawBase = segments.at(-1) ?? "";
+  const rawParent = segments.at(-2) ?? "";
+  const base = sanitizeLockSegment(rawBase);
+  const keepParent = Boolean(rawParent) && (
+    BUCKETED_LOCK_PARENTS.has(rawParent)
+    || GENERIC_LOCK_BASENAMES.has(rawBase)
+    || /^\d+$/.test(rawBase)
+  );
+  const parent = keepParent ? sanitizeLockSegment(rawParent) : "";
+  const subject = parent && base ? `${parent}/${base}` : base;
+  return (subject || "file-transaction").slice(0, 80);
+}
+
+/** Derives a bounded, privacy-safe wait label from the caller's busy message or
+    sanitized lock subject when no explicit `withWaitCorrelation` is active. */
+export function fileTransactionWaitLabel(busyMessage: string, subject: string, explicitLabel?: string): string {
+  const candidate = (explicitLabel?.trim() || busyMessage.trim())
+    .replace(/\s+/g, " ")
+    .replace(/[^\x20-\x7E]/g, "");
+  if (candidate && !/[\\/]|@/.test(candidate)) {
+    const cleaned = candidate.replace(UUID_PATTERN, "<id>").replace(LONG_HEX_PATTERN, "<id>").trim();
+    if (cleaned) return cleaned.slice(0, 80);
+  }
+  return subject.slice(0, 80);
+}
+
+function parseHolderRecord(raw: string, mtimeMs: number): FileLockHolder | undefined {
+  try {
+    const parsed = JSON.parse(raw) as { pid?: unknown; role?: unknown };
+    const pid = typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0 ? parsed.pid : null;
+    const sameProcess = pid === process.pid;
+    const rawRole = typeof parsed.role === "string" ? parsed.role.trim() : "";
+    const kind = rawRole && /^[A-Za-z0-9._-]{1,32}$/.test(rawRole)
+      ? rawRole
+      : (sameProcess ? blockingWaitRole() : "other-process");
+    return {
+      kind,
+      ageMs: Math.max(0, Date.now() - mtimeMs),
+      sameProcess,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function readLockHolderSync(lockPath: string): FileLockHolder | undefined {
+  try {
+    const raw = fs.readFileSync(lockPath, "utf8");
+    const stat = fs.statSync(lockPath);
+    return parseHolderRecord(raw, stat.mtimeMs);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLockHolderAsync(lockPath: string): Promise<FileLockHolder | undefined> {
+  try {
+    const [raw, stat] = await Promise.all([fsp.readFile(lockPath, "utf8"), fsp.stat(lockPath)]);
+    return parseHolderRecord(raw, stat.mtimeMs);
+  } catch {
+    return undefined;
+  }
+}
+
 function transactionPath(filePath: string): string { return path.resolve(filePath); }
 
 interface LockOwner {
   pid: number;
   startIdentity: string | null;
   token: string;
+  role?: string;
 }
 
 interface LockTicket {
@@ -140,6 +240,7 @@ function enqueue(filePath: string): LockTicket {
     pid: process.pid,
     startIdentity: procBackend.processIdentity(process.pid),
     token: crypto.randomUUID(),
+    role: blockingWaitRole(),
   };
   const ticketPath = path.join(
     queuePath,
@@ -205,10 +306,12 @@ export function withFileTransactionAttempt<T>(filePath: string, busyMessage: str
  * Run one synchronous read-modify-write transaction under the process-shared
  * FIFO lock for the target file.
  */
-export function withFileTransactionSync<T>(filePath: string, busyMessage: string, operation: () => T): T {
+export function withFileTransactionSync<T>(filePath: string, busyMessage: string, operation: () => T, options: { label?: string } = {}): T {
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
+  let holder: FileLockHolder | undefined;
+  let callSiteStack: string | undefined;
   // A same-process async owner cannot make progress while this API blocks the
   // event loop. Refuse before queuing so mixed sync/async callers stay safe.
   if ((activeAsyncTransactions.get(transactionPath(filePath)) ?? 0) > 0) {
@@ -219,7 +322,11 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       const descriptor = tryAcquire(ticket);
       if (descriptor === null) {
-        waited = true;
+        if (!waited) {
+          waited = true;
+          holder = readLockHolderSync(ticket.lockPath);
+          callSiteStack = new Error().stack;
+        }
         // eslint-disable-next-line no-restricted-syntax -- Legacy synchronous file-transaction API still reached while serving; async API is available.
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
         continue;
@@ -235,8 +342,20 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
     throw new FileTransactionBusyError(busyMessage);
   } finally {
     removeIfOwned(ticket.ticketPath, ticket.owner.token);
-    if (waited) recordBlockingWait({ site: "file-transaction", synchronous: true,
-      durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
+    if (waited) {
+      const durationMs = (admittedAt ?? performance.now()) - startedAt;
+      const subject = fileTransactionSubject(filePath);
+      recordBlockingWait({
+        site: "file-transaction",
+        synchronous: true,
+        durationMs,
+        subject,
+        correlation: currentWaitCorrelation() ?? { label: fileTransactionWaitLabel(busyMessage, subject, options.label) },
+        ...(durationMs >= 50 && callSiteStack ? { callSite: registryWaitCallSite(callSiteStack) } : {}),
+        ...(holder ? { holder } : {}),
+        refused: admittedAt === undefined,
+      });
+    }
   }
 }
 
@@ -244,16 +363,22 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
  * Run one asynchronous read-modify-write transaction under the same
  * process-shared FIFO lock used by synchronous writers.
  */
-export async function withFileTransaction<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T): Promise<T> {
+export async function withFileTransaction<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T, options: { label?: string } = {}): Promise<T> {
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
+  let holder: FileLockHolder | undefined;
+  let callSiteStack: string | undefined;
   const ticket = enqueue(filePath);
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       const descriptor = tryAcquire(ticket);
       if (descriptor === null) {
-        waited = true;
+        if (!waited) {
+          waited = true;
+          holder = readLockHolderSync(ticket.lockPath);
+          callSiteStack = new Error().stack;
+        }
         await new Promise<void>(resolve => setTimeout(resolve, LOCK_WAIT_MS));
         continue;
       }
@@ -269,25 +394,40 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
     throw new FileTransactionBusyError(busyMessage);
   } finally {
     removeIfOwned(ticket.ticketPath, ticket.owner.token);
-    if (waited) recordBlockingWait({ site: "file-transaction", synchronous: false,
-      durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
+    if (waited) {
+      const durationMs = (admittedAt ?? performance.now()) - startedAt;
+      const subject = fileTransactionSubject(filePath);
+      recordBlockingWait({
+        site: "file-transaction",
+        synchronous: false,
+        durationMs,
+        subject,
+        correlation: currentWaitCorrelation() ?? { label: fileTransactionWaitLabel(busyMessage, subject, options.label) },
+        ...(durationMs >= 50 && callSiteStack ? { callSite: registryWaitCallSite(callSiteStack) } : {}),
+        ...(holder ? { holder } : {}),
+        refused: admittedAt === undefined,
+      });
+    }
   }
 }
 
 /** Async filesystem admission for paths whose publication must not perform
  * synchronous filesystem work on the Viewer loop. */
-export async function withFileTransactionAsync<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T, options: { waitMs?: number } = {}): Promise<T> {
+export async function withFileTransactionAsync<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T, options: { waitMs?: number; label?: string } = {}): Promise<T> {
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
+  let holder: FileLockHolder | undefined;
   const inProcessPath = transactionPath(filePath);
-  activeAsyncTransactions.set(inProcessPath, (activeAsyncTransactions.get(inProcessPath) ?? 0) + 1);
+  const inProcessActive = activeAsyncTransactions.get(inProcessPath) ?? 0;
+  let callSiteStack: string | undefined = inProcessActive > 0 ? new Error().stack : undefined;
+  activeAsyncTransactions.set(inProcessPath, inProcessActive + 1);
   try {
   const lockPath = `${filePath}.write-lock`;
   const queuePath = `${filePath}.write-locks`;
   const deadline = options.waitMs === undefined ? Infinity : startedAt + Math.max(0, options.waitMs);
   await fsp.mkdir(queuePath, { recursive: true, mode: 0o700 });
-  const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID() };
+  const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID(), role: blockingWaitRole() };
   const ticketPath = path.join(queuePath, `${String(Date.now()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`);
   const ticket = { lockPath, queuePath, owner, ticketPath };
   const ticketHandle = await fsp.open(ticketPath, "wx", 0o600);
@@ -353,7 +493,11 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
       if (performance.now() >= deadline) throw new FileTransactionBusyError(busyMessage);
       const handle = await acquireAsync();
       if (handle === null) {
-        waited = true;
+        if (!waited) {
+          waited = true;
+          holder = await readLockHolderAsync(lockPath);
+          callSiteStack ??= new Error().stack;
+        }
         await new Promise<void>((resolve) => setTimeout(resolve, Math.min(LOCK_WAIT_MS, Math.max(0, deadline - performance.now()))));
         continue;
       }
@@ -377,8 +521,20 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
     throw new FileTransactionBusyError(busyMessage);
   } finally {
     await removeOwnedAsync(ticket.ticketPath, owner.token);
-    if (waited) recordBlockingWait({ site: "file-transaction", synchronous: false,
-      durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
+    if (waited) {
+      const durationMs = (admittedAt ?? performance.now()) - startedAt;
+      const subject = fileTransactionSubject(filePath);
+      recordBlockingWait({
+        site: "file-transaction",
+        synchronous: false,
+        durationMs,
+        subject,
+        correlation: currentWaitCorrelation() ?? { label: fileTransactionWaitLabel(busyMessage, subject, options.label) },
+        ...(durationMs >= 50 && callSiteStack ? { callSite: registryWaitCallSite(callSiteStack) } : {}),
+        ...(holder ? { holder } : {}),
+        refused: admittedAt === undefined,
+      });
+    }
   }
   } finally {
     const remaining = (activeAsyncTransactions.get(inProcessPath) ?? 1) - 1;

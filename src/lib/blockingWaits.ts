@@ -42,9 +42,16 @@ export interface StateLockHolder {
   ageMs: number;
 }
 
+export interface FileLockHolder extends StateLockHolder {
+  /** True when the contending lock file belongs to the waiting process. */
+  sameProcess: boolean;
+}
+
 export interface BlockingWaitSample {
-  /** Bounded caller coordinates for a slow registry wait, relative to source. */
+  /** Bounded caller coordinates for a slow registry or file-transaction wait, relative to source. */
   callSite?: string;
+  /** Lock holder observed when a file-transaction wait first contended. */
+  holder?: FileLockHolder;
   stateWait?: { callSite: string; reason: string; outcome: string; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs: number; pid: number; processKind: string; release: string | null; holder?: StateLockHolder };
   site: BlockingWaitSite;
   /** `LLV_STATE_OWNER` of this process, or `unowned`. */
@@ -154,7 +161,7 @@ export function registryWaitCallSite(stack: string | undefined): string {
   const locations: string[] = [];
   for (const frame of stack?.split("\n").slice(1) ?? []) {
     const location = frame.match(/(?:^|\/)((?:src|\.next\/server|dist)\/[A-Za-z0-9_./[\]-]+\.[cm]?[jt]sx?:\d+:\d+)\)?$/)?.[1];
-    if (!location || /(?:blockingWaits|sqliteRegistryStore|agent\/registry)\.[cm]?[jt]sx?:/.test(location)) continue;
+    if (!location || /(?:blockingWaits|sqliteRegistryStore|agent\/registry|state\/fileTransaction)\.[cm]?[jt]sx?:/.test(location)) continue;
     locations.push(location);
     if (locations.length === 8) break;
   }
@@ -185,15 +192,29 @@ export function recordBlockingWait(input: {
   subject?: string | null;
   correlation?: BlockingWaitCorrelation | null;
   refused?: boolean;
+  callSite?: string;
+  holder?: FileLockHolder;
   stateWait?: BlockingWaitSample["stateWait"];
 }): void {
   if (!Number.isFinite(input.durationMs) || (input.durationMs <= 0 && !input.refused)) return;
   const deferred = input.stateWait?.outcome === "deferred";
   const context = input.correlation ?? currentWaitCorrelation();
+  const resolvedCallSite = input.callSite
+    ? input.callSite.slice(0, 1_024)
+    : ((input.site === "registry-lock" || input.site === "registry-revision-retry" || input.site === "registry-lock-async") && input.durationMs >= BLOCKING_WAIT_LOG_MS)
+      || (input.site === "file-transaction" && input.durationMs >= 50)
+      ? registryWaitCallSite(new Error().stack)
+      : undefined;
   const sample: BlockingWaitSample = {
     site: input.site,
-    ...((input.site === "registry-lock" || input.site === "registry-revision-retry" || input.site === "registry-lock-async") && input.durationMs >= BLOCKING_WAIT_LOG_MS
-      ? { callSite: registryWaitCallSite(new Error().stack) } : {}),
+    ...(resolvedCallSite ? { callSite: resolvedCallSite } : {}),
+    ...(input.holder ? {
+      holder: {
+        kind: input.holder.kind.slice(0, 32),
+        ageMs: round(input.holder.ageMs),
+        sameProcess: Boolean(input.holder.sameProcess),
+      },
+    } : {}),
     ...(input.stateWait ? { stateWait: input.stateWait } : {}),
     role: blockingWaitRole(),
     durationMs: round(input.durationMs),
@@ -242,7 +263,19 @@ export function blockingWaitDiagnostics(): BlockingWaitDiagnostics {
     durations.sort((left, right) => left - right);
     sites[site]!.p95Ms = durations[Math.max(0, Math.ceil(durations.length * 0.95) - 1)] ?? 0;
   }
-  const longest = [...samples].sort((left, right) => right.durationMs - left.durationMs).slice(0, LONGEST_LIMIT);
+  const longest = [...samples]
+    .sort((left, right) => right.durationMs - left.durationMs)
+    .slice(0, LONGEST_LIMIT)
+    .map((sample) => ({
+      ...sample,
+      ...(sample.holder ? { holder: { ...sample.holder } } : {}),
+      ...(sample.stateWait ? {
+        stateWait: {
+          ...sample.stateWait,
+          ...(sample.stateWait.holder ? { holder: { ...sample.stateWait.holder } } : {}),
+        },
+      } : {}),
+    }));
   return { role: blockingWaitRole(), sites, longest };
 }
 
