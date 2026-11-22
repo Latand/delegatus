@@ -599,6 +599,7 @@ test("a real-sized sealed inventory stays out of fresh linked and provisioning c
     const payload = path.join(modules, "large-payload");
     // Model a legacy installation before its first payload inventory.
     fs.unlinkSync(path.join(path.dirname(modules), "payload.sha256"));
+    fs.unlinkSync(path.join(path.dirname(modules), "payload-content.sha256"));
     fs.unlinkSync(path.join(path.dirname(modules), "validated.sha256"));
     fs.chmodSync(modules, 0o755);
     fs.mkdirSync(payload);
@@ -686,7 +687,9 @@ test.each((["linked", "new"] as const).flatMap(link =>
       if (change === "deleted") fs.unlinkSync(file);
       else {
         const replacement = path.join(parent, "replacement");
-        fs.copyFileSync(file, replacement);
+        const bytes = fs.readFileSync(file);
+        bytes[0] = bytes[0]! ^ 1;
+        fs.writeFileSync(replacement, bytes, { mode: 0o444 });
         fs.renameSync(replacement, file);
       }
       fs.chmodSync(parent, 0o555);
@@ -702,6 +705,159 @@ test.each((["linked", "new"] as const).flatMap(link =>
       expect(fs.existsSync(local)).toBe(link === "linked");
       if (change === "executable") expect(fs.statSync(file).mode & 0o777).toBe(0o555);
     }
+  } finally { f.close(); }
+}, 30_000);
+
+test.each((["linked", "new"] as const).flatMap(link =>
+  (["zero-length", "legacy zero-length", "truncated portable", "restored"] as const).map(shape => [link, shape] as const),
+))("a fresh %s admission recovers a %s payload receipt", async (link, shape) => {
+  const f = await lockedFixture();
+  try {
+    const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+    await f.run([process.execPath, hook], f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const target = path.dirname(modules), receipt = path.join(target, "payload.sha256");
+    const content = path.join(target, "payload-content.sha256");
+    const before = fs.existsSync(content) ? fs.readFileSync(content, "ascii") : null;
+    const localBefore = fs.readFileSync(receipt, "ascii");
+    if (shape === "restored") {
+      const file = path.join(modules, "fixture-tool", "lib", "index.js");
+      const inode = fs.statSync(file).ino;
+      const backup = path.join(f.root, "backup");
+      fs.renameSync(target, backup);
+      fs.cpSync(backup, target, { recursive: true, verbatimSymlinks: true });
+      expect(fs.statSync(file).ino).not.toBe(inode);
+    } else if (shape === "truncated portable") fs.truncateSync(content, 0);
+    else {
+      fs.truncateSync(receipt, 0);
+      if (shape === "legacy zero-length") fs.rmSync(content, { force: true });
+    }
+    const cwd = link === "linked" ? f.worktreeDir : await f.addWorktree("receipt-admission");
+    await f.run([process.execPath, hook], cwd);
+    expect(fs.realpathSync(path.join(cwd, "node_modules"))).toBe(modules);
+    const restoredContent = fs.readFileSync(content, "ascii");
+    expect(restoredContent).toMatch(/^[a-f0-9]{64}$/);
+    if (before) expect(restoredContent).toBe(before);
+    const recovered = fs.readFileSync(receipt, "ascii");
+    expect(recovered).toMatch(/^[a-f0-9]{64}$/);
+    expect(recovered === localBefore).toBe(shape !== "restored");
+  } finally { f.close(); }
+}, 30_000);
+
+test("a valid local-only receipt is verified before adding a portable digest", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const content = path.join(path.dirname(modules), "payload-content.sha256");
+    const original = fs.readFileSync(content, "ascii");
+    fs.unlinkSync(content);
+    const file = path.join(modules, "fixture-tool", "lib", "index.js");
+    const bytes = fs.readFileSync(file);
+    fs.chmodSync(file, 0o644);
+    fs.writeFileSync(file, "changed");
+    fs.chmodSync(file, 0o444);
+    const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+    await expect(f.run([process.execPath, hook], f.worktreeDir)).rejects.toThrow("dependency payload changed");
+    expect(fs.existsSync(content)).toBe(false);
+    fs.chmodSync(file, 0o644);
+    fs.writeFileSync(file, bytes);
+    fs.chmodSync(file, 0o444);
+    await f.run([process.execPath, hook], f.worktreeDir);
+    expect(fs.readFileSync(content, "ascii")).toBe(original);
+  } finally { f.close(); }
+}, 30_000);
+
+test("a failed payload receipt fsync preserves the previous record and releases the writer", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const receipt = path.join(path.dirname(modules), "payload.sha256");
+    fs.truncateSync(receipt, 0);
+    const temporary = receipt + ".next";
+    const open = fs.promises.open;
+    const hook = spyOn(fs.promises, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === temporary) handle.sync = async () => { throw new Error("fixture fsync failed"); };
+      return handle;
+    });
+    try {
+      await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow("fixture fsync failed");
+      expect(fs.statSync(receipt).size).toBe(0);
+      expect(fs.existsSync(temporary)).toBe(false);
+      f.holdWriter()();
+    } finally { hook.mockRestore(); }
+    await expect(prepareLockedDependencies(f.worktreeDir)).resolves.toBe(true);
+    expect(fs.readFileSync(receipt, "ascii")).toMatch(/^[a-f0-9]{64}$/);
+  } finally { f.close(); }
+}, 30_000);
+
+test.each(["deadline", "revoked"] as const)("a fresh provisioning process handles %s after a permission repair write", async stop => {
+  const f = await lockedFixture();
+  try {
+    const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+    await f.run([process.execPath, hook], f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const nested = path.join(modules, "fixture-tool/lib/index.js");
+    fs.chmodSync(modules, 0o755);
+    fs.chmodSync(nested, 0o644);
+    const newcomer = await f.addWorktree("permission-retry");
+    const local = path.join(newcomer, "node_modules");
+    const source = `
+      import fs from "node:fs";
+      import { prepareLockedDependencies } from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+      const files = ${JSON.stringify([modules, nested])};
+      const local = ${JSON.stringify(local)};
+      const budget = 500;
+      let now = 1800000000000, interrupted = false;
+      const writes = [];
+      Date.now = () => now;
+      const wrote = file => {
+        if (!files.includes(file)) return;
+        if (fs.existsSync(local)) throw new Error("permission repair published an unvalidated link");
+        writes.push(files.indexOf(file));
+      };
+      const open = fs.promises.open;
+      fs.promises.open = async (file, ...args) => {
+        const handle = await open(file, ...args);
+        const change = handle.chmod.bind(handle);
+        handle.chmod = async mode => { await change(mode); wrote(file); };
+        return handle;
+      };
+      let error = null;
+      try {
+        await prepareLockedDependencies(process.cwd(), { budgetMs: budget, assertCurrent() {
+          if (interrupted) return;
+          const dirty = files.filter(file => fs.statSync(file).mode & 0o200).length;
+          if (dirty === files.length) return;
+          if (dirty === 0 || fs.existsSync(local)) throw new Error("repair did not stop with pending writes");
+          interrupted = true;
+          if (${stop === "revoked"}) throw new Error("fixture repair authority revoked");
+          now += budget + 1;
+        } });
+      } catch (failure) { error = failure.message; }
+      process.stdout.write(JSON.stringify({ writes, error }));`;
+    const result = await realExec(process.execPath, ["-e", source], newcomer, undefined, { timeoutMs: 10_000 });
+    expect(result.code, result.stderr).toBe(0);
+    const { writes, error } = JSON.parse(result.stdout);
+    if (stop === "deadline") {
+      expect(error).toBeNull();
+      expect(result.stderr.match(/deadline exceeded \[commit: permission repair,[^\n]+retrying permission repair in 100 ms/g)).toHaveLength(1);
+      expect(writes).toEqual([0, 1]);
+    } else {
+      expect(error).toContain("fixture repair authority revoked [commit: permission repair");
+      expect(fs.existsSync(local)).toBe(false);
+      expect(writes).toEqual([0]);
+      expect(fs.statSync(nested).mode & 0o777).toBe(0o644);
+      await f.run([process.execPath, hook], newcomer);
+    }
+    expect(fs.realpathSync(local)).toBe(modules);
+    expect(fs.statSync(modules).mode & 0o777).toBe(0o555);
+    expect(fs.statSync(nested).mode & 0o777).toBe(0o444);
+    const release = f.holdWriter();
+    try { await f.run([process.execPath, hook], newcomer); }
+    finally { release(); }
   } finally { f.close(); }
 }, 30_000);
 
