@@ -1,5 +1,5 @@
 import type { RelayHttpRefusal } from "./httpDiagnostics";
-import { answerTooLongNotice, recordCompletionRefusal, type CompletionRefusal } from "./completionRefusal";
+import { answerTooLongNotice, completionRefusal, recordCompletionRefusal, type CompletionRefusal } from "./completionRefusal";
 import { ExternalRelayError, isUnknownFeatureRefusal, relayCall } from "./client";
 import type { PairedRelay } from "./store";
 import type { RelayAnswerDelivery } from "./answers";
@@ -15,7 +15,7 @@ export async function completeRelayRequest(
   plainMax = 4000,
   onRefusal?: (refusal: CompletionRefusal) => void,
   onHttpRefusal?: (record: RelayHttpRefusal) => void,
-): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery; refusalCode?: string; tooLong?: true }> {
+): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery; refusalCode?: string; tooLong?: true; downgrade?: CompletionRefusal }> {
   let wait = 1000;
   let attempted = false;
   let downgraded = false;
@@ -23,12 +23,15 @@ export async function completeRelayRequest(
   let attachmentFallbackUsed = false;
   let unresolved = false;
   let tooLong = false;
-  const result = (delivery: RelayAnswerDelivery) => ({ body, delivery, ...(tooLong ? { tooLong: true as const } : {}) });
-  const lengthNotice = () => {
+  let downgrade: CompletionRefusal | undefined;
+  const result = (delivery: RelayAnswerDelivery) => ({ body, delivery, ...(tooLong ? { tooLong: true as const } : {}),
+    ...(downgrade ? { downgrade } : {}) });
+  const lengthNotice = (refusal: CompletionRefusal) => {
     if (body.outcome !== "answered" || tooLong) return false;
     const text = answerTooLongNotice(plainMax);
     if (!text) return false;
     body = { ...body, answer: { action: "reply", text, reply_to: body.answer.reply_to } };
+    downgrade = refusal;
     tooLong = true;
     return true;
   };
@@ -49,11 +52,12 @@ export async function completeRelayRequest(
           } } : {}) });
       return result("accepted");
     } catch (error) {
-      if (responseStatus >= 300) {
-        recordCompletionRefusal(error instanceof ExternalRelayError ? error : new ExternalRelayError("unreachable"), responseStatus, requestId, onRefusal);
-      }
+      const observedRefusal = responseStatus >= 300
+        ? recordCompletionRefusal(error instanceof ExternalRelayError ? error : new ExternalRelayError("unreachable"), responseStatus, requestId, onRefusal)
+        : undefined;
       if (isUnknownFeatureRefusal(error)) await onUnknownFeature?.();
       if (error instanceof ExternalRelayError) {
+        const refusal = observedRefusal ?? completionRefusal(error);
         if (error.status === 409 && error.code === "lease_lost") refusalCode = error.code;
         if (allowOwnerReply && error.status === 409 && error.code === "already_completed") return result("unconfirmed");
         if (unresolved && error.status >= 400 && error.status < 500) return refused();
@@ -67,7 +71,8 @@ export async function completeRelayRequest(
           if ([...body.answer.text].length <= plainMax) {
             const { action, text, reply_to } = body.answer;
             body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
-          } else if (!lengthNotice()) return refused();
+          } else if (!lengthNotice(refusal)) return refused();
+          downgrade = refusal;
           continue;
         }
         if (v2 && error.status === 409 && error.code === "already_completed") return unresolved ? refused() : { body: { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null }, delivery: "refused" };
@@ -75,15 +80,15 @@ export async function completeRelayRequest(
           downgraded = true;
           if (body.outcome === "answered" && body.answer.text.trim() && error.status === 422 && error.code === "attachment_not_ready" && body.answer.attachments?.length) {
             const answer = { ...body.answer }; delete answer.attachments;
-            if (hasActiveMediaReference(answer.text)) { body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null }; continue; }
             attachmentRemoved = true;
             body = { ...body, answer };
           } else if (body.outcome === "answered" && body.answer.text.trim() && [...body.answer.text].length <= plainMax) {
             const { action, text, reply_to } = body.answer;
             body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
           } else if (body.outcome === "answered" && body.answer.text.trim()) {
-            if (!lengthNotice()) return refused();
+            if (!lengthNotice(refusal)) return refused();
           } else body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null };
+          downgrade = refusal;
           continue;
         }
         if (v2 && [415, 422].includes(error.status)) return refused();
@@ -93,13 +98,16 @@ export async function completeRelayRequest(
             || answer.buttons?.length || answer.mentions?.length || answer.attachments?.length)) {
             const { action, text, reply_to } = answer;
             body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
+            downgrade = refusal;
             continue;
           }
-          if ([...answer.text].length > plainMax && lengthNotice()) continue;
+          if ([...answer.text].length > plainMax && lengthNotice(refusal)) continue;
           return refused();
         }
         if (error.status === 409 && error.code === "handoff_after_action" && body.outcome === "declined" && body.reason === "handoff") {
-          body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null }; continue;
+          body = { lease_id: body.lease_id, outcome: "failed", reason: "invalid_answer", detail: null };
+          downgrade = refusal;
+          continue;
         }
         if ([400, 401, 404, 409, 413, 426].includes(error.status)) return refused();
       }

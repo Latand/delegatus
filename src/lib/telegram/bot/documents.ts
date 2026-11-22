@@ -427,6 +427,21 @@ export function readExactFile(requested: string, maxBytes: number): { real: stri
   if (real !== path.resolve(requested)) throw new DocumentRefusal("document_forbidden_path", "generated file is a link");
   return readOpenedFile(requested, real, maxBytes, () => {});
 }
+
+/** A relay's private output directory may have hidden ancestors. Forbid
+ * hidden descendants and traversal, and require an exact, link-free path. */
+export function readRunDocument(requested: string, outputDir: string, environment: DocumentEnvironment, maxBytes: number) {
+  const prefix = outputDir + path.sep;
+  if (!requested.startsWith(prefix) || !within(requested, outputDir)) {
+    throw new DocumentRefusal("document_outside_roots", "File is outside this run's output directory");
+  }
+  if (dotSegment(requested.slice(prefix.length)) !== null
+    || forbiddenDirectories(environment).some(directory => within(requested, directory))) {
+    throw new DocumentRefusal("document_forbidden_path", "File is hidden or inside the Delegatus state directory");
+  }
+  return readExactFile(requested, maxBytes);
+}
+
 function readOpenedFile(requested: string, real: string, maxBytes: number, recheck: (opened: string) => void): { real: string; bytes: Buffer } {
   let descriptor: number | null = null;
   try {

@@ -11,7 +11,7 @@ import { createToolResultMedia } from "./toolResultMedia";
 import { isInboundImage, RELAY_HISTORY_MEDIA, validateMediaInput } from "./mediaInputValidation";
 import { validateAnswerComposition } from "./composition";
 import { answerCapabilities, checkedAnswerV2, checkedRoundV2, withAnswerParts, answerFiles, type AnswerDrop } from "./answerV2";
-import { stageGeneratedAttachments, uploadAnswerAttachments, type StagedAttachment } from "./attachments";
+import { ownerAnswerFileInstructions, stageGeneratedAttachments, uploadAnswerAttachments, type StagedAttachment } from "./attachments";
 import { openOwnerAnswer } from "./ownerAnswer";
 import { hydrateToolIndex } from "./toolIndex";
 import { openOwnerServiceTools } from "./ownerServiceTools";
@@ -494,7 +494,9 @@ export async function runClaimedRequest(
         // release) leaves recovery cleanup only, never a second completion.
         if (recorded && (cloud || !capacityReleased)) await recordAcceptedCompletion(requestId);
       }
-      if (!ownerPastWindow() && caps?.rich && sent.body !== body) recorder?.annotateV2({ drops: [...answerDrops, {part:"answer",reason:"service_downgrade"}] });
+      if (!ownerPastWindow() && caps?.rich && sent.downgrade) {
+        recorder?.annotateV2({ drops: [...answerDrops, { part: "answer", reason: sent.downgrade.reason }] });
+      }
       if (initiallyLate && body.outcome === "answered" && sent.delivery !== "accepted") {
         await changeRunAsync(requestId, row => ({ ...row, ...(!ownerRunPending() && !ownerStopPending(row) ? { capacityReleased: true as const } : {}),
           ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...row.ownerTurn?.lateAnswer, body, files: stagedAttachments } } }), ownerRelayStoreDeadline());
@@ -573,6 +575,7 @@ export async function runClaimedRequest(
   let turn: ReturnType<typeof conversationTurnPrompt> | null = null;
   let conversationBroken = false;
   let runDir: string | null = null;
+  let ownerFileInstructions: string | undefined;
   let capacityReleased = false;
   let duplicate = false;
   let run: EphemeralAgentRun | null = null;
@@ -992,7 +995,10 @@ export async function runClaimedRequest(
           // Service tools never read the Delegatus board; their names stay local.
           steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
         } : undefined);
-        if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, ownerCredentials, () => (!leaseUnavailable || ownerExecution) && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal,toolMedia ?? undefined);
+        if (owner && !prototype && caps?.rich) {
+          if (caps.media) ownerFileInstructions = await ownerAnswerFileInstructions(runDir);
+          ownerParts = openOwnerAnswer(relay.id, request, runDir, ownerCredentials, () => (!leaseUnavailable || ownerExecution) && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal,toolMedia ?? undefined);
+        }
       }
       const final = rounds === RELAY_TOOL_ROUNDS || !!loop && loop.callsLeft() === 0;
       try {
@@ -1002,7 +1008,7 @@ export async function runClaimedRequest(
         if (owner && !cloud) executionDeadline = Date.now() + target.hardCapMinutes * 60_000;
         const inboundRefs = new Set(inbound?.files.map(file => file.ref));
         const mediaMessageIds = request.input.conversation.filter(message => message.media?.some(media => inboundRefs.has(media.ref))).map(message => message.id);
-        const ownerAdditions = { mediaMessageIds, mandatory: [inbound?.prompt,
+        const ownerAdditions = { mediaMessageIds, mandatory: [inbound?.prompt, usingCloud ? undefined : ownerFileInstructions,
           ...(usingCloud ? [rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : "", frame] : []),
         ].filter(Boolean).join("\n") };
         // Prepare only the mode that will be sent. Cloud has no native cursor.
@@ -1052,7 +1058,7 @@ export async function runClaimedRequest(
           // A confirmed Cloud refusal may fall back to a native conversation;
           // recompute from unchanged inputs for that actual delivery mode.
           if (owner && cloudFailed) {
-            const fallbackAdditions = { mediaMessageIds, mandatory: [inbound?.prompt,
+            const fallbackAdditions = { mediaMessageIds, mandatory: [inbound?.prompt, ownerFileInstructions,
               rounds > 1 ? `<tool_results>\n${json(loop?.results ?? [])}\n</tool_results>` : ""].filter(Boolean).join("\n") };
             preparedOwner = conversation?.conversationId
               ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation, fallbackAdditions)

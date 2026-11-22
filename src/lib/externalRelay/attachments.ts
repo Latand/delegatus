@@ -8,7 +8,7 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { attachReadAttributionWorker } from "@/lib/readAttribution";
 import { SQLITE_MEMORY_MESSAGE_PREFIX } from "@/lib/sqliteMemoryDiagnostics";
-import { checkPhotoBytes, defaultDocumentRoots, documentBytesSecret, DocumentRefusal, readExactFile, readUnderRoots, type DocumentEnvironment } from "@/lib/telegram/bot/documents";
+import { checkPhotoBytes, defaultDocumentRoots, documentBytesSecret, DocumentRefusal, readExactFile, readRunDocument, readUnderRoots, type DocumentEnvironment } from "@/lib/telegram/bot/documents";
 import { ExternalRelayError, relayPutBytes } from "./client";
 import { uploadedAttachmentSchema, type ExternalRelayRequest, type RelayAttachment, type RelayMediaKind } from "./protocol";
 import type { AnswerCapabilities, AnswerDrop, LocalAttachment } from "./answerV2";
@@ -18,9 +18,9 @@ const mimeByExtension: Record<string, string> = { ".png": "image/png", ".jpg": "
 const extensions: Record<RelayMediaKind, readonly string[]> = { photo: [".png", ".jpg", ".jpeg"], document: [".png", ".jpg", ".jpeg", ".pdf", ".txt", ".log", ".md", ".markdown", ".json", ".csv"], audio: [".mp3", ".m4a"], video: [".mp4"] };
 export type StagedAttachment = { id: string; file: string; filename: string; mime: string; size: number; sha256: string; kind: RelayMediaKind; caption: string };
 export type OwnerMediaSource = { path: string; dev: number; ino: number; size: number; sha256: string };
-type AttachmentWorkerJob =
+export type AttachmentWorkerJob =
   | { operation:"generated"; refs:LocalAttachment[]; directory:string|null; names:string[]; runDir:string; caps:AnswerCapabilities; drops:AnswerDrop[]; sources:[string,string[]][] }
-  | { operation:"owner"; refs:LocalAttachment[]; runDir:string; caps:AnswerCapabilities; drops:AnswerDrop[]; environment:DocumentEnvironment; roots?:string[]; mediaSources?:OwnerMediaSource[] }
+  | { operation:"owner"; refs:LocalAttachment[]; runDir:string; outputDir:string; caps:AnswerCapabilities; drops:AnswerDrop[]; environment:DocumentEnvironment; roots?:string[]; mediaSources:OwnerMediaSource[] }
   | { operation:"read"; file:StagedAttachment };
 async function attachmentWorkerPath() {
   const bundled=path.join(process.cwd(),".next/server/relay-attachment-stage-worker.js");
@@ -227,21 +227,36 @@ async function configuredRoots(environment: DocumentEnvironment): Promise<string
     } finally { db.close(); }
   }, {waitMs:5000});
 }
+
+const ownerOutputDirectory = (runDir: string) => path.join(runDir, "outbox");
+
+export async function ownerAnswerFileInstructions(runDir: string): Promise<string> {
+  const outputDir = ownerOutputDirectory(runDir);
+  await fs.promises.mkdir(outputDir, { recursive: true, mode: 0o700 });
+  const roots = await configuredRoots({ home: homeDirectory(), stateDir: stateDir() }).catch(() => {
+    console.error("External relay document roots unavailable");
+    return [];
+  });
+  return `[For relay_answer, write files you create in ${JSON.stringify(outputDir)}. ${roots.length
+    ? `The operator's other allowed document roots are ${JSON.stringify(roots)}. ` : ""}Pass the absolute path as an attachment, or use an unexpired media_ref from this request. Share paths only with the tool.]`;
+}
+
 export async function stageOwnerAttachments(refs: LocalAttachment[], runDir: string, caps: AnswerCapabilities, drops: AnswerDrop[], environment: DocumentEnvironment = {home:homeDirectory(), stateDir:stateDir()}, rootsOverride?: readonly string[],signal?:AbortSignal,mediaSources:OwnerMediaSource[] = []): Promise<StagedAttachment[]> {
   return withViewerOperation("relay.attachments", async()=>{
     const jobDir=path.join(runDir,`relay-job-${crypto.randomUUID()}`);
-    try { return await runAttachmentWorker<StagedAttachment[]>({operation:"owner",refs,runDir:jobDir,caps,drops,environment,mediaSources,...(rootsOverride?{roots:[...rootsOverride]}:{})},signal); }
+    try { return await runAttachmentWorker<StagedAttachment[]>({operation:"owner",refs,runDir:jobDir,outputDir:ownerOutputDirectory(runDir),caps,drops,environment,mediaSources,...(rootsOverride?{roots:[...rootsOverride]}:{})},signal); }
     catch(error) { await fs.promises.rm(jobDir,{recursive:true,force:true});throw error; }
   });
 }
 /** Worker entry only, paired with the exact root and descriptor checks above. */
-export async function stageOwnerAttachmentsLocal(refs: LocalAttachment[], runDir: string, caps: AnswerCapabilities, drops: AnswerDrop[], environment: DocumentEnvironment = {home:homeDirectory(), stateDir:stateDir()}, rootsOverride?: readonly string[],mediaSources:OwnerMediaSource[] = []): Promise<StagedAttachment[]> {
+export async function stageOwnerAttachmentsLocal(job: Extract<AttachmentWorkerJob, { operation: "owner" }>): Promise<StagedAttachment[]> {
+  const { refs, runDir, outputDir, caps, environment, mediaSources } = job;
   return withViewerOperation("relay.attachments", async () => {
     if (refs.length > caps.maxItems || refs.length && !caps.media) refuse("media_not_negotiated");
     if (!refs.length) return [];
     const staged: StagedAttachment[] = []; let total = 0;
     try {
-      const roots = rootsOverride ?? await configuredRoots(environment);
+      let roots = job.roots;
       for (const [index, ref] of refs.entries()) {
         if (!ref || typeof ref.path !== "string" || !path.isAbsolute(ref.path) || !caps.kinds.includes(ref.kind)) refuse("document_invalid");
         const filename = ref.filename ?? path.basename(ref.path);
@@ -255,12 +270,15 @@ export async function stageOwnerAttachmentsLocal(refs: LocalAttachment[], runDir
           if(!stat.isFile() || stat.dev!==selected.dev || stat.ino!==selected.ino || stat.size!==selected.size
             || createHash("sha256").update(mediaBytes!).digest("hex")!==selected.sha256) refuse("media_ref_changed");
         }
-        const { bytes, admitted: extension } = selected ? {bytes:mediaBytes!,admitted:path.extname(ref.path).toLowerCase()}
-          : readUnderRoots(ref.path, roots, environment, maxBytes, real => {
+        const admit = (real: string) => {
           const ext = path.extname(real).toLowerCase(), shown = path.extname(filename).toLowerCase();
           if (!extensions[ref.kind]?.includes(ext) || !extensions[ref.kind]?.includes(shown) || typeClass(ext) !== typeClass(shown)) refuse("document_type");
           return ext;
-        });
+        };
+        const { bytes, admitted: extension } = selected ? {bytes:mediaBytes!,admitted:path.extname(ref.path).toLowerCase()}
+          : ref.path.startsWith(outputDir + path.sep)
+          ? { admitted: admit(ref.path), ...readRunDocument(ref.path, outputDir, environment, maxBytes) }
+          : readUnderRoots(ref.path, roots ??= await configuredRoots(environment), environment, maxBytes, admit);
         if(selected && (!extensions[ref.kind]?.includes(extension) || typeClass(path.extname(filename).toLowerCase())!==typeClass(extension))) refuse("document_type");
         if (total + bytes.length > caps.maxBytes) refuse("too_large");
         const mime = await validateAttachmentContent(bytes, extension, ref.kind);

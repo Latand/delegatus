@@ -4,7 +4,7 @@ import path from "node:path";
 import * as workerThreads from "node:worker_threads";
 import sharp from "sharp";
 import { Database } from "bun:sqlite";
-import { stageGeneratedAttachments, stageOwnerAttachments, uploadAnswerAttachments, contentDisposition, validateAttachmentContent } from "./attachments";
+import { stageGeneratedAttachments, stageOwnerAttachments, uploadAnswerAttachments, contentDisposition, ownerAnswerFileInstructions, validateAttachmentContent } from "./attachments";
 import { answerCapabilities, type AnswerDrop } from "./answerV2";
 import { richRequest } from "./rich.fixture";
 import { startTestRelay } from "./testRelay";
@@ -260,6 +260,38 @@ test("aggregate bytes above 64 MiB are refused and staged copies are removed", a
   expect(new Set(fs.readdirSync(root).filter(name=>name.startsWith("relay-job-")))).toEqual(before);
 },30_000);
 
+test("owner output is confined to this run and retains the document checks", async () => {
+  const runDir = path.join(root, ".runs", "current");
+  const output = path.join(runDir, "outbox");
+  const sibling = path.join(root, ".runs", "other", "outbox");
+  const state = path.join(output, "state");
+  for (const directory of [output, sibling, state, path.join(output, ".hidden")]) fs.mkdirSync(directory, { recursive: true });
+  const report = path.join(output, "report.md");
+  const context = path.join(runDir, "context.txt");
+  const outside = path.join(root, "outside.md");
+  const other = path.join(sibling, "report.md");
+  const hidden = path.join(output, ".hidden", "report.md");
+  const stateFile = path.join(state, "report.md");
+  for (const file of [report, context, outside, other, hidden, stateFile]) fs.writeFileSync(file, "Report");
+  const linkedFile = path.join(output, "link.md");
+  const hardLink = path.join(output, "hard.md");
+  const linkedDir = path.join(output, "linked");
+  fs.symlinkSync(outside, linkedFile);
+  fs.linkSync(outside, hardLink);
+  fs.symlinkSync(sibling, linkedDir, "dir");
+  const disguised = path.join(output, "markup.txt");
+  fs.writeFileSync(disguised, "<html><body>Report</body></html>");
+  const send = (file: string) => stageOwnerAttachments([{ path: file, kind: "document" }], runDir, caps, [], { home: root, stateDir: state }, []);
+  const [file] = await send(report);
+  expect(fs.readFileSync(file!.file, "utf8")).toBe("Report");
+  for (const invalid of [context, other, hidden, stateFile, linkedFile, hardLink, path.join(linkedDir, "report.md")]) {
+    await expect(send(invalid)).rejects.toMatchObject({ code: "document_forbidden_path" });
+  }
+  await expect(send([output, "..", "context.txt"].join(path.sep))).rejects.toMatchObject({ code: "document_outside_roots" });
+  await expect(send(outside)).rejects.toMatchObject({ code: "document_outside_roots" });
+  await expect(send(disguised)).rejects.toMatchObject({ code: "document_type" });
+});
+
 test("owner staging reads configured document roots and keeps malformed settings failures private", async () => {
   const state = path.join(root, "configured-state");
   fs.mkdirSync(path.join(state, "telegram"), { recursive: true });
@@ -272,6 +304,7 @@ test("owner staging reads configured document roots and keeps malformed settings
   try {
     const send = () => stageOwnerAttachments([{ path: file, kind: "document" }], root, caps, [], { home: root, stateDir: state });
     expect(await send()).toHaveLength(1);
+    expect(await ownerAnswerFileInstructions(root)).toContain(JSON.stringify(directory));
     db.query("UPDATE settings SET value = ? WHERE key = ?").run("malformed setting", "document_roots");
     await expect(send()).rejects.toMatchObject({ code: "document_invalid" });
   } finally { db.close(); if (old === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = old; }
