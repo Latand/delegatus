@@ -771,10 +771,12 @@ export async function runClaimedRequest(
     if (owner) allowOwnerReply = () => ownerStatusReply
       ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
       : (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
-    // The local runner binds Viewer calls to the live owner conversation,
-    // including when the paired target is configured for Cloud.
     const handoffOnly = !!owner && (request.delivery === "guest" || ownerRelayHandoffRequested(owner));
-    const usingCloud = cloud && !owner;
+    // The local runner binds Viewer calls for owner chat turns and handoffs.
+    // Legacy claims without chat scope can still use a bound Cloud repository.
+    const repositoryBoundOwner = cloud && !!owner && !handoffOnly && !request.chat;
+    const usingCloud = cloud && (!owner || repositoryBoundOwner && !!cloudEnvironment(configuredTarget!, true));
+    if (repositoryBoundOwner && !usingCloud && !prototype) cloudOwnerDirectory(target.project);
     const authority = conversationAuthority(request.input.requester, !!owner);
     const usesConversation = request.delivery !== "guest" && !recovery && !usingCloud && !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
@@ -990,7 +992,7 @@ export async function runClaimedRequest(
           authorize: () => { if (leaseUnavailable || releaseRequested) throw new ExternalRelayError("lease_lost", 409); } }, inbound ?? undefined);
         if (owner && !prototype && callableTools(request).length) ownerTools = openOwnerServiceTools(relay, target, request, hydrated.guidance, lease, runtime ?? {},
           async () => {
-            const registry = usingCloud && localOwnerConversationId
+            const registry = repositoryBoundOwner && localOwnerConversationId
               ? await (await import("@/lib/agent/registry")).prepareAgentRegistry() : null;
             if (!await ownerRelayAuthorizedAsync(relay.id, target.id, requestId)) return false;
             if (registry && localOwnerConversationId) {
@@ -1098,7 +1100,8 @@ export async function runClaimedRequest(
             contextDirectory: localRunDir,
             handoffOnly,
             onPromptBytes: bytes => { if (chain) chain = { ...chain, promptBytes: chain.promptBytes + bytes - Buffer.byteLength(persistentPrompt) }; },
-            request, owner, target: ownerTarget, deadline, admissionDeadlineAt: executionDeadline, accountId: conversation?.conversationId ? null : selectedAccount().accountId,
+            request, owner, target: repositoryBoundOwner ? { ...ownerTarget, engine: "codex-cloud" } : ownerTarget,
+            deadline, admissionDeadlineAt: executionDeadline, accountId: conversation?.conversationId ? null : selectedAccount().accountId,
             hardCapMs: Math.min(cloud ? Math.max(0, executionDeadline - Date.now()) : target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
             onConversation: async (conversationId, initialPrompt) => {
               localOwnerConversationId = conversationId;

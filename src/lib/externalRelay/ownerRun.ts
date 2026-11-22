@@ -257,7 +257,7 @@ function ownerPromptToolIndex(request: ExternalRelayRequest) {
       [tool.name, tool.mode, tool.effect ?? null, tool.audience ?? null]) } : tools;
 }
 
-const ownerSeatHandoff = "For a request to pass on, process or fix a project issue, call Viewer send_message_to_orchestrator before replying. Include the quoted request, relevant reply context and attachments or their description. Name the project when given. Use the paired project when that is the target. On acceptance, reply in one short line naming the recipient. If project selection is unclear, ask one short question. If sending fails, explain the refusal briefly.";
+const ownerSeatHandoff = "For project work, call Viewer send_message_to_orchestrator before replying. Include the quoted request, reply context and attachments or descriptions. Use the named or paired project. Confirm the recipient in one short line. Ask which project if unclear. Explain a refused handoff briefly.";
 
 export function ownerClosingRules(request: ExternalRelayRequest, hardCapMinutes: number, { hideTools = false, handoffOnly = false } = {}): string {
   const toolIndex = hideTools ? " The tool table is omitted. Use relay_service_tools with op list to find the available tools."
